@@ -1,15 +1,15 @@
-# Nucleus Charts Trading Expansion Plan
+# Aeris Charts Trading Expansion Plan
 
 ## Decision and scope
 
-Nucleus Charts will become a complete **headless** professional trading chart engine: order flow,
+Aeris Charts will become a complete **headless** professional trading chart engine: order flow,
 market depth, non-time bars, a professional indicator catalog, and a drawing system whose every
 tool is as configurable as the tools in mature trading platforms. The primary consumer is the
-Axiusflow GPUI platform; browser hosts consume the same engine through WASM.
+Aeris Terminal GPUI platform; browser hosts consume the same engine through WASM.
 
-Headless means Nucleus owns semantics and pixels inside the chart, never application chrome:
+Headless means Aeris owns semantics and pixels inside the chart, never application chrome:
 
-| Nucleus owns | Hosts own |
+| Aeris owns | Hosts own |
 | --- | --- |
 | Validated data models (trades, depth, bars), aggregation, classification and derived studies | Market-data subscriptions, provider normalization, reconnection and resync requests |
 | Indicator and order-flow math, incremental updates, bounded caches | Symbol search, watchlists, exchange calendars and session definitions |
@@ -303,7 +303,7 @@ across workspace cells, and bulk remove.
 
 ## Platform-driven requirements
 
-The Asceify platform roadmap (`plan/trading_platform_feature_roadmap.md` in the platform
+The Aeris platform roadmap (`plan/trading_platform_feature_roadmap.md` in the platform
 repository) adds risk controls, session replay, trade review, order-level analytics and
 fundamentals context. Most of that work is host-owned: canonical market and account state, rule
 evaluation, recording storage, data fetching and every panel or dialog stay in the platform. The
@@ -311,16 +311,16 @@ items below are what the engine must provide so the platform can render those fe
 APIs without reimplementing chart math. They follow the same principles, verification and
 headless boundary as the rest of this plan.
 
-Asceify's `market_runtime` remains the canonical owner of order books, trades and order-level
+Aeris's `market_runtime` remains the canonical owner of order books, trades and order-level
 (market-by-order) state. Engine stores such as F2 and F3 are chart-side projections fed from the
 platform's publications, never a second canonical market model.
 
-Asceify owns these outside the chart, so they are not engine work for this host:
+Aeris owns these outside the chart, so they are not engine work for this host:
 
-- **DOM ladder.** Asceify's DOM is its own GPUI widget (`terminal_ui`, fed by the platform's
+- **DOM ladder.** Aeris's DOM is its own GPUI widget (`terminal_ui`, fed by the platform's
   canonical order book). OF16 remains in this plan for other hosts, such as browser consumers, but
-  it is not an Asceify prerequisite.
-- **Time and sales.** Asceify renders its panel from its own trade tape. OF18 is likewise for
+  it is not an Aeris prerequisite.
+- **Time and sales.** Aeris renders its panel from its own trade tape. OF18 is likewise for
   other hosts.
 - **Trading lock for risk lockouts.** The host already controls chart trading: it forwards
   gestures (`trading_drag_start_at` and related calls) and drains `take_trading_intents`. When a
@@ -467,14 +467,14 @@ interpolation and no look-ahead in fixtures and replay (PD2).
 
 ### PD8 — Order-level depth inputs and microstructure events on the chart
 
-**Problem.** Rithmic supplies CME market-by-order data. Asceify's adapter already assembles an
+**Problem.** Rithmic supplies CME market-by-order data. Aeris's adapter already assembles an
 order-level book but publishes aggregated levels. Queue position, iceberg detection, pulled
-liquidity and order-size clustering are computed platform-side. The DOM shows them in Asceify's
+liquidity and order-size clustering are computed platform-side. The DOM shows them in Aeris's
 own widget; the chart must show them on price panes and the liquidity heatmap.
 
 **Required outcome.**
 
-- F3 depth ingest accepts the optional per-level order count Asceify already carries, so heatmap
+- F3 depth ingest accepts the optional per-level order count Aeris already carries, so heatmap
   cells and tooltips can show order counts beside size.
 - A typed microstructure event marker (kind: iceberg refill, pulled liquidity, size cluster, sweep;
   price, time, size and host label) rendered in price panes and on the heatmap (OF15), with caps and
@@ -507,7 +507,7 @@ frame, and results match the rectangle-based reference within parity tolerance.
 ### PD10 — Dense footprint text budget
 
 **Problem.** Detailed footprint cells update many numeric text runs per frame during fast markets.
-GPUI glyph shaping and atlas cost at that density is unmeasured. (Asceify's DOM ladder is a
+GPUI glyph shaping and atlas cost at that density is unmeasured. (Aeris's DOM ladder is a
 platform widget, so its text performance is platform work, not part of this item.)
 
 **Required outcome.**
@@ -535,7 +535,7 @@ platform widget, so its text performance is platform work, not part of this item
 | Fundamentals dashboards on charts | PD7; existing panes, histogram and stepped lines |
 | Linked charts and symbol groups | PD5 |
 | Custom studies and study scene objects | I4, F4; platform study roadmap Phases F–G |
-| DOM ladder and time and sales | None; Asceify platform widgets |
+| DOM ladder and time and sales | None; Aeris platform widgets |
 
 ## Delivery sequence
 
@@ -622,7 +622,7 @@ For every catalog item:
 
 ## Definition of completion
 
-Nucleus is a complete headless trading chart engine for this plan when a host can build a
+Aeris is a complete headless trading chart engine for this plan when a host can build a
 professional order-flow and technical-analysis workstation — footprint, CVD, profiles, TPO,
 liquidity heatmap, DOM, non-time bars, the I1–I3 indicator catalog, the full drawing catalog
 with per-tool customization, and the platform-driven annotation, replay, event, execution, sync,

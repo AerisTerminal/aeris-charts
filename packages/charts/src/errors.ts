@@ -1,5 +1,5 @@
 /** Stable machine-readable categories for public API failures. */
-export type nucleuscharts_error_code =
+export type AerisChartsErrorCode =
   | "disposed"
   | "invalid_handle"
   | "stale_handle"
@@ -13,13 +13,13 @@ export type nucleuscharts_error_code =
   | "resource_limit";
 
 /** Public error thrown for predictable chart, handle, validation, persistence, and platform failures. */
-export class nucleuscharts_error extends Error {
-  override readonly name = "NucleusChartsError";
+export class AerisChartsError extends Error {
+  override readonly name = "AerisChartsError";
 
   constructor(
-    readonly code: nucleuscharts_error_code,
+    readonly code: AerisChartsErrorCode,
     message: string,
   ) {
-    super(`nucleuscharts: ${message}`);
+    super(`aeris_charts: ${message}`);
   }
 }

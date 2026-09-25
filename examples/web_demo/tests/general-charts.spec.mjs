@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 test("general charts can own the first pane and failed creation leaves no host resources", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.width = "640px";
     host.style.height = "320px";
@@ -166,10 +166,10 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
 
   // Product attribution is not part of the chart surface. The hosts contain canvases/tooltips only;
   // legacy attribution options are retired and cannot inject a mark back into general charts.
-  expect(await page.locator("#general_workspace .nucleuscharts-attribution-logo").count()).toBe(0);
+  expect(await page.locator("#general_workspace .aeris_charts-attribution-logo").count()).toBe(0);
   expect(await page.locator("#general_workspace .general-chart-host svg").count()).toBe(0);
   expect(await page.locator("#general_workspace .general-chart-host").evaluateAll((hosts) =>
-    hosts.every((host) => !/axiusflow|powered by/i.test(host.textContent ?? "")))).toBe(true);
+    hosts.every((host) => !/Aeris Terminal|powered by/i.test(host.textContent ?? "")))).toBe(true);
 
   await page.getByRole("button", { name: "Financial" }).click();
   await expect(page.locator("#chart_wrap")).toBeVisible();
@@ -181,7 +181,7 @@ test("general dashboard keeps rendering when WebGPU has no adapter and does not 
   const fallback_warnings = [];
   const page_errors = [];
   page.on("console", (message) => {
-    if (message.type() === "warning" && message.text().startsWith("nucleuscharts: WebGPU fallback")) {
+    if (message.type() === "warning" && message.text().startsWith("aeris_charts: WebGPU fallback")) {
       fallback_warnings.push(message.text());
     }
   });
@@ -265,7 +265,7 @@ test("React general-series installation rolls back rejected initial data", async
 test("camel-case aliases share the original chart and series handles", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
-    const { createChart, create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { createChart, create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     Object.assign(host.style, { width: "480px", height: "320px" });
     document.body.appendChild(host);
@@ -309,7 +309,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     Object.assign(host.style, {
       position: "fixed",
@@ -597,7 +597,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
 test("general path styles, interpolation, missing connections, and point markers round-trip", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     Object.assign(host.style, { width: "640px", height: "360px" });
     document.body.appendChild(host);
@@ -636,7 +636,7 @@ test("general path styles, interpolation, missing connections, and point markers
 test("general area baselines and fill opacity round-trip through the public browser API", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     Object.assign(host.style, { width: "640px", height: "360px" });
     document.body.appendChild(host);
@@ -669,7 +669,7 @@ test("public linear axes render and navigate the complete finite numeric domain"
   page.on("pageerror", (error) => page_errors.push(error.message));
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     Object.assign(host.style, { width: "640px", height: "400px" });
     document.body.appendChild(host);
@@ -746,7 +746,7 @@ test("public general axes retain typed explicit ticks and formatted labels", asy
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     Object.assign(host.style, { width: "640px", height: "420px" });
     document.body.appendChild(host);
@@ -847,7 +847,7 @@ test("public category axes zoom by identity, pan by visible window, and reset", 
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     Object.assign(host.style, { width: "640px", height: "420px" });
     document.body.appendChild(host);
@@ -931,7 +931,7 @@ test("general auto sizing disables cleanly and survives hidden-container reveal"
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     Object.assign(host.style, { width: "320px", height: "180px" });
     document.body.appendChild(host);
@@ -999,7 +999,7 @@ test("general series rebind and reorder atomically while preserving legend, data
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:520px;z-index:10000";
     document.body.appendChild(host);
@@ -1178,7 +1178,7 @@ test("general shared tooltips group visible series by the exact horizontal datum
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:520px;z-index:10000";
     document.body.appendChild(host);
@@ -1238,7 +1238,7 @@ test("general brushes retain semantic ranges, select visible rows, reproject, an
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:520px;z-index:10000";
     document.body.appendChild(host);
@@ -1301,7 +1301,7 @@ test("general reference lines, dots, and regions survive lifecycle and V2 restor
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:760px;height:640px;z-index:10000";
     document.body.appendChild(host);
@@ -1444,7 +1444,7 @@ test("general columns group and stack through the browser API and V2 persistence
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:640px;z-index:10000";
     document.body.appendChild(host);
@@ -1563,7 +1563,7 @@ test("horizontal bars use category Y axes with stacking, hits, typed updates, an
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:520px;z-index:10000";
     document.body.appendChild(host);
@@ -1671,7 +1671,7 @@ test("xy_area percent stacks through browser hits and V2 persistence", async ({ 
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:560px;z-index:10000";
     document.body.appendChild(host);
@@ -1785,7 +1785,7 @@ test("bubble size data drives marks, hits, updates, accessibility, and V2 restor
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:520px;z-index:10000";
     document.body.appendChild(host);
@@ -1893,7 +1893,7 @@ test("error bars preserve independent XY bounds through browser updates and rest
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:520px;z-index:10000";
     document.body.appendChild(host);
@@ -1981,7 +1981,7 @@ test("category error bars use band and point centers with Y-only bounds", async 
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:760px;z-index:10000";
     document.body.appendChild(host);
@@ -2072,7 +2072,7 @@ test("box plots preserve five-number summaries through updates, hits, accessibil
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:520px;z-index:10000";
     document.body.appendChild(host);
@@ -2190,7 +2190,7 @@ test("heatmap grids preserve X/Y categories through typed updates, hits, accessi
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:520px;z-index:10000";
     document.body.appendChild(host);
@@ -2305,7 +2305,7 @@ test("numeric and temporal heatmap grids preserve coordinates through typed upda
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:760px;height:720px;z-index:10000";
     document.body.appendChild(host);
@@ -2442,7 +2442,7 @@ test("temporal error bars preserve Date and epoch-millisecond XY bounds", async 
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:520px;z-index:10000";
     document.body.appendChild(host);
@@ -2582,7 +2582,7 @@ test("range_area spans numeric, temporal, and category domains through the brows
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:760px;z-index:10000";
     document.body.appendChild(host);
@@ -2720,7 +2720,7 @@ test("range_area spans numeric, temporal, and category domains through the brows
 test("range_bar renders category low/high rectangles with exact browser hits", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:640px;height:420px;z-index:10000";
     document.body.appendChild(host);
@@ -2767,7 +2767,7 @@ test("xy_line and xy_area span general domains and restore through V2", async ({
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const result = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     Object.assign(host.style, {
       position: "fixed",
@@ -2944,7 +2944,7 @@ test("general columns, points, lines, and ranges participate in the shared keybo
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     Object.assign(host.style, {
       position: "fixed",
@@ -3107,12 +3107,12 @@ test("general columns, points, lines, and ranges participate in the shared keybo
     window.__general_keyboard = { chart, host, columns, scatter, line, range, horizontal, boxes, heatmap, accessibility };
   });
 
-  const layers = page.locator("#general-keyboard-host .nucleuscharts-a11y-layer");
+  const layers = page.locator("#general-keyboard-host .aeris_charts-a11y-layer");
   await expect(layers).toHaveCount(8);
 
   await layers.nth(1).focus();
   await page.keyboard.press("Home");
-  const category_region = layers.nth(1).locator(".nucleuscharts-a11y-live-region");
+  const category_region = layers.nth(1).locator(".aeris_charts-a11y-live-region");
   await expect(category_region).toContainText("Jan");
 
   await page.evaluate(() => {
@@ -3130,7 +3130,7 @@ test("general columns, points, lines, and ranges participate in the shared keybo
 
   await layers.nth(2).focus();
   await page.keyboard.press("End");
-  const scatter_region = layers.nth(2).locator(".nucleuscharts-a11y-live-region");
+  const scatter_region = layers.nth(2).locator(".aeris_charts-a11y-live-region");
   await expect(scatter_region).toContainText("Keyboard samples");
   const scatter_text = await scatter_region.textContent();
   expect(scatter_text).toContain("Keyboard samples");
@@ -3149,7 +3149,7 @@ test("general columns, points, lines, and ranges participate in the shared keybo
   await layers.nth(3).focus();
   await page.keyboard.press("Home");
   await page.keyboard.press("ArrowRight");
-  const line_region = layers.nth(3).locator(".nucleuscharts-a11y-live-region");
+  const line_region = layers.nth(3).locator(".aeris_charts-a11y-live-region");
   await expect(line_region).toContainText("Keyboard trend");
   const line_text = await line_region.textContent();
   expect(line_text).toContain("Keyboard trend");
@@ -3163,7 +3163,7 @@ test("general columns, points, lines, and ranges participate in the shared keybo
   await layers.nth(4).focus();
   await page.keyboard.press("Home");
   await page.keyboard.press("ArrowRight");
-  const range_region = layers.nth(4).locator(".nucleuscharts-a11y-live-region");
+  const range_region = layers.nth(4).locator(".aeris_charts-a11y-live-region");
   await expect(range_region).toContainText("Keyboard forecast");
   const range_text = await range_region.textContent();
   expect(range_text).toContain("Expected");
@@ -3178,7 +3178,7 @@ test("general columns, points, lines, and ranges participate in the shared keybo
   await layers.nth(5).focus();
   await page.keyboard.press("Home");
   await page.keyboard.press("ArrowRight");
-  const horizontal_region = layers.nth(5).locator(".nucleuscharts-a11y-live-region");
+  const horizontal_region = layers.nth(5).locator(".aeris_charts-a11y-live-region");
   await expect(horizontal_region).toContainText("Keyboard horizontal bars");
   const horizontal_text = await horizontal_region.textContent();
   expect(horizontal_text).toContain("South delta");
@@ -3187,7 +3187,7 @@ test("general columns, points, lines, and ranges participate in the shared keybo
   await layers.nth(6).focus();
   await page.keyboard.press("Home");
   await page.keyboard.press("ArrowRight");
-  const box_region = layers.nth(6).locator(".nucleuscharts-a11y-live-region");
+  const box_region = layers.nth(6).locator(".aeris_charts-a11y-live-region");
   await expect(box_region).toContainText("Keyboard distributions");
   const box_text = await box_region.textContent();
   expect(box_text).toContain("South spread");
@@ -3199,7 +3199,7 @@ test("general columns, points, lines, and ranges participate in the shared keybo
   await layers.nth(7).focus();
   await page.keyboard.press("Home");
   await page.keyboard.press("ArrowRight");
-  const heat_region = layers.nth(7).locator(".nucleuscharts-a11y-live-region");
+  const heat_region = layers.nth(7).locator(".aeris_charts-a11y-live-region");
   await expect(heat_region).toContainText("Keyboard heatmap");
   const heat_text = await heat_region.textContent();
   expect(heat_text).toContain("South January");

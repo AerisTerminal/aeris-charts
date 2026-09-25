@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
-const portable_browser = process.env.NUCLEUSCHARTS_PORTABLE_BROWSER === "1";
+const port = Number.parseInt(process.env.AERIS_CHARTS_TEST_PORT ?? "4174", 10);
+const portable_browser = process.env.AERIS_CHARTS_PORTABLE_BROWSER === "1";
 
 export default defineConfig({
   testDir: "./tests",

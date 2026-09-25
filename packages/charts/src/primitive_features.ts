@@ -1,7 +1,7 @@
-/** Primitive and compatibility helpers built on Nucleus's existing engine and extension boundaries. */
+/** Primitive and compatibility helpers built on Aeris's existing engine and extension boundaries. */
 
 import { chart_impl, time_to_utc_seconds } from "./impl.js";
-import { nucleuscharts_error } from "./errors.js";
+import { AerisChartsError } from "./errors.js";
 import {
   attach_native_bands_indicator,
   attach_native_anchored_text,
@@ -40,14 +40,14 @@ function is_financial_series(series: series_api | unknown): series is series_api
 
 export interface anchored_text_options {
   vert_align?: "top" | "middle" | "bottom";
-  /** Official plugin spelling; `vert_align` remains the Nucleus alias. */
+  /** Official plugin spelling; `vert_align` remains the Aeris alias. */
   vertAlign?: "top" | "middle" | "bottom";
   horz_align?: "left" | "middle" | "right";
-  /** Official plugin spelling; `horz_align` remains the Nucleus alias. */
+  /** Official plugin spelling; `horz_align` remains the Aeris alias. */
   horzAlign?: "left" | "middle" | "right";
   text: string;
   line_height?: number;
-  /** Official plugin spelling; `line_height` remains the Nucleus alias. */
+  /** Official plugin spelling; `line_height` remains the Aeris alias. */
   lineHeight?: number;
   /** CSS font shorthand containing a pixel size, for example `italic bold 54px Arial`. */
   font?: string;
@@ -109,7 +109,7 @@ export function create_anchored_text(
     apply_options(patch) {
       const next = { ...current, ...patch };
       if (!handle.set_options_json(JSON.stringify(normalize_anchored_text(next)))) {
-        throw new Error("Nucleus rejected anchored-text options");
+        throw new Error("Aeris rejected anchored-text options");
       }
       current = next;
     },
@@ -138,7 +138,7 @@ export function create_bands_indicator(
     apply_options(patch) {
       const next = { ...current, ...patch };
       if (!native.set_options_json(JSON.stringify(next))) {
-        throw new Error("Nucleus rejected bands-indicator options");
+        throw new Error("Aeris rejected bands-indicator options");
       }
       current = next;
     },
@@ -267,7 +267,7 @@ export function create_rectangle_drawing_tool(
   if (toolbar_container !== undefined) {
     button = document.createElement("button");
     button.type = "button";
-    button.className = "nucleus-rectangle-tool-button";
+    button.className = "Aeris-rectangle-tool-button";
     button.setAttribute("aria-label", "Draw rectangle");
     button.setAttribute("aria-pressed", "false");
     button.style.width = "20px";
@@ -422,7 +422,7 @@ export function create_overlay_price_scale(
     apply_options(patch) {
       const next = { ...current, ...patch };
       if (!native.set_options_json(JSON.stringify(next))) {
-        throw new Error("Nucleus rejected overlay-price-scale options");
+        throw new Error("Aeris rejected overlay-price-scale options");
       }
       current = next;
     },
@@ -494,7 +494,7 @@ export function create_session_highlighting(
       color: highlighter(point.time) || "rgba(0, 0, 0, 0)",
     }));
     if (!native.set_data_json(JSON.stringify(highlights))) {
-      throw new Error("Nucleus rejected session-highlighting data that was not aligned to its source series");
+      throw new Error("Aeris rejected session-highlighting data that was not aligned to its source series");
     }
   };
   series.subscribe_data_changed(sync);
@@ -533,10 +533,10 @@ export function create_highlight_bar_crosshair(
 
 export interface image_watermark_options {
   max_width?: number;
-  /** Official plugin spelling; `max_width` remains the Nucleus alias. */
+  /** Official plugin spelling; `max_width` remains the Aeris alias. */
   maxWidth?: number;
   max_height?: number;
-  /** Official plugin spelling; `max_height` remains the Nucleus alias. */
+  /** Official plugin spelling; `max_height` remains the Aeris alias. */
   maxHeight?: number;
   padding?: number;
   alpha?: number;
@@ -687,7 +687,7 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
     & Pick<tooltip_options, "series" | "volume_series" | "format" | "line_color"> = {
     series: options.series,
     volume_series: options.volume_series,
-    class_name: options.class_name ?? "nucleuscharts-tooltip",
+    class_name: options.class_name ?? "aeris_charts-tooltip",
     title: options.title ?? "",
     line_color: options.line_color,
     follow_mode: options.follow_mode ?? "tracking",
@@ -711,23 +711,23 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
   element.style.cssText = "position:absolute;transform:translate(calc(0px - 50%),0);opacity:0;left:0;top:0;z-index:100;pointer-events:none";
 
   const header = document.createElement("div");
-  header.className = "nucleuscharts-tooltip__header";
+  header.className = "aeris_charts-tooltip__header";
   const timestamp = document.createElement("div");
-  timestamp.className = "nucleuscharts-tooltip__timestamp";
+  timestamp.className = "aeris_charts-tooltip__timestamp";
   const title = document.createElement("div");
-  title.className = "nucleuscharts-tooltip__title";
+  title.className = "aeris_charts-tooltip__title";
   header.append(timestamp, title);
 
   const body = document.createElement("div");
-  body.className = "nucleuscharts-tooltip__body";
+  body.className = "aeris_charts-tooltip__body";
   const make_row = (label: string): { row: HTMLDivElement; value: HTMLSpanElement } => {
     const row = document.createElement("div");
-    row.className = "nucleuscharts-tooltip__row";
+    row.className = "aeris_charts-tooltip__row";
     const key = document.createElement("span");
-    key.className = "nucleuscharts-tooltip__label";
+    key.className = "aeris_charts-tooltip__label";
     key.textContent = label;
     const value = document.createElement("span");
-    value.className = "nucleuscharts-tooltip__value";
+    value.className = "aeris_charts-tooltip__value";
     row.append(key, value);
     body.append(row);
     return { row, value };
@@ -837,7 +837,7 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
       current = { ...current, ...patch };
       element.className = current.class_name;
       if (!native.set_options_json(native_options())) {
-        throw new Error("Nucleus rejected tooltip options");
+        throw new Error("Aeris rejected tooltip options");
       }
       apply_theme();
       tooltip_text(title, current.title);
@@ -884,10 +884,10 @@ export function create_delta_tooltip(
 ): delta_tooltip_handle {
   const { series, on_active_range_change, ...native_options } = options;
   if (!(chart instanceof chart_impl)) {
-    throw new Error("engine-owned delta tooltips require a Nucleus chart instance");
+    throw new Error("engine-owned delta tooltips require a Aeris chart instance");
   }
   if (series.series_type() === "candlestick") {
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "unsupported_operation",
       "delta tooltip is not supported on candlestick series; use create_tooltip for candle inspection",
     );
@@ -955,7 +955,7 @@ export function create_volume_profile(
   return {
     set_data(next) {
       if (!handle.set_data_json(serialize_volume_profile(next))) {
-        throw new Error("Nucleus rejected malformed volume-profile data");
+        throw new Error("Aeris rejected malformed volume-profile data");
       }
     },
     detach: handle.detach,

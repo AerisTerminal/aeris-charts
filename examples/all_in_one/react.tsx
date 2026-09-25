@@ -1,11 +1,11 @@
 import {
   FinancialSeries,
   GeneralPane,
-  NucleusChart,
+  AerisChart,
   type GeneralAxisSpec,
   type GeneralSeriesSpec,
-} from "@axiusflowhq/financial/react";
-import type { series_data } from "@axiusflowhq/financial";
+} from "aeris-charts/react";
+import type { series_data } from "aeris-charts";
 
 const summaryAxes: readonly GeneralAxisSpec[] = [
   { id: "month", dimension: "x", position: "bottom", scale: "band" },
@@ -26,13 +26,13 @@ export function MarketDashboard({ candles, revenue }: MarketDashboardProps) {
   }];
 
   return (
-    <NucleusChart options={{ autoSize: true }} style={{ width: "100%", height: 560 }}>
+    <AerisChart options={{ autoSize: true }} style={{ width: "100%", height: 560 }}>
       <FinancialSeries kind="candlestick" data={candles} />
       <GeneralPane
         options={{ horizontal_domain: { type: "category", scale: "band" } }}
         axes={summaryAxes}
         series={summarySeries}
       />
-    </NucleusChart>
+    </AerisChart>
   );
 }

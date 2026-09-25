@@ -1,6 +1,6 @@
 # Third-party references and development dependencies
 
-Nucleus Charts' product code, architecture, rendering backends, state model, and public API are
+Aeris Charts' product code, architecture, rendering backends, state model, and public API are
 independently designed and implemented.
 
 The project studies public documentation, public examples, and observable behavior from established
@@ -14,8 +14,8 @@ drop-in clone.
 The browser test workspace pins
 [Lightweight Charts](https://github.com/tradingview/lightweight-charts) 5.2.1 as a development-only
 dependency. Tests call its public API in an isolated reference fixture and compare observable output
-or interaction behavior with Nucleus Charts. The dependency is not bundled into the published
-`@axiusflowhq/financial` package.
+or interaction behavior with Aeris Charts. The dependency is not bundled into the published
+`aeris-charts` package.
 
 Some development-only comparison fixtures are derived from public plugin examples. They remain
 isolated from product code and are covered by the upstream Apache License 2.0. The
@@ -28,6 +28,6 @@ Lightweight Charts is licensed under the Apache License, Version 2.0.
 
 ## Trademarks
 
-TradingView and Lightweight Charts are trademarks of their respective owners. Nucleus Charts is
+TradingView and Lightweight Charts are trademarks of their respective owners. Aeris Charts is
 not affiliated with or endorsed by TradingView, Inc. Trademark names are used only for factual
 attribution of research references and development dependencies.

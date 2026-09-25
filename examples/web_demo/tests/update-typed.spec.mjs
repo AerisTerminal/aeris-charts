@@ -20,7 +20,7 @@ function sampled_allocations(profile) {
   const by_function = new Map();
   const visit = (node, package_stack = false) => {
     const frame = node.callFrame ?? {};
-    const in_package = package_stack || frame.url?.includes("/dist/nucleuscharts_financial.js") === true;
+    const in_package = package_stack || frame.url?.includes("/dist/aeris_charts_financial.js") === true;
     const bytes = node.selfSize ?? 0;
     total_bytes += bytes;
     if (in_package) {

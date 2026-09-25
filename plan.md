@@ -1,6 +1,6 @@
-# Nucleus Charts All-in-One Architecture and Competitive Delivery Plan
+# Aeris Charts All-in-One Architecture and Competitive Delivery Plan
 
-Nucleus will be a complete financial and general visualization library. Lightweight Charts is the
+Aeris will be a complete financial and general visualization library. Lightweight Charts is the
 financial competitive reference; Recharts is the general charting competitive reference. This plan
 covers the **general (non-financial) charting program** toward full Recharts parity and beyond.
 Trading and order-flow work lives in [Expansion.md](Expansion.md); both plans share one
@@ -271,10 +271,10 @@ memory results and known limits.
 
 ## Parity coverage matrix
 
-Each row must acquire exact versioned reference examples, Nucleus API mappings, named automated
+Each row must acquire exact versioned reference examples, Aeris API mappings, named automated
 fixtures, manual checks where needed, and recorded differences before it can be marked verified.
 Status is deliberately conservative: **Partial** means code exists but the full row is unverified;
-**Open** means the product contract still needs delivery. These are Nucleus requirements, including
+**Open** means the product contract still needs delivery. These are Aeris requirements, including
 platform capabilities beyond the competitor's browser rendering model.
 
 | Capability | Status | Required outcome | Phase |
@@ -305,13 +305,13 @@ lifecycle, responsive layout, documentation, distribution and measured performan
 
 Keep one public library, one `ChartEngine` and one ordered frame contract. Preserve the specialized
 financial data and coordinate paths while completing general charting as a first-class capability.
-The browser package remains `@axiusflowhq/financial` with an optional `/react` entry. Package naming
+The browser package remains `aeris-charts` with an optional `/react` entry. Package naming
 or distribution changes require a compatibility decision; this plan does not introduce another
 product. [Architecture.md](Architecture.md) describes current ownership and execution; this document
 specifies the target and acceptance gates.
 
 The existing shared-engine direction is sound. Replacing it with a browser-only renderer or making
-financial storage universally generic would harm Nucleus: charts would diverge across backends or
+financial storage universally generic would harm Aeris: charts would diverge across backends or
 financial updates would pay unnecessary work. Retain the working foundations and finish their
 contracts.
 
@@ -360,9 +360,9 @@ Framework-neutral API / React authoring / native host
 
 | Owner | Responsibility |
 | --- | --- |
-| `nucleuscharts_core` | Platform-free scale math, validation fundamentals, financial storage and shared option/value types; f64 media-space math |
-| `nucleuscharts_engine` | General datasets, axes, domain resolution, series/layout algorithms, mutations, interaction, transitions, persistence and frame construction |
-| `nucleuscharts_render` | Ordered primitives and shared lowering/tessellation math; no host or chart-family policy |
+| `aeris_charts_core` | Platform-free scale math, validation fundamentals, financial storage and shared option/value types; f64 media-space math |
+| `aeris_charts_engine` | General datasets, axes, domain resolution, series/layout algorithms, mutations, interaction, transitions, persistence and frame construction |
+| `aeris_charts_render` | Ordered primitives and shared lowering/tessellation math; no host or chart-family policy |
 | Executors | Execute prepared primitives with equivalent clipping/blending/text; own bounded device/font/image resources and recovery |
 | WASM and TypeScript | Bulk conversion, platform input, resource initialization, typed handles, host callbacks, DOM presentation and accessibility |
 | React | Declarative ownership and reconciliation through the public imperative API; no duplicate data/geometry/interaction model |
@@ -492,9 +492,9 @@ committing code:
 ```text
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo clippy -p nucleuscharts_wasm --target wasm32-unknown-unknown --locked -- -D warnings
+cargo clippy -p aeris_charts_wasm --target wasm32-unknown-unknown --locked -- -D warnings
 cargo test --workspace --locked
-cargo run -p nucleuscharts_native --example perf_gate --release
+cargo run -p aeris_charts_native --example perf_gate --release
 
 cd packages/charts
 npm ci
@@ -533,7 +533,7 @@ files.
 
 ## Definition of completion
 
-Nucleus is competitively complete for this plan when a consumer can build the full required Recharts
+Aeris is competitively complete for this plan when a consumer can build the full required Recharts
 capability matrix through a coherent published API, combine it with the established financial
 product, and rely on equivalent semantic output across supported backends. Routine changes retain
 identity; invalid updates are atomic; controls are accessible; styles and layouts are deliberate;

@@ -1,14 +1,14 @@
 # AGENTS.md
 
-You are an expert software engineering agent responsible for work in Nucleus Charts. Read `Architecture.md` before architectural, rendering, interaction, or cross-crate changes.
+You are an expert software engineering agent responsible for work in Aeris Charts. Read `Architecture.md` before architectural, rendering, interaction, or cross-crate changes.
 
 ## Product context
 
-Nucleus Charts is the high-performance financial chart engine used by Axiusflow and browser hosts. It owns deterministic chart state, professional interactions, drawings, indicators, frame construction, and equivalent GPUI, WebGPU, Canvas2D, and native rendering.
+Aeris Charts is the high-performance financial chart engine used by Aeris Terminal and browser hosts. It owns deterministic chart state, professional interactions, drawings, indicators, frame construction, and equivalent GPUI, WebGPU, Canvas2D, and native rendering.
 
 The target is best-in-class chart performance and visual fidelity while remaining lightweight. Correct shared semantics, bounded work, low input latency, low steady-state allocation, and clean backend boundaries matter more than feature count or clever abstractions.
 
-Axiusflow is a separate parent platform repository that consumes pinned Nucleus Git revisions. Do not modify Axiusflow unless the user explicitly asks for coordinated work in both repositories.
+Aeris Terminal is a separate parent platform repository that consumes pinned Aeris Git revisions. Do not modify Aeris Terminal unless the user explicitly asks for coordinated work in both repositories.
 
 ## Working with the maintainer
 
@@ -16,7 +16,7 @@ The primary maintainer is a product owner, not a technical developer. Honor the 
 
 If a requested mechanism would materially harm correctness, visual parity, performance, portability, maintainability, security, or architectural boundaries:
 
-1. Say directly that the approach is not good for Nucleus Charts.
+1. Say directly that the approach is not good for Aeris Charts.
 2. Explain the concrete failure mode in product terms.
 3. Recommend the stronger implementation and its tradeoff.
 4. Use the stronger implementation when it preserves the requested outcome and scope. Ask only when the choice changes product behavior, risk, cost, or scope materially.
@@ -46,7 +46,7 @@ Ponytail removes accidental complexity. It must not simplify away render parity,
 
 - Read before editing. Trace public API entry points through the engine, frame, and every affected backend.
 - Fix root causes at the owning shared layer. Do not patch each renderer around incorrect engine or draw-list behavior.
-- Keep `nucleuscharts_core`, `nucleuscharts_indicators`, `nucleuscharts_engine`, and `nucleuscharts_render` free of browser, GPUI, and application dependencies.
+- Keep `aeris_charts_core`, `aeris_charts_indicators`, `aeris_charts_engine`, and `aeris_charts_render` free of browser, GPUI, and application dependencies.
 - Keep one chart model and one ordered frame contract. Backends execute it; they do not fork semantics.
 - Keep media-space math in `f64` until backend encoding. Make device-pixel conversion and snapping explicit.
 - Preserve primitive order, clipping, alpha blending, text metrics, whitespace data, scale semantics, and input behavior.
@@ -106,9 +106,9 @@ before committing, run the applicable complete gates with zero warnings:
 ```text
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p nucleuscharts_wasm --target wasm32-unknown-unknown -- -D warnings
+cargo clippy -p aeris_charts_wasm --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace
-cargo run -p nucleuscharts_native --example perf_gate --release
+cargo run -p aeris_charts_native --example perf_gate --release
 
 cd packages/charts
 npm ci
@@ -122,21 +122,21 @@ Run Playwright once per batch when the batch changes browser-facing behavior, an
 
 ### crates.io releases
 
-Keep every publishable Nucleus crate on one coordinated version and keep each internal dependency's
-`path` plus `version` fields aligned. `nucleuscharts_render_gpui` is repository-only and must retain
+Keep every publishable Aeris crate on one coordinated version and keep each internal dependency's
+`path` plus `version` fields aligned. `aeris_charts_render_gpui` is repository-only and must retain
 `publish = false` while it depends on the reviewed Zed Git revision.
 
 After the complete gates pass, publish with `--locked` in dependency order and wait for each crate to
 be indexed before publishing its consumers:
 
 ```text
-nucleuscharts_indicators
-nucleuscharts_core
-nucleuscharts_render
-nucleuscharts_engine
-nucleuscharts_render_wgpu
-nucleuscharts_native
-nucleuscharts_wasm
+aeris_charts_indicators
+aeris_charts_core
+aeris_charts_render
+aeris_charts_engine
+aeris_charts_render_wgpu
+aeris_charts_native
+aeris_charts_wasm
 ```
 
 Run a package or publish dry run at each layer before its irreversible upload. Never place a crates.io

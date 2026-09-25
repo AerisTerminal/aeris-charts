@@ -222,10 +222,10 @@ test("text watermark API paints its lines and detach clears them without a dupli
   );
 
   await page.evaluate(async () => {
-    const { create_text_watermark } = await import("/dist/nucleuscharts_financial.js");
+    const { create_text_watermark } = await import("/dist/aeris_charts_financial.js");
     window.__test_text_watermark = create_text_watermark(window.__chart.panes()[0], {
       lines: [
-        { text: "NUCLEUS", color: "rgba(41, 98, 255, 0.16)", fontSize: 72, fontStyle: "bold" },
+        { text: "Aeris", color: "rgba(41, 98, 255, 0.16)", fontSize: 72, fontStyle: "bold" },
         { text: "watermark", color: "rgba(41, 98, 255, 0.30)", fontSize: 24, fontFamily: "monospace" },
       ],
     });

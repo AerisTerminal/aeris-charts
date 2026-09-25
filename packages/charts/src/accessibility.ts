@@ -22,7 +22,7 @@ const UPDATE_MAX_SERIES = 3;
 const MAX_VISIBLE_QUERY_POINTS = 512;
 const MIN_ZOOM_SPAN = 2;
 const ZOOM_STEP = 0.2;
-const CANVAS_PREVIOUS_ARIA = "data-nucleuscharts-a11y-previous-aria-hidden";
+const CANVAS_PREVIOUS_ARIA = "data-aeris_charts-a11y-previous-aria-hidden";
 
 type general_accessibility_series = general_series_api & {
   readonly x_axis_id: string;
@@ -101,7 +101,7 @@ export interface accessibility_options {
   time_formatter?: (value: time) => string;
   series_label?: (series: series_api, index: number) => string;
   describe_chart?: (points: readonly series_data[], series_label: string) => string;
-  /** Compatibility hook retained from the first Nucleus helper. */
+  /** Compatibility hook retained from the first Aeris helper. */
   describe_point?: (point: accessibility_point) => string;
   messages?: Partial<accessibility_messages>;
   lang?: string;
@@ -247,30 +247,30 @@ class PaneAccessibility {
     readonly pane: pane_api,
     readonly pane_index: number,
   ) {
-    this.layer.className = "nucleuscharts-a11y-layer";
+    this.layer.className = "aeris_charts-a11y-layer";
     this.layer.tabIndex = 0;
     this.layer.setAttribute("role", "application");
     this.layer.style.cssText = "position:absolute;outline:none;outline-offset:-3px;pointer-events:none;z-index:5";
 
-    this.description.id = `nucleuscharts-a11y-description-${controller.next_id()}`;
-    this.description.className = "nucleuscharts-a11y-description";
+    this.description.id = `aeris_charts-a11y-description-${controller.next_id()}`;
+    this.description.className = "aeris_charts-a11y-description";
     this.description.style.cssText = HIDDEN;
     this.layer.setAttribute("aria-describedby", this.description.id);
     this.layer.appendChild(this.description);
 
-    this.live.className = "nucleuscharts-a11y-live-region";
+    this.live.className = "aeris_charts-a11y-live-region";
     this.live.setAttribute("aria-live", "assertive");
     this.live.setAttribute("aria-atomic", "true");
     this.live.style.cssText = HIDDEN;
     this.layer.appendChild(this.live);
 
-    this.hint.className = "nucleuscharts-a11y-shortcuts-hint";
+    this.hint.className = "aeris_charts-a11y-shortcuts-hint";
     this.hint.setAttribute("aria-hidden", "true");
     this.layer.appendChild(this.hint);
-    this.panel.className = "nucleuscharts-a11y-shortcuts-panel";
+    this.panel.className = "aeris_charts-a11y-shortcuts-panel";
     this.panel.setAttribute("aria-hidden", "true");
     this.layer.appendChild(this.panel);
-    this.targets.className = "nucleuscharts-a11y-targets";
+    this.targets.className = "aeris_charts-a11y-targets";
     this.layer.appendChild(this.targets);
 
     controller.host.appendChild(this.layer);
@@ -1183,7 +1183,7 @@ class AccessibilityController implements accessibility_handle {
     this.host = chart.chart_element();
     this.initial_canvas_states = [...this.host.querySelectorAll("canvas")]
       .map((canvas) => canvas.getAttribute("aria-hidden"));
-    this.status.className = "nucleuscharts-a11y-shared-status-region";
+    this.status.className = "aeris_charts-a11y-shared-status-region";
     this.status.setAttribute("aria-live", "polite");
     this.status.setAttribute("aria-atomic", "true");
     this.status.style.cssText = HIDDEN;
@@ -1383,7 +1383,7 @@ class AccessibilityController implements accessibility_handle {
     }
     const selector = "a[href],button,input,select,textarea,iframe,[tabindex],[contenteditable=true],audio[controls],video[controls]";
     for (const element of this.host.querySelectorAll<HTMLElement>(selector)) {
-      if (element.closest(".nucleuscharts-a11y-layer") !== null) continue;
+      if (element.closest(".aeris_charts-a11y-layer") !== null) continue;
       if (this.neutralised.has(element)) continue;
       const previous_hidden = element instanceof HTMLCanvasElement
         ? this.hidden_canvases.get(element) ?? null

@@ -10,7 +10,7 @@ import {
   default_theme_name,
   enable_brushable_area_interaction,
   theme_palette,
-} from "./dist/nucleuscharts_financial.js";
+} from "./dist/aeris_charts_financial.js";
 import { hydrate_icons } from "./demo_icons.js";
 
 const PRIMARY_BLUE = theme_palette(default_theme_name).primary;

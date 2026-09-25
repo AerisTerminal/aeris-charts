@@ -11,12 +11,12 @@ import { test, expect } from "@playwright/test";
 // Report-only by design: these are comparative numbers for a PR, not a gate. Absolute values on a
 // software rasterizer mean nothing on their own.
 //
-// Opt-in via NUCLEUSCHARTS_BENCH=1, and skipped otherwise. Two reasons, both deliberate: it is a measuring
+// Opt-in via AERIS_CHARTS_BENCH=1, and skipped otherwise. Two reasons, both deliberate: it is a measuring
 // instrument rather than a regression test, and it installs 1M bars five times over, which grows wasm
 // substantial linear memory. Linear memory never shrinks, and that residue was observed starving the
 // *next* spec's page init past a 30s timeout when this ran as part of the default suite.
 
-const ENABLED = process.env.NUCLEUSCHARTS_BENCH === "1";
+const ENABLED = process.env.AERIS_CHARTS_BENCH === "1";
 
 /** Best-of-N so a GC pause or a scheduler hiccup does not become the reported number. */
 const REPEATS = 5;
@@ -29,7 +29,7 @@ async function wait_chart(page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  test.skip(!ENABLED, "set NUCLEUSCHARTS_BENCH=1 to run the build-flag benchmark");
+  test.skip(!ENABLED, "set AERIS_CHARTS_BENCH=1 to run the build-flag benchmark");
   test.setTimeout(600_000);
   page.on("pageerror", (error) => console.log(`[browser:pageerror] ${error.message}`));
   await page.goto("/");
@@ -37,7 +37,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("build-flag benchmark: 1M-bar install, autoscale, hit tests, frame build", async ({ page }) => {
-  test.skip(!ENABLED, "set NUCLEUSCHARTS_BENCH=1 to run the build-flag benchmark");
+  test.skip(!ENABLED, "set AERIS_CHARTS_BENCH=1 to run the build-flag benchmark");
   test.setTimeout(600_000);
   const results = await page.evaluate(async (repeats) => {
     const best = (fn) => {
@@ -225,7 +225,7 @@ test("build-flag benchmark: 1M-bar install, autoscale, hit tests, frame build", 
 });
 
 test("indicator benchmark: 1M RSI current/batch latency and linear-memory delta", async ({ page }) => {
-  test.skip(!ENABLED, "set NUCLEUSCHARTS_BENCH=1 to run the build-flag benchmark");
+  test.skip(!ENABLED, "set AERIS_CHARTS_BENCH=1 to run the build-flag benchmark");
   test.setTimeout(600_000);
   const result = await page.evaluate(() => {
     const rows = 1_000_000;

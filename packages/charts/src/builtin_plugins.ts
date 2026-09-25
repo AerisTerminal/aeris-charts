@@ -176,7 +176,7 @@ export function create_text_watermark(
         lines: patch.lines === undefined ? current.lines : [...patch.lines],
       };
       if (!handle.set_options_json(JSON.stringify(normalize_text_watermark(next)))) {
-        throw new Error("Nucleus rejected text-watermark options");
+        throw new Error("Aeris rejected text-watermark options");
       }
       current = next;
     },

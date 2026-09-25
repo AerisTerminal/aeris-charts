@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
 
-const enabled = process.env.NUCLEUSCHARTS_RUN_GPUI_WEBGPU_MATRIX === "1";
+const enabled = process.env.AERIS_CHARTS_RUN_GPUI_WEBGPU_MATRIX === "1";
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/d1/candles.json", import.meta.url), "utf8"));
 const repository_root = fileURLToPath(new URL("../../..", import.meta.url));
 const matrix_cases = [
@@ -67,7 +67,7 @@ const matrix_cases = [
     webgpu_rgba_sha256: "58c663f83403bbf31d34d0ec7939838aef9a4656c8f278ba616d3b2433321a9d",
   },
 ];
-const requested_case = process.env.NUCLEUSCHARTS_GPUI_CASE;
+const requested_case = process.env.AERIS_CHARTS_GPUI_CASE;
 const selected_cases = requested_case === undefined
   ? matrix_cases
   : matrix_cases.filter((matrix_case) => matrix_case.name === requested_case);
@@ -125,7 +125,7 @@ function capture_gpui(output, metadata, matrix_case) {
     "run",
     "--release",
     "-p",
-    "nucleuscharts_render_gpui",
+    "aeris_charts_render_gpui",
     "--features",
     "gpui-backend",
     "--example",
@@ -133,13 +133,13 @@ function capture_gpui(output, metadata, matrix_case) {
   ];
   const env = {
     ...process.env,
-    NUCLEUSCHARTS_GPUI_CAPTURE_OUT: output,
-    NUCLEUSCHARTS_GPUI_CAPTURE_METADATA: metadata,
-    NUCLEUSCHARTS_GPUI_THEME: matrix_case.theme,
-    NUCLEUSCHARTS_GPUI_FEATURE: matrix_case.feature,
+    AERIS_CHARTS_GPUI_CAPTURE_OUT: output,
+    AERIS_CHARTS_GPUI_CAPTURE_METADATA: metadata,
+    AERIS_CHARTS_GPUI_THEME: matrix_case.theme,
+    AERIS_CHARTS_GPUI_FEATURE: matrix_case.feature,
   };
-  delete env.NUCLEUSCHARTS_GPUI_BAR_SPACING;
-  if (matrix_case.spacing !== null) env.NUCLEUSCHARTS_GPUI_BAR_SPACING = String(matrix_case.spacing);
+  delete env.AERIS_CHARTS_GPUI_BAR_SPACING;
+  if (matrix_case.spacing !== null) env.AERIS_CHARTS_GPUI_BAR_SPACING = String(matrix_case.spacing);
   const result = spawnSync("cargo", args, {
     cwd: repository_root,
     encoding: "utf8",
@@ -188,7 +188,7 @@ test.describe("GPUI versus presented WebGPU matrix", () => {
     ];
     const matrix_report = [];
 
-    expect(selected_cases, `unknown NUCLEUSCHARTS_GPUI_CASE ${requested_case}`).not.toHaveLength(0);
+    expect(selected_cases, `unknown AERIS_CHARTS_GPUI_CASE ${requested_case}`).not.toHaveLength(0);
     for (const matrix_case of selected_cases) {
       await test.step(matrix_case.name, async () => {
         const presented_png = await capture_webgpu(page, matrix_case);

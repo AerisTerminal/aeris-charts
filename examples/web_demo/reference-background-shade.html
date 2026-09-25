@@ -15,11 +15,11 @@
 </head>
 <body>
 <main>
-  <section><h1>Nucleus</h1><div class="chart" id="nucleus"></div></section>
+  <section><h1>Aeris</h1><div class="chart" id="Aeris"></div></section>
   <section><h1>Public reference fixture</h1><div class="chart" id="reference"></div></section>
 </main>
 <script type="module">
-import { create_chart } from "./dist/nucleuscharts_financial.js";
+import { create_chart } from "./dist/aeris_charts_financial.js";
 import {
   LineSeries,
   createChart,
@@ -27,7 +27,7 @@ import {
 } from "./node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.mjs";
 
 const parity = {};
-document.getElementById("nucleus").__shade_parity = parity;
+document.getElementById("Aeris").__shade_parity = parity;
 
 const width = 600;
 const height = 320;
@@ -104,24 +104,24 @@ const shared_options = {
   timeScale: { visible: false },
 };
 
-const nucleus = await create_chart(document.getElementById("nucleus"), {
+const Aeris = await create_chart(document.getElementById("Aeris"), {
   ...shared_options,
   backend: "canvas2d",
 });
-nucleus.resize(width, height, devicePixelRatio);
-const nucleus_empty_range = nucleus.price_scale("right").get_visible_range();
-const nucleus_shade = nucleus.add_series("background_shade", {
+Aeris.resize(width, height, devicePixelRatio);
+const Aeris_empty_range = Aeris.price_scale("right").get_visible_range();
+const Aeris_shade = Aeris.add_series("background_shade", {
   low_color,
   high_color,
   low_value: 0,
   high_value: 1000,
 });
-nucleus_shade.set_data(shade_data);
-nucleus.time_scale().fit_content();
-const nucleus_shade_only_range = nucleus.price_scale("right").get_visible_range();
-const nucleus_line = nucleus.add_series("line", { color: line_color });
-nucleus_line.set_data(line_data);
-nucleus.time_scale().fit_content();
+Aeris_shade.set_data(shade_data);
+Aeris.time_scale().fit_content();
+const Aeris_shade_only_range = Aeris.price_scale("right").get_visible_range();
+const Aeris_line = Aeris.add_series("line", { color: line_color });
+Aeris_line.set_data(line_data);
+Aeris.time_scale().fit_content();
 
 const reference = createChart(document.getElementById("reference"), shared_options);
 const reference_empty_range = reference.priceScale("right").getVisibleRange();
@@ -139,41 +139,41 @@ reference.timeScale().fitContent();
 const render = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 await render();
 const composed_ranges = {
-  nucleus: nucleus.price_scale("right").get_visible_range(),
+  Aeris: Aeris.price_scale("right").get_visible_range(),
   reference: reference.priceScale("right").getVisibleRange(),
 };
-nucleus_shade.apply_options({ visible: false });
+Aeris_shade.apply_options({ visible: false });
 reference_shade.applyOptions({ visible: false });
 await render();
 const line_only_ranges = {
-  nucleus: nucleus.price_scale("right").get_visible_range(),
+  Aeris: Aeris.price_scale("right").get_visible_range(),
   reference: reference.priceScale("right").getVisibleRange(),
 };
-nucleus_shade.apply_options({ visible: true });
+Aeris_shade.apply_options({ visible: true });
 reference_shade.applyOptions({ visible: true });
 const set_range = async (from, to) => {
-  nucleus.time_scale().set_visible_logical_range({ from, to });
+  Aeris.time_scale().set_visible_logical_range({ from, to });
   reference.timeScale().setVisibleLogicalRange({ from, to });
-  nucleus.render();
+  Aeris.render();
   await render();
 };
 const resize = async (next_width, next_height) => {
-  for (const element of [document.getElementById("nucleus"), document.getElementById("reference")]) {
+  for (const element of [document.getElementById("Aeris"), document.getElementById("reference")]) {
     element.style.width = `${next_width}px`;
     element.style.height = `${next_height}px`;
   }
-  nucleus.resize(next_width, next_height, devicePixelRatio);
+  Aeris.resize(next_width, next_height, devicePixelRatio);
   reference.resize(next_width, next_height);
-  nucleus.render();
+  Aeris.render();
   await render();
 };
 const metrics = () => ({
   values,
-  nucleus: {
-    logical_range: nucleus.time_scale().get_visible_logical_range(),
-    price_range: nucleus.price_scale("right").get_visible_range(),
-    pane: nucleus.panes()[0].get_geometry(),
-    coordinates: values.map((_, index) => nucleus.time_scale().logical_to_coordinate(index)),
+  Aeris: {
+    logical_range: Aeris.time_scale().get_visible_logical_range(),
+    price_range: Aeris.price_scale("right").get_visible_range(),
+    pane: Aeris.panes()[0].get_geometry(),
+    coordinates: values.map((_, index) => Aeris.time_scale().logical_to_coordinate(index)),
   },
   reference: {
     logical_range: reference.timeScale().getVisibleLogicalRange(),
@@ -186,11 +186,11 @@ const metrics = () => ({
 await render();
 Object.assign(parity, {
   values,
-  empty_ranges: { nucleus: nucleus_empty_range, reference: reference_empty_range },
-  shade_only_ranges: { nucleus: nucleus_shade_only_range, reference: reference_shade_only_range },
+  empty_ranges: { Aeris: Aeris_empty_range, reference: reference_empty_range },
+  shade_only_ranges: { Aeris: Aeris_shade_only_range, reference: reference_shade_only_range },
   composed_ranges,
   line_only_ranges,
-  series: { nucleus_shade, nucleus_line, reference_shade, reference_line },
+  series: { Aeris_shade, Aeris_line, reference_shade, reference_line },
   metrics,
   set_range,
   resize,

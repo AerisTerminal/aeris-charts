@@ -1,7 +1,7 @@
 # Footprint / Numbers Bars Design
 
 This document is the durable design contract for GitHub issue #23. It describes the tick-truth
-model that Nucleus Charts uses for professional footprint series. `Architecture.md` remains the
+model that Aeris Charts uses for professional footprint series. `Architecture.md` remains the
 authority for crate ownership and dependency direction.
 
 ## 1. Trade event and ordering model
@@ -28,7 +28,7 @@ rebuilds the complete retained series once and reports that work. It never patch
 while leaving the Max/Min Delta path stale. A measured suffix-checkpoint path may replace that full
 reconstruction later without changing the public result.
 
-Prices must lie on the configured integer tick grid. Nucleus rejects off-grid data rather than
+Prices must lie on the configured integer tick grid. Aeris rejects off-grid data rather than
 rounding financial truth silently. Volume is finite and positive. A session-ID change closes the
 current bar and resets session cumulative delta.
 
@@ -44,7 +44,7 @@ Classification is deterministic and ordered by authority:
 4. If none of those rules resolves the event, it remains unknown.
 
 Unknown volume contributes to price-level, bar, and POC total volume, but not bid volume, ask volume,
-delta, imbalance, or cumulative delta. Nucleus never guesses a side merely to make a cluster look
+delta, imbalance, or cumulative delta. Aeris never guesses a side merely to make a cluster look
 complete. Historical reconstruction reruns classification in canonical event order, so inserting a
 late event can correctly change the classification of later ambiguous events.
 
@@ -86,7 +86,7 @@ or Delta cells from the same data without rebuilding the tape.
 
 ## 4. Rendering and LOD
 
-Footprint geometry is constructed in `nucleuscharts_engine` as ordinary backend-neutral primitives.
+Footprint geometry is constructed in `aeris_charts_engine` as ordinary backend-neutral primitives.
 Backends preserve the resulting order, clipping, alpha, text alignment, and pixel coordinates; no
 executor recalculates POC, delta, or imbalance.
 
@@ -150,7 +150,7 @@ ratio/minimum/consecutive count, visual cell mode, colors, text size, summaries,
 retention. Changing tick size or time aggregation rebuilds from the tape atomically. Visual-only
 options invalidate only the series frame layer.
 
-Host callbacks receive derived snapshots only through ordinary chart query/event paths. Axiusflow
+Host callbacks receive derived snapshots only through ordinary chart query/event paths. Aeris Terminal
 and other hosts remain authoritative for feed subscription, exchange calendars, and choosing
 session IDs; none of those concerns enter the renderer.
 

@@ -15,9 +15,9 @@ test("WASM workspace rejects invalid mutations without losing addressable cells"
   });
   await page.goto("/");
   const result = await page.evaluate(async () => {
-    const { default: init, NucleusWorkspace } = await import("/__workspace_test/nucleuscharts_wasm.js");
+    const { default: init, AerisWorkspace } = await import("/__workspace_test/aeris_charts_wasm.js");
     await init();
-    const workspace = new NucleusWorkspace(0);
+    const workspace = new AerisWorkspace(0);
     try {
       workspace.split(1, "horizontal", 0);
       const before = workspace.layout_json();

@@ -1,4 +1,4 @@
-import { create_chart } from "./dist/nucleuscharts_financial.js";
+import { create_chart } from "./dist/aeris_charts_financial.js";
 
 let dashboard_root = null;
 let chart_grid = null;

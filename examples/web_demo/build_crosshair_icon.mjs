@@ -4,7 +4,7 @@ import { chromium } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
 
 const source = new URL("../../packages/charts/src/assets/icons/add.svg", import.meta.url);
-const target = new URL("../../crates/nucleuscharts_render/src/crosshair_add.alpha", import.meta.url);
+const target = new URL("../../crates/aeris_charts_render/src/crosshair_add.alpha", import.meta.url);
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage();

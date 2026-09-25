@@ -10,7 +10,7 @@ const next_frame = () => new Promise((resolve) => requestAnimationFrame(resolve)
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function load_package() {
-  package_module ??= await import("/dist/nucleuscharts_financial.js");
+  package_module ??= await import("/dist/aeris_charts_financial.js");
   return package_module;
 }
 
@@ -479,5 +479,5 @@ async function soak(points, seed, duration_ms, sample_interval_ms, memory_sample
   return { duration_ms: performance.now() - started, updates, samples, backend: entry.chart.backend() };
 }
 
-globalThis.__nucleus_bench = { environment, general_dashboard, historical, lifecycle, memory_snapshot, multi_chart, multi_series, prepare_interaction, prepare_lifecycle, realtime, reset, retained_updates, soak, start_frame_recording, startup, stop_frame_recording };
-globalThis.__nucleus_bench_ready = true;
+globalThis.__Aeris_bench = { environment, general_dashboard, historical, lifecycle, memory_snapshot, multi_chart, multi_series, prepare_interaction, prepare_lifecycle, realtime, reset, retained_updates, soak, start_frame_recording, startup, stop_frame_recording };
+globalThis.__Aeris_bench_ready = true;

@@ -57,7 +57,7 @@ test("all advanced series render through the shared Rust engine", async ({ page 
   await open_chart(page);
   const before = await page.screenshot();
   const result = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const bars = window.__data.slice(0, 20);
     const definitions = [
       ["grouped_bars", {}, bars.map((bar, index) => ({ time: bar.time, values: [index + 1, index + 3, index + 2] }))],
@@ -171,7 +171,7 @@ test("primitive feature helpers compose existing engine and host boundaries", as
   page.on("pageerror", (error) => page_errors.push(error.message));
   await open_chart(page);
   const result = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const chart = window.__chart;
     const series = window.__main;
     const bars = window.__data;
@@ -223,10 +223,10 @@ test("primitive feature helpers compose existing engine and host boundaries", as
     const state = {
       drawings: chart.drawings().map((drawing) => drawing.kind()),
       overlay_has_range: overlay_scale.get_visible_range() !== null,
-      tooltips: chart.chart_element().querySelectorAll(".nucleuscharts-tooltip").length,
-      role: chart.chart_element().querySelector(".nucleuscharts-a11y-layer")?.getAttribute("role"),
-      label: chart.chart_element().querySelector(".nucleuscharts-a11y-layer")?.getAttribute("aria-label"),
-      announcement: chart.chart_element().querySelector(".nucleuscharts-a11y-live-region")?.textContent ?? "",
+      tooltips: chart.chart_element().querySelectorAll(".aeris_charts-tooltip").length,
+      role: chart.chart_element().querySelector(".aeris_charts-a11y-layer")?.getAttribute("role"),
+      label: chart.chart_element().querySelector(".aeris_charts-a11y-layer")?.getAttribute("aria-label"),
+      announcement: chart.chart_element().querySelector(".aeris_charts-a11y-live-region")?.textContent ?? "",
     };
     a11y.detach();
     handles.forEach((handle) => handle.detach());
@@ -259,7 +259,7 @@ test("legacy brushable_area input normalizes to the built-in Area series", async
 test("Delta Tooltip rejects candlesticks, normal Tooltip still works, and type conversion removes Delta Tooltip", async ({ page }) => {
   await open_chart(page);
   const result = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const chart = window.__chart;
     const candles = window.__main;
     let candle_error = "";
@@ -312,7 +312,7 @@ test("Delta Tooltip rejects candlesticks, normal Tooltip still works, and type c
 test("bar highlight default follows dark and light chart surfaces", async ({ page }) => {
   await open_chart(page);
   const point = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const chart = window.__chart;
     chart.apply_options(api.theme_options("dark"));
     window.__bar_highlight = api.create_highlight_bar_crosshair(chart, window.__main);
@@ -337,7 +337,7 @@ test("bar highlight default follows dark and light chart surfaces", async ({ pag
     .toBeGreaterThan(dark_base[0] + dark_base[1] + dark_base[2] + 30);
 
   await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     window.__chart.apply_options(api.theme_options("light"));
     window.__chart.clear_crosshair_position();
   });
@@ -350,7 +350,7 @@ test("bar highlight default follows dark and light chart surfaces", async ({ pag
     .toBeLessThan(light_base[0] + light_base[1] + light_base[2] - 60);
 
   await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     window.__bar_highlight.detach();
     window.__chart.apply_options(api.theme_options("dark"));
     window.__chart.clear_crosshair_position();
@@ -365,14 +365,14 @@ test("bar highlight default follows dark and light chart surfaces", async ({ pag
   expect(count_near_point(PNG.sync.read(await page.screenshot()), point, viewport, [255, 0, 0]))
     .toBeGreaterThan(5);
   await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     window.__chart.apply_options(api.theme_options("light"));
   });
   await page.waitForTimeout(40);
   expect(count_near_point(PNG.sync.read(await page.screenshot()), point, viewport, [255, 0, 0]))
     .toBeGreaterThan(5);
   await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     window.__chart.remove_series(window.__main);
     window.__chart.apply_options(api.theme_options("dark"));
     window.__explicit_bar_highlight.detach();
@@ -382,7 +382,7 @@ test("bar highlight default follows dark and light chart surfaces", async ({ pag
 test("rectangle tool uses official two-click preview, data-time snapping, and engine axis views", async ({ page }) => {
   await open_chart(page);
   const setup = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const chart = window.__chart;
     const series = window.__main;
     series.apply_options({ price_scale_id: "left" });
@@ -501,7 +501,7 @@ test("rectangle tool uses official two-click preview, data-time snapping, and en
 test("session highlighting follows the official callback contract and refreshes on source data", async ({ page }) => {
   await open_chart(page);
   const result = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const series = window.__main;
     const source_count = series.data().length;
     let calls = 0;
@@ -541,7 +541,7 @@ test("session highlighting follows the official callback contract and refreshes 
 test("accessibility provides per-pane semantics, official keyboard help, summaries, updates, and engine focus", async ({ page }) => {
   await open_chart(page);
   const result = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const chart = window.__chart;
     const series = window.__main;
     const before_canvas = [...chart.chart_element().querySelectorAll("canvas")].map((canvas) => canvas.getAttribute("aria-hidden"));
@@ -555,7 +555,7 @@ test("accessibility provides per-pane semantics, official keyboard help, summari
     const layer = document.activeElement;
     layer.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const point_text = chart.chart_element().querySelector(".nucleuscharts-a11y-live-region")?.textContent ?? "";
+    const point_text = chart.chart_element().querySelector(".aeris_charts-a11y-live-region")?.textContent ?? "";
     const last = series.data().at(-1);
     const x = chart.time_scale().time_to_coordinate(last.time);
     const y = series.price_to_coordinate(last.close);
@@ -573,19 +573,19 @@ test("accessibility provides per-pane semantics, official keyboard help, summari
       if (pixels[index] < 90 && pixels[index + 1] > 60 && pixels[index + 1] < 145 && pixels[index + 2] > 180 && pixels[index + 3] > 180) focus_pixels++;
     }
     layer.dispatchEvent(new KeyboardEvent("keydown", { key: "H", bubbles: true }));
-    const panel_visible = getComputedStyle(chart.chart_element().querySelector(".nucleuscharts-a11y-shortcuts-panel")).display !== "none";
+    const panel_visible = getComputedStyle(chart.chart_element().querySelector(".aeris_charts-a11y-shortcuts-panel")).display !== "none";
     const before_zoom = chart.time_scale().get_visible_logical_range();
     layer.dispatchEvent(new KeyboardEvent("keydown", { key: "+", bubbles: true }));
     const after_zoom = chart.time_scale().get_visible_logical_range();
     layer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const summary = chart.chart_element().querySelector(".nucleuscharts-a11y-live-region")?.textContent ?? "";
+    const summary = chart.chart_element().querySelector(".aeris_charts-a11y-live-region")?.textContent ?? "";
     series.update({ ...last, close: last.close + 1 });
     await new Promise((resolve) => setTimeout(resolve, 220));
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const update = chart.chart_element().querySelector(".nucleuscharts-a11y-shared-status-region")?.textContent ?? "";
+    const update = chart.chart_element().querySelector(".aeris_charts-a11y-shared-status-region")?.textContent ?? "";
     const semantic = {
-      layers: chart.chart_element().querySelectorAll(".nucleuscharts-a11y-layer").length,
+      layers: chart.chart_element().querySelectorAll(".aeris_charts-a11y-layer").length,
       role: layer.getAttribute("role"),
       role_description: layer.getAttribute("aria-roledescription"),
       label: layer.getAttribute("aria-label"),
@@ -616,7 +616,7 @@ test("accessibility provides per-pane semantics, official keyboard help, summari
 test("accessibility creates an independently named focus target for every live pane", async ({ page }) => {
   await open_chart(page);
   const result = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const chart = window.__chart;
     const accessibility = api.enable_accessibility(chart, {
       chart_title: (pane_index) => pane_index === 0 ? "Price pane" : "Volume pane",
@@ -626,7 +626,7 @@ test("accessibility creates an independently named focus target for every live p
     await new Promise((resolve) => queueMicrotask(resolve));
     await new Promise((resolve) => requestAnimationFrame(resolve));
     accessibility.focus(1);
-    const layers = [...chart.chart_element().querySelectorAll(".nucleuscharts-a11y-layer")];
+    const layers = [...chart.chart_element().querySelectorAll(".aeris_charts-a11y-layer")];
     const state = {
       count: layers.length,
       labels: layers.map((layer) => layer.getAttribute("aria-label")),
@@ -644,7 +644,7 @@ test("accessibility creates an independently named focus target for every live p
 test("tooltip presents themed OHLC market data with explicit volume", async ({ page }) => {
   await open_chart(page);
   const target = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const chart = window.__chart;
     chart.apply_options(api.theme_options("dark"));
     const volume = chart.add_series("histogram", {
@@ -680,13 +680,13 @@ test("tooltip presents themed OHLC market data with explicit volume", async ({ p
   await page.waitForFunction(() => performance.now() > 600);
   const before = await page.screenshot();
   await page.mouse.move(target.x, target.y);
-  await expect.poll(() => page.locator(".nucleuscharts-tooltip").evaluate((element) => element.style.opacity)).toBe("1");
-  const content = await page.locator(".nucleuscharts-tooltip").evaluate((element) => ({
-    timestamp: element.querySelector(".nucleuscharts-tooltip__timestamp")?.textContent,
-    title: element.querySelector(".nucleuscharts-tooltip__title")?.textContent,
-    rows: [...element.querySelectorAll(".nucleuscharts-tooltip__row:not([hidden])")].map((row) => ({
-      label: row.querySelector(".nucleuscharts-tooltip__label")?.textContent,
-      value: row.querySelector(".nucleuscharts-tooltip__value")?.textContent,
+  await expect.poll(() => page.locator(".aeris_charts-tooltip").evaluate((element) => element.style.opacity)).toBe("1");
+  const content = await page.locator(".aeris_charts-tooltip").evaluate((element) => ({
+    timestamp: element.querySelector(".aeris_charts-tooltip__timestamp")?.textContent,
+    title: element.querySelector(".aeris_charts-tooltip__title")?.textContent,
+    rows: [...element.querySelectorAll(".aeris_charts-tooltip__row:not([hidden])")].map((row) => ({
+      label: row.querySelector(".aeris_charts-tooltip__label")?.textContent,
+      value: row.querySelector(".aeris_charts-tooltip__value")?.textContent,
     })),
     background: getComputedStyle(element).backgroundColor,
     color: getComputedStyle(element).color,
@@ -710,22 +710,22 @@ test("tooltip presents themed OHLC market data with explicit volume", async ({ p
   expect(content.transform).toContain("20px");
 
   await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     window.__chart.apply_options(api.theme_options("light"));
   });
-  await expect.poll(() => page.locator(".nucleuscharts-tooltip").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)");
-  expect(await page.locator(".nucleuscharts-tooltip").evaluate((element) => getComputedStyle(element).color)).toBe("rgb(51, 51, 51)");
+  await expect.poll(() => page.locator(".aeris_charts-tooltip").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)");
+  expect(await page.locator(".aeris_charts-tooltip").evaluate((element) => getComputedStyle(element).color)).toBe("rgb(51, 51, 51)");
 
   const after = await page.screenshot();
   expect(after.equals(before)).toBe(false);
   await page.evaluate(() => window.__official_tooltip.detach());
-  await expect(page.locator(".nucleuscharts-tooltip")).toHaveCount(0);
+  await expect(page.locator(".aeris_charts-tooltip")).toHaveCount(0);
 });
 
 test("tooltip preserves OHLC inspection on area and line presentations", async ({ page }) => {
   await open_chart(page);
   const target = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const chart = window.__chart;
     const series = chart.add_series("area", {
       price_line_visible: false,
@@ -747,10 +747,10 @@ test("tooltip preserves OHLC inspection on area and line presentations", async (
     };
   });
 
-  const read_values = () => page.locator(".nucleuscharts-tooltip__row:not([hidden]) .nucleuscharts-tooltip__value").allTextContents();
+  const read_values = () => page.locator(".aeris_charts-tooltip__row:not([hidden]) .aeris_charts-tooltip__value").allTextContents();
   await page.mouse.move(target.x, target.y);
   await expect.poll(read_values).toEqual(target.expected);
-  await expect(page.locator(".nucleuscharts-tooltip__row").filter({ hasText: "Volume" })).toBeHidden();
+  await expect(page.locator(".aeris_charts-tooltip__row").filter({ hasText: "Volume" })).toBeHidden();
 
   await page.evaluate(() => window.__structured_series.set_type("line"));
   await page.mouse.move(target.x + 1, target.y);
@@ -763,7 +763,7 @@ test("tooltip preserves OHLC inspection on area and line presentations", async (
 test("brushable area keeps ordinary Area data/axes while pane drag is reserved for comparison", async ({ page }) => {
   await open_chart(page);
   const setup = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const chart = window.__chart;
     chart.apply_options({
       crosshair: {
@@ -889,7 +889,7 @@ test("brushable area keeps ordinary Area data/axes while pane drag is reserved f
   expect(count_near(tooltip_clip, [241, 226, 211], 12), "themed primary text").toBeGreaterThan(5);
   expect(count_near(tooltip_clip, [195, 178, 161], 12), "themed muted text").toBeGreaterThan(5);
   expect(count_near(tooltip_clip, [69, 103, 137], 6), "standard themed border").toBeGreaterThan(10);
-  expect(await page.evaluate(() => window.__chart.chart_element().querySelectorAll(".nucleuscharts-delta-tooltip").length)).toBe(0);
+  expect(await page.evaluate(() => window.__chart.chart_element().querySelectorAll(".aeris_charts-delta-tooltip").length)).toBe(0);
 
   await page.mouse.up();
   expect(await page.evaluate(() => window.__delta_tooltip.active_range())).toMatchObject({
@@ -922,7 +922,7 @@ test("brushable area keeps ordinary Area data/axes while pane drag is reserved f
 test("brushable area guides reproject and Escape or double click clears", async ({ page }) => {
   await open_chart(page);
   const selection = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const chart = window.__chart;
     const brush = chart.add_series("area", {
       price_line_visible: false,

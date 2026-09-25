@@ -22,23 +22,23 @@ function expect_color(actual, expected, message) {
 }
 
 async function fixture(page) {
-  return page.locator("#nucleus").evaluate((element) => {
+  return page.locator("#Aeris").evaluate((element) => {
     const fixture = element.__shade_parity;
     return {
       empty_ranges: fixture.empty_ranges,
       shade_only_ranges: fixture.shade_only_ranges,
       composed_ranges: fixture.composed_ranges,
       line_only_ranges: fixture.line_only_ranges,
-      nucleus_types: [fixture.series.nucleus_shade.series_type(), fixture.series.nucleus_line.series_type()],
-      nucleus_lengths: [fixture.series.nucleus_shade.data().length, fixture.series.nucleus_line.data().length],
+      Aeris_types: [fixture.series.Aeris_shade.series_type(), fixture.series.Aeris_line.series_type()],
+      Aeris_lengths: [fixture.series.Aeris_shade.data().length, fixture.series.Aeris_line.data().length],
       reference_lengths: [fixture.series.reference_shade.data().length, fixture.series.reference_line.data().length],
     };
   });
 }
 
 async function assert_strips(page, indices) {
-  const state = await page.locator("#nucleus").evaluate((element) => element.__shade_parity.metrics());
-  for (const name of ["nucleus", "reference"]) {
+  const state = await page.locator("#Aeris").evaluate((element) => element.__shade_parity.metrics());
+  for (const name of ["Aeris", "reference"]) {
     const locator = page.locator(`#${name}`);
     const box = await locator.boundingBox();
     const image = PNG.sync.read(await locator.screenshot({ animations: "disabled" }));
@@ -54,29 +54,29 @@ async function assert_strips(page, indices) {
       }
     }
   }
-  expect(state.nucleus.logical_range.from).toBeCloseTo(state.reference.logical_range.from, 7);
-  expect(state.nucleus.logical_range.to).toBeCloseTo(state.reference.logical_range.to, 7);
+  expect(state.Aeris.logical_range.from).toBeCloseTo(state.reference.logical_range.from, 7);
+  expect(state.Aeris.logical_range.to).toBeCloseTo(state.reference.logical_range.to, 7);
 }
 
 async function assert_scanline_parity(page) {
-  const state = await page.locator("#nucleus").evaluate((element) => element.__shade_parity.metrics());
-  const nucleus_locator = page.locator("#nucleus");
+  const state = await page.locator("#Aeris").evaluate((element) => element.__shade_parity.metrics());
+  const Aeris_locator = page.locator("#Aeris");
   const reference_locator = page.locator("#reference");
-  const nucleus_box = await nucleus_locator.boundingBox();
+  const Aeris_box = await Aeris_locator.boundingBox();
   const reference_box = await reference_locator.boundingBox();
-  const nucleus = PNG.sync.read(await nucleus_locator.screenshot({ animations: "disabled" }));
+  const Aeris = PNG.sync.read(await Aeris_locator.screenshot({ animations: "disabled" }));
   const reference = PNG.sync.read(await reference_locator.screenshot({ animations: "disabled" }));
-  const nucleus_scale = nucleus.width / nucleus_box.width;
+  const Aeris_scale = Aeris.width / Aeris_box.width;
   const reference_scale = reference.width / reference_box.width;
   const width = Math.min(
-    Math.round(state.nucleus.pane.width * nucleus_scale),
+    Math.round(state.Aeris.pane.width * Aeris_scale),
     Math.round(state.reference.pane.width * reference_scale),
   );
-  const nucleus_y = Math.round((state.nucleus.pane.top + 3) * nucleus_scale);
+  const Aeris_y = Math.round((state.Aeris.pane.top + 3) * Aeris_scale);
   const reference_y = Math.round((state.reference.pane.top + 3) * reference_scale);
   for (let x = 0; x < width; x += 1) {
     expect_color(
-      pixel(nucleus, Math.round(state.nucleus.pane.left * nucleus_scale) + x, nucleus_y),
+      pixel(Aeris, Math.round(state.Aeris.pane.left * Aeris_scale) + x, Aeris_y),
       pixel(reference, Math.round(state.reference.pane.left * reference_scale) + x, reference_y),
       `full public-reference shade scanline at x=${x}`,
     );
@@ -88,35 +88,35 @@ test("background shade retains behavior learned from the public example", async 
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: dpr });
     const page = await context.newPage();
     await page.goto("/reference-background-shade.html");
-    await page.waitForFunction(() => document.getElementById("nucleus")?.__shade_parity?.metrics !== undefined);
+    await page.waitForFunction(() => document.getElementById("Aeris")?.__shade_parity?.metrics !== undefined);
 
     const initial = await fixture(page);
-    expect(initial.empty_ranges.nucleus).toBeNull();
-    expect(initial.shade_only_ranges.nucleus).toBeNull();
+    expect(initial.empty_ranges.Aeris).toBeNull();
+    expect(initial.shade_only_ranges.Aeris).toBeNull();
     expect(initial.shade_only_ranges.reference).toEqual({ from: -0.5, to: 0.5 });
     expect(initial.composed_ranges).toEqual(initial.line_only_ranges);
-    expect(initial.nucleus_types).toEqual(["background_shade", "line"]);
-    expect(initial.nucleus_lengths).toEqual([500, 500]);
+    expect(initial.Aeris_types).toEqual(["background_shade", "line"]);
+    expect(initial.Aeris_lengths).toEqual([500, 500]);
     expect(initial.reference_lengths).toEqual([500, 500]);
 
     await assert_scanline_parity(page);
 
-    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(0, 20));
+    await page.locator("#Aeris").evaluate((element) => element.__shade_parity.set_range(0, 20));
     await assert_strips(page, [2, 10, 18]);
     await assert_scanline_parity(page);
-    const clipped = await page.locator("#nucleus").evaluate((element) => element.__shade_parity.metrics());
-    expect(clipped.nucleus.coordinates[100]).toBeGreaterThan(clipped.nucleus.pane.width);
+    const clipped = await page.locator("#Aeris").evaluate((element) => element.__shade_parity.metrics());
+    expect(clipped.Aeris.coordinates[100]).toBeGreaterThan(clipped.Aeris.pane.width);
     expect(clipped.reference.coordinates[100]).toBeGreaterThan(clipped.reference.pane.width);
 
-    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(200, 260));
+    await page.locator("#Aeris").evaluate((element) => element.__shade_parity.set_range(200, 260));
     await assert_strips(page, [205, 230, 255]);
     await assert_scanline_parity(page);
 
-    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(0, 499));
+    await page.locator("#Aeris").evaluate((element) => element.__shade_parity.set_range(0, 499));
     await assert_scanline_parity(page);
 
-    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.resize(480, 260));
-    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(200, 260));
+    await page.locator("#Aeris").evaluate((element) => element.__shade_parity.resize(480, 260));
+    await page.locator("#Aeris").evaluate((element) => element.__shade_parity.set_range(200, 260));
     await assert_strips(page, [205, 230, 255]);
     await assert_scanline_parity(page);
     await context.close();

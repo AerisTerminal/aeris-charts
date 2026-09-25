@@ -29,14 +29,14 @@ import type {
 
 const chart_context = createContext<chart_api | null>(null);
 
-/** Return the live Nucleus chart owned by the nearest {@link NucleusChart}. */
-export function useNucleusChart(): chart_api {
+/** Return the live Aeris chart owned by the nearest {@link AerisChart}. */
+export function useAerisChart(): chart_api {
   const chart = useContext(chart_context);
-  if (chart === null) throw new Error("useNucleusChart must be used inside <NucleusChart>");
+  if (chart === null) throw new Error("useAerisChart must be used inside <AerisChart>");
   return chart;
 }
 
-export interface NucleusChartProps {
+export interface AerisChartProps {
   options?: deep_partial<chart_options>;
   className?: string;
   style?: CSSProperties;
@@ -49,7 +49,7 @@ export interface NucleusChartProps {
  * component, option changes are applied to the same handle, and cleanup calls the canonical
  * `chart.remove()` path. No DOM work runs during server rendering.
  */
-export function NucleusChart({ options, className, style, children, onChartReady }: NucleusChartProps) {
+export function AerisChart({ options, className, style, children, onChartReady }: AerisChartProps) {
   const host_ref = useRef<HTMLDivElement | null>(null);
   const on_ready_ref = useRef(onChartReady);
   const initial_options_ref = useRef(options);
@@ -108,7 +108,7 @@ export interface FinancialSeriesProps {
 
 /** A financial series whose engine identity is retained across ordinary React rerenders. */
 export function FinancialSeries({ kind, data, options, onSeriesReady }: FinancialSeriesProps) {
-  const chart = useNucleusChart();
+  const chart = useAerisChart();
   const options_ref = useRef(options);
   const ready_ref = useRef(onSeriesReady);
   const [series, set_series] = useState<series_api | null>(null);
@@ -228,7 +228,7 @@ function dispose_pane_runtime(chart: chart_api, runtime: pane_runtime): void {
  * or kind changes replace only the affected general series, never the chart.
  */
 export function GeneralPane({ options, axes, series, onPaneReady, onSeriesReady }: GeneralPaneProps) {
-  const chart = useNucleusChart();
+  const chart = useAerisChart();
   const runtime_ref = useRef<pane_runtime | null>(null);
   const ready_ref = useRef(onPaneReady);
   const series_ready_ref = useRef(onSeriesReady);

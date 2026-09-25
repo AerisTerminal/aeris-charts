@@ -1,15 +1,15 @@
 import { test, expect } from "@playwright/test";
 
-// Browser 60fps gate (roadmap O2 item O1): the native headless gates (crates/nucleuscharts_native/
+// Browser 60fps gate (roadmap O2 item O1): the native headless gates (crates/aeris_charts_native/
 // examples/perf_gate.rs, interaction_perf.rs) measure engine-CPU cost only. This spec measures
 // the full browser path — engine + executor + presentation — as rAF frame deltas during
 // scripted pan/zoom/crosshair on a large dataset.
 //
 // Report-only by default: CI runs WebGPU on SwiftShader (software rasterizer), so absolute
-// frame times are not comparable to real GPUs. Set NUCLEUSCHARTS_PERF_STRICT=1 to enforce the
+// frame times are not comparable to real GPUs. Set AERIS_CHARTS_PERF_STRICT=1 to enforce the
 // budgets as hard assertions on machines with a real GPU.
 
-const STRICT = process.env.NUCLEUSCHARTS_PERF_STRICT === "1";
+const STRICT = process.env.AERIS_CHARTS_PERF_STRICT === "1";
 const FRAME_BUDGET_MS = 1000 / 60;
 const P95_BUDGET_MS = FRAME_BUDGET_MS * 2;
 const BARS = 100_000;

@@ -4,9 +4,9 @@ import { dataset_metadata, metric } from "./shared.mjs";
 
 export function measure_native(scenario) {
   const started = performance.now();
-  const output = execFileSync("cargo", ["run", "--quiet", "--release", "-p", "nucleuscharts_native", "--example", "evidence_bench"], { cwd: repository_root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "inherit"] });
+  const output = execFileSync("cargo", ["run", "--quiet", "--release", "-p", "aeris_charts_native", "--example", "evidence_bench"], { cwd: repository_root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "inherit"] });
   const raw = JSON.parse(output);
-  const persistence_output = execFileSync("cargo", ["run", "--quiet", "--release", "-p", "nucleuscharts_native", "--example", "persistence_perf"], { cwd: repository_root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "inherit"] });
+  const persistence_output = execFileSync("cargo", ["run", "--quiet", "--release", "-p", "aeris_charts_native", "--example", "persistence_perf"], { cwd: repository_root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "inherit"] });
   const persistence = JSON.parse(persistence_output);
   const dataset = dataset_metadata(raw.points, raw.seed);
   dataset.configuration.scenario = { runtime_target: "native-rust-headless" };

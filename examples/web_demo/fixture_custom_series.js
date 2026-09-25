@@ -1,9 +1,9 @@
 /**
- * OHLC custom-series fixture for the Nucleus plugin contract (plugin platform Phase C-c).
+ * OHLC custom-series fixture for the Aeris plugin contract (plugin platform Phase C-c).
  *
  * This development-only comparison fixture retains the public example's up/down rule (close vs the PREVIOUS
  * close), the same crisp-position math, and the same media-px `radius`. The only adaptation is
- * the coordinate space: Nucleus's render context
+ * the coordinate space: Aeris's render context
  * carries absolute BITMAP px (item x and `price_to_y` outputs), where the reference's renderer receives
  * pane-media coordinates and scales by `horizontal/verticalPixelRatio` inside its
  * `useBitmapCoordinateSpace` scope — so the helpers below run at pixelRatio 1, with widths
@@ -67,7 +67,7 @@ function gridAndCrosshairMediaWidth(horizontalPixelRatio) {
 }
 
 /**
- * An OHLC pane view as a Nucleus `custom_series_pane_view`.
+ * An OHLC pane view as a Aeris `custom_series_pane_view`.
  * `overrides` supplies plugin-side rendering options; `hooks.on_render` is a demo/test
  * observability hook receiving each frame's visible items.
  */
@@ -121,7 +121,7 @@ export function custom_ohlc_pane_view(overrides = {}, hooks = {}) {
       }
       // _drawCandles: "we want this in media width therefore using 1" (reference comment), then
       // positionsLine scales by the ratio — exactly Math.round(mediaWidth * ctx.dpr) here.
-      // reference falls back to fillRect when the canvas lacks roundRect; Nucleus's analogue for a
+      // reference falls back to fillRect when the canvas lacks roundRect; Aeris's analogue for a
       // zero radius is `rect` (a zero-radius roundRect is a plain rect, and the crisp quad
       // family keeps the backends pixel-identical — the rounded path renders when radius > 0).
       const bodyBitmapWidth = Math.round(candlestickWidth(ctx.bar_spacing, 1) * ctx.dpr);

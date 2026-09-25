@@ -1,4 +1,4 @@
-import { createChart } from "@axiusflowhq/financial";
+import { createChart } from "aeris-charts";
 
 const container = document.querySelector("#chart");
 if (!(container instanceof HTMLElement)) throw new Error("missing #chart container");

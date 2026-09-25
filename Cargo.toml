@@ -1,22 +1,22 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/nucleuscharts_core",
-    "crates/nucleuscharts_indicators",
-    "crates/nucleuscharts_engine",
-    "crates/nucleuscharts_render",
-    "crates/nucleuscharts_render_wgpu",
-    "crates/nucleuscharts_render_gpui",
-    "crates/nucleuscharts_wasm",
-    "crates/nucleuscharts_native",
+    "crates/aeris_charts_core",
+    "crates/aeris_charts_indicators",
+    "crates/aeris_charts_engine",
+    "crates/aeris_charts_render",
+    "crates/aeris_charts_render_wgpu",
+    "crates/aeris_charts_render_gpui",
+    "crates/aeris_charts_wasm",
+    "crates/aeris_charts_native",
 ]
 
 [workspace.package]
 version = "0.3.0"
 edition = "2021"
 license = "AGPL-3.0-only"
-authors = ["Axiusflow"]
-repository = "https://github.com/Axiusflowhq/financial-charts"
+authors = ["Aeris Terminal"]
+repository = "https://github.com/aeristerminal/aeris-charts"
 readme = "Crates.md"
 keywords = ["finance", "charts", "trading", "webgpu", "wasm"]
 categories = ["visualization", "graphics", "wasm"]

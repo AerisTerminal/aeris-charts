@@ -2,7 +2,7 @@
 
 ## Supported product surface
 
-The supported product is the pre-1.0 browser package `@axiusflowhq/financial`. Its framework-neutral
+The supported product is the pre-1.0 browser package `aeris-charts`. Its framework-neutral
 root ESM entry point, optional `./react` adapter, `./wasm` asset, and `./design.css` stylesheet are the
 supported npm export paths. React is an optional peer dependency and is not loaded by root consumers.
 The supported root surface is:
@@ -48,11 +48,11 @@ The supported root surface is:
   `enable_accessibility()`, accessibility options, and keyboard data/drawing operation;
 - the additive `wheel_behavior` chart option (`auto`, `pan`, or `zoom`); existing gesture option
   names remain compatible;
-- `nucleuscharts_error` and its machine-readable error codes;
+- `AerisChartsError` and its machine-readable error codes;
 - chart-state persistence V1 through `chart.export_state()` and `chart.import_state()`.
 - camel-case aliases for the common JavaScript lifecycle (`createChart`, `initWasm`, chart/series/scale
   creation and data methods) while every existing snake-case entry remains supported on the same handles;
-- canonical presentation reset through `chart.reset_style_to_defaults()`. It restores Nucleus-owned
+- canonical presentation reset through `chart.reset_style_to_defaults()`. It restores Aeris-owned
   chart and series visual defaults for the chart's selected theme, including semantic unset/follow
   states, while preserving data, panes, drawings, indicators, series visibility/metadata, price
   formatting, scale bindings and scale/view state. It is deliberately separate from
@@ -61,7 +61,7 @@ The supported root surface is:
   backend, stable fallback stage/reason, secure-context and `navigator.gpu` exposure, and optional
   unstable platform detail. `chart.backend()` retains its existing active-backend return value.
 
-The `./react` entry exports `NucleusChart`, `FinancialSeries`, `GeneralPane`, and `useNucleusChart` plus
+The `./react` entry exports `AerisChart`, `FinancialSeries`, `GeneralPane`, and `useAerisChart` plus
 their configuration types. It is an authoring adapter over the root imperative API: ordinary rerenders
 retain chart/series identities, data changes mutate those existing handles, structural general-axis or
 series changes replace only the affected engine objects, and unmount uses the canonical disposal path.
@@ -132,7 +132,7 @@ visibility without replacing the canonical grid style/color; that presentation c
 library default.
 
 `chart.reset_style_to_defaults()` is the canonical host action for returning presentation to shipped
-Nucleus defaults. It does not reconstruct defaults from `options()` output: the engine restores
+Aeris defaults. It does not reconstruct defaults from `options()` output: the engine restores
 semantic follow states such as unpinned series colors and price-scale text. Watermark content and
 visibility, scale modes/ranges/margins/layout constraints, viewport zoom/scroll, and indicator/data
 semantics survive the reset; only their engine-owned visual styling is restored.
@@ -141,7 +141,7 @@ Default mouse-wheel behavior is informed by measurements from the pinned public 
 a saturated vertical step uses a 1.0 zoom increment, smaller trackpad deltas stay proportional, and the logical point under
 the cursor remains anchored because `right_bar_stays_on_scroll` defaults to `false`. Vertical and
 horizontal deltas independently zoom and pan the time scale on the pane, time axis, or price axis;
-Ctrl and Shift do not change routing. `wheel_behavior: "pan"` and `"zoom"` are explicit Nucleus
+Ctrl and Shift do not change routing. `wheel_behavior: "pan"` and `"zoom"` are explicit Aeris
 extensions; explicit zoom retains price-axis wheel zoom and focused Ctrl zoom.
 
 The built-in series live-price line is engine-owned. `price_line_extent` defaults to `"partial"`
@@ -221,10 +221,35 @@ objects or executable callbacks are never reconstructed from persisted JSON.
 
 ## Errors and lifecycle
 
-Predictable failures throw `nucleuscharts_error`, an `Error` subclass with one of these stable
+Predictable failures throw `AerisChartsError`, an `Error` subclass with one of these stable
 codes: `disposed`, `invalid_handle`, `stale_handle`, `invalid_data`, `invalid_options`,
 `unsupported_operation`, `serialization_error`, `persistence_version_error`, `extension_error`,
 `renderer_platform_error`, or `resource_limit`.
+
+## Brand rename
+
+The browser package is `aeris-charts` (with `aeris-charts/react`). The former branded error
+exports were renamed to `AerisChartsError` and `AerisChartsErrorCode`; update imports and
+`instanceof` checks when migrating. Rust consumers use the `aeris_charts_*` crates listed in
+`Crates.md`.
+
+Every former brand-bearing public identifier was hard renamed:
+
+| Public surface | New identifier |
+| --- | --- |
+| Browser error class | `AerisChartsError` |
+| Browser error-code type | `AerisChartsErrorCode` |
+| React chart component | `AerisChart` |
+| React chart props | `AerisChartProps` |
+| React chart hook | `useAerisChart` |
+| WebAssembly chart class | `AerisChart` |
+| WebAssembly workspace class | `AerisWorkspace` |
+| GPUI prepared-frame type | `PreparedAerisFrame` |
+| GPUI viewport type | `AerisViewport` |
+
+Persisted chart and workspace schema identifiers, browser event names, generated WebAssembly
+asset names, DOM IDs/classes, CSS selectors, and benchmark environment variables now use the
+`aeris_charts` prefix. There are no compatibility aliases for the retired brand.
 
 `chart.remove()` is idempotent. Every operation that needs live chart state throws `disposed`
 after removal. Identity fields already held by the caller may still be read. Removed series,
@@ -292,18 +317,18 @@ support follows the separately documented persistence window and is a major comp
 
 ## Rust distribution
 
-The Rust crates are published to crates.io as one coordinated release family. Version `0.2.0`
-publishes `nucleuscharts_core`, `nucleuscharts_indicators`, `nucleuscharts_render`,
-`nucleuscharts_engine`, `nucleuscharts_render_wgpu`, `nucleuscharts_native`, and
-`nucleuscharts_wasm`. Workspace manifests retain local path dependencies with the same explicit
+The Rust crates are prepared as one coordinated release family. Version `0.3.0`
+publishes `aeris_charts_core`, `aeris_charts_indicators`, `aeris_charts_render`,
+`aeris_charts_engine`, `aeris_charts_render_wgpu`, `aeris_charts_native`, and
+`aeris_charts_wasm`. Workspace manifests retain local path dependencies with the same explicit
 version, so repository builds exercise the same dependency boundaries used by registry consumers.
 
 The Rust API is below 1.0 and may evolve between minor releases. Patch releases preserve the public
 API within their minor line except where a correctness or security repair cannot do so safely; minor
-releases may add, change, or remove pre-1.0 Rust APIs. All published Nucleus crates in one release use
-the same version, and consumers should keep direct Nucleus dependencies aligned.
+releases may add, change, or remove pre-1.0 Rust APIs. All published Aeris crates in one release use
+the same version, and consumers should keep direct Aeris dependencies aligned.
 
-`nucleuscharts_render_gpui` remains repository-only and experimental because it tracks a reviewed
+`aeris_charts_render_gpui` remains repository-only and experimental because it tracks a reviewed
 Zed Git revision whose API differs from the crates.io `gpui` release. Exact Git revisions are
 required for that backend; floating Git dependencies are unsupported.
 

@@ -2,7 +2,7 @@
  * Pointer/wheel/keyboard gesture recognizer wired onto the axis/input overlay canvas.
  *
  * Browser events are normalized here, while pointer membership, gesture transitions, pinch
- * centroid/distance, and primary-touch continuation live in `nucleuscharts_engine::interaction` through the WASM
+ * centroid/distance, and primary-touch continuation live in `aeris_charts_engine::interaction` through the WASM
  * input methods. Scale, drawing, trading, kinetic, and animation math remains engine-owned.
  * - touch: cancellable Touch Events, long-press inspection, fixed-centroid zoom-only pinch,
  * - mouse/pen: Pointer Events + pointer capture,
@@ -485,7 +485,7 @@ export function install_gestures(chart: chart_impl): () => void {
       const target = wasm.price_axis_target_at(pane, point.x) ?? null;
       const zoom = wasm.wheel_zoom_scale(delta_y);
       if (cfg.wheel_behavior === "zoom" && target !== null) {
-        // Explicit Nucleus `zoom` mode retains price-axis wheel zoom as an extension.
+        // Explicit Aeris `zoom` mode retains price-axis wheel zoom as an extension.
         wasm.price_axis_wheel_zoom(
           pane,
           target,
@@ -858,7 +858,7 @@ export function install_gestures(chart: chart_impl): () => void {
       return;
     }
     const p = local_xy(e);
-    // A newly armed Nucleus drawing tool explicitly owns its first placement click. It cannot be
+    // A newly armed Aeris drawing tool explicitly owns its first placement click. It cannot be
     // paired with a click from the interaction that armed or preceded the tool.
     if (chart.creation_armed() && !chart.creation_sequence_active()) {
       reset_mouse_click();
@@ -877,7 +877,7 @@ export function install_gestures(chart: chart_impl): () => void {
       + Math.abs(e.clientY - mouse_click_position.y);
     reset_mouse_click();
     // A qualifying second click emits only double-click. Variable drawing sequences still need
-    // the second terminal anchor before the shared finish action. An already-hit Nucleus drawing
+    // the second terminal anchor before the shared finish action. An already-hit Aeris drawing
     // may consume the click internally (for example, opening its text editor), but pane click
     // subscribers still receive only the first single click.
     if (distance < DBL_CLICK_MANHATTAN) {
@@ -1458,7 +1458,7 @@ export function install_gestures(chart: chart_impl): () => void {
   window.addEventListener("keyup", on_modifier_key);
   window.addEventListener("keyup", release_keyboard_scroll);
   window.addEventListener("blur", cancel_if_active);
-  window.addEventListener("nucleuscharts-chart-backend-lost", cancel_if_active);
+  window.addEventListener("aeris_charts-chart-backend-lost", cancel_if_active);
   document.addEventListener("visibilitychange", on_visibility_change);
 
   return () => {
@@ -1487,7 +1487,7 @@ export function install_gestures(chart: chart_impl): () => void {
     window.removeEventListener("keyup", on_modifier_key);
     window.removeEventListener("keyup", release_keyboard_scroll);
     window.removeEventListener("blur", cancel_if_active);
-    window.removeEventListener("nucleuscharts-chart-backend-lost", cancel_if_active);
+    window.removeEventListener("aeris_charts-chart-backend-lost", cancel_if_active);
     document.removeEventListener("visibilitychange", on_visibility_change);
     gesture_resize_observer.disconnect();
     cancel_if_active();

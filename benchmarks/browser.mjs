@@ -46,7 +46,7 @@ function scenario_dataset(scenario) {
 }
 
 async function page_environment(page) {
-  return page.evaluate(() => globalThis.__nucleus_bench.environment());
+  return page.evaluate(() => globalThis.__Aeris_bench.environment());
 }
 
 function report_browser_errors(page) {
@@ -62,8 +62,8 @@ async function cold_start(browser, base_url, scenario) {
     const page = await context.newPage();
     report_browser_errors(page);
     await page.goto(`${base_url}/benchmark.html`);
-    await page.waitForFunction(() => globalThis.__nucleus_bench_ready === true);
-    rows.push(await page.evaluate(({ points, seed_value }) => globalThis.__nucleus_bench.startup(points, seed_value), { points: scenario.points, seed_value: seed }));
+    await page.waitForFunction(() => globalThis.__Aeris_bench_ready === true);
+    rows.push(await page.evaluate(({ points, seed_value }) => globalThis.__Aeris_bench.startup(points, seed_value), { points: scenario.points, seed_value: seed }));
     rows.at(-1).browser_environment = await page_environment(page);
     await context.close();
   }
@@ -96,7 +96,7 @@ function degradation(values) {
 
 async function run_page_scenario(page, scenario) {
   if (scenario.kind === "historical") {
-    const result = await page.evaluate((input) => globalThis.__nucleus_bench.historical(input.points, input.seed, input.warmup_runs, input.measured_runs), { ...scenario, seed });
+    const result = await page.evaluate((input) => globalThis.__Aeris_bench.historical(input.points, input.seed, input.warmup_runs, input.measured_runs), { ...scenario, seed });
     return { backend: result.backend, metrics: {
       ...samples("set_data_api_ms", result.api_samples, "ms", "lower_is_better", "public_candidate", "Public set_data_typed() call; includes validation, engine install, layout/frame construction, GPU command encoding/submission, and present call."),
       ...samples("first_raf_after_set_data_ms", result.ready_samples, "ms", "lower_is_better", "public_candidate", "Time from set_data_typed start to the next rAF callback; not a photon-visible timestamp."),
@@ -107,7 +107,7 @@ async function run_page_scenario(page, scenario) {
   if (scenario.kind === "realtime") {
     const rows = [];
     for (let run = 0; run < scenario.warmup_runs + scenario.measured_runs; run += 1) {
-      const result = await page.evaluate((input) => globalThis.__nucleus_bench.realtime(input.points, input.seed, input.mode, input.update_rate_hz, input.duration_ms), { ...scenario, seed });
+      const result = await page.evaluate((input) => globalThis.__Aeris_bench.realtime(input.points, input.seed, input.mode, input.update_rate_hz, input.duration_ms), { ...scenario, seed });
       if (run >= scenario.warmup_runs) rows.push(result);
     }
   return { backend: rows.at(-1).backend, metrics: {
@@ -126,7 +126,7 @@ async function run_page_scenario(page, scenario) {
     } };
   }
   if (scenario.kind === "lifecycle") {
-    const result = await page.evaluate((input) => globalThis.__nucleus_bench.lifecycle(input.points, input.seed, input.cycles), { ...scenario, seed });
+    const result = await page.evaluate((input) => globalThis.__Aeris_bench.lifecycle(input.points, input.seed, input.cycles), { ...scenario, seed });
     const metrics = {
       ...samples("wasm_linear_memory_bytes", result.wasm_linear_memory_samples, "bytes", "lower_is_better", "internal", "Global WASM linear memory after each loaded chart; linear memory does not shrink and is not chart-attributable RAM."),
       ...scalar("loaded_page_memory_probe_count", result.loaded_page_memory_sample_count, "count", "informational", "internal", "Configured evenly spaced whole-page memory probes while charts are loaded; initial and final probes are additional."),
@@ -148,9 +148,9 @@ async function run_page_scenario(page, scenario) {
     for (const count of scenario.chart_counts) {
       if (rows.length > 0) {
         await page.reload();
-        await page.waitForFunction(() => globalThis.__nucleus_bench_ready === true);
+        await page.waitForFunction(() => globalThis.__Aeris_bench_ready === true);
       }
-      const result = await page.evaluate((input) => globalThis.__nucleus_bench.multi_chart(input.points, input.seed, [input.count]), { ...scenario, seed, count });
+      const result = await page.evaluate((input) => globalThis.__Aeris_bench.multi_chart(input.points, input.seed, [input.count]), { ...scenario, seed, count });
       rows.push(result.rows[0]);
       backend = result.backend;
     }
@@ -170,9 +170,9 @@ async function run_page_scenario(page, scenario) {
       for (const series_count of scenario.series_counts) {
         if (rows.length > 0) {
           await page.reload();
-          await page.waitForFunction(() => globalThis.__nucleus_bench_ready === true);
+          await page.waitForFunction(() => globalThis.__Aeris_bench_ready === true);
         }
-        const result = await page.evaluate((input) => globalThis.__nucleus_bench.multi_series(input.points, input.seed, [input.series_count], [input.pane_count]), { ...scenario, seed, series_count, pane_count });
+        const result = await page.evaluate((input) => globalThis.__Aeris_bench.multi_series(input.points, input.seed, [input.series_count], [input.pane_count]), { ...scenario, seed, series_count, pane_count });
         rows.push(result.rows[0]);
         backend = result.backend;
       }
@@ -190,10 +190,10 @@ async function run_page_scenario(page, scenario) {
     for (let run = 0; run < scenario.warmup_runs + scenario.measured_runs; run += 1) {
       if (run > 0) {
         await page.reload();
-        await page.waitForFunction(() => globalThis.__nucleus_bench_ready === true);
+        await page.waitForFunction(() => globalThis.__Aeris_bench_ready === true);
       }
       const result = await page.evaluate(
-        (input) => globalThis.__nucleus_bench.general_dashboard(input.points),
+        (input) => globalThis.__Aeris_bench.general_dashboard(input.points),
         { ...scenario, seed },
       );
       if (run >= scenario.warmup_runs) rows.push(result);
@@ -211,7 +211,7 @@ async function run_page_scenario(page, scenario) {
     };
   }
   if (scenario.kind === "retained_updates") {
-    const result = await page.evaluate((input) => globalThis.__nucleus_bench.retained_updates(input.points, input.seed, input.series_counts, input.pane_counts, input.iterations), { ...scenario, seed });
+    const result = await page.evaluate((input) => globalThis.__Aeris_bench.retained_updates(input.points, input.seed, input.series_counts, input.pane_counts, input.iterations), { ...scenario, seed });
     const frames = result.rows.flatMap((row) => row.samples);
     return { backend: result.backend, metrics: {
       ...samples("series_count", result.rows.map((row) => row.series_count), "count", "informational", "internal", "Independent variable for aligned retained-update samples."),
@@ -229,7 +229,7 @@ async function run_page_scenario(page, scenario) {
     } };
   }
   if (scenario.kind === "soak") {
-    const result = await page.evaluate((input) => globalThis.__nucleus_bench.soak(input.points, input.seed, input.duration_ms, input.sample_interval_ms, input.memory_sample_interval_ms), { ...scenario, seed });
+    const result = await page.evaluate((input) => globalThis.__Aeris_bench.soak(input.points, input.seed, input.duration_ms, input.sample_interval_ms, input.memory_sample_interval_ms), { ...scenario, seed });
     const memory = result.samples.map((sample) => sample.page_bytes).filter((value) => value !== null);
     const memory_elapsed = result.samples.filter((sample) => sample.page_bytes !== null).map((sample) => sample.elapsed_ms);
     const frame = result.samples.map((sample) => sample.cpu_ms);
@@ -264,12 +264,12 @@ async function interaction(page, scenario) {
   const rows = [];
   let backend = null;
   for (let run = 0; run < scenario.warmup_runs + scenario.measured_runs; run += 1) {
-    const prepared = await page.evaluate((input) => globalThis.__nucleus_bench.prepare_interaction(input.points, input.seed), { ...scenario, seed });
+    const prepared = await page.evaluate((input) => globalThis.__Aeris_bench.prepare_interaction(input.points, input.seed), { ...scenario, seed });
     backend = prepared.backend;
     const canvas = page.locator("#bench-root canvas").last();
     const box = await canvas.boundingBox();
     if (!box) throw new Error("benchmark canvas has no bounding box");
-    await page.evaluate(() => globalThis.__nucleus_bench.start_frame_recording());
+    await page.evaluate(() => globalThis.__Aeris_bench.start_frame_recording());
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
     if (scenario.interaction === "pan") {
@@ -284,7 +284,7 @@ async function interaction(page, scenario) {
       await page.mouse.move(box.x + 10, cy);
       await page.mouse.move(box.x + box.width - 10, cy, { steps: scenario.steps });
     }
-    const result = await page.evaluate(() => globalThis.__nucleus_bench.stop_frame_recording());
+    const result = await page.evaluate(() => globalThis.__Aeris_bench.stop_frame_recording());
     if (run >= scenario.warmup_runs) rows.push(result);
   }
   const frame_ms = rows.flatMap((row) => row.frame_ms);
@@ -319,9 +319,9 @@ async function interaction(page, scenario) {
 }
 
 export async function run_browser_scenarios(scenarios) {
-  const port = Number(process.env.NUCLEUSCHARTS_BENCH_PORT ?? 4191);
+  const port = Number(process.env.AERIS_CHARTS_BENCH_PORT ?? 4191);
   const base_url = `http://127.0.0.1:${port}`;
-  const server = spawn(process.execPath, ["test_server.mjs"], { cwd: path.join(repository_root, "examples", "web_demo"), env: { ...process.env, NUCLEUSCHARTS_TEST_PORT: String(port) }, stdio: ["ignore", "ignore", "inherit"], windowsHide: true });
+  const server = spawn(process.execPath, ["test_server.mjs"], { cwd: path.join(repository_root, "examples", "web_demo"), env: { ...process.env, AERIS_CHARTS_TEST_PORT: String(port) }, stdio: ["ignore", "ignore", "inherit"], windowsHide: true });
   await wait_for_server(`${base_url}/benchmark.html`, server);
   const browser = await chromium.launch({ channel: "chromium", headless: true, args: ["--enable-unsafe-webgpu", "--enable-dawn-features=allow_unsafe_apis", "--enable-webgpu-developer-features", "--use-gpu-in-tests", "--js-flags=--expose-gc"] });
   try {
@@ -341,12 +341,12 @@ export async function run_browser_scenarios(scenarios) {
           const page = await context.newPage();
           report_browser_errors(page);
           await page.goto(`${base_url}/benchmark.html`);
-          await page.waitForFunction(() => globalThis.__nucleus_bench_ready === true);
+          await page.waitForFunction(() => globalThis.__Aeris_bench_ready === true);
           const session = await context.newCDPSession(page);
           await session.send("Performance.enable");
           await session.send("HeapProfiler.collectGarbage");
           if (scenario.kind === "lifecycle") {
-            await page.evaluate((input) => globalThis.__nucleus_bench.prepare_lifecycle(input.points, input.seed), { ...scenario, seed });
+            await page.evaluate((input) => globalThis.__Aeris_bench.prepare_lifecycle(input.points, input.seed), { ...scenario, seed });
             await session.send("HeapProfiler.collectGarbage");
           }
           const before = await collect_cdp(session);
@@ -363,7 +363,7 @@ export async function run_browser_scenarios(scenarios) {
           await context.close();
         }
         if (cpu_seconds !== null) Object.assign(result.metrics, scalar("browser_main_thread_task_cpu_ms", cpu_seconds * 1000, "ms", "lower_is_better", "internal", "Chromium DevTools Performance.TaskDuration delta for the page over the scenario interval."));
-        if (js_heap_used_bytes !== null) Object.assign(result.metrics, scalar("browser_js_heap_used_bytes", js_heap_used_bytes, "bytes", "lower_is_better", "internal", "Chromium Runtime.getHeapUsage usedSize after a documented forced GC; whole-page JS heap, not Nucleus-only."));
+        if (js_heap_used_bytes !== null) Object.assign(result.metrics, scalar("browser_js_heap_used_bytes", js_heap_used_bytes, "bytes", "lower_is_better", "internal", "Chromium Runtime.getHeapUsage usedSize after a documented forced GC; whole-page JS heap, not Aeris-only."));
         outputs.push({
           id: scenario.id,
           version: scenario.version,

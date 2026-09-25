@@ -40,13 +40,13 @@ jobs:
       - name: clippy (native, all targets)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: clippy (wasm32)
-        run: cargo clippy -p nucleuscharts_wasm --target wasm32-unknown-unknown --locked -- -D warnings
+        run: cargo clippy -p aeris_charts_wasm --target wasm32-unknown-unknown --locked -- -D warnings
       - name: tests (includes golden-image regression)
         run: cargo test --workspace --locked
       - name: perf gate (hard configured budgets)
-        run: cargo run -p nucleuscharts_native --example perf_gate --release
+        run: cargo run -p aeris_charts_native --example perf_gate --release
         env:
-          NUCLEUSCHARTS_PERF_STRICT: "1"
+          AERIS_CHARTS_PERF_STRICT: "1"
 
   native-gpui:
     name: Native GPUI (${{ matrix.os }})
@@ -65,7 +65,7 @@ jobs:
           sudo apt-get install -y libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
       - uses: Swatinem/rust-cache@v2
       - name: Test native GPUI backend
-        run: cargo test -p nucleuscharts_render_gpui --features gpui-backend --all-targets --locked
+        run: cargo test -p aeris_charts_render_gpui --features gpui-backend --all-targets --locked
 
   package:
     name: TypeScript package (lint, typecheck, build)
@@ -136,7 +136,7 @@ jobs:
         working-directory: examples/web_demo
         run: npx playwright test
         env:
-          NUCLEUSCHARTS_PORTABLE_BROWSER: "1"
+          AERIS_CHARTS_PORTABLE_BROWSER: "1"
       - name: Run machine-sensitive pixel/GPU/performance evidence
         id: machine-evidence
         continue-on-error: true

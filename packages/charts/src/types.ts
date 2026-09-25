@@ -1,5 +1,5 @@
 /**
- * Public data, option, and handle types for `@axiusflowhq/financial`. The original snake-case
+ * Public data, option, and handle types for `aeris-charts`. The original snake-case
  * methods remain canonical and supported; common browser lifecycle methods also expose camel-case
  * aliases on the same handles. Extracted from `index.ts`.
  */
@@ -1112,7 +1112,7 @@ export interface price_scale_options {
    */
   text_color?: string;
   /**
-   * Nucleus extension (industry-standard, default true): draw round-figure tick labels in the bold
+   * Aeris extension (industry-standard, default true): draw round-figure tick labels in the bold
    * font — multiples of step×10 on uniform ticks, exact powers of ten on log ticks.
    */
   bold_round_labels?: boolean;
@@ -1150,7 +1150,7 @@ export type deep_partial<T> = { [K in keyof T]?: deep_partial<T[K]> };
 export interface grid_line_options {
   color: string;
   style: number;
-  /** Show the grid lines (Nucleus default `true`; the canonical default style is dashed). */
+  /** Show the grid lines (Aeris default `true`; the canonical default style is dashed). */
   visible: boolean;
 }
 
@@ -1253,7 +1253,7 @@ export interface chart_price_scale_options {
   minimumWidth?: number;
   /** Price scale text color (reference `textColor`); when unset, the scale follows `layout.textColor`. */
   textColor?: string;
-  /** Bold round-figure tick labels (Nucleus extension, industry-standard, default `true`). */
+  /** Bold round-figure tick labels (Aeris extension, industry-standard, default `true`). */
   boldRoundLabels?: boolean;
 }
 
@@ -1306,7 +1306,7 @@ export interface chart_options {
   timeScale: { borderVisible: boolean; borderColor: string };
   /**
    * Large text label painted inside the pane (reference v4 `watermark`). `color` is any CSS color
-   * (include alpha for a faint mark; the default is fully transparent). Nucleus draws it on the shared
+   * (include alpha for a faint mark; the default is fully transparent). Aeris draws it on the shared
    * overlay above the series — a deliberate divergence needed to stay pixel-identical across the
    * WebGPU and Canvas2D backends.
    */
@@ -1343,7 +1343,7 @@ export interface chart_options {
    * Wheel/trackpad policy. `auto` uses behavior measured from the pinned public reference fixture:
    * vertical deltas zoom time
    * and horizontal deltas pan time independently on every chart surface, without modifier
-   * routing. `pan` and `zoom` are explicit Nucleus extensions.
+   * routing. `pan` and `zoom` are explicit Aeris extensions.
    */
   wheel_behavior: "auto" | "pan" | "zoom";
   /** Chart-owned keyboard and assistive-technology surface. Enabled by default. */
@@ -1493,7 +1493,7 @@ export interface series_options {
   line_visible?: boolean;
   /** Point-marker disc radius in CSS px (reference `pointMarkersRadius`); unset = auto. */
   point_markers_radius?: number;
-  /** Show the crosshair marker on this series or indicator output (Nucleus default `false`). */
+  /** Show the crosshair marker on this series or indicator output (Aeris default `false`). */
   crosshair_marker_visible?: boolean;
   /** Crosshair marker radius in CSS px (reference `crosshairMarkerRadius`, default 4). */
   crosshair_marker_radius?: number;
@@ -1727,7 +1727,7 @@ export function is_footprint_series_kind(kind: series_kind): kind is "footprint"
 }
 
 // ---------------------------------------------------------------------------------------------
-// Drawing tools (engine-owned drawing objects; nucleuscharts_engine drawings.rs)
+// Drawing tools (engine-owned drawing objects; aeris_charts_engine drawings.rs)
 // ---------------------------------------------------------------------------------------------
 
 /**
@@ -1888,7 +1888,7 @@ export interface persisted_drawing_v1 {
 
 /** Versioned chart persistence V1: pane topology and built-in drawings only. */
 export interface chart_state_v1 {
-  schema: "nucleuscharts-state";
+  schema: "aeris_charts-state";
   schema_version: 1;
   panes: persisted_pane_v1[];
   drawings: persisted_drawing_v1[];
@@ -1896,7 +1896,7 @@ export interface chart_state_v1 {
 
 /** V2 adds engine-owned general pane, axis, dataset, and series state. */
 export interface chart_state_v2 {
-  schema: "nucleuscharts-state";
+  schema: "aeris_charts-state";
   schema_version: 2;
   panes: (persisted_pane_v1 & { horizontal_domain: unknown })[];
   drawings: persisted_drawing_v1[];
@@ -2287,7 +2287,7 @@ export type alert_condition =
 /**
  * Alert evaluation frequency retained by the chart for visual fidelity. Regular live-price
  * alerts normally use `only_once` or `every_time`; interval-dependent hosts may also expose the
- * per-bar and per-minute modes. Nucleus does not evaluate or deliver alerts.
+ * per-bar and per-minute modes. Aeris does not evaluate or deliver alerts.
  */
 export type alert_frequency =
   | "only_once"
@@ -2326,7 +2326,7 @@ export type crosshair_action_request_handler = (request: crosshair_action_reques
 
 /**
  * Alert presentation boundary. The host owns dialogs, persistence, condition evaluation,
- * expiration, notifications, and server/background delivery; Nucleus owns the backend-neutral
+ * expiration, notifications, and server/background delivery; Aeris owns the backend-neutral
  * line indicators. The multipurpose crosshair action button belongs to {@link chart_api}.
  */
 export interface alert_api {
@@ -2763,7 +2763,7 @@ export interface chart_api {
    */
   swap_panes(first: number, second: number): boolean;
   /**
-   * Restore Nucleus-owned chart and series styling to the canonical defaults for this chart's
+   * Restore Aeris-owned chart and series styling to the canonical defaults for this chart's
    * selected theme. This does not reset the view: data, panes, drawings, indicators, series
    * visibility/metadata, price formatting, scale bindings/ranges/modes/margins, zoom, and scroll
    * position are preserved. Semantic follow/unset states are restored instead of pinning effective
@@ -2833,7 +2833,7 @@ export interface chart_api {
   drawings(): drawing_api[];
   /** Export V1 financial state or V2 general state; neither includes financial market data or runtime caches. */
   export_state(): chart_state;
-  /** Validate and atomically restore V1 into a fresh chart. Throws {@link nucleuscharts_error} on failure. */
+  /** Validate and atomically restore V1 into a fresh chart. Throws {@link AerisChartsError} on failure. */
   import_state(state: chart_state | string): persistence_restore_result;
   /** Remove every drawing (the "clear all" action) and repaint. */
   clear_drawings(): void;

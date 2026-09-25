@@ -1,26 +1,26 @@
 /**
  * Development-only Apache-2.0 compatibility fixture derived from the public `vertical-line` plugin
- * example and adapted to the Nucleus canvas-primitive contract. Source:
+ * example and adapted to the Aeris canvas-primitive contract. Source:
  * tmp/refsrc/plugin-examples/src/plugins/vertical-line/vertical-line.ts plus
  * src/helpers/dimensions/positions.ts.
  *
  * Verbatim-ness: the renderer (`VertLinePaneRenderer.draw`) and the `positionsLine` helper are
  * character-for-character the reference's — the proof that a reference plugin painting with raw
- * canvas calls through `CanvasRenderingTarget2D` drops onto Nucleus's `canvas_render_target`
+ * canvas calls through `CanvasRenderingTarget2D` drops onto Aeris's `canvas_render_target`
  * unchanged. The view/primitive classes keep the reference structure 1:1; the only adaptations
  * are the host seams exposed by the development-only public reference fixture:
- * - `chart.timeScale().timeToCoordinate(t)` → Nucleus's `chart.time_scale().time_to_coordinate(t)`
+ * - `chart.timeScale().timeToCoordinate(t)` → Aeris's `chart.time_scale().time_to_coordinate(t)`
  *   (safe to call from the canvas hooks: the pass runs after the engine frame, not mid-render);
  * - the reference's `paneViews()` returns views whose `renderer()` hands an
- *   `IPrimitivePaneRenderer` to the host, which calls its `draw(target)`; Nucleus's
+ *   `IPrimitivePaneRenderer` to the host, which calls its `draw(target)`; Aeris's
  *   `canvas_pane_view.renderer(target)` IS that call, so the adapter at the bottom delegates
  *   (`view.renderer().draw(target)`);
- * - the reference attaches to a series and adds a time-axis label view; the Nucleus canvas
+ * - the reference attaches to a series and adds a time-axis label view; the Aeris canvas
  *   primitive is pane-bound and raw-canvas only (no axis views — the Prim-command primitives
  *   carry those), so `VertLineTimeAxisView` is dropped (`showLabel` defaults off upstream).
- * - zOrder: the reference view doesn't implement it (default 'normal'); Nucleus's
+ * - zOrder: the reference view doesn't implement it (default 'normal'); Aeris's
  *   `canvas_pane_view.z_order` defaults to "normal" the same way, so the adapter omits it.
- * - the reference paints on the PANE widget's canvas (pane-offset coordinates); Nucleus's plugin
+ * - the reference paints on the PANE widget's canvas (pane-offset coordinates); Aeris's plugin
  *   canvas is whole-chart, so the verbatim bitmap-x math lands exactly while the pane's left
  *   edge is the chart's left edge (no left price axis — the canvas layer's documented
  *   whole-chart limit; the demo's left-scale fixture does not enable this plugin).
@@ -108,7 +108,7 @@ export class VertLine {
 }
 
 /**
- * The Nucleus `canvas_primitive` adapter: the reference classes above stay untouched; only the
+ * The Aeris `canvas_primitive` adapter: the reference classes above stay untouched; only the
  * view→host seam maps (`paneViews()` → `pane_views()`, `view.renderer().draw(target)` →
  * `renderer(target)`). Attach with `pane.attach_canvas_primitive(vert_line_canvas_primitive(...))`.
  */

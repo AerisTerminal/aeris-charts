@@ -51,7 +51,7 @@ async function reset_pair(page) {
 }
 
 async function states(page) {
-  const nucleus = await page.evaluate(() => ({
+  const Aeris = await page.evaluate(() => ({
     spacing: window.__chart.wasm.bar_spacing(),
     offset: window.__chart.wasm.scroll_position(),
     logical: window.__chart.time_scale().coordinate_to_logical(
@@ -66,7 +66,7 @@ async function states(page) {
       window.__reference.chart.timeScale().width() / 2,
     ),
   }));
-  return { nucleus, reference };
+  return { Aeris, reference };
 }
 
 async function dispatch_wheel_pair(page, trace, axis = false) {
@@ -116,13 +116,13 @@ test("normalized wheel traces retain behavior learned from the public reference 
     const before = await states(page);
     await dispatch_wheel_pair(page, trace);
     const after = await states(page);
-    expect(after.nucleus.spacing / before.nucleus.spacing, JSON.stringify(trace))
+    expect(after.Aeris.spacing / before.Aeris.spacing, JSON.stringify(trace))
       .toBeCloseTo(after.reference.spacing / before.reference.spacing, 8);
     if (trace.deltaY === 0) {
-      expect(after.nucleus.offset - before.nucleus.offset, JSON.stringify(trace))
+      expect(after.Aeris.offset - before.Aeris.offset, JSON.stringify(trace))
         .toBeCloseTo(after.reference.offset - before.reference.offset, 6);
     } else if (trace.deltaX === 0) {
-      expect(after.nucleus.logical - before.nucleus.logical, JSON.stringify(trace)).toBe(0);
+      expect(after.Aeris.logical - before.Aeris.logical, JSON.stringify(trace)).toBe(0);
       expect(after.reference.logical - before.reference.logical, JSON.stringify(trace)).toBe(0);
     }
   }
@@ -131,7 +131,7 @@ test("normalized wheel traces retain behavior learned from the public reference 
   const before_axis = await states(page);
   await dispatch_wheel_pair(page, { deltaX: 0, deltaY: -24, deltaMode: 0 }, true);
   const after_axis = await states(page);
-  expect(after_axis.nucleus.spacing / before_axis.nucleus.spacing)
+  expect(after_axis.Aeris.spacing / before_axis.Aeris.spacing)
     .toBeCloseTo(after_axis.reference.spacing / before_axis.reference.spacing, 8);
 });
 
@@ -139,9 +139,9 @@ test("pane drag slop and click/double-click callback counts match the oracle", a
   test.skip(browserName !== "chromium", "iframe double-click delivery is not portable in Playwright");
   await open_pair(page);
   await page.evaluate(() => {
-    window.__nucleusClicks = { single: 0, double: 0 };
-    window.__chart.subscribe_click(() => window.__nucleusClicks.single++);
-    window.__chart.subscribe_dbl_click(() => window.__nucleusClicks.double++);
+    window.__AerisClicks = { single: 0, double: 0 };
+    window.__chart.subscribe_click(() => window.__AerisClicks.single++);
+    window.__chart.subscribe_dbl_click(() => window.__AerisClicks.double++);
   });
   const oracle = page.frames().find((frame) => frame.url().includes("/reference.html"));
   await oracle.evaluate(() => {
@@ -150,8 +150,8 @@ test("pane drag slop and click/double-click callback counts match the oracle", a
     window.__reference.chart.subscribeDblClick(() => window.__oracleClicks.double++);
   });
 
-  const nucleus_box = await page.locator("#chart_container canvas:last-of-type").boundingBox();
-  const nucleus_geometry = await page.evaluate(() => ({
+  const Aeris_box = await page.locator("#chart_container canvas:last-of-type").boundingBox();
+  const Aeris_geometry = await page.evaluate(() => ({
     left: window.__chart.wasm.pane_left(),
     width: window.__chart.wasm.time_scale_width(),
     y: window.__chart.wasm.pane_height(0) / 2,
@@ -159,18 +159,18 @@ test("pane drag slop and click/double-click callback counts match the oracle", a
   const iframe_box = await page.locator("#reference-oracle").boundingBox();
   const oracle_root = page.frameLocator("#reference-oracle").locator("#chart > div");
   const oracle_box = await oracle_root.boundingBox();
-  const nucleus_x = nucleus_box.x + nucleus_geometry.left + nucleus_geometry.width / 2;
-  const nucleus_y = nucleus_box.y + nucleus_geometry.y;
+  const Aeris_x = Aeris_box.x + Aeris_geometry.left + Aeris_geometry.width / 2;
+  const Aeris_y = Aeris_box.y + Aeris_geometry.y;
   const oracle_x = iframe_box.x + oracle_box.x + oracle_box.width / 2;
   const oracle_y = iframe_box.y + oracle_box.y + oracle_box.height / 2;
 
   await page.locator("#reference-oracle").evaluate((node) => { node.style.pointerEvents = "none"; });
-  const nucleus_offsets = [];
-  await page.mouse.move(nucleus_x, nucleus_y);
+  const Aeris_offsets = [];
+  await page.mouse.move(Aeris_x, Aeris_y);
   await page.mouse.down();
   for (const dx of [1, 4, 5, 6, 20]) {
-    await page.mouse.move(nucleus_x + dx, nucleus_y);
-    nucleus_offsets.push(await page.evaluate(() => window.__chart.wasm.scroll_position()));
+    await page.mouse.move(Aeris_x + dx, Aeris_y);
+    Aeris_offsets.push(await page.evaluate(() => window.__chart.wasm.scroll_position()));
   }
   await page.mouse.up();
 
@@ -184,18 +184,18 @@ test("pane drag slop and click/double-click callback counts match the oracle", a
   }
   await page.mouse.up();
 
-  expect(nucleus_offsets.slice(0, 3)).toEqual(oracle_offsets.slice(0, 3));
-  expect(nucleus_offsets[4]).not.toBeCloseTo(nucleus_offsets[0], 8);
+  expect(Aeris_offsets.slice(0, 3)).toEqual(oracle_offsets.slice(0, 3));
+  expect(Aeris_offsets[4]).not.toBeCloseTo(Aeris_offsets[0], 8);
   expect(oracle_offsets[4]).not.toBeCloseTo(oracle_offsets[0], 8);
 
   await page.locator("#reference-oracle").evaluate((node) => { node.style.pointerEvents = "none"; });
-  await page.mouse.dblclick(nucleus_x, nucleus_y);
+  await page.mouse.dblclick(Aeris_x, Aeris_y);
   await page.locator("#reference-oracle").evaluate((node) => { node.style.pointerEvents = "auto"; });
   await page.mouse.dblclick(oracle_x, oracle_y);
   const counts = {
-    nucleus: await page.evaluate(() => window.__nucleusClicks),
+    Aeris: await page.evaluate(() => window.__AerisClicks),
     reference: await oracle.evaluate(() => window.__oracleClicks),
   };
-  expect(counts.nucleus).toEqual(counts.reference);
-  expect(counts.nucleus).toEqual({ single: 1, double: 1 });
+  expect(counts.Aeris).toEqual(counts.reference);
+  expect(counts.Aeris).toEqual({ single: 1, double: 1 });
 });

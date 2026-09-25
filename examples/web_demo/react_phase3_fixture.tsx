@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import {
   FinancialSeries,
   GeneralPane,
-  NucleusChart,
+  AerisChart,
   type GeneralAxisSpec,
   type GeneralSeriesSpec,
 } from "../../packages/charts/dist/react.js";
@@ -101,7 +101,7 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
       : general_series;
     root.render(
       <StrictMode>
-        <NucleusChart
+        <AerisChart
           options={{ backend: "canvas2d", autoSize: false, accessibility: false }}
           style={{ width: "720px", height: "480px" }}
           onChartReady={(value) => { chart = value; }}
@@ -123,7 +123,7 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
               }}
             />
           </> : null}
-        </NucleusChart>
+        </AerisChart>
       </StrictMode>,
     );
   };
@@ -238,14 +238,14 @@ export async function exerciseReactFailureCleanup(): Promise<Record<string, unkn
   console.error = () => {};
   try {
     root.render(
-      <NucleusChart
+      <AerisChart
         options={{ backend: "canvas2d", autoSize: false, accessibility: false }}
         onChartReady={(value) => { chart = value; }}
       >
         <FailureBoundary onFailure={(error) => { failure = error; }}>
           <GeneralPane options={pane_options} axes={axes} series={invalid_series} />
         </FailureBoundary>
-      </NucleusChart>,
+      </AerisChart>,
     );
     await wait_until(() => chart !== null && failure !== null);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));

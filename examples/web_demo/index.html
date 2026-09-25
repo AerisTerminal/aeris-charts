@@ -6,8 +6,8 @@
      scale it down to the device, squishing the UI and adding a fractional CSS scale on top
      of the canvas bitmap. user-scalable=no stops native pinch-zoom fighting the chart. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-<title>Nucleus Charts — @axiusflowhq/financial demo</title>
-<link rel="stylesheet" href="./dist/nucleuscharts.css" />
+<title>Aeris Charts — aeris-charts demo</title>
+<link rel="stylesheet" href="./dist/aeris_charts.css" />
 <link rel="stylesheet" href="./general_dashboard.css" />
 <style>
   * { box-sizing: border-box; }
@@ -174,7 +174,7 @@
     <div id="app_bar">
       <div class="brand-lockup">
         <span class="brand-mark" aria-hidden="true"><span data-icon="activity"></span></span>
-        <span class="brand-copy"><span class="brand">Nucleus Charts</span><span class="lab-title">Market lab</span></span>
+        <span class="brand-copy"><span class="brand">Aeris Charts</span><span class="lab-title">Market lab</span></span>
       </div>
       <nav id="demo_mode_switch" aria-label="Demo workspace">
         <button id="demo_mode_financial" type="button" aria-pressed="true">Financial</button>
@@ -436,7 +436,7 @@
       <label>size <input type="range" id="font_size" min="8" max="20" step="1" value="12"><span id="font_size_val">12</span></label>
     </div>
 
-    <div class="group" data-caption="Series chrome" title="Built-in live-price line and last-value axis label. Nucleus defaults the line to the tracked value → right edge; full width remains available explicitly.">
+    <div class="group" data-caption="Series chrome" title="Built-in live-price line and last-value axis label. Aeris defaults the line to the tracked value → right edge; full width remains available explicitly.">
       <h2>Series chrome</h2>
       <label><input type="checkbox" id="price_line_toggle" checked> price line</label>
       <label title="Live price line extent (price_line_extent)">extent
@@ -472,7 +472,7 @@
     <div class="group" id="watermark_group" data-caption="Watermark">
       <h2>Watermark</h2>
       <label><input type="checkbox" id="wm_visible"> show</label>
-      <label>text <input type="text" id="wm_text" value="NUCLEUS" size="6"></label>
+      <label>text <input type="text" id="wm_text" value="Aeris" size="6"></label>
       <label>color <input type="color" id="wm_color" value="#b0b8c4"></label>
       <label>size <input type="range" id="wm_size" min="16" max="160" step="4" value="72"><span id="wm_size_val">72</span></label>
     </div>
@@ -495,7 +495,7 @@
         <div>
           <span class="general-eyebrow">General charts</span>
           <h1>Analytics dashboard</h1>
-          <p>Every released Cartesian series runs here through the same Nucleus engine and package lifecycle as the financial workspace.</p>
+          <p>Every released Cartesian series runs here through the same Aeris engine and package lifecycle as the financial workspace.</p>
         </div>
         <div class="general-runtime-badge" id="general_runtime_badge">Waiting for viewport…</div>
       </section>
@@ -521,9 +521,9 @@
 </div>
 <script type="module" src="./demo_icons.js"></script>
 <script type="module">
-// Built from the real package distribution. The demo build copies @axiusflowhq/financial's published
+// Built from the real package distribution. The demo build copies aeris-charts's published
 // artifacts; it does not compile or wire an engine of its own.
-import { create_chart, create_chart_grid, create_series_markers, default_theme_name } from "./dist/nucleuscharts_financial.js";
+import { create_chart, create_chart_grid, create_series_markers, default_theme_name } from "./dist/aeris_charts_financial.js";
 import { generate_fixture_data } from "./fixture_data.js";
 import { fixture_theme } from "./fixture_styles.js";
 import { marker_fixture, volume_fixture } from "./fixture_features.js";
@@ -567,7 +567,7 @@ const requested_spacing = Number.parseFloat(query.get("spacing") ?? "");
 const requested_dpr = Number.parseFloat(query.get("dpr") ?? "");
 const theme_param = query.get("theme");
 const requested_demo_mode = query.get("demo") === "general" ? "general" : "financial";
-const THEME_STORAGE_KEY = "nucleuscharts.demo.theme";
+const THEME_STORAGE_KEY = "aeris_charts.demo.theme";
 function stored_demo_theme() {
   try {
     const stored = localStorage.getItem(THEME_STORAGE_KEY);
@@ -634,7 +634,7 @@ if (parity_fixture !== null) {
     horzLines: { color: palette.grid, visible: true },
   };
   // Keep the cross-library fidelity gate pinned to the reference's axis-border default; the package
-  // theme palette (theme.ts) must not leak into the comparison. `boldRoundLabels` is a Nucleus-only
+  // theme palette (theme.ts) must not leak into the comparison. `boldRoundLabels` is a Aeris-only
   // extension (default on) with no reference counterpart, so the comparison disables it too.
   chart_options.timeScale = { borderColor: "#2B2B43" };
   chart_options.leftPriceScale = { ...(chart_options.leftPriceScale ?? {}), borderColor: "#2B2B43", textColor: palette.text, boldRoundLabels: false };
@@ -1820,7 +1820,7 @@ chart.subscribe_crosshair_move((params) => {
   legend.textContent = `O ${fmt(bar.open)}  H ${fmt(bar.high)}  L ${fmt(bar.low)}  C ${fmt(bar.close)}` + tag;
 });
 chart.subscribe_click((params) => {
-  if (params.time !== null) console.log("nucleuscharts click @", new Date(params.time * 1000).toISOString());
+  if (params.time !== null) console.log("aeris_charts click @", new Date(params.time * 1000).toISOString());
 });
 
 if (runtime_test === "backendParity") {

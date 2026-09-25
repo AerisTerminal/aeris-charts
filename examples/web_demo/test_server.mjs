@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const benchmark_root = resolve(root, "..", "..", "benchmarks");
-const port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
+const port = Number.parseInt(process.env.AERIS_CHARTS_TEST_PORT ?? "4174", 10);
 const mime_types = new Map([
   [".html", "text/html; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
@@ -52,7 +52,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Nucleus browser-test server listening on http://127.0.0.1:${port}`);
+  console.log(`Aeris browser-test server listening on http://127.0.0.1:${port}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

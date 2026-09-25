@@ -45,9 +45,9 @@ export async function prepare_browser_artifacts({ build = false } = {}) {
   if (build) run(executable, ["run", "build"], package_root);
   const demo_dist = path.join(repository_root, "examples", "web_demo", "dist");
   await mkdir(demo_dist, { recursive: true });
-  await copyFile(path.join(package_root, "dist", "index.js"), path.join(demo_dist, "nucleuscharts_financial.js"));
+  await copyFile(path.join(package_root, "dist", "index.js"), path.join(demo_dist, "aeris_charts_financial.js"));
   await copyFile(path.join(package_root, "dist", "index.js.map"), path.join(demo_dist, "index.js.map"));
-  await copyFile(path.join(package_root, "dist", "nucleuscharts_wasm_bg.wasm"), path.join(demo_dist, "nucleuscharts_wasm_bg.wasm"));
+  await copyFile(path.join(package_root, "dist", "aeris_charts_wasm_bg.wasm"), path.join(demo_dist, "aeris_charts_wasm_bg.wasm"));
 }
 
 export function parse_pack_manifest(output) {
@@ -63,7 +63,7 @@ export async function measure_size({ build = true } = {}) {
   if (build) run(executable, ["run", "build"], package_root);
   const pack = parse_pack_manifest(run(executable, ["pack", "--json", "--dry-run"], package_root));
   const dist = path.join(package_root, "dist");
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "nucleuscharts-bundle-"));
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aeris_charts-bundle-"));
   try {
     await copyFile(path.join(dist, "index.js"), path.join(temporary, "package.js"));
     const package_url = "./package.js";
@@ -72,8 +72,8 @@ export async function measure_size({ build = true } = {}) {
       npm_unpacked_bytes: metric([pack.unpackedSize], "bytes", "lower_is_better", "public_candidate", "npm pack --json --dry-run unpackedSize for exactly the files npm would publish."),
       typescript_declarations_bytes: metric([await declaration_bytes(dist)], "bytes", "lower_is_better", "public_candidate", "Sum of .d.ts files in the production dist directory."),
       ...await compressed_metrics("javascript", path.join(dist, "index.js")),
-      ...await compressed_metrics("wasm", path.join(dist, "nucleuscharts_wasm_bg.wasm")),
-      ...await consumer_bundle("minimal", `import { nucleuscharts_error } from ${JSON.stringify(package_url)}; console.log(nucleuscharts_error);`, temporary),
+      ...await compressed_metrics("wasm", path.join(dist, "aeris_charts_wasm_bg.wasm")),
+      ...await consumer_bundle("minimal", `import { aeris_charts_error } from ${JSON.stringify(package_url)}; console.log(aeris_charts_error);`, temporary),
       ...await consumer_bundle("typical", `import { create_chart, init_wasm } from ${JSON.stringify(package_url)}; console.log(create_chart, init_wasm);`, temporary),
       ...await consumer_bundle("full", `import * as charts from ${JSON.stringify(package_url)}; console.log(charts);`, temporary),
     };

@@ -13,7 +13,7 @@ for (const [backend, url] of [
   test(`${backend} interactive demo preserves engine defaults except hidden grid`, async ({ page }) => {
     await open_demo(page, url);
     const state = await page.evaluate(async () => {
-      const api = await import("../dist/nucleuscharts_financial.js");
+      const api = await import("../dist/aeris_charts_financial.js");
       const host = document.createElement("div");
       Object.assign(host.style, { position: "fixed", width: "320px", height: "180px", left: "-10000px", top: "0" });
       document.body.appendChild(host);
@@ -44,7 +44,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   const read = async (theme) => {
     await open_demo(page, `/?theme=${theme}&backend=canvas2d&forceFallbackAdapter=1`);
     return page.evaluate(async (name) => {
-      const { theme_palette } = await import("../dist/nucleuscharts_financial.js");
+      const { theme_palette } = await import("../dist/aeris_charts_financial.js");
       const css = getComputedStyle(document.documentElement);
       const token = (name) => css.getPropertyValue(name).trim().toLowerCase();
       const options = window.__chart.options();
@@ -141,7 +141,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
 test("style reset follows a live theme switch and restores semantic series defaults", async ({ page }) => {
   await open_demo(page, "/?theme=dark&backend=canvas2d&forceFallbackAdapter=1");
   const state = await page.evaluate(async () => {
-    const api = await import("../dist/nucleuscharts_financial.js");
+    const api = await import("../dist/aeris_charts_financial.js");
     const chart = window.__chart;
     const series = window.__main;
 
@@ -178,7 +178,7 @@ test("charts never inject product attribution chrome", async ({ page }) => {
   await open_demo(page);
   const result = await page.evaluate(() => {
     const chart = window.__chart;
-    const before = document.querySelectorAll(".nucleuscharts-attribution-logo").length;
+    const before = document.querySelectorAll(".aeris_charts-attribution-logo").length;
     chart.apply_options({
       layout: {
         // Legacy callers may still send this key at runtime. It must remain inert.
@@ -189,7 +189,7 @@ test("charts never inject product attribution chrome", async ({ page }) => {
     });
     chart.add_pane(true);
     chart.render();
-    const after = document.querySelectorAll(".nucleuscharts-attribution-logo").length;
+    const after = document.querySelectorAll(".aeris_charts-attribution-logo").length;
     chart.remove_pane(chart.panes().length - 1);
     return { before, after, layout: chart.options().layout };
   });
@@ -478,7 +478,7 @@ test("reported plugin scenarios use full data and official line compositions", a
   });
   expect(series.filter((item) => item.type === "line")).toHaveLength(initial_lines + 1);
   expect(await page.evaluate(async () => {
-    const { default_theme_name, theme_palette } = await import("/dist/nucleuscharts_financial.js");
+    const { default_theme_name, theme_palette } = await import("/dist/aeris_charts_financial.js");
     return window.__chart.series_order().at(-1).options().color === theme_palette(default_theme_name).primary;
   })).toBe(true);
 
@@ -498,7 +498,7 @@ test("reported plugin scenarios use full data and official line compositions", a
     };
   });
   const primary = await page.evaluate(async () => {
-    const { default_theme_name, theme_palette } = await import("/dist/nucleuscharts_financial.js");
+    const { default_theme_name, theme_palette } = await import("/dist/aeris_charts_financial.js");
     return theme_palette(default_theme_name).primary;
   });
   expect(shade_state).toMatchObject({

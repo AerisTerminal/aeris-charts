@@ -115,7 +115,7 @@ test("split divider live-tracks the axis border token on apply_options (no topol
   await wait_cell_charts(page);
 
   const divider_rgb = () =>
-    page.locator(".nucleuscharts-grid-divider >> nth=0").evaluate((el) => {
+    page.locator(".aeris_charts-grid-divider >> nth=0").evaluate((el) => {
       // The line color is the solid inner strip's background.
       const inner = el.firstElementChild;
       return inner ? getComputedStyle(inner).backgroundColor : "";

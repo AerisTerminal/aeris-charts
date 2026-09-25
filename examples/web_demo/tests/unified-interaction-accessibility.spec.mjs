@@ -60,7 +60,7 @@ test("pointer interaction does not move focus into the accessibility application
   const box = await overlay.boundingBox();
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   const state = await page.evaluate(() => {
-    const layer = window.__chart.chart_element().querySelector(".nucleuscharts-a11y-layer");
+    const layer = window.__chart.chart_element().querySelector(".aeris_charts-a11y-layer");
     return {
       accessibilityFocused: layer.contains(document.activeElement),
       outline: getComputedStyle(layer).outlineStyle,
@@ -159,7 +159,7 @@ test("touch cancellation ends the canonical gesture and ignores later samples", 
 test("accessibility is default, singleton, bounded, silent for streaming, and keyboard drawing edits roll back", async ({ page }) => {
   await open_chart(page);
   const result = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
+    const api = await import("/dist/aeris_charts_financial.js");
     const chart = window.__chart;
     const host = chart.chart_element();
     const first = chart.accessibility();
@@ -185,7 +185,7 @@ test("accessibility is default, singleton, bounded, silent for streaming, and ke
       hostRole: host.getAttribute("role"),
       applications: host.querySelectorAll('[role="application"]').length,
       canvasHidden: [...host.querySelectorAll("canvas")].every((canvas) => canvas.getAttribute("aria-hidden") === "true"),
-      live: host.querySelector(".nucleuscharts-a11y-shared-status-region")?.textContent ?? "",
+      live: host.querySelector(".aeris_charts-a11y-shared-status-region")?.textContent ?? "",
       before,
       after,
     };

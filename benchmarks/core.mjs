@@ -40,7 +40,7 @@ export async function build_provenance(kind = "package") {
   return {
     profile: "release",
     logging: "default-no-verbose-debug",
-    build_command: native ? "cargo run --quiet --release -p nucleuscharts_native --example evidence_bench" : "npm run build",
+    build_command: native ? "cargo run --quiet --release -p aeris_charts_native --example evidence_bench" : "npm run build",
     rustc_version: command("rustc", ["--version"]),
     wasm_pack_version: command("wasm-pack", ["--version"]),
     node_version: process.version,
@@ -61,14 +61,14 @@ export function source_provenance() {
   };
 }
 
-export function base_environment(classification = process.env.NUCLEUSCHARTS_BENCH_ENV_CLASS ?? "local") {
+export function base_environment(classification = process.env.AERIS_CHARTS_BENCH_ENV_CLASS ?? "local") {
   if (!["local", "shared-ci", "official-benchmark-runner"].includes(classification)) {
     throw new Error(`invalid environment classification: ${classification}`);
   }
   const cpus = os.cpus();
   return {
     classification,
-    id: process.env.NUCLEUSCHARTS_BENCH_ENV_ID ?? classification,
+    id: process.env.AERIS_CHARTS_BENCH_ENV_ID ?? classification,
     os: os.platform(),
     os_version: os.release(),
     architecture: os.arch(),
@@ -100,7 +100,7 @@ function safe_segment(value, label) {
 export function validate_run(run) {
   assert_record(run, "result");
   if (run.schema_version !== 1) throw new Error(`unsupported schema_version ${run.schema_version}`);
-  if (run.product?.name !== "nucleuscharts-financial" || !run.product.version) throw new Error("invalid product metadata");
+  if (run.product?.name !== "aeris_charts-financial" || !run.product.version) throw new Error("invalid product metadata");
   if (run.build?.profile !== "release" || run.build?.logging !== "default-no-verbose-debug" || !run.build?.build_command || !/^[a-f0-9]{64}$/.test(run.build?.package_lock_sha256 ?? "") || !/^[a-f0-9]{64}$/.test(run.build?.cargo_lock_sha256 ?? "") || !Array.isArray(run.build?.wasm_opt_args)) throw new Error("invalid release build metadata");
   assert_record(run.source, "source");
   if (typeof run.source.dirty_worktree !== "boolean") throw new Error("invalid source metadata");
@@ -287,7 +287,7 @@ function render_value(value) {
 export function markdown_report(run, comparison = null) {
   validate_run(run);
   const lines = [
-    "# Nucleus Charts benchmark report",
+    "# Aeris Charts benchmark report",
     "",
     `Version: ${run.product.version}`,
     `Commit: ${run.source.git_commit ?? "unknown"}${run.source.dirty_worktree ? " (dirty)" : ""}`,

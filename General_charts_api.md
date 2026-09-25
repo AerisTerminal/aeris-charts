@@ -41,7 +41,7 @@ participate in pane/axis lifecycle protection, and round-trip in V2 persistence.
 The proposal is additive. Existing financial series, data shapes, pane methods, price-scale
 handles, snake-case methods, and persistence V1 keep their current meaning. In particular,
 `"line"`, `"area"`, `"bar"`, `"histogram"`, `"baseline"`, `"candlestick"`, and `"footprint"`
-remain financial-time series. Nucleus must never guess whether a row belongs to the financial or
+remain financial-time series. Aeris must never guess whether a row belongs to the financial or
 general data domain.
 
 The imperative API remains canonical. Phase 3 adds camel-case aliases plus a React adapter that call
@@ -505,7 +505,7 @@ Additional rules:
 - Stacked series require the same stack ID, axis IDs, category keys, orientation, and baseline.
   Grouped series require the same category registry but may use separate compatible Y axes.
 - Polar series share only when their angular category order and radial-domain semantics agree.
-- Incompatible additions fail with `invalid_options`; Nucleus never moves the series implicitly or
+- Incompatible additions fail with `invalid_options`; Aeris never moves the series implicitly or
   creates a hidden chart engine.
 
 ## Shared behavior required of every general series

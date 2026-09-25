@@ -1,13 +1,13 @@
-# Nucleus Charts evidence benchmarks
+# Aeris Charts evidence benchmarks
 
-This subsystem is the source of truth for Nucleus Charts performance, artifact-size, and memory claims. It measures the production `@axiusflowhq/financial` package through its public browser API and keeps every number tied to source, environment, scenario, dataset, and raw samples. It does not optimize the product and it does not manufacture unsupported values.
+This subsystem is the source of truth for Aeris Charts performance, artifact-size, and memory claims. It measures the production `aeris-charts` package through its public browser API and keeps every number tied to source, environment, scenario, dataset, and raw samples. It does not optimize the product and it does not manufacture unsupported values.
 
 ## Requirements
 
 - The repository's configured Rust toolchain and `wasm-pack` 0.15.0 for the production WASM build.
 - Node.js 18 or newer.
 - Chromium installed for Playwright (`cd examples/web_demo && npx playwright install chromium`).
-- For official release results, a clean checkout on a controlled runner with `NUCLEUSCHARTS_BENCH_ENV_CLASS=official-benchmark-runner` and a stable `NUCLEUSCHARTS_BENCH_ENV_ID`.
+- For official release results, a clean checkout on a controlled runner with `AERIS_CHARTS_BENCH_ENV_CLASS=official-benchmark-runner` and a stable `AERIS_CHARTS_BENCH_ENV_ID`.
 
 The CLI runs `npm ci` when the package or demo dependencies are absent. Browser scenarios reuse the existing demo server and Playwright dependency. No benchmark package is shipped to consumers.
 
@@ -60,7 +60,7 @@ Interaction traces use Playwright pointer and wheel input on the package's top o
 
 On WebGPU, `gpu_render_pass_ms` is accepted only when the existing `frame_stats().gpu_ms` produces a resolved hardware timestamp-query sample. The value spans the WebGPU render pass and is asynchronously read back. On Canvas2D or an adapter without `timestamp-query`, it is `unsupported`, never zero and never replaced with CPU submission time.
 
-Browser CPU is the Chromium DevTools `Performance.TaskDuration` delta across a scenario. It is a page main-thread task measurement, not whole-system CPU and not solely attributable to Nucleus Charts. Frame CPU comes from the existing bounded WASM telemetry record.
+Browser CPU is the Chromium DevTools `Performance.TaskDuration` delta across a scenario. It is a page main-thread task measurement, not whole-system CPU and not solely attributable to Aeris Charts. Frame CPU comes from the existing bounded WASM telemetry record.
 
 ## Memory and lifecycle methodology
 
@@ -68,7 +68,7 @@ Memory labels stay distinct:
 
 - `wasm_linear_memory_bytes` is reserved WASM linear memory. It is global to the module, grows in 64 KiB pages, does not shrink, and is not total RAM.
 - `browser_js_heap_used_bytes` is Chromium's whole-page JavaScript heap after a documented DevTools GC.
-- `browser_page_memory_*` uses `measureUserAgentSpecificMemory` when available and is whole-page memory, not exact Nucleus ownership.
+- `browser_page_memory_*` uses `measureUserAgentSpecificMemory` when available and is whole-page memory, not exact Aeris ownership.
 
 Lifecycle scenarios first complete and discard one create/load/render/destroy warm-up so WASM initialization and initial allocator growth precede the baseline. They then repeat the same deterministic fixture, recording WASM linear memory on every loaded cycle. Because whole-page memory collection is disruptive, smoke takes one loaded sample while 50- and 100-cycle profiles take five and ten evenly spaced loaded samples; initial and final samples bracket every run. Results record whether GC was forced. Retained delta is final whole-page memory minus the warmed initial baseline; retained delta per cycle divides that value by completed cycles. Unsupported page-memory APIs remain explicit. Multi-chart and multi-series scaling load every configuration in a fresh page realm so non-shrinking WASM linear-memory high-water marks remain comparable; fixture creation and disruptive page-memory collection stay outside startup timing.
 

@@ -91,7 +91,7 @@ async function build_run(profile, scenarios, execution_command) {
   });
   const run_result = validate_run({
     schema_version: 1,
-    product: { name: "nucleuscharts-financial", version: await product_version() },
+    product: { name: "aeris_charts-financial", version: await product_version() },
     source,
     build: await build_provenance(native_scenarios.length > 0 && size_scenarios.length === 0 && browser_scenarios.length === 0 ? "native" : "package"),
     environment,
@@ -187,7 +187,7 @@ async function claims() {
 }
 
 function help() {
-  console.log(`Nucleus Charts evidence benchmark CLI
+  console.log(`Aeris Charts evidence benchmark CLI
 
   node benchmarks/benchmark.mjs test
   node benchmarks/benchmark.mjs smoke

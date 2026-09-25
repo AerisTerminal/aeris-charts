@@ -1,25 +1,25 @@
 {
-  "name": "@axiusflowhq/financial",
+  "name": "aeris-charts",
   "version": "0.11.0",
   "type": "module",
-  "description": "Nucleus all-in-one financial and general charting SDK powered by Rust and WebAssembly.",
+  "description": "Aeris all-in-one financial and general charting SDK powered by Rust and WebAssembly.",
   "license": "AGPL-3.0-only",
-  "author": "Axiusflow",
+  "author": "Aeris Terminal",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Axiusflowhq/financial-charts.git",
+    "url": "git+https://github.com/aeristerminal/aeris-charts.git",
     "directory": "packages/charts"
   },
   "bugs": {
-    "url": "https://github.com/Axiusflowhq/financial-charts/issues"
+    "url": "https://github.com/aeristerminal/aeris-charts/issues"
   },
-  "homepage": "https://github.com/Axiusflowhq/financial-charts#readme",
+  "homepage": "https://github.com/aeristerminal/aeris-charts#readme",
   "keywords": [
-    "nucleuscharts",
+    "aeris_charts",
     "charts",
     "charting",
     "trading",
-    "financial-charts",
+    "aeris-charts",
     "candlestick",
     "finance",
     "market-data",
@@ -32,7 +32,8 @@
     "node": ">=18"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -45,15 +46,15 @@
       "types": "./dist/react.d.ts",
       "import": "./dist/react.js"
     },
-    "./wasm": "./dist/nucleuscharts_wasm_bg.wasm",
-    "./design.css": "./dist/nucleuscharts.css"
+    "./wasm": "./dist/aeris_charts_wasm_bg.wasm",
+    "./design.css": "./dist/aeris_charts.css"
   },
   "files": [
     "dist",
     "!dist/index.js.map"
   ],
   "sideEffects": [
-    "./dist/nucleuscharts.css"
+    "./dist/aeris_charts.css"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -62,15 +63,15 @@
     "update:api": "node scripts/api_surface.mjs --update",
     "check:release-gates": "node scripts/release_gate_guard.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('pkg',{recursive:true,force:true})\"",
-    "build:wasm": "wasm-pack build ../../crates/nucleuscharts_wasm --target web --out-dir ../../packages/charts/pkg",
+    "build:wasm": "wasm-pack build ../../crates/aeris_charts_wasm --target web --out-dir ../../packages/charts/pkg",
     "build:js": "esbuild src/index.ts --bundle --format=esm --minify --sourcemap --loader:.svg=text --outfile=dist/index.js",
     "build:react": "esbuild src/react.ts --bundle --format=esm --minify --sourcemap --external:react --external:./index.js --outfile=dist/react.js",
     "build:types": "tsc --declaration --emitDeclarationOnly --outDir dist --noEmit false",
-    "build:copy-wasm": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('pkg/nucleuscharts_wasm_bg.wasm','dist/nucleuscharts_wasm_bg.wasm')\"",
-    "build:copy-design": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('src/nucleuscharts.css','dist/nucleuscharts.css')\"",
+    "build:copy-wasm": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('pkg/aeris_charts_wasm_bg.wasm','dist/aeris_charts_wasm_bg.wasm')\"",
+    "build:copy-design": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('src/aeris_charts.css','dist/aeris_charts.css')\"",
     "build": "npm run build:wasm && npm run build:js && npm run build:react && npm run build:types && npm run build:copy-wasm && npm run build:copy-design",
     "lint": "oxlint src",
-    "test:react-ssr": "node -e \"import('./dist/react.js').then(m=>{if(typeof m.NucleusChart!=='function')process.exit(1)})\"",
+    "test:react-ssr": "node -e \"import('./dist/react.js').then(m=>{if(typeof m.AerisChart!=='function')process.exit(1)})\"",
     "test:pack": "node scripts/pack_smoke.mjs",
     "prepublishOnly": "npm run clean && npm run build && npm run check:api && npm run check:namespace && npm run check:release-gates && npm run test:react-ssr && npm run test:pack"
   },

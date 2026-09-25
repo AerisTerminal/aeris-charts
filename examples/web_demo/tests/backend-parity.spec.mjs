@@ -10,7 +10,7 @@ const reference_baseline = JSON.parse(readFileSync(new URL("../fixtures/d1/refer
 const reference_matrix = JSON.parse(readFileSync(new URL("../fixtures/d1/reference-matrix.json", import.meta.url), "utf8"));
 const reference_features = JSON.parse(readFileSync(new URL("../fixtures/d1/reference-features.json", import.meta.url), "utf8"));
 const repository_root = fileURLToPath(new URL("../../..", import.meta.url));
-const test_port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
+const test_port = Number.parseInt(process.env.AERIS_CHARTS_TEST_PORT ?? "4174", 10);
 const test_base_url = `http://127.0.0.1:${test_port}`;
 
 test.beforeEach(async ({ page }) => {
@@ -47,8 +47,8 @@ async function capture_presented_frame(page, backend, extra_query = "") {
 
 function render_native_fixture(output) {
   const args = process.platform === "win32"
-    ? ["+stable-x86_64-pc-windows-msvc", "run", "-p", "nucleuscharts_native", "--example", "parity_fixture", "--", output]
-    : ["run", "-p", "nucleuscharts_native", "--example", "parity_fixture", "--", output];
+    ? ["+stable-x86_64-pc-windows-msvc", "run", "-p", "aeris_charts_native", "--example", "parity_fixture", "--", output]
+    : ["run", "-p", "aeris_charts_native", "--example", "parity_fixture", "--", output];
   const result = spawnSync("cargo", args, { cwd: repository_root, encoding: "utf8" });
   expect(result.status, `native fixture failed\n${result.stdout}\n${result.stderr}`).toBe(0);
 }
@@ -125,21 +125,21 @@ function css_to_device(css, pixel_ratio) {
   return Math.round(css * pixel_ratio);
 }
 
-// Regional comparison with per-image axis geometry. Nucleus negotiates compact strips while
+// Regional comparison with per-image axis geometry. Aeris negotiates compact strips while
 // the pinned reference keeps its own sizes, so each image is cropped with its own geometry
 // ({ price_axis_width, time_axis_height } in CSS px). Windows anchor on shared edges — panes
 // and price strips on the top-right (same spacing, same right-anchored last bar, same top
 // edge), time strips on the bottom-right (same bottom edge) — so equal content coincides and
 // only genuine rendering differences (sizes, glyphs, density) remain in the diff.
-function regional_fidelity_report(nucleus, reference, pixel_ratio, nucleus_geom, reference_geom) {
-  expect([nucleus.width, nucleus.height]).toEqual([reference.width, reference.height]);
+function regional_fidelity_report(Aeris, reference, pixel_ratio, Aeris_geom, reference_geom) {
+  expect([Aeris.width, Aeris.height]).toEqual([reference.width, reference.height]);
   const layout = (image, geom) => ({
     pane_w: css_to_device(fixture.css_width - geom.price_axis_width, pixel_ratio),
     pane_h: css_to_device(fixture.css_height - geom.time_axis_height, pixel_ratio),
     full_w: image.width,
     full_h: image.height,
   });
-  const n = layout(nucleus, nucleus_geom);
+  const n = layout(Aeris, Aeris_geom);
   const r = layout(reference, reference_geom);
   // Intersect two windows anchored on shared edges: panes and price strips anchor
   // top-right (common top edge; bars coincide because spacing and the right-anchored last
@@ -148,36 +148,36 @@ function regional_fidelity_report(nucleus, reference, pixel_ratio, nucleus_geom,
     const w = Math.min(n_w, r_w);
     const h = Math.min(n_h, r_h);
     return [
-      crop_png(nucleus, n_right - w, 0, w, h),
+      crop_png(Aeris, n_right - w, 0, w, h),
       crop_png(reference, r_right - w, 0, w, h),
     ];
   };
   const pairBottomRight = (n_right, n_w, n_h, r_right, r_w, r_h) => {
     const w = Math.min(n_w, r_w);
     const h = Math.min(n_h, r_h);
-    const H = nucleus.height;
+    const H = Aeris.height;
     return [
-      crop_png(nucleus, n_right - w, H - h, w, h),
+      crop_png(Aeris, n_right - w, H - h, w, h),
       crop_png(reference, r_right - w, H - h, w, h),
     ];
   };
-  const W = nucleus.width;
+  const W = Aeris.width;
   const regions = {
-    full: [nucleus, reference],
+    full: [Aeris, reference],
     pane: pairTopRight(n.pane_w, n.pane_w, n.pane_h, r.pane_w, r.pane_w, r.pane_h),
     price_axis: pairTopRight(
       W, W - n.pane_w, n.pane_h,
       W, W - r.pane_w, r.pane_h,
     ),
     time_axis: pairBottomRight(
-      n.pane_w, n.pane_w, nucleus.height - n.pane_h,
+      n.pane_w, n.pane_w, Aeris.height - n.pane_h,
       r.pane_w, r.pane_w, reference.height - r.pane_h,
     ),
   };
   const report = {};
   const visuals = {};
-  for (const [name, [nucleus_region, reference_region]] of Object.entries(regions)) {
-    const stats = image_stats(nucleus_region, reference_region);
+  for (const [name, [Aeris_region, reference_region]] of Object.entries(regions)) {
+    const stats = image_stats(Aeris_region, reference_region);
     report[name] = {
       total_pixels: stats.total_pixels,
       different_pixels: stats.different_pixels,
@@ -583,7 +583,7 @@ test("public time and price scale handles are engine-owned and reference-compati
   expect(result.percentage_range.to).toBeCloseTo(reference_modes.percentage.range.to, 9);
   // Pane heights differ by design (compact 22px time strip vs the reference's), so media
   // coordinates cannot match across libraries; per-side roundtrips prove each mode's math
-  // instead (nucleus roundtrips are asserted with the nucleus result above).
+  // instead (Aeris roundtrips are asserted with the Aeris result above).
   expect(reference_modes.percentage.roundtrip).toBeCloseTo(result.source_price, 9);
   // Compact strips are narrower than the reference's by design; ranges and logical ranges
   // above still match exactly.
@@ -608,7 +608,7 @@ test("public time and price scale handles are engine-owned and reference-compati
 
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&leftScale=1&dpr=1");
   await wait_for_chart(page);
-  const nucleus_left = await page.evaluate(async () => {
+  const Aeris_left = await page.evaluate(async () => {
     const chart = window.__chart;
     const series = window.__main;
     const source_price = window.__data[900].close;
@@ -624,10 +624,10 @@ test("public time and price scale handles are engine-owned and reference-compati
       source_price,
     };
   });
-  expect(nucleus_left.left_width).toBeGreaterThan(0);
-  expect(nucleus_left.right_width).toBe(0);
-  expect(nucleus_left.pane_width + nucleus_left.left_width).toBe(fixture.css_width);
-  expect(nucleus_left.roundtrip).toBeCloseTo(nucleus_left.source_price, 9);
+  expect(Aeris_left.left_width).toBeGreaterThan(0);
+  expect(Aeris_left.right_width).toBe(0);
+  expect(Aeris_left.pane_width + Aeris_left.left_width).toBe(fixture.css_width);
+  expect(Aeris_left.roundtrip).toBeCloseTo(Aeris_left.source_price, 9);
 
   await page.goto("/reference.html?leftScale=1");
   await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
@@ -643,28 +643,28 @@ test("public time and price scale handles are engine-owned and reference-compati
       roundtrip: series.coordinateToPrice(series.priceToCoordinate(source_price)),
       logical_range: chart.timeScale().getVisibleLogicalRange(),
     };
-  }, nucleus_left.source_price);
-  expect(nucleus_left.left_width).toBeLessThan(reference_left.left_width);
-  expect(nucleus_left.right_width).toBe(reference_left.right_width);
-  expect(nucleus_left.pane_width).toBeGreaterThan(reference_left.pane_width);
-  expect(nucleus_left.range).toEqual(reference_left.range);
+  }, Aeris_left.source_price);
+  expect(Aeris_left.left_width).toBeLessThan(reference_left.left_width);
+  expect(Aeris_left.right_width).toBe(reference_left.right_width);
+  expect(Aeris_left.pane_width).toBeGreaterThan(reference_left.pane_width);
+  expect(Aeris_left.range).toEqual(reference_left.range);
   // Media coordinates couple to pane height (compact 22px time strip vs the reference's),
   // so each side proves its own mapping with a roundtrip instead.
-  expect(reference_left.roundtrip).toBeCloseTo(nucleus_left.source_price, 9);
-  expect(nucleus_left.logical_range.to).toBe(reference_left.logical_range.to);
+  expect(reference_left.roundtrip).toBeCloseTo(Aeris_left.source_price, 9);
+  expect(Aeris_left.logical_range.to).toBe(reference_left.logical_range.to);
   expect(
-    Math.abs(nucleus_left.logical_range.from - reference_left.logical_range.from)
+    Math.abs(Aeris_left.logical_range.from - reference_left.logical_range.from)
   ).toBeLessThanOrEqual(1);
 });
 
-test("reference 5.2 reference is deterministic and reports Nucleus fidelity", async ({ page }, test_info) => {
+test("reference 5.2 reference is deterministic and reports Aeris fidelity", async ({ page }, test_info) => {
   // Pin bar spacing like the matrix cases: compact strips change default-fit spacing, so only
   // equal spacing keeps bars pixel-aligned for the comparison.
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&spacing=6");
   await wait_for_chart(page);
   await settle_page(page);
-  const nucleus = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
-  const nucleus_axis_width = Number(await page.getAttribute("html", "data-price-axis-width"));
+  const Aeris = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
+  const Aeris_axis_width = Number(await page.getAttribute("html", "data-price-axis-width"));
 
   await page.goto("/reference.html?spacing=6");
   await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
@@ -677,39 +677,39 @@ test("reference 5.2 reference is deterministic and reports Nucleus fidelity", as
   const reference = PNG.sync.read(reference_first);
 
   // Comparing presented pages puts both libraries through the same Chromium compositor and avoids
-  // the unequal public screenshot resolutions (Nucleus is device-pixel-sized; reference is CSS-sized).
+  // the unequal public screenshot resolutions (Aeris is device-pixel-sized; reference is CSS-sized).
   const expected_size = [
     Math.round(fixture.css_width * fixture.pixel_ratio),
     Math.round(fixture.css_height * fixture.pixel_ratio),
   ];
-  expect([nucleus.width, nucleus.height]).toEqual(expected_size);
+  expect([Aeris.width, Aeris.height]).toEqual(expected_size);
   expect([reference.width, reference.height]).toEqual(expected_size);
 
   const reference_axis_width = Number(await page.getAttribute("html", "data-price-axis-width"));
   const reference_pane_height = await page.evaluate(() => window.__reference.chart.panes()[0].getHeight());
 
   const { report, visuals } = regional_fidelity_report(
-    nucleus,
+    Aeris,
     reference,
     fixture.pixel_ratio,
-    { price_axis_width: nucleus_axis_width, time_axis_height: fixture.time_axis_height },
+    { price_axis_width: Aeris_axis_width, time_axis_height: fixture.time_axis_height },
     {
       price_axis_width: reference_axis_width,
       time_axis_height: fixture.css_height - reference_pane_height,
     },
   );
-  await test_info.attach("nucleus.png", { body: PNG.sync.write(nucleus), contentType: "image/png" });
+  await test_info.attach("Aeris.png", { body: PNG.sync.write(Aeris), contentType: "image/png" });
   await test_info.attach("reference-5.2.0.png", { body: PNG.sync.write(reference), contentType: "image/png" });
-  await test_info.attach("nucleuscharts-reference-diff.png", { body: PNG.sync.write(visuals.full), contentType: "image/png" });
-  console.log(`Nucleus/reference 5.2 fidelity report: ${JSON.stringify(report)}`);
-  await test_info.attach("nucleuscharts-reference-report.json", {
+  await test_info.attach("aeris_charts-reference-diff.png", { body: PNG.sync.write(visuals.full), contentType: "image/png" });
+  console.log(`Aeris/reference 5.2 fidelity report: ${JSON.stringify(report)}`);
+  await test_info.attach("aeris_charts-reference-report.json", {
     body: Buffer.from(JSON.stringify({ fixture: fixture.name, ref_version: "5.2.0", regions: report }, null, 2)),
     contentType: "application/json",
   });
 
   // This gate currently establishes a reproducible upstream reference and makes divergence
   // visible. The explicit ceilings prevent fidelity regressions and are lowered region-by-region
-  // as Nucleus closes each measured gap; they are intentionally not represented as pixel parity.
+  // as Aeris closes each measured gap; they are intentionally not represented as pixel parity.
   // Compact axes (9/2026) intentionally diverge in both axis regions; the pane ceiling still
   // guards chart-content fidelity at its historical level.
   expect(reference_baseline.fixture).toBe(fixture.name);
@@ -741,15 +741,15 @@ test("reference spacing, DPR, and theme matrix reports regional fidelity", async
     await matrix_page.goto(`${test_base_url}/?${query}`);
     await wait_for_chart(matrix_page);
     await settle_page(matrix_page);
-    const nucleus_spacing = Number(await matrix_page.getAttribute("html", "data-bar-spacing"));
-    expect(nucleus_spacing).toBeCloseTo(entry.spacing, 9);
-    const nucleus_range = JSON.parse(await matrix_page.getAttribute("html", "data-visible-logical-range"));
-    const nucleus_axis_width = Number(await matrix_page.getAttribute("html", "data-price-axis-width"));
-    const nucleus_price_extent = await matrix_page.evaluate(() => [
+    const Aeris_spacing = Number(await matrix_page.getAttribute("html", "data-bar-spacing"));
+    expect(Aeris_spacing).toBeCloseTo(entry.spacing, 9);
+    const Aeris_range = JSON.parse(await matrix_page.getAttribute("html", "data-visible-logical-range"));
+    const Aeris_axis_width = Number(await matrix_page.getAttribute("html", "data-price-axis-width"));
+    const Aeris_price_extent = await matrix_page.evaluate(() => [
       window.__chart.coordinate_to_price(0),
       window.__chart.coordinate_to_price(window.__chart.wasm.pane_height(0) - 1),
     ]);
-    const nucleus = PNG.sync.read(await matrix_page.screenshot({ animations: "disabled", fullPage: false }));
+    const Aeris = PNG.sync.read(await matrix_page.screenshot({ animations: "disabled", fullPage: false }));
 
     await matrix_page.goto(`${test_base_url}/reference.html?${query}`);
     await matrix_page.waitForFunction(() => document.documentElement.dataset.ready === "true");
@@ -762,36 +762,36 @@ test("reference spacing, DPR, and theme matrix reports regional fidelity", async
     const reference_pane_height = await matrix_page.evaluate(() => window.__reference.chart.panes()[0].getHeight());
     // Compact axes are intentionally narrower than the reference's strips; the shared
     // content contract is equal ranges, spacing, and price extents (asserted below).
-    expect(nucleus_axis_width).toBeLessThan(reference_axis_width);
+    expect(Aeris_axis_width).toBeLessThan(reference_axis_width);
     const reference_price_extent = await matrix_page.evaluate(() => [
       window.__reference.series.coordinateToPrice(0),
       window.__reference.series.coordinateToPrice(window.__reference.chart.panes()[0].getHeight() - 1),
     ]);
     const reference = PNG.sync.read(await matrix_page.screenshot({ animations: "disabled", fullPage: false }));
-    expect([nucleus.width, nucleus.height]).toEqual([
+    expect([Aeris.width, Aeris.height]).toEqual([
       Math.round(fixture.css_width * entry.dpr),
       Math.round(fixture.css_height * entry.dpr),
     ]);
     const { report, visuals } = regional_fidelity_report(
-      nucleus,
+      Aeris,
       reference,
       entry.dpr,
-      { price_axis_width: nucleus_axis_width, time_axis_height: fixture.time_axis_height },
+      { price_axis_width: Aeris_axis_width, time_axis_height: fixture.time_axis_height },
       {
         price_axis_width: reference_axis_width,
         time_axis_height: fixture.css_height - reference_pane_height,
       },
     );
     matrix[entry.name] = report;
-    console.log(`${entry.name}: axis ${nucleus_axis_width}px, ranges Nucleus ${JSON.stringify(nucleus_range)} reference ${JSON.stringify(reference_range)}, price extents Nucleus ${JSON.stringify(nucleus_price_extent)} reference ${JSON.stringify(reference_price_extent)}; ${JSON.stringify(report)}`);
+    console.log(`${entry.name}: axis ${Aeris_axis_width}px, ranges Aeris ${JSON.stringify(Aeris_range)} reference ${JSON.stringify(reference_range)}, price extents Aeris ${JSON.stringify(Aeris_price_extent)} reference ${JSON.stringify(reference_price_extent)}; ${JSON.stringify(report)}`);
     if (entry.spacing === 50) {
-      await test_info.attach(`${entry.name}-nucleus.png`, { body: PNG.sync.write(nucleus), contentType: "image/png" });
+      await test_info.attach(`${entry.name}-Aeris.png`, { body: PNG.sync.write(Aeris), contentType: "image/png" });
       await test_info.attach(`${entry.name}-reference.png`, { body: PNG.sync.write(reference), contentType: "image/png" });
       await test_info.attach(`${entry.name}-diff.png`, { body: PNG.sync.write(visuals.full), contentType: "image/png" });
     }
     await context.close();
   }
-  await test_info.attach("nucleuscharts-reference-matrix.json", {
+  await test_info.attach("aeris_charts-reference-matrix.json", {
     body: Buffer.from(JSON.stringify({ ref_version: "5.2.0", cases: matrix }, null, 2)),
     contentType: "application/json",
   });
@@ -827,12 +827,12 @@ test("reference marker and overlay-volume fixtures report regional fidelity", as
     await wait_for_chart(feature_page);
     await settle_page(feature_page);
     const axis_width = Number(await feature_page.getAttribute("html", "data-price-axis-width"));
-    const nucleus_range = JSON.parse(await feature_page.getAttribute("html", "data-visible-logical-range"));
-    const nucleus_price_extent = await feature_page.evaluate(() => [
+    const Aeris_range = JSON.parse(await feature_page.getAttribute("html", "data-visible-logical-range"));
+    const Aeris_price_extent = await feature_page.evaluate(() => [
       window.__chart.coordinate_to_price(0),
       window.__chart.coordinate_to_price(window.__chart.wasm.pane_height(0) - 1),
     ]);
-    const nucleus = PNG.sync.read(await feature_page.screenshot({ animations: "disabled", fullPage: false }));
+    const Aeris = PNG.sync.read(await feature_page.screenshot({ animations: "disabled", fullPage: false }));
 
     await feature_page.goto(`${test_base_url}/reference.html?${query}`);
     await feature_page.waitForFunction(() => document.documentElement.dataset.ready === "true");
@@ -848,22 +848,22 @@ test("reference marker and overlay-volume fixtures report regional fidelity", as
     // Compact axes are intentionally narrower than the reference's strips; the shared
     // content contract is equal ranges and price extents (asserted below).
     expect(axis_width).toBeLessThan(reference_axis_width);
-    // Same right-anchored last bar on both sides; the wider Nucleus pane shows more bars to
+    // Same right-anchored last bar on both sides; the wider Aeris pane shows more bars to
     // the left (pinning a range here would refit bar spacing and break pixel alignment, so
     // the ranges agree on the anchor and order on the edge instead). Edge prices agree
     // relatively: the extra visible bars can nudge autoscale extrema, so this proves mapping
     // sanity (1e-3) rather than bit-exact autoscale inputs.
-    expect(nucleus_range.to).toBe(reference_range.to);
-    expect(nucleus_range.from).toBeLessThan(reference_range.from);
+    expect(Aeris_range.to).toBe(reference_range.to);
+    expect(Aeris_range.from).toBeLessThan(reference_range.from);
     for (const [got, want] of [
-      [nucleus_price_extent[0], reference_price_extent[0]],
-      [nucleus_price_extent[1], reference_price_extent[1]],
+      [Aeris_price_extent[0], reference_price_extent[0]],
+      [Aeris_price_extent[1], reference_price_extent[1]],
     ]) {
       expect(Math.abs(got - want) / Math.abs(want)).toBeLessThan(1e-3);
     }
     const reference = PNG.sync.read(await feature_page.screenshot({ animations: "disabled", fullPage: false }));
     const { report, visuals } = regional_fidelity_report(
-      nucleus,
+      Aeris,
       reference,
       fixture.pixel_ratio,
       { price_axis_width: axis_width, time_axis_height: fixture.time_axis_height },
@@ -872,11 +872,11 @@ test("reference marker and overlay-volume fixtures report regional fidelity", as
         time_axis_height: fixture.css_height - reference_pane_height,
       },
     );
-    captures[feature] = { nucleus, reference };
-    console.log(`${feature} ranges: Nucleus ${JSON.stringify(nucleus_range)} reference ${JSON.stringify(reference_range)}, price extents Nucleus ${JSON.stringify(nucleus_price_extent)} reference ${JSON.stringify(reference_price_extent)}`);
+    captures[feature] = { Aeris, reference };
+    console.log(`${feature} ranges: Aeris ${JSON.stringify(Aeris_range)} reference ${JSON.stringify(reference_range)}, price extents Aeris ${JSON.stringify(Aeris_price_extent)} reference ${JSON.stringify(reference_price_extent)}`);
     feature_reports[feature] = report;
     console.log(`${feature}: ${JSON.stringify(report)}`);
-    await test_info.attach(`${feature}-nucleus.png`, { body: PNG.sync.write(nucleus), contentType: "image/png" });
+    await test_info.attach(`${feature}-Aeris.png`, { body: PNG.sync.write(Aeris), contentType: "image/png" });
     await test_info.attach(`${feature}-reference.png`, { body: PNG.sync.write(reference), contentType: "image/png" });
     await test_info.attach(`${feature}-diff.png`, { body: PNG.sync.write(visuals.full), contentType: "image/png" });
     await context.close();
@@ -884,12 +884,12 @@ test("reference marker and overlay-volume fixtures report regional fidelity", as
   const footprints = {};
   for (const feature of ["markers", "volume"]) {
     footprints[feature] = {
-      nucleus: changed_footprint(captures.base.nucleus, captures[feature].nucleus),
+      Aeris: changed_footprint(captures.base.Aeris, captures[feature].Aeris),
       reference: changed_footprint(captures.base.reference, captures[feature].reference),
     };
   }
   console.log(`feature footprints: ${JSON.stringify(footprints)}`);
-  await test_info.attach("nucleuscharts-reference-features.json", {
+  await test_info.attach("aeris_charts-reference-features.json", {
     body: Buffer.from(JSON.stringify({ ref_version: "5.2.0", features: feature_reports, footprints }, null, 2)),
     contentType: "application/json",
   });

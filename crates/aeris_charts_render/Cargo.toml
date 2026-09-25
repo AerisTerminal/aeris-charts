@@ -1,0 +1,18 @@
+[package]
+name = "aeris_charts_render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+description = "Draw-list IR and rendering math (bar widths, primitives) — backend-agnostic"
+
+[dependencies]
+aeris_charts_core = { path = "../aeris_charts_core", version = "0.3.0" }
+
+[lints]
+workspace = true

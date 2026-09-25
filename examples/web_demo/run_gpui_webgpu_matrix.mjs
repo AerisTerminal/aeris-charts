@@ -12,7 +12,7 @@ const result = spawnSync(
   [cli, "test", "tests/gpui-webgpu-matrix.spec.mjs", "--project=chromium"],
   {
     cwd: fileURLToPath(new URL(".", import.meta.url)),
-    env: { ...process.env, NUCLEUSCHARTS_RUN_GPUI_WEBGPU_MATRIX: "1" },
+    env: { ...process.env, AERIS_CHARTS_RUN_GPUI_WEBGPU_MATRIX: "1" },
     stdio: "inherit",
   },
 );

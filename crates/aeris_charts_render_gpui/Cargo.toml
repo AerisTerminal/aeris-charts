@@ -1,0 +1,73 @@
+[package]
+name = "aeris_charts_render_gpui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+description = "Optional GPUI executor for the Prim IR: lowers Aeris's backend-neutral frame into GPUI scene primitives"
+
+# GPUI itself is OPTIONAL and off by default, so `cargo build/test --workspace` never compiles it
+# Normal non-GPUI builds do not compile GPUI. Everything except the thin
+# `backend` module — the whole Prim lowering, snapping, cache, and metrics layer — is
+# GPUI-free and unit-testable without a window or a GPU.
+[features]
+default = []
+gpui-backend = ["dep:gpui", "dep:image", "dep:smallvec"]
+
+[dependencies]
+aeris_charts_core = { path = "../aeris_charts_core", version = "0.3.0" }
+aeris_charts_engine = { path = "../aeris_charts_engine", version = "0.3.0" }
+aeris_charts_render = { path = "../aeris_charts_render", version = "0.3.0" }
+
+# GPUI is sourced from Zed because Aeris and Aeris Terminal intentionally track the current pre-1.0
+# API. Both dependencies pin the same reviewed immutable commit; upgrades are explicit manifest and
+# lockfile changes and must pass the complete GPUI parity suite.
+#
+# `default-features = false` keeps unrelated platform feature paths out of the graph, so Windows
+# resolves cleanly to GPUI's native backend.
+#
+# `windows-manifest` is NOT optional on Windows: GPUI imports `comctl32!TaskDialogIndirect`, which
+# only resolves under a comctl32 v6 activation context. That context comes from the application
+# manifest this feature embeds. Without it the executable fails to load at all
+# (STATUS_ENTRYPOINT_NOT_FOUND, 0xC0000139) before `main` runs.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1057c2cf3d5b4aefd04755e1387c7826a4d7fba6", version = "=0.2.2", optional = true, default-features = false, features = [
+    "windows-manifest",
+] }
+image = { version = "0.25", optional = true, default-features = false }
+smallvec = { version = "1", optional = true }
+
+# The pixel-parity harness diffs GPUI's real output against Aeris's existing native rasterizer.
+[dev-dependencies]
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1057c2cf3d5b4aefd04755e1387c7826a4d7fba6", default-features = false, features = [
+    "wayland",
+    "x11",
+] }
+aeris_charts_native = { path = "../aeris_charts_native", version = "0.3.0" }
+sha2 = "0.11"
+tiny-skia = "0.12"
+
+[lints]
+workspace = true
+
+# The probe needs a real GPUI window, so it only builds with the backend feature. Without this,
+# `cargo build --workspace` would try to compile it (and GPUI) unconditionally.
+[[example]]
+name = "gpui_probe"
+required-features = ["gpui-backend"]
+
+[[example]]
+name = "pixel_parity"
+required-features = ["gpui-backend"]
+
+[[example]]
+name = "gpui_pane_capture"
+required-features = ["gpui-backend"]
+
+[[example]]
+name = "gpui_fixture_view"
+required-features = ["gpui-backend"]

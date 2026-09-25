@@ -295,7 +295,7 @@ test("main demo splits into independent charts, drags dividers, meters, caps, an
   }
 
   // The divider is visible and draggable (col-resize), and the drag resizes the cells.
-  const divider = page.locator(".nucleuscharts-grid-divider >> nth=0");
+  const divider = page.locator(".aeris_charts-grid-divider >> nth=0");
   await expect(divider).toHaveCSS("cursor", "col-resize");
   const widths = () => page.evaluate(() => window.__grid.cells().map((c) => c.element.getBoundingClientRect().width));
   const before = await widths();
@@ -319,7 +319,7 @@ test("main demo splits into independent charts, drags dividers, meters, caps, an
   await page.click("#split_v");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 12);
   await wait_cell_charts(page);
-  await expect(page.locator(".nucleuscharts-grid-divider >> nth=1")).toHaveCSS("cursor", "row-resize");
+  await expect(page.locator(".aeris_charts-grid-divider >> nth=1")).toHaveCSS("cursor", "row-resize");
   let usage = await page.evaluate(() => window.__grid.usage());
   expect(usage.chart_count).toBe(3);
   expect(usage.split_count).toBe(2);
@@ -400,7 +400,7 @@ test("demo theme persists across reloads while runtime fixtures stay determinist
   await wait_grid(page);
   await page.selectOption("#theme_select", "light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  expect(await page.evaluate(() => localStorage.getItem("nucleuscharts.demo.theme"))).toBe("light");
+  expect(await page.evaluate(() => localStorage.getItem("aeris_charts.demo.theme"))).toBe("light");
 
   await page.reload();
   await wait_grid(page);
@@ -461,7 +461,7 @@ test("divider drags never disturb a cell's candle spacing (even with interaction
   const left_before = await probe(0);
   const right_before = await probe(1);
 
-  const divider = page.locator(".nucleuscharts-grid-divider >> nth=0");
+  const divider = page.locator(".aeris_charts-grid-divider >> nth=0");
   const box = await divider.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
@@ -487,7 +487,7 @@ test("the divider keeps its canonical border line under a global border-box rese
   await page.click("#split_h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
   await wait_cell_charts(page);
-  const divider = page.locator(".nucleuscharts-grid-divider >> nth=0");
+  const divider = page.locator(".aeris_charts-grid-divider >> nth=0");
   const box = await divider.boundingBox();
   expect(box.width).toBeGreaterThanOrEqual(5); // the full hit area
 
@@ -525,7 +525,7 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   await wait_cell_charts(page);
 
   const divider_rgb = () =>
-    page.locator(".nucleuscharts-grid-divider >> nth=0").evaluate((el) => {
+    page.locator(".aeris_charts-grid-divider >> nth=0").evaluate((el) => {
       // The line color is the solid inner strip's background.
       const inner = el.firstElementChild;
       return inner ? getComputedStyle(inner).backgroundColor : "";
@@ -610,7 +610,7 @@ test("the shortcut registry accepts combo overrides", async ({ page }) => {
   await wait_grid(page);
   // A scratch grid with the vertical split re-keyed: ctrl+shift+x, default ctrl+v disabled.
   await page.evaluate(async () => {
-    const mod = await import("/dist/nucleuscharts_financial.js");
+    const mod = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:640px;height:400px;z-index:50;background:white;";
     host.id = "scratch_grid";
@@ -767,7 +767,7 @@ test("workspace state composes chart persistence V1 and restores stable ownershi
   await page.goto("/");
   await wait_grid(page);
   const result = await page.evaluate(async () => {
-    const { create_chart_grid } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart_grid } = await import("/dist/aeris_charts_financial.js");
     const make_host = (width, height) => {
       const host = document.createElement("div");
       host.style.cssText = `position:absolute;left:-10000px;top:0;width:${width}px;height:${height}px`;

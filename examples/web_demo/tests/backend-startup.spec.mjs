@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 test("forced adapter failure is classified per chart and warns once", async ({ page }) => {
   const warnings = [];
   page.on("console", (message) => {
-    if (message.type() === "warning" && message.text().startsWith("nucleuscharts: WebGPU fallback")) {
+    if (message.type() === "warning" && message.text().startsWith("aeris_charts: WebGPU fallback")) {
       warnings.push(message.text());
     }
   });
@@ -12,7 +12,7 @@ test("forced adapter failure is classified per chart and warns once", async ({ p
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
   const statuses = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const entries = await Promise.all(Array.from({ length: 4 }, async (_, index) => {
       const host = document.createElement("div");
       host.style.cssText = `width:160px;height:100px;position:absolute;left:${-10000 - index * 200}px`;
@@ -60,7 +60,7 @@ test("forced adapter failure is classified per chart and warns once", async ({ p
 test("explicit Canvas2D status does not request or warn about WebGPU", async ({ page }) => {
   const warnings = [];
   page.on("console", (message) => {
-    if (message.type() === "warning" && message.text().startsWith("nucleuscharts: WebGPU fallback")) {
+    if (message.type() === "warning" && message.text().startsWith("aeris_charts: WebGPU fallback")) {
       warnings.push(message.text());
     }
   });
@@ -85,7 +85,7 @@ test("forced adapter failure remains chart-local after shared WebGPU is ready", 
   test.skip(await page.evaluate(() => window.__chart.backend() !== "webgpu"), "WebGPU unavailable");
 
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "width:160px;height:100px;position:absolute;left:-10000px";
     document.body.append(host);

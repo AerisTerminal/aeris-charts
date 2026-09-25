@@ -238,7 +238,7 @@ test("built-in series convert in place while unsupported custom operations stay 
   });
   expect(result.converted_type).toBe("area");
   expect(result.captured).toEqual([
-    { name: "NucleusChartsError", code: "unsupported_operation" },
+    { name: "AerisChartsError", code: "unsupported_operation" },
   ]);
 });
 
@@ -250,7 +250,7 @@ test("shared WebGPU loss wakes 1, 2, 8, and 16 live charts", async ({ page, brow
 
   for (const count of [1, 2, 8, 16]) {
     const result = await page.evaluate(async (count) => {
-      const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+      const { create_chart } = await import("/dist/aeris_charts_financial.js");
       const original = window.__chart;
       const charts = [];
       for (let index = 0; index < count; index += 1) {
@@ -272,7 +272,7 @@ test("shared WebGPU loss wakes 1, 2, 8, and 16 live charts", async ({ page, brow
       const backends = charts.map(({ chart }) => chart.backend());
       const disposed = charts.pop();
       disposed.chart.remove();
-      globalThis.dispatchEvent(new CustomEvent("nucleuscharts-chart-backend-lost", { detail: 999 }));
+      globalThis.dispatchEvent(new CustomEvent("aeris_charts-chart-backend-lost", { detail: 999 }));
       await Promise.resolve();
       const disposed_count = disposed.chart.backend_loss_count_for_test();
       for (const { chart, host } of charts) {

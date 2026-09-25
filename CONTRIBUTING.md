@@ -3,7 +3,7 @@
 Issue reports, reproducible test cases, design discussion, and documentation corrections are
 welcome through the project repository.
 
-Nucleus Charts uses an AGPL and commercial dual-license model. To preserve Axiusflow's ability to
+Aeris Charts uses an AGPL and commercial dual-license model. To preserve Aeris Terminal's ability to
 offer both licenses, external code contributions require a separate contributor agreement before
 they can be accepted. Open an issue before preparing a code contribution so the agreement and the
 intended change can be reviewed first.

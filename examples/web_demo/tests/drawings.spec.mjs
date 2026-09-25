@@ -695,7 +695,7 @@ test("an empty trend line offers direct inline text entry at its configured slot
   const prompt_gap = gap_width(hovered);
 
   await page.mouse.click(slot.x, slot.y);
-  const editor = page.locator("#nucleuscharts-text-input");
+  const editor = page.locator("#aeris_charts-text-input");
   await expect(editor).toBeVisible();
   await settle_frames(page);
   const caret_gap = gap_width(await capture(page));
@@ -1423,14 +1423,14 @@ test("changing style mid-edit never wipes the typed text; font size control appl
 
   await page.click("#drawings_group [data-tool='text']");
   await page.mouse.click(p.x + offset.left, p.y + offset.top);
-  const editor = page.locator("#chart_container #nucleuscharts-text-input");
+  const editor = page.locator("#chart_container #aeris_charts-text-input");
   await expect(editor).toBeVisible();
   await editor.fill("keep me");
   // Change the weight like a real user (focusing the toolbar input blurs the editor, which
   // commits the text first; the change then applies the style) — the text must survive.
   await page.evaluate(() => document.getElementById("drawing_weight").focus());
   await page.selectOption("#drawing_weight", "700");
-  await expect(page.locator("#chart_container #nucleuscharts-text-editor")).toHaveCount(0);
+  await expect(page.locator("#chart_container #aeris_charts-text-editor")).toHaveCount(0);
   const options = await page.evaluate(() => window.__chart.drawings()[0].options());
   expect(options.text).toBe("keep me");
   expect(options.text_weight).toBe(700);
@@ -1451,7 +1451,7 @@ test("changing style mid-edit never wipes the typed text; font size control appl
   await page.mouse.click(p.x + offset.left, p.y + offset.top); // first click: select only
   await settle_frames(page);
   expect(await page.evaluate(() => window.__chart.selected_drawing())).not.toBeNull();
-  await expect(page.locator("#chart_container #nucleuscharts-text-editor")).toHaveCount(0);
+  await expect(page.locator("#chart_container #aeris_charts-text-editor")).toHaveCount(0);
   const synced = await page.evaluate(() => ({
     weight: document.getElementById("drawing_weight").value,
     size: document.getElementById("drawing_text_size").value,
@@ -1503,10 +1503,10 @@ test("tool customization templates new drawings and applies live to the selected
   ));
   await page.mouse.move(label_x + offset.left, label_y + offset.top);
   await page.mouse.click(label_x + offset.left, label_y + offset.top);
-  const editor = page.locator("#nucleuscharts-text-input");
+  const editor = page.locator("#aeris_charts-text-input");
   await expect(editor).toBeFocused();
   expect(await editor.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
-  expect(await page.locator("#nucleuscharts-text-caret").evaluate((el) => getComputedStyle(el).backgroundColor)).toBe("rgb(255, 0, 255)");
+  expect(await page.locator("#aeris_charts-text-caret").evaluate((el) => getComputedStyle(el).backgroundColor)).toBe("rgb(255, 0, 255)");
   await page.keyboard.press("Escape");
 
   // Live-apply: with the drawing selected, changing the settings updates it in place.
@@ -1569,12 +1569,12 @@ test("trend labels rotate, reverse, template alignment, and never inherit text-t
   }
   expect(configured_red_pixels, "the real WebGPU prompt uses configured text RGB, not gray").toBeGreaterThan(5);
   await page.mouse.click(slot.x + offset.left, slot.y + offset.top);
-  const editor = page.locator("#chart_container #nucleuscharts-text-input");
+  const editor = page.locator("#chart_container #aeris_charts-text-input");
   await expect(editor).toBeFocused();
-  const wrap = page.locator("#chart_container #nucleuscharts-text-editor");
+  const wrap = page.locator("#chart_container #aeris_charts-text-editor");
   expect(await editor.evaluate((el) => getComputedStyle(el).fontSize)).toBe("14px");
   expect(await editor.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
-  expect(await page.locator("#nucleuscharts-text-caret")).toBeVisible();
+  expect(await page.locator("#aeris_charts-text-caret")).toBeVisible();
   const editor_angle = () => wrap.evaluate((el) => Number(el.style.transform.match(/rotate\(([-\d.e]+)rad\)/)?.[1]));
   expect(await editor_angle()).toBeCloseTo(slot.angle, 6);
   await editor.fill("owned trend label");
@@ -1654,11 +1654,11 @@ test("text tool: press places and opens typing mode; typing commits; leaving emp
   await page.evaluate(() => window.__chart.set_drawing_tool("text"));
   await page.mouse.click(p.x, p.y);
   // Typing mode: borderless caret overlay; the engine's focus border is the only outline.
-  const wrap = page.locator("#chart_container #nucleuscharts-text-editor");
+  const wrap = page.locator("#chart_container #aeris_charts-text-editor");
   await expect(wrap).toBeVisible();
-  const editor = wrap.locator("#nucleuscharts-text-input");
+  const editor = wrap.locator("#aeris_charts-text-input");
   await expect(editor).toBeFocused();
-  await expect(page.locator("#nucleuscharts-text-preview")).toHaveCount(0);
+  await expect(page.locator("#aeris_charts-text-preview")).toHaveCount(0);
   expect(await wrap.evaluate((el) => getComputedStyle(el).borderStyle)).toBe("none");
   // Focus border stays on the canvas (primary blue ring) — not a DOM handoff.
   const blue_ring = (png) => count_color(crop_around(png, p.x * PR, p.y * PR, 130, 40), BLUE, 40);
@@ -1671,7 +1671,7 @@ test("text tool: press places and opens typing mode; typing commits; leaving emp
   await editor.fill("engine label");
   await page.keyboard.press("Enter");
   await settle_frames(page);
-  await expect(page.locator("#chart_container #nucleuscharts-text-editor")).toHaveCount(0);
+  await expect(page.locator("#chart_container #aeris_charts-text-editor")).toHaveCount(0);
   const list = await drawings(page);
   expect(list).toHaveLength(1);
   expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("engine label");
@@ -1679,7 +1679,7 @@ test("text tool: press places and opens typing mode; typing commits; leaving emp
   // Leaving empty (Escape on a fresh placement) removes the drawing — no "Add text" left behind.
   await page.evaluate(() => window.__chart.set_drawing_tool("text"));
   await page.mouse.click(p.x + 80, p.y);
-  await expect(page.locator("#chart_container #nucleuscharts-text-input")).toBeVisible();
+  await expect(page.locator("#chart_container #aeris_charts-text-input")).toBeVisible();
   await page.keyboard.press("Escape");
   await settle_frames(page);
   expect(await drawings(page)).toHaveLength(1);
@@ -1695,7 +1695,7 @@ test("text tool: first click selects (focus border), a second click opens typing
   }, s);
   await settle_frames(page);
   const p = await spot(page, s.l0, s.p_mid);
-  const editor = page.locator("#chart_container #nucleuscharts-text-input");
+  const editor = page.locator("#chart_container #aeris_charts-text-input");
 
   // the public reference's two-step model: the first click only SELECTS — no editor, the drawing
   // becomes selected, and the engine's focus border (primary blue ring) paints around the
@@ -1722,12 +1722,12 @@ test("text tool: first click selects (focus border), a second click opens typing
   expect(ink.fill).toBe("rgba(0, 0, 0, 0)");
   expect(ink.caret).toBe("rgba(0, 0, 0, 0)");
   expect(ink.opacity).toBe("0");
-  await expect(page.locator("#nucleuscharts-text-caret")).toBeVisible();
+  await expect(page.locator("#aeris_charts-text-caret")).toBeVisible();
   // Escape discards the edit.
   await editor.fill("discarded");
   await page.keyboard.press("Escape");
   await settle_frames(page);
-  await expect(page.locator("#chart_container #nucleuscharts-text-editor")).toHaveCount(0);
+  await expect(page.locator("#chart_container #aeris_charts-text-editor")).toHaveCount(0);
   expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("source");
   // Still selected after the cancelled edit: ONE click re-enters typing mode.
   await page.mouse.click(p.x, p.y);
@@ -1782,10 +1782,10 @@ test("empty text paints nothing on the chart; leaving edit without typing remove
   ).toBe(0);
   // Empty text: first click opens typing mode (no ink to focus). Leaving without typing removes it.
   await page.mouse.click(p.x, p.y);
-  const editor = page.locator("#chart_container #nucleuscharts-text-input");
+  const editor = page.locator("#chart_container #aeris_charts-text-input");
   await expect(editor).toBeVisible();
   await expect(editor).toHaveText("");
-  await expect(page.locator("#nucleuscharts-text-preview")).toHaveCount(0);
+  await expect(page.locator("#aeris_charts-text-preview")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await settle_frames(page);
   expect(await drawings(page)).toHaveLength(0);
@@ -1812,7 +1812,7 @@ test("text drawing moves freely in both directions with a body drag", async ({ p
   // Clicking the label afterwards still opens typing mode (movement does not eat the click).
   const moved_p = { x: p.x + 45, y: p.y - 25 };
   await page.mouse.click(moved_p.x, moved_p.y);
-  await expect(page.locator("#chart_container #nucleuscharts-text-input")).toBeVisible();
+  await expect(page.locator("#chart_container #aeris_charts-text-input")).toBeVisible();
   await page.keyboard.press("Escape");
 });
 
@@ -1827,10 +1827,10 @@ test("the editor tracks its anchor through wheel zoom and scroll (no displacemen
   // Two-step: first click selects, second opens typing mode.
   await page.mouse.click(p.x, p.y);
   await page.mouse.click(p.x, p.y);
-  const editor = page.locator("#chart_container #nucleuscharts-text-input");
+  const editor = page.locator("#chart_container #aeris_charts-text-input");
   await expect(editor).toBeVisible();
   const text_center = () => page.evaluate(() => {
-    const editor = document.querySelector("#nucleuscharts-text-input");
+    const editor = document.querySelector("#aeris_charts-text-input");
     const range = document.createRange();
     range.selectNodeContents(editor);
     const r = range.getBoundingClientRect();
@@ -1874,11 +1874,11 @@ test("typing mode keeps the text pixel-anchored (no shift, same size) as it grow
   // Two-step: first click selects, second opens typing mode.
   await page.mouse.click(p.x, p.y);
   await page.mouse.click(p.x, p.y);
-  const editor = page.locator("#chart_container #nucleuscharts-text-input");
+  const editor = page.locator("#chart_container #aeris_charts-text-input");
   await expect(editor).toBeVisible();
   // The editable's REAL text rect (Range) vs the engine anchor — the calibration's contract.
   const metrics = () => page.evaluate(() => {
-    const editor = document.querySelector("#nucleuscharts-text-input");
+    const editor = document.querySelector("#aeris_charts-text-input");
     const range = document.createRange();
     range.selectNodeContents(editor);
     const r = range.getBoundingClientRect();
@@ -1942,10 +1942,10 @@ test("typing mode matches the committed render: exact size and baseline (no jump
   // Two-step: first click selects, second opens typing mode.
   await page.mouse.click(p.x, p.y);
   await page.mouse.click(p.x, p.y);
-  const editor = page.locator("#chart_container #nucleuscharts-text-input");
+  const editor = page.locator("#chart_container #aeris_charts-text-input");
   await expect(editor).toBeVisible();
   const probe = await page.evaluate(() => {
-    const editor = document.querySelector("#nucleuscharts-text-input");
+    const editor = document.querySelector("#aeris_charts-text-input");
     // The editor's own baseline, via the same zero-size inline-probe the package uses.
     const span = document.createElement("span");
     span.style.display = "inline-block";
@@ -1974,10 +1974,10 @@ test("empty typing mode is a blank caret box (no Add text ghost)", async ({ page
   await settle_frames(page);
   const p = await spot(page, s.l0, s.p_mid);
   await page.mouse.click(p.x, p.y);
-  const editor = page.locator("#chart_container #nucleuscharts-text-input");
+  const editor = page.locator("#chart_container #aeris_charts-text-input");
   await expect(editor).toBeVisible();
   await expect(editor).toHaveText("");
-  await expect(page.locator("#nucleuscharts-text-preview")).toHaveCount(0);
+  await expect(page.locator("#aeris_charts-text-preview")).toHaveCount(0);
   const font_size = await editor.evaluate((el) => getComputedStyle(el).fontSize);
   expect(font_size).toBe("14px");
   await page.keyboard.press("Escape");

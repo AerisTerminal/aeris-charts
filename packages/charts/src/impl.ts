@@ -4,7 +4,7 @@
  */
 
 // @ts-ignore -- pkg is a build artifact, present after build:wasm
-import init, { NucleusChart } from "../pkg/nucleuscharts_wasm.js";
+import init, { AerisChart } from "../pkg/aeris_charts_wasm.js";
 
 import { install_gestures } from "./gestures.js";
 import type { pane_primitive, pane_primitive_handle, series_primitive, series_primitive_handle } from "./primitives.js";
@@ -16,8 +16,8 @@ import {
   type accessibility_handle,
   type accessibility_options,
 } from "./accessibility.js";
-import { nucleuscharts_error } from "./errors.js";
-import type { nucleuscharts_error_code } from "./errors.js";
+import { AerisChartsError } from "./errors.js";
+import type { AerisChartsErrorCode } from "./errors.js";
 import type {
   alert_api, alert_condition, alert_frequency, alert_line, alert_price_scale, alert_snapshot,
   crosshair_action_request, crosshair_action_request_handler,
@@ -72,15 +72,15 @@ const DRAWING_KIND_FROM_U8: readonly drawing_kind[] = [
 
 type persistence_error_result = {
   ok: false;
-  error: { code: nucleuscharts_error_code; message: string };
+  error: { code: AerisChartsErrorCode; message: string };
 };
 
 function throw_persistence_error(result: persistence_error_result): never {
-  throw new nucleuscharts_error(result.error.code, result.error.message);
+  throw new AerisChartsError(result.error.code, result.error.message);
 }
 /**
  * Instantiate the wasm module once per page. `wasm_url` overrides the default asset resolution
- * (`new URL("nucleuscharts_wasm_bg.wasm", import.meta.url)` beside the bundle) — the escape hatch for
+ * (`new URL("aeris_charts_wasm_bg.wasm", import.meta.url)` beside the bundle) — the escape hatch for
  * bundlers that relocate the JS away from the .wasm (e.g. Vite's dev pre-bundler). Only the
  * first call's argument takes effect.
  */
@@ -194,7 +194,7 @@ const FEATURE_KIND_NAMES = [
 
 /**
  * Slot layout of the `frame_stats_into` f64 buffer. Must match `crate::telemetry::slot` in
- * `nucleuscharts_wasm` exactly — append only, never reorder (the engine and the package version
+ * `aeris_charts_wasm` exactly — append only, never reorder (the engine and the package version
  * together, but a stale bundle against a newer .wasm must still read the same slots).
  */
 const FRAME_STATS_SLOT = {
@@ -393,7 +393,7 @@ function point_color_to_u32(css: string | undefined): number | undefined {
   if (css === undefined) return undefined;
   const packed = parse_css_to_u32(css);
   if (packed === null) {
-    console.warn(`nucleuscharts: ignoring unparseable data point color "${css}"`);
+    console.warn(`aeris_charts: ignoring unparseable data point color "${css}"`);
     return undefined;
   }
   return packed;
@@ -401,11 +401,11 @@ function point_color_to_u32(css: string | undefined): number | undefined {
 
 type general_engine_result<T> =
   | { ok: true; result: T }
-  | { ok: false; error: { code: nucleuscharts_error_code; message: string } };
+  | { ok: false; error: { code: AerisChartsErrorCode; message: string } };
 
 function parse_general_result<T>(json: string): T {
   const result = JSON.parse(json) as general_engine_result<T>;
-  if (!result.ok) throw new nucleuscharts_error(result.error.code, result.error.message);
+  if (!result.ok) throw new AerisChartsError(result.error.code, result.error.message);
   return result.result;
 }
 
@@ -470,7 +470,7 @@ type general_columns_input =
 function general_ids_json(ids: readonly (string | number | null)[] | undefined, rows: number): string {
   if (ids === undefined) return "";
   if (ids.length !== rows) {
-    throw new nucleuscharts_error("invalid_data", "general row IDs and value columns must have equal lengths");
+    throw new AerisChartsError("invalid_data", "general row IDs and value columns must have equal lengths");
   }
   return JSON.stringify(ids);
 }
@@ -478,7 +478,7 @@ function general_ids_json(ids: readonly (string | number | null)[] | undefined, 
 function general_labels_value(labels: readonly (string | null)[] | undefined, rows: number): readonly (string | null)[] | null {
   if (labels === undefined) return null;
   if (labels.length !== rows) {
-    throw new nucleuscharts_error("invalid_data", "general row labels and value columns must have equal lengths");
+    throw new AerisChartsError("invalid_data", "general row labels and value columns must have equal lengths");
   }
   return labels;
 }
@@ -511,7 +511,7 @@ function pack_general_rows(
         const row = data[index] as heatmap_grid_row;
         const x = row.x instanceof Date ? row.x.getTime() : row.x;
         if (typeof x !== "number" || typeof row.y !== "number") {
-          throw new nucleuscharts_error(
+          throw new AerisChartsError(
             "invalid_data",
             "temporal heatmap_grid rows require Date/epoch-millisecond X and numeric Y coordinates",
           );
@@ -519,7 +519,7 @@ function pack_general_rows(
         x_epoch_ms[index] = x;
         y_coordinate[index] = row.y;
         if (row.value === undefined) {
-          throw new nucleuscharts_error("invalid_data", "heatmap_grid rows require a value field");
+          throw new AerisChartsError("invalid_data", "heatmap_grid rows require a value field");
         }
         if (row.value === null) {
           value_valid ??= new Uint8Array(data.length).fill(1);
@@ -538,7 +538,7 @@ function pack_general_rows(
       for (let index = 0; index < data.length; index += 1) {
         const row = data[index] as heatmap_grid_row;
         if (typeof row.x !== "number" || typeof row.y !== "number") {
-          throw new nucleuscharts_error(
+          throw new AerisChartsError(
             "invalid_data",
             "continuous heatmap_grid rows require numeric X and Y coordinates",
           );
@@ -546,7 +546,7 @@ function pack_general_rows(
         x[index] = row.x;
         y_coordinate[index] = row.y;
         if (row.value === undefined) {
-          throw new nucleuscharts_error("invalid_data", "heatmap_grid rows require a value field");
+          throw new AerisChartsError("invalid_data", "heatmap_grid rows require a value field");
         }
         if (row.value === null) {
           value_valid ??= new Uint8Array(data.length).fill(1);
@@ -568,7 +568,7 @@ function pack_general_rows(
     for (let index = 0; index < data.length; index += 1) {
       const row = data[index] as heatmap_grid_row;
       if (typeof row.x !== "string" || typeof row.y !== "string") {
-        throw new nucleuscharts_error("invalid_data", "heatmap_grid X and Y categories must be strings");
+        throw new AerisChartsError("invalid_data", "heatmap_grid X and Y categories must be strings");
       }
       let x_category = x_lookup.get(row.x);
       if (x_category === undefined) {
@@ -585,7 +585,7 @@ function pack_general_rows(
       x_category_indices[index] = x_category;
       y_category_indices[index] = y_category;
       if (row.value === undefined) {
-        throw new nucleuscharts_error("invalid_data", "heatmap_grid rows require a value field");
+        throw new AerisChartsError("invalid_data", "heatmap_grid rows require a value field");
       }
       if (row.value === null) {
         value_valid ??= new Uint8Array(data.length).fill(1);
@@ -615,7 +615,7 @@ function pack_general_rows(
     for (let index = 0; index < data.length; index += 1) {
       const row = data[index] as box_plot_row;
       if (typeof row.x !== "string") {
-        throw new nucleuscharts_error("invalid_data", "box_plot category X values must be strings");
+        throw new AerisChartsError("invalid_data", "box_plot category X values must be strings");
       }
       let category = category_lookup.get(row.x);
       if (category === undefined) {
@@ -632,7 +632,7 @@ function pack_general_rows(
         [row.max, max, () => { max_valid ??= new Uint8Array(data.length).fill(1); return max_valid; }],
       ] as const) {
         if (value === undefined) {
-          throw new nucleuscharts_error("invalid_data", "box_plot rows require min, q1, median, q3, and max fields");
+          throw new AerisChartsError("invalid_data", "box_plot rows require min, q1, median, q3, and max fields");
         }
         if (value === null) {
           validity()[index] = 0;
@@ -655,7 +655,7 @@ function pack_general_rows(
     const row = data[index]!;
     const value = is_range ? (row as range_area_row).high : (row as general_xy_row).y;
     if (value === undefined) {
-      throw new nucleuscharts_error("invalid_data", `${kind} rows require low and high fields`);
+      throw new AerisChartsError("invalid_data", `${kind} rows require low and high fields`);
     }
     if (value === null) {
       y_valid ??= new Uint8Array(data.length).fill(1);
@@ -666,7 +666,7 @@ function pack_general_rows(
     if (is_range) {
       const low_value = (row as range_area_row).low;
       if (low_value === undefined) {
-        throw new nucleuscharts_error("invalid_data", `${kind} rows require low and high fields`);
+        throw new AerisChartsError("invalid_data", `${kind} rows require low and high fields`);
       }
       if (low_value === null) {
         low_valid ??= new Uint8Array(data.length).fill(1);
@@ -691,7 +691,7 @@ function pack_general_rows(
     for (let index = 0; index < data.length; index += 1) {
       const value = data[index]!.x;
       if (typeof value !== "number") {
-        throw new nucleuscharts_error("invalid_data", `${kind} numeric X values must be numbers`);
+        throw new AerisChartsError("invalid_data", `${kind} numeric X values must be numbers`);
       }
       x[index] = value;
     }
@@ -701,7 +701,7 @@ function pack_general_rows(
       for (let index = 0; index < data.length; index += 1) {
         const value = (data[index] as bubble_row).size;
         if (value === undefined) {
-          throw new nucleuscharts_error("invalid_data", "bubble rows require a size field");
+          throw new AerisChartsError("invalid_data", "bubble rows require a size field");
         }
         if (value === null) {
           size_valid ??= new Uint8Array(data.length).fill(1);
@@ -729,7 +729,7 @@ function pack_general_rows(
         ] as const) {
           if (value === undefined || value === null) continue;
           if (typeof value !== "number") {
-            throw new nucleuscharts_error("invalid_data", "numeric error_bar X bounds must be numbers");
+            throw new AerisChartsError("invalid_data", "numeric error_bar X bounds must be numbers");
           }
           values[index] = value;
           validity[index] = 1;
@@ -760,7 +760,7 @@ function pack_general_rows(
       } else if (typeof value === "number") {
         x_epoch_ms[index] = value;
       } else {
-        throw new nucleuscharts_error(
+        throw new AerisChartsError(
           "invalid_data",
           `${kind} temporal X values must be Date objects or epoch-millisecond numbers`,
         );
@@ -787,7 +787,7 @@ function pack_general_rows(
           } else if (typeof value === "number") {
             values[index] = value;
           } else {
-            throw new nucleuscharts_error(
+            throw new AerisChartsError(
               "invalid_data",
               "temporal error_bar X bounds must be Date objects or epoch-millisecond numbers",
             );
@@ -817,7 +817,7 @@ function pack_general_rows(
   for (let index = 0; index < data.length; index += 1) {
     const value = data[index]!.x;
     if (typeof value !== "string") {
-      throw new nucleuscharts_error("invalid_data", `${kind} category X values must be strings`);
+      throw new AerisChartsError("invalid_data", `${kind} category X values must be strings`);
     }
     let category = category_lookup.get(value);
     if (category === undefined) {
@@ -836,7 +836,7 @@ function pack_general_rows(
     for (let index = 0; index < data.length; index += 1) {
       const row = data[index] as error_bar_row;
       if (row.x_low !== undefined || row.x_high !== undefined) {
-        throw new nucleuscharts_error("invalid_data", "category error bars do not accept X bounds");
+        throw new AerisChartsError("invalid_data", "category error bars do not accept X bounds");
       }
       if (row.y_low !== undefined && row.y_low !== null) {
         y_low[index] = row.y_low;
@@ -877,10 +877,10 @@ class general_axis_impl implements general_axis_api {
 
   private current(): general_axis_options {
     if (this.chart.wasm.general_axis_handle_token(this.id) !== this.handle_token) {
-      throw new nucleuscharts_error("stale_handle", "this general axis has been removed");
+      throw new AerisChartsError("stale_handle", "this general axis has been removed");
     }
     const value = JSON.parse(this.chart.wasm.general_axis_json(this.id)) as general_axis_options | null;
-    if (value === null) throw new nucleuscharts_error("stale_handle", "this general axis has been removed");
+    if (value === null) throw new AerisChartsError("stale_handle", "this general axis has been removed");
     return value;
   }
 
@@ -901,7 +901,7 @@ class general_axis_impl implements general_axis_api {
   set_visible(visible: boolean): void {
     this.current();
     if (!this.chart.wasm.set_general_axis_visible(this.id, visible)) {
-      throw new nucleuscharts_error("stale_handle", "this general axis has been removed");
+      throw new AerisChartsError("stale_handle", "this general axis has been removed");
     }
     this.chart.repaint();
   }
@@ -916,7 +916,7 @@ class general_axis_impl implements general_axis_api {
     const options = this.current();
     const category = options.scale === "band" || options.scale === "point";
     if (category !== (typeof anchor_value === "string")) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         category ? "category axis zoom requires a string anchor" : "continuous axis zoom requires a numeric anchor",
       );
@@ -972,7 +972,7 @@ function general_reference_wire_value(
 ): general_reference_wire_value {
   const axis = chart.axis(axis_id);
   if (axis === null) {
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "invalid_options",
       "general reference axis \"" + axis_id + "\" does not exist",
     );
@@ -981,7 +981,7 @@ function general_reference_wire_value(
   if (scale === "temporal") {
     const epoch_ms = value instanceof Date ? value.getTime() : value;
     if (typeof epoch_ms !== "number" || !Number.isSafeInteger(epoch_ms)) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         "temporal reference values must be Date objects or whole epoch-millisecond numbers",
       );
@@ -990,17 +990,17 @@ function general_reference_wire_value(
   }
   if (scale === "band" || scale === "point") {
     if (typeof value !== "string") {
-      throw new nucleuscharts_error("invalid_options", "category reference values must be strings");
+      throw new AerisChartsError("invalid_options", "category reference values must be strings");
     }
     return { type: "category", value };
   }
   if (scale === "linear" || scale === "log" || scale === "symlog") {
     if (typeof value !== "number" || !Number.isFinite(value)) {
-      throw new nucleuscharts_error("invalid_options", "numeric reference values must be finite numbers");
+      throw new AerisChartsError("invalid_options", "numeric reference values must be finite numbers");
     }
     return { type: "numeric", value };
   }
-  throw new nucleuscharts_error("invalid_options", "general references require Cartesian axes");
+  throw new AerisChartsError("invalid_options", "general references require Cartesian axes");
 }
 
 function encode_general_reference_options(
@@ -1065,7 +1065,7 @@ class general_reference_impl implements general_reference_api {
       this.chart.wasm.general_reference_options_json(this.id),
     ) as general_reference_wire_options | null;
     if (value === null) {
-      throw new nucleuscharts_error("stale_handle", "this general reference has been removed");
+      throw new AerisChartsError("stale_handle", "this general reference has been removed");
     }
     return value;
   }
@@ -1113,12 +1113,12 @@ class general_series_impl implements general_series_api {
 
   private assert_live(): void {
     void this.chart.wasm;
-    if (this.removed) throw new nucleuscharts_error("stale_handle", "this general series has been removed");
+    if (this.removed) throw new AerisChartsError("stale_handle", "this general series has been removed");
   }
 
   private x_scale(): general_axis_options["scale"] {
     const axis = this.chart.axis(this.x_axis_id);
-    if (axis === null) throw new nucleuscharts_error("stale_handle", "this general series X axis has been removed");
+    if (axis === null) throw new AerisChartsError("stale_handle", "this general series X axis has been removed");
     return axis.options().scale;
   }
 
@@ -1126,7 +1126,7 @@ class general_series_impl implements general_series_api {
     this.assert_live();
     const options = JSON.parse(this.chart.wasm.general_series_options_json(this.id)) as general_series_options | null;
     if (options === null) {
-      throw new nucleuscharts_error("stale_handle", "this general series has been removed");
+      throw new AerisChartsError("stale_handle", "this general series has been removed");
     }
     return options;
   }
@@ -1144,7 +1144,7 @@ class general_series_impl implements general_series_api {
   set_visible(visible: boolean): void {
     this.assert_live();
     if (!this.chart.wasm.set_general_series_visible(this.id, visible)) {
-      throw new nucleuscharts_error("stale_handle", "this general series has been removed");
+      throw new AerisChartsError("stale_handle", "this general series has been removed");
     }
     this.chart.repaint();
   }
@@ -1159,7 +1159,7 @@ class general_series_impl implements general_series_api {
 
   update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[], options: general_update_options = {}): void {
     if (data.some((row) => row.id === undefined)) {
-      throw new nucleuscharts_error("invalid_data", "general incremental updates require explicit row IDs");
+      throw new AerisChartsError("invalid_data", "general incremental updates require explicit row IDs");
     }
     this.upsert_data(pack_general_rows(this.kind, data, this.x_scale()), options);
   }
@@ -1174,32 +1174,32 @@ class general_series_impl implements general_series_api {
   private upsert_data(columns: general_columns_input, options: general_update_options): void {
     this.assert_live();
     if (columns.ids === undefined) {
-      throw new nucleuscharts_error("invalid_data", "general incremental updates require explicit row IDs");
+      throw new AerisChartsError("invalid_data", "general incremental updates require explicit row IDs");
     }
     const max_rows = options.max_rows;
     if (max_rows !== undefined && (!Number.isSafeInteger(max_rows) || max_rows <= 0 || max_rows > 0xffff_ffff)) {
-      throw new nucleuscharts_error("invalid_options", "general max_rows must be a positive safe 32-bit integer");
+      throw new AerisChartsError("invalid_options", "general max_rows must be a positive safe 32-bit integer");
     }
     if (this.kind === "scatter" && !("x" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "scatter requires numeric XY columns");
+      throw new AerisChartsError("invalid_data", "scatter requires numeric XY columns");
     }
     if (this.kind === "bubble" && (!("x" in columns) || !("size" in columns))) {
-      throw new nucleuscharts_error("invalid_data", "bubble requires numeric XY columns with a size channel");
+      throw new AerisChartsError("invalid_data", "bubble requires numeric XY columns with a size channel");
     }
     if ((this.kind === "range_area" || this.kind === "range_bar") && !("low" in columns)) {
-      throw new nucleuscharts_error("invalid_data", `${this.kind} requires low and high columns`);
+      throw new AerisChartsError("invalid_data", `${this.kind} requires low and high columns`);
     }
     if (this.kind === "error_bar" && !("y_low" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "error_bar requires numeric, temporal, or category error-bound columns");
+      throw new AerisChartsError("invalid_data", "error_bar requires numeric, temporal, or category error-bound columns");
     }
     if ((this.kind === "column" || this.kind === "horizontal_bar") && !("category_indices" in columns)) {
-      throw new nucleuscharts_error("invalid_data", `${this.kind} requires category/value columns`);
+      throw new AerisChartsError("invalid_data", `${this.kind} requires category/value columns`);
     }
     if (this.kind === "box_plot" && !("median" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "box_plot requires category box columns");
+      throw new AerisChartsError("invalid_data", "box_plot requires category box columns");
     }
     if (this.kind === "heatmap_grid" && !("value" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
+      throw new AerisChartsError("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
     }
     let result: string;
     if ("value" in columns) {
@@ -1345,25 +1345,25 @@ class general_series_impl implements general_series_api {
   private install_data(columns: general_columns_input): void {
     this.assert_live();
     if (this.kind === "scatter" && !("x" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "scatter requires numeric XY columns");
+      throw new AerisChartsError("invalid_data", "scatter requires numeric XY columns");
     }
     if (this.kind === "bubble" && (!("x" in columns) || !("size" in columns))) {
-      throw new nucleuscharts_error("invalid_data", "bubble requires numeric XY columns with a size channel");
+      throw new AerisChartsError("invalid_data", "bubble requires numeric XY columns with a size channel");
     }
     if ((this.kind === "range_area" || this.kind === "range_bar") && !("low" in columns)) {
-      throw new nucleuscharts_error("invalid_data", `${this.kind} requires low and high columns`);
+      throw new AerisChartsError("invalid_data", `${this.kind} requires low and high columns`);
     }
     if (this.kind === "error_bar" && !("y_low" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "error_bar requires numeric, temporal, or category error-bound columns");
+      throw new AerisChartsError("invalid_data", "error_bar requires numeric, temporal, or category error-bound columns");
     }
     if ((this.kind === "column" || this.kind === "horizontal_bar") && !("category_indices" in columns)) {
-      throw new nucleuscharts_error("invalid_data", `${this.kind} requires category/value columns`);
+      throw new AerisChartsError("invalid_data", `${this.kind} requires category/value columns`);
     }
     if (this.kind === "box_plot" && !("median" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "box_plot requires category box columns");
+      throw new AerisChartsError("invalid_data", "box_plot requires category box columns");
     }
     if (this.kind === "heatmap_grid" && !("value" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
+      throw new AerisChartsError("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
     }
     let result: string;
     if ("value" in columns) {
@@ -1501,7 +1501,7 @@ class general_series_impl implements general_series_api {
   data_at(row: number): general_tooltip_snapshot | null {
     this.assert_live();
     if (!Number.isSafeInteger(row) || row < 0) {
-      throw new nucleuscharts_error("invalid_options", "general data row must be a non-negative safe integer");
+      throw new AerisChartsError("invalid_options", "general data row must be a non-negative safe integer");
     }
     return JSON.parse(this.chart.wasm.general_tooltip_json(this.id, row)) as general_tooltip_snapshot | null;
   }
@@ -1515,7 +1515,7 @@ class general_series_impl implements general_series_api {
   accessibility_snapshot(offset = 0, limit = 512): general_accessibility_snapshot {
     this.assert_live();
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 0) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         "general accessibility offset and limit must be non-negative safe integers",
       );
@@ -1524,7 +1524,7 @@ class general_series_impl implements general_series_api {
       this.chart.wasm.general_accessibility_json(this.id, offset, limit),
     ) as general_accessibility_snapshot | null;
     if (snapshot === null) {
-      throw new nucleuscharts_error("stale_handle", "this general series has been removed");
+      throw new AerisChartsError("stale_handle", "this general series has been removed");
     }
     return snapshot;
   }
@@ -1582,7 +1582,7 @@ class series_impl implements series_api {
   }
   protected assert_live(): void {
     void this.chart.wasm;
-    if (this.removed) throw new nucleuscharts_error("stale_handle", "this series has been removed from the chart");
+    if (this.removed) throw new AerisChartsError("stale_handle", "this series has been removed from the chart");
   }
 
   set_data(data: readonly series_data[]): void {
@@ -1653,13 +1653,13 @@ class series_impl implements series_api {
       return;
     }
     if (layout === undefined) {
-      throw new nucleuscharts_error("invalid_options", "set_ring_source requires a layout when a buffer is given");
+      throw new AerisChartsError("invalid_options", "set_ring_source requires a layout when a buffer is given");
     }
     // A plain ArrayBuffer would work for the reads but defeats the point (the producer is a worker),
     // and `Atomics.load` on non-shared memory is a footgun rather than an error. Reject it here
     // where the message can say why.
     if (typeof SharedArrayBuffer !== "undefined" && !(buffer instanceof SharedArrayBuffer)) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_data",
         "set_ring_source expects a SharedArrayBuffer (is the page cross-origin isolated?)",
       );
@@ -1667,7 +1667,7 @@ class series_impl implements series_api {
     const reason = this.chart.wasm.set_ring_source(
       this.id, new Uint8Array(buffer), new Int32Array(buffer), JSON.stringify(layout),
     );
-    if (reason !== "") throw new nucleuscharts_error("invalid_options", `set_ring_source rejected — ${reason}`);
+    if (reason !== "") throw new AerisChartsError("invalid_options", `set_ring_source rejected — ${reason}`);
     this.chart.sync_ring_drain_loop();
   }
 
@@ -1826,7 +1826,7 @@ class series_impl implements series_api {
         options.pane_stretch ?? 1,
         scale,
       )) {
-        throw new nucleuscharts_error(
+        throw new AerisChartsError(
           "invalid_options",
           `price scale '${scale}' does not exist in pane ${pane}`,
         );
@@ -1884,13 +1884,13 @@ class series_impl implements series_api {
   set_type(kind: series_kind): void {
     this.assert_live();
     if (kind === "custom" || is_feature_series_kind(kind) || is_footprint_series_kind(kind)) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "unsupported_operation",
         "set_type() only converts built-in series; remove and re-add custom or advanced series",
       );
     }
     if (!this.chart.wasm.set_series_kind(this.id, KIND_TO_U8[kind])) {
-      throw new nucleuscharts_error("stale_handle", "this series has been removed from the chart");
+      throw new AerisChartsError("stale_handle", "this series has been removed from the chart");
     }
     this.chart.repaint();
   }
@@ -1898,7 +1898,7 @@ class series_impl implements series_api {
   move_to_pane(pane_index: number, stretch = 1): void {
     this.assert_live();
     if (!this.chart.wasm.try_set_series_pane(this.id, pane_index, stretch)) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         `pane ${pane_index} does not contain price scale '${this.price_scale_id()}'`,
       );
@@ -1955,14 +1955,14 @@ class series_impl implements series_api {
     if (options?.z_order !== undefined) {
       const z_order = options.z_order === "aboveSeries" ? 1 : options.z_order === "top" ? 2 : 0;
       if (!this.chart.wasm.set_series_markers_z_order(this.id, z_order)) {
-        throw new Error("Nucleus rejected the series-marker z-order");
+        throw new Error("Aeris rejected the series-marker z-order");
       }
     }
     // Normalize marker times to UTC seconds so business-day/string forms match their data points
     // (the engine's marker JSON expects a numeric time).
     const normalized = markers.map((mk) => ({ ...mk, time: time_to_utc_seconds(mk.time) }));
     if (!this.chart.wasm.set_series_markers(this.id, JSON.stringify(normalized))) {
-      throw new Error("Nucleus rejected invalid series markers");
+      throw new Error("Aeris rejected invalid series markers");
     }
     this.chart.repaint();
   }
@@ -1978,7 +1978,7 @@ class series_impl implements series_api {
   move_to_price_scale(id: string): void {
     this.assert_live();
     if (!this.chart.wasm.set_series_price_scale_by_name(this.id, id)) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         `price scale '${id}' does not exist in pane ${this.pane_index()}`,
       );
@@ -2240,15 +2240,15 @@ class series_impl implements series_api {
 function assert_trading_result(json: string): void {
   const result = JSON.parse(json) as
     | { ok: true }
-    | { ok: false; error: { code: nucleuscharts_error_code; message: string } };
-  if (!result.ok) throw new nucleuscharts_error(result.error.code, result.error.message);
+    | { ok: false; error: { code: AerisChartsErrorCode; message: string } };
+  if (!result.ok) throw new AerisChartsError(result.error.code, result.error.message);
 }
 
 function parse_engine_result<T extends object>(json: string): T {
   const result = JSON.parse(json) as
     | ({ ok: true } & T)
-    | { ok: false; error: { code: nucleuscharts_error_code; message: string } };
-  if (!result.ok) throw new nucleuscharts_error(result.error.code, result.error.message);
+    | { ok: false; error: { code: AerisChartsErrorCode; message: string } };
+  if (!result.ok) throw new AerisChartsError(result.error.code, result.error.message);
   return result;
 }
 
@@ -2296,9 +2296,9 @@ export interface native_tooltip_handle extends native_primitive_handle {
 
 function native_series(series: series_api): series_impl {
   if (!(series instanceof series_impl)) {
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "invalid_handle",
-      "engine-owned primitives require a series created by this Nucleus chart",
+      "engine-owned primitives require a series created by this Aeris chart",
     );
   }
   return series;
@@ -2310,7 +2310,7 @@ export function set_native_area_brush_state(series: series_api, state_json: stri
 }
 
 function native_handle(series: series_impl, id: number): native_primitive_handle {
-  if (id === 0) throw new nucleuscharts_error("invalid_data", "engine rejected native primitive data or options");
+  if (id === 0) throw new AerisChartsError("invalid_data", "engine rejected native primitive data or options");
   series.native_repaint();
   let attached = true;
   return {
@@ -2471,9 +2471,9 @@ export function attach_native_volume_profile(
 
 function native_pane(pane: pane_api): pane_impl {
   if (!(pane instanceof pane_impl)) {
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "invalid_handle",
-      "engine-owned primitives require a pane created by this Nucleus chart",
+      "engine-owned primitives require a pane created by this Aeris chart",
     );
   }
   return pane;
@@ -2488,7 +2488,7 @@ export function attach_native_image_watermark(
 ): native_primitive_handle {
   const owner = native_series(series);
   const id = owner.native_add_image_watermark(width, height, pixels, options_json);
-  if (id === 0) throw new nucleuscharts_error("invalid_data", "engine rejected image watermark data or options");
+  if (id === 0) throw new AerisChartsError("invalid_data", "engine rejected image watermark data or options");
   owner.native_repaint();
   let attached = true;
   return {
@@ -2506,7 +2506,7 @@ export function attach_native_anchored_text(
 ): native_anchored_text_handle {
   const owner = native_series(series);
   const id = owner.native_add_anchored_text(options_json);
-  if (id === 0) throw new nucleuscharts_error("invalid_data", "engine rejected anchored-text options");
+  if (id === 0) throw new AerisChartsError("invalid_data", "engine rejected anchored-text options");
   owner.native_repaint();
   let attached = true;
   return {
@@ -2528,7 +2528,7 @@ export function attach_native_text_watermark(
 ): native_text_watermark_handle {
   const owner = native_pane(pane);
   const id = owner.native_add_text_watermark(options_json);
-  if (id === 0) throw new nucleuscharts_error("invalid_data", "engine rejected text-watermark options");
+  if (id === 0) throw new AerisChartsError("invalid_data", "engine rejected text-watermark options");
   owner.native_repaint();
   let attached = true;
   return {
@@ -2584,19 +2584,19 @@ class custom_series_impl extends series_impl {
   set_data_typed(): void {
     // A custom series carries raw plugin items aligned by time, not OHLC columns.
     this.assert_live();
-    throw new nucleuscharts_error("unsupported_operation", "set_data_typed() does not apply to a custom series");
+    throw new AerisChartsError("unsupported_operation", "set_data_typed() does not apply to a custom series");
   }
 
   update_typed(): void {
     // Same reason as `set_data_typed`: no OHLC columns to append.
     this.assert_live();
-    throw new nucleuscharts_error("unsupported_operation", "update_typed() does not apply to a custom series");
+    throw new AerisChartsError("unsupported_operation", "update_typed() does not apply to a custom series");
   }
 
   set_ring_source(): void {
     // A ring carries OHLC rows; a custom series' values live in its host-side pane view.
     this.assert_live();
-    throw new nucleuscharts_error("unsupported_operation", "set_ring_source() does not apply to a custom series");
+    throw new AerisChartsError("unsupported_operation", "set_ring_source() does not apply to a custom series");
   }
 
   /** The raw items aligned with the engine rows (sorted, last-wins deduped). */
@@ -2619,7 +2619,7 @@ class custom_series_impl extends series_impl {
   set_type(): void {
     // A custom series' type IS the pane view; change it by removing and re-adding the series.
     this.assert_live();
-    throw new nucleuscharts_error("unsupported_operation", "set_type() does not apply to a custom series");
+    throw new AerisChartsError("unsupported_operation", "set_type() does not apply to a custom series");
   }
 }
 
@@ -2665,7 +2665,7 @@ class feature_series_impl extends series_impl {
 
   set_data_typed(): void {
     this.assert_live();
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "unsupported_operation",
       "set_data_typed() does not apply to structured advanced-series payloads",
     );
@@ -2673,7 +2673,7 @@ class feature_series_impl extends series_impl {
 
   update_typed(): void {
     this.assert_live();
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "unsupported_operation",
       "update_typed() does not apply to structured advanced-series payloads",
     );
@@ -2681,7 +2681,7 @@ class feature_series_impl extends series_impl {
 
   set_ring_source(): void {
     this.assert_live();
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "unsupported_operation",
       "set_ring_source() does not apply to structured advanced-series payloads",
     );
@@ -2705,7 +2705,7 @@ class feature_series_impl extends series_impl {
     const current_data = shader_changed ? this.data() : [];
     if (shader_changed) {
       if (typeof cell_shader !== "function") {
-        throw new nucleuscharts_error("invalid_options", "cell_shader must be a function");
+        throw new AerisChartsError("invalid_options", "cell_shader must be a function");
       }
       this.heatmap_shader = cell_shader;
     }
@@ -2734,7 +2734,7 @@ class feature_series_impl extends series_impl {
 
   set_type(): void {
     this.assert_live();
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "unsupported_operation",
       "set_type() does not change an advanced series schema; remove and re-add the series",
     );
@@ -2745,7 +2745,7 @@ function footprint_side(side: footprint_trade["aggressor"], index = 0): number {
   if (side === undefined || side === "unknown") return 0;
   if (side === "buy") return 1;
   if (side === "sell") return 2;
-  throw new nucleuscharts_error(
+  throw new AerisChartsError(
     "invalid_data",
     `invalid footprint trade at index ${index}: aggressor must be 'buy', 'sell', or 'unknown'`,
   );
@@ -2789,7 +2789,7 @@ function throw_footprint_error(result: string): never {
   } catch {
     // Preserve the engine string when it is not an error envelope.
   }
-  throw new nucleuscharts_error("invalid_data", message);
+  throw new AerisChartsError("invalid_data", message);
 }
 
 /** A public handle whose authoritative payload is a raw trade tape in the Rust engine. */
@@ -2883,7 +2883,7 @@ class footprint_series_impl extends series_impl implements footprint_series_api 
 
   set_data(): void {
     this.assert_live();
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "unsupported_operation",
       "footprint series require set_trades() or set_trades_typed(); OHLC data cannot supply order-flow truth",
     );
@@ -2895,7 +2895,7 @@ class footprint_series_impl extends series_impl implements footprint_series_api 
 
   update(): void {
     this.assert_live();
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "unsupported_operation",
       "footprint series require update_trade(); OHLC updates cannot supply order-flow truth",
     );
@@ -2907,7 +2907,7 @@ class footprint_series_impl extends series_impl implements footprint_series_api 
 
   set_ring_source(): void {
     this.assert_live();
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "unsupported_operation",
       "the OHLC shared ring does not apply to footprint trades",
     );
@@ -2915,7 +2915,7 @@ class footprint_series_impl extends series_impl implements footprint_series_api 
 
   pop(): void {
     this.assert_live();
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "unsupported_operation",
       "pop() cannot remove a derived footprint bar independently of its trade tape",
     );
@@ -2946,7 +2946,7 @@ class footprint_series_impl extends series_impl implements footprint_series_api 
 
   set_type(): void {
     this.assert_live();
-    throw new nucleuscharts_error(
+    throw new AerisChartsError(
       "unsupported_operation",
       "set_type() does not change a footprint trade schema; remove and re-add the series",
     );
@@ -3114,23 +3114,23 @@ class price_scale_impl implements price_scale_api {
   ) {
     const pane_id = undef_to_null(chart.wasm.pane_stable_id(pane));
     if (pane_id === null) {
-      throw new nucleuscharts_error("invalid_handle", `pane index ${pane} does not identify a live price scale`);
+      throw new AerisChartsError("invalid_handle", `pane index ${pane} does not identify a live price scale`);
     }
     this.pane_id = pane_id;
     if (undef_to_null(chart.wasm.price_scale_target_by_id(pane, id)) === null) {
-      throw new nucleuscharts_error("invalid_handle", `price scale '${id}' does not exist in pane ${pane}`);
+      throw new AerisChartsError("invalid_handle", `price scale '${id}' does not exist in pane ${pane}`);
     }
   }
 
   private pane(): number {
     const pane = undef_to_null(this.chart.wasm.pane_index_for_id(this.pane_id));
-    if (pane === null) throw new nucleuscharts_error("stale_handle", "price-scale pane has been removed");
+    if (pane === null) throw new AerisChartsError("stale_handle", "price-scale pane has been removed");
     return pane;
   }
 
   private target(): number {
     const target = undef_to_null(this.chart.wasm.price_scale_target_by_id(this.pane(), this.id));
-    if (target === null) throw new nucleuscharts_error("stale_handle", "price scale has been removed");
+    if (target === null) throw new AerisChartsError("stale_handle", "price scale has been removed");
     return target;
   }
 
@@ -3195,13 +3195,13 @@ class pane_impl implements pane_api {
 
   constructor(private readonly chart: chart_impl, index: number) {
     const stable_id = undef_to_null(chart.wasm.pane_stable_id(index));
-    if (stable_id === null) throw new nucleuscharts_error("invalid_handle", `pane index ${index} is not live`);
+    if (stable_id === null) throw new AerisChartsError("invalid_handle", `pane index ${index} is not live`);
     this.stable_id = stable_id;
   }
 
   private index(): number {
     const index = undef_to_null(this.chart.wasm.pane_index_for_id(this.stable_id));
-    if (index === null) throw new nucleuscharts_error("stale_handle", "pane has been removed");
+    if (index === null) throw new AerisChartsError("stale_handle", "pane has been removed");
     return index;
   }
 
@@ -3351,9 +3351,9 @@ class drawing_impl implements drawing_api {
   ) {}
   private assert_live(): string {
     void this.chart.wasm;
-    if (this.removed) throw new nucleuscharts_error("stale_handle", "drawing has been removed");
+    if (this.removed) throw new AerisChartsError("stale_handle", "drawing has been removed");
     const options = this.chart.wasm.drawing_options_json(this.id);
-    if (options === "") throw new nucleuscharts_error("stale_handle", "drawing has been removed");
+    if (options === "") throw new AerisChartsError("stale_handle", "drawing has been removed");
     return options;
   }
   kind(): drawing_kind {
@@ -3371,7 +3371,7 @@ class drawing_impl implements drawing_api {
   set_points(points: drawing_point[]): void {
     this.assert_live();
     if (!this.chart.wasm.drawing_set_points(this.id, JSON.stringify(points))) {
-      throw new nucleuscharts_error("invalid_data", "drawing anchors are malformed or invalid for this kind");
+      throw new AerisChartsError("invalid_data", "drawing anchors are malformed or invalid for this kind");
     }
     this.chart.repaint();
   }
@@ -3381,14 +3381,14 @@ class drawing_impl implements drawing_api {
   apply_options(options: Partial<drawing_options>): void {
     this.assert_live();
     if (!this.chart.wasm.drawing_apply_options(this.id, JSON.stringify(options))) {
-      throw new nucleuscharts_error("invalid_options", "drawing options are malformed");
+      throw new AerisChartsError("invalid_options", "drawing options are malformed");
     }
     this.chart.repaint();
   }
   remove(): void {
     this.assert_live();
     if (!this.chart.wasm.remove_drawing(this.id)) {
-      throw new nucleuscharts_error("stale_handle", "drawing has been removed");
+      throw new AerisChartsError("stale_handle", "drawing has been removed");
     }
     this.removed = true;
     this.chart.repaint();
@@ -3639,7 +3639,7 @@ export class chart_impl implements chart_api {
   takeScreenshot(...args: Parameters<chart_api["take_screenshot"]>): HTMLCanvasElement { return this.take_screenshot(...args); }
   exportState(): chart_state { return this.export_state(); }
   importState(...args: Parameters<chart_api["import_state"]>): persistence_restore_result { return this.import_state(...args); }
-  private wasm_instance: NucleusChart | null;
+  private wasm_instance: AerisChart | null;
   private next_extra_series = false;
   private readonly gestures_cfg: resolved_gestures = {
     pan: true,
@@ -3746,7 +3746,7 @@ export class chart_impl implements chart_api {
    * that reading stats for 60s does not itself raise `cpu_ms`). Each read still copies these
    * few dozen bytes across the wasm boundary — fixed size, no growth.
    */
-  private readonly stats_scratch = new Float64Array(NucleusChart.frame_stats_len());
+  private readonly stats_scratch = new Float64Array(AerisChart.frame_stats_len());
 
   /** The gesture recognizer marks pointer/touch activity (down = true, all-up = false). */
   set_interacting(active: boolean): void {
@@ -3775,7 +3775,7 @@ export class chart_impl implements chart_api {
 
   accessibility(): accessibility_handle {
     if (this.accessibility_handle === null) {
-      throw new nucleuscharts_error("unsupported_operation", "accessibility is disabled for this chart");
+      throw new AerisChartsError("unsupported_operation", "accessibility is disabled for this chart");
     }
     return this.accessibility_handle;
   }
@@ -3970,7 +3970,7 @@ export class chart_impl implements chart_api {
   };
 
   constructor(
-    wasm: NucleusChart,
+    wasm: AerisChart,
     private readonly container: HTMLElement,
     private readonly gpu_pane: HTMLCanvasElement,
     private readonly fallback_pane: HTMLCanvasElement,
@@ -3983,10 +3983,10 @@ export class chart_impl implements chart_api {
     this.wasm_instance = wasm;
     const plugin_ctx = plugin_canvas.getContext("2d");
     if (plugin_ctx === null) {
-      throw new nucleuscharts_error("renderer_platform_error", "plugin canvas 2D context is unavailable");
+      throw new AerisChartsError("renderer_platform_error", "plugin canvas 2D context is unavailable");
     }
     this.plugin_ctx = plugin_ctx;
-    window.addEventListener("nucleuscharts-chart-backend-lost", this.backend_loss_handler);
+    window.addEventListener("aeris_charts-chart-backend-lost", this.backend_loss_handler);
     this.last_visible_logical_range = this.read_visible_logical_range();
     this.last_visible_time_range = this.read_visible_time_range();
     this.last_ts_width = this.wasm.time_scale_width();
@@ -4013,9 +4013,9 @@ export class chart_impl implements chart_api {
   }
 
   /** Internal package boundary. Every post-disposal operation fails with one stable error. */
-  get wasm(): NucleusChart {
+  get wasm(): AerisChart {
     if (this.wasm_instance === null) {
-      throw new nucleuscharts_error("disposed", "this chart has been disposed");
+      throw new AerisChartsError("disposed", "this chart has been disposed");
     }
     return this.wasm_instance;
   }
@@ -4146,13 +4146,13 @@ export class chart_impl implements chart_api {
       try {
         primitive.update_all_views?.();
       } catch (error) {
-        console.warn(`nucleuscharts: canvas primitive \`update_all_views\` threw — ${error}`);
+        console.warn(`aeris_charts: canvas primitive \`update_all_views\` threw — ${error}`);
       }
       let views;
       try {
         views = primitive.pane_views?.();
       } catch (error) {
-        console.warn(`nucleuscharts: canvas primitive \`pane_views\` threw — ${error}`);
+        console.warn(`aeris_charts: canvas primitive \`pane_views\` threw — ${error}`);
         continue;
       }
       for (const view of views ?? []) {
@@ -4180,7 +4180,7 @@ export class chart_impl implements chart_api {
       try {
         renderer(target);
       } catch (error) {
-        console.warn(`nucleuscharts: canvas primitive renderer threw — ${error}`);
+        console.warn(`aeris_charts: canvas primitive renderer threw — ${error}`);
       } finally {
         ctx.restore();
       }
@@ -4194,7 +4194,7 @@ export class chart_impl implements chart_api {
     try {
       primitive.attached?.({ pane_index });
     } catch (error) {
-      console.warn(`nucleuscharts: canvas primitive \`attached\` threw — ${error}`);
+      console.warn(`aeris_charts: canvas primitive \`attached\` threw — ${error}`);
     }
     this.repaint();
     return new canvas_primitive_handle_impl(this, entry);
@@ -4209,7 +4209,7 @@ export class chart_impl implements chart_api {
     try {
       entry.primitive.detached?.();
     } catch (error) {
-      console.warn(`nucleuscharts: canvas primitive \`detached\` threw — ${error}`);
+      console.warn(`aeris_charts: canvas primitive \`detached\` threw — ${error}`);
     }
     this.repaint();
   }
@@ -4352,7 +4352,7 @@ export class chart_impl implements chart_api {
       || kind === "bubble"
     ) {
       if (options === undefined || !("x_axis_id" in options) || !("y_axis_id" in options)) {
-        throw new nucleuscharts_error(
+        throw new AerisChartsError(
           "invalid_options",
           `${kind} requires pane, x_axis_id, and y_axis_id options`,
         );
@@ -4374,7 +4374,7 @@ export class chart_impl implements chart_api {
       return series;
     }
     if (kind === "custom") {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         "add_series does not accept 'custom'; use add_custom_series(pane_view)",
       );
@@ -4388,7 +4388,7 @@ export class chart_impl implements chart_api {
       if (requested_scale !== undefined
         && !["left", "right", ""].includes(requested_scale)
         && undef_to_null(this.wasm.price_scale_target_by_id(pane, requested_scale)) === null) {
-        throw new nucleuscharts_error(
+        throw new AerisChartsError(
           "invalid_options",
           `price scale '${requested_scale}' does not exist in pane ${pane}`,
         );
@@ -4396,7 +4396,7 @@ export class chart_impl implements chart_api {
       const adopt_primary = !this.next_extra_series;
       const id = this.wasm.add_footprint_series(adopt_primary, JSON.stringify(financial_options ?? {}));
       if (id === 0xffffffff) {
-        throw new nucleuscharts_error("invalid_options", "footprint series options were rejected by the engine");
+        throw new AerisChartsError("invalid_options", "footprint series options were rejected by the engine");
       }
       const series = new footprint_series_impl(id, this);
       if (financial_options) series.apply_options(financial_options);
@@ -4410,7 +4410,7 @@ export class chart_impl implements chart_api {
       this.next_extra_series = true;
       const id = this.wasm.add_feature_series(FEATURE_KIND_TO_U8[kind], adopt_primary, "{}");
       if (id === 0xffffffff) {
-        throw new nucleuscharts_error("invalid_options", `advanced series '${kind}' was rejected by the engine`);
+        throw new AerisChartsError("invalid_options", `advanced series '${kind}' was rejected by the engine`);
       }
       const series = new feature_series_impl(id, kind, this);
       this.series_by_id.set(id, series);
@@ -4447,7 +4447,7 @@ export class chart_impl implements chart_api {
       if (typeof hook === "function") adapted[key] = hook.bind(pane_view);
     }
     if (typeof adapted.price_value_builder !== "function" || typeof adapted.render !== "function") {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         "add_custom_series needs a pane view with `price_value_builder` and `render`",
       );
@@ -4462,7 +4462,7 @@ export class chart_impl implements chart_api {
       id = this.wasm.add_custom_series(adapted, false);
     }
     if (id === 0xffffffff) {
-      throw new nucleuscharts_error("invalid_options", "add_custom_series was rejected by the engine");
+      throw new AerisChartsError("invalid_options", "add_custom_series was rejected by the engine");
     }
     const series = new custom_series_impl(id, this);
     this.series_by_id.set(id, series);
@@ -4541,7 +4541,7 @@ export class chart_impl implements chart_api {
 
   general_series_order(pane?: number): general_series_api[] {
     if (pane !== undefined && (!Number.isInteger(pane) || pane < 0)) {
-      throw new nucleuscharts_error("invalid_options", "general series order pane must be a non-negative integer");
+      throw new AerisChartsError("invalid_options", "general series order pane must be a non-negative integer");
     }
     const ids = JSON.parse(this.wasm.general_series_order_json(pane ?? -1)) as number[];
     return ids
@@ -4566,7 +4566,7 @@ export class chart_impl implements chart_api {
   }
 
   private indicator_series(id: number, options?: Partial<series_options>): series_api {
-    if (id === 0xffffffff) throw new nucleuscharts_error("invalid_options", "invalid indicator configuration");
+    if (id === 0xffffffff) throw new AerisChartsError("invalid_options", "invalid indicator configuration");
     const series = new series_impl(id, "line", this);
     this.series_by_id.set(id, series);
     if (options) series.apply_options(options);
@@ -4592,7 +4592,7 @@ export class chart_impl implements chart_api {
   ): [series_api, series_api, series_api, series_api, series_api] {
     const normalized = periods.map((period) => Math.max(1, Math.floor(period))) as [number, number, number, number, number];
     const ids = this.wasm.add_ema_ribbon(source.id, ...normalized);
-    if (ids.length !== 5) throw new nucleuscharts_error("invalid_options", "invalid EMA ribbon configuration");
+    if (ids.length !== 5) throw new AerisChartsError("invalid_options", "invalid EMA ribbon configuration");
     return [
       this.indicator_series(ids[0]!, options?.[0]),
       this.indicator_series(ids[1]!, options?.[1]),
@@ -4611,7 +4611,7 @@ export class chart_impl implements chart_api {
 
   add_bollinger(source: series_api, period: number, deviation = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
     const ids = this.wasm.add_bollinger(source.id, Math.max(1, Math.floor(period)), deviation);
-    if (ids.length !== 3) throw new nucleuscharts_error("invalid_options", "invalid Bollinger configuration");
+    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Bollinger configuration");
     return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
   }
 
@@ -4621,13 +4621,13 @@ export class chart_impl implements chart_api {
 
   add_macd(source: series_api, fast: number, slow: number, signal: number, options?: Partial<series_options>): [series_api, series_api, series_api] {
     const ids = this.wasm.add_macd(source.id, Math.max(1, Math.floor(fast)), Math.max(1, Math.floor(slow)), Math.max(1, Math.floor(signal)));
-    if (ids.length !== 3) throw new nucleuscharts_error("invalid_options", "invalid MACD configuration");
+    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid MACD configuration");
     return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
   }
 
   add_stochastic(source: series_api, k_period: number, d_period: number, options?: Partial<series_options>): [series_api, series_api] {
     const ids = this.wasm.add_stochastic(source.id, Math.max(1, Math.floor(k_period)), Math.max(1, Math.floor(d_period)));
-    if (ids.length !== 2) throw new nucleuscharts_error("invalid_options", "invalid Stochastic configuration");
+    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid Stochastic configuration");
     return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
   }
 
@@ -4642,14 +4642,14 @@ export class chart_impl implements chart_api {
   add_volume_profile(source: series_api, volume_source: series_api, options: Partial<volume_profile_indicator_options> = {}): volume_profile_indicator_api {
     const wasm = this.wasm;
     if (this.series_by_id.get(source.id) !== source || this.series_by_id.get(volume_source.id) !== volume_source) {
-      throw new nucleuscharts_error("invalid_handle", "volume profile requires two live series from this chart");
+      throw new AerisChartsError("invalid_handle", "volume profile requires two live series from this chart");
     }
     const id = wasm.add_volume_profile_indicator(source.id, volume_source.id, JSON.stringify(options));
-    if (id === 0) throw new nucleuscharts_error("invalid_options", "invalid volume-profile sources, options, or indicator limit (16)");
+    if (id === 0) throw new AerisChartsError("invalid_options", "invalid volume-profile sources, options, or indicator limit (16)");
     let removed = false;
     const read_options = (): volume_profile_indicator_options => {
       const result = removed ? null : JSON.parse(this.wasm.volume_profile_indicator_options(id)) as volume_profile_indicator_options | null;
-      if (result === null) throw new nucleuscharts_error("stale_handle", "volume-profile indicator has been removed");
+      if (result === null) throw new AerisChartsError("stale_handle", "volume-profile indicator has been removed");
       return result;
     };
     this.repaint();
@@ -4659,13 +4659,13 @@ export class chart_impl implements chart_api {
       apply_options: (patch) => {
         const merged = { ...read_options(), ...patch };
         if (!this.wasm.set_volume_profile_indicator_options(id, JSON.stringify(merged))) {
-          throw new nucleuscharts_error("invalid_options", "invalid volume-profile options");
+          throw new AerisChartsError("invalid_options", "invalid volume-profile options");
         }
         this.repaint();
       },
       snapshot: () => {
         const result = removed ? null : JSON.parse(this.wasm.volume_profile_indicator_snapshot(id)) as volume_profile_indicator_snapshot | null;
-        if (result === null) throw new nucleuscharts_error("stale_handle", "volume-profile indicator has been removed");
+        if (result === null) throw new AerisChartsError("stale_handle", "volume-profile indicator has been removed");
         return result;
       },
       remove: () => {
@@ -4926,7 +4926,7 @@ export class chart_impl implements chart_api {
     for (const h of this.click_subs) h(params);
   }
 
-  /** Let an explicitly hit Nucleus drawing consume the second click without a pane click event. */
+  /** Let an explicitly hit Aeris drawing consume the second click without a pane click event. */
   activate_drawing_double_click(x: number, y: number): void {
     const selected = this.selected_drawing();
     if (selected === null || selected.id !== this.text_press_selected) return;
@@ -4983,7 +4983,7 @@ export class chart_impl implements chart_api {
       JSON.stringify(options ?? {}),
     );
     if (id === 0) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_data",
         "add_drawing rejected (stale pane, wrong anchor count, or non-finite anchors)",
       );
@@ -5010,7 +5010,7 @@ export class chart_impl implements chart_api {
     try {
       document = typeof state === "string" ? state : JSON.stringify(state);
     } catch (error) {
-      throw new nucleuscharts_error("serialization_error", `state is not JSON-serializable: ${error}`);
+      throw new AerisChartsError("serialization_error", `state is not JSON-serializable: ${error}`);
     }
     const response = JSON.parse(this.wasm.import_state_result_json(document)) as
       | { ok: true; result: persistence_restore_result }
@@ -5091,12 +5091,12 @@ export class chart_impl implements chart_api {
     }
     if (!changed && tool !== null && options !== undefined) {
       if (!this.wasm.drawing_tool_apply_options(this.tool_options_json)) {
-        throw new nucleuscharts_error("invalid_options", "drawing tool options are malformed");
+        throw new AerisChartsError("invalid_options", "drawing tool options are malformed");
       }
     } else if (changed || tool === null) {
       const wire_kind = tool === null ? -1 : DRAWING_KIND_TO_U8[tool];
       if (!this.wasm.set_drawing_tool(wire_kind, this.tool_options_json, next_pane ?? -1)) {
-        throw new nucleuscharts_error("invalid_options", "drawing tool options are malformed");
+        throw new AerisChartsError("invalid_options", "drawing tool options are malformed");
       }
     }
     if (changed) {
@@ -5283,7 +5283,7 @@ export class chart_impl implements chart_api {
       theme_palette(default_theme_name).foreground;
 
     const wrap = document.createElement("div");
-    wrap.id = "nucleuscharts-text-editor";
+    wrap.id = "aeris_charts-text-editor";
     wrap.style.position = "absolute";
     wrap.style.zIndex = "10";
     // Borderless: the engine paints the focus border continuously (selected + editing), so the
@@ -5296,7 +5296,7 @@ export class chart_impl implements chart_api {
     wrap.style.outline = "none";
 
     const editor = document.createElement("div");
-    editor.id = "nucleuscharts-text-input";
+    editor.id = "aeris_charts-text-input";
     editor.contentEditable = "true";
     editor.textContent = options.text;
     editor.style.font = font;
@@ -5319,7 +5319,7 @@ export class chart_impl implements chart_api {
     editor.style.minWidth = `${font_size}px`;
 
     const caret = document.createElement("span");
-    caret.id = "nucleuscharts-text-caret";
+    caret.id = "aeris_charts-text-caret";
     caret.setAttribute("aria-hidden", "true");
     caret.style.position = "absolute";
     caret.style.top = "0";
@@ -5333,7 +5333,7 @@ export class chart_impl implements chart_api {
     // trend label cannot place theme-colored blocks over the canonical canvas glyphs.
     const selection_style = document.createElement("style");
     selection_style.textContent =
-      "#nucleuscharts-text-input::selection{background:transparent!important;color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:none!important}";
+      "#aeris_charts-text-input::selection{background:transparent!important;color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:none!important}";
 
     const dpr = window.devicePixelRatio || 1;
     const measure_ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
@@ -5495,7 +5495,7 @@ export class chart_impl implements chart_api {
     if (editor === null) return;
     this.text_editor = null;
     this.text_editor_reposition = null;
-    const wrap = this.container.querySelector("#nucleuscharts-text-editor");
+    const wrap = this.container.querySelector("#aeris_charts-text-editor");
     wrap?.remove();
     this.wasm.set_editing_drawing(undefined);
     const id = this.text_editor_id;
@@ -5767,7 +5767,7 @@ export class chart_impl implements chart_api {
   move_price_scale(id: string, side: "left" | "right", order: number, pane_index = 0): void {
     const target = undef_to_null(this.wasm.price_scale_target_by_id(pane_index, id));
     if (target === null) {
-      throw new nucleuscharts_error("invalid_handle", `price scale '${id}' does not exist in pane ${pane_index}`);
+      throw new AerisChartsError("invalid_handle", `price scale '${id}' does not exist in pane ${pane_index}`);
     }
     parse_engine_result<object>(
       this.wasm.move_price_scale_result_json(pane_index, target, side, order),
@@ -5778,7 +5778,7 @@ export class chart_impl implements chart_api {
   remove_price_scale(id: string, pane_index = 0): void {
     const target = undef_to_null(this.wasm.price_scale_target_by_id(pane_index, id));
     if (target === null) {
-      throw new nucleuscharts_error("invalid_handle", `price scale '${id}' does not exist in pane ${pane_index}`);
+      throw new AerisChartsError("invalid_handle", `price scale '${id}' does not exist in pane ${pane_index}`);
     }
     parse_engine_result<object>(this.wasm.remove_price_scale_result_json(pane_index, target));
     this.repaint();
@@ -5802,7 +5802,7 @@ export class chart_impl implements chart_api {
       return new pane_impl(this, pane);
     }
     const index = undef_to_null(this.wasm.add_pane(options ?? false));
-    if (index === null) throw new nucleuscharts_error("resource_limit", "pane identity space is exhausted");
+    if (index === null) throw new AerisChartsError("resource_limit", "pane identity space is exhausted");
     this.repaint();
     return new pane_impl(this, index);
   }
@@ -5843,7 +5843,7 @@ export class chart_impl implements chart_api {
 
   general_references(pane?: number): general_reference_api[] {
     if (pane !== undefined && (!Number.isSafeInteger(pane) || pane < 0)) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         "general reference pane must be a non-negative safe integer",
       );
@@ -5854,7 +5854,7 @@ export class chart_impl implements chart_api {
 
   general_legend_snapshot(pane?: number): general_legend_snapshot {
     if (pane !== undefined && (!Number.isSafeInteger(pane) || pane < 0)) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         "general legend pane must be a non-negative safe integer",
       );
@@ -5867,14 +5867,14 @@ export class chart_impl implements chart_api {
     row: number,
   ): general_shared_tooltip_snapshot | null {
     if (!Number.isSafeInteger(row) || row < 0) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         "general shared-tooltip row must be a non-negative safe integer",
       );
     }
     const series_id = typeof series === "number" ? series : series.id;
     if (!Number.isSafeInteger(series_id) || series_id <= 0) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         "general shared-tooltip series must have a positive safe integer id",
       );
@@ -5890,14 +5890,14 @@ export class chart_impl implements chart_api {
     to_coordinate: number,
   ): general_brush_snapshot {
     if (!Number.isFinite(from_coordinate) || !Number.isFinite(to_coordinate)) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         "general brush coordinates must be finite CSS-pixel values",
       );
     }
     const axis_id = typeof axis === "string" ? axis : axis.id;
     if (axis_id.length === 0) {
-      throw new nucleuscharts_error("invalid_options", "general brush axis id must not be empty");
+      throw new AerisChartsError("invalid_options", "general brush axis id must not be empty");
     }
     const snapshot = parse_general_result<general_brush_snapshot>(
       this.wasm.set_general_brush_result_json(axis_id, from_coordinate, to_coordinate),
@@ -5922,7 +5922,7 @@ export class chart_impl implements chart_api {
     max_distance?: number,
   ): general_series_hit | null {
     if (max_distance !== undefined && (!Number.isFinite(max_distance) || max_distance < 0)) {
-      throw new nucleuscharts_error(
+      throw new AerisChartsError(
         "invalid_options",
         "general hit-test max_distance must be a finite non-negative number",
       );
@@ -6042,7 +6042,7 @@ export class chart_impl implements chart_api {
     output.height = this.overlay.height;
     const ctx = output.getContext("2d");
     if (ctx === null) {
-      throw new nucleuscharts_error("renderer_platform_error", "screenshot Canvas2D context is unavailable");
+      throw new AerisChartsError("renderer_platform_error", "screenshot Canvas2D context is unavailable");
     }
     ctx.drawImage(this.fallback_pane, 0, 0);
     // Canvas primitives composite at pane level (the reference paints primitives on the pane
@@ -6080,7 +6080,7 @@ export class chart_impl implements chart_api {
       try {
         entry.primitive.detached?.();
       } catch (error) {
-        console.warn(`nucleuscharts: canvas primitive \`detached\` threw — ${error}`);
+        console.warn(`aeris_charts: canvas primitive \`detached\` threw — ${error}`);
       }
     }
     this.removed = true;
@@ -6098,7 +6098,7 @@ export class chart_impl implements chart_api {
     this.close_text_editor(false);
     this.stop_animation();
     this.stop_countdown_timer();
-    window.removeEventListener("nucleuscharts-chart-backend-lost", this.backend_loss_handler);
+    window.removeEventListener("aeris_charts-chart-backend-lost", this.backend_loss_handler);
     this.unbind_dpr_watcher();
     this.detach_gestures?.();
     this.observer?.disconnect();

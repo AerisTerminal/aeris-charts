@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nucleuscharts.com/benchmarks/result-v1.schema.json",
-  "title": "Nucleus Charts benchmark run",
+  "$id": "https://aeris_charts.com/benchmarks/result-v1.schema.json",
+  "title": "Aeris Charts benchmark run",
   "type": "object",
   "required": ["schema_version", "product", "source", "build", "environment", "execution", "scenarios"],
   "properties": {
@@ -9,7 +9,7 @@
     "product": {
       "type": "object",
       "required": ["name", "version"],
-      "properties": { "name": { "const": "nucleuscharts-financial" }, "version": { "type": "string", "minLength": 1 } },
+      "properties": { "name": { "const": "aeris_charts-financial" }, "version": { "type": "string", "minLength": 1 } },
       "additionalProperties": false
     },
     "source": {

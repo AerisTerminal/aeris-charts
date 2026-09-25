@@ -1,4 +1,4 @@
-import { create_offscreen_chart } from "./dist/nucleuscharts_financial.js";
+import { create_offscreen_chart } from "./dist/aeris_charts_financial.js";
 
 let chart = null;
 let gpu_canvas = null;

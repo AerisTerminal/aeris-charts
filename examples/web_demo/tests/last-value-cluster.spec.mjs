@@ -11,7 +11,7 @@ const BORDER = [37, 37, 37]; // #252525 - dark axis border composited over the s
 const ROW = 15; // 11px axis text + 2*2 padding (compact price row)
 const ROW_CD = 14; // 10px countdown text + 2*2 padding
 
-const test_port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
+const test_port = Number.parseInt(process.env.AERIS_CHARTS_TEST_PORT ?? "4174", 10);
 const test_base_url = `http://127.0.0.1:${test_port}`;
 
 async function wait_for_chart(page) {
@@ -256,7 +256,7 @@ function region_diff(a, b, box) {
 
 test("last-value cluster paints chip, price, and countdown rows; the chip matches the label color", async ({ browser }) => {
   const { context, page } = await open_cluster_page(browser, {
-    title: "NUCLEUS",
+    title: "Aeris",
     title_visible: true,
     countdown_visible: true,
   });
@@ -298,7 +298,7 @@ test("last-value cluster paints chip, price, and countdown rows; the chip matche
 test("explicit light price-line color unifies the live cluster and selects dark text", async ({ browser }) => {
   const LIVE = [240, 230, 140];
   const { context, page } = await open_cluster_page(browser, {
-    title: "NUCLEUS",
+    title: "Aeris",
     title_visible: true,
     countdown_visible: true,
     price_line_color: "#f0e68c",
@@ -555,7 +555,7 @@ test("precision-zero daily countdown reserves the complete live-label width", as
 
 test("cluster parts toggle independently", async ({ browser }) => {
   const { context, page } = await open_cluster_page(browser, {
-    title: "NUCLEUS",
+    title: "Aeris",
     title_visible: true,
     countdown_visible: true,
   });
@@ -604,7 +604,7 @@ test("cluster parts toggle independently", async ({ browser }) => {
 
 test("countdown row ticks with the 1s interval timer", async ({ browser }) => {
   const { context, page } = await open_cluster_page(browser, {
-    title: "NUCLEUS",
+    title: "Aeris",
     title_visible: true,
     countdown_visible: true,
   });
@@ -634,7 +634,7 @@ test("price and countdown chips share an exact edge at any DPR (no attachment ga
       const close = last.close - 2;
       window.__cluster_close = close;
       window.__main.update({ time: now, open: last.close, high: last.close + 0.6, low: close - 0.6, close });
-      window.__main.apply_options({ title: "NUCLEUS", title_visible: true, countdown_visible: true, price_line_visible: false });
+      window.__main.apply_options({ title: "Aeris", title_visible: true, countdown_visible: true, price_line_visible: false });
     });
     // Isolate the cluster under test: a second visible series' own cluster would share the
     // strip (and its white glyphs would cross the probe column), so hide the demo SMA.
@@ -684,7 +684,7 @@ test("cluster rounds its axis-facing corners and keeps the chart-facing side sha
   // The canonical radius is 1 CSS px. At DPR 1 a correct arc can fully cover the one extreme
   // sample depending on rasterizer/MSAA rules, so probe at DPR 2 and compare painted row extents.
   const { context, page } = await open_cluster_page(browser, {
-    title: "NUCLEUS",
+    title: "Aeris",
     title_visible: true,
     countdown_visible: true,
   }, 2, "?backend=canvas2d");

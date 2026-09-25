@@ -6,7 +6,7 @@ import { test, expect } from "@playwright/test";
 // and — the one that matters most — that polling the record every frame does not itself cost
 // anything measurable.
 
-const STRICT = process.env.NUCLEUSCHARTS_PERF_STRICT === "1";
+const STRICT = process.env.AERIS_CHARTS_PERF_STRICT === "1";
 
 async function wait_chart(page) {
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);

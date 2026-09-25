@@ -1,6 +1,7 @@
-# Nucleus Charts
+# Aeris Charts
 
-Nucleus Charts is a financial chart engine built in Rust. One deterministic chart model powers WebGPU, Canvas2D, GPUI, and native rendering for browser and desktop hosts.
+Aeris Charts is the Rust chart engine for [Aeris Terminal](https://aeristerminal.com) and browser
+hosts. One deterministic chart model powers WebGPU, Canvas2D, GPUI, and native rendering.
 
 The project includes professional chart interactions, drawings, technical indicators, multiple panes and scales, custom series, primitives, shared-memory market-data input, and backend parity tooling.
 
@@ -9,7 +10,7 @@ The project includes professional chart interactions, drawings, technical indica
 Rust consumers can use the engine and backends directly:
 
 ```sh
-cargo add nucleuscharts_engine
+cargo add aeris_charts_engine
 ```
 
 The current coordinated Rust release is `0.2.0` and is available on crates.io. Repository source
@@ -17,41 +18,36 @@ is preparing the AGPL-licensed `0.3.0` release:
 
 | Crate | Purpose |
 | --- | --- |
-| [`nucleuscharts_engine`](https://crates.io/crates/nucleuscharts_engine) | Headless chart state, interactions, drawings, indicators, and frame construction |
-| [`nucleuscharts_core`](https://crates.io/crates/nucleuscharts_core) | Platform-free data, scales, options, validation, and formatting |
-| [`nucleuscharts_indicators`](https://crates.io/crates/nucleuscharts_indicators) | Pure Rust technical-indicator calculations |
-| [`nucleuscharts_render`](https://crates.io/crates/nucleuscharts_render) | Backend-neutral draw-list contract and rendering math |
-| [`nucleuscharts_render_wgpu`](https://crates.io/crates/nucleuscharts_render_wgpu) | WebGPU executor |
-| [`nucleuscharts_native`](https://crates.io/crates/nucleuscharts_native) | Native tiny-skia rasterizer and server-side PNG rendering |
-| [`nucleuscharts_wasm`](https://crates.io/crates/nucleuscharts_wasm) | WebAssembly browser host |
+| [`aeris_charts_engine`](https://crates.io/crates/aeris_charts_engine) | Headless chart state, interactions, drawings, indicators, and frame construction |
+| [`aeris_charts_core`](https://crates.io/crates/aeris_charts_core) | Platform-free data, scales, options, validation, and formatting |
+| [`aeris_charts_indicators`](https://crates.io/crates/aeris_charts_indicators) | Pure Rust technical-indicator calculations |
+| [`aeris_charts_render`](https://crates.io/crates/aeris_charts_render) | Backend-neutral draw-list contract and rendering math |
+| [`aeris_charts_render_wgpu`](https://crates.io/crates/aeris_charts_render_wgpu) | WebGPU executor |
+| [`aeris_charts_native`](https://crates.io/crates/aeris_charts_native) | Native tiny-skia rasterizer and server-side PNG rendering |
+| [`aeris_charts_wasm`](https://crates.io/crates/aeris_charts_wasm) | WebAssembly browser host |
 
 The GPUI executor remains available from this repository because it relies on a reviewed Zed commit
 whose API differs from the crates.io `gpui` release. It is deliberately not published as a broken
-registry fallback. All published Nucleus crates in a release use the same version. Existing
+registry fallback. All published Aeris crates in a release use the same version. Existing
 registry artifacts remain under the license bundled with their release; repository source and
 future releases use the [AGPL and commercial dual-license model](#license).
 
 ## Browser package
 
-The browser SDK is published as `@axiusflowhq/financial` on GitHub Packages. Configure the
-registry and authenticate with a GitHub token that can read packages before installing:
-
-```ini
-@axiusflowhq:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-```
+The browser SDK is prepared for the public npm registry as `aeris-charts`.
 
 ```sh
-npm install @axiusflowhq/financial
+npm install aeris-charts
 ```
 
-Version tags publish automatically when the tag matches `packages/charts/package.json` exactly
+Version tags publish automatically after release credentials are configured and the tag matches
+`packages/charts/package.json` exactly
 (for example, package version `0.9.0` is released from tag `v0.9.0`).
 
 Create a chart with the asynchronous camel-case API:
 
 ```ts
-import { createChart } from "@axiusflowhq/financial";
+import { createChart } from "aeris-charts";
 
 const container = document.querySelector<HTMLElement>("#chart");
 if (!container) throw new Error("missing chart container");
@@ -95,11 +91,11 @@ use it, then import the adapter from the package subpath; framework-neutral appl
 or depend on React:
 
 ```sh
-npm install @axiusflowhq/financial react
+npm install aeris-charts react
 ```
 
 ```tsx
-import { FinancialSeries, GeneralPane, NucleusChart } from "@axiusflowhq/financial/react";
+import { FinancialSeries, GeneralPane, AerisChart } from "aeris-charts/react";
 
 const axes = [
   { id: "month", dimension: "x", scale: "band" },
@@ -108,7 +104,7 @@ const axes = [
 
 export function Dashboard({ candles, revenue }) {
   return (
-    <NucleusChart options={{ autoSize: true }} style={{ width: "100%", height: 560 }}>
+    <AerisChart options={{ autoSize: true }} style={{ width: "100%", height: 560 }}>
       <FinancialSeries kind="candlestick" data={candles} />
       <GeneralPane
         options={{ horizontal_domain: { type: "category", scale: "band" } }}
@@ -120,7 +116,7 @@ export function Dashboard({ candles, revenue }) {
           data: revenue,
         }]}
       />
-    </NucleusChart>
+    </AerisChart>
   );
 }
 ```
@@ -131,12 +127,12 @@ during SSR because chart creation and DOM access begin only after the component 
 framework-neutral and React combined examples live in `examples/all_in_one/`.
 
 The optimized WASM binary is shipped beside the ESM entry and resolves there automatically. Bundlers
-that require an explicit asset URL may import `@axiusflowhq/financial/wasm` (or their normal URL-loader
+that require an explicit asset URL may import `aeris-charts/wasm` (or their normal URL-loader
 form of that export) and pass the resulting URL to `initWasm()` before creating a chart; no `pkg/`,
 `crates/`, demo, or repository path is part of the consumer contract.
 
 Numeric times are finite whole UTC seconds in the exact inclusive range
-`-62167219200..253402300799` (years 0000..9999). Nucleus never auto-converts numeric timestamps;
+`-62167219200..253402300799` (years 0000..9999). Aeris never auto-converts numeric timestamps;
 rejections include a likely milliseconds, microseconds, or nanoseconds hint when applicable.
 Direct set/update batches reject atomically on any invalid timestamp, and invalid single updates
 leave existing data unchanged. Inspect `series.last_ingestion_diagnostics()` for the reason.
@@ -148,7 +144,7 @@ geometry, lifecycle, and rendering are shared by every backend; the browser pack
 public data and options at the WASM boundary:
 
 ```ts
-import { create_volume_profile } from "@axiusflowhq/financial";
+import { create_volume_profile } from "aeris-charts";
 
 const heatmap = chart.add_series("heatmap", {
   cell_border_width: 1,
@@ -174,7 +170,7 @@ drawings, session highlighting, volume profile, and user-defined price lines.
 
 Heatmap-around-line and shaded-background examples are composed beneath a normal line series.
 
-Features that Nucleus already owns—drawings (including Long Position and Short Position tools), bands, price lines, overlay scales, partial-last-price
+Features that Aeris already owns—drawings (including Long Position and Short Position tools), bands, price lines, overlay scales, partial-last-price
 lines, session shading, highlighted bar slots, and time-anchored volume profiles—are thin helpers
 over those engine APIs. Accessibility is enabled by default; `chart.accessibility()` returns its
 singleton controller and `enable_accessibility(chart, options)` configures the same instance for
@@ -190,12 +186,12 @@ device-aware hit tolerances. Wheel policy is configurable with
 `wheel_behavior: "auto" | "pan" | "zoom"`; informed by measured behavior from the pinned public
 reference fixture, auto zooms time from
 vertical deltas and pans time from horizontal deltas independently on the pane or either axis, with
-no Ctrl/Shift special case. The explicit `pan` and `zoom` values retain Nucleus extension routing.
+no Ctrl/Shift special case. The explicit `pan` and `zoom` values retain Aeris extension routing.
 
 ## Trading and order management
 
 Trading objects are a separate first-party engine domain. The application supplies authoritative
-positions, working orders, bracket/OCO relationships, executions, and instrument metadata; Nucleus
+positions, working orders, bracket/OCO relationships, executions, and instrument metadata; Aeris
 owns their deterministic visualization, native axis labels, hit testing, risk/reward regions, and
 local interaction previews. A drag never rewrites confirmed broker state. Instant mode emits one
 typed, broker-neutral intent on release; manual mode holds the preview behind inline Confirm and
@@ -236,7 +232,7 @@ Give the container an explicit size; the chart canvases fill it.
 Import the portable design system once in browser hosts:
 
 ```ts
-import "@axiusflowhq/financial/design.css";
+import "aeris-charts/design.css";
 ```
 
 Light is the CSS default. Set `data-theme="dark"` (or class `dark`) on a root element for dark
@@ -248,14 +244,14 @@ for crosshair lines, and muted for crosshair-label surfaces.
 
 ## Repository layout
 
-- `crates/nucleuscharts_core` — validated data, scales, options, formatting, and shared math.
-- `crates/nucleuscharts_indicators` — platform-free indicator calculations.
-- `crates/nucleuscharts_engine` — chart state, interactions, drawings, panes, and frame construction.
-- `crates/nucleuscharts_render` — backend-neutral primitives and the ordered draw list.
-- `crates/nucleuscharts_render_wgpu` — WebGPU executor.
-- `crates/nucleuscharts_render_gpui` — GPUI executor.
-- `crates/nucleuscharts_wasm` — browser and WebAssembly boundary.
-- `crates/nucleuscharts_native` — deterministic native rendering and performance verification.
+- `crates/aeris_charts_core` — validated data, scales, options, formatting, and shared math.
+- `crates/aeris_charts_indicators` — platform-free indicator calculations.
+- `crates/aeris_charts_engine` — chart state, interactions, drawings, panes, and frame construction.
+- `crates/aeris_charts_render` — backend-neutral primitives and the ordered draw list.
+- `crates/aeris_charts_render_wgpu` — WebGPU executor.
+- `crates/aeris_charts_render_gpui` — GPUI executor.
+- `crates/aeris_charts_wasm` — browser and WebAssembly boundary.
+- `crates/aeris_charts_native` — deterministic native rendering and performance verification.
 - `packages/charts` — TypeScript browser package.
 - `examples/web_demo` — browser integration and parity test host; it is not a published package.
 
@@ -287,24 +283,24 @@ Reproducible release-package benchmarks live in [`benchmarks/`](benchmarks/READM
 
 ## License
 
-Nucleus Charts is open-source software licensed under the
+Aeris Charts is open-source software licensed under the
 [GNU Affero General Public License v3.0](LICENSE), identified by the SPDX expression
 `AGPL-3.0-only`. The AGPL permits commercial use, modification, and redistribution subject to its
 copyleft and corresponding-source requirements, including its network-interaction provisions.
 
-Organizations that cannot comply with the AGPL may obtain a separate Axiusflow Commercial License
+Organizations that cannot comply with the AGPL may obtain a separate Aeris Terminal Commercial License
 for proprietary integration, redistribution, OEM/embedded use, white-label use, support, and custom
 engineering. The commercial option is a separate agreement; it does not add restrictions to the
 public AGPL grant. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
 
 ## Independent development and third-party references
 
-Nucleus Charts is independently designed and implemented. Public documentation, public examples,
+Aeris Charts is independently designed and implemented. Public documentation, public examples,
 and observed behavior from established charting products are used to learn common user expectations
-and to build development-only compatibility comparisons. Those references do not share Nucleus's
+and to build development-only compatibility comparisons. Those references do not share Aeris's
 engine, rendering, or state-management implementation.
 
 Development tests use Lightweight Charts as a pinned Apache-2.0 dependency through its public API.
-That dependency is not included in the published `@axiusflowhq/financial` package. TradingView and
-Lightweight Charts are trademarks of their respective owners; Nucleus Charts is not affiliated with
+That dependency is not included in the published `aeris-charts` package. TradingView and
+Lightweight Charts are trademarks of their respective owners; Aeris Charts is not affiliated with
 or endorsed by TradingView. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

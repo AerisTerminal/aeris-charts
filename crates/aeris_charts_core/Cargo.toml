@@ -1,0 +1,22 @@
+[package]
+name = "aeris_charts_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+description = "Platform-free chart data, scales, ranges, invalidation, and formatting for Aeris Charts"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

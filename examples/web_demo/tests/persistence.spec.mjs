@@ -10,7 +10,7 @@ test("persistence V1 round-trips all drawing kinds across stable multi-pane refe
   await page.goto("/?backend=canvas2d");
   await wait_for_chart(page);
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = () => {
       const element = document.createElement("div");
       element.style.cssText = "position:absolute;left:-10000px;width:800px;height:500px";
@@ -61,7 +61,7 @@ test("persistence failures are structured, bounded, and atomic", async ({ page }
   await page.goto("/?backend=canvas2d");
   await wait_for_chart(page);
   const result = await page.evaluate(async () => {
-    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
     const host = document.createElement("div");
     host.style.cssText = "position:absolute;left:-10000px;width:400px;height:300px";
     document.body.append(host);
@@ -70,9 +70,9 @@ test("persistence failures are structured, bounded, and atomic", async ({ page }
     const errors = [];
     for (const document of [
       "{",
-      { schema: "nucleuscharts-state", schema_version: 99, panes: [], drawings: [] },
+      { schema: "aeris_charts-state", schema_version: 99, panes: [], drawings: [] },
       {
-        schema: "nucleuscharts-state",
+        schema: "aeris_charts-state",
         schema_version: 1,
         panes: [{ id: "pane-1", stretch_factor: 1, preserve_empty: false }],
         drawings: [{ id: 1, kind: "future_tool", pane_id: "pane-1", anchors: [{ logical: 1, price: 1 }] }],
@@ -90,10 +90,10 @@ test("persistence failures are structured, bounded, and atomic", async ({ page }
   });
 
   expect(result.errors).toEqual([
-    { name: "NucleusChartsError", code: "serialization_error" },
-    { name: "NucleusChartsError", code: "persistence_version_error" },
-    { name: "NucleusChartsError", code: "invalid_data" },
-    { name: "NucleusChartsError", code: "resource_limit" },
+    { name: "AerisChartsError", code: "serialization_error" },
+    { name: "AerisChartsError", code: "persistence_version_error" },
+    { name: "AerisChartsError", code: "invalid_data" },
+    { name: "AerisChartsError", code: "resource_limit" },
   ]);
   expect(result.after).toEqual(result.before);
 });

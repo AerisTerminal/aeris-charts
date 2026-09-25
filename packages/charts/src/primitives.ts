@@ -104,7 +104,7 @@ export interface primitive_pane_view {
 }
 
 /**
- * A primitive's hit-test result (reference `PrimitiveHoveredItem`, reduced to Nucleus's arbitration
+ * A primitive's hit-test result (reference `PrimitiveHoveredItem`, reduced to Aeris's arbitration
  * model: the host owns z-ordering and series-vs-primitive precedence, so the reference's `distance`,
  * `hitTestPriority`, `itemType`, and `isBackground` fields are not modeled — within a layer,
  * the first hit in paint order wins).
@@ -127,7 +127,7 @@ export interface primitive_hit_result {
  * from the pane's top edge (price axis) or the pane's left edge (time axis). `background_color`
  * (or `color` as a shorthand) fills the box; omitted `text_color` automatically selects black or
  * white for contrast with the effective background.
- * Extension over reference: reference exposes axis views only on series primitives; Nucleus
+ * Extension over reference: reference exposes axis views only on series primitives; Aeris
  * accepts them on pane primitives too (painted on the pane's right scale / the time strip).
  */
 export interface primitive_axis_label {
