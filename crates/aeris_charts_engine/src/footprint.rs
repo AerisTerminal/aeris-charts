@@ -1532,6 +1532,9 @@ impl ChartEngine {
                     if points.len() > keep {
                         points.drain(..points.len() - keep);
                     }
+                    for (index, point) in points.iter_mut().enumerate() {
+                        point.logical_index = index as u64;
+                    }
                     self.sync_sequence_axis_times();
                 }
             }
@@ -2878,6 +2881,43 @@ mod tests {
         );
         assert_eq!(chart.data_layer().series_data(delta).unwrap().0, &[0, 1]);
         assert_eq!(chart.sequence_points().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn non_time_sequence_indices_remain_chart_local_after_retention_trims_absolute_bars() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let id = chart
+            .add_footprint_series(FootprintSeriesOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
+                    ..FootprintAggregationOptions::default()
+                },
+                ..FootprintSeriesOptions::default()
+            })
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                id,
+                vec![
+                    trade(1_000_001, 100.0, 1.0, AggressorSide::Buy),
+                    trade(2_000_001, 101.0, 1.0, AggressorSide::Buy),
+                    trade(3_000_001, 102.0, 1.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        assert!(chart.set_series_max_points(id, Some(2)));
+
+        let sequence = chart.sequence_points().unwrap();
+        assert_eq!(
+            sequence
+                .iter()
+                .map(|point| point.logical_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(sequence[0].open_timestamp_micros, 2_000_001);
+        assert_eq!(sequence[1].open_timestamp_micros, 3_000_001);
     }
 
     #[test]

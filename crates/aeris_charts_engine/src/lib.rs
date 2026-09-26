@@ -3332,6 +3332,13 @@ impl ChartEngine {
         // unrelated sidecar; install the new sidecar before the second sync below.
         let previous_sequence = self.sequence_points.take();
         let previous_pending = self.pending_sequence_mapping.take();
+        // The aggregator keeps absolute bar identities across retention, while the chart data
+        // layer and drawing geometry address the retained rows from zero. Preserve the absolute
+        // identity through the full-resolution times, but normalize the chart-local sidecar
+        // indices before mapping/rebasing anchors.
+        for (index, point) in points.iter_mut().enumerate() {
+            point.logical_index = index as u64;
+        }
         self.pending_sequence_mapping = previous_sequence
             .as_deref()
             .map(|old| BarSequenceMapping::between_points(old, &points));
@@ -3466,7 +3473,7 @@ impl ChartEngine {
         projection: FootprintSequenceProjection,
     ) -> usize {
         debug_assert!(self.is_footprint_series(id));
-        let (points, open, high, low, close) = projection;
+        let (mut points, open, high, low, close) = projection;
         if points.is_empty()
             || points.len() != open.len()
             || points.len() != high.len()
@@ -3487,6 +3494,9 @@ impl ChartEngine {
             .collect::<Vec<_>>();
         let previous_pending = self.pending_sequence_mapping.take();
         let mut next_sequence = sequence[..from].to_vec();
+        for (index, point) in points.iter_mut().enumerate() {
+            point.logical_index = (from + index) as u64;
+        }
         next_sequence.extend_from_slice(&points);
         self.pending_sequence_mapping = Some(BarSequenceMapping::between_points(
             &sequence,
