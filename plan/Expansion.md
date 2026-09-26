@@ -27,14 +27,14 @@ items; they do not renumber them.
 
 ## Status at a glance
 
-Updated 2026-09-25. Baseline source-confirmed 2026-09-24.
+Updated 2026-09-26. Baseline source-confirmed 2026-09-24.
 
 | Batch | Scope | Unblocks on the platform | Status |
 | --- | --- | --- | --- |
 | B1 | Platform chart contracts: PD11, PD1, PD3, PD4, PD5, PD6, PD7 | Multi-account chart trading, trailing and break-even stops, risk warnings on order lines, economic events and risk windows, trade review markers, linked charts, journal images, fundamentals | **Complete** |
 | B2 | Drawing model and customization: F5, schema conventions, existing tools | Configurable drawings, templates, drawing sync across cells | **Complete** |
 | B3 | Shared tape and order flow: F2, OF1, OF2, OF11, OF12, PD10 | Footprint, CVD, delta, big-trade bubbles | Open |
-| B4 | Study inputs and core indicators: F4, OF9, CT1, CT2, CT6, I1 | Professional indicator set, VWAP bands, Heikin Ashi, comparisons | Open |
+| B4 | Study inputs and core indicators: F4, OF9, CT1, CT2, CT6, I1 | Professional indicator set, VWAP bands, Heikin Ashi, comparisons | **Complete** |
 | B5 | Non-time bars and replay: F1, OF14, CT3, CT4, PD2 | Tick/volume/range charts, session replay, trade review playback | Open |
 | B6 | Depth: F3, OF15–OF18, PD8, PD9 | Liquidity heatmap, order-level markers, depth studies | Open |
 | B7 | Profiles and resampling: F6, OF3–OF8, OF10, CT5 | Session/composite profiles, TPO, anchored VWAP, multi-timeframe studies | Open |
@@ -207,9 +207,9 @@ retention evicts both), and PD10 budgets hold on GPUI.
 ### B4 — Study inputs and core indicators
 
 **Scope:** F4, OF9, CT1, CT2, CT6, indicator tier I1. **Depends on:** B2 schema conventions.
-**Status:** open.
+**Status:** complete (2026-09-26).
 
-- [ ] **F4** `IndicatorInput` gains open; selectable sources (open, high, low, close, hl2, hlc3,
+- [x] **F4** `IndicatorInput` gains open; selectable sources (open, high, low, close, hl2, hlc3,
       ohlc4, hlcc4, any indicator output); multi-input bindings with typed validation; typed
       parameter schemas and output descriptors; per-output style persisted; study bindings in the
       next persistence schema version.
@@ -251,7 +251,7 @@ retention evicts both), and PD10 budgets hold on GPUI.
 - [x] **I1 levels:** pivot points (standard, Fibonacci, Camarilla, Woodie, DeMark), ZigZag.
 - [x] Every indicator has incremental state, rebuild equivalence, a typed schema, persistence and an
       independently computed reference fixture.
-- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [x] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
 
 **Exit:** the F4 exit criterion passes (RSI of hlc3, SMA of that RSI and a Bollinger band fill
 round-trip through persistence and render identically on every executor) and every I1 fixture
@@ -270,18 +270,18 @@ session, weekly and monthly reset keys, weighted population-deviation bands and 
 pure-math and incremental rebuild tests cover the monthly reference path. Typed multi-input
 validation now rejects invalid VWAP volume bindings atomically. Financial persistence V3 now
 round-trips ordered study dependencies, scalar inputs, volume references and per-output styles while
-leaving market data host-owned. The Terminal host bridge now carries each
+leaving market data host-owned. The Terminal host bridge carries each
 runtime study's transitive typed trade/quote/depth stream requirements beside
 the bounded scalar publication, so downstream chart presentation can retain
 binding metadata without a second tape or book. The final B4 docs/full-gate
-item remains open. DEMA, TEMA, SMMA/RMA, HMA, VWMA,
+closure is now verified. DEMA, TEMA, SMMA/RMA, HMA, VWMA,
 standard deviation, CCI, Williams %R, Stochastic RSI, ROC, Momentum, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku are
 OBV, CMF, MFI, the volume/MA study, daily previous-session pivot points and percentage-deviation
 ZigZag are now exposed through the engine, WASM and TypeScript APIs, with pure and incremental
 rebuild coverage. The all-runtime-mutation fixture exercises every current indicator state,
 including pivot, ZigZag and VWAP bands, and the fixed-value reference fixture covers every output
 family and pivot variant. Engine persistence and full-recompute fixtures cover the same catalog;
-the remaining B4 closure is the final docs/full-gate item. CT6 now
+the completed B4 closure includes the host-owned F4 trade/depth binding bridge. CT6 now
 uses one bounded chart-level comparison anchor for percentage/indexed geometry and exposes an
 engine-owned per-series legend snapshot; the Rust fixture and browser public API path cover exact
 anchor values, latest values, and percent changes without duplicating canonical rows. CT1's
