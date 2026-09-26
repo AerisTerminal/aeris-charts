@@ -2650,6 +2650,30 @@ mod tests {
     }
 
     #[test]
+    fn removing_the_last_non_time_series_retires_the_sequence_axis() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let footprint = chart
+            .add_footprint_series(FootprintSeriesOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
+                    ..FootprintAggregationOptions::default()
+                },
+                ..FootprintSeriesOptions::default()
+            })
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                footprint,
+                vec![trade(1_000_001, 100.0, 1.0, AggressorSide::Buy)],
+            )
+            .unwrap();
+        assert!(chart.sequence_points().is_some());
+        assert!(chart.remove_series(footprint));
+        assert!(chart.sequence_points().is_none());
+    }
+
+    #[test]
     fn chart_trade_stream_is_shared_by_bound_footprint_dependents() {
         let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
         let stream = chart

@@ -373,7 +373,9 @@ an engine-owned sequence sidecar; axis labels, crosshair lookup, and visible ran
 the sidecar's full-resolution open times, never synthetic UTC timestamps. `BarSequenceMapping`
 matches ordered full-resolution bounds and rebases logical anchors across prepend/rebuild operations
 without collapsing duplicate second labels. The current non-time tip path still rebuilds its bounded
-projection, so the B5 performance exit remains open.
+projection, so the B5 performance exit remains open. The sidecar is retired when the last live
+non-time footprint leaves the chart, preventing stale sequence labels from affecting later time
+series.
 The configured tick size owns the series min-move/formatter and the shared autoscale, frame, and hit
 paths use complete half-tick outer cell bounds on the series' ordinary pane-local price scale.
 Footprint bars ultimately emit the same ordered `ChartFrame` as every other series, and no backend

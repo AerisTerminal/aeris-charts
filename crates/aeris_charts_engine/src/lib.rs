@@ -2174,6 +2174,7 @@ impl ChartEngine {
             }
             self.data
                 .set_rows_count_as_data(id, kind == SeriesKind::Custom);
+            self.clear_sequence_axis_if_unused();
             self.invalidate_frame_scene();
         }
     }
@@ -2264,6 +2265,7 @@ impl ChartEngine {
         self.trade_bubbles.retain(|stream_id, dependents| {
             live_streams.contains(stream_id) && !dependents.is_empty()
         });
+        self.clear_sequence_axis_if_unused();
         self.series_order.retain(|sid| !tombstones.contains(sid));
         // A hovered series leaving the chart releases the hovered-on-top z-bump with it.
         if self
@@ -4319,5 +4321,22 @@ impl ChartEngine {
         self.synced_first_time = times.first().copied();
         self.time_scale.set_points_len(times.len());
         self.time_scale.set_base_index(self.data.base_index());
+    }
+
+    fn clear_sequence_axis_if_unused(&mut self) {
+        let has_sequence_series = self.series.iter().any(|series| {
+            series.footprint.as_ref().is_some_and(|state| {
+                self.trade_stream(state.trade_stream_id)
+                    .is_some_and(|stream| {
+                        !matches!(stream.options().bars, FootprintBarAggregation::Time { .. })
+                    })
+            })
+        });
+        if !has_sequence_series && self.sequence_points.take().is_some() {
+            // The data-layer generation does not change when the sidecar is retired. Force one
+            // ordinary sync so tick weights and axis endpoints stop referring to sequence labels.
+            self.synced_time_points_generation = self.data.time_points_generation().wrapping_sub(1);
+            self.sync_time_points();
+        }
     }
 }
