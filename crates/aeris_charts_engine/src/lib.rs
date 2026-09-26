@@ -72,12 +72,12 @@ pub use feature_series::{
     StackedAreaColor,
 };
 pub use footprint::{
-    AggressorSide, CumulativeDeltaReset, FootprintAggregationOptions, FootprintAggregator,
-    FootprintBar, FootprintBarAggregation, FootprintCellMode, FootprintError,
-    FootprintImbalanceOptions, FootprintLevel, FootprintSeriesOptions, FootprintTrade,
-    FootprintUpdateKind, FootprintVisualOptions, FootprintWorkStats, TradeBubbleOptions,
-    TradeStreamStats, TradeStudyKind, TradeStudyOptions, MAX_TRADE_STREAMS,
-    MAX_TRADE_STREAM_KEY_BYTES,
+    AggressorSide, BarSequence, BarSequencePoint, CumulativeDeltaReset,
+    FootprintAggregationOptions, FootprintAggregator, FootprintBar, FootprintBarAggregation,
+    FootprintCellMode, FootprintError, FootprintImbalanceOptions, FootprintLevel,
+    FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind, FootprintVisualOptions,
+    FootprintWorkStats, TradeBubbleOptions, TradeStreamStats, TradeStudyKind, TradeStudyOptions,
+    MAX_TRADE_STREAMS, MAX_TRADE_STREAM_KEY_BYTES,
 };
 pub use frame::{
     AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,

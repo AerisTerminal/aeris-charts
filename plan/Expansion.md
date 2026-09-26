@@ -320,6 +320,11 @@ This is the largest architectural change in the plan.
 - [ ] `perf_gate` covers tip append without rebuilding closed bars and 100× replay with flat memory.
 - [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
 
+Current F1 slice (2026-09-26): the existing engine-owned footprint aggregator now publishes a
+logical bar index with each bar's full-resolution open/close microsecond bounds through a
+read-only `bar_sequence` view. This records the identity boundary for the non-time axis without
+claiming chart projection, drawing rebasing, or replay completion; the B5 checklist remains open.
+
 **Exit:** the F1 and PD2 exit criteria pass: many-bars-per-second and gap fixtures render on every
 executor, drawings survive prepend and rebuild, and seek-back equals a fresh load to the same
 clock.

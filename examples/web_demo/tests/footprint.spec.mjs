@@ -76,6 +76,7 @@ test("tick-driven footprint API preserves delta path, POC, and stacked imbalance
   expect(result.options.stacked_ask_color).toBe("#089981");
   expect(result.bars).toBe(1);
   expect(result.first).toMatchObject({
+    logical_index: 0,
     bid_volume: 100,
     ask_volume: 90,
     total_volume: 190,
@@ -118,7 +119,7 @@ test("footprint shared-frame semantics execute through WebGPU", async ({ page })
     return { backend: chart.backend(), bar: footprint.footprint_bar(0) };
   });
   expect(result.backend).toBe("webgpu");
-  expect(result.bar).toMatchObject({ total_volume: 13, delta: 5, max_delta: 9, min_delta: 0 });
+  expect(result.bar).toMatchObject({ logical_index: 0, total_volume: 13, delta: 5, max_delta: 9, min_delta: 0 });
   const screenshot = await page.screenshot();
   expect(screenshot.byteLength).toBeGreaterThan(10_000);
 });

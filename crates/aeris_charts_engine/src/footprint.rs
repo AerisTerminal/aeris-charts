@@ -258,6 +258,9 @@ pub struct FootprintLevel {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct FootprintBar {
+    /// Stable logical position within the canonical bar sequence. Unlike the display timestamp,
+    /// this identity remains distinct when several non-time bars open within one second.
+    pub logical_index: u64,
     pub start_timestamp_micros: i64,
     pub end_timestamp_micros: i64,
     pub session_id: Option<u64>,
@@ -283,6 +286,47 @@ pub struct FootprintBar {
     pub poc_price: f64,
     /// Sorted ascending by integer price level.
     pub levels: Vec<FootprintLevel>,
+}
+
+/// Read-only view of the canonical logical bar domain produced by a trade aggregator. The view
+/// intentionally keeps open/close microsecond times beside the logical index; callers must not
+/// derive a non-time bar's horizontal identity by truncating either timestamp to whole seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct BarSequencePoint {
+    pub logical_index: u64,
+    pub open_timestamp_micros: i64,
+    pub close_timestamp_micros: i64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BarSequence<'a> {
+    bars: &'a [FootprintBar],
+}
+
+impl<'a> BarSequence<'a> {
+    pub fn len(self) -> usize {
+        self.bars.len()
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.bars.is_empty()
+    }
+
+    pub fn get(self, position: usize) -> Option<BarSequencePoint> {
+        self.bars.get(position).map(|bar| BarSequencePoint {
+            logical_index: bar.logical_index,
+            open_timestamp_micros: bar.start_timestamp_micros,
+            close_timestamp_micros: bar.end_timestamp_micros,
+        })
+    }
+
+    pub fn iter(self) -> impl ExactSizeIterator<Item = BarSequencePoint> + 'a {
+        self.bars.iter().map(|bar| BarSequencePoint {
+            logical_index: bar.logical_index,
+            open_timestamp_micros: bar.start_timestamp_micros,
+            close_timestamp_micros: bar.end_timestamp_micros,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -429,6 +473,13 @@ impl FootprintAggregator {
 
     pub fn bars(&self) -> &[FootprintBar] {
         &self.bars
+    }
+
+    /// Logical bar positions and their full-resolution temporal bounds. This is the boundary that
+    /// future non-time axes and drawing rebasing consume; the existing whole-second projection is
+    /// deliberately kept separate until that axis is chart-integrated.
+    pub fn bar_sequence(&self) -> BarSequence<'_> {
+        BarSequence { bars: &self.bars }
     }
 
     pub fn trades(&self) -> impl ExactSizeIterator<Item = &FootprintTrade> {
@@ -693,6 +744,10 @@ impl FootprintAggregator {
                 }
             };
             self.bars.push(FootprintBar {
+                logical_index: self
+                    .bars
+                    .last()
+                    .map_or(0, |bar| bar.logical_index.saturating_add(1)),
                 start_timestamp_micros: start,
                 end_timestamp_micros: trade.timestamp_micros,
                 session_id: trade.session_id,
@@ -2083,6 +2138,48 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![12.0, 8.0]
         );
+    }
+
+    #[test]
+    fn logical_bar_sequence_keeps_subsecond_bars_and_gap_times_distinct() {
+        let mut aggregator = FootprintAggregator::new(FootprintAggregationOptions {
+            tick_size: 1.0,
+            bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
+            ..FootprintAggregationOptions::default()
+        })
+        .unwrap();
+        aggregator
+            .set_trades(vec![
+                trade(1_000_001, 100.0, 1.0, AggressorSide::Buy),
+                trade(1_000_002, 101.0, 1.0, AggressorSide::Buy),
+                trade(9_000_000, 102.0, 1.0, AggressorSide::Buy),
+            ])
+            .unwrap();
+        let sequence = aggregator.bar_sequence();
+        assert_eq!(sequence.len(), 3);
+        assert_eq!(
+            sequence.iter().collect::<Vec<_>>(),
+            vec![
+                BarSequencePoint {
+                    logical_index: 0,
+                    open_timestamp_micros: 1_000_001,
+                    close_timestamp_micros: 1_000_001,
+                },
+                BarSequencePoint {
+                    logical_index: 1,
+                    open_timestamp_micros: 1_000_002,
+                    close_timestamp_micros: 1_000_002,
+                },
+                BarSequencePoint {
+                    logical_index: 2,
+                    open_timestamp_micros: 9_000_000,
+                    close_timestamp_micros: 9_000_000,
+                },
+            ]
+        );
+        assert_eq!(aggregator.bars()[0].start_timestamp_micros / 1_000_000, 1);
+        assert_eq!(aggregator.bars()[1].start_timestamp_micros / 1_000_000, 1);
+        assert_eq!(aggregator.bars()[2].start_timestamp_micros / 1_000_000, 9);
     }
 
     #[test]
