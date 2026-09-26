@@ -50,8 +50,8 @@ late event can correctly change the classification of later ambiguous events.
 
 ## 3. Aggregation and accounting
 
-The aggregation model supports aligned time bars, fixed trade-count bars, and whole-trade volume
-bars. A trade is never split to hit an exact volume threshold. A new session always starts a new
+The aggregation model supports aligned time bars, fixed trade-count bars, whole-trade volume bars,
+and tick-grid range bars. A trade is never split to hit an exact volume or range threshold. A new session always starts a new
 bar. The first chart-integrated API exposes whole-second-aligned time bars because the shared chart
 time axis currently has one logical row per UTC second. Every derived bar nevertheless carries a
 logical index and full-resolution open/close microsecond bounds through the engine's

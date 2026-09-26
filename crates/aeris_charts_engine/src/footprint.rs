@@ -119,6 +119,11 @@ pub enum FootprintBarAggregation {
     Volume {
         volume_per_bar: f64,
     },
+    /// Close a bar once its high-low span reaches this many integer ticks. A trade is never
+    /// split; the event that reaches the threshold remains in the closing bar.
+    Range {
+        range_ticks: u32,
+    },
 }
 
 impl Default for FootprintBarAggregation {
@@ -836,9 +841,9 @@ impl FootprintAggregator {
                     interval_micros as i64,
                     anchor_micros,
                 ),
-                FootprintBarAggregation::Trades { .. } | FootprintBarAggregation::Volume { .. } => {
-                    trade.timestamp_micros
-                }
+                FootprintBarAggregation::Trades { .. }
+                | FootprintBarAggregation::Volume { .. }
+                | FootprintBarAggregation::Range { .. } => trade.timestamp_micros,
             };
             self.bars.push(FootprintBar {
                 logical_index: self
@@ -937,6 +942,11 @@ impl FootprintAggregator {
             FootprintBarAggregation::Trades { trades_per_bar } => bar.trade_count >= trades_per_bar,
             FootprintBarAggregation::Volume { volume_per_bar } => {
                 bar.total_volume >= volume_per_bar
+            }
+            FootprintBarAggregation::Range { range_ticks } => {
+                price_level(bar.high, self.options.tick_size)
+                    .saturating_sub(price_level(bar.low, self.options.tick_size))
+                    >= i64::from(range_ticks)
             }
         }
     }
@@ -1748,6 +1758,7 @@ fn validate_options(options: FootprintAggregationOptions) -> Result<(), Footprin
         FootprintBarAggregation::Volume { volume_per_bar } => {
             volume_per_bar.is_finite() && volume_per_bar > 0.0
         }
+        FootprintBarAggregation::Range { range_ticks } => range_ticks > 0,
     };
     if !valid_bars {
         return Err(FootprintError::InvalidAggregation);
@@ -2235,6 +2246,29 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![12.0, 8.0]
         );
+    }
+
+    #[test]
+    fn range_bar_mode_closes_on_tick_span_without_splitting_the_trigger_trade() {
+        let mut range = FootprintAggregator::new(FootprintAggregationOptions {
+            tick_size: 0.25,
+            bars: FootprintBarAggregation::Range { range_ticks: 4 },
+            ..FootprintAggregationOptions::default()
+        })
+        .unwrap();
+        range
+            .set_trades(vec![
+                trade(1, 100.00, 1.0, AggressorSide::Buy),
+                trade(2, 100.75, 2.0, AggressorSide::Buy),
+                trade(3, 101.00, 3.0, AggressorSide::Buy),
+                trade(4, 101.25, 4.0, AggressorSide::Buy),
+            ])
+            .unwrap();
+        assert_eq!(range.bars().len(), 2);
+        assert_eq!(range.bars()[0].trade_count, 3);
+        assert_eq!(range.bars()[0].high, 101.0);
+        assert_eq!(range.bars()[1].trade_count, 1);
+        assert_eq!(range.bars()[1].open, 101.25);
     }
 
     #[test]
