@@ -331,8 +331,10 @@ round-trip those policies, and native/browser fixtures cover labels, crosshair l
 keys. Non-time tip updates now replace only the affected suffix (with a full path when retention
 can shift the prefix), and derived delta studies and trade-bubble markers use the same logical keys.
 Value queries and transient trading/event overlays now resolve timestamp labels through the same
-sidecar; durable drawing bar-plus-time anchors, candles, replay, release performance evidence, and
-the full gate remain open; the B5 checklist remains open.
+sidecar. Non-time sequence rebuilds also rebase committed, pending, drag, brush, and drawing-history
+logical anchors through the full-resolution bar mapping; durable bar-plus-time drawing anchor
+persistence, candles, replay, release performance evidence, and the full gate remain open. The B5
+checklist remains open.
 
 **Exit:** the F1 and PD2 exit criteria pass: many-bars-per-second and gap fixtures render on every
 executor, drawings survive prepend and rebuild, and seek-back equals a fresh load to the same

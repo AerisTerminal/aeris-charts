@@ -751,15 +751,21 @@ impl Drawing {
         }
     }
 
-    fn rebase_logical(&mut self, mapping: &MergedTimeMapping) -> bool {
-        rebase_points(&mut self.points, mapping)
+    fn rebase_logical_with<F>(&mut self, map: F) -> bool
+    where
+        F: Fn(f64) -> f64 + Copy,
+    {
+        rebase_points_with(&mut self.points, map)
     }
 }
 
-fn rebase_points(points: &mut [DrawingPoint], mapping: &MergedTimeMapping) -> bool {
+fn rebase_points_with<F>(points: &mut [DrawingPoint], map: F) -> bool
+where
+    F: Fn(f64) -> f64 + Copy,
+{
     let mut changed = false;
     for point in points {
-        let logical = mapping.map_logical(point.logical);
+        let logical = map(point.logical);
         changed |= logical != point.logical;
         point.logical = logical;
     }
@@ -852,28 +858,31 @@ enum DrawingCommand {
 }
 
 impl DrawingCommand {
-    fn rebase_logical(&mut self, mapping: &MergedTimeMapping) {
+    fn rebase_logical_with<F>(&mut self, map: F)
+    where
+        F: Fn(f64) -> f64 + Copy,
+    {
         match self {
             Self::Create { drawing, .. } | Self::Delete { drawing, .. } => {
-                drawing.rebase_logical(mapping);
+                drawing.rebase_logical_with(map);
             }
             Self::Update { before, after } => {
-                before.rebase_logical(mapping);
-                after.rebase_logical(mapping);
+                before.rebase_logical_with(map);
+                after.rebase_logical_with(map);
             }
             Self::Clear { drawings } => {
                 for drawing in drawings {
-                    drawing.rebase_logical(mapping);
+                    drawing.rebase_logical_with(map);
                 }
             }
             Self::Reorder { before, after } => {
                 for drawing in before.iter_mut().chain(after.iter_mut()) {
-                    drawing.rebase_logical(mapping);
+                    drawing.rebase_logical_with(map);
                 }
             }
             Self::BatchUpdate { before, after } => {
                 for drawing in before.iter_mut().chain(after.iter_mut()) {
-                    drawing.rebase_logical(mapping);
+                    drawing.rebase_logical_with(map);
                 }
             }
         }
@@ -895,9 +904,12 @@ impl DrawingHistory {
         self.redo.clear();
     }
 
-    fn rebase_logical(&mut self, mapping: &MergedTimeMapping) {
+    fn rebase_logical_with<F>(&mut self, map: F)
+    where
+        F: Fn(f64) -> f64 + Copy,
+    {
         for command in self.undo.iter_mut().chain(&mut self.redo) {
-            command.rebase_logical(mapping);
+            command.rebase_logical_with(map);
         }
     }
 }
@@ -1341,27 +1353,30 @@ impl ChartEngine {
         })
     }
 
-    pub(crate) fn rebase_drawing_logicals(&mut self, mapping: &MergedTimeMapping) {
+    fn rebase_drawing_logicals_with<F>(&mut self, map: F)
+    where
+        F: Fn(f64) -> f64 + Copy,
+    {
         let mut committed_changed = false;
         for drawing in &mut self.drawings {
-            committed_changed |= drawing.rebase_logical(mapping);
+            committed_changed |= drawing.rebase_logical_with(map);
         }
         let mut transient_changed = false;
         if let Some(pending) = self.drawing_controller.pending.as_mut() {
-            transient_changed |= pending.drawing.rebase_logical(mapping);
+            transient_changed |= pending.drawing.rebase_logical_with(map);
             if let Some(preview) = pending.preview.as_mut() {
-                transient_changed |= rebase_points(std::slice::from_mut(preview), mapping);
+                transient_changed |= rebase_points_with(std::slice::from_mut(preview), map);
             }
         }
         if let Some(capture) = self.drawing_controller.brush.as_mut() {
-            transient_changed |= rebase_points(&mut capture.points, mapping);
-            transient_changed |= capture.options.rebase_logical(mapping);
+            transient_changed |= rebase_points_with(&mut capture.points, map);
+            transient_changed |= capture.options.rebase_logical_with(map);
         }
         if let Some(drag) = self.drawing_drag.as_mut() {
-            transient_changed |= rebase_points(&mut drag.start_points, mapping);
-            transient_changed |= rebase_points(&mut drag.history_points, mapping);
+            transient_changed |= rebase_points_with(&mut drag.start_points, map);
+            transient_changed |= rebase_points_with(&mut drag.history_points, map);
         }
-        self.drawing_history.rebase_logical(mapping);
+        self.drawing_history.rebase_logical_with(map);
 
         if committed_changed {
             self.drawing_runtime
@@ -1371,6 +1386,14 @@ impl ChartEngine {
         if committed_changed || transient_changed {
             self.invalidate_frame_drawings();
         }
+    }
+
+    pub(crate) fn rebase_drawing_logicals(&mut self, mapping: &MergedTimeMapping) {
+        self.rebase_drawing_logicals_with(|logical| mapping.map_logical(logical));
+    }
+
+    pub(crate) fn rebase_drawing_logicals_sequence(&mut self, mapping: &BarSequenceMapping) {
+        self.rebase_drawing_logicals_with(|logical| mapping.map_logical(logical));
     }
 
     pub(crate) fn refresh_drawing_pixel_baselines(&mut self) {

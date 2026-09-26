@@ -1519,6 +1519,10 @@ pub struct ChartEngine {
     /// keys remain chart-local positions; this sidecar prevents non-time bars from being encoded
     /// as synthetic UTC timestamps.
     sequence_points: Option<Vec<BarSequencePoint>>,
+    /// Sequence identity mapping waiting for the data-layer synchronization triggered by a
+    /// non-time footprint rebuild. It is consumed before ordinary timestamp rebasing so drawing
+    /// anchors follow the same full-resolution bars even when row keys are reused.
+    pending_sequence_mapping: Option<BarSequenceMapping>,
     pub series: SeriesStore,
     tick_marks: TimeTickMarks,
     next_pane_id: u32,
@@ -1740,6 +1744,7 @@ impl ChartEngine {
             price_formatter: PriceFormatter::default(),
             data,
             sequence_points: None,
+            pending_sequence_mapping: None,
             series,
             tick_marks: TimeTickMarks::new(),
             next_pane_id: 2,
@@ -3291,6 +3296,7 @@ impl ChartEngine {
     ) -> bool {
         debug_assert!(self.is_footprint_series(id));
         self.sequence_points = None;
+        self.pending_sequence_mapping = None;
         self.install_series_data_inner(id, times, open, high, low, close)
     }
 
@@ -3318,6 +3324,10 @@ impl ChartEngine {
         // sequence first so that synchronization cannot interpret the new logical rows with an
         // unrelated sidecar; install the new sidecar before the second sync below.
         let previous_sequence = self.sequence_points.take();
+        let previous_pending = self.pending_sequence_mapping.take();
+        self.pending_sequence_mapping = previous_sequence
+            .as_deref()
+            .map(|old| BarSequenceMapping::between_points(old, &points));
         let installed = self.install_series_data_inner(id, times, open, high, low, close);
         if installed {
             let retained_len = self
@@ -3335,6 +3345,7 @@ impl ChartEngine {
             self.sync_sequence_axis_times();
         } else {
             self.sequence_points = previous_sequence;
+            self.pending_sequence_mapping = previous_pending;
         }
         installed
     }
@@ -3372,7 +3383,7 @@ impl ChartEngine {
         {
             return 0;
         }
-        let Some(mut sequence) = self.sequence_points.take() else {
+        let Some(sequence) = self.sequence_points.take() else {
             return 0;
         };
         if from > sequence.len() {
@@ -3382,14 +3393,20 @@ impl ChartEngine {
         let times = (from..from + points.len())
             .map(|index| index as i64)
             .collect::<Vec<_>>();
+        let previous_pending = self.pending_sequence_mapping.take();
+        let mut next_sequence = sequence[..from].to_vec();
+        next_sequence.extend_from_slice(&points);
+        self.pending_sequence_mapping = Some(BarSequenceMapping::between_points(
+            &sequence,
+            &next_sequence,
+        ));
         let accepted = self.update_series_bars_sanitized_inner(id, times, open, high, low, close);
         if accepted == points.len() {
-            sequence.truncate(from);
-            sequence.extend(points);
-            self.sequence_points = Some(sequence);
+            self.sequence_points = Some(next_sequence);
             self.sync_sequence_axis_times();
         } else {
             self.sequence_points = Some(sequence);
+            self.pending_sequence_mapping = previous_pending;
         }
         accepted
     }
@@ -4282,7 +4299,9 @@ impl ChartEngine {
         if sequence_changed {
             self.invalidate_frame_scene();
         }
-        if let Some(mapping) = merged_time_mapping.as_ref() {
+        if let Some(mapping) = self.pending_sequence_mapping.take() {
+            self.rebase_drawing_logicals_sequence(&mapping);
+        } else if let Some(mapping) = merged_time_mapping.as_ref() {
             self.rebase_drawing_logicals(mapping);
         }
         // Port of reference `ChartModel.updateTimeScale` (chart-model.ts:953-984): decide the

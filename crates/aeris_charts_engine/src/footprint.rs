@@ -345,15 +345,22 @@ pub struct BarSequenceMapping {
 
 impl BarSequenceMapping {
     pub fn between(old: BarSequence<'_>, new: BarSequence<'_>) -> Self {
+        Self::between_iter(old.iter(), new.iter())
+    }
+
+    pub fn between_points(old: &[BarSequencePoint], new: &[BarSequencePoint]) -> Self {
+        Self::between_iter(old.iter().copied(), new.iter().copied())
+    }
+
+    fn between_iter<I, J>(old: I, new: J) -> Self
+    where
+        I: IntoIterator<Item = BarSequencePoint>,
+        J: IntoIterator<Item = BarSequencePoint>,
+    {
         let mut common_indices: Vec<(u64, u64)> = Vec::new();
-        let (mut old_position, mut new_position) = (0usize, 0usize);
-        while old_position < old.len() && new_position < new.len() {
-            let Some(old_point) = old.get(old_position) else {
-                break;
-            };
-            let Some(new_point) = new.get(new_position) else {
-                break;
-            };
+        let mut old = old.into_iter().peekable();
+        let mut new = new.into_iter().peekable();
+        while let (Some(&old_point), Some(&new_point)) = (old.peek(), new.peek()) {
             match (
                 old_point.open_timestamp_micros,
                 old_point.close_timestamp_micros,
@@ -362,8 +369,12 @@ impl BarSequenceMapping {
                     new_point.open_timestamp_micros,
                     new_point.close_timestamp_micros,
                 )) {
-                std::cmp::Ordering::Less => old_position += 1,
-                std::cmp::Ordering::Greater => new_position += 1,
+                std::cmp::Ordering::Less => {
+                    old.next();
+                }
+                std::cmp::Ordering::Greater => {
+                    new.next();
+                }
                 std::cmp::Ordering::Equal => {
                     let current = (old_point.logical_index, new_point.logical_index);
                     if common_indices.len() >= 2 {
@@ -383,8 +394,8 @@ impl BarSequenceMapping {
                     } else {
                         common_indices.push(current);
                     }
-                    old_position += 1;
-                    new_position += 1;
+                    old.next();
+                    new.next();
                 }
             }
         }
@@ -418,6 +429,35 @@ impl BarSequenceMapping {
         let offset = (logical_index - old_left) as u128;
         let mapped = (new_left as u128).saturating_add(offset * new_span / old_span);
         u64::try_from(mapped).ok()
+    }
+
+    /// Map a fractional logical anchor through the same piecewise sequence mapping used for
+    /// integer bar identities. Fractional anchors remain in the interpolation space between
+    /// their neighboring bars instead of being rounded to a row.
+    pub fn map_logical(&self, logical: f64) -> f64 {
+        if !logical.is_finite() || self.common_indices.is_empty() {
+            return logical;
+        }
+        let upper = self
+            .common_indices
+            .partition_point(|&(old_index, _)| (old_index as f64) < logical);
+        if let Some(&(old_index, new_index)) = self.common_indices.get(upper) {
+            if old_index as f64 == logical {
+                return new_index as f64;
+            }
+        }
+        if upper == 0 {
+            let (old_index, new_index) = self.common_indices[0];
+            return new_index as f64 + logical - old_index as f64;
+        }
+        if upper == self.common_indices.len() {
+            let (old_index, new_index) = self.common_indices[upper - 1];
+            return new_index as f64 + logical - old_index as f64;
+        }
+        let (old_left, new_left) = self.common_indices[upper - 1];
+        let (old_right, new_right) = self.common_indices[upper];
+        let fraction = (logical - old_left as f64) / (old_right - old_left) as f64;
+        new_left as f64 + fraction * (new_right - new_left) as f64
     }
 
     pub fn rebase_anchor(
@@ -2103,6 +2143,7 @@ fn mark_stacks(levels: &mut [FootprintLevel], minimum: usize, ask: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{DrawingKind, DrawingPoint};
     use aeris_charts_render::draw_list::Prim;
 
     fn trade(
@@ -2490,6 +2531,55 @@ mod tests {
             rebuilt.bar_sequence().get(2)
         );
         assert!(!mapping.is_empty());
+    }
+
+    #[test]
+    fn non_time_sequence_rebuild_rebases_drawing_anchors_by_full_resolution_bar_identity() {
+        let mut chart = ChartEngine::new(800.0, 420.0, 1.0);
+        let id = chart
+            .add_footprint_series(FootprintSeriesOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
+                    ..FootprintAggregationOptions::default()
+                },
+                ..FootprintSeriesOptions::default()
+            })
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                id,
+                vec![
+                    trade(2_000_001, 100.0, 1.0, AggressorSide::Buy),
+                    trade(3_000_001, 101.0, 1.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        let drawing = chart
+            .add_drawing(
+                DrawingKind::TrendLine,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 0.5,
+                        price: 100.0,
+                    },
+                    DrawingPoint {
+                        logical: 1.0,
+                        price: 101.0,
+                    },
+                ],
+                None,
+            )
+            .unwrap();
+
+        chart
+            .update_footprint_trade(id, trade(1_000_001, 99.0, 1.0, AggressorSide::Buy))
+            .unwrap();
+
+        let points = &chart.drawing(drawing).unwrap().points;
+        assert_eq!(points[0].logical, 1.5);
+        assert_eq!(points[1].logical, 2.0);
     }
 
     #[test]
