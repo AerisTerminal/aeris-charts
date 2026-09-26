@@ -235,11 +235,18 @@ pub(crate) fn visible_ohlc_with_work(
     x_at: impl Fn(i64) -> f64,
     work: &mut DensityWork,
 ) -> Vec<VisibleOhlc> {
-    visible_ohlc_policy(plot, from, to, bar_spacing, hpr, x_at, work, true)
+    visible_ohlc_with_values(plot, from, to, bar_spacing, hpr, x_at, work, true, |row| {
+        Some([
+            plot.value_at(row, PlotValueIndex::Open),
+            plot.value_at(row, PlotValueIndex::High),
+            plot.value_at(row, PlotValueIndex::Low),
+            plot.value_at(row, PlotValueIndex::Close),
+        ])
+    })
 }
 
-#[allow(clippy::too_many_arguments)] // production arguments plus the test-only raw/LOD policy seam
-fn visible_ohlc_policy(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn visible_ohlc_with_values(
     plot: PlotListView<'_>,
     from: i64,
     to: i64,
@@ -248,57 +255,54 @@ fn visible_ohlc_policy(
     x_at: impl Fn(i64) -> f64,
     work: &mut DensityWork,
     use_lod: bool,
+    value_at: impl Fn(usize) -> Option<[f64; 4]>,
 ) -> Vec<VisibleOhlc> {
-    let open = plot.column(PlotValueIndex::Open);
-    let high = plot.column(PlotValueIndex::High);
-    let low = plot.column(PlotValueIndex::Low);
-    let close = plot.column(PlotValueIndex::Close);
-    // Whitespace rows draw nothing (the reference's plot list omits them); a compressed bucket only
-    // ever aggregates real bars, so no NaN can leak into an extremum or the bucket close.
     let (visible, measured) = density_rows(plot, from, to, bar_spacing, hpr, &x_at, use_lod);
     *work = measured;
-
     if bar_spacing * hpr >= 1.0 {
         return visible
             .into_iter()
-            .map(|row| VisibleOhlc {
-                x_px: x_at(plot.index_at(row).expect("visible row index")),
-                open: open[row],
-                high: high[row],
-                low: low[row],
-                close: close[row],
-                source_row: row,
-                geometry_time: plot.index_at(row).expect("visible row index"),
+            .filter_map(|row| {
+                let values = value_at(row)?;
+                Some(VisibleOhlc {
+                    x_px: x_at(plot.index_at(row).expect("visible row index")),
+                    open: values[0],
+                    high: values[1],
+                    low: values[2],
+                    close: values[3],
+                    source_row: row,
+                    geometry_time: plot.index_at(row).expect("visible row index"),
+                })
             })
             .collect();
     }
-
     let mut out = Vec::new();
     let mut current_bucket: Option<i64> = None;
     let mut current: Option<VisibleOhlc> = None;
     for row in visible {
+        let Some(values) = value_at(row) else {
+            continue;
+        };
         let bucket = x_at(plot.index_at(row).expect("visible row index")).floor() as i64;
         if current_bucket.is_some_and(|previous| previous != bucket) {
-            // `current` is always populated alongside `current_bucket` below.
             if let Some(item) = current.take() {
                 out.push(item);
             }
         }
-
         match current.as_mut() {
             Some(item) => {
-                item.high = item.high.max(high[row]);
-                item.low = item.low.min(low[row]);
-                item.close = close[row];
+                item.high = item.high.max(values[1]);
+                item.low = item.low.min(values[2]);
+                item.close = values[3];
                 item.source_row = row;
             }
             None => {
                 current = Some(VisibleOhlc {
                     x_px: bucket as f64,
-                    open: open[row],
-                    high: high[row],
-                    low: low[row],
-                    close: close[row],
+                    open: values[0],
+                    high: values[1],
+                    low: values[2],
+                    close: values[3],
                     source_row: row,
                     geometry_time: bucket,
                 });
@@ -310,6 +314,38 @@ fn visible_ohlc_policy(
         out.push(item);
     }
     out
+}
+
+#[allow(clippy::too_many_arguments)] // production arguments plus the test-only raw/LOD policy seam
+#[cfg(test)]
+fn visible_ohlc_policy(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    bar_spacing: f64,
+    hpr: f64,
+    x_at: impl Fn(i64) -> f64,
+    work: &mut DensityWork,
+    use_lod: bool,
+) -> Vec<VisibleOhlc> {
+    visible_ohlc_with_values(
+        plot,
+        from,
+        to,
+        bar_spacing,
+        hpr,
+        x_at,
+        work,
+        use_lod,
+        |row| {
+            Some([
+                plot.value_at(row, PlotValueIndex::Open),
+                plot.value_at(row, PlotValueIndex::High),
+                plot.value_at(row, PlotValueIndex::Low),
+                plot.value_at(row, PlotValueIndex::Close),
+            ])
+        },
+    )
 }
 
 #[cfg(test)]

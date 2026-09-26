@@ -705,7 +705,10 @@ impl ChartEngine {
             .and_then(|index| plot.search(index as i64, MismatchDirection::NearestLeft))
             .filter(|&row| !plot.is_whitespace_row(row))
             .or_else(|| plot.first_non_whitespace_row(visible_from))?;
-        let value = plot.value_at(row, PlotValueIndex::Close);
+        let value = self
+            .heikin_ashi_row(id, row)
+            .map(|values| values[3])
+            .unwrap_or_else(|| plot.value_at(row, PlotValueIndex::Close));
         value.is_finite().then_some(value)
     }
 

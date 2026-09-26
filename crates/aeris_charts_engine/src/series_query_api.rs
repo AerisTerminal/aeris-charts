@@ -363,6 +363,7 @@ impl ChartEngine {
         insert("open_visible", s.open_visible.into());
         insert("close_visible", s.close_visible.into());
         insert("thin_bars", s.thin_bars.into());
+        insert("heikin_ashi", s.heikin_ashi.into());
         insert("point_markers", s.point_markers.into());
         insert(
             "point_markers_radius",
@@ -654,6 +655,11 @@ impl ChartEngine {
                 "thin_bars" => {
                     if let Some(v) = value.as_bool() {
                         s.thin_bars = v;
+                    }
+                }
+                "heikin_ashi" => {
+                    if let Some(v) = value.as_bool() {
+                        s.heikin_ashi = v;
                     }
                 }
                 // Unknown keys are ignored gracefully (reference applyOptions merge semantics).

@@ -1387,9 +1387,13 @@ impl ChartEngine {
                         .plot(series.id)
                         .last_non_whitespace_row(to)
                         .map(|row| {
-                            self.data
-                                .plot(series.id)
-                                .value_at(row, PlotValueIndex::Close)
+                            self.heikin_ashi_row(series.id, row)
+                                .map(|values| values[3])
+                                .unwrap_or_else(|| {
+                                    self.data
+                                        .plot(series.id)
+                                        .value_at(row, PlotValueIndex::Close)
+                                })
                         })
                 };
                 if let (Some(value), Some(base)) = (value, self.series_base_value(series.id, from))
@@ -1881,7 +1885,10 @@ impl ChartEngine {
                     let Some(row) = plot.last_non_whitespace_row(to) else {
                         continue;
                     };
-                    let close = plot.value_at(row, PlotValueIndex::Close);
+                    let close = self
+                        .heikin_ashi_row(series.id, row)
+                        .map(|values| values[3])
+                        .unwrap_or_else(|| plot.value_at(row, PlotValueIndex::Close));
                     if !close.is_finite() {
                         continue;
                     }

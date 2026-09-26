@@ -1448,6 +1448,8 @@ export interface series_options {
   up_color: string;
   /** Candlestick/bar down (close < open) body color. */
   down_color: string;
+  /** Render candlesticks from a bounded Heikin Ashi presentation projection while keeping raw OHLC in data(). */
+  heikin_ashi: boolean;
   /** Candlestick up-bar wick color. Until set, follows `up_color` (reference parity). Pass `""` to
    *  clear a previously-pinned color and go back to following the body color. */
   wick_up_color: string;

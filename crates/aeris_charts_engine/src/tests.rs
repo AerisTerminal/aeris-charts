@@ -72,6 +72,30 @@ fn constructs_without_a_browser_or_gpu() {
     assert_eq!(chart.dpr, 2.0);
 }
 
+#[test]
+fn heikin_ashi_frame_projection_preserves_raw_queries() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [1.0, 2.0];
+    let open = [10.0, 12.0];
+    let high = [14.0, 16.0];
+    let low = [8.0, 10.0];
+    let close = [12.0, 14.0];
+    chart
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .expect("valid candlestick data");
+    assert!(chart.series_apply_options_json(0, r#"{"heikin_ashi":true}"#));
+    chart.time_scale.fit_content();
+    chart.build_frame();
+
+    assert_eq!(chart.heikin_ashi_row(0, 0), Some([11.0, 14.0, 8.0, 11.0]));
+    assert_eq!(chart.heikin_ashi_row(0, 1), Some([11.0, 16.0, 10.0, 13.0]));
+    let (_, raw_columns) = chart.data.series_data(0).expect("raw series data");
+    assert_eq!(raw_columns[0], &open);
+    assert_eq!(raw_columns[1], &high);
+    assert_eq!(raw_columns[2], &low);
+    assert_eq!(raw_columns[3], &close);
+}
+
 /// Phase-0 compatibility sentinel for the all-in-one architecture. This deliberately uses the
 /// real engine mutation and frame paths instead of testing future domain types in isolation: when
 /// panes become domain-aware, the unchanged financial default must still compose the established
@@ -4273,6 +4297,7 @@ fn series_options_json_covers_the_ts_field_set() {
         "title",
         "title_visible",
         "countdown_visible",
+        "heikin_ashi",
     ] {
         assert!(options.get(key).is_some(), "missing key {key}");
     }
@@ -4483,6 +4508,7 @@ fn series_apply_options_json_round_trips_all_new_fields() {
         "open_visible": false,
         "close_visible": false,
         "thin_bars": false,
+        "heikin_ashi": true,
         "title": "NDQ",
         "title_visible": false,
         "countdown_visible": true
@@ -4520,6 +4546,7 @@ fn series_apply_options_json_round_trips_all_new_fields() {
     assert_eq!(options["open_visible"], false);
     assert_eq!(options["close_visible"], false);
     assert_eq!(options["thin_bars"], false);
+    assert_eq!(options["heikin_ashi"], true);
     assert_eq!(options["title"], "NDQ");
     assert_eq!(options["title_visible"], false);
     assert_eq!(options["countdown_visible"], true);

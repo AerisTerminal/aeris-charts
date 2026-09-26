@@ -55,7 +55,7 @@ mod trading_geometry;
 use conflation::{visible_histogram_rows, visible_ohlc};
 use conflation::{
     visible_histogram_rows_with_work, visible_line_rows, visible_line_rows_with_work,
-    visible_ohlc_with_work,
+    visible_ohlc_with_values, visible_ohlc_with_work,
 };
 
 const UP: Color = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
@@ -700,6 +700,7 @@ struct ResolvedSeries {
     open_visible: bool,
     close_visible: bool,
     thin_bars: bool,
+    heikin_ashi: bool,
     base: f64,
     top_fill1: Color,
     top_fill2: Color,
@@ -890,8 +891,16 @@ impl ChartEngine {
     fn candlestick_chrome_color(&self, series: &crate::SeriesEntry, row: usize) -> Color {
         let (up, down) = self.themed_candle_colors();
         let plot = self.data.plot(series.id);
-        let rising =
-            plot.value_at(row, PlotValueIndex::Open) <= plot.value_at(row, PlotValueIndex::Close);
+        let (open, close) = self
+            .heikin_ashi_row(series.id, row)
+            .map(|values| (values[0], values[3]))
+            .unwrap_or_else(|| {
+                (
+                    plot.value_at(row, PlotValueIndex::Open),
+                    plot.value_at(row, PlotValueIndex::Close),
+                )
+            });
+        let rising = open <= close;
         let point = |channel| self.data.point_color(series.id, channel, row).map(Color);
         let pick = |up: &Option<String>, down: &Option<String>, fallback: Color| {
             if rising {
@@ -1340,6 +1349,7 @@ impl ChartEngine {
                 open_visible: s.open_visible,
                 close_visible: s.close_visible,
                 thin_bars: s.thin_bars,
+                heikin_ashi: s.heikin_ashi,
                 base: s.base,
                 // reference baselineStyleDefaults; an unset quadrant line width follows the series'
                 // line width (the reference's single baseline lineWidth). Quadrant colors are verbatim
@@ -2336,30 +2346,45 @@ impl ChartEngine {
             let Some(pane_index) = (s.pane_index < n).then_some(s.pane_index) else {
                 continue;
             };
-            let mm = self.data.min_max_on_range_cached(
+            let raw_mm = self.data.min_max_on_range_cached(
                 s.id,
                 from,
                 to,
                 &[PlotValueIndex::Low, PlotValueIndex::High],
             );
-            let Some(mm) = mm else {
-                continue;
+            let (mut minimum, mut maximum) = if s.kind == SeriesKind::Candlestick && s.heikin_ashi {
+                let plot = self.data.plot(s.id);
+                let mut minimum = f64::INFINITY;
+                let mut maximum = f64::NEG_INFINITY;
+                for row in plot.visible_rows(from, to) {
+                    if let Some(values) = self.heikin_ashi_row(s.id, row) {
+                        minimum = minimum.min(values[2]);
+                        maximum = maximum.max(values[1]);
+                    }
+                }
+                (minimum, maximum)
+            } else {
+                let Some(mm) = raw_mm else {
+                    continue;
+                };
+                (mm.min, mm.max)
             };
-            let (minimum, maximum) = if s.kind == SeriesKind::Footprint {
+            if !minimum.is_finite() || !maximum.is_finite() {
+                continue;
+            }
+            if s.kind == SeriesKind::Footprint {
                 let Some(state) = s.footprint.as_ref() else {
                     continue;
                 };
                 let Some(stream) = self.trade_stream(state.trade_stream_id) else {
                     continue;
                 };
-                crate::footprint::footprint_cell_price_bounds(
-                    mm.min,
-                    mm.max,
+                (minimum, maximum) = crate::footprint::footprint_cell_price_bounds(
+                    minimum,
+                    maximum,
                     stream.options().tick_size,
-                )
-            } else {
-                (mm.min, mm.max)
-            };
+                );
+            }
             let Some(base_value) = self.series_base_value(s.id, from) else {
                 continue;
             };

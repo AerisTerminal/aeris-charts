@@ -17,6 +17,7 @@ mod frame;
 mod general_axes;
 mod general_data;
 mod general_series;
+mod heikin_ashi;
 mod hit_test;
 mod host_layout;
 mod indicators;
@@ -888,6 +889,9 @@ pub struct SeriesEntry {
     pub close_visible: bool,
     /// reference bar `thinBars` (default true): bar body width capped to the crisp line width.
     pub thin_bars: bool,
+    /// Presentation-only Heikin Ashi projection. Raw OHLC remains canonical in the data layer.
+    pub heikin_ashi: bool,
+    pub(crate) heikin_ashi_cache: RefCell<heikin_ashi::HeikinAshiCache>,
     /// reference `priceFormat` (series-options-defaults.ts: `{type:'price', precision:2, minMove:0.01}`):
     /// drives this series' last-value label, its price-line labels, the crosshair price label
     /// when this series is the label source, and the axis ticks when it is the scale's primary
@@ -988,6 +992,8 @@ impl SeriesEntry {
             open_visible: true,
             close_visible: true,
             thin_bars: true,
+            heikin_ashi: false,
+            heikin_ashi_cache: RefCell::new(heikin_ashi::HeikinAshiCache::default()),
             price_format: SeriesPriceFormat::default(),
             price_lines: Vec::new(),
             markers: Vec::new(),
@@ -1059,6 +1065,8 @@ impl SeriesEntry {
         self.open_visible = defaults.open_visible;
         self.close_visible = defaults.close_visible;
         self.thin_bars = defaults.thin_bars;
+        self.heikin_ashi = defaults.heikin_ashi;
+        self.heikin_ashi_cache = RefCell::new(heikin_ashi::HeikinAshiCache::default());
 
         if let Some(feature) = self.feature.as_mut() {
             feature.options.reset_style_to_defaults();
@@ -2735,6 +2743,21 @@ impl ChartEngine {
         self.series
             .get_mut(slot)
             .filter(|series| series.id == id && !series.removed)
+    }
+
+    /// Return one lazily rebuilt Heikin Ashi row for a candlestick presentation.
+    /// The cache is invalidated by the canonical data generation and never replaces raw columns.
+    pub(crate) fn heikin_ashi_row(&self, id: SeriesId, row: usize) -> Option<[f64; 4]> {
+        let series = self.series_entry(id)?;
+        if !series.heikin_ashi {
+            return None;
+        }
+        let generation = self.data.series_generation(id)?;
+        let (_, columns) = self.data.series_data(id)?;
+        series
+            .heikin_ashi_cache
+            .borrow_mut()
+            .row(generation, columns, row)
     }
 
     /// Toggle a series without destroying its data or indicator binding. A removed slot can

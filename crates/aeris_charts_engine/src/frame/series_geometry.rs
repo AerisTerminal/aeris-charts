@@ -216,15 +216,29 @@ impl ChartEngine {
     ) {
         let plot = self.data.plot(rs.id);
         let mut work = conflation::DensityWork::default();
-        let visible = visible_ohlc_with_work(
-            plot,
-            from,
-            to,
-            self.time_scale.bar_spacing(),
-            hpr,
-            |index| self.time_scale.index_to_coordinate(index) * hpr,
-            &mut work,
-        );
+        let visible = if rs.heikin_ashi {
+            visible_ohlc_with_values(
+                plot,
+                from,
+                to,
+                self.time_scale.bar_spacing(),
+                hpr,
+                |index| self.time_scale.index_to_coordinate(index) * hpr,
+                &mut work,
+                true,
+                |row| self.heikin_ashi_row(rs.id, row),
+            )
+        } else {
+            visible_ohlc_with_work(
+                plot,
+                from,
+                to,
+                self.time_scale.bar_spacing(),
+                hpr,
+                |index| self.time_scale.index_to_coordinate(index) * hpr,
+                &mut work,
+            )
+        };
         self.record_lod_work(
             work.selected_level,
             work.summary_nodes,
@@ -1007,7 +1021,10 @@ impl ChartEngine {
 
             let high = plot.value_at(row, PlotValueIndex::High);
             let low = plot.value_at(row, PlotValueIndex::Low);
-            let close = plot.value_at(row, PlotValueIndex::Close);
+            let close = self
+                .heikin_ashi_row(series.id, row)
+                .map(|values| values[3])
+                .unwrap_or_else(|| plot.value_at(row, PlotValueIndex::Close));
             let exact_price = matches!(
                 marker.position,
                 crate::marker_pos::AT_PRICE_TOP
@@ -1219,7 +1236,10 @@ impl ChartEngine {
             let Some(row) = row else {
                 continue;
             };
-            let close = plot.value_at(row, PlotValueIndex::Close);
+            let close = self
+                .heikin_ashi_row(series.id, row)
+                .map(|values| values[3])
+                .unwrap_or_else(|| plot.value_at(row, PlotValueIndex::Close));
             if !close.is_finite() {
                 continue;
             }
@@ -1326,7 +1346,10 @@ impl ChartEngine {
             return;
         };
         let index = plot.index_at(last).expect("last series row index");
-        let close = plot.value_at(last, PlotValueIndex::Close);
+        let close = self
+            .heikin_ashi_row(series_id, last)
+            .map(|values| values[3])
+            .unwrap_or_else(|| plot.value_at(last, PlotValueIndex::Close));
         let Some(base_value) = self.visible_series_base_value(series_id) else {
             return;
         };
@@ -1337,7 +1360,10 @@ impl ChartEngine {
             SeriesKind::Area => AREA_LINE,
             SeriesKind::Histogram => HISTOGRAM,
             _ => {
-                let open = plot.value_at(last, PlotValueIndex::Open);
+                let open = self
+                    .heikin_ashi_row(series_id, last)
+                    .map(|values| values[0])
+                    .unwrap_or_else(|| plot.value_at(last, PlotValueIndex::Open));
                 if close >= open {
                     UP
                 } else {

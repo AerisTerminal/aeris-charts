@@ -163,6 +163,7 @@ const SERIES_JSON_OPTION_KEYS = [
   "open_visible",
   "close_visible",
   "thin_bars",
+  "heikin_ashi",
 ] as const;
 
 /**

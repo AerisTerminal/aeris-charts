@@ -256,3 +256,31 @@ test("comparison overlays share one anchor and expose legend values", async ({ p
     expect.objectContaining({ title: "second", anchor_value: 180, latest_value: 220 }),
   ]));
 });
+
+test("Heikin Ashi is a presentation projection while data stays raw", async ({ page }) => {
+  await open_chart(page);
+
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const candles = chart.add_series("candlestick", {
+      heikin_ashi: true,
+      price_line_visible: false,
+      last_value_visible: false,
+    });
+    const raw = [
+      { time: 1, open: 10, high: 14, low: 8, close: 12 },
+      { time: 2, open: 12, high: 16, low: 10, close: 14 },
+    ];
+    candles.set_data(raw);
+    const options = candles.options();
+    const data = candles.data();
+    chart.render();
+    return { options, data };
+  });
+
+  expect(result.options).toMatchObject({ heikin_ashi: true });
+  expect(result.data).toEqual([
+    { time: 1, open: 10, high: 14, low: 8, close: 12 },
+    { time: 2, open: 12, high: 16, low: 10, close: 14 },
+  ]);
+});

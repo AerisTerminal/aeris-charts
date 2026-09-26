@@ -219,7 +219,7 @@ retention evicts both), and PD10 budgets hold on GPUI.
       aggregate F4 exit.
 - [x] **OF9** VWAP standard-deviation and percent bands with session, weekly and monthly reset.
 - [x] **CT1** Hollow candles, columns, high-low bars, step line, line with markers.
-- [ ] **CT2** Heikin Ashi with real OHLC exposed separately for trading and crosshair.
+- [x] **CT2** Heikin Ashi with real OHLC exposed separately for trading and crosshair.
 - [x] **CT6** Symbol comparison overlays with a shared comparison anchor and per-symbol legend
       values.
 - [x] **I1 moving-average catalog:** HMA, VWMA, DEMA, TEMA, SMMA/RMA.
@@ -270,7 +270,7 @@ session, weekly and monthly reset keys, weighted population-deviation bands and 
 pure-math and incremental rebuild tests cover the monthly reference path. Typed multi-input
 validation now rejects invalid VWAP volume bindings atomically. Financial persistence V3 now
 round-trips ordered study dependencies, scalar inputs, volume references and per-output styles while
-leaving market data host-owned. The remaining F4 trade/depth bindings, chart-type additions and
+leaving market data host-owned. The remaining F4 trade/depth bindings and
 the final B4 docs/full-gate item remain open. DEMA, TEMA, SMMA/RMA, HMA, VWMA,
 standard deviation, CCI, Williams %R, Stochastic RSI, ROC, Momentum, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku are
 OBV, CMF, MFI, the volume/MA study, daily previous-session pivot points and percentage-deviation
@@ -278,7 +278,7 @@ ZigZag are now exposed through the engine, WASM and TypeScript APIs, with pure a
 rebuild coverage. The all-runtime-mutation fixture exercises every current indicator state,
 including pivot, ZigZag and VWAP bands, and the fixed-value reference fixture covers every output
 family and pivot variant. Engine persistence and full-recompute fixtures cover the same catalog;
-the remaining B4 closure is F4 trade/depth bindings, CT2, and the docs/full-gate item. CT6 now
+the remaining B4 closure is F4 trade/depth bindings and the docs/full-gate item. CT6 now
 uses one bounded chart-level comparison anchor for percentage/indexed geometry and exposes an
 engine-owned per-series legend snapshot; the Rust fixture and browser public API path cover exact
 anchor values, latest values, and percent changes without duplicating canonical rows. CT1's
@@ -288,6 +288,9 @@ typed `close_visible` style flag through Rust, WASM and TypeScript so disabling 
 produces a high-low bar while retaining its vertical range body. Browser compatibility coverage
 round-trips the high-low, stepped-line, and point-marker options; existing backend parity and GPUI
 matrix fixtures cover marker execution across Canvas2D, WebGPU, and GPUI.
+CT2 keeps raw OHLC canonical for `series_data`, crosshair, and trading while an engine-owned,
+generation-keyed Heikin Ashi projection feeds candlestick geometry, autoscale, last-value chrome,
+and candle direction colors; engine and browser fixtures verify the projection and raw-data split.
 
 ### B5 — Non-time bars and replay
 
