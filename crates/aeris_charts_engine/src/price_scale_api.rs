@@ -699,7 +699,12 @@ impl ChartEngine {
                 .filter(|value| value.is_finite());
         }
         let plot = self.data.plot(id);
-        let row = plot.first_non_whitespace_row(visible_from)?;
+        let row = self
+            .comparison_anchor
+            .and_then(|time| self.data.merged_times().binary_search(&time).ok())
+            .and_then(|index| plot.search(index as i64, MismatchDirection::NearestLeft))
+            .filter(|&row| !plot.is_whitespace_row(row))
+            .or_else(|| plot.first_non_whitespace_row(visible_from))?;
         let value = plot.value_at(row, PlotValueIndex::Close);
         value.is_finite().then_some(value)
     }
@@ -707,5 +712,76 @@ impl ChartEngine {
     pub(crate) fn visible_series_base_value(&self, id: SeriesId) -> Option<f64> {
         let from = self.time_scale.visible_strict_range()?.left();
         self.series_base_value(id, from)
+    }
+
+    /// Set or clear the chart-wide comparison anchor. The timestamp must be a finite integral
+    /// chart time (UTC seconds in the public API); a non-integral value is rejected so all hosts
+    /// resolve the same merged-time identity. Returns whether the request changed the anchor.
+    pub fn set_comparison_anchor(&mut self, time: Option<f64>) -> bool {
+        let next = match time {
+            None => None,
+            Some(value)
+                if value.is_finite()
+                    && value.fract() == 0.0
+                    && value >= i64::MIN as f64
+                    && value <= i64::MAX as f64 =>
+            {
+                Some(value as i64)
+            }
+            Some(_) => return false,
+        };
+        if self.comparison_anchor == next {
+            return false;
+        }
+        self.comparison_anchor = next;
+        self.invalidate_frame_all();
+        true
+    }
+
+    /// Current chart-wide comparison anchor, if configured.
+    pub fn comparison_anchor(&self) -> Option<i64> {
+        self.comparison_anchor
+    }
+
+    /// Resolve the bounded legend values for all live series using one shared anchor. Missing
+    /// anchor rows stay explicit as `None`; no neighboring series or host-owned cache is used.
+    pub fn comparison_legend_snapshot(&self) -> Vec<crate::ComparisonLegendEntry> {
+        let anchor_time = self.comparison_anchor;
+        let anchor_index =
+            anchor_time.and_then(|time| self.data.merged_times().binary_search(&time).ok());
+        self.series
+            .iter()
+            .filter(|series| !series.removed && series.visible)
+            .filter_map(|series| {
+                let plot = self.data.plot(series.id);
+                let anchor_value = anchor_index
+                    .and_then(|index| plot.search(index as i64, MismatchDirection::NearestLeft))
+                    .filter(|&row| !plot.is_whitespace_row(row))
+                    .map(|row| plot.value_at(row, PlotValueIndex::Close))
+                    .filter(|value| value.is_finite());
+                let latest_row = plot.last_non_whitespace_row(i64::MAX)?;
+                let latest_value = plot.value_at(latest_row, PlotValueIndex::Close);
+                if !latest_value.is_finite() {
+                    return None;
+                }
+                let latest_time = plot
+                    .index_at(latest_row)
+                    .and_then(|index| self.data.merged_times().get(index as usize).copied());
+                let change = anchor_value.map(|value| latest_value - value);
+                let percent_change = anchor_value
+                    .filter(|value| *value != 0.0)
+                    .map(|value| (latest_value - value) / value * 100.0);
+                Some(crate::ComparisonLegendEntry {
+                    series_id: series.id,
+                    title: series.title.clone(),
+                    anchor_time,
+                    anchor_value,
+                    latest_time,
+                    latest_value: Some(latest_value),
+                    change,
+                    percent_change,
+                })
+            })
+            .collect()
     }
 }

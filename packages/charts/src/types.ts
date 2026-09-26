@@ -966,6 +966,18 @@ export interface pane_geometry {
   height: number;
 }
 
+/** One live overlay value resolved against the chart-wide comparison anchor. */
+export interface comparison_legend_entry {
+  series_id: number;
+  title: string;
+  anchor_time: number | null;
+  anchor_value: number | null;
+  latest_time: number | null;
+  latest_value: number | null;
+  change: number | null;
+  percent_change: number | null;
+}
+
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
 export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "zigzag" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
@@ -2794,6 +2806,12 @@ export interface chart_api {
    * and whitespace remain present with null data and never borrow a neighboring value.
    */
   value_snapshot(logical_index?: number): chart_value_snapshot[];
+  /** Set or clear the shared UTC-second anchor used by percentage/indexed comparison overlays. */
+  set_comparison_anchor(time: number | null): boolean;
+  /** Current shared comparison anchor, or `null` when unset. */
+  comparison_anchor(): number | null;
+  /** Engine-owned per-series values resolved against the shared comparison anchor. */
+  comparison_legend_snapshot(): comparison_legend_entry[];
   /** Create or reuse a chart-level canonical trade stream for tape-derived studies. */
   add_trade_stream(key: string, options?: Partial<footprint_series_options>): number;
   trade_stream_id(key: string): number | null;

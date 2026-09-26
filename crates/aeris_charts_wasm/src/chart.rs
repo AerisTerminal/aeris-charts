@@ -5026,6 +5026,16 @@ impl AerisChart {
     pub fn value_snapshot_json(&self, logical_index: f64) -> String {
         self.inner.borrow().value_snapshot_json(logical_index)
     }
+    /// Set the shared comparison anchor in UTC seconds. Pass `NaN` to clear it.
+    pub fn set_comparison_anchor(&mut self, time: f64) -> bool {
+        self.inner.borrow_mut().set_comparison_anchor(time)
+    }
+    pub fn comparison_anchor(&self) -> f64 {
+        self.inner.borrow().comparison_anchor()
+    }
+    pub fn comparison_legend_json(&self) -> String {
+        self.inner.borrow().comparison_legend_json()
+    }
     pub fn series_bars_in_logical_range(&self, id: u32, from: f64, to: f64) -> Vec<f64> {
         self.inner
             .borrow()

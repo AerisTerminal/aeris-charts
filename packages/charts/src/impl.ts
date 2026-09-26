@@ -21,7 +21,7 @@ import type { AerisChartsErrorCode } from "./errors.js";
 import type {
   alert_api, alert_condition, alert_frequency, alert_line, alert_price_scale, alert_snapshot,
   crosshair_action_request, crosshair_action_request_handler,
-  any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state, chart_value_snapshot, data_changed_handler, dbl_click_handler,
+  any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state, chart_value_snapshot, comparison_legend_entry, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   drawing_point, drawing_tool_change_handler, drawing_interval, drawing_property_schema, drawing_kind_options, drawing_template,
   ema_ribbon_options, ema_ribbon_periods,
@@ -3831,6 +3831,24 @@ export class chart_impl implements chart_api {
       series: this.series_handle(entry.series_id),
       kind: entry.kind === "feature" ? feature_kind! : entry.kind,
     }));
+  }
+
+  set_comparison_anchor(time: number | null): boolean {
+    if (time !== null && (!Number.isFinite(time) || !Number.isSafeInteger(time))) {
+      throw new AerisChartsError("invalid_options", "comparison anchor must be a finite integer UTC second or null");
+    }
+    const changed = this.wasm.set_comparison_anchor(time ?? Number.NaN);
+    if (changed) this.repaint();
+    return changed;
+  }
+
+  comparison_anchor(): number | null {
+    const value = this.wasm.comparison_anchor();
+    return Number.isNaN(value) ? null : value;
+  }
+
+  comparison_legend_snapshot(): comparison_legend_entry[] {
+    return JSON.parse(this.wasm.comparison_legend_json()) as comparison_legend_entry[];
   }
 
   /** Internal package hook used by the singleton accessibility controller. */

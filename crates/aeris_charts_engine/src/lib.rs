@@ -528,6 +528,20 @@ pub struct SeriesDataPoint {
     pub close: f64,
 }
 
+/// One engine-resolved value for a comparison overlay legend. The raw series remains the
+/// canonical market data; these values are derived from the chart's shared comparison anchor.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ComparisonLegendEntry {
+    pub series_id: SeriesId,
+    pub title: String,
+    pub anchor_time: Option<i64>,
+    pub anchor_value: Option<f64>,
+    pub latest_time: Option<i64>,
+    pub latest_value: Option<f64>,
+    pub change: Option<f64>,
+    pub percent_change: Option<f64>,
+}
+
 /// One live series in a chart-wide value query. Latest mode resolves `logical_index` and `time`
 /// independently for each series; exact mode retains an entry with null values for gaps and
 /// whitespace. All formatting is resolved by the engine through the series' current formatter.
@@ -1537,6 +1551,10 @@ pub struct ChartEngine {
     /// time every frame unless a value is pinned; tests pin one here for determinism.
     pub now_override: Option<f64>,
     pub crosshair: Option<(f64, f64)>,
+    /// Optional chart-wide time anchor used by percentage/indexed comparison overlays and their
+    /// legend. The anchor is a time identity only; each series resolves its own value at that
+    /// time and continues to own its canonical rows.
+    comparison_anchor: Option<i64>,
     /// Host-supplied interval metadata used by drawing visibility ranges. `None` means no
     /// interval filter is active and keeps legacy drawings visible.
     pub drawing_interval: Option<DrawingInterval>,
@@ -1731,6 +1749,7 @@ impl ChartEngine {
             dpr,
             now_override: None,
             crosshair: None,
+            comparison_anchor: None,
             drawing_interval: None,
             sync_events: VecDeque::new(),
             sync_revision: 0,

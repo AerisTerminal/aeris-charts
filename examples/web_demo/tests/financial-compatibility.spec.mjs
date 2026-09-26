@@ -223,3 +223,36 @@ test("stepped lines and point markers round-trip through the public series API",
 
   expect(options).toMatchObject({ line_type: "stepped", point_markers: true, point_markers_radius: 5 });
 });
+
+test("comparison overlays share one anchor and expose legend values", async ({ page }) => {
+  await open_chart(page);
+
+  const legend = await page.evaluate(() => {
+    const chart = window.__chart;
+    const first = chart.add_series("line", { title: "first", price_line_visible: false });
+    const second = chart.add_series("line", { title: "second", price_line_visible: false });
+    first.set_data([
+      { time: 1, value: 100 },
+      { time: 2, value: 110 },
+      { time: 3, value: 120 },
+    ]);
+    second.set_data([
+      { time: 1, value: 200 },
+      { time: 2, value: 180 },
+      { time: 3, value: 220 },
+    ]);
+    const changed = chart.set_comparison_anchor(2);
+    return {
+      changed,
+      anchor: chart.comparison_anchor(),
+      values: chart.comparison_legend_snapshot(),
+    };
+  });
+
+  expect(legend.changed).toBe(true);
+  expect(legend.anchor).toBe(2);
+  expect(legend.values).toEqual(expect.arrayContaining([
+    expect.objectContaining({ title: "first", anchor_value: 110, latest_value: 120 }),
+    expect.objectContaining({ title: "second", anchor_value: 180, latest_value: 220 }),
+  ]));
+});

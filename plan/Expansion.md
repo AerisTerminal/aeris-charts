@@ -220,7 +220,7 @@ retention evicts both), and PD10 budgets hold on GPUI.
 - [x] **OF9** VWAP standard-deviation and percent bands with session, weekly and monthly reset.
 - [x] **CT1** Hollow candles, columns, high-low bars, step line, line with markers.
 - [ ] **CT2** Heikin Ashi with real OHLC exposed separately for trading and crosshair.
-- [ ] **CT6** Symbol comparison overlays with a shared comparison anchor and per-symbol legend
+- [x] **CT6** Symbol comparison overlays with a shared comparison anchor and per-symbol legend
       values.
 - [x] **I1 moving-average catalog:** HMA, VWMA, DEMA, TEMA, SMMA/RMA.
 - [x] **I1 Hull moving-average slice:** HMA with pure, incremental, schema, persistence and package coverage.
@@ -278,7 +278,10 @@ ZigZag are now exposed through the engine, WASM and TypeScript APIs, with pure a
 rebuild coverage. The all-runtime-mutation fixture exercises every current indicator state,
 including pivot, ZigZag and VWAP bands, and the fixed-value reference fixture covers every output
 family and pivot variant. Engine persistence and full-recompute fixtures cover the same catalog;
-the remaining B4 closure is F4 trade/depth bindings, CT2/CT6, and the docs/full-gate item. CT1's
+the remaining B4 closure is F4 trade/depth bindings, CT2, and the docs/full-gate item. CT6 now
+uses one bounded chart-level comparison anchor for percentage/indexed geometry and exposes an
+engine-owned per-series legend snapshot; the Rust fixture and browser public API path cover exact
+anchor values, latest values, and percent changes without duplicating canonical rows. CT1's
 histogram columns, transparent-body hollow candles, stepped lines, point markers, and high-low
 bars are covered by shared frame fixtures plus the browser package path; the bar path exposes a
 typed `close_visible` style flag through Rust, WASM and TypeScript so disabling both OHLC ticks

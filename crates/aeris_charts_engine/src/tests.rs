@@ -7438,3 +7438,42 @@ fn price_tick_labels_keep_their_full_height_clear_of_pane_dividers() {
         }
     }
 }
+
+#[test]
+fn comparison_anchor_drives_shared_bases_and_bounded_legend_values() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0],
+            &[100.0, 110.0, 120.0],
+            &[100.0, 110.0, 120.0],
+            &[100.0, 110.0, 120.0],
+            &[100.0, 110.0, 120.0],
+        )
+        .unwrap();
+    let second = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(
+            second,
+            &[1.0, 2.0, 3.0],
+            &[200.0, 180.0, 220.0],
+            &[200.0, 180.0, 220.0],
+            &[200.0, 180.0, 220.0],
+            &[200.0, 180.0, 220.0],
+        )
+        .unwrap();
+    assert!(chart.set_comparison_anchor(Some(2.0)));
+    assert_eq!(chart.series_base_value(0, 0), Some(110.0));
+    assert_eq!(chart.series_base_value(second, 0), Some(180.0));
+    let legend = chart.comparison_legend_snapshot();
+    assert_eq!(legend.len(), 2);
+    assert_eq!(legend[0].anchor_value, Some(110.0));
+    assert_eq!(legend[0].latest_value, Some(120.0));
+    assert_eq!(legend[0].percent_change, Some(100.0 / 11.0));
+    assert_eq!(legend[1].anchor_value, Some(180.0));
+    assert_eq!(legend[1].latest_value, Some(220.0));
+    assert_eq!(legend[1].percent_change, Some(200.0 / 9.0));
+    assert!(chart.set_comparison_anchor(None));
+    assert_eq!(chart.comparison_anchor(), None);
+}

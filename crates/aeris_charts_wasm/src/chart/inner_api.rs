@@ -2434,6 +2434,22 @@ impl ChartInner {
         serde_json::to_string(&self.engine.value_snapshot(logical_index))
             .unwrap_or_else(|_| "[]".to_string())
     }
+
+    pub fn set_comparison_anchor(&mut self, time: f64) -> bool {
+        let anchor = if time.is_nan() { None } else { Some(time) };
+        self.engine.set_comparison_anchor(anchor)
+    }
+
+    pub fn comparison_anchor(&self) -> f64 {
+        self.engine
+            .comparison_anchor()
+            .map_or(f64::NAN, |time| time as f64)
+    }
+
+    pub fn comparison_legend_json(&self) -> String {
+        serde_json::to_string(&self.engine.comparison_legend_snapshot())
+            .unwrap_or_else(|_| "[]".to_string())
+    }
     pub fn series_bars_in_logical_range(&self, id: u32, from: f64, to: f64) -> Vec<f64> {
         self.engine
             .series_bars_in_logical_range(id as SeriesId, from, to)
