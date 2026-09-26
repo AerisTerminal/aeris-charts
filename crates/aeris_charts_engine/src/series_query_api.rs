@@ -361,6 +361,7 @@ impl ChartEngine {
         );
         insert("bottom_line_style", s.bottom_line_style.into());
         insert("open_visible", s.open_visible.into());
+        insert("close_visible", s.close_visible.into());
         insert("thin_bars", s.thin_bars.into());
         insert("point_markers", s.point_markers.into());
         insert(
@@ -643,6 +644,11 @@ impl ChartEngine {
                 "open_visible" => {
                     if let Some(v) = value.as_bool() {
                         s.open_visible = v;
+                    }
+                }
+                "close_visible" => {
+                    if let Some(v) = value.as_bool() {
+                        s.close_visible = v;
                     }
                 }
                 "thin_bars" => {

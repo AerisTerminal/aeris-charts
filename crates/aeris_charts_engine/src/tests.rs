@@ -4412,6 +4412,7 @@ fn series_style_options_use_aeris_defaults() {
         "base",
         "invert_filled_area",
         "open_visible",
+        "close_visible",
         "thin_bars",
     ] {
         assert!(options.get(key).is_some(), "missing key {key}");
@@ -4444,6 +4445,7 @@ fn series_style_options_use_aeris_defaults() {
     assert_eq!(options["base"], 0.0);
     assert_eq!(options["invert_filled_area"], false);
     assert_eq!(options["open_visible"], true);
+    assert_eq!(options["close_visible"], true);
     assert_eq!(options["thin_bars"], true);
 }
 
@@ -4479,6 +4481,7 @@ fn series_apply_options_json_round_trips_all_new_fields() {
         "base": 42.5,
         "invert_filled_area": true,
         "open_visible": false,
+        "close_visible": false,
         "thin_bars": false,
         "title": "NDQ",
         "title_visible": false,
@@ -4515,6 +4518,7 @@ fn series_apply_options_json_round_trips_all_new_fields() {
     assert_eq!(options["base"], 42.5);
     assert_eq!(options["invert_filled_area"], true);
     assert_eq!(options["open_visible"], false);
+    assert_eq!(options["close_visible"], false);
     assert_eq!(options["thin_bars"], false);
     assert_eq!(options["title"], "NDQ");
     assert_eq!(options["title_visible"], false);

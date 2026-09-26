@@ -336,6 +336,7 @@ impl ChartEngine {
                 horizontal_pixel_ratio: hpr,
                 vertical_pixel_ratio: vpr,
                 open_visible: rs.open_visible,
+                close_visible: rs.close_visible,
                 thin_bars: rs.thin_bars,
             },
             out,

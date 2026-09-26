@@ -161,6 +161,7 @@ const SERIES_JSON_OPTION_KEYS = [
   "base",
   "invert_filled_area",
   "open_visible",
+  "close_visible",
   "thin_bars",
 ] as const;
 
@@ -1812,6 +1813,9 @@ class series_impl implements series_api {
     }
     if (options.point_markers !== undefined) {
       this.chart.wasm.set_series_point_markers(this.id, options.point_markers);
+    }
+    if (options.close_visible !== undefined) {
+      this.chart.wasm.set_series_close_visible(this.id, options.close_visible);
     }
     if (options.baseline_value !== undefined) {
       this.chart.wasm.set_series_baseline(this.id, options.baseline_value);

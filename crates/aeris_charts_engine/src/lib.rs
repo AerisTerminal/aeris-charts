@@ -869,6 +869,9 @@ pub struct SeriesEntry {
     pub invert_filled_area: bool,
     /// reference bar `openVisible` (default true): draw the open tick on OHLC bars.
     pub open_visible: bool,
+    /// High-low bar mode: draw the close tick when enabled (default true). Set both
+    /// `open_visible` and this flag false to render a vertical high-low bar.
+    pub close_visible: bool,
     /// reference bar `thinBars` (default true): bar body width capped to the crisp line width.
     pub thin_bars: bool,
     /// reference `priceFormat` (series-options-defaults.ts: `{type:'price', precision:2, minMove:0.01}`):
@@ -969,6 +972,7 @@ impl SeriesEntry {
             base: 0.0,
             invert_filled_area: false,
             open_visible: true,
+            close_visible: true,
             thin_bars: true,
             price_format: SeriesPriceFormat::default(),
             price_lines: Vec::new(),
@@ -1039,6 +1043,7 @@ impl SeriesEntry {
         self.bottom_line_style = defaults.bottom_line_style;
         self.invert_filled_area = defaults.invert_filled_area;
         self.open_visible = defaults.open_visible;
+        self.close_visible = defaults.close_visible;
         self.thin_bars = defaults.thin_bars;
 
         if let Some(feature) = self.feature.as_mut() {

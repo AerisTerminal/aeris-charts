@@ -21,6 +21,7 @@ pub struct BarsParams {
     pub horizontal_pixel_ratio: f64,
     pub vertical_pixel_ratio: f64,
     pub open_visible: bool,
+    pub close_visible: bool,
     pub thin_bars: bool,
 }
 
@@ -99,22 +100,25 @@ pub fn build_bars(items: &[BarItem], params: &BarsParams, out: &mut Vec<Prim>) {
                 });
             }
 
-            let close_right = body_center + side_width;
-            let mut close_top = body_top.max((bar.close_y * vpr).round() as i32 - body_width_half);
-            let mut close_bottom = close_top + body_width - 1;
-            if close_bottom > body_top + body_height - 1 {
-                close_bottom = body_top + body_height - 1;
-                close_top = close_bottom - body_width + 1;
+            if params.close_visible {
+                let close_right = body_center + side_width;
+                let mut close_top =
+                    body_top.max((bar.close_y * vpr).round() as i32 - body_width_half);
+                let mut close_bottom = close_top + body_width - 1;
+                if close_bottom > body_top + body_height - 1 {
+                    close_bottom = body_top + body_height - 1;
+                    close_top = close_bottom - body_width + 1;
+                }
+                out.push(Prim::Rect {
+                    rect: IRect {
+                        x: body_right + 1,
+                        y: close_top,
+                        w: close_right - body_right,
+                        h: close_bottom - close_top + 1,
+                    },
+                    color: bar.color,
+                });
             }
-            out.push(Prim::Rect {
-                rect: IRect {
-                    x: body_right + 1,
-                    y: close_top,
-                    w: close_right - body_right,
-                    h: close_bottom - close_top + 1,
-                },
-                color: bar.color,
-            });
         }
     }
 }
@@ -142,6 +146,7 @@ mod tests {
             horizontal_pixel_ratio: dpr,
             vertical_pixel_ratio: dpr,
             open_visible: true,
+            close_visible: true,
             thin_bars: true,
         }
     }
@@ -195,6 +200,25 @@ mod tests {
                 y: 30,
                 w: 5,
                 h: 1
+            }
+        );
+    }
+
+    #[test]
+    fn high_low_mode_keeps_only_the_range_body() {
+        let mut params = params(10.0, 1.0);
+        params.open_visible = false;
+        params.close_visible = false;
+        let mut out = Vec::new();
+        build_bars(&[bar(100.0)], &params, &mut out);
+        assert_eq!(rects(&out).len(), 1);
+        assert_eq!(
+            rects(&out)[0],
+            IRect {
+                x: 100,
+                y: 20,
+                w: 1,
+                h: 40,
             }
         );
     }

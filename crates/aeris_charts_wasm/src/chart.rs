@@ -2617,6 +2617,13 @@ impl AerisChart {
             .set_series_point_markers(id, visible);
     }
 
+    /// Toggle the close tick on OHLC bars. Set this and `open_visible` false for high-low bars.
+    pub fn set_series_close_visible(&mut self, id: u32, visible: bool) {
+        self.inner
+            .borrow_mut()
+            .set_series_close_visible(id, visible);
+    }
+
     /// Set a Baseline series' baseline price (`NaN` = auto). Call `render()` after (Phase B3).
     pub fn set_series_baseline(&mut self, id: u32, price: f64) {
         self.inner.borrow_mut().set_series_baseline(id, price);

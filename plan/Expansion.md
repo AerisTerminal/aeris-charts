@@ -278,7 +278,11 @@ ZigZag are now exposed through the engine, WASM and TypeScript APIs, with pure a
 rebuild coverage. The all-runtime-mutation fixture exercises every current indicator state,
 including pivot, ZigZag and VWAP bands, and the fixed-value reference fixture covers every output
 family and pivot variant. Engine persistence and full-recompute fixtures cover the same catalog;
-the remaining B4 closure is the chart-type work and the docs/full-gate item.
+the remaining B4 closure is F4 trade/depth bindings, CT2/CT6, the rest of the CT1 host/executor
+ matrix, and the docs/full-gate item. CT1's existing histogram columns, transparent-body hollow
+ candles, stepped lines and point markers remain on the shared frame path; the bar path now also
+ exposes a typed `close_visible` style flag through Rust, WASM and TypeScript so disabling both
+ OHLC ticks produces a high-low bar while retaining its vertical range body.
 
 ### B5 — Non-time bars and replay
 

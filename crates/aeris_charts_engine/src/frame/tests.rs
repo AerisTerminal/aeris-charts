@@ -8175,6 +8175,11 @@ fn bar_open_visible_and_thin_bars_reach_the_builder() {
     chart.series[0].open_visible = false;
     let rs = rects(&mut chart);
     assert_eq!(rs.len(), 2 * 5);
+
+    // High-low bars suppress both side ticks and retain only the vertical range body.
+    chart.series[0].close_visible = false;
+    let rs = rects(&mut chart);
+    assert_eq!(rs.len(), 5);
 }
 
 // --- per-data-point colors (reference data-item colors, series-bar-colorer.ts) ---

@@ -1041,6 +1041,13 @@ impl ChartInner {
         }
     }
 
+    /// Toggle the close tick on OHLC bars. Set this and `open_visible` false for high-low bars.
+    pub fn set_series_close_visible(&mut self, id: u32, visible: bool) {
+        if let Some(s) = self.series.iter_mut().find(|s| s.id == id as SeriesId) {
+            s.close_visible = visible;
+        }
+    }
+
     /// Set a Baseline series' baseline price. `NaN` resets to auto (visible-range midpoint).
     pub fn set_series_baseline(&mut self, id: u32, price: f64) {
         if let Some(s) = self.series.iter_mut().find(|s| s.id == id as SeriesId) {

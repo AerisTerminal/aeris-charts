@@ -1575,6 +1575,8 @@ export interface series_options {
   invert_filled_area?: boolean;
   /** Bar: draw the open tick on each bar (reference `openVisible`, default `true`). */
   open_visible?: boolean;
+  /** Bar: draw the close tick on each bar (default `true`). Set false with `open_visible` false for high-low bars. */
+  close_visible?: boolean;
   /** Bar: draw thin bars when the bar spacing is small (reference `thinBars`, default `true`). */
   thin_bars?: boolean;
   /**

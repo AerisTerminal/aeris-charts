@@ -698,6 +698,7 @@ struct ResolvedSeries {
     visible: bool,
     line_type: LineType,
     open_visible: bool,
+    close_visible: bool,
     thin_bars: bool,
     base: f64,
     top_fill1: Color,
@@ -1337,6 +1338,7 @@ impl ChartEngine {
                 visible: s.visible,
                 line_type: s.line_type,
                 open_visible: s.open_visible,
+                close_visible: s.close_visible,
                 thin_bars: s.thin_bars,
                 base: s.base,
                 // reference baselineStyleDefaults; an unset quadrant line width follows the series'
