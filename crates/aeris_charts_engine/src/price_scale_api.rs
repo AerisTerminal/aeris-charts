@@ -701,7 +701,7 @@ impl ChartEngine {
         let plot = self.data.plot(id);
         let row = self
             .comparison_anchor
-            .and_then(|time| self.data.merged_times().binary_search(&time).ok())
+            .and_then(|time| self.axis_index_for_time(time))
             .and_then(|index| plot.search(index as i64, MismatchDirection::NearestLeft))
             .filter(|&row| !plot.is_whitespace_row(row))
             .or_else(|| plot.first_non_whitespace_row(visible_from))?;
@@ -750,8 +750,7 @@ impl ChartEngine {
     /// anchor rows stay explicit as `None`; no neighboring series or host-owned cache is used.
     pub fn comparison_legend_snapshot(&self) -> Vec<crate::ComparisonLegendEntry> {
         let anchor_time = self.comparison_anchor;
-        let anchor_index =
-            anchor_time.and_then(|time| self.data.merged_times().binary_search(&time).ok());
+        let anchor_index = anchor_time.and_then(|time| self.axis_index_for_time(time));
         self.series
             .iter()
             .filter(|series| !series.removed && series.visible)
@@ -769,7 +768,7 @@ impl ChartEngine {
                 }
                 let latest_time = plot
                     .index_at(latest_row)
-                    .and_then(|index| self.data.merged_times().get(index as usize).copied());
+                    .and_then(|index| self.axis_time_key_at(index as usize));
                 let change = anchor_value.map(|value| latest_value - value);
                 let percent_change = anchor_value
                     .filter(|value| *value != 0.0)

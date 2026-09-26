@@ -1877,6 +1877,23 @@ impl ChartEngine {
         self.data.merged_times().get(index).copied()
     }
 
+    pub(crate) fn axis_index_for_time(&self, time: i64) -> Option<usize> {
+        if self.sequence_points().is_some() {
+            return self
+                .time_to_index(time as f64, true)
+                .and_then(|index| usize::try_from(index).ok());
+        }
+        let times = self.data.merged_times();
+        if times.is_empty() {
+            return None;
+        }
+        Some(
+            times
+                .binary_search(&time)
+                .unwrap_or_else(|index| index.min(times.len() - 1)),
+        )
+    }
+
     /// Structure-level memory attribution for engineering evidence. This reports logical payload
     /// and vector capacity, not allocator metadata, committed WASM pages, or browser memory.
     pub fn memory_usage(&self) -> EngineMemoryUsage {

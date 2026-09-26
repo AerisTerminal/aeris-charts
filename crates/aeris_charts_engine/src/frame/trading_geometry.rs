@@ -876,20 +876,17 @@ impl ChartEngine {
 
         // Host context is a separate, non-persisted layer. Windows are lowered first and event
         // markers use deterministic LOD collapse when releases share the same pixel column.
-        let times = self.data.merged_times();
-        if !times.is_empty() {
-            let logical = |time: i64| match times.binary_search(&time) {
-                Ok(index) => index,
-                Err(index) if index < times.len() => index,
-                Err(_) => times.len() - 1,
-            } as i64;
+        if !self.data.merged_times().is_empty() {
+            let logical = |time: i64| self.axis_index_for_time(time).map(|index| index as i64);
             for window in &self.trading_state.host_overlay.windows {
-                let x0 = self
-                    .time_scale
-                    .index_to_coordinate(logical(window.start_time));
-                let x1 = self
-                    .time_scale
-                    .index_to_coordinate(logical(window.end_time));
+                let Some(start_index) = logical(window.start_time) else {
+                    continue;
+                };
+                let Some(end_index) = logical(window.end_time) else {
+                    continue;
+                };
+                let x0 = self.time_scale.index_to_coordinate(start_index);
+                let x1 = self.time_scale.index_to_coordinate(end_index);
                 regions.push(Prim::Rect {
                     rect: IRect {
                         x: (x0.min(x1) * hpr).round() as i32,
@@ -907,7 +904,10 @@ impl ChartEngine {
             }
             let mut last_event_x = f64::NEG_INFINITY;
             for event in &self.trading_state.host_overlay.events {
-                let x = self.time_scale.index_to_coordinate(logical(event.time));
+                let Some(index) = logical(event.time) else {
+                    continue;
+                };
+                let x = self.time_scale.index_to_coordinate(index);
                 if x - last_event_x < 8.0 {
                     continue;
                 }
@@ -1559,17 +1559,24 @@ impl ChartEngine {
                 || !self.trading_state.account_visible(exit.account_id.as_ref())
                 || entry.pane_index != pane_index
                 || exit.pane_index != pane_index
-                || times.is_empty()
+                || self.data.merged_times().is_empty()
             {
                 continue;
             }
-            let logical = |time: i64| match times.binary_search(&time) {
-                Ok(index) => index,
-                Err(index) if index < times.len() => index,
-                Err(_) => times.len() - 1,
-            } as i64;
-            let entry_x = self.time_scale.index_to_coordinate(logical(entry.time));
-            let exit_x = self.time_scale.index_to_coordinate(logical(exit.time));
+            let Some(entry_logical) = self
+                .axis_index_for_time(entry.time)
+                .map(|index| index as i64)
+            else {
+                continue;
+            };
+            let Some(exit_logical) = self
+                .axis_index_for_time(exit.time)
+                .map(|index| index as i64)
+            else {
+                continue;
+            };
+            let entry_x = self.time_scale.index_to_coordinate(entry_logical);
+            let exit_x = self.time_scale.index_to_coordinate(exit_logical);
             let Some(entry_y) =
                 self.trading_price_coordinate(pane_index, entry.price_scale, entry.price)
             else {
@@ -1622,14 +1629,15 @@ impl ChartEngine {
             {
                 continue;
             }
-            if execution.pane_index != pane_index || times.is_empty() {
+            if execution.pane_index != pane_index || self.data.merged_times().is_empty() {
                 continue;
             }
-            let logical = match times.binary_search(&execution.time) {
-                Ok(index) => index,
-                Err(index) if index < times.len() => index,
-                Err(_) => times.len() - 1,
-            } as i64;
+            let Some(logical) = self
+                .axis_index_for_time(execution.time)
+                .map(|index| index as i64)
+            else {
+                continue;
+            };
             let x = self.time_scale.index_to_coordinate(logical);
             let Some(y) =
                 self.trading_price_coordinate(pane_index, execution.price_scale, execution.price)

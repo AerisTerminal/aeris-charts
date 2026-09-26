@@ -376,7 +376,8 @@ without collapsing duplicate second labels. Non-time tip updates now replace onl
 suffix (falling back to a full projection when retention can shift the prefix), and derived delta
 studies and trade-bubble markers use the same logical row keys. Bubble aggregation windows compare
 the original microsecond trade times; value snapshots and series queries resolve their time labels
-through the same sidecar. The broader B5 performance exit remains open for replay and
+through the same sidecar. Trading executions, host events, and round-trip geometry resolve their
+timestamp anchors through the same index helper. The broader B5 performance exit remains open for replay and
 release benchmarks. The sidecar is retired when the last live non-time footprint or dependent leaves the chart,
 preventing stale sequence labels from affecting later time series.
 The configured tick size owns the series min-move/formatter and the shared autoscale, frame, and hit

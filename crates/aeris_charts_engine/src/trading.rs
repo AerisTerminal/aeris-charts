@@ -1076,7 +1076,6 @@ impl ChartEngine {
             });
         }
 
-        let times = self.data.merged_times();
         for execution in self.trading_state.executions.iter().rev() {
             if !self
                 .trading_state
@@ -1084,14 +1083,15 @@ impl ChartEngine {
             {
                 continue;
             }
-            if execution.pane_index != pane_index || times.is_empty() {
+            if execution.pane_index != pane_index {
                 continue;
             }
-            let logical = match times.binary_search(&execution.time) {
-                Ok(index) => index,
-                Err(index) if index < times.len() => index,
-                Err(_) => times.len() - 1,
-            } as i64;
+            let Some(logical) = self
+                .axis_index_for_time(execution.time)
+                .map(|index| index as i64)
+            else {
+                continue;
+            };
             let x = self.time_scale.index_to_coordinate(logical);
             let Some(y) =
                 self.trading_price_coordinate(pane_index, execution.price_scale, execution.price)
@@ -2018,20 +2018,12 @@ impl ChartEngine {
     #[must_use]
     pub fn host_event_hit_at(&self, x_css: f64, y_css: f64) -> Option<HostEventHit> {
         let pane_index = self.pane_at_y(y_css)?;
-        let times = self.data.merged_times();
-        if times.is_empty() {
-            return None;
-        }
-        let coordinate = |time: i64| {
-            let logical = match times.binary_search(&time) {
-                Ok(index) => index,
-                Err(index) if index < times.len() => index,
-                Err(_) => times.len() - 1,
-            } as i64;
-            self.time_scale.index_to_coordinate(logical)
+        let coordinate = |time: i64| -> Option<f64> {
+            let logical = self.axis_index_for_time(time)? as i64;
+            Some(self.time_scale.index_to_coordinate(logical))
         };
         for event in &self.trading_state.host_overlay.events {
-            if (coordinate(event.time) - x_css).abs() <= 8.0 {
+            if coordinate(event.time).is_some_and(|x| (x - x_css).abs() <= 8.0) {
                 return Some(HostEventHit {
                     id: event.id.clone(),
                     window: false,
@@ -2040,8 +2032,12 @@ impl ChartEngine {
         }
         let pane = self.panes.get(pane_index)?;
         for window in &self.trading_state.host_overlay.windows {
-            let x0 = coordinate(window.start_time);
-            let x1 = coordinate(window.end_time);
+            let Some(x0) = coordinate(window.start_time) else {
+                continue;
+            };
+            let Some(x1) = coordinate(window.end_time) else {
+                continue;
+            };
             if x_css >= x0.min(x1)
                 && x_css <= x0.max(x1)
                 && y_css >= pane.top

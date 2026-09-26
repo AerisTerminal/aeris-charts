@@ -330,8 +330,9 @@ chart-local logical row keys with a full-resolution sequence sidecar; the WASM a
 round-trip those policies, and native/browser fixtures cover labels, crosshair lookup, and logical
 keys. Non-time tip updates now replace only the affected suffix (with a full path when retention
 can shift the prefix), and derived delta studies and trade-bubble markers use the same logical keys.
-Candles, drawings,
-replay, release performance evidence, and the full gate remain open; the B5 checklist remains open.
+Value queries and transient trading/event overlays now resolve timestamp labels through the same
+sidecar; durable drawing bar-plus-time anchors, candles, replay, release performance evidence, and
+the full gate remain open; the B5 checklist remains open.
 
 **Exit:** the F1 and PD2 exit criteria pass: many-bars-per-second and gap fixtures render on every
 executor, drawings survive prepend and rebuild, and seek-back equals a fresh load to the same
