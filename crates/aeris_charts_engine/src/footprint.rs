@@ -258,8 +258,8 @@ pub struct FootprintLevel {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct FootprintBar {
-    /// Stable logical position within the canonical bar sequence. Unlike the display timestamp,
-    /// this identity remains distinct when several non-time bars open within one second.
+    /// Deterministic logical position within the canonical bar sequence. Unlike the display
+    /// timestamp, this position remains distinct when several non-time bars open within one second.
     pub logical_index: u64,
     pub start_timestamp_micros: i64,
     pub end_timestamp_micros: i64,

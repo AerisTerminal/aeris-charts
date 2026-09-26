@@ -679,7 +679,7 @@ export interface footprint_level {
 }
 
 export interface footprint_bar {
-  /** Logical bar identity; unlike display time, this remains unique for sub-second bars. */
+  /** Logical bar position; unlike display time, this remains unique for sub-second bars. */
   logical_index: number;
   start_timestamp_micros: number;
   end_timestamp_micros: number;
