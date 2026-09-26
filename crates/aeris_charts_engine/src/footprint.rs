@@ -1039,6 +1039,29 @@ impl ChartEngine {
         Ok(())
     }
 
+    fn install_footprint_bars_projection(
+        &mut self,
+        id: SeriesId,
+        aggregation: FootprintAggregationOptions,
+        bars: &[FootprintBar],
+    ) -> Result<(), FootprintError> {
+        if matches!(aggregation.bars, FootprintBarAggregation::Time { .. }) {
+            let (times, open, high, low, close) = projection_columns(bars)?;
+            if self.install_footprint_projection(id, times, open, high, low, close) {
+                Ok(())
+            } else {
+                Err(FootprintError::UnknownSeries(id))
+            }
+        } else {
+            let (points, open, high, low, close) = sequence_projection_columns(bars);
+            if self.install_footprint_sequence_projection(id, points, open, high, low, close) {
+                Ok(())
+            } else {
+                Err(FootprintError::UnknownSeries(id))
+            }
+        }
+    }
+
     /// Rebind a footprint series to a canonical chart stream. The stream's aggregation policy is
     /// authoritative; the visual options remain series-local.
     pub fn bind_footprint_series_to_stream(
@@ -1050,7 +1073,8 @@ impl ChartEngine {
         let stream = self
             .trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
-        let (times, open, high, low, close) = projection_columns(stream.bars())?;
+        let aggregation = stream.options();
+        let bars = stream.bars().to_vec();
         let visual = self
             .series_entry(id)
             .and_then(|series| series.footprint.as_ref())
@@ -1063,7 +1087,7 @@ impl ChartEngine {
                 trade_stream_id: stream_id,
                 visual,
             });
-        self.install_footprint_projection(id, times, open, high, low, close);
+        self.install_footprint_bars_projection(id, aggregation, &bars)?;
         self.invalidate_frame_series(id);
         Ok(())
     }
@@ -1151,9 +1175,9 @@ impl ChartEngine {
         self.refresh_trade_bubbles(stream_id)
     }
 
-    /// Add a first-class tick-driven footprint series. The shared chart time axis currently
-    /// projects whole-second aligned time bars; analytical aggregation also supports trade-count
-    /// and volume bars without pretending that several bars share one canonical second.
+    /// Add a first-class tick-driven footprint series. Time bars use the chart's UTC-second
+    /// projection; trade-count, volume, and range bars use the chart-owned logical sequence axis
+    /// with full-resolution open/close times retained in its sidecar.
     pub fn add_footprint_series(
         &mut self,
         options: FootprintSeriesOptions,
@@ -1271,8 +1295,13 @@ impl ChartEngine {
             .collect::<Vec<_>>();
         let mut aggregator = FootprintAggregator::new(options.aggregation)?;
         aggregator.set_trades(trades)?;
-        let (times, open, high, low, close) = projection_columns(aggregator.bars())?;
+        let aggregation = aggregator.options();
         self.trade_streams.insert(stream_id, aggregator);
+        let bars = self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownSeries(id))?
+            .bars()
+            .to_vec();
         let series = self
             .series_entry_mut(id)
             .expect("validated footprint series");
@@ -1285,9 +1314,7 @@ impl ChartEngine {
                 visual: options.visual,
             });
         series.price_format = footprint_price_format(options.aggregation.tick_size);
-        if !self.install_footprint_projection(id, times, open, high, low, close) {
-            return Err(FootprintError::UnknownSeries(id));
-        }
+        self.install_footprint_bars_projection(id, aggregation, &bars)?;
         self.invalidate_frame_series(id);
         Ok(())
     }
@@ -1325,12 +1352,15 @@ impl ChartEngine {
             .ok_or(FootprintError::UnknownSeries(id))?
             .clone();
         next.set_trades(trades)?;
-        let (times, open, high, low, close) = projection_columns(next.bars())?;
+        let aggregation = next.options();
         self.trade_streams.insert(stream_id, next);
+        let bars = self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownSeries(id))?
+            .bars()
+            .to_vec();
         self.refresh_trade_dependents(stream_id)?;
-        if !self.install_footprint_projection(id, times, open, high, low, close) {
-            return Err(FootprintError::UnknownSeries(id));
-        }
+        self.install_footprint_bars_projection(id, aggregation, &bars)?;
         self.invalidate_frame_series(id);
         Ok(())
     }
@@ -1371,17 +1401,22 @@ impl ChartEngine {
             let mut next = stream.historical_update_candidate();
             let result = next.update_trades(trades)?;
             debug_assert_eq!(result, FootprintUpdateKind::Historical);
-            let (times, open, high, low, close) = projection_columns(next.bars())?;
+            let aggregation = next.options();
             self.trade_streams.insert(stream_id, next);
+            let bars = self
+                .trade_stream(stream_id)
+                .ok_or(FootprintError::UnknownSeries(id))?
+                .bars()
+                .to_vec();
             self.refresh_trade_dependents(stream_id)?;
-            if !self.install_footprint_projection(id, times, open, high, low, close) {
-                return Err(FootprintError::UnknownSeries(id));
-            }
+            self.install_footprint_bars_projection(id, aggregation, &bars)?;
             self.invalidate_frame_series(id);
             return Ok(FootprintUpdateKind::Historical);
         }
 
-        validate_projection_sessions(stream.bars(), options, &trades)?;
+        if matches!(options.bars, FootprintBarAggregation::Time { .. }) {
+            validate_projection_sessions(stream.bars(), options, &trades)?;
+        }
         let result = self
             .trade_streams
             .get_mut(&stream_id)
@@ -1389,11 +1424,22 @@ impl ChartEngine {
             .update_trades(trades)?;
         debug_assert_eq!(result, FootprintUpdateKind::Tip);
         let from = previous_bar_count.saturating_sub(1);
-        let (times, open, high, low, close) = projection_columns(
-            &self.footprint_bars(id).expect("validated footprint series")[from..],
-        )?;
-        if self.update_footprint_projection_bars(id, times, open, high, low, close) == 0 {
-            return Err(FootprintError::UnknownSeries(id));
+        if matches!(options.bars, FootprintBarAggregation::Time { .. }) {
+            let (times, open, high, low, close) = projection_columns(
+                &self
+                    .footprint_bars(id)
+                    .ok_or(FootprintError::UnknownSeries(id))?[from..],
+            )?;
+            if self.update_footprint_projection_bars(id, times, open, high, low, close) == 0 {
+                return Err(FootprintError::UnknownSeries(id));
+            }
+        } else {
+            let bars = self
+                .trade_stream(stream_id)
+                .ok_or(FootprintError::UnknownSeries(id))?
+                .bars()
+                .to_vec();
+            self.install_footprint_bars_projection(id, options, &bars)?;
         }
         self.refresh_trade_dependents_from(stream_id, Some(from))?;
         self.invalidate_frame_series(id);
@@ -1647,7 +1693,17 @@ fn validate_chart_projection(options: FootprintAggregationOptions) -> Result<(),
         {
             Ok(())
         }
-        _ => Err(FootprintError::UnsupportedChartAggregation),
+        FootprintBarAggregation::Trades { trades_per_bar } => (trades_per_bar > 0)
+            .then_some(())
+            .ok_or(FootprintError::UnsupportedChartAggregation),
+        FootprintBarAggregation::Volume { volume_per_bar } => (volume_per_bar.is_finite()
+            && volume_per_bar > 0.0)
+            .then_some(())
+            .ok_or(FootprintError::UnsupportedChartAggregation),
+        FootprintBarAggregation::Range { range_ticks } => (range_ticks > 0)
+            .then_some(())
+            .ok_or(FootprintError::UnsupportedChartAggregation),
+        FootprintBarAggregation::Time { .. } => Err(FootprintError::UnsupportedChartAggregation),
     }
 }
 
@@ -1719,6 +1775,13 @@ fn series_error(error: SeriesIdError) -> FootprintError {
 }
 
 type ProjectionColumns = (Vec<i64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
+type SequenceProjectionColumns = (
+    Vec<BarSequencePoint>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+);
 
 fn projection_columns(bars: &[FootprintBar]) -> Result<ProjectionColumns, FootprintError> {
     let mut times = Vec::with_capacity(bars.len());
@@ -1738,6 +1801,26 @@ fn projection_columns(bars: &[FootprintBar]) -> Result<ProjectionColumns, Footpr
         close.push(bar.close);
     }
     Ok((times, open, high, low, close))
+}
+
+fn sequence_projection_columns(bars: &[FootprintBar]) -> SequenceProjectionColumns {
+    let mut points = Vec::with_capacity(bars.len());
+    let mut open = Vec::with_capacity(bars.len());
+    let mut high = Vec::with_capacity(bars.len());
+    let mut low = Vec::with_capacity(bars.len());
+    let mut close = Vec::with_capacity(bars.len());
+    for bar in bars {
+        points.push(BarSequencePoint {
+            logical_index: bar.logical_index,
+            open_timestamp_micros: bar.start_timestamp_micros,
+            close_timestamp_micros: bar.end_timestamp_micros,
+        });
+        open.push(bar.open);
+        high.push(bar.high);
+        low.push(bar.low);
+        close.push(bar.close);
+    }
+    (points, open, high, low, close)
 }
 
 fn validate_options(options: FootprintAggregationOptions) -> Result<(), FootprintError> {
@@ -2531,6 +2614,39 @@ mod tests {
         assert_eq!(historical, FootprintUpdateKind::Historical);
         assert_eq!(chart.data_layer().series_data(0).unwrap().0.len(), 2);
         assert_eq!(chart.footprint_bar(0, 0).unwrap().delta, 12.0);
+    }
+
+    #[test]
+    fn non_time_footprint_projection_uses_sequence_labels_without_timestamp_collisions() {
+        let mut chart = ChartEngine::new(800.0, 420.0, 1.0);
+        let id = chart
+            .add_footprint_series(FootprintSeriesOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
+                    ..FootprintAggregationOptions::default()
+                },
+                ..FootprintSeriesOptions::default()
+            })
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                id,
+                vec![
+                    trade(1_000_001, 100.0, 1.0, AggressorSide::Buy),
+                    trade(1_000_002, 101.0, 1.0, AggressorSide::Buy),
+                    trade(9_000_000, 102.0, 1.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        assert_eq!(chart.data_layer().merged_times(), &[0, 1, 2]);
+        assert_eq!(chart.time_to_index(1.000002, false), Some(1));
+        chart.time_scale.set_width(800.0);
+        chart.build_frame();
+        let gap_x = chart.time_scale.index_to_coordinate(2);
+        assert_eq!(chart.coordinate_to_time(gap_x), Some(9.0));
+        assert!(chart.set_crosshair_position(101.0, 1.000002, id));
+        assert_eq!(chart.crosshair_sync_position().unwrap().time, 1.000002);
     }
 
     #[test]

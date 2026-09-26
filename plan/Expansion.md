@@ -325,8 +325,11 @@ logical bar index with each bar's full-resolution open/close microsecond bounds 
 read-only `bar_sequence` view. `BarSequenceMapping` now rebases anchors across ordered
 prepend/rebuild sequences without collapsing duplicate second labels. This records the identity
 boundary for the non-time axis, and the shared footprint aggregator now validates tick-grid range
-bar boundaries. Neither change claims chart projection, drawing integration, or replay completion;
-the B5 checklist remains open.
+bar boundaries. The chart engine now projects trade-count, volume, and range footprint bars through
+chart-local logical row keys with a full-resolution sequence sidecar; the WASM and TypeScript APIs
+round-trip those policies, and native/browser fixtures cover labels, crosshair lookup, and logical
+keys. The non-time tip path is still a bounded full projection, and candles, drawings, replay, and
+the performance/full-gate work remain open; the B5 checklist remains open.
 
 **Exit:** the F1 and PD2 exit criteria pass: many-bars-per-second and gap fixtures render on every
 executor, drawings survive prepend and rebuild, and seek-back equals a fresh load to the same

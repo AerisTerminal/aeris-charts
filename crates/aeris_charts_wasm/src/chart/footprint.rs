@@ -54,20 +54,62 @@ fn parse_options(json: &str) -> Result<FootprintSeriesOptions, String> {
     if let Some(tick_size) = number(&value, "tick_size")? {
         options.aggregation.tick_size = tick_size;
     }
-    let interval_seconds = number(&value, "interval_seconds")?.unwrap_or(60.0);
-    let anchor_seconds = number(&value, "anchor_seconds")?.unwrap_or(0.0);
-    let interval_micros = interval_seconds * 1_000_000.0;
-    let anchor_micros = anchor_seconds * 1_000_000.0;
-    if interval_micros < 0.0
-        || interval_micros > u64::MAX as f64
-        || anchor_micros < i64::MIN as f64
-        || anchor_micros > i64::MAX as f64
-    {
-        return Err("footprint time aggregation is outside the supported range".to_string());
-    }
-    options.aggregation.bars = FootprintBarAggregation::Time {
-        interval_micros: interval_micros.round() as u64,
-        anchor_micros: anchor_micros.round() as i64,
+    let bar_type = value
+        .get("bar_type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("time");
+    options.aggregation.bars = match bar_type {
+        "time" => {
+            let interval_seconds = number(&value, "interval_seconds")?.unwrap_or(60.0);
+            let anchor_seconds = number(&value, "anchor_seconds")?.unwrap_or(0.0);
+            let interval_micros = interval_seconds * 1_000_000.0;
+            let anchor_micros = anchor_seconds * 1_000_000.0;
+            if interval_micros < 0.0
+                || interval_micros > u64::MAX as f64
+                || anchor_micros < i64::MIN as f64
+                || anchor_micros > i64::MAX as f64
+            {
+                return Err("footprint time aggregation is outside the supported range".to_string());
+            }
+            FootprintBarAggregation::Time {
+                interval_micros: interval_micros.round() as u64,
+                anchor_micros: anchor_micros.round() as i64,
+            }
+        }
+        "trades" => {
+            let trades_per_bar = number(&value, "trades_per_bar")?.ok_or_else(|| {
+                "trades_per_bar is required for trade-count aggregation".to_string()
+            })?;
+            if trades_per_bar <= 0.0
+                || trades_per_bar > f64::from(u32::MAX)
+                || trades_per_bar.fract() != 0.0
+            {
+                return Err("trades_per_bar must be a positive integer".to_string());
+            }
+            FootprintBarAggregation::Trades {
+                trades_per_bar: trades_per_bar as u32,
+            }
+        }
+        "volume" => {
+            let volume_per_bar = number(&value, "volume_per_bar")?
+                .ok_or_else(|| "volume_per_bar is required for volume aggregation".to_string())?;
+            if volume_per_bar <= 0.0 {
+                return Err("volume_per_bar must be positive".to_string());
+            }
+            FootprintBarAggregation::Volume { volume_per_bar }
+        }
+        "range" => {
+            let range_ticks = number(&value, "range_ticks")?
+                .ok_or_else(|| "range_ticks is required for range aggregation".to_string())?;
+            if range_ticks <= 0.0 || range_ticks > f64::from(u32::MAX) || range_ticks.fract() != 0.0
+            {
+                return Err("range_ticks must be a positive integer".to_string());
+            }
+            FootprintBarAggregation::Range {
+                range_ticks: range_ticks as u32,
+            }
+        }
+        _ => return Err(format!("unsupported footprint bar_type '{bar_type}'")),
     };
     if let Some(ratio) = number(&value, "imbalance_ratio")? {
         options.aggregation.imbalance.ratio = ratio;
@@ -134,17 +176,8 @@ fn parse_options(json: &str) -> Result<FootprintSeriesOptions, String> {
 }
 
 pub(super) fn options_json(options: &FootprintSeriesOptions) -> String {
-    let FootprintBarAggregation::Time {
-        interval_micros,
-        anchor_micros,
-    } = options.aggregation.bars
-    else {
-        return "{}".to_string();
-    };
-    serde_json::json!({
+    let mut output = serde_json::json!({
         "tick_size": options.aggregation.tick_size,
-        "interval_seconds": interval_micros as f64 / 1_000_000.0,
-        "anchor_seconds": anchor_micros as f64 / 1_000_000.0,
         "imbalance_ratio": options.aggregation.imbalance.ratio,
         "imbalance_minimum_volume": options.aggregation.imbalance.minimum_volume,
         "stacked_imbalance_levels": options.aggregation.imbalance.consecutive_levels,
@@ -167,8 +200,33 @@ pub(super) fn options_json(options: &FootprintSeriesOptions) -> String {
         "stacked_bid_color": options.visual.stacked_bid_color.to_css(),
         "stacked_ask_color": options.visual.stacked_ask_color.to_css(),
         "show_bar_summary": options.visual.show_bar_summary,
-    })
-    .to_string()
+    });
+    let fields = match options.aggregation.bars {
+        FootprintBarAggregation::Time {
+            interval_micros,
+            anchor_micros,
+        } => serde_json::json!({
+            "bar_type": "time",
+            "interval_seconds": interval_micros as f64 / 1_000_000.0,
+            "anchor_seconds": anchor_micros as f64 / 1_000_000.0,
+        }),
+        FootprintBarAggregation::Trades { trades_per_bar } => serde_json::json!({
+            "bar_type": "trades",
+            "trades_per_bar": trades_per_bar,
+        }),
+        FootprintBarAggregation::Volume { volume_per_bar } => serde_json::json!({
+            "bar_type": "volume",
+            "volume_per_bar": volume_per_bar,
+        }),
+        FootprintBarAggregation::Range { range_ticks } => serde_json::json!({
+            "bar_type": "range",
+            "range_ticks": range_ticks,
+        }),
+    };
+    if let (Some(output), Some(fields)) = (output.as_object_mut(), fields.as_object()) {
+        output.extend(fields.clone());
+    }
+    output.to_string()
 }
 
 fn error_json(error: impl core::fmt::Display) -> String {

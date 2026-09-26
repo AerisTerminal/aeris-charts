@@ -228,6 +228,49 @@ test("historical correction batches and session replacements use final canonical
   expect(result.bars[0]).toMatchObject({ session_id: 2, bid_volume: 6, ask_volume: 3, delta: -3 });
 });
 
+test("non-time footprint bars use the sequence axis and round-trip construction options", async ({ page }) => {
+  await open_chart(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    chart.remove_series(window.__main);
+    const second = Math.floor(window.__data[0].time / 60) * 60;
+    const micros = second * 1_000_000;
+    const trades = [
+      { timestamp_micros: micros + 1, price: 100, volume: 3, aggressor: "buy", session_id: 1 },
+      { timestamp_micros: micros + 2, price: 101, volume: 2, aggressor: "sell", session_id: 1 },
+      { timestamp_micros: micros + 3, price: 102, volume: 4, aggressor: "buy", session_id: 1 },
+      { timestamp_micros: micros + 4, price: 103, volume: 1, aggressor: "sell", session_id: 1 },
+    ];
+    const read = (options) => {
+      const series = chart.add_series("footprint", options);
+      series.set_trades(trades);
+      const snapshot = {
+        bars: series.footprint_bars(),
+        options: series.options(),
+      };
+      chart.remove_series(series);
+      return snapshot;
+    };
+    return {
+      trade: read({ tick_size: 1, bar_type: "trades", trades_per_bar: 2 }),
+      volume: read({ tick_size: 1, bar_type: "volume", volume_per_bar: 5 }),
+      range: read({ tick_size: 1, bar_type: "range", range_ticks: 2 }),
+      first_open: micros + 1,
+    };
+  });
+
+  expect(result.trade.bars).toHaveLength(2);
+  expect(result.volume.bars).toHaveLength(2);
+  expect(result.range.bars).toHaveLength(2);
+  expect(result.trade.bars.map((bar) => bar.logical_index)).toEqual([0, 1]);
+  expect(result.volume.bars.map((bar) => bar.logical_index)).toEqual([0, 1]);
+  expect(result.range.bars.map((bar) => bar.logical_index)).toEqual([0, 1]);
+  expect(result.trade.options).toMatchObject({ bar_type: "trades", trades_per_bar: 2 });
+  expect(result.volume.options).toMatchObject({ bar_type: "volume", volume_per_bar: 5 });
+  expect(result.range.options).toMatchObject({ bar_type: "range", range_ticks: 2 });
+  expect(result.trade.bars[0].start_timestamp_micros).toBe(result.first_open);
+});
+
 test("failed footprint creation leaves engine order, handles, scale membership, and notifications unchanged", async ({ page }) => {
   await open_chart(page);
   const result = await page.evaluate(() => {

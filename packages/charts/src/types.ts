@@ -1657,9 +1657,17 @@ export interface feature_series_options {
 export interface footprint_series_options {
   /** Exact exchange price increment. Off-grid trades are rejected. */
   tick_size: number;
-  /** Whole-second aligned time-bar period. */
+  /** Bar construction policy shared by footprint and its chart-level trade stream. */
+  bar_type: "time" | "trades" | "volume" | "range";
+  /** Whole-second aligned time-bar period when bar_type is time. */
   interval_seconds: number;
   anchor_seconds: number;
+  /** Number of trades per bar when bar_type is trades. */
+  trades_per_bar: number;
+  /** Total volume per bar when bar_type is volume. */
+  volume_per_bar: number;
+  /** Tick span when bar_type is range. */
+  range_ticks: number;
   imbalance_ratio: number;
   imbalance_minimum_volume: number;
   stacked_imbalance_levels: number;

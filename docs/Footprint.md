@@ -52,13 +52,13 @@ late event can correctly change the classification of later ambiguous events.
 
 The aggregation model supports aligned time bars, fixed trade-count bars, whole-trade volume bars,
 and tick-grid range bars. A trade is never split to hit an exact volume or range threshold. A new session always starts a new
-bar. The first chart-integrated API exposes whole-second-aligned time bars because the shared chart
-time axis currently has one logical row per UTC second. Every derived bar nevertheless carries a
-logical index and full-resolution open/close microsecond bounds through the engine's
-`bar_sequence` view, and `BarSequenceMapping` provides deterministic anchor rebasing when a
-sequence is prepended or rebuilt. The standalone Rust aggregator covers and tests trade-count and
-volume policies; exposing those policies as chart series still requires the composite logical axis
-and is deliberately not emulated by assigning false timestamps.
+bar. Time bars retain their whole-second display projection; trade-count, volume, and range bars
+are chart-integrated through a chart-local logical row key and an engine-owned sequence sidecar.
+That sidecar carries each bar's full-resolution open/close microsecond bounds for labels, crosshair,
+and visible-range lookup, so several bars in one second are never assigned false timestamps.
+`BarSequenceMapping` provides deterministic anchor rebasing when a sequence is prepended or rebuilt.
+The current non-time tip update still takes the bounded full-projection path; incremental closed-bar
+preservation remains part of the B5 performance exit.
 
 Each bar retains OHLC, bid/ask/unknown/total volume, trade count, final delta, delta percentage,
 session cumulative delta, and sorted price levels. Each level retains bid, ask, unknown, total, and delta. Integer level
@@ -165,7 +165,7 @@ Delta, delta percentage, bid/ask/unknown/total volume, session delta, and stacke
 methods create CVD, delta, and bounded bubble dependents and query stream revision/telemetry. Data-change notifications use
 `full` for replacement/historical reconstruction and `update` for a true tip update.
 
-Options cover tick size, whole-second time-bar interval/anchor, imbalance
+Options cover tick size, time-bar interval/anchor or trade-count/volume/range construction, imbalance
 ratio/minimum/consecutive count, visual cell modes, colors, text size, summaries, and generic series
 retention. Changing tick size or time aggregation rebuilds from the tape atomically. Visual-only
 options invalidate only the series frame layer.

@@ -700,12 +700,13 @@ impl ChartEngine {
                 .map(|(_, weight)| *weight)
                 .max()
                 .unwrap_or(0);
-            let times = self.data.merged_times();
             for &(index, weight) in &time_marks {
                 if index < from || index > to {
                     continue;
                 }
-                let ts = times[index as usize];
+                let Some(ts) = self.axis_time_key_at(index as usize) else {
+                    continue;
+                };
                 // A hidden time axis (reference `timeScale.visible` false) drops its whole strip,
                 // tick labels and tick stubs included.
                 if !self.time_axis_visible {
@@ -1001,9 +1002,9 @@ impl ChartEngine {
                     continue;
                 }
                 let logical = point.logical.round() as i64;
-                let Some(&time) = usize::try_from(logical)
+                let Some(time) = usize::try_from(logical)
                     .ok()
-                    .and_then(|index| self.data.merged_times().get(index))
+                    .and_then(|index| self.axis_time_key_at(index))
                 else {
                     continue;
                 };
@@ -2364,6 +2365,9 @@ impl ChartEngine {
     /// inter-bar deltas of the series' own bar times (fallback: the last delta). `None` (the row
     /// hides) with fewer than two bars or no installed host clock (`now_override`).
     fn series_countdown_remaining_at(&self, id: SeriesId, now: f64) -> Option<f64> {
+        if self.sequence_points().is_some() {
+            return None;
+        }
         let plot = self.data.plot(id);
         // Only the tail (up to 11 bars → 10 deltas) feeds the inference.
         let times = self.data.merged_times();
@@ -2496,8 +2500,11 @@ impl ChartEngine {
             let index = self.snapped_crosshair_index(x_css);
             // reference `indexToTime` returns null in the empty area — the time label is hidden
             // when the snapped index has no bar (past either data edge).
-            if index >= 0 && (index as usize) < self.data.merged_times().len() {
-                let text = self.format_crosshair_ts(self.data.merged_times()[index as usize]);
+            if index >= 0 {
+                let Some(time) = self.axis_time_key_at(index as usize) else {
+                    return;
+                };
+                let text = self.format_crosshair_ts(time);
                 let width = AxisMetrics::time_tag_width(measure(&text, false));
                 let height = metrics.time_strip_height();
                 let x = self.pane_left + self.time_scale.index_to_coordinate(index);

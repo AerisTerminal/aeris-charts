@@ -1507,6 +1507,10 @@ pub struct ChartEngine {
     pub panes: Vec<Pane>,
     pub price_formatter: PriceFormatter,
     data: DataLayer,
+    /// Full-resolution temporal labels for a logical bar sequence. The data layer's integer row
+    /// keys remain chart-local positions; this sidecar prevents non-time bars from being encoded
+    /// as synthetic UTC timestamps.
+    sequence_points: Option<Vec<BarSequencePoint>>,
     pub series: SeriesStore,
     tick_marks: TimeTickMarks,
     next_pane_id: u32,
@@ -1727,6 +1731,7 @@ impl ChartEngine {
             panes: vec![initial_pane],
             price_formatter: PriceFormatter::default(),
             data,
+            sequence_points: None,
             series,
             tick_marks: TimeTickMarks::new(),
             next_pane_id: 2,
@@ -1844,6 +1849,24 @@ impl ChartEngine {
     /// scale, indicator, retention, and invalidation invariants remain synchronized.
     pub fn data_layer(&self) -> &DataLayer {
         &self.data
+    }
+
+    pub(crate) fn axis_time_seconds_at(&self, index: usize) -> Option<f64> {
+        if let Some(points) = self.sequence_points() {
+            return points
+                .get(index)
+                .map(|point| point.open_timestamp_micros as f64 / 1_000_000.0);
+        }
+        self.data.merged_times().get(index).map(|&time| time as f64)
+    }
+
+    pub(crate) fn axis_time_key_at(&self, index: usize) -> Option<i64> {
+        if let Some(points) = self.sequence_points() {
+            return points
+                .get(index)
+                .map(|point| point.open_timestamp_micros.div_euclid(1_000_000));
+        }
+        self.data.merged_times().get(index).copied()
     }
 
     /// Structure-level memory attribution for engineering evidence. This reports logical payload
@@ -3240,7 +3263,50 @@ impl ChartEngine {
         close: Vec<f64>,
     ) -> bool {
         debug_assert!(self.is_footprint_series(id));
+        self.sequence_points = None;
         self.install_series_data_inner(id, times, open, high, low, close)
+    }
+
+    pub(crate) fn install_footprint_sequence_projection(
+        &mut self,
+        id: SeriesId,
+        points: Vec<BarSequencePoint>,
+        open: Vec<f64>,
+        high: Vec<f64>,
+        low: Vec<f64>,
+        close: Vec<f64>,
+    ) -> bool {
+        debug_assert!(self.is_footprint_series(id));
+        if points.len() != open.len()
+            || points.len() != high.len()
+            || points.len() != low.len()
+            || points.len() != close.len()
+        {
+            return false;
+        }
+        let times = (0..points.len())
+            .map(|index| index as i64)
+            .collect::<Vec<_>>();
+        // The data layer synchronizes immediately during installation. Clear any prior
+        // sequence first so that synchronization cannot interpret the new logical rows with an
+        // unrelated sidecar; install the new sidecar before the second sync below.
+        let previous_sequence = self.sequence_points.take();
+        let installed = self.install_series_data_inner(id, times, open, high, low, close);
+        if installed {
+            self.sequence_points = Some(points);
+            // Recompute tick weights and axis endpoints from the full-resolution sequence times,
+            // not from the chart-local row keys used by the data layer. The data-layer generation
+            // is unchanged at this point, so the ordinary sync path would otherwise retain the
+            // row-key weights.
+            self.sync_sequence_axis_times();
+        } else {
+            self.sequence_points = previous_sequence;
+        }
+        installed
+    }
+
+    pub(crate) fn sequence_points(&self) -> Option<&[BarSequencePoint]> {
+        self.sequence_points.as_deref()
     }
 
     pub(crate) fn update_footprint_projection_bars(
@@ -3550,9 +3616,9 @@ impl ChartEngine {
         if !self.series.iter().any(|s| s.id == series_id) {
             return false;
         }
-        // Bars live at validated integer-second times, so a fractional or out-of-range time can
-        // never resolve to a bar.
-        if validate_timestamp(time).is_err() {
+        // Ordinary time bars require validated whole-second timestamps. A logical bar sequence
+        // accepts full-resolution seconds because its identity is carried by the sequence sidecar.
+        if self.sequence_points().is_none() && validate_timestamp(time).is_err() {
             return false;
         }
         let Some(index) = self.time_to_index(time, false) else {
@@ -3606,7 +3672,7 @@ impl ChartEngine {
     pub fn crosshair_sync_position(&self) -> Option<CrosshairSyncPosition> {
         let (x, y) = self.crosshair?;
         let logical = self.time_scale.coordinate_to_index(x);
-        let time = self.data.merged_times().get(logical as usize).copied()? as f64;
+        let time = self.axis_time_seconds_at(logical as usize)?;
         let pane_index = self.pane_at_y(y).unwrap_or(0);
         let pane = self.panes.get(pane_index)?;
         Some(CrosshairSyncPosition {
@@ -4004,6 +4070,23 @@ impl ChartEngine {
     /// or after the timestamp and clamp timestamps beyond the last point to that final point,
     /// matching the reference's lower-bound behavior.
     pub fn time_to_index(&self, time: f64, find_nearest: bool) -> Option<TimePointIndex> {
+        if let Some(points) = self.sequence_points() {
+            if !time.is_finite() {
+                return None;
+            }
+            if points.is_empty() {
+                return None;
+            }
+            let micros = (time * 1_000_000.0).round();
+            if !micros.is_finite() || micros < i64::MIN as f64 || micros > i64::MAX as f64 {
+                return None;
+            }
+            let index = points.partition_point(|point| point.open_timestamp_micros < micros as i64);
+            if index < points.len() && points[index].open_timestamp_micros == micros as i64 {
+                return Some(index as TimePointIndex);
+            }
+            return find_nearest.then(|| index.min(points.len()).saturating_sub(1) as i64);
+        }
         let time = validate_timestamp(time).ok()?;
         let times = self.data.merged_times();
         if times.is_empty() {
@@ -4030,12 +4113,8 @@ impl ChartEngine {
         if !x.is_finite() {
             return None;
         }
-        let times = self.data.merged_times();
         let index = self.time_scale.coordinate_to_index(x);
-        if index < 0 || index as usize >= times.len() {
-            return None;
-        }
-        Some(times[index as usize] as f64)
+        (index >= 0).then(|| self.axis_time_seconds_at(index as usize))?
     }
 
     pub fn visible_logical_range(&self) -> Option<(f64, f64)> {
@@ -4054,15 +4133,17 @@ impl ChartEngine {
 
     /// Visible data timestamps nearest the logical window edges.
     pub fn visible_time_range(&self) -> Option<(f64, f64)> {
-        let times = self.data.merged_times();
         let range = self.time_scale.visible_strict_range()?;
-        if times.is_empty() {
+        if self.data.merged_times().is_empty() {
             return None;
         }
-        let last = times.len() as i64 - 1;
+        let last = self.data.merged_times().len() as i64 - 1;
         let left = range.left().clamp(0, last) as usize;
         let right = range.right().clamp(0, last) as usize;
-        Some((times[left] as f64, times[right] as f64))
+        Some((
+            self.axis_time_seconds_at(left)?,
+            self.axis_time_seconds_at(right)?,
+        ))
     }
 
     /// Set the visible window to the points bracketing a UTC-seconds range.
@@ -4070,16 +4151,27 @@ impl ChartEngine {
         if !from.is_finite() || !to.is_finite() || from > to {
             return;
         }
-        let times = self.data.merged_times();
-        if times.is_empty() {
+        let point_count = self.data.merged_times().len();
+        if point_count == 0 {
             return;
         }
-        let left = times.partition_point(|&time| (time as f64) < from);
-        let right = times.partition_point(|&time| (time as f64) <= to);
-        if right == 0 || left >= times.len() {
+        let (left, right) = if let Some(points) = self.sequence_points() {
+            let left = points
+                .partition_point(|point| point.open_timestamp_micros as f64 / 1_000_000.0 < from);
+            let right = points
+                .partition_point(|point| point.open_timestamp_micros as f64 / 1_000_000.0 <= to);
+            (left, right)
+        } else {
+            let times = self.data.merged_times();
+            (
+                times.partition_point(|&time| (time as f64) < from),
+                times.partition_point(|&time| (time as f64) <= to),
+            )
+        };
+        if right == 0 || left >= point_count {
             return;
         }
-        let last = times.len() - 1;
+        let last = point_count - 1;
         let left = left.min(last) as i64;
         let right = (right - 1).min(last) as i64;
         if left <= right {
@@ -4163,38 +4255,45 @@ impl ChartEngine {
         }
 
         let times = self.data.merged_times();
+        let sequence_tick_times = self.sequence_points().map(|points| {
+            points
+                .iter()
+                .map(|point| point.open_timestamp_micros.div_euclid(1_000_000))
+                .collect::<Vec<_>>()
+        });
+        let tick_times = sequence_tick_times.as_deref().unwrap_or(times);
         let time_points_changed =
             self.data.time_points_generation() != self.synced_time_points_generation;
         let appended = time_points_changed
-            && times.len() > self.synced_points_len
+            && tick_times.len() > self.synced_points_len
             && self.synced_points_len > 0
             && self.synced_last_time.is_some_and(|last| {
-                times
+                tick_times
                     .get(self.synced_points_len)
                     .is_some_and(|&time| time > last)
             });
         if appended {
-            for index in self.synced_points_len..times.len() {
+            for index in self.synced_points_len..tick_times.len() {
                 let weight = aeris_charts_core::scale::time_tick_marks::weight_by_time(
-                    times[index],
-                    times[index - 1],
+                    tick_times[index],
+                    tick_times[index - 1],
                 ) as u8;
                 self.tick_marks.push_weight(index as i64, weight);
             }
         } else if time_points_changed {
-            let mut weights = vec![0u8; times.len()];
+            let mut weights = vec![0u8; tick_times.len()];
             aeris_charts_core::scale::time_tick_marks::fill_weights_for_points(
-                times,
+                tick_times,
                 &mut weights,
                 0,
             );
             self.tick_marks.set_weights(&weights);
         }
-        self.synced_points_len = times.len();
+        self.synced_points_len = tick_times.len();
         self.synced_time_points_generation = self.data.time_points_generation();
-        self.synced_last_time = times.last().copied();
-        self.synced_first_time = times.first().copied();
-        self.time_scale.set_points_len(times.len());
+        self.synced_last_time = tick_times.last().copied();
+        self.synced_first_time = tick_times.first().copied();
+        self.time_scale.set_points_len(tick_times.len());
         self.time_scale.set_base_index(self.data.base_index());
         if merged_time_mapping.is_some() {
             self.refresh_drawing_pixel_baselines();
@@ -4202,5 +4301,23 @@ impl ChartEngine {
         }
         self.prune_selection_anchor_snapshot();
         self.data.begin_merged_time_transaction();
+    }
+
+    fn sync_sequence_axis_times(&mut self) {
+        let Some(points) = self.sequence_points() else {
+            return;
+        };
+        let times = points
+            .iter()
+            .map(|point| point.open_timestamp_micros.div_euclid(1_000_000))
+            .collect::<Vec<_>>();
+        let mut weights = vec![0u8; times.len()];
+        aeris_charts_core::scale::time_tick_marks::fill_weights_for_points(&times, &mut weights, 0);
+        self.tick_marks.set_weights(&weights);
+        self.synced_points_len = times.len();
+        self.synced_last_time = times.last().copied();
+        self.synced_first_time = times.first().copied();
+        self.time_scale.set_points_len(times.len());
+        self.time_scale.set_base_index(self.data.base_index());
     }
 }
