@@ -415,6 +415,15 @@ pub struct DrawingPoint {
     pub price: f64,
 }
 
+/// Full-resolution identity persisted alongside a logical drawing anchor on a non-time chart.
+/// The live geometry remains in logical/price space; this sidecar lets a restored drawing find
+/// the same bar after the host installs a different retained sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct DrawingAnchorTime {
+    pub(crate) open_timestamp_micros: i64,
+    pub(crate) close_timestamp_micros: i64,
+}
+
 /// Horizontal text alignment shared by every tool's label (TS `drawing_text_h_align`; maps to
 /// the IR's `TextAlign`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1451,6 +1460,7 @@ impl ChartEngine {
     fn remove_drawing_snapshot(&mut self, id: DrawingId) -> Option<(Drawing, usize)> {
         let index = self.drawings.iter().position(|drawing| drawing.id == id)?;
         let drawing = self.drawings.remove(index);
+        self.drawing_anchor_times.remove(&id);
         self.drawing_runtime.borrow_mut().remove(id, &self.drawings);
         if self.selected_drawing == Some(id) {
             self.selected_drawing = None;
@@ -1479,6 +1489,7 @@ impl ChartEngine {
             return false;
         };
         *drawing = snapshot.clone();
+        self.drawing_anchor_times.remove(&snapshot.id);
         self.update_drawing_runtime(snapshot.id);
         true
     }
@@ -2395,6 +2406,9 @@ impl ChartEngine {
         let before = drawing.clone();
         self.drawings[index].points = points;
         let after = self.drawings[index].clone();
+        if before.points != after.points {
+            self.drawing_anchor_times.remove(&id);
+        }
         self.update_drawing_runtime(id);
         if before != after {
             self.record_drawing_command(DrawingCommand::Update {
@@ -2425,6 +2439,7 @@ impl ChartEngine {
             return;
         }
         let drawings = std::mem::take(&mut self.drawings);
+        self.drawing_anchor_times.clear();
         self.drawing_runtime.borrow_mut().clear();
         self.selected_drawing = None;
         self.drawing_drag = None;
@@ -3698,6 +3713,7 @@ impl ChartEngine {
                 let mut before = after.clone();
                 before.points = drag.history_points;
                 if before != after {
+                    self.drawing_anchor_times.remove(&id);
                     self.record_drawing_command(DrawingCommand::Update {
                         before,
                         after: Box::new(after),

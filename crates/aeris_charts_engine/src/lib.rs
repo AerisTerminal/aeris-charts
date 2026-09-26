@@ -66,7 +66,9 @@ pub use drawings::{
     DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats, TextMeasureFn,
     DRAWING_DEFAULT_COLOR,
 };
-pub(crate) use drawings::{DrawingController, DrawingDrag, DrawingHistory, DrawingRuntime};
+pub(crate) use drawings::{
+    DrawingAnchorTime, DrawingController, DrawingDrag, DrawingHistory, DrawingRuntime,
+};
 pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
     StackedAreaColor,
@@ -1523,6 +1525,10 @@ pub struct ChartEngine {
     /// non-time footprint rebuild. It is consumed before ordinary timestamp rebasing so drawing
     /// anchors follow the same full-resolution bars even when row keys are reused.
     pending_sequence_mapping: Option<BarSequenceMapping>,
+    /// Persisted non-time drawing identities waiting for the host to install a matching bar
+    /// sequence. Entries are bounded by the persistence anchor limits and are consumed when they
+    /// resolve to a live sequence point.
+    drawing_anchor_times: HashMap<DrawingId, Vec<Option<DrawingAnchorTime>>>,
     pub series: SeriesStore,
     tick_marks: TimeTickMarks,
     next_pane_id: u32,
@@ -1745,6 +1751,7 @@ impl ChartEngine {
             data,
             sequence_points: None,
             pending_sequence_mapping: None,
+            drawing_anchor_times: HashMap::new(),
             series,
             tick_marks: TimeTickMarks::new(),
             next_pane_id: 2,
@@ -3338,6 +3345,7 @@ impl ChartEngine {
                 points.drain(..points.len() - retained_len);
             }
             self.sequence_points = Some(points);
+            self.apply_persisted_drawing_anchor_times();
             // Recompute tick weights and axis endpoints from the full-resolution sequence times,
             // not from the chart-local row keys used by the data layer. The data-layer generation
             // is unchanged at this point, so the ordinary sync path would otherwise retain the
@@ -3352,6 +3360,90 @@ impl ChartEngine {
 
     pub(crate) fn sequence_points(&self) -> Option<&[BarSequencePoint]> {
         self.sequence_points.as_deref()
+    }
+
+    pub(crate) fn drawing_anchor_times_for(
+        &self,
+        drawing: &Drawing,
+    ) -> Vec<Option<DrawingAnchorTime>> {
+        let Some(points) = self.sequence_points() else {
+            return Vec::new();
+        };
+        drawing
+            .points
+            .iter()
+            .map(|point| {
+                let index = point.logical.round();
+                if !index.is_finite() || index < 0.0 {
+                    return None;
+                }
+                points
+                    .get(index as usize)
+                    .map(|sequence| DrawingAnchorTime {
+                        open_timestamp_micros: sequence.open_timestamp_micros,
+                        close_timestamp_micros: sequence.close_timestamp_micros,
+                    })
+            })
+            .collect()
+    }
+
+    fn apply_persisted_drawing_anchor_times(&mut self) {
+        let Some(sequence) = self.sequence_points() else {
+            return;
+        };
+        if self.drawing_anchor_times.is_empty() {
+            return;
+        }
+        let lookup = sequence
+            .iter()
+            .enumerate()
+            .map(|(index, point)| {
+                (
+                    (point.open_timestamp_micros, point.close_timestamp_micros),
+                    index,
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let mut resolved_ids = Vec::new();
+        let mut changed = false;
+        for drawing in &mut self.drawings {
+            let Some(anchor_times) = self.drawing_anchor_times.get(&drawing.id) else {
+                continue;
+            };
+            if anchor_times.len() != drawing.points.len() {
+                continue;
+            }
+            let mut resolved_all = true;
+            for (point, anchor_time) in drawing.points.iter_mut().zip(anchor_times) {
+                let Some(anchor_time) = anchor_time else {
+                    resolved_all = false;
+                    continue;
+                };
+                let Some(&index) = lookup.get(&(
+                    anchor_time.open_timestamp_micros,
+                    anchor_time.close_timestamp_micros,
+                )) else {
+                    resolved_all = false;
+                    continue;
+                };
+                let offset = point.logical - point.logical.round();
+                let logical = index as f64 + offset;
+                changed |= logical != point.logical;
+                point.logical = logical;
+            }
+            if resolved_all {
+                resolved_ids.push(drawing.id);
+            }
+        }
+        for id in resolved_ids {
+            self.drawing_anchor_times.remove(&id);
+        }
+        if changed {
+            self.drawing_runtime
+                .borrow_mut()
+                .rebuild_all(&self.drawings, self.panes.len());
+            self.invalidate_frame_drawings();
+        }
     }
 
     pub(crate) fn update_footprint_projection_bars(

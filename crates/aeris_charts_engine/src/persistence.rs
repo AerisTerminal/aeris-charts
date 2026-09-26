@@ -12,7 +12,7 @@ use aeris_charts_core::model::data_validation::MAX_SAFE_VALUE;
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::LineStyle;
 
-use crate::drawings::{DrawingPriceScale, DrawingTextHAlign, DrawingTextVAlign};
+use crate::drawings::{DrawingAnchorTime, DrawingPriceScale, DrawingTextHAlign, DrawingTextVAlign};
 use crate::{
     ChartEngine, ChartError, Drawing, DrawingKind, DrawingPoint, ErrorCode, IndicatorInputSource,
     IndicatorKind, IndicatorOutputStyle, Pane, PaneId, SeriesId,
@@ -67,6 +67,7 @@ struct InstallProfile {
 pub struct ValidatedStateV1 {
     panes: Vec<ValidatedPane>,
     drawings: Vec<Drawing>,
+    drawing_anchor_times: HashMap<u32, Vec<Option<DrawingAnchorTime>>>,
     max_drawing_id: u32,
     max_persistent_pane_id: u32,
     points: usize,
@@ -206,6 +207,8 @@ struct DrawingV1 {
     kind: String,
     pane_id: String,
     anchors: Vec<DrawingPoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    anchor_times_micros: Vec<Option<DrawingAnchorTime>>,
     #[serde(default)]
     style: DrawingStyleV1,
 }
@@ -677,6 +680,7 @@ impl ChartEngine {
                     kind: drawing.kind.name().to_string(),
                     pane_id: pane_wire_id(persistent_id),
                     anchors: drawing.points.clone(),
+                    anchor_times_micros: self.drawing_anchor_times_for(drawing),
                     style: DrawingStyleV1 {
                         name: (!drawing.name.is_empty()).then(|| drawing.name.clone()),
                         group_id: drawing.group_id.clone(),
@@ -1223,6 +1227,7 @@ impl ChartEngine {
             .collect::<std::collections::HashMap<_, _>>();
         let mut drawing_ids = HashSet::with_capacity(state.drawings.len());
         let mut drawings = Vec::with_capacity(state.drawings.len());
+        let mut drawing_anchor_times = HashMap::new();
         let mut max_drawing_id = 0;
         let mut total_points = 0usize;
         let mut total_text = 0usize;
@@ -1241,6 +1246,14 @@ impl ChartEngine {
                     item.id
                 )));
             }
+            if !item.anchor_times_micros.is_empty()
+                && item.anchor_times_micros.len() != item.anchors.len()
+            {
+                return Err(invalid(format!(
+                    "drawing {} has an anchor-time count different from its anchors",
+                    item.id
+                )));
+            }
             total_points = total_points
                 .checked_add(item.anchors.len())
                 .ok_or_else(|| resource("drawing anchor count overflow"))?;
@@ -1254,6 +1267,9 @@ impl ChartEngine {
                     "drawing {} has an invalid anchor count",
                     item.id
                 )));
+            }
+            if !item.anchor_times_micros.is_empty() {
+                drawing_anchor_times.insert(item.id, item.anchor_times_micros.clone());
             }
             if item.anchors.iter().any(|point| {
                 !point.logical.is_finite()
@@ -1449,6 +1465,7 @@ impl ChartEngine {
         Ok(ValidatedStateV1 {
             panes,
             drawings,
+            drawing_anchor_times,
             max_drawing_id,
             max_persistent_pane_id,
             points: total_points,
@@ -1510,6 +1527,7 @@ impl ChartEngine {
         self.general_data = None;
         self.general_series = None;
         self.drawings = state.drawings;
+        self.drawing_anchor_times = state.drawing_anchor_times;
         self.next_pane_id = next_runtime;
         self.next_persistent_pane_id = state.max_persistent_pane_id + 1;
         self.next_drawing_id = state.max_drawing_id + 1;
@@ -1894,6 +1912,10 @@ impl ChartEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        AggressorSide, FootprintAggregationOptions, FootprintBarAggregation,
+        FootprintSeriesOptions, FootprintTrade,
+    };
 
     const MINIMAL: &str = include_str!("../fixtures/persistence/minimal-v1.json");
     const VALID: &str = include_str!("../fixtures/persistence/valid-v1.json");
@@ -2429,6 +2451,85 @@ mod tests {
         assert!(drawing.locked);
         assert_eq!(drawing.stroke_end, crate::DrawingLineCap::Arrow);
         assert_eq!(drawing.labels.len(), 1);
+    }
+
+    #[test]
+    fn non_time_drawing_anchor_times_restore_against_a_rebased_sequence() {
+        let trade = |timestamp_micros, price| FootprintTrade {
+            timestamp_micros,
+            price,
+            volume: 1.0,
+            aggressor: AggressorSide::Buy,
+            bid: None,
+            ask: None,
+            sequence: None,
+            trade_id: None,
+            conditions: 0,
+            session_id: Some(1),
+        };
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let footprint = chart
+            .add_footprint_series(FootprintSeriesOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
+                    ..FootprintAggregationOptions::default()
+                },
+                ..FootprintSeriesOptions::default()
+            })
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                footprint,
+                vec![trade(2_000_001, 100.0), trade(3_000_001, 101.0)],
+            )
+            .unwrap();
+        let id = chart
+            .add_drawing(
+                DrawingKind::TrendLine,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 0.5,
+                        price: 100.0,
+                    },
+                    DrawingPoint {
+                        logical: 1.0,
+                        price: 101.0,
+                    },
+                ],
+                None,
+            )
+            .unwrap();
+        let document = chart.export_state_json().unwrap();
+        assert!(document.contains("anchor_times_micros"));
+
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored.import_state_json(&document).unwrap();
+        let restored_footprint = restored
+            .add_footprint_series(FootprintSeriesOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
+                    ..FootprintAggregationOptions::default()
+                },
+                ..FootprintSeriesOptions::default()
+            })
+            .unwrap();
+        restored
+            .set_footprint_trades(
+                restored_footprint,
+                vec![
+                    trade(1_000_001, 99.0),
+                    trade(2_000_001, 100.0),
+                    trade(3_000_001, 101.0),
+                ],
+            )
+            .unwrap();
+
+        let points = &restored.drawing(id).unwrap().points;
+        assert_eq!(points[0].logical, 1.5);
+        assert_eq!(points[1].logical, 2.0);
     }
 
     #[test]
