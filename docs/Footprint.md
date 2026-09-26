@@ -55,9 +55,10 @@ bars. A trade is never split to hit an exact volume threshold. A new session alw
 bar. The first chart-integrated API exposes whole-second-aligned time bars because the shared chart
 time axis currently has one logical row per UTC second. Every derived bar nevertheless carries a
 logical index and full-resolution open/close microsecond bounds through the engine's
-`bar_sequence` view. The standalone Rust aggregator covers and tests trade-count and volume
-policies; exposing those policies as chart series still requires the composite logical axis and is
-deliberately not emulated by assigning false timestamps.
+`bar_sequence` view, and `BarSequenceMapping` provides deterministic anchor rebasing when a
+sequence is prepended or rebuilt. The standalone Rust aggregator covers and tests trade-count and
+volume policies; exposing those policies as chart series still requires the composite logical axis
+and is deliberately not emulated by assigning false timestamps.
 
 Each bar retains OHLC, bid/ask/unknown/total volume, trade count, final delta, delta percentage,
 session cumulative delta, and sorted price levels. Each level retains bid, ask, unknown, total, and delta. Integer level

@@ -368,7 +368,9 @@ exactly once.
 Each derived bar also carries an engine-owned logical index plus its full-resolution open and close
 microsecond times. `FootprintAggregator::bar_sequence` exposes those bounds without collapsing them
 to the whole-second display projection, so several non-time bars in one second and long gaps remain
-distinct for the forthcoming F1 axis and drawing-rebase path.
+distinct for the forthcoming F1 axis and drawing-rebase path. `BarSequenceMapping` matches ordered
+full-resolution bounds and rebases logical anchors across prepend/rebuild operations without
+collapsing duplicate second labels.
 The configured tick size owns the series min-move/formatter and the shared autoscale, frame, and hit
 paths use complete half-tick outer cell bounds on the series' ordinary pane-local price scale.
 Footprint bars ultimately emit the same ordered `ChartFrame` as every other series, and no backend

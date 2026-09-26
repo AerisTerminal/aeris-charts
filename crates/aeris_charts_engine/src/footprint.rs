@@ -329,6 +329,103 @@ impl<'a> BarSequence<'a> {
     }
 }
 
+/// Mapping from a prior logical bar sequence to a rebuilt sequence. Common bars are matched by
+/// their full-resolution open/close times in order, so duplicate whole-second labels do not
+/// collapse into one identity. Anchors between common bars are mapped by the piecewise sequence
+/// position and anchors outside the common extent extrapolate the nearest shift.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BarSequenceMapping {
+    common_indices: Vec<(u64, u64)>,
+}
+
+impl BarSequenceMapping {
+    pub fn between(old: BarSequence<'_>, new: BarSequence<'_>) -> Self {
+        let mut common_indices: Vec<(u64, u64)> = Vec::new();
+        let (mut old_position, mut new_position) = (0usize, 0usize);
+        while old_position < old.len() && new_position < new.len() {
+            let Some(old_point) = old.get(old_position) else {
+                break;
+            };
+            let Some(new_point) = new.get(new_position) else {
+                break;
+            };
+            match (
+                old_point.open_timestamp_micros,
+                old_point.close_timestamp_micros,
+            )
+                .cmp(&(
+                    new_point.open_timestamp_micros,
+                    new_point.close_timestamp_micros,
+                )) {
+                std::cmp::Ordering::Less => old_position += 1,
+                std::cmp::Ordering::Greater => new_position += 1,
+                std::cmp::Ordering::Equal => {
+                    let current = (old_point.logical_index, new_point.logical_index);
+                    if common_indices.len() >= 2 {
+                        let a = common_indices[common_indices.len() - 2];
+                        let b = common_indices[common_indices.len() - 1];
+                        let ab_old = (b.0 - a.0) as u128;
+                        let ab_new = (b.1 - a.1) as u128;
+                        let bc_old = (current.0 - b.0) as u128;
+                        let bc_new = (current.1 - b.1) as u128;
+                        if ab_old * bc_new == ab_new * bc_old {
+                            if let Some(last) = common_indices.last_mut() {
+                                *last = current;
+                            }
+                        } else {
+                            common_indices.push(current);
+                        }
+                    } else {
+                        common_indices.push(current);
+                    }
+                    old_position += 1;
+                    new_position += 1;
+                }
+            }
+        }
+        Self { common_indices }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.common_indices.is_empty()
+    }
+
+    pub fn map_logical_index(&self, logical_index: u64) -> Option<u64> {
+        let first = *self.common_indices.first()?;
+        let last = *self.common_indices.last()?;
+        if logical_index <= first.0 {
+            return Some(
+                first
+                    .1
+                    .saturating_sub(first.0.saturating_sub(logical_index)),
+            );
+        }
+        if logical_index >= last.0 {
+            return Some(last.1.saturating_add(logical_index.saturating_sub(last.0)));
+        }
+        let upper = self
+            .common_indices
+            .partition_point(|&(old_index, _)| old_index < logical_index);
+        let (old_left, new_left) = self.common_indices[upper - 1];
+        let (old_right, new_right) = self.common_indices[upper];
+        let old_span = (old_right - old_left) as u128;
+        let new_span = (new_right - new_left) as u128;
+        let offset = (logical_index - old_left) as u128;
+        let mapped = (new_left as u128).saturating_add(offset * new_span / old_span);
+        u64::try_from(mapped).ok()
+    }
+
+    pub fn rebase_anchor(
+        &self,
+        anchor: BarSequencePoint,
+        new: BarSequence<'_>,
+    ) -> Option<BarSequencePoint> {
+        let logical_index = self.map_logical_index(anchor.logical_index)?;
+        new.iter()
+            .find(|point| point.logical_index == logical_index)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FootprintWorkStats {
     pub incremental_ticks: usize,
@@ -2180,6 +2277,40 @@ mod tests {
         assert_eq!(aggregator.bars()[0].start_timestamp_micros / 1_000_000, 1);
         assert_eq!(aggregator.bars()[1].start_timestamp_micros / 1_000_000, 1);
         assert_eq!(aggregator.bars()[2].start_timestamp_micros / 1_000_000, 9);
+    }
+
+    #[test]
+    fn logical_bar_sequence_mapping_rebases_prepend_without_merging_same_second_bars() {
+        let options = FootprintAggregationOptions {
+            tick_size: 1.0,
+            bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
+            ..FootprintAggregationOptions::default()
+        };
+        let mut old = FootprintAggregator::new(options).unwrap();
+        old.set_trades(vec![
+            trade(1_000_001, 100.0, 1.0, AggressorSide::Buy),
+            trade(1_000_002, 101.0, 1.0, AggressorSide::Buy),
+            trade(9_000_000, 102.0, 1.0, AggressorSide::Buy),
+        ])
+        .unwrap();
+        let old_anchor = old.bar_sequence().get(1).unwrap();
+
+        let mut rebuilt = FootprintAggregator::new(options).unwrap();
+        rebuilt
+            .set_trades(vec![
+                trade(500_000, 99.0, 1.0, AggressorSide::Buy),
+                trade(1_000_001, 100.0, 1.0, AggressorSide::Buy),
+                trade(1_000_002, 101.0, 1.0, AggressorSide::Buy),
+                trade(9_000_000, 102.0, 1.0, AggressorSide::Buy),
+            ])
+            .unwrap();
+        let mapping = BarSequenceMapping::between(old.bar_sequence(), rebuilt.bar_sequence());
+        assert_eq!(mapping.map_logical_index(old_anchor.logical_index), Some(2));
+        assert_eq!(
+            mapping.rebase_anchor(old_anchor, rebuilt.bar_sequence()),
+            rebuilt.bar_sequence().get(2)
+        );
+        assert!(!mapping.is_empty());
     }
 
     #[test]

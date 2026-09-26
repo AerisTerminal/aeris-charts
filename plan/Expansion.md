@@ -322,8 +322,10 @@ This is the largest architectural change in the plan.
 
 Current F1 slice (2026-09-26): the existing engine-owned footprint aggregator now publishes a
 logical bar index with each bar's full-resolution open/close microsecond bounds through a
-read-only `bar_sequence` view. This records the identity boundary for the non-time axis without
-claiming chart projection, drawing rebasing, or replay completion; the B5 checklist remains open.
+read-only `bar_sequence` view. `BarSequenceMapping` now rebases anchors across ordered
+prepend/rebuild sequences without collapsing duplicate second labels. This records the identity
+boundary for the non-time axis without claiming chart projection, drawing integration, or replay
+completion; the B5 checklist remains open.
 
 **Exit:** the F1 and PD2 exit criteria pass: many-bars-per-second and gap fixtures render on every
 executor, drawings survive prepend and rebuild, and seek-back equals a fresh load to the same

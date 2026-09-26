@@ -72,7 +72,7 @@ pub use feature_series::{
     StackedAreaColor,
 };
 pub use footprint::{
-    AggressorSide, BarSequence, BarSequencePoint, CumulativeDeltaReset,
+    AggressorSide, BarSequence, BarSequenceMapping, BarSequencePoint, CumulativeDeltaReset,
     FootprintAggregationOptions, FootprintAggregator, FootprintBar, FootprintBarAggregation,
     FootprintCellMode, FootprintError, FootprintImbalanceOptions, FootprintLevel,
     FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind, FootprintVisualOptions,
