@@ -173,7 +173,7 @@ builds a generic property panel from schemas alone, and old layouts migrate.
       filters and consecutive-print aggregation, on a bounded marker primitive path.
 - [x] **OF12** Footprint variants: profile-in-bar, volume ladder, horizontal imbalance, delta-only
       and bid/ask histogram cells.
-- [ ] **PD10** Release benchmarks for dense footprint text on GPUI and WebGPU; shared caching of
+- [x] **PD10** Release benchmarks for dense footprint text on GPUI and WebGPU; shared caching of
       repeated numeric runs where measurement shows shaping dominates; budgets added to `perf_gate`.
 - [x] Early F1 design note in `docs/Architecture.md` so later work does not assume the second-based
       axis.
@@ -193,13 +193,17 @@ stops at GPUI scene construction, while native `perf_gate` Target J covers WebGP
 frame encoding and verifies every resolved dense text run is scheduled. Neither benchmark covers
 native window shaping or actual GPU present time; `gpui_probe` now accepts
 `AERIS_CHARTS_PROBE_FEATURE=footprint` for that real-window capture and reports the shaped-run
-cache. WebGPU executor timing,
-and accessibility review remain open until the batch is closed. The screenshot harness now accepts
+cache. Accessibility review and the screenshot milestone remain open until the batch is closed. The
+screenshot harness now accepts
 `AERIS_CHARTS_GPUI_FEATURE=footprint` and emits a DPR-aware PNG plus metadata for the dense
 12-bar fixture; the capture has been exercised on the current Windows display after fixing the
 harness to pass the configured frame background through the GPUI prepared frame. The observed
 30-frame footprint probe run is recorded in `docs/Footprint.md`; it remains machine-specific
-evidence, not a portable budget.
+evidence, not a portable budget. The current release gate also verifies the WebGPU executor path:
+Target J schedules all 120 resolved dense text runs and measures 0.00 ms p99 CPU-side frame
+encoding against the 2.00 ms budget; the browser footprint suite passes its six Chromium cases,
+including the WebGPU shared-frame case. The GPUI probe remains machine-specific evidence, while
+the portable release budget is now covered for both executor sides.
 
 **Exit:** the F2 exit criterion passes (footprint and CVD share one tape, a late trade updates both,
 retention evicts both), and PD10 budgets hold on GPUI.

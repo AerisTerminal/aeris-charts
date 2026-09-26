@@ -195,6 +195,13 @@ misses), with adapter p50/p99 of 2.005/4.508 ms and GPUI paint p50/p95/p99 of 2.
 These numbers are an observed host run, not a portable release budget; the probe does not expose
 native WebGPU device-present timing.
 
+The 2026-09-26 release gate measured the same dense fixture through the native WebGPU CPU-side
+encoding path: 120 resolved text primitives produced 120 atlas instances, with a 0.00 ms p99
+encoding sample against the 2.00 ms Target J budget. The Chromium footprint suite also passed all
+six cases, including the WebGPU shared-frame path. These checks cover executor scheduling and
+browser integration; native device-present timing and the GPUI display-specific numbers above
+remain diagnostic rather than portable budgets.
+
 Deterministic synthetic tapes cover grid boundaries, unknown-side handling, quote/tick-rule
 classification, equal timestamps and sequences, late events, corrections, session resets, all bar
 modes, bid/ask/total/delta levels, POC ties, mean-reverting Max/Min Delta paths, both imbalance sides,
