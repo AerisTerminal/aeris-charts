@@ -178,3 +178,31 @@ test("financial product composes through one public chart and ordered frame", as
   expect(result.snapshot_count).toBeGreaterThanOrEqual(30);
   expect(result.screenshot_length).toBeGreaterThan(10_000);
 });
+
+test("bar close visibility reaches the browser frame for high-low bars", async ({ page }) => {
+  await open_chart(page);
+
+  const result = await page.evaluate(async () => {
+    const chart = window.__chart;
+    const bar = chart.add_series("bar", { price_line_visible: false, last_value_visible: false });
+    bar.set_data([
+      { time: 1, open: 100, high: 108, low: 96, close: 104 },
+      { time: 2, open: 104, high: 111, low: 101, close: 107 },
+      { time: 3, open: 107, high: 114, low: 103, close: 105 },
+    ]);
+    chart.time_scale().apply_options({ bar_spacing: 24 });
+    const settle = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await settle();
+    bar.apply_options({ open_visible: false });
+    await settle();
+    bar.apply_options({ close_visible: false });
+    await settle();
+    return {
+      options: bar.options(),
+      data: bar.data(),
+    };
+  });
+
+  expect(result.options).toMatchObject({ open_visible: false, close_visible: false });
+  expect(result.data).toHaveLength(3);
+});
