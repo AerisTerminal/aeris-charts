@@ -247,6 +247,8 @@ test("non-time footprint bars use the sequence axis and round-trip construction 
       const snapshot = {
         bars: series.footprint_bars(),
         options: series.options(),
+        data_times: series.data().map((point) => point.time),
+        snapshot_time: chart.value_snapshot(1).find((entry) => entry.series_id === series.id)?.time,
       };
       chart.remove_series(series);
       return snapshot;
@@ -268,6 +270,8 @@ test("non-time footprint bars use the sequence axis and round-trip construction 
   expect(result.trade.options).toMatchObject({ bar_type: "trades", trades_per_bar: 2 });
   expect(result.volume.options).toMatchObject({ bar_type: "volume", volume_per_bar: 5 });
   expect(result.range.options).toMatchObject({ bar_type: "range", range_ticks: 2 });
+  expect(result.trade.data_times[0]).toBe(Math.floor(result.first_open / 1_000_000));
+  expect(result.trade.snapshot_time).toBe(Math.floor(result.first_open / 1_000_000));
   expect(result.trade.bars[0].start_timestamp_micros).toBe(result.first_open);
 });
 

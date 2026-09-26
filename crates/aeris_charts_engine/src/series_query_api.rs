@@ -85,7 +85,7 @@ impl ChartEngine {
             logical_index: requested_index,
             time: requested_index
                 .and_then(|index| usize::try_from(index).ok())
-                .and_then(|index| self.data.merged_times().get(index).copied()),
+                .and_then(|index| self.axis_time_key_at(index)),
             open: None,
             high: None,
             low: None,
@@ -133,7 +133,7 @@ impl ChartEngine {
             return Some(snapshot);
         };
         let index = plot.index_at(row)?;
-        let time = *self.data.merged_times().get(index as usize)?;
+        let time = self.axis_time_key_at(index as usize)?;
         snapshot.logical_index = Some(index);
         snapshot.time = Some(time);
 
@@ -677,7 +677,7 @@ impl ChartEngine {
     fn series_point_at_row(&self, id: SeriesId, row: usize) -> Option<SeriesDataPoint> {
         let plot = self.data.plot(id);
         let index = plot.index_at(row)?;
-        let time = *self.data.merged_times().get(index as usize)?;
+        let time = self.axis_time_key_at(index as usize)?;
         Some(SeriesDataPoint {
             time,
             open: plot.value_at(row, PlotValueIndex::Open),
@@ -772,7 +772,7 @@ impl ChartEngine {
         if !value.is_finite() {
             return None;
         }
-        let time = *self.data.merged_times().get(plot.index_at(row)? as usize)?;
+        let time = self.axis_time_key_at(plot.index_at(row)? as usize)?;
         let formatted = self.format_series_resolved(series, value);
         Some(
             serde_json::json!({
@@ -828,8 +828,8 @@ impl ChartEngine {
         };
         let times = first_index.zip(last_index).and_then(|(first, last)| {
             Some((
-                *self.data.merged_times().get(first as usize)?,
-                *self.data.merged_times().get(last as usize)?,
+                self.axis_time_key_at(first as usize)?,
+                self.axis_time_key_at(last as usize)?,
             ))
         });
         Some(BarsInLogicalRange {

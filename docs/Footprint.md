@@ -62,6 +62,8 @@ later time-only series cannot inherit stale logical labels.
 Non-time tip updates replace only the affected suffix and keep derived delta studies on the same
 logical row keys; capped series use the full path when retention can shift the prefix. Trade bubbles
 also use logical bar indices while their aggregation windows retain microsecond comparison precision.
+Chart value snapshots and series queries expose the corresponding UTC-second label instead of the
+internal row key.
 Incremental replay and release performance evidence remain part of the B5 performance exit.
 
 Each bar retains OHLC, bid/ask/unknown/total volume, trade count, final delta, delta percentage,

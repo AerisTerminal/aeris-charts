@@ -2707,6 +2707,15 @@ mod tests {
         chart.build_frame();
         let gap_x = chart.time_scale.index_to_coordinate(2);
         assert_eq!(chart.coordinate_to_time(gap_x), Some(9.0));
+        assert_eq!(chart.series_data(id)[0].time, 1);
+        assert_eq!(
+            chart
+                .value_snapshot(Some(2))
+                .into_iter()
+                .find(|snapshot| snapshot.series_id == id)
+                .and_then(|snapshot| snapshot.time),
+            Some(9)
+        );
         assert!(chart.set_crosshair_position(101.0, 1.000002, id));
         assert_eq!(chart.crosshair_sync_position().unwrap().time, 1.000002);
     }
