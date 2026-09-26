@@ -275,7 +275,8 @@ catalog remain open until the whole batch is implemented. DEMA, TEMA, SMMA/RMA, 
 standard deviation, CCI, Williams %R, Stochastic RSI, ROC, Momentum, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku are
 OBV, CMF, MFI, the volume/MA study, daily previous-session pivot points and percentage-deviation
 ZigZag are now exposed through the engine, WASM and TypeScript APIs, with pure and incremental
-rebuild coverage; the remaining aggregate I1 fixture/reference gate is still open.
+rebuild coverage. The all-runtime-mutation fixture now exercises the pivot, ZigZag and VWAP-band
+states as well as the earlier I1 catalog; the independent reference fixture gate remains open.
 
 ### B5 — Non-time bars and replay
 

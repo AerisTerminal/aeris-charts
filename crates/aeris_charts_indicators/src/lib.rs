@@ -4860,6 +4860,8 @@ mod tests {
         Momentum,
         RateOfChange,
         Donchian,
+        PivotPoints,
+        ZigZag,
         Keltner,
         AdxDmi,
         ParabolicSar,
@@ -4872,6 +4874,7 @@ mod tests {
         Stochastic,
         Atr,
         Vwap,
+        VwapBands,
         Obv,
         Cmf,
         Mfi,
@@ -4901,6 +4904,24 @@ mod tests {
                     points.iter().map(|point| point.lower).collect(),
                 ]
             }
+            TestKind::PivotPoints => {
+                let points = pivot_points(
+                    input.times,
+                    input.open,
+                    input.high,
+                    input.low,
+                    input.close,
+                    PivotKind::Standard,
+                );
+                vec![
+                    points.iter().map(|point| point.pivot).collect(),
+                    points.iter().map(|point| point.resistance_1).collect(),
+                    points.iter().map(|point| point.support_1).collect(),
+                    points.iter().map(|point| point.resistance_2).collect(),
+                    points.iter().map(|point| point.support_2).collect(),
+                ]
+            }
+            TestKind::ZigZag => vec![zigzag(input.high, input.low, 5.0)],
             TestKind::Keltner => {
                 let points = keltner(input.high, input.low, input.close, 5, 2.0);
                 vec![
@@ -4965,6 +4986,27 @@ mod tests {
                 input.close,
                 input.volume,
             )],
+            TestKind::VwapBands => {
+                let points = vwap_bands(
+                    input.times,
+                    input.high,
+                    input.low,
+                    input.close,
+                    input.volume,
+                    VwapBandsOptions {
+                        reset: VwapReset::Monthly,
+                        standard_deviation: 1.0,
+                        percent: 5.0,
+                    },
+                );
+                vec![
+                    points.iter().map(|point| point.basis).collect(),
+                    points.iter().map(|point| point.standard_upper).collect(),
+                    points.iter().map(|point| point.standard_lower).collect(),
+                    points.iter().map(|point| point.percent_upper).collect(),
+                    points.iter().map(|point| point.percent_lower).collect(),
+                ]
+            }
             TestKind::Obv => vec![obv(input.close, input.volume)],
             TestKind::Cmf => vec![cmf(input.high, input.low, input.close, input.volume, 5)],
             TestKind::Mfi => vec![mfi(input.high, input.low, input.close, input.volume, 5)],
@@ -4991,11 +5033,16 @@ mod tests {
                     .enumerate()
                 {
                     let index = output_from + offset;
-                    let expected = expected.expect("output begins after warmup");
-                    assert!(
-                        (actual - expected).abs() < 1e-10,
-                        "output {output} row {index}: {actual} != {expected}"
-                    );
+                    match expected {
+                        Some(expected) => assert!(
+                            (actual - expected).abs() < 1e-10,
+                            "output {output} row {index}: {actual} != {expected}"
+                        ),
+                        None => assert!(
+                            actual.is_nan(),
+                            "output {output} row {index}: expected warmup NaN, got {actual}"
+                        ),
+                    }
                 }
             }
         }
@@ -5024,6 +5071,11 @@ mod tests {
             (TestKind::Momentum, IncrementalState::momentum(5)),
             (TestKind::RateOfChange, IncrementalState::rate_of_change(5)),
             (TestKind::Donchian, IncrementalState::donchian(5)),
+            (
+                TestKind::PivotPoints,
+                IncrementalState::pivot_points(PivotKind::Standard),
+            ),
+            (TestKind::ZigZag, IncrementalState::zigzag(5.0)),
             (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
             (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),
             (TestKind::ParabolicSar, IncrementalState::parabolic_sar()),
@@ -5039,6 +5091,10 @@ mod tests {
             (TestKind::Stochastic, IncrementalState::stochastic(5, 3)),
             (TestKind::Atr, IncrementalState::atr(5)),
             (TestKind::Vwap, IncrementalState::vwap()),
+            (
+                TestKind::VwapBands,
+                IncrementalState::vwap_bands(VwapReset::Monthly, 1.0, 5.0),
+            ),
             (TestKind::Obv, IncrementalState::obv()),
             (TestKind::Cmf, IncrementalState::cmf(5)),
             (TestKind::Mfi, IncrementalState::mfi(5)),
