@@ -1620,7 +1620,10 @@ impl ChartEngine {
             .trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
         let trades = stream.trades().cloned().collect::<Vec<_>>();
+        let bars = stream.bars().to_vec();
         let revision = stream.revision();
+        let sequence_axis = !matches!(stream.options().bars, FootprintBarAggregation::Time { .. });
+        let trade_bar_indices = sequence_axis.then(|| bar_indices_for_trades(&bars, &trades));
         let dependents = self
             .trade_bubbles
             .get(&stream_id)
@@ -1628,7 +1631,8 @@ impl ChartEngine {
             .unwrap_or_default();
         for dependent in &dependents {
             let mut markers = Vec::with_capacity(dependent.options.max_markers);
-            for trade in &trades {
+            let mut last_marker_timestamp_micros: Option<i64> = None;
+            for (trade_index, trade) in trades.iter().enumerate() {
                 if trade.volume < dependent.options.minimum_volume {
                     continue;
                 }
@@ -1647,13 +1651,20 @@ impl ChartEngine {
                     AggressorSide::Sell => Color::rgb(239, 83, 80),
                     AggressorSide::Unknown => Color::rgb(158, 158, 158),
                 };
-                let time = trade.timestamp_micros.div_euclid(MICROS_PER_SECOND);
+                let time = trade_bar_indices
+                    .as_ref()
+                    .and_then(|indices| indices.get(trade_index).copied())
+                    .map_or_else(
+                        || trade.timestamp_micros.div_euclid(MICROS_PER_SECOND),
+                        |index| index as i64,
+                    );
                 let can_merge = dependent.options.aggregation_window_micros > 0
                     && markers.last().is_some_and(|marker: &Marker| {
-                        marker.position == position
-                            && marker.price == Some(trade.price)
-                            && (marker.time * MICROS_PER_SECOND - trade.timestamp_micros).abs()
-                                <= dependent.options.aggregation_window_micros
+                        marker.position == position && marker.price == Some(trade.price)
+                    })
+                    && last_marker_timestamp_micros.is_some_and(|previous| {
+                        (previous - trade.timestamp_micros).abs()
+                            <= dependent.options.aggregation_window_micros
                     });
                 if can_merge {
                     if let Some(marker) = markers.last_mut() {
@@ -1673,6 +1684,7 @@ impl ChartEngine {
                         price: Some(trade.price),
                     });
                 }
+                last_marker_timestamp_micros = Some(trade.timestamp_micros);
                 if markers.len() >= dependent.options.max_markers {
                     break;
                 }
@@ -1686,6 +1698,24 @@ impl ChartEngine {
         }
         Ok(())
     }
+}
+
+fn bar_indices_for_trades(bars: &[FootprintBar], trades: &[FootprintTrade]) -> Vec<usize> {
+    if bars.is_empty() {
+        return vec![0; trades.len()];
+    }
+    let mut bar_index = 0usize;
+    let mut remaining = bars[0].trade_count as usize;
+    let mut indices = Vec::with_capacity(trades.len());
+    for _trade in trades {
+        while remaining == 0 && bar_index + 1 < bars.len() {
+            bar_index += 1;
+            remaining = bars[bar_index].trade_count as usize;
+        }
+        indices.push(bar_index);
+        remaining = remaining.saturating_sub(1);
+    }
+    indices
 }
 
 fn cumulative_delta_values(bars: &[FootprintBar], options: TradeStudyOptions) -> Vec<f64> {
@@ -2749,6 +2779,63 @@ mod tests {
         );
         assert_eq!(chart.data_layer().series_data(delta).unwrap().0, &[0, 1]);
         assert_eq!(chart.sequence_points().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn non_time_trade_bubbles_use_logical_bar_indices() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let footprint = chart
+            .add_footprint_series(FootprintSeriesOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    bars: FootprintBarAggregation::Trades { trades_per_bar: 2 },
+                    ..FootprintAggregationOptions::default()
+                },
+                ..FootprintSeriesOptions::default()
+            })
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                footprint,
+                vec![
+                    trade(1_000_001, 100.0, 1.0, AggressorSide::Buy),
+                    trade(1_000_002, 101.0, 1.0, AggressorSide::Sell),
+                ],
+            )
+            .unwrap();
+        let stream_id = chart
+            .series_entry(footprint)
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap()
+            .trade_stream_id;
+        chart
+            .add_trade_bubbles(stream_id, footprint, TradeBubbleOptions::default())
+            .unwrap();
+        assert_eq!(
+            chart
+                .series_entry(footprint)
+                .unwrap()
+                .markers
+                .iter()
+                .map(|marker| marker.time)
+                .collect::<Vec<_>>(),
+            vec![0, 0]
+        );
+        chart
+            .update_footprint_trade(footprint, trade(1_000_003, 102.0, 1.0, AggressorSide::Buy))
+            .unwrap();
+        assert_eq!(
+            chart
+                .series_entry(footprint)
+                .unwrap()
+                .markers
+                .iter()
+                .map(|marker| marker.time)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 1]
+        );
     }
 
     #[test]

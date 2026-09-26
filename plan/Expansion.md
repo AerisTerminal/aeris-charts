@@ -329,7 +329,8 @@ bar boundaries. The chart engine now projects trade-count, volume, and range foo
 chart-local logical row keys with a full-resolution sequence sidecar; the WASM and TypeScript APIs
 round-trip those policies, and native/browser fixtures cover labels, crosshair lookup, and logical
 keys. Non-time tip updates now replace only the affected suffix (with a full path when retention
-can shift the prefix), and derived delta studies use the same logical keys. Candles, drawings,
+can shift the prefix), and derived delta studies and trade-bubble markers use the same logical keys.
+Candles, drawings,
 replay, release performance evidence, and the full gate remain open; the B5 checklist remains open.
 
 **Exit:** the F1 and PD2 exit criteria pass: many-bars-per-second and gap fixtures render on every

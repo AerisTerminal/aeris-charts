@@ -60,8 +60,9 @@ and visible-range lookup, so several bars in one second are never assigned false
 The chart retires the sidecar when its last non-time footprint and dependent are removed, so a
 later time-only series cannot inherit stale logical labels.
 Non-time tip updates replace only the affected suffix and keep derived delta studies on the same
-logical row keys; capped series use the full path when retention can shift the prefix. Incremental
-replay and release performance evidence remain part of the B5 performance exit.
+logical row keys; capped series use the full path when retention can shift the prefix. Trade bubbles
+also use logical bar indices while their aggregation windows retain microsecond comparison precision.
+Incremental replay and release performance evidence remain part of the B5 performance exit.
 
 Each bar retains OHLC, bid/ask/unknown/total volume, trade count, final delta, delta percentage,
 session cumulative delta, and sorted price levels. Each level retains bid, ask, unknown, total, and delta. Integer level

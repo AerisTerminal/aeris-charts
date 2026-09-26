@@ -374,7 +374,8 @@ the sidecar's full-resolution open times, never synthetic UTC timestamps. `BarSe
 matches ordered full-resolution bounds and rebases logical anchors across prepend/rebuild operations
 without collapsing duplicate second labels. Non-time tip updates now replace only the affected
 suffix (falling back to a full projection when retention can shift the prefix), and derived delta
-studies use the same logical row keys. The broader B5 performance exit remains open for replay and
+studies and trade-bubble markers use the same logical row keys. Bubble aggregation windows compare
+the original microsecond trade times. The broader B5 performance exit remains open for replay and
 release benchmarks. The sidecar is retired when the last live non-time footprint or dependent leaves the chart,
 preventing stale sequence labels from affecting later time series.
 The configured tick size owns the series min-move/formatter and the shared autoscale, frame, and hit
