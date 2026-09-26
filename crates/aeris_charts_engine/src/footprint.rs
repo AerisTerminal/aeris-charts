@@ -1439,7 +1439,22 @@ impl ChartEngine {
                 .ok_or(FootprintError::UnknownSeries(id))?
                 .bars()
                 .to_vec();
-            self.install_footprint_bars_projection(id, options, &bars)?;
+            let (points, open, high, low, close) = sequence_projection_columns(&bars[from..]);
+            let accepted = if self.series_max_points(id).is_some() {
+                // Retention can evict the prefix while the stream advances. Keep the full
+                // projection path in that case so the sidecar and data-layer rows stay aligned.
+                self.install_footprint_bars_projection(id, options, &bars)?;
+                points.len()
+            } else {
+                self.update_footprint_sequence_projection_bars(
+                    id,
+                    from,
+                    (points, open, high, low, close),
+                )
+            };
+            if accepted == 0 {
+                return Err(FootprintError::UnknownSeries(id));
+            }
         }
         self.refresh_trade_dependents_from(stream_id, Some(from))?;
         self.invalidate_frame_series(id);
@@ -1467,6 +1482,17 @@ impl ChartEngine {
             if let Some(dependents) = self.trade_dependents.get(&stream_id).cloned() {
                 for dependent in dependents {
                     self.data.trim_front(dependent.series_id, keep);
+                }
+            }
+            let sequence_owner = self.trade_stream(stream_id).is_some_and(|stream| {
+                !matches!(stream.options().bars, FootprintBarAggregation::Time { .. })
+            });
+            if sequence_owner {
+                if let Some(points) = self.sequence_points.as_mut() {
+                    if points.len() > keep {
+                        points.drain(..points.len() - keep);
+                    }
+                    self.sync_sequence_axis_times();
                 }
             }
             let _ = self.refresh_trade_bubbles(stream_id);
@@ -1510,6 +1536,7 @@ impl ChartEngine {
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
         let bars = stream.bars().to_vec();
         let revision = stream.revision();
+        let sequence_axis = !matches!(stream.options().bars, FootprintBarAggregation::Time { .. });
         let dependents = self
             .trade_dependents
             .get(&stream_id)
@@ -1517,10 +1544,15 @@ impl ChartEngine {
             .unwrap_or_default();
         let mut updates = Vec::with_capacity(dependents.len());
         for dependent in &dependents {
-            let times = bars
-                .iter()
-                .map(|bar| bar.start_timestamp_micros.div_euclid(MICROS_PER_SECOND))
-                .collect::<Vec<_>>();
+            let times = if sequence_axis {
+                (0..bars.len())
+                    .map(|index| index as i64)
+                    .collect::<Vec<_>>()
+            } else {
+                bars.iter()
+                    .map(|bar| bar.start_timestamp_micros.div_euclid(MICROS_PER_SECOND))
+                    .collect::<Vec<_>>()
+            };
             let values = match dependent.kind {
                 TradeStudyKind::CumulativeDelta => {
                     cumulative_delta_values(&bars, dependent.options)
@@ -2671,6 +2703,52 @@ mod tests {
         assert!(chart.sequence_points().is_some());
         assert!(chart.remove_series(footprint));
         assert!(chart.sequence_points().is_none());
+    }
+
+    #[test]
+    fn non_time_tip_updates_reuse_sequence_rows_for_derived_studies() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let footprint = chart
+            .add_footprint_series(FootprintSeriesOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    bars: FootprintBarAggregation::Trades { trades_per_bar: 2 },
+                    ..FootprintAggregationOptions::default()
+                },
+                ..FootprintSeriesOptions::default()
+            })
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                footprint,
+                vec![
+                    trade(1_000_001, 100.0, 1.0, AggressorSide::Buy),
+                    trade(1_000_002, 101.0, 1.0, AggressorSide::Sell),
+                ],
+            )
+            .unwrap();
+        let stream_id = chart
+            .series_entry(footprint)
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap()
+            .trade_stream_id;
+        let delta = chart.add_delta_series(stream_id, 0).unwrap();
+        assert_eq!(chart.data_layer().series_data(delta).unwrap().0, &[0]);
+
+        assert_eq!(
+            chart
+                .update_footprint_trade(footprint, trade(1_000_003, 102.0, 1.0, AggressorSide::Buy))
+                .unwrap(),
+            FootprintUpdateKind::Tip
+        );
+        assert_eq!(
+            chart.data_layer().series_data(footprint).unwrap().0,
+            &[0, 1]
+        );
+        assert_eq!(chart.data_layer().series_data(delta).unwrap().0, &[0, 1]);
+        assert_eq!(chart.sequence_points().unwrap().len(), 2);
     }
 
     #[test]

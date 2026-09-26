@@ -328,8 +328,9 @@ boundary for the non-time axis, and the shared footprint aggregator now validate
 bar boundaries. The chart engine now projects trade-count, volume, and range footprint bars through
 chart-local logical row keys with a full-resolution sequence sidecar; the WASM and TypeScript APIs
 round-trip those policies, and native/browser fixtures cover labels, crosshair lookup, and logical
-keys. The non-time tip path is still a bounded full projection, and candles, drawings, replay, and
-the performance/full-gate work remain open; the B5 checklist remains open.
+keys. Non-time tip updates now replace only the affected suffix (with a full path when retention
+can shift the prefix), and derived delta studies use the same logical keys. Candles, drawings,
+replay, release performance evidence, and the full gate remain open; the B5 checklist remains open.
 
 **Exit:** the F1 and PD2 exit criteria pass: many-bars-per-second and gap fixtures render on every
 executor, drawings survive prepend and rebuild, and seek-back equals a fresh load to the same

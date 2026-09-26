@@ -57,10 +57,11 @@ are chart-integrated through a chart-local logical row key and an engine-owned s
 That sidecar carries each bar's full-resolution open/close microsecond bounds for labels, crosshair,
 and visible-range lookup, so several bars in one second are never assigned false timestamps.
 `BarSequenceMapping` provides deterministic anchor rebasing when a sequence is prepended or rebuilt.
-The chart retires the sidecar when its last non-time footprint is removed, so a later time-only
-series cannot inherit stale logical labels.
-The current non-time tip update still takes the bounded full-projection path; incremental closed-bar
-preservation remains part of the B5 performance exit.
+The chart retires the sidecar when its last non-time footprint and dependent are removed, so a
+later time-only series cannot inherit stale logical labels.
+Non-time tip updates replace only the affected suffix and keep derived delta studies on the same
+logical row keys; capped series use the full path when retention can shift the prefix. Incremental
+replay and release performance evidence remain part of the B5 performance exit.
 
 Each bar retains OHLC, bid/ask/unknown/total volume, trade count, final delta, delta percentage,
 session cumulative delta, and sorted price levels. Each level retains bid, ask, unknown, total, and delta. Integer level

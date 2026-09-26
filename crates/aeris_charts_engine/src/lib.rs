@@ -184,6 +184,14 @@ pub type PriceFormatterFn = Box<dyn Fn(f64) -> Option<String>>;
 pub type TickMarkFormatterFn = Box<dyn Fn(i64, u8) -> Option<String>>;
 pub type TimeFormatterFn = Box<dyn Fn(i64) -> Option<String>>;
 
+type FootprintSequenceProjection = (
+    Vec<BarSequencePoint>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+);
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EngineMemoryUsage {
     pub data: DataLayerMemoryUsage,
@@ -3272,7 +3280,7 @@ impl ChartEngine {
     pub(crate) fn install_footprint_sequence_projection(
         &mut self,
         id: SeriesId,
-        points: Vec<BarSequencePoint>,
+        mut points: Vec<BarSequencePoint>,
         open: Vec<f64>,
         high: Vec<f64>,
         low: Vec<f64>,
@@ -3295,6 +3303,13 @@ impl ChartEngine {
         let previous_sequence = self.sequence_points.take();
         let installed = self.install_series_data_inner(id, times, open, high, low, close);
         if installed {
+            let retained_len = self
+                .data
+                .series_data(id)
+                .map_or(0, |(retained_times, _)| retained_times.len());
+            if points.len() > retained_len {
+                points.drain(..points.len() - retained_len);
+            }
             self.sequence_points = Some(points);
             // Recompute tick weights and axis endpoints from the full-resolution sequence times,
             // not from the chart-local row keys used by the data layer. The data-layer generation
@@ -3322,6 +3337,44 @@ impl ChartEngine {
     ) -> usize {
         debug_assert!(self.is_footprint_series(id));
         self.update_series_bars_sanitized_inner(id, times, open, high, low, close)
+    }
+
+    pub(crate) fn update_footprint_sequence_projection_bars(
+        &mut self,
+        id: SeriesId,
+        from: usize,
+        projection: FootprintSequenceProjection,
+    ) -> usize {
+        debug_assert!(self.is_footprint_series(id));
+        let (points, open, high, low, close) = projection;
+        if points.is_empty()
+            || points.len() != open.len()
+            || points.len() != high.len()
+            || points.len() != low.len()
+            || points.len() != close.len()
+        {
+            return 0;
+        }
+        let Some(mut sequence) = self.sequence_points.take() else {
+            return 0;
+        };
+        if from > sequence.len() {
+            self.sequence_points = Some(sequence);
+            return 0;
+        }
+        let times = (from..from + points.len())
+            .map(|index| index as i64)
+            .collect::<Vec<_>>();
+        let accepted = self.update_series_bars_sanitized_inner(id, times, open, high, low, close);
+        if accepted == points.len() {
+            sequence.truncate(from);
+            sequence.extend(points);
+            self.sequence_points = Some(sequence);
+            self.sync_sequence_axis_times();
+        } else {
+            self.sequence_points = Some(sequence);
+        }
+        accepted
     }
 
     fn install_series_columns(
@@ -4324,14 +4377,20 @@ impl ChartEngine {
     }
 
     fn clear_sequence_axis_if_unused(&mut self) {
-        let has_sequence_series = self.series.iter().any(|series| {
-            series.footprint.as_ref().is_some_and(|state| {
-                self.trade_stream(state.trade_stream_id)
-                    .is_some_and(|stream| {
+        let has_sequence_series =
+            self.series.iter().any(|series| {
+                series.footprint.as_ref().is_some_and(|state| {
+                    self.trade_stream(state.trade_stream_id)
+                        .is_some_and(|stream| {
+                            !matches!(stream.options().bars, FootprintBarAggregation::Time { .. })
+                        })
+                })
+            }) || self.trade_dependents.iter().any(|(stream_id, dependents)| {
+                !dependents.is_empty()
+                    && self.trade_stream(*stream_id).is_some_and(|stream| {
                         !matches!(stream.options().bars, FootprintBarAggregation::Time { .. })
                     })
-            })
-        });
+            });
         if !has_sequence_series && self.sequence_points.take().is_some() {
             // The data-layer generation does not change when the sidecar is retired. Force one
             // ordinary sync so tick weights and axis endpoints stop referring to sequence labels.
