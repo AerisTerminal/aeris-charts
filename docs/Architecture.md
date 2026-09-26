@@ -692,6 +692,7 @@ study persistence V3 stores binding definitions, dependency references, scalar i
 and output styles while leaving market history and ordinary series data host-owned. Trade, quote, and
 depth study inputs remain owned by the host market runtime: it supplies typed stream requirements and
 generation-fenced borrowed views, while Charts receives only bounded scalar study output publications.
-Charts must not retain a second tape/book or infer provider stream state from a rendered series; the
-remaining F4 bridge must preserve this runtime-to-chart boundary and persist only validated binding
-metadata.
+Charts must not retain a second tape/book or infer provider stream state from a rendered series. The
+Terminal bridge now carries the transitive stream requirements as bounded output metadata and persists
+only the validated host binding; this keeps the runtime-to-chart boundary explicit while allowing
+downstream output presentation to retain its typed input contract.

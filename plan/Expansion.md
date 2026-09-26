@@ -270,15 +270,18 @@ session, weekly and monthly reset keys, weighted population-deviation bands and 
 pure-math and incremental rebuild tests cover the monthly reference path. Typed multi-input
 validation now rejects invalid VWAP volume bindings atomically. Financial persistence V3 now
 round-trips ordered study dependencies, scalar inputs, volume references and per-output styles while
-leaving market data host-owned. The remaining F4 trade/depth bindings and
-the final B4 docs/full-gate item remain open. DEMA, TEMA, SMMA/RMA, HMA, VWMA,
+leaving market data host-owned. The Terminal host bridge now carries each
+runtime study's transitive typed trade/quote/depth stream requirements beside
+the bounded scalar publication, so downstream chart presentation can retain
+binding metadata without a second tape or book. The final B4 docs/full-gate
+item remains open. DEMA, TEMA, SMMA/RMA, HMA, VWMA,
 standard deviation, CCI, Williams %R, Stochastic RSI, ROC, Momentum, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku are
 OBV, CMF, MFI, the volume/MA study, daily previous-session pivot points and percentage-deviation
 ZigZag are now exposed through the engine, WASM and TypeScript APIs, with pure and incremental
 rebuild coverage. The all-runtime-mutation fixture exercises every current indicator state,
 including pivot, ZigZag and VWAP bands, and the fixed-value reference fixture covers every output
 family and pivot variant. Engine persistence and full-recompute fixtures cover the same catalog;
-the remaining B4 closure is F4 trade/depth bindings and the docs/full-gate item. CT6 now
+the remaining B4 closure is the final docs/full-gate item. CT6 now
 uses one bounded chart-level comparison anchor for percentage/indexed geometry and exposes an
 engine-owned per-series legend snapshot; the Rust fixture and browser public API path cover exact
 anchor values, latest values, and percent changes without duplicating canonical rows. CT1's
