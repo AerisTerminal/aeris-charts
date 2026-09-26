@@ -689,4 +689,9 @@ are never changed merely to satisfy a different host.
 Indicator multi-input validation is engine-owned: VWAP and VWAP-band bindings require a distinct
 live scalar volume series, while missing volume remains the explicit unit-weight fallback. Financial
 study persistence V3 stores binding definitions, dependency references, scalar inputs, volume inputs,
-and output styles while leaving market history and ordinary series data host-owned.
+and output styles while leaving market history and ordinary series data host-owned. Trade, quote, and
+depth study inputs remain owned by the host market runtime: it supplies typed stream requirements and
+generation-fenced borrowed views, while Charts receives only bounded scalar study output publications.
+Charts must not retain a second tape/book or infer provider stream state from a rendered series; the
+remaining F4 bridge must preserve this runtime-to-chart boundary and persist only validated binding
+metadata.
