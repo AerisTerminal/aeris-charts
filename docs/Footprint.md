@@ -202,6 +202,15 @@ six cases, including the WebGPU shared-frame path. These checks cover executor s
 browser integration; native device-present timing and the GPUI display-specific numbers above
 remain diagnostic rather than portable budgets.
 
+Order-flow milestone evidence was captured on 2026-09-26. The GPUI pane capture used
+`AERIS_CHARTS_GPUI_FEATURE=footprint` at DPR 1.25 and produced a 1543×873 image for the dense
+12-bar fixture; the image was visually inspected for readable cell text, stable column alignment,
+and unclipped pane content. The browser accessibility review passed the focused
+`unified-interaction-accessibility.spec.mjs` contract: one bounded application surface, hidden
+canvas pixels, a silent live region during streaming, and keyboard drawing edits that roll back.
+The capture image remains a transient milestone artifact; the command and metadata are recorded
+here so the evidence can be reproduced without adding binary fixtures to the repository.
+
 Deterministic synthetic tapes cover grid boundaries, unknown-side handling, quote/tick-rule
 classification, equal timestamps and sequences, late events, corrections, session resets, all bar
 modes, bid/ask/total/delta levels, POC ties, mean-reverting Max/Min Delta paths, both imbalance sides,

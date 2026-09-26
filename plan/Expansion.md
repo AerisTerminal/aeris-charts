@@ -33,7 +33,7 @@ Updated 2026-09-26. Baseline source-confirmed 2026-09-24.
 | --- | --- | --- | --- |
 | B1 | Platform chart contracts: PD11, PD1, PD3, PD4, PD5, PD6, PD7 | Multi-account chart trading, trailing and break-even stops, risk warnings on order lines, economic events and risk windows, trade review markers, linked charts, journal images, fundamentals | **Complete** |
 | B2 | Drawing model and customization: F5, schema conventions, existing tools | Configurable drawings, templates, drawing sync across cells | **Complete** |
-| B3 | Shared tape and order flow: F2, OF1, OF2, OF11, OF12, PD10 | Footprint, CVD, delta, big-trade bubbles | Open |
+| B3 | Shared tape and order flow: F2, OF1, OF2, OF11, OF12, PD10 | Footprint, CVD, delta, big-trade bubbles | **Complete** |
 | B4 | Study inputs and core indicators: F4, OF9, CT1, CT2, CT6, I1 | Professional indicator set, VWAP bands, Heikin Ashi, comparisons | **Complete** |
 | B5 | Non-time bars and replay: F1, OF14, CT3, CT4, PD2 | Tick/volume/range charts, session replay, trade review playback | Open |
 | B6 | Depth: F3, OF15–OF18, PD8, PD9 | Liquidity heatmap, order-level markers, depth studies | Open |
@@ -159,7 +159,7 @@ builds a generic property panel from schemas alone, and old layouts migrate.
 ### B3 — Shared tape and order flow
 
 **Scope:** F2, OF1, OF2, OF11, OF12, PD10. **Depends on:** the existing footprint.
-**Status:** open.
+**Status:** complete (2026-09-26).
 
 - [x] Record reference behavior and release baselines for footprint and tape-derived studies.
 - [x] **F2** Chart-level trade stream handle keyed by host instrument stream; footprint rebound to
@@ -177,8 +177,8 @@ builds a generic property panel from schemas alone, and old layouts migrate.
       repeated numeric runs where measurement shows shaping dominates; budgets added to `perf_gate`.
 - [x] Early F1 design note in `docs/Architecture.md` so later work does not assume the second-based
       axis.
-- [x] Full gate green; benchmark gate changes committed and pushed; milestone evidence remains open.
-- [ ] Milestone evidence: screenshots, accessibility review and recorded benchmarks for order flow.
+- [x] Full gate green; benchmark gate changes committed and pushed; milestone evidence recorded.
+- [x] Milestone evidence: screenshots, accessibility review and recorded benchmarks for order flow.
 
 Implementation evidence so far: `chart_trade_stream_is_shared_by_bound_footprint_dependents`,
 `cvd_and_delta_dependents_follow_late_corrections_and_report_rebuilds`,
@@ -193,8 +193,8 @@ stops at GPUI scene construction, while native `perf_gate` Target J covers WebGP
 frame encoding and verifies every resolved dense text run is scheduled. Neither benchmark covers
 native window shaping or actual GPU present time; `gpui_probe` now accepts
 `AERIS_CHARTS_PROBE_FEATURE=footprint` for that real-window capture and reports the shaped-run
-cache. Accessibility review and the screenshot milestone remain open until the batch is closed. The
-screenshot harness now accepts
+cache. The screenshot and accessibility milestone is recorded in `docs/Footprint.md`. The
+screenshot harness accepts
 `AERIS_CHARTS_GPUI_FEATURE=footprint` and emits a DPR-aware PNG plus metadata for the dense
 12-bar fixture; the capture has been exercised on the current Windows display after fixing the
 harness to pass the configured frame background through the GPUI prepared frame. The observed
