@@ -218,7 +218,7 @@ retention evicts both), and PD10 budgets hold on GPUI.
       draw-stream parity fixtures cover the chain, while full render parity remains part of the
       aggregate F4 exit.
 - [x] **OF9** VWAP standard-deviation and percent bands with session, weekly and monthly reset.
-- [ ] **CT1** Hollow candles, columns, high-low bars, step line, line with markers.
+- [x] **CT1** Hollow candles, columns, high-low bars, step line, line with markers.
 - [ ] **CT2** Heikin Ashi with real OHLC exposed separately for trading and crosshair.
 - [ ] **CT6** Symbol comparison overlays with a shared comparison anchor and per-symbol legend
       values.
@@ -278,11 +278,13 @@ ZigZag are now exposed through the engine, WASM and TypeScript APIs, with pure a
 rebuild coverage. The all-runtime-mutation fixture exercises every current indicator state,
 including pivot, ZigZag and VWAP bands, and the fixed-value reference fixture covers every output
 family and pivot variant. Engine persistence and full-recompute fixtures cover the same catalog;
-the remaining B4 closure is F4 trade/depth bindings, CT2/CT6, the rest of the CT1 host/executor
- matrix, and the docs/full-gate item. CT1's existing histogram columns, transparent-body hollow
- candles, stepped lines and point markers remain on the shared frame path; the bar path now also
- exposes a typed `close_visible` style flag through Rust, WASM and TypeScript so disabling both
- OHLC ticks produces a high-low bar while retaining its vertical range body.
+the remaining B4 closure is F4 trade/depth bindings, CT2/CT6, and the docs/full-gate item. CT1's
+histogram columns, transparent-body hollow candles, stepped lines, point markers, and high-low
+bars are covered by shared frame fixtures plus the browser package path; the bar path exposes a
+typed `close_visible` style flag through Rust, WASM and TypeScript so disabling both OHLC ticks
+produces a high-low bar while retaining its vertical range body. Browser compatibility coverage
+round-trips the high-low, stepped-line, and point-marker options; existing backend parity and GPUI
+matrix fixtures cover marker execution across Canvas2D, WebGPU, and GPUI.
 
 ### B5 — Non-time bars and replay
 

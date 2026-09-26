@@ -206,3 +206,20 @@ test("bar close visibility reaches the browser frame for high-low bars", async (
   expect(result.options).toMatchObject({ open_visible: false, close_visible: false });
   expect(result.data).toHaveLength(3);
 });
+
+test("stepped lines and point markers round-trip through the public series API", async ({ page }) => {
+  await open_chart(page);
+
+  const options = await page.evaluate(() => {
+    const line = window.__chart.add_series("line", { price_line_visible: false, last_value_visible: false });
+    line.set_data([
+      { time: 1, value: 100 },
+      { time: 2, value: 103 },
+      { time: 3, value: 101 },
+    ]);
+    line.apply_options({ line_type: "stepped", point_markers: true, point_markers_radius: 5 });
+    return line.options();
+  });
+
+  expect(options).toMatchObject({ line_type: "stepped", point_markers: true, point_markers_radius: 5 });
+});
