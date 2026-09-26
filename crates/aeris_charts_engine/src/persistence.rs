@@ -2356,6 +2356,32 @@ mod tests {
     }
 
     #[test]
+    fn vwap_bands_persistence_round_trips_reset_and_parameters() {
+        let mut chart = settled_chart();
+        let outputs = chart.add_vwap_bands(
+            0,
+            None,
+            aeris_charts_indicators::VwapReset::Monthly,
+            1.25,
+            7.5,
+        );
+        assert_eq!(outputs.len(), 5);
+        let document = chart.export_state_json().unwrap();
+
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(
+            restored.indicator_bindings()[0].kind,
+            crate::IndicatorKind::VwapBands {
+                reset: aeris_charts_indicators::VwapReset::Monthly,
+                standard_deviation: 1.25,
+                percent: 7.5,
+            }
+        );
+        assert_eq!(restored.indicator_bindings()[0].outputs, outputs);
+    }
+
+    #[test]
     fn supported_fixtures_restore_and_canonical_output_round_trips() {
         for fixture in [MINIMAL, VALID, ALL_DRAWINGS] {
             let mut first = ChartEngine::new(800.0, 500.0, 1.0);

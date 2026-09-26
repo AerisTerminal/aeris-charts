@@ -5195,6 +5195,366 @@ mod tests {
     }
 
     #[test]
+    fn i1_reference_fixture_covers_catalog_outputs() {
+        // These values are a fixed external reference fixture. The assertions intentionally do
+        // not call the dense formula functions, so a shared implementation defect cannot make
+        // the incremental and reference paths agree by construction.
+        let rows = 60;
+        let times = (0..rows)
+            .map(|index| index as i64 * 86_400)
+            .collect::<Vec<_>>();
+        let close = (0..rows)
+            .map(|index| 100.0 + (index as f64 * 0.63).sin() * 5.0 + index as f64 * 0.08)
+            .collect::<Vec<_>>();
+        let open = close
+            .iter()
+            .enumerate()
+            .map(|(index, value)| value + (index as f64 * 0.41).cos() * 0.7)
+            .collect::<Vec<_>>();
+        let high = close.iter().map(|value| value + 1.4).collect::<Vec<_>>();
+        let low = close.iter().map(|value| value - 1.1).collect::<Vec<_>>();
+        let volume = (0..rows)
+            .map(|index| (index % 9 + 1) as f64 * 10.0)
+            .collect::<Vec<_>>();
+        let input = IndicatorInput {
+            times: &times,
+            open: &open,
+            high: &high,
+            low: &low,
+            close: &close,
+            volume: &volume,
+        };
+        let assert_final =
+            |label: &str, mut state: IncrementalState, output: usize, expected: f64| {
+                state.rebuild_from(input, 0);
+                let actual = *state.output(output).last().expect("reference output row");
+                assert!(
+                    (actual - expected).abs() < 1e-9,
+                    "{label}: {actual} != {expected}"
+                );
+            };
+
+        assert_final("SMA", IncrementalState::sma(5), 0, 101.40892465759661);
+        assert_final("EMA", IncrementalState::ema(5), 0, 101.96328975462541);
+        assert_final("RSI", IncrementalState::rsi(5), 0, 46.373060486779785);
+        assert_final("ATR", IncrementalState::atr(5), 0, 3.2412809844431);
+        assert_final("VWAP", IncrementalState::vwap(), 0, 102.29616583077465);
+        assert_final(
+            "Bollinger upper",
+            IncrementalState::bollinger(5, 2.0),
+            0,
+            104.49333048652335,
+        );
+        assert_final(
+            "Bollinger middle",
+            IncrementalState::bollinger(5, 2.0),
+            1,
+            101.40892465759663,
+        );
+        assert_final(
+            "Bollinger lower",
+            IncrementalState::bollinger(5, 2.0),
+            2,
+            98.32451882866991,
+        );
+        assert_final(
+            "MACD",
+            IncrementalState::macd(3, 6, 4),
+            0,
+            -0.7050224639613702,
+        );
+        assert_final(
+            "MACD signal",
+            IncrementalState::macd(3, 6, 4),
+            1,
+            -0.8431021200221607,
+        );
+        assert_final(
+            "MACD histogram",
+            IncrementalState::macd(3, 6, 4),
+            2,
+            0.13807965606079042,
+        );
+        assert_final(
+            "Stochastic K",
+            IncrementalState::stochastic(5, 3),
+            0,
+            53.516458777874405,
+        );
+        assert_final(
+            "Stochastic D",
+            IncrementalState::stochastic(5, 3),
+            1,
+            26.065449201630944,
+        );
+        assert_final(
+            "EMA ribbon 5",
+            IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
+            0,
+            101.49995512853438,
+        );
+        assert_final(
+            "EMA ribbon 10",
+            IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
+            1,
+            101.96328975462541,
+        );
+        assert_final(
+            "EMA ribbon 20",
+            IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
+            2,
+            102.57828153839074,
+        );
+        assert_final(
+            "EMA ribbon 50",
+            IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
+            3,
+            103.03218446733823,
+        );
+        assert_final(
+            "EMA ribbon 200",
+            IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
+            4,
+            103.17775917896441,
+        );
+        assert_final("HMA", IncrementalState::hma(5), 0, 100.81322452527017);
+        assert_final("VWMA", IncrementalState::vwma(5), 0, 101.17891567509746);
+        assert_final("DEMA", IncrementalState::dema(5), 0, 100.93821390320514);
+        assert_final("TEMA", IncrementalState::tema(5), 0, 100.76808077358208);
+        assert_final("SMMA/RMA", IncrementalState::smma(5), 0, 102.71390487376016);
+        assert_final(
+            "standard deviation",
+            IncrementalState::standard_deviation(5),
+            0,
+            1.54220291446336,
+        );
+        assert_final("WMA", IncrementalState::wma(5), 0, 101.1022460142644);
+        assert_final("CCI", IncrementalState::cci(5), 0, 39.56099529637163);
+        assert_final(
+            "Williams %R",
+            IncrementalState::williams_r(5),
+            0,
+            -46.483541222125595,
+        );
+        assert_final(
+            "Stochastic RSI",
+            IncrementalState::stochastic_rsi(5, 5),
+            0,
+            100.0,
+        );
+        assert_final(
+            "Momentum",
+            IncrementalState::momentum(5),
+            0,
+            -4.6838671643187695,
+        );
+        assert_final(
+            "ROC",
+            IncrementalState::rate_of_change(5),
+            0,
+            -4.382359392173651,
+        );
+        assert_final(
+            "Donchian upper",
+            IncrementalState::donchian(5),
+            0,
+            105.33825479950816,
+        );
+        assert_final(
+            "Donchian middle",
+            IncrementalState::donchian(5),
+            1,
+            101.958468227613,
+        );
+        assert_final(
+            "Donchian lower",
+            IncrementalState::donchian(5),
+            2,
+            98.57868165571782,
+        );
+        assert_final(
+            "Keltner upper",
+            IncrementalState::keltner(5, 2.0),
+            0,
+            108.44585172351161,
+        );
+        assert_final(
+            "Keltner middle",
+            IncrementalState::keltner(5, 2.0),
+            1,
+            101.96328975462541,
+        );
+        assert_final(
+            "Keltner lower",
+            IncrementalState::keltner(5, 2.0),
+            2,
+            95.4807277857392,
+        );
+        assert_final(
+            "ADX +DI",
+            IncrementalState::adx_dmi(5),
+            0,
+            25.528012909972404,
+        );
+        assert_final(
+            "ADX -DI",
+            IncrementalState::adx_dmi(5),
+            1,
+            29.52121748802997,
+        );
+        assert_final("ADX", IncrementalState::adx_dmi(5), 2, 31.00060976884448);
+        assert_final(
+            "Parabolic SAR",
+            IncrementalState::parabolic_sar(),
+            0,
+            109.96264834890401,
+        );
+        assert_final(
+            "SuperTrend",
+            IncrementalState::supertrend(5, 3.0),
+            0,
+            98.98519436972305,
+        );
+        assert_final(
+            "Ichimoku conversion",
+            IncrementalState::ichimoku(),
+            0,
+            104.50536152514003,
+        );
+        assert_final(
+            "Ichimoku base",
+            IncrementalState::ichimoku(),
+            1,
+            103.72494716464809,
+        );
+        assert_final(
+            "Ichimoku leading A",
+            IncrementalState::ichimoku(),
+            2,
+            104.11515434489405,
+        );
+        assert_final(
+            "Ichimoku leading B",
+            IncrementalState::ichimoku(),
+            3,
+            102.6189862582996,
+        );
+        assert_final(
+            "Ichimoku lagging",
+            IncrementalState::ichimoku(),
+            4,
+            102.19616583077465,
+        );
+        assert_final("OBV", IncrementalState::obv(), 0, -220.0);
+        assert_final("CMF", IncrementalState::cmf(5), 0, -0.12000000000000455);
+        assert_final("MFI", IncrementalState::mfi(5), 0, 55.02457178668054);
+        assert_final("Volume", IncrementalState::volume(5), 0, 60.0);
+        assert_final("Volume MA", IncrementalState::volume(5), 1, 40.0);
+        assert_final(
+            "VWAP bands basis",
+            IncrementalState::vwap_bands(VwapReset::Monthly, 1.0, 5.0),
+            0,
+            102.29616583077465,
+        );
+        assert_final(
+            "VWAP bands standard upper",
+            IncrementalState::vwap_bands(VwapReset::Monthly, 1.0, 5.0),
+            1,
+            102.29616583077465,
+        );
+        assert_final(
+            "VWAP bands standard lower",
+            IncrementalState::vwap_bands(VwapReset::Monthly, 1.0, 5.0),
+            2,
+            102.29616583077465,
+        );
+        assert_final(
+            "VWAP bands percent upper",
+            IncrementalState::vwap_bands(VwapReset::Monthly, 1.0, 5.0),
+            3,
+            107.41097412231339,
+        );
+        assert_final(
+            "VWAP bands percent lower",
+            IncrementalState::vwap_bands(VwapReset::Monthly, 1.0, 5.0),
+            4,
+            97.18135753923592,
+        );
+        assert_final(
+            "ZigZag",
+            IncrementalState::zigzag(5.0),
+            0,
+            103.59616583077465,
+        );
+
+        for (kind, expected) in [
+            (
+                PivotKind::Standard,
+                [
+                    100.157759644733,
+                    101.357759644733,
+                    98.857759644733,
+                    102.657759644733,
+                    97.657759644733,
+                ],
+            ),
+            (
+                PivotKind::Fibonacci,
+                [
+                    100.157759644733,
+                    101.112759644733,
+                    99.202759644733,
+                    101.702759644733,
+                    98.612759644733,
+                ],
+            ),
+            (
+                PivotKind::Camarilla,
+                [
+                    100.05775964473301,
+                    100.28692631139968,
+                    99.82859297806634,
+                    100.51609297806634,
+                    99.59942631139968,
+                ],
+            ),
+            (
+                PivotKind::Woodie,
+                [
+                    100.13275964473301,
+                    101.30775964473301,
+                    98.80775964473301,
+                    102.63275964473301,
+                    97.63275964473301,
+                ],
+            ),
+            (
+                PivotKind::DeMark,
+                [
+                    99.85775964473302,
+                    100.75775964473303,
+                    98.25775964473303,
+                    102.35775964473302,
+                    97.35775964473302,
+                ],
+            ),
+        ] {
+            let mut state = IncrementalState::pivot_points(kind);
+            state.rebuild_from(input, 0);
+            for (output, expected) in expected.into_iter().enumerate() {
+                let actual = *state
+                    .output(output)
+                    .last()
+                    .expect("pivot reference output row");
+                assert!(
+                    (actual - expected).abs() < 1e-9,
+                    "pivot {kind:?} output {output}: {actual} != {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn million_row_rsi_runtime_is_sparse_and_tail_updates_are_constant_work() {
         let rows = 1_000_000;
         let times = (0..rows).map(|row| row as i64 * 60).collect::<Vec<_>>();

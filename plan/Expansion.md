@@ -249,7 +249,7 @@ retention evicts both), and PD10 budgets hold on GPUI.
 - [x] **I1 levels slice:** ZigZag with percentage-deviation turning points, pure, incremental,
       schema, persistence and package coverage.
 - [x] **I1 levels:** pivot points (standard, Fibonacci, Camarilla, Woodie, DeMark), ZigZag.
-- [ ] Every indicator has incremental state, rebuild equivalence, a typed schema, persistence and an
+- [x] Every indicator has incremental state, rebuild equivalence, a typed schema, persistence and an
       independently computed reference fixture.
 - [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
 
@@ -270,13 +270,15 @@ session, weekly and monthly reset keys, weighted population-deviation bands and 
 pure-math and incremental rebuild tests cover the monthly reference path. Typed multi-input
 validation now rejects invalid VWAP volume bindings atomically. Financial persistence V3 now
 round-trips ordered study dependencies, scalar inputs, volume references and per-output styles while
-leaving market data host-owned. Chart-type additions, the remaining F4 exit fixtures and the I1
-catalog remain open until the whole batch is implemented. DEMA, TEMA, SMMA/RMA, HMA, VWMA,
+leaving market data host-owned. The remaining F4 trade/depth bindings, chart-type additions and
+the final B4 docs/full-gate item remain open. DEMA, TEMA, SMMA/RMA, HMA, VWMA,
 standard deviation, CCI, Williams %R, Stochastic RSI, ROC, Momentum, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku are
 OBV, CMF, MFI, the volume/MA study, daily previous-session pivot points and percentage-deviation
 ZigZag are now exposed through the engine, WASM and TypeScript APIs, with pure and incremental
-rebuild coverage. The all-runtime-mutation fixture now exercises the pivot, ZigZag and VWAP-band
-states as well as the earlier I1 catalog; the independent reference fixture gate remains open.
+rebuild coverage. The all-runtime-mutation fixture exercises every current indicator state,
+including pivot, ZigZag and VWAP bands, and the fixed-value reference fixture covers every output
+family and pivot variant. Engine persistence and full-recompute fixtures cover the same catalog;
+the remaining B4 closure is the chart-type work and the docs/full-gate item.
 
 ### B5 — Non-time bars and replay
 

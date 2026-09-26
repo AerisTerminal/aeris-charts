@@ -2047,6 +2047,11 @@ fn every_indicator_engine_path_matches_full_recomputation() {
         },
         IndicatorKind::Atr { period: 5 },
         IndicatorKind::Vwap,
+        IndicatorKind::VwapBands {
+            reset: aeris_charts_indicators::VwapReset::Monthly,
+            standard_deviation: 1.0,
+            percent: 5.0,
+        },
         IndicatorKind::Obv,
         IndicatorKind::Cmf { period: 5 },
         IndicatorKind::Mfi { period: 5 },
