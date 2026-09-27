@@ -1529,6 +1529,50 @@ impl AerisChart {
         self.inner.borrow_mut().add_trade_stream(key, options_json)
     }
 
+    pub fn replay_clock_micros(&self) -> f64 {
+        self.inner.borrow().replay_clock_micros()
+    }
+
+    pub fn set_replay_clock_micros(&mut self, clock_micros: f64) -> String {
+        self.inner
+            .borrow_mut()
+            .set_replay_clock_micros(clock_micros)
+    }
+
+    pub fn configure_synthetic_bar_series(&mut self, id: u32, options_json: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .configure_synthetic_bar_series(id, options_json)
+    }
+
+    pub fn set_synthetic_bar_source_typed(
+        &mut self,
+        id: u32,
+        times: &Float64Array,
+        open: &Float64Array,
+        high: &Float64Array,
+        low: &Float64Array,
+        close: &Float64Array,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_synthetic_bar_source_typed(id, times, open, high, low, close)
+    }
+
+    pub fn update_synthetic_bar_source(
+        &mut self,
+        id: u32,
+        time: f64,
+        open: f64,
+        high: f64,
+        low: f64,
+        close: f64,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .update_synthetic_bar_source(id, time, open, high, low, close)
+    }
+
     pub fn trade_stream_id(&self, key: &str) -> u32 {
         self.inner.borrow().trade_stream_id(key)
     }
@@ -1541,10 +1585,32 @@ impl AerisChart {
         self.inner.borrow().trade_stream_stats_json(stream_id)
     }
 
+    pub fn trade_stream_replay_clock_micros(&self, stream_id: u32) -> f64 {
+        self.inner
+            .borrow()
+            .trade_stream_replay_clock_micros(stream_id)
+    }
+
+    pub fn set_trade_stream_replay_clock_micros(
+        &mut self,
+        stream_id: u32,
+        clock_micros: f64,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_trade_stream_replay_clock_micros(stream_id, clock_micros)
+    }
+
     pub fn bind_footprint_series_to_stream(&mut self, id: u32, stream_id: u32) -> bool {
         self.inner
             .borrow_mut()
             .bind_footprint_series_to_stream(id, stream_id)
+    }
+
+    pub fn bind_trade_bar_series_to_stream(&mut self, id: u32, stream_id: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .bind_trade_bar_series_to_stream(id, stream_id)
     }
 
     pub fn add_cvd_series(
@@ -1616,6 +1682,36 @@ impl AerisChart {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn set_trade_stream_trades_typed(
+        &mut self,
+        stream_id: u32,
+        timestamps: &[f64],
+        prices: &[f64],
+        volumes: &[f64],
+        sides: &[u8],
+        bids: &[f64],
+        asks: &[f64],
+        sequences: &[f64],
+        trade_ids: &[f64],
+        conditions: &[u32],
+        session_ids: &[f64],
+    ) -> String {
+        self.inner.borrow_mut().set_trade_stream_trades_typed(
+            stream_id,
+            timestamps,
+            prices,
+            volumes,
+            sides,
+            bids,
+            asks,
+            sequences,
+            trade_ids,
+            conditions,
+            session_ids,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn update_footprint_trades_typed(
         &mut self,
         id: u32,
@@ -1632,6 +1728,36 @@ impl AerisChart {
     ) -> String {
         self.inner.borrow_mut().update_footprint_trades_typed(
             id,
+            timestamps,
+            prices,
+            volumes,
+            sides,
+            bids,
+            asks,
+            sequences,
+            trade_ids,
+            conditions,
+            session_ids,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_trade_stream_trades_typed(
+        &mut self,
+        stream_id: u32,
+        timestamps: &[f64],
+        prices: &[f64],
+        volumes: &[f64],
+        sides: &[u8],
+        bids: &[f64],
+        asks: &[f64],
+        sequences: &[f64],
+        trade_ids: &[f64],
+        conditions: &[u32],
+        session_ids: &[f64],
+    ) -> String {
+        self.inner.borrow_mut().update_trade_stream_trades_typed(
+            stream_id,
             timestamps,
             prices,
             volumes,

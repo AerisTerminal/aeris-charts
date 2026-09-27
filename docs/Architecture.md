@@ -372,14 +372,55 @@ Chart-integrated trade-count, volume, and range footprint projections use chart-
 an engine-owned sequence sidecar; axis labels, crosshair lookup, and visible ranges resolve against
 the sidecar's full-resolution open times, never synthetic UTC timestamps. `BarSequenceMapping`
 matches ordered full-resolution bounds and rebases logical anchors across prepend/rebuild operations
-without collapsing duplicate second labels. Non-time tip updates now replace only the affected
-suffix (falling back to a full projection when retention can shift the prefix), and derived delta
-studies and trade-bubble markers use the same logical row keys. Bubble aggregation windows compare
+without collapsing duplicate second labels. Ordinary candlestick and OHLC-bar presentations bind
+to that same chart-level stream and consume the aggregator's canonical OHLC bars; stream-identity
+replacement and live batches update footprint, ordinary bars, studies, and bubbles together without
+copying or reclassifying the tape. Bound ordinary bars reject independent retention caps because all
+presentations in a non-time domain must retain the same logical rows. Non-time tip updates now
+replace only the affected suffix (falling back to a full projection when retention can shift the
+prefix), and derived delta studies and trade-bubble markers use the same logical row keys. Bubble aggregation windows compare
 the original microsecond trade times; value snapshots and series queries resolve their time labels
 through the same sidecar. Trading executions, host events, and round-trip geometry resolve their
-timestamp anchors through the same index helper. The broader B5 performance exit remains open for replay and
-release benchmarks. The sidecar is retired when the last live non-time footprint or dependent leaves the chart,
+timestamp anchors through the same index helper. The sidecar is retired when the last live
+non-time footprint, candle/bar, or study dependent leaves the chart,
 preventing stale sequence labels from affecting later time series.
+The chart owns one host-supplied replay clock in microseconds and applies it to every canonical
+trade stream and the ordinary time-domain data layer. Source rows and future events remain retained
+once while series queries, studies, footprint cells, markers, sparse stepped releases, trading
+executions, round trips, and host-event geometry expose only the eligible prefix. A host window
+crossing the clock is clipped; a wholly future window is omitted. The ordered frame draws one
+engine-owned dashed replay cursor in every pane, so Canvas2D, WebGPU, native, and GPUI executors do
+not reconstruct replay state. Non-time dependents use their shared sequence projection rather than
+interpreting logical row keys as UTC seconds; arbitrary independently timed series are not valid on
+that domain.
+
+Moving the clock forward applies newly revealed canonical events through the ordinary live path.
+Backward trade seeks restore the nearest retained aggregation checkpoint, replay only the reported
+suffix, and produce the same bars as a fresh load to that clock. Checkpoints are recorded every
+1,024 eligible trades and capped at 64 per stream; an older seek starts from the retained tape's
+rebuild seed. Retention reconstructs checkpoints for the surviving suffix. Ingest wholly beyond
+the clock changes only source truth and performs no dependent work. The existing columnar
+`update_typed` path is the bulk ordered bar boundary, while trade batches cross as parallel typed
+arrays and update all stream dependents once. The release `perf_gate` advances a shared
+footprint/candle chart through 6,000 recorded seconds at 100×, builds every frame, and requires
+steady-state retained memory not to grow across complete passes.
+
+Renko, Line Break, Kagi, and Point & Figure are engine-owned price-action transforms over one
+canonical host OHLC source. Fixed-box Renko requires a two-box reversal; ATR Renko uses Wilder true
+range and begins only after its configured warm-up; Line Break compares a source close with the
+high/low of the last configured lines; Kagi reverses only by its configured absolute amount; Point
+& Figure uses fixed boxes and a configured reversal count. Ordered tip input updates only the
+active transform state, while current-source replacement rebuilds deterministically and is tested
+against the incremental result. Source and output are each capped at 1,000,000 rows/bars and reject
+overflow atomically. Their output installs through the same full-resolution bar-sequence sidecar as
+trade-count/volume/range charts, so replay, labels, crosshair lookup, drawing rebasing, indicators,
+and every backend share one logical identity. A chart permits only one independent non-time source;
+derived indicators may share it, but another synthetic transform, arbitrary independently timed
+series, or a non-time trade stream must use another chart. Renko and Line Break use canonical candle
+or OHLC-bar geometry, Kagi lowers to shared horizontal/vertical line primitives, and Point & Figure
+lowers bounded X/O text (with a dense-column line fallback), so executors contain no transform math.
+Synthetic market source remains host-owned and is intentionally excluded from chart-state
+persistence, consistent with every financial series definition and market-history payload.
 The configured tick size owns the series min-move/formatter and the shared autoscale, frame, and hit
 paths use complete half-tick outer cell bounds on the series' ordinary pane-local price scale.
 Footprint bars ultimately emit the same ordered `ChartFrame` as every other series, and no backend

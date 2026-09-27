@@ -5,12 +5,13 @@
 //!   Target A — 60fps @ 10 series x 50k bars:  `build_frame` under 16.67 ms/frame
 //!   Target B — 1M-bar load under 300 ms:      `set_series_data` of 1,000,000 bars
 //!   Target C — canonical pointer sample:      fixed-capacity resolver under 0.01 ms/sample
-//!   Target D — footprint history/live/correction ingestion plus shared-frame construction
+//!   Target D — shared non-time candles/footprint history, live, correction, and frame construction
 //!   Target E — 100k visible-bar volume profile refresh and cached shared frame
 //!   Target F — 100k-point general XY line frame + nearest-hit interaction
 //!   Target G — mixed 100k-row general dashboard frame, hit interaction, and retained memory
 //!   Target H — combined 50k-bar financial + 50k-point general frame and retained memory
 //!   Target I — 100k-row numeric error bars frame, hit interaction, and retained memory
+//!   Target K — 100x replay clock advance, shared projections, frame work, and flat retained memory
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `AERIS_CHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -202,6 +203,9 @@ fn main() {
     const COMBINED_MEMORY_BUDGET_BYTES: usize = 16 * 1024 * 1024;
     const ERROR_BAR_POINTS: usize = 100_000;
     const ERROR_BAR_MEMORY_BUDGET_BYTES: usize = 16 * 1024 * 1024;
+    const REPLAY_SPEED: usize = 100;
+    const REPLAY_SECONDS: usize = 6_000;
+    const REPLAY_FRAMES: usize = REPLAY_SECONDS / REPLAY_SPEED;
 
     println!("aeris_charts perf gate (release build recommended)\n");
 
@@ -280,9 +284,8 @@ fn main() {
             FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 0.25,
-                    bars: FootprintBarAggregation::Time {
-                        interval_micros: 60_000_000,
-                        anchor_micros: 0,
+                    bars: FootprintBarAggregation::Trades {
+                        trades_per_bar: FOOTPRINT_TRADES_PER_BAR as u32,
                     },
                     ..FootprintAggregationOptions::default()
                 },
@@ -295,9 +298,8 @@ fn main() {
             "PERF:ES",
             FootprintAggregationOptions {
                 tick_size: 0.25,
-                bars: FootprintBarAggregation::Time {
-                    interval_micros: 60_000_000,
-                    anchor_micros: 0,
+                bars: FootprintBarAggregation::Trades {
+                    trades_per_bar: FOOTPRINT_TRADES_PER_BAR as u32,
                 },
                 ..FootprintAggregationOptions::default()
             },
@@ -306,6 +308,10 @@ fn main() {
     footprint
         .bind_footprint_series_to_stream(0, footprint_stream)
         .expect("bind footprint stream");
+    let trade_candles = footprint.add_series(SeriesKind::Candlestick);
+    footprint
+        .bind_trade_bar_series_to_stream(trade_candles, footprint_stream)
+        .expect("bind trade candle stream");
     let _cvd = footprint
         .add_cvd_series(footprint_stream, 1, TradeStudyOptions::default())
         .expect("add CVD dependent");
@@ -379,7 +385,7 @@ fn main() {
     let footprint_stream_stats = footprint
         .trade_stream_stats(footprint_stream)
         .expect("shared footprint stream stats");
-    assert_eq!(footprint_stream_stats.dependent_count, 3);
+    assert_eq!(footprint_stream_stats.dependent_count, 4);
     println!(
         "Target D — {} footprint trades / {} bars + {}-trade live batch ({} incremental ticks, {} historical rebuilds, {} dependent incremental updates, {} retained bars, {:.2}/{:.2} MiB footprint capacity):",
         FOOTPRINT_HISTORY_BARS * FOOTPRINT_TRADES_PER_BAR,
@@ -868,6 +874,106 @@ fn main() {
         ERROR_BAR_MEMORY_BUDGET_BYTES,
     );
 
+    // ---- Target K: 100x replay through the real chart clock and shared trade projections ------
+    let mut replay = ChartEngine::new(1600.0, 800.0, 1.0);
+    replay
+        .configure_footprint_series(
+            0,
+            FootprintSeriesOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 0.25,
+                    bars: FootprintBarAggregation::Time {
+                        interval_micros: 1_000_000,
+                        anchor_micros: 0,
+                    },
+                    ..FootprintAggregationOptions::default()
+                },
+                visual: FootprintVisualOptions::default(),
+            },
+        )
+        .expect("valid replay footprint options");
+    let replay_stream = replay
+        .add_trade_stream(
+            "PERF:REPLAY",
+            FootprintAggregationOptions {
+                tick_size: 0.25,
+                bars: FootprintBarAggregation::Time {
+                    interval_micros: 1_000_000,
+                    anchor_micros: 0,
+                },
+                ..FootprintAggregationOptions::default()
+            },
+        )
+        .expect("valid replay stream");
+    replay
+        .bind_footprint_series_to_stream(0, replay_stream)
+        .expect("bind replay footprint");
+    let replay_candles = replay.add_series(SeriesKind::Candlestick);
+    replay
+        .bind_trade_bar_series_to_stream(replay_candles, replay_stream)
+        .expect("bind replay candles");
+    let replay_trades = (1..=REPLAY_SECONDS)
+        .map(|second| FootprintTrade {
+            timestamp_micros: second as i64 * 1_000_000,
+            price: 100.0 + ((second % 40) as f64 - 20.0) * 0.25,
+            volume: 1.0,
+            aggressor: if second % 2 == 0 {
+                AggressorSide::Buy
+            } else {
+                AggressorSide::Sell
+            },
+            bid: None,
+            ask: None,
+            sequence: Some(second as u64),
+            trade_id: Some(second as u64),
+            conditions: 0,
+            session_id: Some(1),
+        })
+        .collect();
+    replay
+        .set_trade_stream_trades(replay_stream, replay_trades)
+        .expect("valid replay history");
+    replay.time_scale.set_width(1600.0);
+    replay.fit_content();
+    let mut replay_frame = ChartFrame::default();
+    let run_replay = |chart: &mut ChartEngine, frame: &mut ChartFrame| {
+        chart
+            .set_replay_clock_micros(Some(0))
+            .expect("reset replay clock");
+        let started = Instant::now();
+        for frame_index in 1..=REPLAY_FRAMES {
+            chart
+                .set_replay_clock_micros(Some((frame_index * REPLAY_SPEED) as i64 * 1_000_000))
+                .expect("advance replay clock");
+            chart.build_frame_into(frame);
+        }
+        started.elapsed().as_secs_f64() * 1000.0 / REPLAY_FRAMES as f64
+    };
+    run_replay(&mut replay, &mut replay_frame);
+    let replay_first_ms = run_replay(&mut replay, &mut replay_frame);
+    let replay_memory_first = replay.memory_usage().estimated_live_bytes();
+    let replay_second_ms = run_replay(&mut replay, &mut replay_frame);
+    let replay_memory_second = replay.memory_usage().estimated_live_bytes();
+    let replay_visible = replay
+        .footprint_bars(0)
+        .expect("replay footprint bars")
+        .len();
+    println!(
+        "Target K — {REPLAY_SPEED}x replay over {REPLAY_SECONDS} seconds / {REPLAY_FRAMES} frames:"
+    );
+    let k_frame = report(
+        "clock advance + shared frame",
+        replay_first_ms.max(replay_second_ms),
+        FRAME_BUDGET_MS,
+    );
+    let k_flat_memory = replay_memory_second <= replay_memory_first;
+    println!(
+        "  [{}] flat retained memory: {:.2} MiB -> {:.2} MiB; {replay_visible} visible bars",
+        if k_flat_memory { "PASS" } else { "FAIL" },
+        replay_memory_first as f64 / (1024.0 * 1024.0),
+        replay_memory_second as f64 / (1024.0 * 1024.0),
+    );
+
     let all_pass = a_pass
         && b_pass
         && c_pass
@@ -885,7 +991,9 @@ fn main() {
         && h_memory
         && i_frame
         && i_hit
-        && i_memory;
+        && i_memory
+        && k_frame
+        && k_flat_memory;
     println!(
         "\n{}",
         if all_pass {

@@ -4,10 +4,93 @@
 use super::inner_render::measure_text_ctx;
 use super::*;
 use aeris_charts_engine::{
-    ChartEngine, IndicatorInputSource, IndicatorKind, IndicatorOutputStyle, PivotKind, VwapReset,
+    ChartEngine, IndicatorInputSource, IndicatorKind, IndicatorOutputStyle, PivotKind,
+    SyntheticBarOptions, SyntheticSourceBar, VwapReset,
 };
 
 impl ChartInner {
+    pub fn configure_synthetic_bar_series(&mut self, id: u32, options_json: &str) -> String {
+        let options: SyntheticBarOptions = match serde_json::from_str(options_json) {
+            Ok(options) => options,
+            Err(error) => return format!("invalid synthetic bar options: {error}"),
+        };
+        self.engine
+            .configure_synthetic_bar_series(id as SeriesId, options)
+            .map_or_else(|error| error.to_string(), |()| String::new())
+    }
+
+    pub fn set_synthetic_bar_source_typed(
+        &mut self,
+        id: u32,
+        times: &Float64Array,
+        open: &Float64Array,
+        high: &Float64Array,
+        low: &Float64Array,
+        close: &Float64Array,
+    ) -> String {
+        let sanitized = match aeris_charts_core::model::data_validation::sanitize_ohlc_owned(
+            times.to_vec(),
+            open.to_vec(),
+            high.to_vec(),
+            low.to_vec(),
+            close.to_vec(),
+        ) {
+            Ok(sanitized) => sanitized,
+            Err(error) => return format!("invalid synthetic source: {error}"),
+        };
+        if sanitized.report.accepted == 0 && sanitized.report.dropped_invalid > 0 {
+            return "synthetic source contains no valid rows".to_string();
+        }
+        let mut source = Vec::with_capacity(sanitized.times.len());
+        for index in 0..sanitized.times.len() {
+            let Some(timestamp_micros) = sanitized.times[index].checked_mul(1_000_000) else {
+                return format!(
+                    "synthetic source timestamp at index {index} is outside microsecond range"
+                );
+            };
+            source.push(SyntheticSourceBar {
+                timestamp_micros,
+                open: sanitized.open[index],
+                high: sanitized.high[index],
+                low: sanitized.low[index],
+                close: sanitized.close[index],
+            });
+        }
+        self.engine
+            .set_synthetic_bar_source(id as SeriesId, source)
+            .map_or_else(|error| error.to_string(), |()| String::new())
+    }
+
+    pub fn update_synthetic_bar_source(
+        &mut self,
+        id: u32,
+        time: f64,
+        open: f64,
+        high: f64,
+        low: f64,
+        close: f64,
+    ) -> String {
+        let timestamp = match aeris_charts_core::model::data_validation::validate_timestamp(time) {
+            Ok(timestamp) => timestamp,
+            Err(error) => return format!("invalid synthetic source timestamp: {error}"),
+        };
+        let Some(timestamp_micros) = timestamp.checked_mul(1_000_000) else {
+            return "synthetic source timestamp is outside microsecond range".to_string();
+        };
+        self.engine
+            .update_synthetic_bar_source(
+                id as SeriesId,
+                SyntheticSourceBar {
+                    timestamp_micros,
+                    open,
+                    high,
+                    low,
+                    close,
+                },
+            )
+            .map_or_else(|error| error.to_string(), |()| String::new())
+    }
+
     pub fn set_series_area_brush_state(&mut self, id: u32, state_json: &str) -> bool {
         if state_json.is_empty() || state_json == "null" {
             return self.engine.clear_area_brush_state(id as SeriesId);

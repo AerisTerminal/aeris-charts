@@ -293,6 +293,9 @@ pub struct DataLayer {
     /// logical indices and consumed when the owner synchronizes the final time scale.
     merged_time_rebase_source: Option<Vec<i64>>,
     capture_merged_time_rebase: bool,
+    /// Inclusive whole-second visibility boundary supplied by the chart replay clock. Canonical
+    /// rows remain retained; merged indices and public/derived views expose only this prefix.
+    time_cutoff: Option<i64>,
 }
 
 /// Piecewise-linear old-to-new logical-index mapping through timestamps present in both unions.
@@ -413,6 +416,27 @@ impl DataLayerMemoryUsage {
 impl DataLayer {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn time_cutoff(&self) -> Option<i64> {
+        self.time_cutoff
+    }
+
+    /// Set the inclusive replay visibility boundary without deleting canonical rows.
+    pub fn set_time_cutoff(&mut self, cutoff: Option<i64>) -> bool {
+        if self.time_cutoff == cutoff {
+            return false;
+        }
+        self.time_cutoff = cutoff;
+        self.rebuild_merged();
+        self.reindex_all();
+        true
+    }
+
+    fn visible_len(&self, times: &[i64]) -> usize {
+        self.time_cutoff.map_or(times.len(), |cutoff| {
+            times.partition_point(|&time| time <= cutoff)
+        })
     }
 
     /// Start an owner-level market-data transaction. This is allocation-free until a merged-union
@@ -625,7 +649,18 @@ impl DataLayer {
     pub fn series_data(&self, id: SeriesId) -> Option<(&[i64], [&[f64]; 4])> {
         let slot = self.series_slot(id)?;
         let s = self.series.get(slot)?;
-        Some((self.series_times_by_slot(slot)?, s.values.columns()))
+        let times = self.series_times_by_slot(slot)?;
+        let len = self.visible_len(times).min(s.values.len());
+        let columns = s.values.columns();
+        Some((
+            &times[..len],
+            [
+                &columns[0][..len],
+                &columns[1][..len],
+                &columns[2][..len],
+                &columns[3][..len],
+            ],
+        ))
     }
 
     fn series_times_by_slot(&self, mut slot: usize) -> Option<&[i64]> {
@@ -768,9 +803,10 @@ impl DataLayer {
         if target_slot == source_slot {
             return false;
         }
-        let Some(source_len) = self.series_times_by_slot(source_slot).map(<[i64]>::len) else {
+        let Some(source_times) = self.series_times_by_slot(source_slot) else {
             return false;
         };
+        let source_len = self.visible_len(source_times);
         if source_from + values.len() != source_len {
             return false;
         }
@@ -821,7 +857,7 @@ impl DataLayer {
         if source_from < alias_offset {
             return None;
         }
-        let source_len = self.series_times_by_slot(source_slot)?.len();
+        let source_len = self.visible_len(self.series_times_by_slot(source_slot)?);
         if source_from + values.len() != source_len {
             return None;
         }
@@ -990,6 +1026,34 @@ impl DataLayer {
         let Some(slot) = self.materialize_time_alias(id) else {
             return false;
         };
+        if self.time_cutoff.is_some_and(|cutoff| time > cutoff) {
+            let s = &mut self.series[slot];
+            let row = lower_bound(&s.times, |&candidate| candidate < time);
+            if s.times.get(row) == Some(&time) {
+                s.values.set_row(row, values);
+                for (channel, color) in s.point_colors.iter_mut().zip(colors) {
+                    if !channel.is_empty() {
+                        channel[row] = color.unwrap_or(POINT_COLOR_ABSENT);
+                    }
+                }
+                if update_lod {
+                    s.rebuild_lod_range(row..row + 1);
+                }
+            } else {
+                s.times.insert(row, time);
+                s.values.insert(row, values);
+                for (channel, color) in s.point_colors.iter_mut().zip(colors) {
+                    if !channel.is_empty() {
+                        channel.insert(row, color.unwrap_or(POINT_COLOR_ABSENT));
+                    }
+                }
+                if update_lod {
+                    s.rebuild_lod();
+                }
+            }
+            s.generation = s.generation.wrapping_add(1);
+            return true;
+        }
         let last_merged = self.merged_times.last().copied();
 
         // Case 1: brand-new global max time — appended at the end, no indices shift.
@@ -1362,7 +1426,11 @@ impl DataLayer {
         }
         for &slot in self.live_slots.values() {
             if self.series[slot].time_alias.is_none() {
-                all.extend_from_slice(&self.series[slot].times);
+                let times = &self.series[slot].times;
+                let len = self.time_cutoff.map_or(times.len(), |cutoff| {
+                    times.partition_point(|&time| time <= cutoff)
+                });
+                all.extend_from_slice(&times[..len]);
             }
         }
         all.sort_unstable();
@@ -1383,7 +1451,10 @@ impl DataLayer {
         for &slot in self.live_slots.values() {
             if self.series[slot].time_alias.is_none() {
                 let s = &mut self.series[slot];
-                s.plot.rebuild_from(merged, &s.times);
+                let len = self.time_cutoff.map_or(s.times.len(), |cutoff| {
+                    s.times.partition_point(|&time| time <= cutoff)
+                });
+                s.plot.rebuild_from(merged, &s.times[..len]);
             }
         }
         let aliases = self
@@ -1465,6 +1536,37 @@ mod tests {
 
     fn indices(dl: &DataLayer, id: SeriesId) -> Vec<TimePointIndex> {
         dl.plot(id).indices().collect()
+    }
+
+    #[test]
+    fn replay_cutoff_masks_without_discarding_canonical_rows() {
+        let mut dl = DataLayer::new();
+        let first = dl.add_series();
+        let second = dl.add_series();
+        set(&mut dl, first, &[1, 2, 3, 4], &[10.0, 20.0, 30.0, 40.0]);
+        set(&mut dl, second, &[2, 4, 6], &[2.0, 4.0, 6.0]);
+
+        assert!(dl.set_time_cutoff(Some(3)));
+        assert_eq!(dl.merged_times(), &[1, 2, 3]);
+        assert_eq!(dl.series_data(first).unwrap().0, &[1, 2, 3]);
+        assert_eq!(dl.series_data(second).unwrap().0, &[2]);
+        assert_eq!(indices(&dl, first), vec![0, 1, 2]);
+        assert_eq!(indices(&dl, second), vec![1]);
+
+        assert!(dl.update(first, 5, [50.0; 4]));
+        assert_eq!(dl.merged_times(), &[1, 2, 3]);
+        assert_eq!(dl.series_data(first).unwrap().0, &[1, 2, 3]);
+
+        assert!(dl.set_time_cutoff(Some(5)));
+        assert_eq!(dl.merged_times(), &[1, 2, 3, 4, 5]);
+        assert_eq!(dl.series_data(first).unwrap().0, &[1, 2, 3, 4, 5]);
+        assert_eq!(
+            dl.series_data(first).unwrap().1[3],
+            &[10.0, 20.0, 30.0, 40.0, 50.0]
+        );
+        assert!(!dl.set_time_cutoff(Some(5)));
+        assert!(dl.set_time_cutoff(None));
+        assert_eq!(dl.merged_times(), &[1, 2, 3, 4, 5, 6]);
     }
 
     fn assert_lod_matches_fresh(dl: &DataLayer, id: SeriesId) {

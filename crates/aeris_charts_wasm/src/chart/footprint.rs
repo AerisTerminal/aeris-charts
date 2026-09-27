@@ -344,6 +344,30 @@ fn trades_from_columns(
 }
 
 impl ChartInner {
+    pub(super) fn replay_clock_micros(&self) -> f64 {
+        self.engine
+            .replay_clock_micros()
+            .map_or(f64::NAN, |clock| clock as f64)
+    }
+
+    pub(super) fn set_replay_clock_micros(&mut self, clock_micros: f64) -> String {
+        let clock = if clock_micros.is_nan() {
+            None
+        } else if clock_micros.is_finite()
+            && clock_micros.abs() <= MAX_SAFE_INTEGER
+            && clock_micros.fract() == 0.0
+        {
+            Some(clock_micros as i64)
+        } else {
+            return error_json("replay clock must be an integer microsecond timestamp or null");
+        };
+        self.engine
+            .set_replay_clock_micros(clock)
+            .map_or_else(error_json, |stats| {
+                serde_json::to_string(&stats).unwrap_or_else(|error| error_json(error.to_string()))
+            })
+    }
+
     pub(super) fn add_trade_stream(&mut self, key: &str, options_json: &str) -> u32 {
         let Ok(options) = parse_options(options_json) else {
             return u32::MAX;
@@ -370,9 +394,44 @@ impl ChartInner {
             .unwrap_or_else(|| "null".to_string())
     }
 
+    pub(super) fn trade_stream_replay_clock_micros(&self, stream_id: u32) -> f64 {
+        self.engine
+            .trade_stream_replay_clock_micros(stream_id as u64)
+            .flatten()
+            .map_or(f64::NAN, |clock| clock as f64)
+    }
+
+    pub(super) fn set_trade_stream_replay_clock_micros(
+        &mut self,
+        stream_id: u32,
+        clock_micros: f64,
+    ) -> String {
+        let clock = if clock_micros.is_nan() {
+            None
+        } else if clock_micros.is_finite()
+            && clock_micros.abs() <= MAX_SAFE_INTEGER
+            && clock_micros.fract() == 0.0
+        {
+            Some(clock_micros as i64)
+        } else {
+            return error_json("replay clock must be an integer microsecond timestamp or null");
+        };
+        self.engine
+            .set_trade_stream_replay_clock_micros(stream_id as u64, clock)
+            .map_or_else(error_json, |stats| {
+                serde_json::to_string(&stats).unwrap_or_else(|error| error_json(error.to_string()))
+            })
+    }
+
     pub(super) fn bind_footprint_series_to_stream(&mut self, id: u32, stream_id: u32) -> bool {
         self.engine
             .bind_footprint_series_to_stream(id, stream_id as u64)
+            .is_ok()
+    }
+
+    pub(super) fn bind_trade_bar_series_to_stream(&mut self, id: u32, stream_id: u32) -> bool {
+        self.engine
+            .bind_trade_bar_series_to_stream(id, stream_id as u64)
             .is_ok()
     }
 
@@ -493,6 +552,41 @@ impl ChartInner {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub(super) fn set_trade_stream_trades_typed(
+        &mut self,
+        stream_id: u32,
+        timestamps: &[f64],
+        prices: &[f64],
+        volumes: &[f64],
+        sides: &[u8],
+        bids: &[f64],
+        asks: &[f64],
+        sequences: &[f64],
+        trade_ids: &[f64],
+        conditions: &[u32],
+        session_ids: &[f64],
+    ) -> String {
+        let trades = match trades_from_columns(
+            timestamps,
+            prices,
+            volumes,
+            sides,
+            bids,
+            asks,
+            sequences,
+            trade_ids,
+            conditions,
+            session_ids,
+        ) {
+            Ok(trades) => trades,
+            Err(error) => return error_json(error),
+        };
+        self.engine
+            .set_trade_stream_trades(stream_id as u64, trades)
+            .map_or_else(error_json, |()| String::new())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn update_footprint_trades_typed(
         &mut self,
         id: u32,
@@ -524,6 +618,47 @@ impl ChartInner {
         };
         self.engine
             .update_footprint_trades(id, trades)
+            .map_or_else(error_json, |kind| {
+                match kind {
+                    FootprintUpdateKind::Tip => "tip",
+                    FootprintUpdateKind::Historical => "historical",
+                }
+                .to_string()
+            })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn update_trade_stream_trades_typed(
+        &mut self,
+        stream_id: u32,
+        timestamps: &[f64],
+        prices: &[f64],
+        volumes: &[f64],
+        sides: &[u8],
+        bids: &[f64],
+        asks: &[f64],
+        sequences: &[f64],
+        trade_ids: &[f64],
+        conditions: &[u32],
+        session_ids: &[f64],
+    ) -> String {
+        let trades = match trades_from_columns(
+            timestamps,
+            prices,
+            volumes,
+            sides,
+            bids,
+            asks,
+            sequences,
+            trade_ids,
+            conditions,
+            session_ids,
+        ) {
+            Ok(trades) => trades,
+            Err(error) => return error_json(error),
+        };
+        self.engine
+            .update_trade_stream_trades(stream_id as u64, trades)
             .map_or_else(error_json, |kind| {
                 match kind {
                     FootprintUpdateKind::Tip => "tip",

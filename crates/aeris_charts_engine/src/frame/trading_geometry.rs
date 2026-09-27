@@ -1048,15 +1048,56 @@ impl ChartEngine {
         let min_line_width = vpr.floor().max(1.0) as i32;
         let mut tooltip = None;
 
+        if let Some(clock_micros) = self.replay_clock_micros {
+            let time = if self.sequence_points().is_some() {
+                clock_micros as f64 / 1_000_000.0
+            } else {
+                clock_micros.div_euclid(1_000_000) as f64
+            };
+            if let Some(index) = self.time_to_index(time, true) {
+                let x = self.time_scale.index_to_coordinate(index);
+                let color = Color::parse_css(match self.theme {
+                    crate::ChartTheme::Light => aeris_charts_core::style::LIGHT_PRIMARY_CSS,
+                    crate::ChartTheme::Dark => aeris_charts_core::style::DARK_PRIMARY_CSS,
+                })
+                .unwrap_or(self.trading_state.style.control);
+                lines.push(Prim::VLine {
+                    x: (x * hpr).round() as i32,
+                    y0: (pane.top * vpr).round() as i32,
+                    y1: ((pane.top + pane.height) * vpr).round() as i32,
+                    width: min_line_width,
+                    style: LineStyle::Dashed,
+                    color,
+                });
+                lines.push(Prim::Text {
+                    x: (x * hpr) as f32,
+                    y: ((pane.top + 12.0) * vpr) as f32,
+                    text: "Replay".to_string(),
+                    color,
+                    size: (self.options.get().layout.font_size * vpr) as f32,
+                    family: self.options.get().layout.font_family.clone(),
+                    align: TextAlign::Center,
+                    weight: 600,
+                    italic: false,
+                });
+            }
+        }
+
         // Host context is a separate, non-persisted layer. Windows are lowered first and event
         // markers use deterministic LOD collapse when releases share the same pixel column.
         if !self.data.merged_times().is_empty() {
             let logical = |time: i64| self.axis_index_for_time(time).map(|index| index as i64);
             for window in &self.trading_state.host_overlay.windows {
+                if !self.replay_time_is_visible(window.start_time) {
+                    continue;
+                }
+                let end_time = self
+                    .replay_cutoff_seconds()
+                    .map_or(window.end_time, |cutoff| window.end_time.min(cutoff));
                 let Some(start_index) = logical(window.start_time) else {
                     continue;
                 };
-                let Some(end_index) = logical(window.end_time) else {
+                let Some(end_index) = logical(end_time) else {
                     continue;
                 };
                 let x0 = self.time_scale.index_to_coordinate(start_index);
@@ -1078,6 +1119,9 @@ impl ChartEngine {
             }
             let mut last_event_x = f64::NEG_INFINITY;
             for event in &self.trading_state.host_overlay.events {
+                if !self.replay_time_is_visible(event.time) {
+                    continue;
+                }
                 let Some(index) = logical(event.time) else {
                     continue;
                 };
@@ -1752,6 +1796,8 @@ impl ChartEngine {
                 .trading_state
                 .account_visible(entry.account_id.as_ref())
                 || !self.trading_state.account_visible(exit.account_id.as_ref())
+                || !self.replay_time_is_visible(entry.time)
+                || !self.replay_time_is_visible(exit.time)
                 || entry.pane_index != pane_index
                 || exit.pane_index != pane_index
                 || self.data.merged_times().is_empty()
@@ -1824,7 +1870,10 @@ impl ChartEngine {
             {
                 continue;
             }
-            if execution.pane_index != pane_index || self.data.merged_times().is_empty() {
+            if execution.pane_index != pane_index
+                || !self.replay_time_is_visible(execution.time)
+                || self.data.merged_times().is_empty()
+            {
                 continue;
             }
             let Some(logical) = self

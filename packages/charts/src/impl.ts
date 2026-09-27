@@ -39,7 +39,7 @@ import type {
   price_scale_info, price_scale_options, ring_source_layout,
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
-  trade_stream_stats,
+  replay_clock_stats, replay_seek_stats, synthetic_bar_options, trade_stream_stats,
   time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_execution, trading_hit,
   chart_sync_event, crosshair_sync_position,
   trading_intent, trading_intent_handler, trading_position, trading_preview, trading_snapshot,
@@ -4397,6 +4397,81 @@ export class chart_impl implements chart_api {
     return id;
   }
 
+  replay_clock_micros(): number | null {
+    const clock = this.wasm.replay_clock_micros();
+    return Number.isNaN(clock) ? null : clock;
+  }
+
+  set_replay_clock_micros(clock_micros: number | null): replay_clock_stats {
+    const result = this.wasm.set_replay_clock_micros(clock_micros ?? Number.NaN);
+    try {
+      const parsed = JSON.parse(result) as Record<string, unknown>;
+      if (typeof parsed.error === "string") throw_footprint_error(result);
+      this.repaint();
+      return parsed as unknown as replay_clock_stats;
+    } catch (error) {
+      if (error instanceof AerisChartsError) throw error;
+      throw_footprint_error(result);
+    }
+  }
+
+  configure_synthetic_bar_series(
+    series: series_api | number,
+    options: synthetic_bar_options,
+  ): void {
+    const series_id = typeof series === "number" ? series : series.id;
+    const result = this.wasm.configure_synthetic_bar_series(series_id, JSON.stringify(options));
+    if (result !== "") throw new AerisChartsError("invalid_options", result);
+    this.repaint();
+  }
+
+  set_synthetic_bar_source(series: series_api | number, data: readonly series_data[]): void {
+    const columns = pack(data);
+    this.set_synthetic_bar_source_typed(series, columns);
+  }
+
+  set_synthetic_bar_source_typed(
+    series: series_api | number,
+    columns: ohlc_columns,
+  ): void {
+    const series_id = typeof series === "number" ? series : series.id;
+    const result = this.wasm.set_synthetic_bar_source_typed(
+      series_id,
+      columns.times,
+      columns.open,
+      columns.high,
+      columns.low,
+      columns.close,
+    );
+    if (result !== "") throw new AerisChartsError("invalid_data", result);
+    this.sync_countdown_timer();
+    this.repaint();
+  }
+
+  update_synthetic_bar_source(series: series_api | number, data: ohlc_data): void {
+    const series_id = typeof series === "number" ? series : series.id;
+    const columns = pack([data]);
+    const time = columns.times[0];
+    const open = columns.open[0];
+    const high = columns.high[0];
+    const low = columns.low[0];
+    const close = columns.close[0];
+    if (time === undefined || open === undefined || high === undefined || low === undefined || close === undefined) {
+      throw new AerisChartsError("invalid_data", "synthetic source update requires one complete OHLC row");
+    }
+    const result = this.wasm.update_synthetic_bar_source(
+      series_id,
+      time,
+      open,
+      high,
+      low,
+      close,
+    );
+    if (result !== "") throw new AerisChartsError("invalid_data", result);
+    this.sync_countdown_timer();
+    this.repaint();
+  }
+
   trade_stream_id(key: string): number | null {
     const id = this.wasm.trade_stream_id(key);
     return id === 0 ? null : id;
@@ -4411,10 +4486,98 @@ export class chart_impl implements chart_api {
     return JSON.parse(this.wasm.trade_stream_stats_json(stream_id)) as trade_stream_stats | null;
   }
 
+  trade_stream_replay_clock_micros(stream_id: number): number | null {
+    const clock = this.wasm.trade_stream_replay_clock_micros(stream_id);
+    return Number.isNaN(clock) ? null : clock;
+  }
+
+  set_trade_stream_replay_clock_micros(
+    stream_id: number,
+    clock_micros: number | null,
+  ): replay_seek_stats {
+    const result = this.wasm.set_trade_stream_replay_clock_micros(
+      stream_id,
+      clock_micros ?? Number.NaN,
+    );
+    try {
+      const parsed = JSON.parse(result) as Record<string, unknown>;
+      if (typeof parsed.error === "string") throw_footprint_error(result);
+      this.repaint();
+      return parsed as unknown as replay_seek_stats;
+    } catch (error) {
+      if (error instanceof AerisChartsError) throw error;
+      throw_footprint_error(result);
+    }
+  }
+
+  set_trade_stream_trades(stream_id: number, trades: readonly footprint_trade[]): void {
+    this.set_trade_stream_trades_typed(stream_id, pack_footprint_trades(trades));
+  }
+
+  set_trade_stream_trades_typed(stream_id: number, columns: footprint_trade_columns): void {
+    const result = this.wasm.set_trade_stream_trades_typed(
+      stream_id,
+      columns.timestamps_micros,
+      columns.prices,
+      columns.volumes,
+      columns.aggressors,
+      columns.bids,
+      columns.asks,
+      columns.sequences,
+      columns.trade_ids,
+      columns.conditions,
+      columns.session_ids,
+    );
+    if (result !== "") throw_footprint_error(result);
+    this.sync_countdown_timer();
+    this.repaint();
+  }
+
+  update_trade_stream_trades(
+    stream_id: number,
+    trades: readonly footprint_trade[],
+  ): "tip" | "historical" {
+    return this.update_trade_stream_trades_typed(stream_id, pack_footprint_trades(trades));
+  }
+
+  update_trade_stream_trades_typed(
+    stream_id: number,
+    columns: footprint_trade_columns,
+  ): "tip" | "historical" {
+    const result = this.wasm.update_trade_stream_trades_typed(
+      stream_id,
+      columns.timestamps_micros,
+      columns.prices,
+      columns.volumes,
+      columns.aggressors,
+      columns.bids,
+      columns.asks,
+      columns.sequences,
+      columns.trade_ids,
+      columns.conditions,
+      columns.session_ids,
+    );
+    if (result !== "tip" && result !== "historical") throw_footprint_error(result);
+    if (this.countdown_series_present) this.sync_countdown_timer();
+    this.schedule_repaint();
+    return result;
+  }
+
   bind_footprint_series_to_stream(series: footprint_series_api | number, stream_id: number): void {
     const id = typeof series === "number" ? series : series.id;
     if (!this.wasm.bind_footprint_series_to_stream(id, stream_id)) {
       throw new AerisChartsError("invalid_options", "trade stream binding was rejected by the engine");
+    }
+    this.repaint();
+  }
+
+  bind_trade_bar_series_to_stream(series: series_api | number, stream_id: number): void {
+    const id = typeof series === "number" ? series : series.id;
+    if (!this.wasm.bind_trade_bar_series_to_stream(id, stream_id)) {
+      throw new AerisChartsError(
+        "invalid_options",
+        "trade bar stream binding requires a candlestick or bar series",
+      );
     }
     this.repaint();
   }

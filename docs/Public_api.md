@@ -26,6 +26,11 @@ The supported root surface is:
   per-level Bid × Ask/total/delta, POC, final/Max/Min/session delta, configurable diagonal and
   stacked imbalances, density LOD, and derived bar/level queries; generic OHLC setters are rejected
   because they cannot supply order-flow truth;
+- one chart-level replay clock plus shared canonical trade streams, typed batch ingestion, ordinary
+  candle/bar bindings, exact seek-work telemetry, and fixed/ATR Renko, Line Break, Kagi, and Point &
+  Figure transforms through `configure_synthetic_bar_series`, `set_synthetic_bar_source[_typed]`,
+  and `update_synthetic_bar_source`; synthetic source/history remains host-owned and is not part of
+  chart-state persistence;
 - engine-resolved secondary-click context through `chart.subscribe_chart_context()`, including
   pane, time, logical index, coordinates, hit series, and the exact price on its scale; hosts own
   menus, clipboard operations, and order actions;

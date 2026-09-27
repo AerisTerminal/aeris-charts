@@ -1688,6 +1688,14 @@ export interface footprint_series_options {
   show_bar_summary: boolean;
 }
 
+/** Engine-owned price-action transform applied to canonical host OHLC source bars. */
+export type synthetic_bar_options =
+  | { kind: "renko_fixed"; box_size: number }
+  | { kind: "renko_atr"; period: number }
+  | { kind: "line_break"; lines: number }
+  | { kind: "kagi"; reversal_size: number }
+  | { kind: "point_and_figure"; box_size: number; reversal_boxes: number };
+
 export type any_series_options = series_options & Partial<feature_series_options> & Partial<footprint_series_options>;
 
 export const LINE_TYPE_TO_U8: Record<NonNullable<series_options["line_type"]>, number> = {
@@ -2023,6 +2031,18 @@ export interface trade_stream_stats {
   dependent_count: number;
   dependent_rebuilds: number;
   dependent_incremental_updates: number;
+}
+
+export interface replay_seek_stats {
+  previous_clock_micros: number | null;
+  clock_micros: number | null;
+  visible_trades: number;
+  rebuilt_trades: number;
+  incremental_trades: number;
+}
+
+export interface replay_clock_stats extends replay_seek_stats {
+  stream_count: number;
 }
 
 /** V2 adds engine-owned general pane, axis, dataset, and series state. */
@@ -2829,10 +2849,28 @@ export interface chart_api {
   comparison_legend_snapshot(): comparison_legend_entry[];
   /** Create or reuse a chart-level canonical trade stream for tape-derived studies. */
   add_trade_stream(key: string, options?: Partial<footprint_series_options>): number;
+  replay_clock_micros(): number | null;
+  set_replay_clock_micros(clock_micros: number | null): replay_clock_stats;
+  /** Configure one candlestick/bar series as the chart's exclusive non-time price transform. */
+  configure_synthetic_bar_series(series: series_api | number, options: synthetic_bar_options): void;
+  /** Replace the transform's canonical OHLC source through the columnar boundary. */
+  set_synthetic_bar_source_typed(series: series_api | number, columns: ohlc_columns): void;
+  /** Object-row convenience wrapper over {@link set_synthetic_bar_source_typed}. */
+  set_synthetic_bar_source(series: series_api | number, data: readonly series_data[]): void;
+  /** Append or replace the current canonical source bar, then refresh the synthetic sequence. */
+  update_synthetic_bar_source(series: series_api | number, data: ohlc_data): void;
   trade_stream_id(key: string): number | null;
   trade_stream_revision(stream_id: number): number | null;
   trade_stream_stats(stream_id: number): trade_stream_stats | null;
+  trade_stream_replay_clock_micros(stream_id: number): number | null;
+  set_trade_stream_replay_clock_micros(stream_id: number, clock_micros: number | null): replay_seek_stats;
+  set_trade_stream_trades(stream_id: number, trades: readonly footprint_trade[]): void;
+  set_trade_stream_trades_typed(stream_id: number, columns: footprint_trade_columns): void;
+  update_trade_stream_trades(stream_id: number, trades: readonly footprint_trade[]): "tip" | "historical";
+  update_trade_stream_trades_typed(stream_id: number, columns: footprint_trade_columns): "tip" | "historical";
   bind_footprint_series_to_stream(series: footprint_series_api | number, stream_id: number): void;
+  /** Present one canonical trade stream as ordinary candlesticks or OHLC bars. */
+  bind_trade_bar_series_to_stream(series: series_api | number, stream_id: number): void;
   add_cvd_series(stream_id: number, pane?: number, reset?: "session" | "continuous" | "anchored", anchor_timestamp_micros?: number): series_api;
   add_delta_series(stream_id: number, pane?: number): series_api;
   add_trade_bubbles(series: series_api | number, stream_id: number, options?: { minimum_volume?: number; max_markers?: number; aggregation_window_micros?: number }): void;

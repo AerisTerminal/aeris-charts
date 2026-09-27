@@ -16,6 +16,8 @@ use crate::{
 };
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
+const REPLAY_CHECKPOINT_INTERVAL: usize = 1_024;
+const MAX_REPLAY_CHECKPOINTS: usize = 64;
 const MIN_TIMESTAMP_MICROS: i64 = -62_167_219_200 * MICROS_PER_SECOND;
 const MAX_TIMESTAMP_MICROS: i64 = 253_402_300_799 * MICROS_PER_SECOND + 999_999;
 pub const MAX_TRADE_STREAMS: usize = 64;
@@ -48,6 +50,25 @@ pub struct TradeStreamStats {
     pub dependent_count: usize,
     pub dependent_rebuilds: u64,
     pub dependent_incremental_updates: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ReplaySeekStats {
+    pub previous_clock_micros: Option<i64>,
+    pub clock_micros: Option<i64>,
+    pub visible_trades: usize,
+    pub rebuilt_trades: usize,
+    pub incremental_trades: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ReplayClockStats {
+    pub previous_clock_micros: Option<i64>,
+    pub clock_micros: Option<i64>,
+    pub stream_count: usize,
+    pub visible_trades: usize,
+    pub rebuilt_trades: usize,
+    pub incremental_trades: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -495,7 +516,9 @@ pub enum FootprintError {
     InvalidQuote { index: usize },
     DuplicateTradeId { trade_id: u64 },
     UnsupportedChartAggregation,
+    SequenceDomainInUse,
     ProjectionTimeCollision,
+    UnsupportedTradeBarSeries(SeriesId),
     UnknownSeries(SeriesId),
     StaleSeries(SeriesId),
 }
@@ -525,9 +548,17 @@ impl core::fmt::Display for FootprintError {
                 f,
                 "chart footprint series currently require whole-second aligned time bars"
             ),
+            Self::SequenceDomainInUse => write!(
+                f,
+                "a chart can own only one independent non-time bar sequence"
+            ),
             Self::ProjectionTimeCollision => write!(
                 f,
                 "two footprint bars resolve to the same canonical chart second"
+            ),
+            Self::UnsupportedTradeBarSeries(id) => write!(
+                f,
+                "series {id} must be a candlestick or OHLC bar presentation"
             ),
             Self::UnknownSeries(id) => write!(f, "unknown series id {id}"),
             Self::StaleSeries(id) => write!(f, "stale series id {id}"),
@@ -551,6 +582,17 @@ struct RebuildSeed {
     session_delta: f64,
 }
 
+#[derive(Clone, Debug)]
+struct ReplayCheckpoint {
+    trade_count: usize,
+    bars_len: usize,
+    active_bar: Option<FootprintBar>,
+    last_trade_price: Option<f64>,
+    last_classified_side: AggressorSide,
+    active_session: Option<Option<u64>>,
+    session_delta: f64,
+}
+
 /// Authoritative tick tape plus its reusable derived footprint bars.
 #[derive(Clone, Debug)]
 pub struct FootprintAggregator {
@@ -566,6 +608,8 @@ pub struct FootprintAggregator {
     session_delta: f64,
     work: FootprintWorkStats,
     revision: u64,
+    replay_clock_micros: Option<i64>,
+    replay_checkpoints: Vec<ReplayCheckpoint>,
 }
 
 #[derive(Clone, Debug)]
@@ -579,6 +623,14 @@ pub(crate) struct TradeStudyDependent {
     pub series_id: SeriesId,
     pub kind: TradeStudyKind,
     pub options: TradeStudyOptions,
+    pub applied_revision: u64,
+    pub rebuilds: u64,
+    pub incremental_updates: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TradeBarDependent {
+    pub series_id: SeriesId,
     pub applied_revision: u64,
     pub rebuilds: u64,
     pub incremental_updates: u64,
@@ -606,6 +658,8 @@ impl FootprintAggregator {
             session_delta: 0.0,
             work: FootprintWorkStats::default(),
             revision: 1,
+            replay_clock_micros: None,
+            replay_checkpoints: Vec::new(),
         })
     }
 
@@ -625,7 +679,9 @@ impl FootprintAggregator {
     }
 
     pub fn trades(&self) -> impl ExactSizeIterator<Item = &FootprintTrade> {
-        self.trades.iter().map(|trade| &trade.event)
+        self.trades[..self.visible_trade_count()]
+            .iter()
+            .map(|trade| &trade.event)
     }
 
     pub fn work_stats(&self) -> FootprintWorkStats {
@@ -636,6 +692,70 @@ impl FootprintAggregator {
         self.revision
     }
 
+    pub fn replay_clock_micros(&self) -> Option<i64> {
+        self.replay_clock_micros
+    }
+
+    pub fn set_replay_clock_micros(
+        &mut self,
+        clock_micros: Option<i64>,
+    ) -> Result<ReplaySeekStats, FootprintError> {
+        if clock_micros
+            .is_some_and(|clock| !(MIN_TIMESTAMP_MICROS..=MAX_TIMESTAMP_MICROS).contains(&clock))
+        {
+            return Err(FootprintError::InvalidTimestamp { index: 0 });
+        }
+        let previous_clock_micros = self.replay_clock_micros;
+        if previous_clock_micros == clock_micros {
+            return Ok(ReplaySeekStats {
+                previous_clock_micros,
+                clock_micros,
+                visible_trades: self.visible_trade_count(),
+                rebuilt_trades: 0,
+                incremental_trades: 0,
+            });
+        }
+        let previously_visible = self.visible_trade_count();
+        self.replay_clock_micros = clock_micros;
+        let visible_trades = self.visible_trade_count();
+        if previous_clock_micros.is_some() && visible_trades >= previously_visible {
+            for index in previously_visible..visible_trades {
+                let trade = self.trades[index].event.clone();
+                self.apply_trade(&trade);
+                self.maybe_record_replay_checkpoint(index + 1);
+            }
+            let incremental_trades = visible_trades - previously_visible;
+            self.work.incremental_ticks = self
+                .work
+                .incremental_ticks
+                .saturating_add(incremental_trades);
+            self.revision = self.revision.saturating_add(1);
+            return Ok(ReplaySeekStats {
+                previous_clock_micros,
+                clock_micros,
+                visible_trades,
+                rebuilt_trades: 0,
+                incremental_trades,
+            });
+        }
+        let rebuilt_trades = self.rebuild_visible_from_checkpoint(visible_trades);
+        self.revision = self.revision.saturating_add(1);
+        Ok(ReplaySeekStats {
+            previous_clock_micros,
+            clock_micros,
+            visible_trades,
+            rebuilt_trades,
+            incremental_trades: 0,
+        })
+    }
+
+    fn visible_trade_count(&self) -> usize {
+        self.replay_clock_micros.map_or(self.trades.len(), |clock| {
+            self.trades
+                .partition_point(|trade| trade.event.timestamp_micros <= clock)
+        })
+    }
+
     pub fn reset_work_stats(&mut self) {
         self.work = FootprintWorkStats::default();
     }
@@ -644,9 +764,16 @@ impl FootprintAggregator {
         self.trades.capacity() * core::mem::size_of::<StoredTrade>()
             + self.trade_ids.capacity() * core::mem::size_of::<(u64, usize)>()
             + self.bars.capacity() * core::mem::size_of::<FootprintBar>()
+            + self.replay_checkpoints.capacity() * core::mem::size_of::<ReplayCheckpoint>()
             + self
                 .bars
                 .iter()
+                .map(|bar| bar.levels.capacity() * core::mem::size_of::<FootprintLevel>())
+                .sum::<usize>()
+            + self
+                .replay_checkpoints
+                .iter()
+                .filter_map(|checkpoint| checkpoint.active_bar.as_ref())
                 .map(|bar| bar.levels.capacity() * core::mem::size_of::<FootprintLevel>())
                 .sum::<usize>()
     }
@@ -664,6 +791,7 @@ impl FootprintAggregator {
             self.active_session = None;
             self.session_delta = 0.0;
             self.rebuild_seed = RebuildSeed::default();
+            self.replay_checkpoints.clear();
             self.revision = self.revision.saturating_add(1);
             return;
         }
@@ -693,7 +821,12 @@ impl FootprintAggregator {
         self.rebuild_seed = seed;
         self.trades.drain(..trade_start);
         self.bars.drain(..first);
+        self.replay_checkpoints.clear();
         self.reindex_trade_ids();
+        // Retention changes the tape start and its rebuild seed. Reconstruct the retained suffix
+        // once so subsequent backward replay seeks can start from bounded checkpoints instead of
+        // falling back to the new retained boundary on every seek.
+        self.rebuild();
         self.revision = self.revision.saturating_add(1);
     }
 
@@ -746,7 +879,13 @@ impl FootprintAggregator {
                     input_order: self.next_input_order,
                 };
                 self.next_input_order = self.next_input_order.saturating_add(1);
-                self.apply_trade(&stored.event);
+                if self
+                    .replay_clock_micros
+                    .is_none_or(|clock| stored.event.timestamp_micros <= clock)
+                {
+                    self.apply_trade(&stored.event);
+                    self.maybe_record_replay_checkpoint(self.trades.len() + 1);
+                }
                 if let Some(trade_id) = stored.event.trade_id {
                     self.trade_ids.insert(trade_id, self.trades.len());
                 }
@@ -817,6 +956,8 @@ impl FootprintAggregator {
             session_delta: self.session_delta,
             work: self.work,
             revision: self.revision,
+            replay_clock_micros: self.replay_clock_micros,
+            replay_checkpoints: self.replay_checkpoints.clone(),
         }
     }
 
@@ -826,19 +967,84 @@ impl FootprintAggregator {
 
     fn rebuild(&mut self) {
         self.bars.clear();
+        self.replay_checkpoints.clear();
         self.last_trade_price = self.rebuild_seed.last_trade_price;
         self.last_classified_side = self.rebuild_seed.last_classified_side;
         self.active_session = self.rebuild_seed.active_session;
         self.session_delta = self.rebuild_seed.session_delta;
-        let trade_count = self.trades.len();
+        let trade_count = self.visible_trade_count();
         for index in 0..trade_count {
             // The event has no heap-owned fields. Copying one value avoids retaining a second tape
             // while mutable derived state is rebuilt.
             let trade = self.trades[index].event.clone();
             self.apply_trade(&trade);
+            self.maybe_record_replay_checkpoint(index + 1);
         }
         self.work.historical_rebuilds += 1;
         self.work.rebuilt_ticks += trade_count;
+    }
+
+    fn maybe_record_replay_checkpoint(&mut self, trade_count: usize) {
+        if trade_count == 0 || !trade_count.is_multiple_of(REPLAY_CHECKPOINT_INTERVAL) {
+            return;
+        }
+        if self
+            .replay_checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.trade_count == trade_count)
+        {
+            return;
+        }
+        if self.replay_checkpoints.len() == MAX_REPLAY_CHECKPOINTS {
+            self.replay_checkpoints.remove(0);
+        }
+        self.replay_checkpoints.push(ReplayCheckpoint {
+            trade_count,
+            bars_len: self.bars.len(),
+            active_bar: self.bars.last().cloned(),
+            last_trade_price: self.last_trade_price,
+            last_classified_side: self.last_classified_side,
+            active_session: self.active_session,
+            session_delta: self.session_delta,
+        });
+    }
+
+    fn rebuild_visible_from_checkpoint(&mut self, visible_trades: usize) -> usize {
+        let checkpoint = self
+            .replay_checkpoints
+            .iter()
+            .rev()
+            .find(|checkpoint| {
+                checkpoint.trade_count <= visible_trades && checkpoint.bars_len <= self.bars.len()
+            })
+            .cloned();
+        let start = if let Some(checkpoint) = checkpoint {
+            self.bars.truncate(checkpoint.bars_len);
+            if let (Some(active), Some(current)) = (checkpoint.active_bar, self.bars.last_mut()) {
+                *current = active;
+            }
+            self.last_trade_price = checkpoint.last_trade_price;
+            self.last_classified_side = checkpoint.last_classified_side;
+            self.active_session = checkpoint.active_session;
+            self.session_delta = checkpoint.session_delta;
+            checkpoint.trade_count
+        } else {
+            self.bars.clear();
+            self.last_trade_price = self.rebuild_seed.last_trade_price;
+            self.last_classified_side = self.rebuild_seed.last_classified_side;
+            self.active_session = self.rebuild_seed.active_session;
+            self.session_delta = self.rebuild_seed.session_delta;
+            0
+        };
+        for index in start..visible_trades {
+            let trade = self.trades[index].event.clone();
+            self.apply_trade(&trade);
+            self.maybe_record_replay_checkpoint(index + 1);
+        }
+        let rebuilt_trades = visible_trades.saturating_sub(start);
+        self.work.historical_rebuilds = self.work.historical_rebuilds.saturating_add(1);
+        self.work.rebuilt_ticks = self.work.rebuilt_ticks.saturating_add(rebuilt_trades);
+        rebuilt_trades
     }
 
     fn reindex_trade_ids(&mut self) {
@@ -993,6 +1199,80 @@ impl FootprintAggregator {
 }
 
 impl ChartEngine {
+    pub fn replay_clock_micros(&self) -> Option<i64> {
+        self.replay_clock_micros
+    }
+
+    pub(crate) fn replay_cutoff_seconds(&self) -> Option<i64> {
+        self.replay_clock_micros
+            .map(|clock| clock.div_euclid(MICROS_PER_SECOND))
+    }
+
+    pub(crate) fn replay_time_is_visible(&self, time: i64) -> bool {
+        self.replay_cutoff_seconds()
+            .is_none_or(|cutoff| time <= cutoff)
+    }
+
+    /// Apply one host clock to the chart's ordinary time-domain rows and every canonical trade
+    /// stream. Source rows and future trades stay retained; only the visible projections change.
+    pub fn set_replay_clock_micros(
+        &mut self,
+        clock_micros: Option<i64>,
+    ) -> Result<ReplayClockStats, FootprintError> {
+        if clock_micros
+            .is_some_and(|clock| !(MIN_TIMESTAMP_MICROS..=MAX_TIMESTAMP_MICROS).contains(&clock))
+        {
+            return Err(FootprintError::InvalidTimestamp { index: 0 });
+        }
+        let previous_clock_micros = self.replay_clock_micros;
+        if previous_clock_micros == clock_micros {
+            return Ok(ReplayClockStats {
+                previous_clock_micros,
+                clock_micros,
+                stream_count: self.trade_streams.len(),
+                ..ReplayClockStats::default()
+            });
+        }
+
+        let mut stream_ids = self.trade_streams.keys().copied().collect::<Vec<_>>();
+        stream_ids.sort_unstable();
+        let mut stats = ReplayClockStats {
+            previous_clock_micros,
+            clock_micros,
+            stream_count: stream_ids.len(),
+            ..ReplayClockStats::default()
+        };
+        for stream_id in &stream_ids {
+            let seek = self
+                .trade_streams
+                .get_mut(stream_id)
+                .expect("collected trade stream remains live")
+                .set_replay_clock_micros(clock_micros)?;
+            stats.visible_trades = stats.visible_trades.saturating_add(seek.visible_trades);
+            stats.rebuilt_trades = stats.rebuilt_trades.saturating_add(seek.rebuilt_trades);
+            stats.incremental_trades = stats
+                .incremental_trades
+                .saturating_add(seek.incremental_trades);
+        }
+        for stream_id in stream_ids {
+            self.refresh_trade_dependents(stream_id)?;
+            self.refresh_footprint_series_from_stream(stream_id, None)?;
+        }
+        self.replay_clock_micros = clock_micros;
+        self.refresh_synthetic_replay_projections()
+            .map_err(|_| FootprintError::InvalidAggregation)?;
+        let cutoff_seconds = self
+            .sequence_points
+            .is_none()
+            .then(|| clock_micros.map(|clock| clock.div_euclid(MICROS_PER_SECOND)))
+            .flatten();
+        self.data.set_time_cutoff(cutoff_seconds);
+        self.recompute_all_indicators();
+        self.sync_time_points();
+        self.invalidate_frame_scene();
+        Ok(stats)
+    }
+
     /// Create a bounded chart-level trade stream keyed by the host instrument identity. The
     /// stream owns canonical ordering, classification, corrections and retention; dependent
     /// footprint/study series refer to it by the returned opaque id.
@@ -1001,6 +1281,11 @@ impl ChartEngine {
         key: &str,
         options: FootprintAggregationOptions,
     ) -> Result<u64, FootprintError> {
+        if !matches!(options.bars, FootprintBarAggregation::Time { .. })
+            && !self.synthetic_series.is_empty()
+        {
+            return Err(FootprintError::SequenceDomainInUse);
+        }
         if key.is_empty() || key.len() > MAX_TRADE_STREAM_KEY_BYTES {
             return Err(FootprintError::InvalidTradeStreamKey);
         }
@@ -1033,24 +1318,58 @@ impl ChartEngine {
             .map(FootprintAggregator::revision)
     }
 
+    pub fn trade_stream_replay_clock_micros(&self, stream_id: u64) -> Option<Option<i64>> {
+        Some(self.trade_stream(stream_id)?.replay_clock_micros())
+    }
+
+    pub fn set_trade_stream_replay_clock_micros(
+        &mut self,
+        stream_id: u64,
+        clock_micros: Option<i64>,
+    ) -> Result<ReplaySeekStats, FootprintError> {
+        let stats = self
+            .trade_streams
+            .get_mut(&stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?
+            .set_replay_clock_micros(clock_micros)?;
+        if stats.previous_clock_micros != stats.clock_micros {
+            self.refresh_trade_dependents(stream_id)?;
+            self.refresh_footprint_series_from_stream(stream_id, None)?;
+        }
+        Ok(stats)
+    }
+
     pub fn trade_stream_stats(&self, stream_id: u64) -> Option<TradeStreamStats> {
         let stream = self.trade_stream(stream_id)?;
         let dependents = self.trade_dependents.get(&stream_id);
+        let bar_dependents = self.trade_bar_dependents.get(&stream_id);
         let bubbles = self.trade_bubbles.get(&stream_id);
         Some(TradeStreamStats {
             revision: stream.revision(),
             stream_capacity_bytes: stream.capacity_bytes(),
-            dependent_count: dependents.map_or(0, Vec::len) + bubbles.map_or(0, Vec::len),
+            dependent_count: dependents.map_or(0, Vec::len)
+                + bar_dependents.map_or(0, Vec::len)
+                + bubbles.map_or(0, Vec::len),
             dependent_rebuilds: dependents
                 .into_iter()
                 .flatten()
                 .map(|dependent| dependent.rebuilds)
-                .sum(),
+                .sum::<u64>()
+                + bar_dependents
+                    .into_iter()
+                    .flatten()
+                    .map(|dependent| dependent.rebuilds)
+                    .sum::<u64>(),
             dependent_incremental_updates: dependents
                 .into_iter()
                 .flatten()
                 .map(|dependent| dependent.incremental_updates)
-                .sum(),
+                .sum::<u64>()
+                + bar_dependents
+                    .into_iter()
+                    .flatten()
+                    .map(|dependent| dependent.incremental_updates)
+                    .sum::<u64>(),
         })
     }
 
@@ -1064,9 +1383,13 @@ impl ChartEngine {
                 .as_ref()
                 .is_some_and(|state| state.trade_stream_id == stream_id && !series.removed)
         }) || self
-            .trade_dependents
+            .trade_bar_dependents
             .get(&stream_id)
             .is_some_and(|dependents| !dependents.is_empty())
+            || self
+                .trade_dependents
+                .get(&stream_id)
+                .is_some_and(|dependents| !dependents.is_empty())
             || self
                 .trade_bubbles
                 .get(&stream_id)
@@ -1120,6 +1443,11 @@ impl ChartEngine {
             .and_then(|series| series.footprint.as_ref())
             .map(|state| state.visual.clone())
             .ok_or(FootprintError::UnknownSeries(id))?;
+        let previous_stream_id = self
+            .series_entry(id)
+            .and_then(|series| series.footprint.as_ref())
+            .map(|state| state.trade_stream_id)
+            .ok_or(FootprintError::UnknownSeries(id))?;
         self.series_entry_mut(id)
             .and_then(|series| series.footprint.as_mut())
             .ok_or(FootprintError::UnknownSeries(id))?
@@ -1129,7 +1457,45 @@ impl ChartEngine {
             });
         self.install_footprint_bars_projection(id, aggregation, &bars)?;
         self.invalidate_frame_series(id);
+        if previous_stream_id != stream_id {
+            self.prune_trade_stream_if_unused(previous_stream_id);
+        }
         Ok(())
+    }
+
+    /// Bind an ordinary candlestick or OHLC bar presentation to the canonical bars derived from
+    /// a chart-level trade stream. The series retains presentation options only; trade ordering,
+    /// corrections, aggregation, and logical non-time bar identity remain stream-owned.
+    pub fn bind_trade_bar_series_to_stream(
+        &mut self,
+        id: SeriesId,
+        stream_id: u64,
+    ) -> Result<(), FootprintError> {
+        self.validate_series_id(id).map_err(series_error)?;
+        if !self
+            .series_entry(id)
+            .is_some_and(|series| matches!(series.kind, SeriesKind::Candlestick | SeriesKind::Bar))
+        {
+            return Err(FootprintError::UnsupportedTradeBarSeries(id));
+        }
+        if self.series_max_points(id).is_some() {
+            return Err(FootprintError::InvalidAggregation);
+        }
+        self.trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+        for dependents in self.trade_bar_dependents.values_mut() {
+            dependents.retain(|dependent| dependent.series_id != id);
+        }
+        self.trade_bar_dependents
+            .entry(stream_id)
+            .or_default()
+            .push(TradeBarDependent {
+                series_id: id,
+                applied_revision: 0,
+                rebuilds: 0,
+                incremental_updates: 0,
+            });
+        self.refresh_trade_bar_dependents_from(stream_id, None)
     }
 
     pub fn add_cvd_series(
@@ -1387,22 +1753,24 @@ impl ChartEngine {
             .and_then(|series| series.footprint.as_ref())
             .map(|state| state.trade_stream_id)
             .ok_or(FootprintError::UnknownSeries(id))?;
+        self.set_trade_stream_trades(stream_id, trades)
+    }
+
+    /// Atomically replace the canonical tape owned by a chart-level trade stream and refresh all
+    /// footprint, candle/bar, study, and marker dependents from the resulting bar sequence.
+    pub fn set_trade_stream_trades(
+        &mut self,
+        stream_id: u64,
+        trades: Vec<FootprintTrade>,
+    ) -> Result<(), FootprintError> {
         let mut next = self
             .trade_stream(stream_id)
-            .ok_or(FootprintError::UnknownSeries(id))?
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?
             .clone();
         next.set_trades(trades)?;
-        let aggregation = next.options();
         self.trade_streams.insert(stream_id, next);
-        let bars = self
-            .trade_stream(stream_id)
-            .ok_or(FootprintError::UnknownSeries(id))?
-            .bars()
-            .to_vec();
         self.refresh_trade_dependents(stream_id)?;
-        self.install_footprint_bars_projection(id, aggregation, &bars)?;
-        self.invalidate_frame_series(id);
-        Ok(())
+        self.refresh_footprint_series_from_stream(stream_id, None)
     }
 
     pub fn update_footprint_trade(
@@ -1430,10 +1798,37 @@ impl ChartEngine {
             .and_then(|series| series.footprint.as_ref())
             .map(|state| state.trade_stream_id)
             .ok_or(FootprintError::UnknownSeries(id))?;
+        self.update_trade_stream_trades(stream_id, trades)
+    }
+
+    pub fn update_trade_stream_trade(
+        &mut self,
+        stream_id: u64,
+        trade: FootprintTrade,
+    ) -> Result<FootprintUpdateKind, FootprintError> {
+        self.update_trade_stream_trades(stream_id, vec![trade])
+    }
+
+    /// Apply a live trade batch to the canonical stream once, then incrementally advance every
+    /// dependent presentation from the same derived bars. Late events and corrections rebuild
+    /// one candidate tape before any visible state is changed.
+    pub fn update_trade_stream_trades(
+        &mut self,
+        stream_id: u64,
+        trades: Vec<FootprintTrade>,
+    ) -> Result<FootprintUpdateKind, FootprintError> {
+        if trades.is_empty() {
+            self.trade_stream(stream_id)
+                .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+            return Ok(FootprintUpdateKind::Tip);
+        }
         let stream = self
             .trade_stream(stream_id)
-            .ok_or(FootprintError::UnknownSeries(id))?;
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
         let options = stream.options();
+        let batch_changes_visible_state = stream
+            .replay_clock_micros()
+            .is_none_or(|clock| trades.iter().any(|trade| trade.timestamp_micros <= clock));
         validate_trade_batch(options, &trades)?;
         let historical = !stream.batch_is_tip(&trades);
         let previous_bar_count = stream.bars().len();
@@ -1441,16 +1836,12 @@ impl ChartEngine {
             let mut next = stream.historical_update_candidate();
             let result = next.update_trades(trades)?;
             debug_assert_eq!(result, FootprintUpdateKind::Historical);
-            let aggregation = next.options();
             self.trade_streams.insert(stream_id, next);
-            let bars = self
-                .trade_stream(stream_id)
-                .ok_or(FootprintError::UnknownSeries(id))?
-                .bars()
-                .to_vec();
+            if !batch_changes_visible_state {
+                return Ok(FootprintUpdateKind::Historical);
+            }
             self.refresh_trade_dependents(stream_id)?;
-            self.install_footprint_bars_projection(id, aggregation, &bars)?;
-            self.invalidate_frame_series(id);
+            self.refresh_footprint_series_from_stream(stream_id, None)?;
             return Ok(FootprintUpdateKind::Historical);
         }
 
@@ -1460,45 +1851,63 @@ impl ChartEngine {
         let result = self
             .trade_streams
             .get_mut(&stream_id)
-            .ok_or(FootprintError::UnknownSeries(id))?
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?
             .update_trades(trades)?;
         debug_assert_eq!(result, FootprintUpdateKind::Tip);
-        let from = previous_bar_count.saturating_sub(1);
-        if matches!(options.bars, FootprintBarAggregation::Time { .. }) {
-            let (times, open, high, low, close) = projection_columns(
-                &self
-                    .footprint_bars(id)
-                    .ok_or(FootprintError::UnknownSeries(id))?[from..],
-            )?;
-            if self.update_footprint_projection_bars(id, times, open, high, low, close) == 0 {
-                return Err(FootprintError::UnknownSeries(id));
-            }
-        } else {
-            let bars = self
-                .trade_stream(stream_id)
-                .ok_or(FootprintError::UnknownSeries(id))?
-                .bars()
-                .to_vec();
-            let (points, open, high, low, close) = sequence_projection_columns(&bars[from..]);
-            let accepted = if self.series_max_points(id).is_some() {
-                // Retention can evict the prefix while the stream advances. Keep the full
-                // projection path in that case so the sidecar and data-layer rows stay aligned.
-                self.install_footprint_bars_projection(id, options, &bars)?;
-                points.len()
-            } else {
-                self.update_footprint_sequence_projection_bars(
-                    id,
-                    from,
-                    (points, open, high, low, close),
-                )
-            };
-            if accepted == 0 {
-                return Err(FootprintError::UnknownSeries(id));
-            }
+        if !batch_changes_visible_state {
+            return Ok(result);
         }
+        let from = previous_bar_count.saturating_sub(1);
         self.refresh_trade_dependents_from(stream_id, Some(from))?;
-        self.invalidate_frame_series(id);
+        self.refresh_footprint_series_from_stream(stream_id, Some(from))?;
         Ok(result)
+    }
+
+    fn refresh_footprint_series_from_stream(
+        &mut self,
+        stream_id: u64,
+        incremental_from: Option<usize>,
+    ) -> Result<(), FootprintError> {
+        let stream = self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+        let options = stream.options();
+        let bars = stream.bars().to_vec();
+        let series_ids = self
+            .series
+            .iter()
+            .filter(|series| !series.removed)
+            .filter_map(|series| {
+                series
+                    .footprint
+                    .as_ref()
+                    .is_some_and(|state| state.trade_stream_id == stream_id)
+                    .then_some(series.id)
+            })
+            .collect::<Vec<_>>();
+        for id in series_ids {
+            let from = incremental_from.unwrap_or(0).min(bars.len());
+            let incrementally_installed =
+                if incremental_from.is_some() && self.series_max_points(id).is_none() {
+                    if matches!(options.bars, FootprintBarAggregation::Time { .. }) {
+                        let (times, open, high, low, close) = projection_columns(&bars[from..])?;
+                        self.update_footprint_projection_bars(id, times, open, high, low, close) > 0
+                    } else {
+                        self.update_footprint_sequence_projection_bars(
+                            id,
+                            from,
+                            sequence_projection_columns(&bars[from..]),
+                        ) > 0
+                    }
+                } else {
+                    false
+                };
+            if !incrementally_installed {
+                self.install_footprint_bars_projection(id, options, &bars)?;
+            }
+            self.invalidate_frame_series(id);
+        }
+        Ok(())
     }
 
     pub(crate) fn footprint_capacity_bytes(&self) -> usize {
@@ -1524,6 +1933,11 @@ impl ChartEngine {
                     self.data.trim_front(dependent.series_id, keep);
                 }
             }
+            if let Some(dependents) = self.trade_bar_dependents.get(&stream_id).cloned() {
+                for dependent in dependents {
+                    self.data.trim_front(dependent.series_id, keep);
+                }
+            }
             let sequence_owner = self.trade_stream(stream_id).is_some_and(|stream| {
                 !matches!(stream.options().bars, FootprintBarAggregation::Time { .. })
             });
@@ -1544,6 +1958,38 @@ impl ChartEngine {
 
     pub(crate) fn trade_stream(&self, stream_id: u64) -> Option<&FootprintAggregator> {
         self.trade_streams.get(&stream_id)
+    }
+
+    pub(crate) fn is_trade_bar_dependent(&self, series_id: SeriesId) -> bool {
+        self.trade_bar_dependents
+            .values()
+            .flatten()
+            .any(|dependent| dependent.series_id == series_id)
+    }
+
+    fn prune_trade_stream_if_unused(&mut self, stream_id: u64) {
+        let used = self.series.iter().any(|series| {
+            !series.removed
+                && series
+                    .footprint
+                    .as_ref()
+                    .is_some_and(|state| state.trade_stream_id == stream_id)
+        }) || self.trade_stream_keys.values().any(|&id| id == stream_id)
+            || self
+                .trade_bar_dependents
+                .get(&stream_id)
+                .is_some_and(|dependents| !dependents.is_empty())
+            || self
+                .trade_dependents
+                .get(&stream_id)
+                .is_some_and(|dependents| !dependents.is_empty())
+            || self
+                .trade_bubbles
+                .get(&stream_id)
+                .is_some_and(|dependents| !dependents.is_empty());
+        if !used {
+            self.trade_streams.remove(&stream_id);
+        }
     }
 
     fn register_trade_dependent(
@@ -1655,7 +2101,85 @@ impl ChartEngine {
                 }
             }
         }
+        self.refresh_trade_bar_dependents_from(stream_id, incremental_from)?;
         self.refresh_trade_bubbles(stream_id)
+    }
+
+    fn refresh_trade_bar_dependents_from(
+        &mut self,
+        stream_id: u64,
+        incremental_from: Option<usize>,
+    ) -> Result<(), FootprintError> {
+        let stream = self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+        let bars = stream.bars().to_vec();
+        let aggregation = stream.options();
+        let revision = stream.revision();
+        let dependents = self
+            .trade_bar_dependents
+            .get(&stream_id)
+            .cloned()
+            .unwrap_or_default();
+        for dependent in &dependents {
+            let from = incremental_from.unwrap_or(0).min(bars.len());
+            let incrementally_installed = if incremental_from.is_some() {
+                if matches!(aggregation.bars, FootprintBarAggregation::Time { .. }) {
+                    let (times, open, high, low, close) = projection_columns(&bars[from..])?;
+                    self.update_series_bars_sanitized(
+                        dependent.series_id,
+                        times,
+                        open,
+                        high,
+                        low,
+                        close,
+                    ) > 0
+                } else {
+                    let projection = sequence_projection_columns(&bars[from..]);
+                    self.update_trade_bar_sequence_projection_bars(
+                        dependent.series_id,
+                        from,
+                        projection,
+                    ) > 0
+                }
+            } else {
+                false
+            };
+            if !incrementally_installed {
+                let installed = if matches!(aggregation.bars, FootprintBarAggregation::Time { .. })
+                {
+                    let (times, open, high, low, close) = projection_columns(&bars)?;
+                    self.install_series_data(dependent.series_id, times, open, high, low, close)
+                } else {
+                    let (points, open, high, low, close) = sequence_projection_columns(&bars);
+                    self.install_trade_bar_sequence_projection(
+                        dependent.series_id,
+                        points,
+                        open,
+                        high,
+                        low,
+                        close,
+                    )
+                };
+                if !installed {
+                    return Err(FootprintError::UnknownSeries(dependent.series_id));
+                }
+            }
+        }
+        if let Some(dependents) = self.trade_bar_dependents.get_mut(&stream_id) {
+            for dependent in dependents {
+                if dependent.applied_revision != revision {
+                    dependent.applied_revision = revision;
+                    if incremental_from.is_some() {
+                        dependent.incremental_updates =
+                            dependent.incremental_updates.saturating_add(1);
+                    } else {
+                        dependent.rebuilds = dependent.rebuilds.saturating_add(1);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn refresh_trade_bubbles(&mut self, stream_id: u64) -> Result<(), FootprintError> {
@@ -2147,7 +2671,7 @@ fn mark_stacks(levels: &mut [FootprintLevel], minimum: usize, ask: bool) {
 mod tests {
     use super::*;
     use crate::{DrawingKind, DrawingPoint};
-    use aeris_charts_render::draw_list::Prim;
+    use aeris_charts_render::draw_list::{LineStyle, Prim};
 
     fn trade(
         timestamp_micros: i64,
@@ -2375,6 +2899,42 @@ mod tests {
         let mut expected = FootprintAggregator::new(options).unwrap();
         expected.set_trades(history).unwrap();
         assert_eq!(aggregator.bars(), expected.bars());
+    }
+
+    #[test]
+    fn backward_replay_seek_restores_nearest_bounded_checkpoint() {
+        let options = FootprintAggregationOptions {
+            tick_size: 1.0,
+            bars: FootprintBarAggregation::Trades { trades_per_bar: 10 },
+            ..FootprintAggregationOptions::default()
+        };
+        let tape = (1..=3_000)
+            .map(|timestamp| {
+                trade(
+                    timestamp,
+                    100.0 + (timestamp % 5) as f64,
+                    1.0,
+                    AggressorSide::Buy,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut replay = FootprintAggregator::new(options).unwrap();
+        replay.set_trades(tape.clone()).unwrap();
+
+        let seek = replay.set_replay_clock_micros(Some(2_300)).unwrap();
+        assert_eq!(seek.visible_trades, 2_300);
+        assert_eq!(seek.rebuilt_trades, 2_300 - 2_048);
+        assert!(replay.replay_checkpoints.len() <= MAX_REPLAY_CHECKPOINTS);
+
+        let mut expected = FootprintAggregator::new(options).unwrap();
+        expected.set_trades(tape[..2_300].to_vec()).unwrap();
+        assert_eq!(replay.bars(), expected.bars());
+
+        let checkpoint_seek = replay.set_replay_clock_micros(Some(2_048)).unwrap();
+        assert_eq!(checkpoint_seek.rebuilt_trades, 0);
+        let mut expected = FootprintAggregator::new(options).unwrap();
+        expected.set_trades(tape[..2_048].to_vec()).unwrap();
+        assert_eq!(replay.bars(), expected.bars());
     }
 
     #[test]
@@ -3017,6 +3577,228 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_candles_share_non_time_trade_stream_bars_and_sequence_identity() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let footprint = chart
+            .add_footprint_series(FootprintSeriesOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    bars: FootprintBarAggregation::Trades { trades_per_bar: 2 },
+                    ..FootprintAggregationOptions::default()
+                },
+                ..FootprintSeriesOptions::default()
+            })
+            .unwrap();
+        let stream_id = chart
+            .series_entry(footprint)
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap()
+            .trade_stream_id;
+        let candles = chart.add_series(SeriesKind::Candlestick);
+        chart
+            .bind_trade_bar_series_to_stream(candles, stream_id)
+            .unwrap();
+
+        chart
+            .set_footprint_trades(
+                footprint,
+                vec![
+                    trade(1_000_001, 100.0, 1.0, AggressorSide::Buy),
+                    trade(1_000_002, 102.0, 1.0, AggressorSide::Sell),
+                    trade(1_000_003, 101.0, 1.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        let (times, columns) = chart.data_layer().series_data(candles).unwrap();
+        assert_eq!(times, &[0, 1]);
+        assert_eq!(columns[0], [100.0, 101.0]);
+        assert_eq!(columns[1], [102.0, 101.0]);
+        assert_eq!(columns[2], [100.0, 101.0]);
+        assert_eq!(columns[3], [102.0, 101.0]);
+        assert_eq!(chart.sequence_points().unwrap().len(), 2);
+
+        chart
+            .update_footprint_trade(footprint, trade(1_000_004, 103.0, 1.0, AggressorSide::Buy))
+            .unwrap();
+        let (_, columns) = chart.data_layer().series_data(candles).unwrap();
+        assert_eq!(columns[0], [100.0, 101.0]);
+        assert_eq!(columns[1], [102.0, 103.0]);
+        assert_eq!(columns[2], [100.0, 101.0]);
+        assert_eq!(columns[3], [102.0, 103.0]);
+        let stats = chart.trade_stream_stats(stream_id).unwrap();
+        assert_eq!(stats.dependent_count, 1);
+        assert_eq!(stats.dependent_rebuilds, 2);
+        assert_eq!(stats.dependent_incremental_updates, 1);
+    }
+
+    #[test]
+    fn trade_bar_binding_rejects_scalar_series_and_releases_stream_dependency_on_remove() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let stream = chart
+            .add_trade_stream(
+                "CME:ES:volume",
+                FootprintAggregationOptions {
+                    bars: FootprintBarAggregation::Volume {
+                        volume_per_bar: 2.0,
+                    },
+                    ..FootprintAggregationOptions::default()
+                },
+            )
+            .unwrap();
+        let line = chart.add_series(SeriesKind::Line);
+        assert_eq!(
+            chart.bind_trade_bar_series_to_stream(line, stream),
+            Err(FootprintError::UnsupportedTradeBarSeries(line))
+        );
+        let bars = chart.add_series(SeriesKind::Bar);
+        chart.bind_trade_bar_series_to_stream(bars, stream).unwrap();
+        assert!(!chart.set_series_max_points(bars, Some(1)));
+        chart
+            .set_trade_stream_trades(
+                stream,
+                vec![
+                    trade(1_000_001, 100.0, 1.0, AggressorSide::Buy),
+                    trade(1_000_002, 101.0, 1.0, AggressorSide::Sell),
+                ],
+            )
+            .unwrap();
+        assert_eq!(chart.data_layer().series_data(bars).unwrap().0, &[0]);
+        chart
+            .update_trade_stream_trade(stream, trade(1_000_003, 102.0, 1.0, AggressorSide::Buy))
+            .unwrap();
+        assert_eq!(chart.data_layer().series_data(bars).unwrap().0, &[0, 1]);
+        assert_eq!(chart.sequence_points().unwrap().len(), 2);
+        assert_eq!(chart.trade_stream_stats(stream).unwrap().dependent_count, 1);
+        assert!(chart.remove_series(bars));
+        assert_eq!(chart.trade_stream_stats(stream).unwrap().dependent_count, 0);
+        chart.remove_trade_stream(stream).unwrap();
+    }
+
+    #[test]
+    fn replay_clock_masks_future_tape_from_every_trade_stream_dependent() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let stream = chart
+            .add_trade_stream(
+                "CME:ES:replay",
+                FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
+                    ..FootprintAggregationOptions::default()
+                },
+            )
+            .unwrap();
+        let footprint = chart.add_series(SeriesKind::Footprint);
+        chart
+            .configure_footprint_series(footprint, FootprintSeriesOptions::default())
+            .unwrap();
+        chart
+            .bind_footprint_series_to_stream(footprint, stream)
+            .unwrap();
+        let candles = chart.add_series(SeriesKind::Candlestick);
+        chart
+            .bind_trade_bar_series_to_stream(candles, stream)
+            .unwrap();
+        let delta = chart.add_delta_series(stream, 1).unwrap();
+        chart
+            .add_trade_bubbles(stream, footprint, TradeBubbleOptions::default())
+            .unwrap();
+        chart
+            .set_trade_stream_trades(
+                stream,
+                (1..=3)
+                    .map(|timestamp| {
+                        trade(timestamp, 99.0 + timestamp as f64, 1.0, AggressorSide::Buy)
+                    })
+                    .collect(),
+            )
+            .unwrap();
+
+        let seek = chart.set_replay_clock_micros(Some(2)).unwrap();
+        assert_eq!(seek.stream_count, 1);
+        assert_eq!(seek.visible_trades, 2);
+        assert_eq!(seek.rebuilt_trades, 2);
+        assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 2);
+        assert_eq!(chart.data_layer().series_data(candles).unwrap().0.len(), 2);
+        assert_eq!(chart.data_layer().series_data(delta).unwrap().0.len(), 2);
+        assert_eq!(chart.series_entry(footprint).unwrap().markers.len(), 2);
+
+        let before_future = chart.trade_stream_stats(stream).unwrap();
+        chart
+            .update_trade_stream_trade(stream, trade(4, 103.0, 1.0, AggressorSide::Buy))
+            .unwrap();
+        assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 2);
+        let after_future = chart.trade_stream_stats(stream).unwrap();
+        assert_eq!(
+            after_future.dependent_rebuilds,
+            before_future.dependent_rebuilds
+        );
+        assert_eq!(
+            after_future.dependent_incremental_updates,
+            before_future.dependent_incremental_updates
+        );
+        let forward = chart.set_replay_clock_micros(Some(4)).unwrap();
+        assert_eq!(forward.visible_trades, 4);
+        assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 4);
+        let backward = chart.set_replay_clock_micros(Some(1)).unwrap();
+        assert_eq!(backward.visible_trades, 1);
+        assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 1);
+        chart.set_replay_clock_micros(None).unwrap();
+        assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn chart_replay_clock_masks_ordinary_rows_without_discarding_future_updates() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0, 3.0],
+                &[10.0, 20.0, 30.0],
+                &[11.0, 21.0, 31.0],
+                &[9.0, 19.0, 29.0],
+                &[10.5, 20.5, 30.5],
+            )
+            .unwrap();
+        let sma = chart.add_sma(0, 2).unwrap();
+
+        let stats = chart.set_replay_clock_micros(Some(2_500_000)).unwrap();
+        assert_eq!(stats.stream_count, 0);
+        assert_eq!(chart.replay_clock_micros(), Some(2_500_000));
+        assert_eq!(chart.data_layer().merged_times(), &[1, 2]);
+        assert_eq!(chart.data_layer().series_data(0).unwrap().0, &[1, 2]);
+        assert_eq!(chart.data_layer().series_data(sma).unwrap().0, &[2]);
+        chart.fit_content();
+        let frame = chart.build_frame();
+        assert!(frame
+            .panes
+            .iter()
+            .flat_map(|pane| &pane.main)
+            .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "Replay")));
+        assert!(frame
+            .panes
+            .iter()
+            .flat_map(|pane| &pane.main)
+            .any(|primitive| matches!(
+                primitive,
+                Prim::VLine {
+                    style: LineStyle::Dashed,
+                    ..
+                }
+            )));
+
+        assert!(chart.update_series_bar(0, 4.0, [40.0, 41.0, 39.0, 40.5]));
+        assert_eq!(chart.data_layer().merged_times(), &[1, 2]);
+        chart.set_replay_clock_micros(Some(4_500_000)).unwrap();
+        assert_eq!(chart.data_layer().merged_times(), &[1, 2, 3, 4]);
+        assert_eq!(chart.data_layer().series_data(0).unwrap().0, &[1, 2, 3, 4]);
+        assert_eq!(chart.data_layer().series_data(sma).unwrap().0, &[2, 3, 4]);
+        chart.set_replay_clock_micros(None).unwrap();
+        assert_eq!(chart.data_layer().merged_times(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
     fn cvd_and_delta_dependents_follow_late_corrections_and_report_rebuilds() {
         let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
         let stream = chart
@@ -3125,6 +3907,10 @@ mod tests {
         let cvd = chart
             .add_cvd_series(stream, 1, TradeStudyOptions::default())
             .unwrap();
+        let candles = chart.add_series(SeriesKind::Candlestick);
+        chart
+            .bind_trade_bar_series_to_stream(candles, stream)
+            .unwrap();
         chart.set_series_max_points(footprint, Some(1));
         chart
             .set_footprint_trades(
@@ -3137,6 +3923,7 @@ mod tests {
             .unwrap();
         assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 1);
         assert_eq!(chart.data_layer().series_data(cvd).unwrap().0.len(), 1);
+        assert_eq!(chart.data_layer().series_data(candles).unwrap().0.len(), 1);
         assert_eq!(chart.trade_stream_stats(stream).unwrap().revision, 3);
     }
 

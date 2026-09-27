@@ -275,6 +275,204 @@ test("non-time footprint bars use the sequence axis and round-trip construction 
   expect(result.trade.bars[0].start_timestamp_micros).toBe(result.first_open);
 });
 
+test("ordinary candles consume one canonical non-time trade stream", async ({ page }) => {
+  await open_chart(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    chart.remove_series(window.__main);
+    const candles = chart.add_series("candlestick");
+    const scalar = chart.add_series("line");
+    const stream = chart.add_trade_stream("CME:ES:browser", {
+      tick_size: 1,
+      bar_type: "trades",
+      trades_per_bar: 2,
+    });
+    let scalar_error = "";
+    try {
+      chart.bind_trade_bar_series_to_stream(scalar, stream);
+    } catch (error) {
+      scalar_error = String(error);
+    }
+    chart.bind_trade_bar_series_to_stream(candles, stream);
+    const second = Math.floor(window.__data[0].time / 60) * 60;
+    const micros = second * 1_000_000;
+    chart.set_trade_stream_trades(stream, [
+      { timestamp_micros: micros + 1, price: 100, volume: 1, aggressor: "buy" },
+      { timestamp_micros: micros + 2, price: 102, volume: 1, aggressor: "sell" },
+      { timestamp_micros: micros + 3, price: 101, volume: 1, aggressor: "buy" },
+    ]);
+    const before = candles.data();
+    const update = chart.update_trade_stream_trades(stream, [
+      { timestamp_micros: micros + 4, price: 103, volume: 1, aggressor: "buy" },
+    ]);
+    return {
+      before,
+      after: candles.data(),
+      update,
+      stats: chart.trade_stream_stats(stream),
+      snapshots: [chart.value_snapshot(0), chart.value_snapshot(1)],
+      scalar_error,
+    };
+  });
+
+  expect(result.before.map(({ open, high, low, close }) => ({ open, high, low, close }))).toEqual([
+    { open: 100, high: 102, low: 100, close: 102 },
+    { open: 101, high: 101, low: 101, close: 101 },
+  ]);
+  expect(result.after[1]).toMatchObject({ open: 101, high: 103, low: 101, close: 103 });
+  expect(result.update).toBe("tip");
+  expect(result.stats).toMatchObject({ dependent_count: 1, dependent_incremental_updates: 1 });
+  expect(result.snapshots).toHaveLength(2);
+  expect(result.scalar_error).toContain("candlestick or bar");
+});
+
+test("trade replay clock masks retained future events and reports seek work", async ({ page }) => {
+  await open_chart(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    chart.remove_series(window.__main);
+    const candles = chart.add_series("candlestick");
+    const reference = chart.add_series("line");
+    reference.apply_options({ line_type: "stepped", title: "Weekly fundamentals" });
+    const footprint = chart.add_series("footprint", {
+      tick_size: 1,
+      bar_type: "time",
+      interval_seconds: 1,
+    });
+    const stream = chart.add_trade_stream("CME:ES:replay-browser", {
+      tick_size: 1,
+      bar_type: "time",
+      interval_seconds: 1,
+    });
+    chart.bind_footprint_series_to_stream(footprint, stream);
+    chart.bind_trade_bar_series_to_stream(candles, stream);
+    const micros = Math.floor(window.__data[0].time) * 1_000_000;
+    const second = Math.floor(micros / 1_000_000);
+    reference.set_data([
+      { time: second, value: 10 },
+      { time: second + 1, value: 20 },
+      { time: second + 2, value: 30 },
+    ]);
+    chart.set_trade_stream_trades(stream, [1, 1_000_001, 2_000_001].map((offset, index) => ({
+      timestamp_micros: micros + offset,
+      price: 100 + index,
+      volume: 1,
+      aggressor: "buy",
+    })));
+    const backward = chart.set_replay_clock_micros(micros + 1);
+    const masked = { candles: candles.data(), bars: footprint.footprint_bars(), reference: reference.data() };
+    chart.update_trade_stream_trades(stream, [{
+      timestamp_micros: micros + 3_000_001,
+      price: 103,
+      volume: 1,
+      aggressor: "buy",
+    }]);
+    const still_masked = candles.data().length;
+    const forward = chart.set_replay_clock_micros(micros + 3_000_001);
+    return {
+      backward,
+      masked,
+      still_masked,
+      forward,
+      visible: candles.data(),
+      reference: reference.data(),
+      clock: chart.replay_clock_micros(),
+    };
+  });
+
+  expect(result.backward).toMatchObject({ stream_count: 1, visible_trades: 1, rebuilt_trades: 1 });
+  expect(result.masked.candles).toHaveLength(1);
+  expect(result.masked.bars).toHaveLength(1);
+  expect(result.masked.reference).toHaveLength(1);
+  expect(result.still_masked).toBe(1);
+  expect(result.forward).toMatchObject({ visible_trades: 4, rebuilt_trades: 0, incremental_trades: 3 });
+  expect(result.visible).toHaveLength(4);
+  expect(result.reference).toHaveLength(3);
+  expect(result.clock).toBe(result.forward.clock_micros);
+});
+
+test("synthetic price-action charts share the logical sequence and replay clock", async ({ page }) => {
+  await open_chart(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    chart.remove_series(window.__main);
+    const series = chart.add_series("candlestick");
+    const start = Math.floor(window.__data[0].time);
+    const rows = (values, spread = 0) => values.map((close, index) => ({
+      time: start + index,
+      open: close,
+      high: close + spread,
+      low: close - spread,
+      close,
+    }));
+    const read = (options, data) => {
+      chart.configure_synthetic_bar_series(series, options);
+      chart.set_synthetic_bar_source(series, data);
+      return series.data().map(({ open, high, low, close }) => ({ open, high, low, close }));
+    };
+    const renko = read({ kind: "renko_fixed", box_size: 1 }, rows([100, 103.2, 102.1, 100.8]));
+    chart.update_synthetic_bar_source(series, {
+      time: start + 4,
+      open: 105,
+      high: 105,
+      low: 105,
+      close: 105,
+    });
+    const renko_updated = series.data();
+    const atr = read({ kind: "renko_atr", period: 3 }, rows([100, 101, 102, 105], 0.5));
+    const line_break = read({ kind: "line_break", lines: 3 }, rows([100, 101, 102, 101.5, 99]));
+    const kagi = read({ kind: "kagi", reversal_size: 2 }, rows([100, 103, 104, 103, 101.5, 99]));
+    const point_and_figure = read(
+      { kind: "point_and_figure", box_size: 1, reversal_boxes: 3 },
+      rows([100, 104.2, 102, 100.5, 103.8]),
+    );
+    chart.configure_synthetic_bar_series(series, { kind: "renko_fixed", box_size: 1 });
+    chart.set_synthetic_bar_source(series, rows([100, 103, 99]));
+    chart.set_replay_clock_micros((start + 1) * 1_000_000);
+    const replay_masked = series.data().length;
+    chart.set_replay_clock_micros(null);
+    let second_error = "";
+    try {
+      const second = chart.add_series("candlestick");
+      chart.configure_synthetic_bar_series(second, { kind: "line_break", lines: 3 });
+    } catch (error) {
+      second_error = String(error);
+    }
+    return {
+      renko,
+      renko_updated_length: renko_updated.length,
+      renko_updated_close: renko_updated.at(-1)?.close,
+      atr,
+      line_break,
+      kagi,
+      point_and_figure,
+      replay_masked,
+      second_error,
+    };
+  });
+
+  expect(result.renko.map(({ open, close }) => ({ open, close }))).toEqual([
+    { open: 100, close: 101 },
+    { open: 101, close: 102 },
+    { open: 102, close: 103 },
+    { open: 102, close: 101 },
+  ]);
+  expect(result.renko_updated_length).toBe(7);
+  expect(result.renko_updated_close).toBe(105);
+  expect(result.atr).toHaveLength(1);
+  expect(result.line_break.map(({ close }) => close)).toEqual([100, 101, 102, 99]);
+  expect(result.kagi.map(({ open, close }) => ({ open, close }))).toEqual([
+    { open: 100, close: 104 },
+    { open: 104, close: 99 },
+  ]);
+  expect(result.point_and_figure.map(({ open, close }) => ({ open, close }))).toEqual([
+    { open: 100, close: 104 },
+    { open: 103, close: 101 },
+  ]);
+  expect(result.replay_masked).toBe(3);
+  expect(result.second_error).toContain("one independent non-time bar sequence");
+});
+
 test("failed footprint creation leaves engine order, handles, scale membership, and notifications unchanged", async ({ page }) => {
   await open_chart(page);
   const result = await page.evaluate(() => {

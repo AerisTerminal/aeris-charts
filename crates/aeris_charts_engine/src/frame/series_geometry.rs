@@ -262,6 +262,134 @@ impl ChartEngine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn build_price_action_frame(
+        &self,
+        rs: ResolvedSeries,
+        from: i64,
+        to: i64,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+        scale: &aeris_charts_core::scale::price_scale_core::PriceScaleCore,
+    ) -> bool {
+        let Some(options) = self.synthetic_bar_options(rs.id) else {
+            return false;
+        };
+        if !matches!(
+            options,
+            crate::SyntheticBarOptions::Kagi { .. }
+                | crate::SyntheticBarOptions::PointAndFigure { .. }
+        ) {
+            return false;
+        }
+        let mut work = conflation::DensityWork::default();
+        let visible = visible_ohlc_with_work(
+            self.data.plot(rs.id),
+            from,
+            to,
+            self.time_scale.bar_spacing(),
+            hpr,
+            |index| self.time_scale.index_to_coordinate(index) * hpr,
+            &mut work,
+        );
+        self.record_lod_work(
+            work.selected_level,
+            work.summary_nodes,
+            work.raw_rows,
+            work.candidates,
+        );
+        match options {
+            crate::SyntheticBarOptions::Kagi { .. } => {
+                let base_width = (rs.line_width * hpr).round().max(1.0) as i32;
+                let mut previous: Option<(i32, i32)> = None;
+                for bar in visible {
+                    let rising = bar.close >= bar.open;
+                    let color = if rising { rs.up } else { rs.down };
+                    let width = if rising {
+                        base_width.saturating_mul(2)
+                    } else {
+                        base_width
+                    };
+                    let x = bar.x_px.round() as i32;
+                    let open_y =
+                        (scale.price_to_coordinate(bar.open, rs.base_value) * vpr).round() as i32;
+                    let close_y =
+                        (scale.price_to_coordinate(bar.close, rs.base_value) * vpr).round() as i32;
+                    if let Some((previous_x, previous_y)) = previous {
+                        out.push(Prim::HLine {
+                            y: open_y,
+                            x0: previous_x.min(x),
+                            x1: previous_x.max(x),
+                            width,
+                            style: LineStyle::Solid,
+                            color,
+                        });
+                        debug_assert_eq!(previous_y, open_y);
+                    }
+                    out.push(Prim::VLine {
+                        x,
+                        y0: open_y.min(close_y),
+                        y1: open_y.max(close_y),
+                        width,
+                        style: LineStyle::Solid,
+                        color,
+                    });
+                    previous = Some((x, close_y));
+                }
+            }
+            crate::SyntheticBarOptions::PointAndFigure { box_size, .. } => {
+                const MAX_VISIBLE_GLYPHS: usize = 4_096;
+                let font_size = self
+                    .options
+                    .get()
+                    .layout
+                    .font_size
+                    .min(self.time_scale.bar_spacing() * 0.75)
+                    .max(1.0);
+                let mut glyphs = 0usize;
+                for bar in visible {
+                    let rising = bar.close >= bar.open;
+                    let color = if rising { rs.up } else { rs.down };
+                    let boxes = ((bar.close - bar.open).abs() / box_size).round() as usize + 1;
+                    if font_size < 6.0 || glyphs.saturating_add(boxes) > MAX_VISIBLE_GLYPHS {
+                        let y0 = (scale.price_to_coordinate(bar.open, rs.base_value) * vpr).round()
+                            as i32;
+                        let y1 = (scale.price_to_coordinate(bar.close, rs.base_value) * vpr).round()
+                            as i32;
+                        out.push(Prim::VLine {
+                            x: bar.x_px.round() as i32,
+                            y0: y0.min(y1),
+                            y1: y0.max(y1),
+                            width: (hpr * rs.line_width).round().max(1.0) as i32,
+                            style: LineStyle::Solid,
+                            color,
+                        });
+                        continue;
+                    }
+                    let step = if rising { box_size } else { -box_size };
+                    for box_index in 0..boxes {
+                        let price = bar.open + step * box_index as f64;
+                        out.push(Prim::Text {
+                            x: bar.x_px as f32,
+                            y: (scale.price_to_coordinate(price, rs.base_value) * vpr) as f32,
+                            text: if rising { "X" } else { "O" }.to_string(),
+                            color,
+                            size: (font_size * vpr) as f32,
+                            family: self.options.get().layout.font_family.clone(),
+                            align: TextAlign::Center,
+                            weight: 600,
+                            italic: false,
+                        });
+                    }
+                    glyphs += boxes;
+                }
+            }
+            _ => unreachable!("price-action branch filters synthetic options"),
+        }
+        true
+    }
+
     #[allow(clippy::too_many_arguments)] // mirrors the reference renderer-data signature
     pub(super) fn build_candles_frame(
         &self,
@@ -273,6 +401,9 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
         scale: &aeris_charts_core::scale::price_scale_core::PriceScaleCore,
     ) {
+        if self.build_price_action_frame(rs, from, to, hpr, vpr, out, scale) {
+            return;
+        }
         let plot = self.data.plot(rs.id);
         let mut work = conflation::DensityWork::default();
         let visible = if rs.heikin_ashi {
@@ -364,6 +495,9 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
         scale: &aeris_charts_core::scale::price_scale_core::PriceScaleCore,
     ) {
+        if self.build_price_action_frame(rs, from, to, hpr, vpr, out, scale) {
+            return;
+        }
         let plot = self.data.plot(rs.id);
         let mut work = conflation::DensityWork::default();
         let visible = visible_ohlc_with_work(

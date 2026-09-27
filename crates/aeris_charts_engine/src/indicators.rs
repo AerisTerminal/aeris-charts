@@ -1659,6 +1659,33 @@ impl ChartEngine {
         self.sync_time_points();
     }
 
+    pub(crate) fn recompute_all_indicators(&mut self) {
+        self.indicator_changes.clear();
+        for binding in &self.indicators {
+            for dependency in [Some(binding.source), binding.volume_source]
+                .into_iter()
+                .flatten()
+            {
+                if !self
+                    .indicator_changes
+                    .iter()
+                    .any(|(existing, _)| *existing == dependency)
+                {
+                    self.indicator_changes.push((
+                        dependency,
+                        IndicatorChange {
+                            from: 0,
+                            previous_generation: 0,
+                            full_replace: true,
+                        },
+                    ));
+                }
+            }
+        }
+        self.propagate_indicator_changes();
+        self.sync_time_points();
+    }
+
     pub(crate) fn update_indicators_after_change(
         &mut self,
         dependency: SeriesId,

@@ -1083,7 +1083,7 @@ impl ChartEngine {
             {
                 continue;
             }
-            if execution.pane_index != pane_index {
+            if execution.pane_index != pane_index || !self.replay_time_is_visible(execution.time) {
                 continue;
             }
             let Some(logical) = self
@@ -2023,7 +2023,9 @@ impl ChartEngine {
             Some(self.time_scale.index_to_coordinate(logical))
         };
         for event in &self.trading_state.host_overlay.events {
-            if coordinate(event.time).is_some_and(|x| (x - x_css).abs() <= 8.0) {
+            if self.replay_time_is_visible(event.time)
+                && coordinate(event.time).is_some_and(|x| (x - x_css).abs() <= 8.0)
+            {
                 return Some(HostEventHit {
                     id: event.id.clone(),
                     window: false,
@@ -2032,10 +2034,16 @@ impl ChartEngine {
         }
         let pane = self.panes.get(pane_index)?;
         for window in &self.trading_state.host_overlay.windows {
+            if !self.replay_time_is_visible(window.start_time) {
+                continue;
+            }
+            let end_time = self
+                .replay_cutoff_seconds()
+                .map_or(window.end_time, |cutoff| window.end_time.min(cutoff));
             let Some(x0) = coordinate(window.start_time) else {
                 continue;
             };
-            let Some(x1) = coordinate(window.end_time) else {
+            let Some(x1) = coordinate(end_time) else {
                 continue;
             };
             if x_css >= x0.min(x1)
@@ -4769,12 +4777,20 @@ mod tests {
                     label: "CPI".to_string(),
                     icon: None,
                 }],
-                windows: vec![HostTimeWindow {
-                    id: "risk".to_string(),
-                    start_time: time,
-                    end_time: time + 10,
-                    label: "risk".to_string(),
-                }],
+                windows: vec![
+                    HostTimeWindow {
+                        id: "risk".to_string(),
+                        start_time: 10,
+                        end_time: time + 10,
+                        label: "risk".to_string(),
+                    },
+                    HostTimeWindow {
+                        id: "future-risk".to_string(),
+                        start_time: time,
+                        end_time: time + 10,
+                        label: "future risk".to_string(),
+                    },
+                ],
             })
             .unwrap();
         chart.build_frame();
@@ -4790,6 +4806,42 @@ mod tests {
             .host_event_hit_at(chart.time_scale.index_to_coordinate(2), 20.0)
             .is_some());
         assert!(!chart.export_state_json().unwrap().contains("release"));
+
+        chart.set_replay_clock_micros(Some(20_000_000)).unwrap();
+        chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        let frame = chart.build_frame();
+        assert_eq!(
+            frame.panes[0].main[segments.series_end..segments.trading_regions_end]
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::Rect { .. }))
+                .count(),
+            1,
+            "a crossing host window is clipped and a wholly future window stays hidden"
+        );
+        assert_eq!(
+            frame.panes[0].main[segments.trading_regions_end..segments.trading_end]
+                .iter()
+                .filter(|primitive| matches!(
+                    primitive,
+                    Prim::VLine {
+                        style: aeris_charts_render::draw_list::LineStyle::Dotted,
+                        ..
+                    }
+                ))
+                .count(),
+            0,
+            "future release markers stay hidden behind the replay clock"
+        );
+        assert!(chart
+            .host_event_hit_at(chart.time_scale.index_to_coordinate(2), 20.0)
+            .is_none());
+        assert_eq!(
+            chart
+                .host_event_hit_at(chart.time_scale.index_to_coordinate(0), 20.0)
+                .map(|hit| hit.id),
+            Some("risk".to_string())
+        );
     }
 
     #[test]

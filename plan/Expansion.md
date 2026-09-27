@@ -27,7 +27,7 @@ items; they do not renumber them.
 
 ## Status at a glance
 
-Updated 2026-09-26. Baseline source-confirmed 2026-09-24.
+Updated 2026-09-27. Baseline source-confirmed 2026-09-24.
 
 | Batch | Scope | Unblocks on the platform | Status |
 | --- | --- | --- | --- |
@@ -35,7 +35,7 @@ Updated 2026-09-26. Baseline source-confirmed 2026-09-24.
 | B2 | Drawing model and customization: F5, schema conventions, existing tools | Configurable drawings, templates, drawing sync across cells | **Complete** |
 | B3 | Shared tape and order flow: F2, OF1, OF2, OF11, OF12, PD10 | Footprint, CVD, delta, big-trade bubbles | **Complete** |
 | B4 | Study inputs and core indicators: F4, OF9, CT1, CT2, CT6, I1 | Professional indicator set, VWAP bands, Heikin Ashi, comparisons | **Complete** |
-| B5 | Non-time bars and replay: F1, OF14, CT3, CT4, PD2 | Tick/volume/range charts, session replay, trade review playback | Open |
+| B5 | Non-time bars and replay: F1, OF14, CT3, CT4, PD2 | Tick/volume/range charts, session replay, trade review playback | **Complete** |
 | B6 | Depth: F3, OF15–OF18, PD8, PD9 | Liquidity heatmap, order-level markers, depth studies | Open |
 | B7 | Profiles and resampling: F6, OF3–OF8, OF10, CT5 | Session/composite profiles, TPO, anchored VWAP, multi-timeframe studies | Open |
 | B8 | Drawing catalog expansion | Full professional drawing toolset | Open |
@@ -301,24 +301,24 @@ and candle direction colors; engine and browser fixtures verify the projection a
 
 ### B5 — Non-time bars and replay
 
-**Scope:** F1, OF14, CT3, CT4, PD2 for bars and tape. **Depends on:** B3. **Status:** open.
+**Scope:** F1, OF14, CT3, CT4, PD2 for bars and tape. **Depends on:** B3. **Status:** complete (2026-09-27).
 
 This is the largest architectural change in the plan.
 
-- [ ] **F1** Bar-sequence domain: each logical index is a bar with open and close time in
+- [x] **F1** Bar-sequence domain: each logical index is a bar with open and close time in
       microseconds; labels, crosshair, ticks and gaps derive from bar times; drawings, alerts,
       trading lines and markers store bar plus time and rebase on prepend and rebuild; declared
       rules for which series may share a non-time pane.
-- [ ] One shared tick, volume and range aggregator used by candles and footprint; footprint
+- [x] One shared tick, volume and range aggregator used by candles and footprint; footprint
       trade-count and volume policies become chart-integrated.
-- [ ] **OF14 / CT3** Tick, volume and range candles, with footprint on the same bars.
-- [ ] **CT4** Renko (fixed box or ATR), Line Break, Kagi, Point & Figure.
-- [ ] **PD2** Replay clock supplied by the host; replay cursor; masking of everything after the
+- [x] **OF14 / CT3** Tick, volume and range candles, with footprint on the same bars.
+- [x] **CT4** Renko (fixed box or ATR), Line Break, Kagi, Point & Figure.
+- [x] **PD2** Replay clock supplied by the host; replay cursor; masking of everything after the
       clock in every series, study, footprint cell and marker; checkpoint-based seek backward with
       reported cost; bulk ordered ingest for trades and bars; live and replay share code paths.
-- [ ] PD7 no-look-ahead verified in replay fixtures.
-- [ ] `perf_gate` covers tip append without rebuilding closed bars and 100× replay with flat memory.
-- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [x] PD7 no-look-ahead verified in replay fixtures.
+- [x] `perf_gate` covers tip append without rebuilding closed bars and 100× replay with flat memory.
+- [x] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
 
 Current F1 slice (2026-09-26): the existing engine-owned footprint aggregator now publishes a
 logical bar index with each bar's full-resolution open/close microsecond bounds through a
@@ -333,8 +333,26 @@ can shift the prefix), and derived delta studies and trade-bubble markers use th
 Value queries and transient trading/event overlays now resolve timestamp labels through the same
 sidecar. Non-time sequence rebuilds also rebase committed, pending, drag, brush, and drawing-history
 logical anchors through the full-resolution bar mapping, and persistence now carries an optional
-bounded open/close-microsecond sidecar for those drawing anchors. Candles, replay, release
-performance evidence, and the full gate remain open. The B5 checklist remains open.
+bounded open/close-microsecond sidecar for those drawing anchors. Ordinary candlestick and OHLC-bar
+series can now bind to the same chart-level stream as footprint and studies; stream-identity bulk
+replacement and live batches classify and aggregate once, then update every dependent through the
+same full or incremental path. The binding rejects scalar presentations and independent retention
+caps that would misalign the shared logical domain. Engine and packaged-browser fixtures cover
+trade-count and volume candles, stream-only ingestion, logical-axis growth, and dependent telemetry.
+The same sequence owner now builds fixed-box and Wilder-ATR Renko, N-line Break, Kagi, and
+Point & Figure projections from bounded canonical OHLC source rows. Ordered source updates replace
+only the affected projection suffix, replay rebuilds from the eligible source prefix, and Kagi and
+Point & Figure lower to the shared draw-list contract without backend-specific state.
+The chart-wide PD2 clock now masks ordinary host rows, indicators, every shared-tape dependent,
+sparse stepped releases, and transient host/trading events without discarding canonical future
+input. One shared replay cursor is emitted through the ordered frame. Forward movement uses the
+ordinary live update path; backward seeks restore the nearest 1,024-trade checkpoint from a bounded
+64-checkpoint set and report only replayed suffix work. Columnar `update_typed` and typed trade
+batches are the bulk replay boundaries. Engine and packaged-browser fixtures verify no-look-ahead,
+checkpoint equivalence, future-ingest isolation, and clipped host windows. The release `perf_gate`
+passes 100× replay at 1.25 ms per clock-advance/frame on the measured machine with flat
+steady-state retained memory. The final B5 run passed the complete Rust, WASM/package, GPUI
+parity/replay, Chromium, and release-performance gates.
 
 **Exit:** the F1 and PD2 exit criteria pass: many-bars-per-second and gap fixtures render on every
 executor, drawings survive prepend and rebuild, and seek-back equals a fresh load to the same

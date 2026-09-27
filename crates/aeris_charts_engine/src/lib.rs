@@ -23,6 +23,7 @@ mod host_layout;
 mod indicators;
 mod interaction;
 mod native_primitives;
+mod synthetic_bars;
 mod volume_profile;
 pub use volume_profile::{
     VolumeProfileIndicatorOptions, VolumeProfileIndicatorSnapshot, MAX_VOLUME_PROFILE_INDICATORS,
@@ -78,8 +79,8 @@ pub use footprint::{
     FootprintAggregationOptions, FootprintAggregator, FootprintBar, FootprintBarAggregation,
     FootprintCellMode, FootprintError, FootprintImbalanceOptions, FootprintLevel,
     FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind, FootprintVisualOptions,
-    FootprintWorkStats, TradeBubbleOptions, TradeStreamStats, TradeStudyKind, TradeStudyOptions,
-    MAX_TRADE_STREAMS, MAX_TRADE_STREAM_KEY_BYTES,
+    FootprintWorkStats, ReplayClockStats, ReplaySeekStats, TradeBubbleOptions, TradeStreamStats,
+    TradeStudyKind, TradeStudyOptions, MAX_TRADE_STREAMS, MAX_TRADE_STREAM_KEY_BYTES,
 };
 pub use frame::{
     AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,
@@ -143,6 +144,10 @@ pub use persistence::{
     PERSISTENCE_MAX_POINTS_PER_DRAWING, PERSISTENCE_MAX_TOTAL_POINTS, PERSISTENCE_SCHEMA_VERSION,
     PERSISTENCE_SCHEMA_VERSION_GENERAL, PERSISTENCE_SCHEMA_VERSION_STUDIES,
 };
+pub use synthetic_bars::{
+    SyntheticBar, SyntheticBarAggregator, SyntheticBarError, SyntheticBarOptions,
+    SyntheticSourceBar, MAX_SYNTHETIC_BARS, MAX_SYNTHETIC_SOURCE_BARS,
+};
 pub use trading::{
     AccountId, ExecutionId, ExecutionKind, ExecutionMarkerShape, HostEventHit, HostEventMarker,
     HostOverlaySnapshot, HostTimeWindow, InstrumentMetadata, OrderId, OrderKind, OrderRole,
@@ -186,7 +191,7 @@ pub type PriceFormatterFn = Box<dyn Fn(f64) -> Option<String>>;
 pub type TickMarkFormatterFn = Box<dyn Fn(i64, u8) -> Option<String>>;
 pub type TimeFormatterFn = Box<dyn Fn(i64) -> Option<String>>;
 
-type FootprintSequenceProjection = (
+pub(crate) type SequenceProjectionColumns = (
     Vec<BarSequencePoint>,
     Vec<f64>,
     Vec<f64>,
@@ -1540,6 +1545,7 @@ pub struct ChartEngine {
     /// keys remain chart-local positions; this sidecar prevents non-time bars from being encoded
     /// as synthetic UTC timestamps.
     sequence_points: Option<Vec<BarSequencePoint>>,
+    synthetic_series: HashMap<SeriesId, SyntheticBarAggregator>,
     /// Sequence identity mapping waiting for the data-layer synchronization triggered by a
     /// non-time footprint rebuild. It is consumed before ordinary timestamp rebasing so drawing
     /// anchors follow the same full-resolution bars even when row keys are reused.
@@ -1599,6 +1605,9 @@ pub struct ChartEngine {
     /// hidden until a host supplies the time — the wasm render path feeds the browser's system
     /// time every frame unless a value is pinned; tests pin one here for determinism.
     pub now_override: Option<f64>,
+    /// Host-owned replay clock. Canonical rows remain retained while the data layer and canonical
+    /// trade streams expose only facts at or before this microsecond boundary.
+    replay_clock_micros: Option<i64>,
     pub crosshair: Option<(f64, f64)>,
     /// Optional chart-wide time anchor used by percentage/indexed comparison overlays and their
     /// legend. The anchor is a time identity only; each series resolves its own value at that
@@ -1628,6 +1637,7 @@ pub struct ChartEngine {
     /// stream identity instead of retaining a second provider-event tape.
     trade_streams: HashMap<u64, footprint::FootprintAggregator>,
     trade_stream_keys: HashMap<String, u64>,
+    trade_bar_dependents: HashMap<u64, Vec<footprint::TradeBarDependent>>,
     trade_dependents: HashMap<u64, Vec<footprint::TradeStudyDependent>>,
     trade_bubbles: HashMap<u64, Vec<footprint::TradeBubbleDependent>>,
     next_trade_stream_id: u64,
@@ -1769,6 +1779,7 @@ impl ChartEngine {
             price_formatter: PriceFormatter::default(),
             data,
             sequence_points: None,
+            synthetic_series: HashMap::new(),
             pending_sequence_mapping: None,
             drawing_anchor_times: HashMap::new(),
             series,
@@ -1800,6 +1811,7 @@ impl ChartEngine {
             css_height,
             dpr,
             now_override: None,
+            replay_clock_micros: None,
             crosshair: None,
             comparison_anchor: None,
             drawing_interval: None,
@@ -1818,6 +1830,7 @@ impl ChartEngine {
             indicator_changes: Vec::new(),
             trade_streams: HashMap::new(),
             trade_stream_keys: HashMap::new(),
+            trade_bar_dependents: HashMap::new(),
             trade_dependents: HashMap::new(),
             trade_bubbles: HashMap::new(),
             next_trade_stream_id: 1,
@@ -2287,6 +2300,7 @@ impl ChartEngine {
         }
         for rid in &tombstones {
             let rid = *rid;
+            self.synthetic_series.remove(&rid);
             self.drop_volume_profiles_using(rid);
             if let Some(entry) = self.series.iter_mut().find(|s| s.id == rid) {
                 entry.removed = true;
@@ -2308,12 +2322,19 @@ impl ChartEngine {
             .filter_map(|series| series.footprint.as_ref().map(|state| state.trade_stream_id))
             .collect::<std::collections::HashSet<_>>();
         live_streams.extend(self.trade_stream_keys.values().copied());
+        live_streams.extend(self.trade_bar_dependents.keys().copied());
         live_streams.extend(self.trade_dependents.keys().copied());
         live_streams.extend(self.trade_bubbles.keys().copied());
         self.trade_streams
             .retain(|stream_id, _| live_streams.contains(stream_id));
         self.trade_stream_keys
             .retain(|_, stream_id| live_streams.contains(stream_id));
+        for dependents in self.trade_bar_dependents.values_mut() {
+            dependents.retain(|dependent| !tombstones.contains(&dependent.series_id));
+        }
+        self.trade_bar_dependents.retain(|stream_id, dependents| {
+            live_streams.contains(stream_id) && !dependents.is_empty()
+        });
         for dependents in self.trade_dependents.values_mut() {
             dependents.retain(|dependent| !tombstones.contains(&dependent.series_id));
         }
@@ -2936,7 +2957,7 @@ impl ChartEngine {
         if self.is_series_removed(id) || !self.series.iter().any(|s| s.id == id) {
             return None;
         }
-        if self.is_footprint_series(id) {
+        if self.is_source_owned_series(id) {
             return None;
         }
         self.invalidate_frame_series(id);
@@ -2996,7 +3017,7 @@ impl ChartEngine {
     where
         I: IntoIterator<Item = (f64, [f64; 4])>,
     {
-        if self.validate_series_id(id).is_err() || self.is_footprint_series(id) {
+        if self.validate_series_id(id).is_err() || self.is_source_owned_series(id) {
             return 0;
         }
         self.invalidate_frame_series(id);
@@ -3048,7 +3069,9 @@ impl ChartEngine {
         low: Vec<f64>,
         close: Vec<f64>,
     ) -> usize {
-        if self.validate_series_id(id).is_err() || self.is_footprint_series(id) || times.is_empty()
+        if self.validate_series_id(id).is_err()
+            || self.is_source_owned_series(id)
+            || times.is_empty()
         {
             return 0;
         }
@@ -3096,7 +3119,7 @@ impl ChartEngine {
         values: [f64; 4],
         colors: [Option<u32>; 3],
     ) -> bool {
-        if self.validate_series_id(id).is_err() || self.is_footprint_series(id) {
+        if self.validate_series_id(id).is_err() || self.is_source_owned_series(id) {
             return false;
         }
         self.update_series_bar_styled_inner(id, time, values, colors)
@@ -3163,7 +3186,7 @@ impl ChartEngine {
         wick: Option<Vec<u32>>,
         border: Option<Vec<u32>>,
     ) -> bool {
-        if self.validate_series_id(id).is_err() || self.is_footprint_series(id) {
+        if self.validate_series_id(id).is_err() || self.is_source_owned_series(id) {
             return false;
         }
         let changed = self.data.set_point_colors(id, [body, wick, border]);
@@ -3223,7 +3246,7 @@ impl ChartEngine {
             SeriesIdError::Unknown(id) => ValidationError::UnknownSeries(id),
             SeriesIdError::Stale(id) => ValidationError::StaleSeries(id),
         })?;
-        if self.is_footprint_series(id) {
+        if self.is_source_owned_series(id) {
             return Err(ValidationError::UnsupportedSeriesData(id));
         }
         let s = sanitize_ohlc_styled(times, open, high, low, close, colors)?;
@@ -3268,7 +3291,7 @@ impl ChartEngine {
             SeriesIdError::Unknown(id) => ValidationError::UnknownSeries(id),
             SeriesIdError::Stale(id) => ValidationError::StaleSeries(id),
         })?;
-        if self.is_footprint_series(id) {
+        if self.is_source_owned_series(id) {
             return Err(ValidationError::UnsupportedSeriesData(id));
         }
         let sanitized = sanitize_ohlc(times, open, high, low, close)?;
@@ -3302,7 +3325,7 @@ impl ChartEngine {
         low: Vec<f64>,
         close: Vec<f64>,
     ) -> bool {
-        if self.validate_series_id(id).is_err() || self.is_footprint_series(id) {
+        if self.validate_series_id(id).is_err() || self.is_source_owned_series(id) {
             return false;
         }
         self.install_series_data_inner(id, times, open, high, low, close)
@@ -3336,6 +3359,13 @@ impl ChartEngine {
         })
     }
 
+    /// Source-owned series may only be mutated through their canonical footprint/trade or
+    /// synthetic-bar ingestion API. Generic OHLC writes would desynchronize the visible
+    /// projection from the state that owns replay, sequence identity, and incremental updates.
+    fn is_source_owned_series(&self, id: SeriesId) -> bool {
+        self.is_footprint_series(id) || self.synthetic_series.contains_key(&id)
+    }
+
     pub(crate) fn install_footprint_projection(
         &mut self,
         id: SeriesId,
@@ -3354,13 +3384,25 @@ impl ChartEngine {
     pub(crate) fn install_footprint_sequence_projection(
         &mut self,
         id: SeriesId,
-        mut points: Vec<BarSequencePoint>,
+        points: Vec<BarSequencePoint>,
         open: Vec<f64>,
         high: Vec<f64>,
         low: Vec<f64>,
         close: Vec<f64>,
     ) -> bool {
         debug_assert!(self.is_footprint_series(id));
+        self.install_sequence_projection_inner(id, points, open, high, low, close)
+    }
+
+    fn install_sequence_projection_inner(
+        &mut self,
+        id: SeriesId,
+        mut points: Vec<BarSequencePoint>,
+        open: Vec<f64>,
+        high: Vec<f64>,
+        low: Vec<f64>,
+        close: Vec<f64>,
+    ) -> bool {
         if points.len() != open.len()
             || points.len() != high.len()
             || points.len() != low.len()
@@ -3407,6 +3449,21 @@ impl ChartEngine {
             self.pending_sequence_mapping = previous_pending;
         }
         installed
+    }
+
+    pub(crate) fn install_trade_bar_sequence_projection(
+        &mut self,
+        id: SeriesId,
+        points: Vec<BarSequencePoint>,
+        open: Vec<f64>,
+        high: Vec<f64>,
+        low: Vec<f64>,
+        close: Vec<f64>,
+    ) -> bool {
+        debug_assert!(self.series_entry(id).is_some_and(|series| {
+            matches!(series.kind, SeriesKind::Candlestick | SeriesKind::Bar)
+        }));
+        self.install_sequence_projection_inner(id, points, open, high, low, close)
     }
 
     pub(crate) fn sequence_points(&self) -> Option<&[BarSequencePoint]> {
@@ -3514,9 +3571,30 @@ impl ChartEngine {
         &mut self,
         id: SeriesId,
         from: usize,
-        projection: FootprintSequenceProjection,
+        projection: SequenceProjectionColumns,
     ) -> usize {
         debug_assert!(self.is_footprint_series(id));
+        self.update_sequence_projection_bars_inner(id, from, projection)
+    }
+
+    pub(crate) fn update_trade_bar_sequence_projection_bars(
+        &mut self,
+        id: SeriesId,
+        from: usize,
+        projection: SequenceProjectionColumns,
+    ) -> usize {
+        debug_assert!(self.series_entry(id).is_some_and(|series| {
+            matches!(series.kind, SeriesKind::Candlestick | SeriesKind::Bar)
+        }));
+        self.update_sequence_projection_bars_inner(id, from, projection)
+    }
+
+    fn update_sequence_projection_bars_inner(
+        &mut self,
+        id: SeriesId,
+        from: usize,
+        projection: SequenceProjectionColumns,
+    ) -> usize {
         let (mut points, open, high, low, close) = projection;
         if points.is_empty()
             || points.len() != open.len()
@@ -3593,6 +3671,13 @@ impl ChartEngine {
     /// An unknown or removed id is ignored.
     pub fn set_series_max_points(&mut self, id: SeriesId, max_points: Option<usize>) -> bool {
         if self.is_series_removed(id) {
+            return false;
+        }
+        // Non-time candle/bar dependents share the stream's exact logical sequence and retention
+        // boundary. A series-local cap would silently misalign it from footprint and studies.
+        if max_points.is_some()
+            && (self.is_trade_bar_dependent(id) || self.synthetic_series.contains_key(&id))
+        {
             return false;
         }
         let Some(entry) = self.series_entry_mut(id) else {
@@ -4559,15 +4644,25 @@ impl ChartEngine {
     }
 
     fn clear_sequence_axis_if_unused(&mut self) {
-        let has_sequence_series =
-            self.series.iter().any(|series| {
+        let has_sequence_series = !self.synthetic_series.is_empty()
+            || self.series.iter().any(|series| {
                 series.footprint.as_ref().is_some_and(|state| {
                     self.trade_stream(state.trade_stream_id)
                         .is_some_and(|stream| {
                             !matches!(stream.options().bars, FootprintBarAggregation::Time { .. })
                         })
                 })
-            }) || self.trade_dependents.iter().any(|(stream_id, dependents)| {
+            })
+            || self
+                .trade_bar_dependents
+                .iter()
+                .any(|(stream_id, dependents)| {
+                    !dependents.is_empty()
+                        && self.trade_stream(*stream_id).is_some_and(|stream| {
+                            !matches!(stream.options().bars, FootprintBarAggregation::Time { .. })
+                        })
+                })
+            || self.trade_dependents.iter().any(|(stream_id, dependents)| {
                 !dependents.is_empty()
                     && self.trade_stream(*stream_id).is_some_and(|stream| {
                         !matches!(stream.options().bars, FootprintBarAggregation::Time { .. })
