@@ -21,8 +21,6 @@
     "border": "#e5e5e5",
     "muted_border": "#e5e5e5",
     "ring": "#e0e0e0",
-    "crosshair_line": "#c2c2c2",
-    "crosshair_label": "#c2c2c2",
     "bullish": "#089981",
     "bearish": "#f7525f"
   },
@@ -40,8 +38,6 @@
     "border": "#333333",
     "muted_border": "#333333",
     "ring": "#303030",
-    "crosshair_line": "#404040",
-    "crosshair_label": "#404040",
     "bullish": "#089981",
     "bearish": "#f7525f"
   },

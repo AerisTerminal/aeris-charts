@@ -63,6 +63,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
           muted_text: options.layout.mutedTextColor,
           border: options.rightPriceScale.borderColor,
           crosshair: options.crosshair.vertLine.color,
+          crosshair_label: options.crosshair.vertLine.labelBackgroundColor,
           bullish: options.layout.bullishColor,
           bearish: options.layout.bearishColor,
         },
@@ -97,7 +98,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     text: "#222222",
     muted_text: "#646465",
     border: "#e5e5e5",
-    crosshair: "#c2c2c2",
+    crosshair: "#333333",
+    crosshair_label: "#222222",
     bullish: "#089981",
     bearish: "#f7525f",
   });
@@ -129,7 +131,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     text: "#f5f5f5",
     muted_text: "#c2c2c2",
     border: "#333333",
-    crosshair: "#404040",
+    crosshair: "#333333",
+    crosshair_label: "#222222",
     bullish: "#089981",
     bearish: "#f7525f",
   });

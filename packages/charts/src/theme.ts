@@ -18,14 +18,16 @@ export interface chart_theme {
   primary: string;
   primary_foreground: string;
   primary_hover: string;
-  /** Passive control surface. Crosshair colors have dedicated tokens below. */
+  /** Secondary surface; named themes also use it for crosshair labels. */
   muted: string;
   muted_foreground: string;
   accent: string;
   border: string;
   muted_border: string;
   ring: string;
+  /** Crosshair line color. Named themes alias this to the dark-theme `border`. */
   crosshair_line: string;
+  /** Crosshair label surface. Named themes alias this to the dark-theme `muted`. */
   crosshair_label: string;
   /** Candle, volume, and other up-market geometry. */
   bullish: string;
@@ -45,8 +47,8 @@ export const light_theme: chart_theme = {
   border: style_tokens.light.border,
   muted_border: style_tokens.light.muted_border,
   ring: style_tokens.light.ring,
-  crosshair_line: style_tokens.light.crosshair_line,
-  crosshair_label: style_tokens.light.crosshair_label,
+  crosshair_line: style_tokens.dark.border,
+  crosshair_label: style_tokens.dark.muted,
   bullish: style_tokens.light.bullish,
   bearish: style_tokens.light.bearish,
 };
@@ -63,8 +65,8 @@ export const dark_theme: chart_theme = {
   border: style_tokens.dark.border,
   muted_border: style_tokens.dark.muted_border,
   ring: style_tokens.dark.ring,
-  crosshair_line: style_tokens.dark.crosshair_line,
-  crosshair_label: style_tokens.dark.crosshair_label,
+  crosshair_line: style_tokens.dark.border,
+  crosshair_label: style_tokens.dark.muted,
   bullish: style_tokens.dark.bullish,
   bearish: style_tokens.dark.bearish,
 };

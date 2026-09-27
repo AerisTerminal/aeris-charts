@@ -116,8 +116,6 @@ fn main() {
             ("border", "BORDER"),
             ("muted_border", "MUTED_BORDER"),
             ("ring", "RING"),
-            ("crosshair_line", "CROSSHAIR_LINE"),
-            ("crosshair_label", "CROSSHAIR_LABEL"),
             ("bullish", "MARKET_UP"),
             ("bearish", "MARKET_DOWN"),
         ] {
@@ -127,6 +125,23 @@ fn main() {
                 required_string(&tokens, &[theme, field]),
             );
         }
+    }
+    // Crosshair chrome deliberately uses the dark-theme semantic roles in both chart modes. Keep
+    // these as generated aliases so every Rust backend and host stays attached to dark border and
+    // dark secondary-surface (`muted`) instead of maintaining duplicate color values.
+    for prefix in ["LIGHT", "DARK"] {
+        output.push_str(&format!(
+            "pub const {prefix}_CROSSHAIR_LINE_CSS: &str = DARK_BORDER_CSS;\n"
+        ));
+        output.push_str(&format!(
+            "pub const {prefix}_CROSSHAIR_LINE_RGB: (u8, u8, u8) = DARK_BORDER_RGB;\n"
+        ));
+        output.push_str(&format!(
+            "pub const {prefix}_CROSSHAIR_LABEL_CSS: &str = DARK_MUTED_CSS;\n"
+        ));
+        output.push_str(&format!(
+            "pub const {prefix}_CROSSHAIR_LABEL_RGB: (u8, u8, u8) = DARK_MUTED_RGB;\n"
+        ));
     }
     emit_color(
         &mut output,
