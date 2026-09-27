@@ -455,6 +455,7 @@ test("confirmed bracket connector deactivates on an empty-canvas click without r
     return {
       overlay: { left: overlay.left, top: overlay.top, width: overlay.width, height: overlay.height },
       pane_width: window.__chart.time_scale().width(),
+      connector_color: getComputedStyle(document.documentElement).getPropertyValue("--primary").trim(),
       from_y: window.__main.price_to_coordinate(target.price),
       to_y: window.__main.price_to_coordinate(target.price + 0.5),
     };
@@ -492,6 +493,7 @@ test("confirmed bracket connector deactivates on an empty-canvas click without r
 
   const connector_pixels = (url) => {
     const image = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
+    const connector_rgb = probe.connector_color.match(/[\da-f]{2}/gi).map((value) => Number.parseInt(value, 16));
     const scale_x = active.width / probe.overlay.width;
     const scale_y = active.height / probe.overlay.height;
     const x = Math.round((probe.pane_width - 8) * scale_x);
@@ -502,9 +504,9 @@ test("confirmed bracket connector deactivates on an empty-canvas click without r
       for (let dx = -2; dx <= 2; dx += 1) {
         const offset = (y * image.width + x + dx) * 4;
         if (
-          Math.abs(image.data[offset] - 22) <= 12
-          && Math.abs(image.data[offset + 1] - 142) <= 12
-          && Math.abs(image.data[offset + 2] - 247) <= 12
+          Math.abs(image.data[offset] - connector_rgb[0]) <= 12
+          && Math.abs(image.data[offset + 1] - connector_rgb[1]) <= 12
+          && Math.abs(image.data[offset + 2] - connector_rgb[2]) <= 12
           && image.data[offset + 3] > 200
         ) count += 1;
       }

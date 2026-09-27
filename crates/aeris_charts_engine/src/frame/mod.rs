@@ -1830,7 +1830,6 @@ impl ChartEngine {
                     vpr,
                     &mut cache.trading_regions.prims,
                     &mut cache.trading.prims,
-                    &mut cache.trading.points,
                 );
                 cache.trading_regions.revision = self.frame_invalidation.trading;
                 cache.trading_regions.coordinate_revision = self.frame_invalidation.coordinate;

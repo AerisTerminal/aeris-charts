@@ -4,8 +4,8 @@ use crate::trading::{
 };
 use crate::Pane;
 use aeris_charts_core::style::{
-    DARK_ACCENT_RGB, DARK_ACTIVE_RGB, DARK_DANGER_RGB, DARK_MUTED_RGB, LIGHT_ACCENT_RGB,
-    LIGHT_ACTIVE_RGB, LIGHT_DANGER_RGB, LIGHT_MUTED_RGB, RADIUS_LARGE, RADIUS_SMALL,
+    DARK_ACCENT_RGB, DARK_ACTIVE_RGB, LIGHT_ACCENT_RGB, LIGHT_ACTIVE_RGB, RADIUS_LARGE,
+    RADIUS_SMALL,
 };
 
 #[derive(Clone, Copy)]
@@ -48,7 +48,7 @@ struct TradingControlSegment<'a> {
 }
 
 /// One order or position marker: quantity, PnL/order type, and a trailing integrated close cell
-/// inside one dashed pill. Every segment before `Cancel` is a readout cell.
+/// inside one solid-outlined pill. Every segment before `Cancel` is a readout cell.
 struct TradingControlCluster<'a> {
     segments: &'a [TradingControlSegment<'a>],
     left: f64,
@@ -100,12 +100,10 @@ const ORDER_MARKER_SPAN: f64 = 304.0;
 /// Visual inset for the close control's secondary-surface pill. Its larger containing cell remains
 /// the hit target, so the affordance stays easy to activate without looking oversized.
 const CLOSE_SURFACE_INSET: f64 = 3.0;
-/// Inset for readout-cell fills along the edges they share with the dashed outline. The outline
-/// stroke is centered on the pill edge, so a flush fill would cover its inner half and leave dash
-/// stubs poking out around the fill's rounded end. This keeps the full outline visible.
-const CELL_FILL_INSET: f64 = 1.5;
-/// Dash and gap length of the pill outline, in CSS px.
-const TRADING_PILL_DASH: f64 = 2.0;
+/// Deliberate chip-surface gap between the outline's inner edge and an edge cell's fill. It is
+/// measured from the inside border, not the pill edge, so on the capsule ends the border's and the
+/// fill's anti-aliased curves never share pixels and read as two clean rings.
+const CELL_FILL_GAP: f64 = 1.5;
 /// Vertical breathing room around the marker text. At the canonical 12px font this produces a
 /// 24px control instead of compressing a financial action into the axis-label line box.
 const CONTROL_PAD_Y: f64 = 12.0;
@@ -258,11 +256,6 @@ impl ChartEngine {
         Color::rgb(token.0, token.1, token.2)
     }
 
-    /// `--surface-secondary`: the close control's resting surface.
-    fn trading_secondary_surface(&self) -> Color {
-        self.trading_theme_token(LIGHT_MUTED_RGB, DARK_MUTED_RGB)
-    }
-
     /// Neutral control feedback from the brand's `--hover-bg` / `--active-bg`. Feedback never
     /// takes the order's buy/sell color: the outline already identifies the order, and a colored
     /// hover would read as a state change of the order itself. Both stay opaque so the marker line
@@ -277,10 +270,6 @@ impl ChartEngine {
                 Some(self.trading_theme_token(LIGHT_ACTIVE_RGB, DARK_ACTIVE_RGB))
             }
         }
-    }
-
-    fn trading_destructive_color(&self) -> Color {
-        self.trading_theme_token(LIGHT_DANGER_RGB, DARK_DANGER_RGB)
     }
 
     /// `--border-width` (0.5 CSS px) on the device grid with browser border semantics: whole
@@ -501,7 +490,7 @@ impl ChartEngine {
         };
         lines.push(Prim::HLine {
             y: (y * vpr).round() as i32,
-            x0: (self.trading_marker_start() * hpr).round() as i32,
+            x0: 0,
             x1: (self.pane_w * hpr).round() as i32,
             width: vpr.floor().max(1.0) as i32,
             style: LineStyle::Dotted,
@@ -663,97 +652,9 @@ impl ChartEngine {
         }
     }
 
-    /// Emit the pill's dashed outline as pre-split solid polyline runs so every backend draws the
-    /// same dashes. `rect` is the snapped device-space pill `[left, top, right, bottom]`.
-    ///
-    /// Dashes follow CSS `dashed` borders: each straight edge and each capsule end is dashed on
-    /// its own, symmetric about its middle, so spacing stays even around the ends and at the path
-    /// seam. Straight-edge dashes land on whole device pixels, and the stroke is inset by half its
-    /// width so a one-device-pixel hairline covers exactly one pixel row instead of blurring
-    /// across two.
-    fn push_trading_pill_border(
-        out: &mut Vec<Prim>,
-        points: &mut Vec<[f32; 2]>,
-        rect: [f64; 4],
-        color: Color,
-        vpr: f64,
-    ) {
-        use std::f64::consts::{FRAC_PI_2, PI};
-        let stroke = Self::trading_border_width(vpr);
-        let half = stroke / 2.0;
-        let [left, top, right, bottom] = [
-            rect[0] + half,
-            rect[1] + half,
-            rect[2] - half,
-            rect[3] - half,
-        ];
-        let radius = (bottom - top) / 2.0;
-        if radius <= 0.0 || right - left < 2.0 * radius {
-            return;
-        }
-        let center_y = top + radius;
-        let dash = (TRADING_PILL_DASH * vpr).round().max(1.0);
-        let period = dash * 2.0;
-        let mut emit = |run: &[[f64; 2]]| {
-            let first_point = points.len() as u32;
-            points.extend(run.iter().map(|p| [p[0] as f32, p[1] as f32]));
-            out.push(Prim::Polyline {
-                first_point,
-                point_count: run.len() as u32,
-                width: stroke as f32,
-                style: LineStyle::Solid,
-                line_type: LineType::Simple,
-                color,
-            });
-        };
-
-        // Straight edges: the snapped rect makes the edge a whole number of device pixels long,
-        // so dash count and margins stay integral and every dash has the same length.
-        let (line_start, line_end) = (left + radius, right - radius);
-        let length = line_end - line_start;
-        if length >= dash {
-            let count = (length / period).round().max(1.0);
-            let margin = ((length - (count * 2.0 - 1.0) * dash) / 2.0).floor();
-            for index in 0..count as usize {
-                let a = line_start + margin + index as f64 * period;
-                let b = (a + dash).min(line_end);
-                if b > a {
-                    emit(&[[a, top], [b, top]]);
-                    // The bottom edge mirrors the top so the pill is symmetric.
-                    let (mirror_a, mirror_b) =
-                        (line_end - (a - line_start), line_end - (b - line_start));
-                    emit(&[[mirror_a, bottom], [mirror_b, bottom]]);
-                }
-            }
-        }
-
-        // Capsule ends: whole periods along the true arc, each dash sampled analytically so it
-        // stays round at any DPR. A quarter-period margin at each end of the arc meets the
-        // straight edge's half-gap margin, keeping the gap there close to a regular gap.
-        let arc_count = (PI * radius / period).round().max(1.0);
-        let arc_period = PI / arc_count;
-        let chord_steps = ((radius.sqrt() * 5.0) / arc_count).ceil().max(2.0) as usize;
-        let mut run = Vec::with_capacity(chord_steps + 1);
-        for (center_x, start) in [(line_end, -FRAC_PI_2), (line_start, FRAC_PI_2)] {
-            for index in 0..arc_count as usize {
-                let first = start + (index as f64 + 0.25) * arc_period;
-                run.clear();
-                for step in 0..=chord_steps {
-                    let angle = first + arc_period * 0.5 * step as f64 / chord_steps as f64;
-                    run.push([
-                        center_x + radius * angle.cos(),
-                        center_y + radius * angle.sin(),
-                    ]);
-                }
-                emit(&run);
-            }
-        }
-    }
-
     fn push_trading_cluster(
         &self,
         out: &mut Vec<Prim>,
-        points: &mut Vec<[f32; 2]>,
         cluster: &TradingControlCluster<'_>,
         hovered: Option<TradingControlSegmentKind>,
         pressed: Option<TradingControlSegmentKind>,
@@ -782,8 +683,7 @@ impl ChartEngine {
                 TradingControlFeedback::Idle
             }
         };
-        // One container owns the readout and close control. Its dashed outline is emitted after
-        // all cell fills so the pill edge stays continuous and visually authoritative.
+        // One container owns the readout and close control with one solid semantic outline.
         out.push(Prim::RoundRect {
             x: pill_left as f32,
             y: pill_top as f32,
@@ -791,11 +691,12 @@ impl ChartEngine {
             h: (pill_bottom - pill_top) as f32,
             radii: [radius; 4],
             fill: self.trading_chip_background(),
-            border_width: 0.0,
+            border_width: Self::trading_border_width(vpr) as f32,
             border_color: color,
         });
-        let inset_x = (CELL_FILL_INSET * hpr).round();
-        let inset_y = (CELL_FILL_INSET * vpr).round();
+        let border = Self::trading_border_width(vpr);
+        let inset_x = border + (CELL_FILL_GAP * hpr).round();
+        let inset_y = border + (CELL_FILL_GAP * vpr).round();
         let mut cursor = left;
         let body = cluster.body();
         for (index, segment) in body.iter().enumerate() {
@@ -859,41 +760,34 @@ impl ChartEngine {
             cursor += segment.width;
         }
         // The close control is the integrated final cell, immediately after the PnL/order text.
-        // Its surface is `--surface-secondary`, with the brand hover/active fills on feedback.
+        // At rest it sits directly on the container surface and draws its icon in the line's own
+        // color; only hover/press paint the brand feedback surface behind it.
         if let Some(close) = cluster.close() {
             let surface_left = ((left + cluster.body_width() + CLOSE_SURFACE_INSET) * hpr).round();
             let surface_top = pill_top + (CLOSE_SURFACE_INSET * vpr).round();
             let surface_bottom = pill_bottom - (CLOSE_SURFACE_INSET * vpr).round();
             let surface_size = (surface_bottom - surface_top).max(1.0);
-            let fill = self
-                .trading_feedback_surface(cell_feedback(close.kind))
-                .unwrap_or_else(|| self.trading_secondary_surface());
-            out.push(Prim::RoundRect {
-                x: surface_left as f32,
-                y: surface_top as f32,
-                w: surface_size as f32,
-                h: surface_size as f32,
-                radii: [(RADIUS_LARGE * hpr.min(vpr)).min(surface_size / 2.0) as f32; 4],
-                fill,
-                border_width: 0.0,
-                border_color: fill,
-            });
+            if let Some(fill) = self.trading_feedback_surface(cell_feedback(close.kind)) {
+                out.push(Prim::RoundRect {
+                    x: surface_left as f32,
+                    y: surface_top as f32,
+                    w: surface_size as f32,
+                    h: surface_size as f32,
+                    radii: [(RADIUS_LARGE * hpr.min(vpr)).min(surface_size / 2.0) as f32; 4],
+                    fill,
+                    border_width: 0.0,
+                    border_color: fill,
+                });
+            }
             self.push_trading_close_icon(
                 out,
                 (surface_left + surface_size / 2.0) / hpr,
                 (surface_top + surface_size / 2.0) / vpr,
-                self.trading_destructive_color(),
+                color,
                 hpr,
                 vpr,
             );
         }
-        Self::push_trading_pill_border(
-            out,
-            points,
-            [pill_left, pill_top, pill_right, pill_bottom],
-            color,
-            vpr,
-        );
     }
 
     pub(crate) fn trading_position_color(&self, side: PositionSide) -> Color {
@@ -1020,9 +914,8 @@ impl ChartEngine {
         vpr: f64,
         regions: &mut Vec<Prim>,
         lines: &mut Vec<Prim>,
-        points: &mut Vec<[f32; 2]>,
     ) {
-        self.build_trading_frame(pane_index, hpr, vpr, regions, lines, points);
+        self.build_trading_frame(pane_index, hpr, vpr, regions, lines);
     }
 
     pub(super) fn build_trading_frame(
@@ -1032,7 +925,6 @@ impl ChartEngine {
         vpr: f64,
         regions: &mut Vec<Prim>,
         lines: &mut Vec<Prim>,
-        points: &mut Vec<[f32; 2]>,
     ) {
         let Some(pane) = self.panes.get(pane_index) else {
             return;
@@ -1178,7 +1070,7 @@ impl ChartEngine {
             let position_color = self.trading_position_color(position.side);
             lines.push(Prim::HLine {
                 y: (y * vpr).round() as i32,
-                x0: (self.trading_marker_start() * hpr).round() as i32,
+                x0: 0,
                 x1: (self.trading_marker_end() * hpr).round() as i32,
                 width: if hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::PositionLine)
                 {
@@ -1238,7 +1130,6 @@ impl ChartEngine {
             let pressed_segment = pressed.and_then(|hit| Self::trading_control_kind(hit.kind));
             self.push_trading_cluster(
                 lines,
-                points,
                 &cluster,
                 hovered_segment,
                 pressed_segment,
@@ -1316,7 +1207,7 @@ impl ChartEngine {
             );
             lines.push(Prim::HLine {
                 y: (y * vpr).round() as i32,
-                x0: (self.trading_marker_start() * hpr).round() as i32,
+                x0: 0,
                 x1: (self.trading_marker_end() * hpr).round() as i32,
                 // Hover is communicated by the dash pattern, not a thickness jump. Dash metrics
                 // scale with stroke width in every executor, so keeping the hairline also keeps
@@ -1437,7 +1328,6 @@ impl ChartEngine {
             };
             self.push_trading_cluster(
                 lines,
-                points,
                 &cluster,
                 hovered_segment,
                 pressed_segment,
@@ -1487,7 +1377,7 @@ impl ChartEngine {
                     {
                         lines.push(Prim::HLine {
                             y: (stop_y * vpr).round() as i32,
-                            x0: (self.trading_marker_start() * hpr).round() as i32,
+                            x0: 0,
                             x1: (self.pane_w * hpr).round() as i32,
                             width: min_line_width,
                             style: LineStyle::Dotted,
@@ -1560,7 +1450,7 @@ impl ChartEngine {
                     };
                     lines.push(Prim::HLine {
                         y: (preview_y * vpr).round() as i32,
-                        x0: (self.trading_marker_start() * hpr).round() as i32,
+                        x0: 0,
                         x1: (self.trading_marker_end() * hpr).round() as i32,
                         width: min_line_width,
                         style: LineStyle::Dotted,
@@ -1595,7 +1485,6 @@ impl ChartEngine {
                     };
                     self.push_trading_cluster(
                         lines,
-                        points,
                         &cluster,
                         None,
                         None,

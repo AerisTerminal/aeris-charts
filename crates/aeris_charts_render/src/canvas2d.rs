@@ -360,12 +360,37 @@ pub fn execute(
                 border_width,
                 border_color,
             } => {
-                round_rect_path(target, *x, *y, *w, *h, *radii);
+                if *w <= 0.0 || *h <= 0.0 {
+                    continue;
+                }
+                // `border_width` is an INSIDE border, exactly like the WebGPU/GPUI tessellation:
+                // the fill covers only the inner rect and the stroke is centred half a border
+                // inside the edge. A stroke centred on the edge would spill half outside the
+                // shape and, on whole-pixel geometry, smear a hairline across two pixel rows.
+                let inset = border_width.max(0.0).min(*w / 2.0).min(*h / 2.0);
+                let inner = |by: f32| radii.map(|r| (r - by).max(0.0));
+                round_rect_path(
+                    target,
+                    x + inset,
+                    y + inset,
+                    w - inset * 2.0,
+                    h - inset * 2.0,
+                    inner(inset),
+                );
                 target.set_fill_solid(*fill);
                 target.fill();
-                if *border_width > 0.0 {
+                if inset > 0.0 {
+                    let half = inset / 2.0;
+                    round_rect_path(
+                        target,
+                        x + half,
+                        y + half,
+                        w - inset,
+                        h - inset,
+                        inner(half),
+                    );
                     target.set_stroke(*border_color);
-                    target.set_line_width(*border_width);
+                    target.set_line_width(inset);
                     target.stroke();
                 }
             }
@@ -601,6 +626,32 @@ mod tests {
                 "fill_rect 3 4 10 6".into()
             ]
         );
+    }
+
+    #[test]
+    fn round_rect_border_is_inside_like_the_tessellated_executors() {
+        let ops = run(
+            &[Prim::RoundRect {
+                x: 10.0,
+                y: 20.0,
+                w: 40.0,
+                h: 24.0,
+                radii: [12.0; 4],
+                fill: C,
+                border_width: 2.0,
+                border_color: Color::rgb(0xff, 0, 0),
+            }],
+            &[],
+        );
+        // The fill covers only the inner rect, never the border ring.
+        assert_eq!(ops[1], "move 22 22");
+        assert!(ops.contains(&"arc 22 32 10 1.5707964 3.1415927".to_string()));
+        // The stroke is centred one half-border inside the edge, so it ends exactly on it.
+        let stroke_path = ops.iter().position(|op| op == "fill").unwrap() + 1;
+        assert_eq!(ops[stroke_path], "begin");
+        assert_eq!(ops[stroke_path + 1], "move 22 21");
+        assert!(ops.contains(&"line_width 2".to_string()));
+        assert_eq!(ops.last().unwrap(), "stroke");
     }
 
     #[test]
