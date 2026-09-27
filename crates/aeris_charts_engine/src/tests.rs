@@ -1151,6 +1151,7 @@ fn reset_style_to_defaults_preserves_runtime_view_and_semantic_state() {
     assert_eq!(primary["visible"], false);
     assert_eq!(primary["price_format"]["precision"], 4);
     assert_eq!(primary["price_format"]["min_move"], 0.0001);
+    assert_eq!(primary["countdown_visible"], false);
 
     let rsi_entry = chart.series_entry(rsi).unwrap();
     assert_eq!(rsi_entry.line_color, None);
@@ -1210,6 +1211,22 @@ fn reset_style_to_defaults_preserves_runtime_view_and_semantic_state() {
     assert_eq!(
         chart.price_scale_visible_range_for(0, named),
         Some(named_range)
+    );
+}
+
+#[test]
+fn only_the_canonical_primary_series_owns_countdown_by_default() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    assert!(chart.series_entry(0).unwrap().countdown_visible);
+
+    let overlay = chart.add_series(SeriesKind::Line);
+    assert!(!chart.series_entry(overlay).unwrap().countdown_visible);
+
+    assert!(chart.series_apply_options_json(overlay, r#"{"countdown_visible":true}"#));
+    chart.reset_style_to_defaults();
+    assert!(
+        chart.series_entry(overlay).unwrap().countdown_visible,
+        "style reset must preserve explicit countdown ownership"
     );
 }
 

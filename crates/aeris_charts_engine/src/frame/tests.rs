@@ -7013,6 +7013,7 @@ fn last_value_clusters_attach_only_within_their_own_series() {
     chart.series[0].countdown_visible = true;
     // A second series with its own (countdown-only) cluster on the same strip.
     let extra = chart.add_series(SeriesKind::Histogram);
+    chart.series_entry_mut(extra).unwrap().countdown_visible = true;
     let times = [0.0, 60.0, 120.0, 180.0, 240.0];
     let values = [1.0, 2.0, 3.0, 2.0, 1.0];
     chart

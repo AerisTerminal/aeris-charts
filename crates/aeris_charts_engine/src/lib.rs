@@ -835,9 +835,11 @@ pub struct SeriesEntry {
     /// darker chip of the last-value cluster. The chip renders even when the price label itself
     /// is off (`last_value_visible: false`).
     pub title_visible: bool,
-    /// industry-standard candle-close countdown (default true): stack a countdown row below the
-    /// price inside the last-value cluster. Hidden when the series has no usable bar interval
-    /// or the host installed no clock (`now_override`).
+    /// industry-standard candle-close countdown: stack a countdown row below the price inside the
+    /// last-value cluster. The canonical primary market series starts enabled; subsequently added
+    /// series start disabled because a derived value does not own the market bar close. Hosts may
+    /// opt any series in explicitly. Hidden when the series has no usable bar interval or the host
+    /// installed no clock (`now_override`).
     pub countdown_visible: bool,
     /// Draw the built-in last-price line for this series (default true).
     pub price_line_visible: bool,
@@ -1082,7 +1084,8 @@ impl SeriesEntry {
         self.last_price_animation_explicit = false;
         self.last_value_visible = defaults.last_value_visible;
         self.title_visible = defaults.title_visible;
-        self.countdown_visible = defaults.countdown_visible;
+        // Countdown ownership is semantic, not visual styling. A theme/style reset must never
+        // turn a derived series into a market-bar countdown owner.
         self.price_line_visible = defaults.price_line_visible;
         self.price_line_source = defaults.price_line_source;
         self.price_line_extent = defaults.price_line_extent;
@@ -2221,6 +2224,10 @@ impl ChartEngine {
         } else {
             self.series[slot] = SeriesEntry::new(id, kind);
         }
+        // Only the canonical primary market series created with the chart owns the bar-close
+        // countdown by default. Every later series is an overlay, study, companion, or an
+        // explicitly host-owned source and must opt in if it truly owns a market interval.
+        self.series[slot].countdown_visible = false;
         if kind == SeriesKind::Footprint {
             let stream_id = self.next_trade_stream_id;
             self.next_trade_stream_id = self.next_trade_stream_id.saturating_add(1).max(1);

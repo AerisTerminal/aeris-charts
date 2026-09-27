@@ -1628,9 +1628,10 @@ export interface series_options {
   /** Show the `title` chip in the last-value cluster (industry-standard; default `true`). */
   title_visible?: boolean;
   /**
-   * Stack a candle-close countdown row below the price inside the last-value cluster
-   * (industry-standard; default `true`). The package ticks a 1s timer while any visible
-   * series with data has this on.
+   * Stack a candle-close countdown row below the price inside the last-value cluster. The
+   * canonical primary market series defaults to `true`; subsequently added series default to
+   * `false` and must opt in when they own a market interval. The package ticks a 1s timer while
+   * any visible series with data has this on.
    */
   countdown_visible?: boolean;
   /** Show the series price line at the last value (reference `priceLineVisible`, default `true`). */
