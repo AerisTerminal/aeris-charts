@@ -4,7 +4,7 @@
 //! imbalances are derived state and can be rebuilt deterministically after a late event. Rendering
 //! consumes [`FootprintBar`] values; it never attempts to infer order flow from OHLC rows.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use aeris_charts_core::model::data_layer::{SeriesId, SeriesIdError};
 use aeris_charts_core::model::data_validation::{MAX_SAFE_VALUE, MIN_SAFE_VALUE};
@@ -2295,27 +2295,12 @@ impl ChartEngine {
             .cloned()
             .unwrap_or_default();
         for dependent in &dependents {
-            let mut markers = Vec::with_capacity(dependent.options.max_markers);
-            let mut last_marker_timestamp_micros: Option<i64> = None;
+            // Newest prints matter most: retain the latest `max_markers` bubbles.
+            let mut bubbles = VecDeque::with_capacity(dependent.options.max_markers);
             for (trade_index, trade) in trades.iter().enumerate() {
                 if trade.volume < dependent.options.minimum_volume {
                     continue;
                 }
-                let position = match trade.aggressor {
-                    AggressorSide::Buy => marker_pos::BELOW,
-                    AggressorSide::Sell => marker_pos::ABOVE,
-                    AggressorSide::Unknown => marker_pos::IN_BAR,
-                };
-                let shape = match trade.aggressor {
-                    AggressorSide::Buy => marker_shape::ARROW_UP,
-                    AggressorSide::Sell => marker_shape::ARROW_DOWN,
-                    AggressorSide::Unknown => marker_shape::CIRCLE,
-                };
-                let color = match trade.aggressor {
-                    AggressorSide::Buy => Color::rgb(76, 175, 80),
-                    AggressorSide::Sell => Color::rgb(239, 83, 80),
-                    AggressorSide::Unknown => Color::rgb(158, 158, 158),
-                };
                 let time = trade_bar_indices
                     .as_ref()
                     .and_then(|indices| indices.get(trade_index).copied())
@@ -2323,37 +2308,44 @@ impl ChartEngine {
                         || trade.timestamp_micros.div_euclid(MICROS_PER_SECOND),
                         |index| index as i64,
                     );
-                let can_merge = dependent.options.aggregation_window_micros > 0
-                    && markers.last().is_some_and(|marker: &Marker| {
-                        marker.position == position && marker.price == Some(trade.price)
-                    })
-                    && last_marker_timestamp_micros.is_some_and(|previous| {
-                        (previous - trade.timestamp_micros).abs()
-                            <= dependent.options.aggregation_window_micros
+                let merged = dependent.options.aggregation_window_micros > 0
+                    && bubbles.back_mut().is_some_and(|bubble: &mut TradeBubble| {
+                        let mergeable = bubble.time == time
+                            && bubble.aggressor == trade.aggressor
+                            && bubble.price.to_bits() == trade.price.to_bits()
+                            && (trade.timestamp_micros - bubble.last_timestamp_micros).abs()
+                                <= dependent.options.aggregation_window_micros;
+                        if mergeable {
+                            bubble.volume += trade.volume;
+                            bubble.last_timestamp_micros = trade.timestamp_micros;
+                        }
+                        mergeable
                     });
-                if can_merge {
-                    if let Some(marker) = markers.last_mut() {
-                        marker.size += trade.volume.sqrt();
-                    }
-                } else {
-                    markers.push(Marker {
-                        time,
-                        position,
-                        shape,
-                        color,
-                        text: String::new(),
-                        id: trade
-                            .trade_id
-                            .map_or_else(|| format!("trade-{time}"), |id| format!("trade-{id}")),
-                        size: trade.volume.sqrt().clamp(1.0, 16.0),
-                        price: Some(trade.price),
-                    });
+                if merged {
+                    continue;
                 }
-                last_marker_timestamp_micros = Some(trade.timestamp_micros);
-                if markers.len() >= dependent.options.max_markers {
-                    break;
+                if bubbles.len() == dependent.options.max_markers {
+                    bubbles.pop_front();
                 }
+                bubbles.push_back(TradeBubble {
+                    time,
+                    price: trade.price,
+                    volume: trade.volume,
+                    aggressor: trade.aggressor,
+                    last_timestamp_micros: trade.timestamp_micros,
+                    id: trade
+                        .trade_id
+                        .map_or_else(|| format!("trade-{time}"), |id| format!("trade-{id}")),
+                });
             }
+            let peak_volume = bubbles
+                .iter()
+                .map(|bubble| bubble.volume)
+                .fold(0.0_f64, f64::max);
+            let markers = bubbles
+                .into_iter()
+                .map(|bubble| bubble.into_marker(peak_volume))
+                .collect();
             self.set_series_markers(dependent.series_id, markers);
         }
         if let Some(dependents) = self.trade_bubbles.get_mut(&stream_id) {
@@ -2362,6 +2354,49 @@ impl ChartEngine {
             }
         }
         Ok(())
+    }
+}
+
+/// Smallest and largest bubble diameter as a multiple of the marker envelope.
+const TRADE_BUBBLE_MIN_SIZE: f64 = 0.5;
+const TRADE_BUBBLE_MAX_SIZE: f64 = 2.5;
+
+/// One large print, or consecutive same-side prints merged at one price, before sizing.
+struct TradeBubble {
+    time: i64,
+    price: f64,
+    volume: f64,
+    aggressor: AggressorSide,
+    last_timestamp_micros: i64,
+    id: String,
+}
+
+impl TradeBubble {
+    /// A translucent circle centred on the traded price. Area scales with volume relative to
+    /// the largest retained bubble, so size compares prints instead of saturating.
+    fn into_marker(self, peak_volume: f64) -> Marker {
+        let ratio = if peak_volume > 0.0 {
+            (self.volume / peak_volume).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let size =
+            TRADE_BUBBLE_MIN_SIZE + (TRADE_BUBBLE_MAX_SIZE - TRADE_BUBBLE_MIN_SIZE) * ratio.sqrt();
+        let color = match self.aggressor {
+            AggressorSide::Buy => Color::rgba(76, 175, 80, 150),
+            AggressorSide::Sell => Color::rgba(239, 83, 80, 150),
+            AggressorSide::Unknown => Color::rgba(158, 158, 158, 150),
+        };
+        Marker {
+            time: self.time,
+            position: marker_pos::AT_PRICE_MIDDLE,
+            shape: marker_shape::CIRCLE,
+            color,
+            text: String::new(),
+            id: self.id,
+            size,
+            price: Some(self.price),
+        }
     }
 }
 
@@ -4030,8 +4065,68 @@ mod tests {
             .unwrap();
         let entry = chart.series_entry(series).unwrap();
         assert_eq!(entry.markers.len(), 2);
-        assert_eq!(entry.markers[0].size, 3.0_f64.sqrt().min(16.0));
+        let expected = TRADE_BUBBLE_MIN_SIZE
+            + (TRADE_BUBBLE_MAX_SIZE - TRADE_BUBBLE_MIN_SIZE) * (3.0_f64 / 10.0).sqrt();
+        assert!((entry.markers[0].size - expected).abs() < 1e-12);
+        assert_eq!(entry.markers[1].size, TRADE_BUBBLE_MAX_SIZE);
         assert_eq!(chart.trade_stream_stats(stream).unwrap().dependent_count, 1);
+    }
+
+    #[test]
+    fn trade_bubbles_are_price_centred_circles_that_keep_the_newest_prints() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let stream = chart
+            .add_trade_stream("CME:ES", FootprintAggregationOptions::default())
+            .unwrap();
+        let series = chart.add_series(SeriesKind::Footprint);
+        chart
+            .configure_footprint_series(series, FootprintSeriesOptions::default())
+            .unwrap();
+        chart
+            .bind_footprint_series_to_stream(series, stream)
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                series,
+                vec![
+                    trade(1_000_000, 100.0, 4.0, AggressorSide::Sell),
+                    trade(2_000_000, 101.0, 2.0, AggressorSide::Buy),
+                    // Merged into the previous buy: same side, price, bar and window.
+                    trade(2_050_000, 101.0, 2.0, AggressorSide::Buy),
+                    trade(3_000_000, 99.0, 1.0, AggressorSide::Sell),
+                ],
+            )
+            .unwrap();
+        chart
+            .add_trade_bubbles(
+                stream,
+                series,
+                TradeBubbleOptions {
+                    minimum_volume: 0.0,
+                    max_markers: 2,
+                    aggregation_window_micros: 100_000,
+                },
+            )
+            .unwrap();
+        let markers = &chart.series_entry(series).unwrap().markers;
+        assert_eq!(markers.len(), 2, "the oldest bubble is evicted first");
+        assert_eq!(markers[0].price, Some(101.0));
+        assert_eq!(markers[1].price, Some(99.0));
+        for marker in markers {
+            assert_eq!(marker.shape, marker_shape::CIRCLE);
+            assert_eq!(marker.position, marker_pos::AT_PRICE_MIDDLE);
+        }
+        assert!(
+            markers[0].color.g() > markers[0].color.r(),
+            "buys are green"
+        );
+        assert!(markers[1].color.r() > markers[1].color.g(), "sells are red");
+        assert_eq!(
+            markers[0].size, TRADE_BUBBLE_MAX_SIZE,
+            "merged volume sets the peak"
+        );
+        let quarter = TRADE_BUBBLE_MIN_SIZE + (TRADE_BUBBLE_MAX_SIZE - TRADE_BUBBLE_MIN_SIZE) * 0.5;
+        assert!((markers[1].size - quarter).abs() < 1e-12);
     }
 
     #[test]

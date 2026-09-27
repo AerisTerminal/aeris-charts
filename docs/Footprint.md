@@ -102,8 +102,10 @@ footprints, CVD, delta histograms, and bubble markers bind to that identity rath
 second provider-event tape. CVD supports session, continuous, and anchored resets. Delta dependents
 read final delta, Max/Min Delta, delta percentage, and bid/ask/unknown volumes from the same bars.
 
-Large-trade bubbles are bounded marker dependents with minimum-volume filtering, side-aware shape and
-color, optional same-price consecutive-print aggregation, and a hard marker cap. Late events refresh
+Large-trade bubbles are bounded marker dependents: translucent circles centred on the traded price,
+colored by aggressor side, with area proportional to volume relative to the largest retained bubble.
+They support minimum-volume filtering, optional same-side same-price consecutive-print aggregation
+(merged volume sets the size), and a hard marker cap that retains the newest prints. Late events refresh
 all dependents after one canonical rebuild; stream telemetry reports revision, retained capacity,
 dependent count, and dependent rebuilds.
 
