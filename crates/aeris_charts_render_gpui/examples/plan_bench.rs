@@ -103,6 +103,7 @@ fn build_dense_footprint_fixture() -> ChartEngine {
         .add_footprint_series(FootprintSeriesOptions {
             aggregation: FootprintAggregationOptions {
                 tick_size: TICK_SIZE,
+                ticks_per_row: 1,
                 bars: FootprintBarAggregation::Time {
                     interval_micros: INTERVAL_MICROS as u64,
                     anchor_micros: 1_600_000_000_000_000,

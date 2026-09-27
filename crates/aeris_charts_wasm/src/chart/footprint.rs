@@ -54,6 +54,15 @@ fn parse_options(json: &str) -> Result<FootprintSeriesOptions, String> {
     if let Some(tick_size) = number(&value, "tick_size")? {
         options.aggregation.tick_size = tick_size;
     }
+    if let Some(ticks_per_row) = number(&value, "ticks_per_row")? {
+        if ticks_per_row < 1.0
+            || ticks_per_row > f64::from(u32::MAX)
+            || ticks_per_row.fract() != 0.0
+        {
+            return Err("ticks_per_row must be a positive whole number".to_string());
+        }
+        options.aggregation.ticks_per_row = ticks_per_row as u32;
+    }
     let bar_type = value
         .get("bar_type")
         .and_then(serde_json::Value::as_str)
@@ -178,6 +187,7 @@ fn parse_options(json: &str) -> Result<FootprintSeriesOptions, String> {
 pub(super) fn options_json(options: &FootprintSeriesOptions) -> String {
     let mut output = serde_json::json!({
         "tick_size": options.aggregation.tick_size,
+        "ticks_per_row": options.aggregation.ticks_per_row,
         "imbalance_ratio": options.aggregation.imbalance.ratio,
         "imbalance_minimum_volume": options.aggregation.imbalance.minimum_volume,
         "stacked_imbalance_levels": options.aggregation.imbalance.consecutive_levels,

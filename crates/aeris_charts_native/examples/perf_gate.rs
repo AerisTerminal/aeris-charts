@@ -290,6 +290,7 @@ fn main() {
             FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 0.25,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Trades {
                         trades_per_bar: FOOTPRINT_TRADES_PER_BAR as u32,
                     },
@@ -304,6 +305,7 @@ fn main() {
             "PERF:ES",
             FootprintAggregationOptions {
                 tick_size: 0.25,
+                ticks_per_row: 1,
                 bars: FootprintBarAggregation::Trades {
                     trades_per_bar: FOOTPRINT_TRADES_PER_BAR as u32,
                 },
@@ -888,6 +890,7 @@ fn main() {
             FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 0.25,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Time {
                         interval_micros: 1_000_000,
                         anchor_micros: 0,
@@ -903,6 +906,7 @@ fn main() {
             "PERF:REPLAY",
             FootprintAggregationOptions {
                 tick_size: 0.25,
+                ticks_per_row: 1,
                 bars: FootprintBarAggregation::Time {
                     interval_micros: 1_000_000,
                     anchor_micros: 0,

@@ -309,11 +309,11 @@ impl ChartEngine {
         let hpr = (self.pane_w * self.dpr.max(0.01)).round().max(1.0) / self.pane_w.max(1.0);
         let result = match series.kind {
             SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint => {
-                let footprint_tick_size = series
+                let footprint_aggregation = series
                     .footprint
                     .as_ref()
                     .and_then(|state| self.trade_stream(state.trade_stream_id))
-                    .map(|stream| stream.options().tick_size);
+                    .map(|stream| stream.options());
                 let mut work = crate::frame::conflation::DensityWork::default();
                 let visible = crate::frame::conflation::visible_ohlc_with_work(
                     plot,
@@ -334,9 +334,11 @@ impl ChartEngine {
                     .into_iter()
                     .map(|bar| {
                         let (low, high) =
-                            footprint_tick_size.map_or((bar.low, bar.high), |tick_size| {
-                                crate::footprint::footprint_cell_price_bounds(
-                                    bar.low, bar.high, tick_size,
+                            footprint_aggregation.map_or((bar.low, bar.high), |aggregation| {
+                                crate::footprint::footprint_row_price_bounds(
+                                    &aggregation,
+                                    bar.low,
+                                    bar.high,
                                 )
                             });
                         (

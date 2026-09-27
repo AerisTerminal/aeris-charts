@@ -8,7 +8,7 @@ use std::collections::{HashMap, VecDeque};
 
 use aeris_charts_core::model::data_layer::{SeriesId, SeriesIdError};
 use aeris_charts_core::model::data_validation::{MAX_SAFE_VALUE, MIN_SAFE_VALUE};
-use aeris_charts_core::style::MARKET_UP_RGB;
+use aeris_charts_core::style::{MARKET_DOWN_RGB, MARKET_UP_RGB};
 use aeris_charts_render::color::Color;
 
 use crate::{
@@ -210,9 +210,27 @@ impl Default for FootprintImbalanceOptions {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FootprintAggregationOptions {
+    /// Instrument price increment. Every trade must lie on this grid.
     pub tick_size: f64,
+    /// Ticks grouped into one footprint row. `1` keeps one row per tick; larger values
+    /// aggregate adjacent ticks so dense instruments stay legible.
+    pub ticks_per_row: u32,
     pub bars: FootprintBarAggregation,
     pub imbalance: FootprintImbalanceOptions,
+}
+
+impl FootprintAggregationOptions {
+    /// Price height of one footprint row.
+    #[must_use]
+    pub fn row_size(&self) -> f64 {
+        self.tick_size * f64::from(self.ticks_per_row)
+    }
+
+    /// Row identity containing `price`; the row spans `ticks_per_row` ticks starting at
+    /// `row * row_size()`.
+    pub(crate) fn row_level(&self, price: f64) -> i64 {
+        price_level(price, self.tick_size).div_euclid(i64::from(self.ticks_per_row.max(1)))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -292,6 +310,7 @@ impl Default for FootprintAggregationOptions {
     fn default() -> Self {
         Self {
             tick_size: 0.25,
+            ticks_per_row: 1,
             bars: FootprintBarAggregation::default(),
             imbalance: FootprintImbalanceOptions::default(),
         }
@@ -300,7 +319,7 @@ impl Default for FootprintAggregationOptions {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
 pub struct FootprintLevel {
-    /// Exact integer grid identity. `price == level * tick_size`.
+    /// Exact integer row identity. `price == level * row_size()` is the row's lowest tick.
     pub level: i64,
     pub price: f64,
     pub bid_volume: f64,
@@ -1119,7 +1138,7 @@ impl FootprintAggregator {
         if side != AggressorSide::Unknown {
             self.last_classified_side = side;
         }
-        let level = price_level(trade.price, self.options.tick_size);
+        let level = self.options.row_level(trade.price);
         let start_new = self
             .bars
             .last()
@@ -1200,7 +1219,7 @@ impl FootprintAggregator {
                     position,
                     FootprintLevel {
                         level,
-                        price: level as f64 * self.options.tick_size,
+                        price: level as f64 * self.options.row_size(),
                         ..FootprintLevel::default()
                     },
                 );
@@ -2146,6 +2165,22 @@ impl ChartEngine {
                 }
                 TradeStudyKind::DeltaHistogram => bars.iter().map(|bar| bar.delta).collect(),
             };
+            let point_colors = match dependent.kind {
+                TradeStudyKind::CumulativeDelta => None,
+                TradeStudyKind::DeltaHistogram => Some(
+                    values
+                        .iter()
+                        .map(|value| {
+                            let rgb = if *value >= 0.0 {
+                                MARKET_UP_RGB
+                            } else {
+                                MARKET_DOWN_RGB
+                            };
+                            Color::rgb(rgb.0, rgb.1, rgb.2).0
+                        })
+                        .collect(),
+                ),
+            };
             let columns = match dependent.kind {
                 TradeStudyKind::CumulativeDelta => (
                     times,
@@ -2161,9 +2196,9 @@ impl ChartEngine {
                     (times, open, high, low, values)
                 }
             };
-            updates.push((dependent.series_id, columns));
+            updates.push((dependent.series_id, columns, point_colors));
         }
-        for (series_id, (times, open, high, low, close)) in updates {
+        for (series_id, (times, open, high, low, close), point_colors) in updates {
             let from = incremental_from.unwrap_or(0).min(times.len());
             let incremental_accepted = if incremental_from.is_some() {
                 self.update_series_bars_sanitized(
@@ -2184,6 +2219,13 @@ impl ChartEngine {
             };
             if !installed {
                 return Err(FootprintError::UnknownSeries(series_id));
+            }
+            if let Some(point_colors) = point_colors {
+                // Delta is an engine-owned source series, so install its sign palette through the
+                // same internal data owner immediately after the data mutation that resets colors.
+                let _ = self
+                    .data
+                    .set_point_colors(series_id, [Some(point_colors), None, None]);
             }
         }
         if let Some(dependents) = self.trade_dependents.get_mut(&stream_id) {
@@ -2525,8 +2567,19 @@ fn footprint_price_format(tick_size: f64) -> SeriesPriceFormat {
     }
 }
 
-pub(crate) fn footprint_cell_price_bounds(low: f64, high: f64, tick_size: f64) -> (f64, f64) {
-    (low - tick_size / 2.0, high + tick_size / 2.0)
+/// Price extent of the rows containing `low` and `high`, padded half a tick so the lowest
+/// and highest ticks sit inside their rows.
+pub(crate) fn footprint_row_price_bounds(
+    options: &FootprintAggregationOptions,
+    low: f64,
+    high: f64,
+) -> (f64, f64) {
+    let row_size = options.row_size();
+    let half_tick = options.tick_size / 2.0;
+    (
+        options.row_level(low) as f64 * row_size - half_tick,
+        options.row_level(high) as f64 * row_size + row_size - half_tick,
+    )
 }
 
 fn series_error(error: SeriesIdError) -> FootprintError {
@@ -2588,6 +2641,9 @@ fn sequence_projection_columns(bars: &[FootprintBar]) -> SequenceProjectionColum
 fn validate_options(options: FootprintAggregationOptions) -> Result<(), FootprintError> {
     if !options.tick_size.is_finite() || options.tick_size <= 0.0 {
         return Err(FootprintError::InvalidTickSize);
+    }
+    if options.ticks_per_row == 0 || !options.row_size().is_finite() {
+        return Err(FootprintError::InvalidAggregation);
     }
     let valid_bars = match options.bars {
         FootprintBarAggregation::Time {
@@ -2846,6 +2902,7 @@ mod tests {
     fn tick_truth_drives_levels_poc_and_non_final_delta_extrema() {
         let mut aggregator = FootprintAggregator::new(FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             bars: FootprintBarAggregation::Time {
                 interval_micros: 60_000_000,
                 anchor_micros: 0,
@@ -2892,6 +2949,7 @@ mod tests {
     fn stacked_imbalances_mark_complete_bid_and_ask_runs() {
         let options = FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             bars: FootprintBarAggregation::Time {
                 interval_micros: 60_000_000,
                 anchor_micros: 0,
@@ -2933,6 +2991,7 @@ mod tests {
     fn host_side_quote_rule_tick_rule_and_ambiguity_are_deterministic() {
         let mut aggregator = FootprintAggregator::new(FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             ..FootprintAggregationOptions::default()
         })
         .unwrap();
@@ -2950,6 +3009,7 @@ mod tests {
 
         let mut ambiguous = FootprintAggregator::new(FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             ..FootprintAggregationOptions::default()
         })
         .unwrap();
@@ -2963,6 +3023,7 @@ mod tests {
     fn late_event_rebuild_matches_sorted_history_and_live_tip_is_incremental() {
         let options = FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             ..FootprintAggregationOptions::default()
         };
         let first = trade(1, 100.0, 8.0, AggressorSide::Buy);
@@ -2988,6 +3049,7 @@ mod tests {
     fn historical_batch_merges_final_tape_with_one_rebuild() {
         let options = FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             ..FootprintAggregationOptions::default()
         };
         let mut aggregator = FootprintAggregator::new(options).unwrap();
@@ -3038,6 +3100,7 @@ mod tests {
     fn backward_replay_seek_restores_nearest_bounded_checkpoint() {
         let options = FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             bars: FootprintBarAggregation::Trades { trades_per_bar: 10 },
             ..FootprintAggregationOptions::default()
         };
@@ -3074,6 +3137,7 @@ mod tests {
     fn session_change_resets_cumulative_delta_and_forces_a_bar_boundary() {
         let mut aggregator = FootprintAggregator::new(FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             ..FootprintAggregationOptions::default()
         })
         .unwrap();
@@ -3097,6 +3161,7 @@ mod tests {
         ];
         let mut trades = FootprintAggregator::new(FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             bars: FootprintBarAggregation::Trades { trades_per_bar: 2 },
             ..FootprintAggregationOptions::default()
         })
@@ -3113,6 +3178,7 @@ mod tests {
 
         let mut volume = FootprintAggregator::new(FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             bars: FootprintBarAggregation::Volume {
                 volume_per_bar: 10.0,
             },
@@ -3134,6 +3200,7 @@ mod tests {
     fn range_bar_mode_closes_on_tick_span_without_splitting_the_trigger_trade() {
         let mut range = FootprintAggregator::new(FootprintAggregationOptions {
             tick_size: 0.25,
+            ticks_per_row: 1,
             bars: FootprintBarAggregation::Range { range_ticks: 4 },
             ..FootprintAggregationOptions::default()
         })
@@ -3157,6 +3224,7 @@ mod tests {
     fn logical_bar_sequence_keeps_subsecond_bars_and_gap_times_distinct() {
         let mut aggregator = FootprintAggregator::new(FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
             ..FootprintAggregationOptions::default()
         })
@@ -3199,6 +3267,7 @@ mod tests {
     fn logical_bar_sequence_mapping_rebases_prepend_without_merging_same_second_bars() {
         let options = FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
             ..FootprintAggregationOptions::default()
         };
@@ -3236,6 +3305,7 @@ mod tests {
             .add_footprint_series(FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 1.0,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
                     ..FootprintAggregationOptions::default()
                 },
@@ -3282,6 +3352,7 @@ mod tests {
     fn invalid_or_off_grid_batches_are_atomic() {
         let mut aggregator = FootprintAggregator::new(FootprintAggregationOptions {
             tick_size: 0.25,
+            ticks_per_row: 1,
             ..FootprintAggregationOptions::default()
         })
         .unwrap();
@@ -3300,6 +3371,7 @@ mod tests {
     fn trade_id_correction_replaces_source_truth_and_rebuilds_delta_path() {
         let mut aggregator = FootprintAggregator::new(FootprintAggregationOptions {
             tick_size: 1.0,
+            ticks_per_row: 1,
             ..FootprintAggregationOptions::default()
         })
         .unwrap();
@@ -3331,6 +3403,7 @@ mod tests {
                 FootprintSeriesOptions {
                     aggregation: FootprintAggregationOptions {
                         tick_size: 1.0,
+                        ticks_per_row: 1,
                         ..FootprintAggregationOptions::default()
                     },
                     visual: FootprintVisualOptions::default(),
@@ -3382,6 +3455,7 @@ mod tests {
                 FootprintSeriesOptions {
                     aggregation: FootprintAggregationOptions {
                         tick_size: 1.0,
+                        ticks_per_row: 1,
                         ..FootprintAggregationOptions::default()
                     },
                     visual: FootprintVisualOptions::default(),
@@ -3420,6 +3494,7 @@ mod tests {
                 FootprintSeriesOptions {
                     aggregation: FootprintAggregationOptions {
                         tick_size: 1.0,
+                        ticks_per_row: 1,
                         bars: FootprintBarAggregation::Time {
                             interval_micros: 60_000_000,
                             anchor_micros: 0,
@@ -3471,6 +3546,7 @@ mod tests {
             .add_footprint_series(FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 1.0,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
                     ..FootprintAggregationOptions::default()
                 },
@@ -3513,6 +3589,7 @@ mod tests {
             .add_footprint_series(FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 1.0,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
                     ..FootprintAggregationOptions::default()
                 },
@@ -3537,6 +3614,7 @@ mod tests {
             .add_footprint_series(FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 1.0,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Trades { trades_per_bar: 2 },
                     ..FootprintAggregationOptions::default()
                 },
@@ -3583,6 +3661,7 @@ mod tests {
             .add_footprint_series(FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 1.0,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
                     ..FootprintAggregationOptions::default()
                 },
@@ -3620,6 +3699,7 @@ mod tests {
             .add_footprint_series(FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 1.0,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Trades { trades_per_bar: 2 },
                     ..FootprintAggregationOptions::default()
                 },
@@ -3678,6 +3758,7 @@ mod tests {
                 "CME:ES",
                 FootprintAggregationOptions {
                     tick_size: 1.0,
+                    ticks_per_row: 1,
                     ..FootprintAggregationOptions::default()
                 },
             )
@@ -3761,6 +3842,7 @@ mod tests {
             .add_footprint_series(FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 1.0,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Trades { trades_per_bar: 2 },
                     ..FootprintAggregationOptions::default()
                 },
@@ -3862,6 +3944,7 @@ mod tests {
                 "CME:ES:replay",
                 FootprintAggregationOptions {
                     tick_size: 1.0,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
                     ..FootprintAggregationOptions::default()
                 },
@@ -4008,6 +4091,15 @@ mod tests {
         let delta_values = chart.data_layer().series_data(delta).unwrap().1[3];
         assert_eq!(cvd_values.last().copied(), Some(1.0));
         assert_eq!(delta_values.last().copied(), Some(1.0));
+        assert_eq!(
+            chart.data.point_color(
+                delta,
+                aeris_charts_core::model::data_layer::PointColorChannel::Body,
+                0,
+            ),
+            Some(Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2).0),
+            "positive delta uses the market-up color"
+        );
         let before = chart.trade_stream_stats(stream).unwrap();
         let mut correction = trade(2_000_000, 100.0, 8.0, AggressorSide::Sell);
         correction.trade_id = Some(2);
@@ -4026,6 +4118,15 @@ mod tests {
                 .last()
                 .copied(),
             Some(-4.0)
+        );
+        assert_eq!(
+            chart.data.point_color(
+                delta,
+                aeris_charts_core::model::data_layer::PointColorChannel::Body,
+                0,
+            ),
+            Some(Color::rgb(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2).0),
+            "corrected negative delta uses the market-down color"
         );
     }
 
@@ -4070,6 +4171,70 @@ mod tests {
         assert!((entry.markers[0].size - expected).abs() < 1e-12);
         assert_eq!(entry.markers[1].size, TRADE_BUBBLE_MAX_SIZE);
         assert_eq!(chart.trade_stream_stats(stream).unwrap().dependent_count, 1);
+    }
+
+    #[test]
+    fn ticks_per_row_groups_adjacent_ticks_into_one_row() {
+        let options = FootprintAggregationOptions {
+            tick_size: 1.0,
+            ticks_per_row: 5,
+            ..FootprintAggregationOptions::default()
+        };
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let series = chart.add_series(SeriesKind::Footprint);
+        chart
+            .configure_footprint_series(
+                series,
+                FootprintSeriesOptions {
+                    aggregation: options,
+                    ..FootprintSeriesOptions::default()
+                },
+            )
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                series,
+                vec![
+                    trade(1_000_000, 100.0, 1.0, AggressorSide::Buy),
+                    trade(1_100_000, 101.0, 2.0, AggressorSide::Sell),
+                    trade(1_200_000, 104.0, 3.0, AggressorSide::Buy),
+                    trade(1_300_000, 105.0, 4.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        let bars = chart.footprint_bars(series).unwrap();
+        assert_eq!(bars.len(), 1);
+        let levels = &bars[0].levels;
+        assert_eq!(
+            levels.len(),
+            2,
+            "100-104 share one row; 105 starts the next"
+        );
+        let lower = levels.iter().find(|level| level.price == 100.0).unwrap();
+        assert_eq!(lower.total_volume, 6.0);
+        assert_eq!(lower.bid_volume, 2.0);
+        assert_eq!(lower.ask_volume, 4.0);
+        assert!(levels
+            .iter()
+            .any(|level| level.price == 105.0 && level.total_volume == 4.0));
+        // Bar high/low stay exact trade prices; the row extent covers whole rows.
+        assert_eq!((bars[0].low, bars[0].high), (100.0, 105.0));
+        assert_eq!(
+            footprint_row_price_bounds(&options, 100.0, 105.0),
+            (99.5, 109.5)
+        );
+        // Trades are still validated against the instrument tick, not the row.
+        assert!(chart
+            .set_footprint_trades(
+                series,
+                vec![trade(1_400_000, 100.5, 1.0, AggressorSide::Buy)]
+            )
+            .is_err());
+        assert!(validate_options(FootprintAggregationOptions {
+            ticks_per_row: 0,
+            ..options
+        })
+        .is_err());
     }
 
     #[test]
@@ -4217,6 +4382,7 @@ mod tests {
                 FootprintSeriesOptions {
                     aggregation: FootprintAggregationOptions {
                         tick_size: 1.0,
+                        ticks_per_row: 1,
                         bars: FootprintBarAggregation::Time {
                             interval_micros: 60_000_000,
                             anchor_micros: 0,
@@ -4348,6 +4514,7 @@ mod tests {
                 FootprintSeriesOptions {
                     aggregation: FootprintAggregationOptions {
                         tick_size: 1.0,
+                        ticks_per_row: 1,
                         bars: FootprintBarAggregation::Time {
                             interval_micros: 60_000_000,
                             anchor_micros: 0,
@@ -4438,6 +4605,7 @@ mod tests {
                 FootprintSeriesOptions {
                     aggregation: FootprintAggregationOptions {
                         tick_size: 1.0,
+                        ticks_per_row: 1,
                         bars: FootprintBarAggregation::Time {
                             interval_micros: 60_000_000,
                             anchor_micros: 0,
@@ -4498,6 +4666,7 @@ mod tests {
                 FootprintSeriesOptions {
                     aggregation: FootprintAggregationOptions {
                         tick_size: 1.0,
+                        ticks_per_row: 1,
                         bars: FootprintBarAggregation::Time {
                             interval_micros: 60_000_000,
                             anchor_micros: 0,
@@ -4554,6 +4723,7 @@ mod tests {
                 FootprintSeriesOptions {
                     aggregation: FootprintAggregationOptions {
                         tick_size: 1.0,
+                        ticks_per_row: 1,
                         bars: FootprintBarAggregation::Time {
                             interval_micros: 60_000_000,
                             anchor_micros: 0,
@@ -4611,6 +4781,7 @@ mod tests {
                 FootprintSeriesOptions {
                     aggregation: FootprintAggregationOptions {
                         tick_size: 1.0,
+                        ticks_per_row: 1,
                         ..FootprintAggregationOptions::default()
                     },
                     visual: FootprintVisualOptions::default(),
@@ -4657,6 +4828,7 @@ mod tests {
                 FootprintSeriesOptions {
                     aggregation: FootprintAggregationOptions {
                         tick_size: 1.0,
+                        ticks_per_row: 1,
                         ..FootprintAggregationOptions::default()
                     },
                     visual: FootprintVisualOptions::default(),

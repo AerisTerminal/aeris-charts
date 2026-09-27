@@ -445,7 +445,10 @@ lowers bounded X/O text (with a dense-column line fallback), so executors contai
 Synthetic market source remains host-owned and is intentionally excluded from chart-state
 persistence, consistent with every financial series definition and market-history payload.
 The configured tick size owns the series min-move/formatter and the shared autoscale, frame, and hit
-paths use complete half-tick outer cell bounds on the series' ordinary pane-local price scale.
+paths use complete row bounds (whole `ticks_per_row` rows padded half a tick) on the series' ordinary
+pane-local price scale. Any series may carry a `render_before_time` cutoff: rows at or after it keep
+their data, scale participation, and last-value chrome but are not drawn, so a host can hand a
+price series' tail to a live footprint without a second price model.
 Footprint bars ultimately emit the same ordered `ChartFrame` as every other series, and no backend
 may infer order flow from OHLC or recalculate footprint math.
 

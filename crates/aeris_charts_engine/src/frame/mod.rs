@@ -1551,6 +1551,7 @@ impl ChartEngine {
                         series_layer.layer.prims.clear();
                         series_layer.layer.points.clear();
                         let scale = pane_scale(pane, rs.scale_target);
+                        let to = self.series_render_end(rs.id, to);
                         self.build_native_series_background_primitives_frame(
                             *rs,
                             from,
@@ -2405,10 +2406,10 @@ impl ChartEngine {
                 let Some(stream) = self.trade_stream(state.trade_stream_id) else {
                     continue;
                 };
-                (minimum, maximum) = crate::footprint::footprint_cell_price_bounds(
+                (minimum, maximum) = crate::footprint::footprint_row_price_bounds(
+                    &stream.options(),
                     minimum,
                     maximum,
-                    stream.options().tick_size,
                 );
             }
             let Some(base_value) = self.series_base_value(s.id, from) else {

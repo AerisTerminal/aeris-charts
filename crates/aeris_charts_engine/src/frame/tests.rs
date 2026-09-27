@@ -11566,3 +11566,35 @@ fn pulse_stages_match_the_reference_and_stay_continuous() {
         previous = next;
     }
 }
+
+#[test]
+fn render_cutoff_stops_drawing_rows_without_dropping_series_data() {
+    let up = Color::parse_css(aeris_charts_core::style::DEFAULT_MARKET_UP_CSS).unwrap();
+    let candle_bodies = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::Rect { color, .. } if *color == up))
+            .count()
+    };
+    let mut chart = ohlc_chart(SeriesKind::Candlestick, 6);
+    let all = candle_bodies(&mut chart);
+    assert!(
+        all > 0 && all % 6 == 0,
+        "every rising candle draws the same primitives"
+    );
+    let per_candle = all / 6;
+
+    chart.set_series_render_before_time(0, Some(4));
+    assert_eq!(
+        candle_bodies(&mut chart),
+        4 * per_candle,
+        "rows at or after the cutoff are not drawn"
+    );
+    assert_eq!(chart.data_layer().series_data(0).unwrap().0.len(), 6);
+
+    chart.set_series_render_before_time(0, Some(0));
+    assert_eq!(candle_bodies(&mut chart), 0);
+    chart.set_series_render_before_time(0, None);
+    assert_eq!(candle_bodies(&mut chart), all);
+}

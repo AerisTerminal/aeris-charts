@@ -959,6 +959,9 @@ pub struct SeriesEntry {
     /// `None` (the default) is unbounded — a series grows for as long as the host appends to it.
     /// See [`ChartEngine::set_series_max_points`] for the eviction schedule.
     pub max_points: Option<usize>,
+    /// Rows at or after this UTC-seconds time keep their data but are not drawn. A host uses it
+    /// to hand the tail of a series to another presentation (candles before a live footprint).
+    pub render_before_time: Option<i64>,
 }
 
 impl SeriesEntry {
@@ -1047,6 +1050,7 @@ impl SeriesEntry {
             footprint: None,
             native_primitives: Vec::new(),
             max_points: None,
+            render_before_time: None,
         }
     }
 
@@ -2897,6 +2901,45 @@ impl ChartEngine {
 
     /// Toggle a series without destroying its data or indicator binding. A removed slot can
     /// never be revived, so visibility changes on it are ignored.
+    /// Stops drawing a series' rows at or after `time` (UTC seconds) while keeping its data,
+    /// scale participation, and last-value chrome. `None` draws every row.
+    pub fn set_series_render_before_time(&mut self, id: SeriesId, time: Option<i64>) {
+        if let Some(series) = self
+            .series
+            .iter_mut()
+            .find(|series| series.id == id && !series.removed)
+        {
+            if series.render_before_time == time {
+                return;
+            }
+            series.render_before_time = time;
+            self.invalidate_frame_scene();
+        }
+    }
+
+    /// Last logical index a series draws inside `to`, honoring its render cutoff.
+    pub(crate) fn series_render_end(&self, id: SeriesId, to: i64) -> i64 {
+        let Some(cutoff) = self
+            .series
+            .iter()
+            .find(|series| series.id == id && !series.removed)
+            .and_then(|series| series.render_before_time)
+        else {
+            return to;
+        };
+        let first_hidden = match self.sequence_points() {
+            Some(points) => {
+                let cutoff_micros = cutoff.saturating_mul(1_000_000);
+                points.partition_point(|point| point.open_timestamp_micros < cutoff_micros)
+            }
+            None => self
+                .data
+                .merged_times()
+                .partition_point(|&time| time < cutoff),
+        };
+        to.min(first_hidden as i64 - 1)
+    }
+
     pub fn set_series_visible(&mut self, id: SeriesId, visible: bool) {
         if let Some(series) = self
             .series

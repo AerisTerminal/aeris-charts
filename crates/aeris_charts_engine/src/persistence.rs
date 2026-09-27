@@ -2472,6 +2472,7 @@ mod tests {
             .add_footprint_series(FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 1.0,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
                     ..FootprintAggregationOptions::default()
                 },
@@ -2510,6 +2511,7 @@ mod tests {
             .add_footprint_series(FootprintSeriesOptions {
                 aggregation: FootprintAggregationOptions {
                     tick_size: 1.0,
+                    ticks_per_row: 1,
                     bars: FootprintBarAggregation::Trades { trades_per_bar: 1 },
                     ..FootprintAggregationOptions::default()
                 },

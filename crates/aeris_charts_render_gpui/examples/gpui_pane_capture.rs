@@ -356,6 +356,7 @@ fn install_footprint_fixture(engine: &mut ChartEngine, end_time: i64) {
         .add_footprint_series(FootprintSeriesOptions {
             aggregation: FootprintAggregationOptions {
                 tick_size: 0.25,
+                ticks_per_row: 1,
                 bars: FootprintBarAggregation::Time {
                     interval_micros: 3_600_000_000,
                     anchor_micros: 0,

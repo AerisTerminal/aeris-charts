@@ -1551,6 +1551,12 @@ export interface series_options {
    * Note this is a *point* count, not a time window: the retained span depends on the bar interval.
    */
   max_points: number;
+  /**
+   * UTC-seconds time from which rows keep their data but are not drawn, so another
+   * presentation (for example a live footprint) can take over the series' tail. `null` draws
+   * every row.
+   */
+  render_before_time: number | null;
   /** Overrides the kind default color (line/area/histogram). */
   color: string;
   /** Candlestick/bar up (close ≥ open) body color. Any CSS color the engine parses. */
@@ -1767,6 +1773,8 @@ export interface feature_series_options {
 export interface footprint_series_options {
   /** Exact exchange price increment. Off-grid trades are rejected. */
   tick_size: number;
+  /** Adjacent ticks aggregated into one footprint row. Defaults to 1 (one row per tick). */
+  ticks_per_row?: number;
   /** Bar construction policy shared by footprint and its chart-level trade stream. */
   bar_type: "time" | "trades" | "volume" | "range";
   /** Whole-second aligned time-bar period when bar_type is time. */

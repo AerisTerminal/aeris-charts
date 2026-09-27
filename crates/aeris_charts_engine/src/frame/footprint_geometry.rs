@@ -1,5 +1,7 @@
 use super::*;
-use crate::footprint::{footprint_cell_price_bounds, FootprintBar, FootprintCellMode};
+use crate::footprint::{
+    footprint_row_price_bounds, FootprintAggregationOptions, FootprintBar, FootprintCellMode,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FootprintLod {
@@ -80,13 +82,13 @@ impl ChartEngine {
             let left = ((x - spacing * 0.48) * hpr).round() as i32;
             let right = ((x + spacing * 0.48) * hpr).round() as i32;
             let width = (right - left).max(1);
-            let tick_size = stream.options().tick_size;
+            let aggregation = stream.options();
             let representative_row_height = bar
                 .levels
                 .first()
                 .map(|level| {
                     let (lower_price, upper_price) =
-                        footprint_cell_price_bounds(level.price, level.price, tick_size);
+                        footprint_row_price_bounds(&aggregation, level.price, level.price);
                     let upper = scale.price_to_coordinate(upper_price, rs.base_value);
                     let lower = scale.price_to_coordinate(lower_price, rs.base_value);
                     (lower - upper).abs()
@@ -106,7 +108,7 @@ impl ChartEngine {
                     let (max_bid, max_ask, max_total, max_abs_delta) = bar_volume_maxima(bar);
                     // Wick spine behind the cells.
                     let (low_price, high_price) =
-                        footprint_cell_price_bounds(bar.low, bar.high, tick_size);
+                        footprint_row_price_bounds(&aggregation, bar.low, bar.high);
                     let high = scale.price_to_coordinate(high_price, rs.base_value);
                     let low = scale.price_to_coordinate(low_price, rs.base_value);
                     let spine_top = (high.min(low) * vpr).round() as i32;
@@ -179,7 +181,7 @@ impl ChartEngine {
                     };
                     for level in &bar.levels {
                         let (lower_price, upper_price) =
-                            footprint_cell_price_bounds(level.price, level.price, tick_size);
+                            footprint_row_price_bounds(&aggregation, level.price, level.price);
                         let upper = scale.price_to_coordinate(upper_price, rs.base_value);
                         let lower = scale.price_to_coordinate(lower_price, rs.base_value);
                         let top = (upper.min(lower) * vpr).round() as i32;
@@ -495,13 +497,13 @@ impl ChartEngine {
                             &text_style,
                             state.visual.positive_delta_color.solid(),
                             state.visual.negative_delta_color.solid(),
-                            tick_size,
+                            &aggregation,
                         );
                     }
                 }
                 FootprintLod::Summary => {
                     let (low_price, high_price) =
-                        footprint_cell_price_bounds(bar.low, bar.high, tick_size);
+                        footprint_row_price_bounds(&aggregation, bar.low, bar.high);
                     let high = scale.price_to_coordinate(high_price, rs.base_value);
                     let low = scale.price_to_coordinate(low_price, rs.base_value);
                     let top = (high.min(low) * vpr).round() as i32;
@@ -684,13 +686,13 @@ fn push_bar_summary(
     style: &FootprintTextStyle<'_>,
     positive: Color,
     negative: Color,
-    tick_size: f64,
+    aggregation: &FootprintAggregationOptions,
 ) {
     // Delta is the signal: color it by sign at full strength. Volume stays in the
     // theme foreground so the two lines scan as signal + context. The block sits
     // below the bar's outer cell edge so it never overprints bottom-row numbers.
     let summary_size = style.summary;
-    let (bottom_price, _) = footprint_cell_price_bounds(bar.low, bar.high, tick_size);
+    let (bottom_price, _) = footprint_row_price_bounds(aggregation, bar.low, bar.high);
     let y = (scale.price_to_coordinate(bottom_price, base_value) * style.pixel_ratio) as f32
         + summary_size * 0.9;
     let delta_text_color = if bar.delta >= 0.0 { positive } else { negative };

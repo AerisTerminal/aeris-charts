@@ -1782,6 +1782,12 @@ class series_impl implements series_api {
     if (options.visible !== undefined) {
       this.chart.wasm.set_series_visible(this.id, options.visible);
     }
+    if (options.render_before_time !== undefined) {
+      this.chart.wasm.set_series_render_before_time(
+        this.id,
+        options.render_before_time ?? undefined,
+      );
+    }
     if (options.up_color !== undefined || options.down_color !== undefined) {
       // Pass each direction through unchanged: undefined = keep, "" = clear, CSS = pin (alpha
       // preserved, so "transparent" yields a hollow body). A plain `?? ""` here would wrongly

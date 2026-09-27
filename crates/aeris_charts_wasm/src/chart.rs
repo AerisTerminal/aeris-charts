@@ -2811,6 +2811,17 @@ impl AerisChart {
         self.inner.borrow_mut().set_series_visible(id, visible);
     }
 
+    /// Stops drawing a series' rows at or after `time` (UTC seconds) while keeping its data
+    /// (`series_options.render_before_time`). `undefined`/`null` draws every row.
+    pub fn set_series_render_before_time(&mut self, id: u32, time: Option<f64>) {
+        let time = time
+            .filter(|time| time.is_finite())
+            .map(|time| time.floor().clamp(i64::MIN as f64, i64::MAX as f64) as i64);
+        self.inner
+            .borrow_mut()
+            .set_series_render_before_time(id, time);
+    }
+
     /// Retention ceiling for a series (`series_options.max_points`): at most this many rows, oldest
     /// evicted first. `undefined`/`null`/`0` clears the cap back to unbounded.
     pub fn set_series_max_points(&mut self, id: u32, max_points: Option<f64>) {
