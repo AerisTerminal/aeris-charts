@@ -8,6 +8,7 @@
 mod alerts;
 mod axis_metrics;
 mod axis_primitives;
+mod depth;
 mod domains;
 mod drawing_contract;
 mod drawings;
@@ -49,6 +50,15 @@ pub use alerts::{
     AlertCondition, AlertCreateRequest, AlertFrequency, AlertId, AlertLine, AlertLineStatus,
     AlertPriceScale, AlertSnapshot, MAX_ALERT_LINES,
 };
+pub use depth::{
+    DepthBook, DepthBucket, DepthError, DepthEventCluster, DepthEventKind, DepthEventLayerOptions,
+    DepthHeatmapOptions, DepthLadderRow, DepthLevel, DepthMicrostructureEvent, DepthOptions,
+    DepthReplayStats, DepthResyncRequest, DepthSide, DepthSnapshot, DepthStudySnapshot,
+    DepthUpdate, MAX_DEPTH_BATCH_UPDATES, MAX_DEPTH_EVENT_LABEL_BYTES, MAX_DEPTH_EVENT_LAYERS,
+    MAX_DEPTH_EVENT_MARKERS, MAX_DEPTH_HEATMAPS, MAX_DEPTH_HEATMAP_ROWS, MAX_DEPTH_HISTORY_BUCKETS,
+    MAX_DEPTH_HISTORY_CELLS, MAX_DEPTH_LEVELS_PER_SIDE, MAX_DEPTH_REPLAY_UPDATES,
+    MAX_DEPTH_STREAMS, MAX_DEPTH_STREAM_KEY_BYTES,
+};
 pub use domains::{
     CategoryScaleType, ContinuousScaleType, HorizontalDomain, MAX_GENERAL_HORIZONTAL_DOMAINS,
 };
@@ -79,8 +89,9 @@ pub use footprint::{
     FootprintAggregationOptions, FootprintAggregator, FootprintBar, FootprintBarAggregation,
     FootprintCellMode, FootprintError, FootprintImbalanceOptions, FootprintLevel,
     FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind, FootprintVisualOptions,
-    FootprintWorkStats, ReplayClockStats, ReplaySeekStats, TradeBubbleOptions, TradeStreamStats,
-    TradeStudyKind, TradeStudyOptions, MAX_TRADE_STREAMS, MAX_TRADE_STREAM_KEY_BYTES,
+    FootprintWorkStats, ReplayClockStats, ReplaySeekStats, TimeAndSalesOptions, TimeAndSalesRow,
+    TradeBubbleOptions, TradeStreamStats, TradeStudyKind, TradeStudyOptions,
+    MAX_TIME_AND_SALES_ROWS, MAX_TRADE_STREAMS, MAX_TRADE_STREAM_KEY_BYTES,
 };
 pub use frame::{
     AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,
@@ -210,6 +221,7 @@ pub struct EngineMemoryUsage {
     pub drawing_runtime_capacity_bytes: usize,
     pub feature_series_capacity_bytes: usize,
     pub footprint_capacity_bytes: usize,
+    pub depth_capacity_bytes: usize,
     pub native_primitive_capacity_bytes: usize,
     pub trading_capacity_bytes: usize,
     pub alert_capacity_bytes: usize,
@@ -237,6 +249,7 @@ impl EngineMemoryUsage {
             + self.drawing_runtime_capacity_bytes
             + self.feature_series_capacity_bytes
             + self.footprint_capacity_bytes
+            + self.depth_capacity_bytes
             + self.native_primitive_capacity_bytes
             + self.trading_capacity_bytes
             + self.alert_capacity_bytes
@@ -1546,6 +1559,13 @@ pub struct ChartEngine {
     /// as synthetic UTC timestamps.
     sequence_points: Option<Vec<BarSequencePoint>>,
     synthetic_series: HashMap<SeriesId, SyntheticBarAggregator>,
+    depth_streams: HashMap<u64, DepthBook>,
+    depth_stream_keys: HashMap<String, u64>,
+    next_depth_stream_id: u64,
+    depth_heatmaps: HashMap<u64, depth::DepthHeatmap>,
+    next_depth_heatmap_id: u64,
+    depth_event_layers: HashMap<u64, depth::DepthEventLayer>,
+    next_depth_event_layer_id: u64,
     /// Sequence identity mapping waiting for the data-layer synchronization triggered by a
     /// non-time footprint rebuild. It is consumed before ordinary timestamp rebasing so drawing
     /// anchors follow the same full-resolution bars even when row keys are reused.
@@ -1780,6 +1800,13 @@ impl ChartEngine {
             data,
             sequence_points: None,
             synthetic_series: HashMap::new(),
+            depth_streams: HashMap::new(),
+            depth_stream_keys: HashMap::new(),
+            next_depth_stream_id: 1,
+            depth_heatmaps: HashMap::new(),
+            next_depth_heatmap_id: 1,
+            depth_event_layers: HashMap::new(),
+            next_depth_event_layer_id: 1,
             pending_sequence_mapping: None,
             drawing_anchor_times: HashMap::new(),
             series,
@@ -1953,6 +1980,7 @@ impl ChartEngine {
             drawing_runtime_capacity_bytes: self.drawing_runtime.borrow().capacity_bytes(),
             feature_series_capacity_bytes: self.feature_series_capacity_bytes(),
             footprint_capacity_bytes: self.footprint_capacity_bytes(),
+            depth_capacity_bytes: self.depth_capacity_bytes(),
             native_primitive_capacity_bytes: self.native_primitive_capacity_bytes(),
             trading_capacity_bytes: self.trading_state.estimated_bytes(),
             alert_capacity_bytes: self.alert_state.estimated_bytes(),

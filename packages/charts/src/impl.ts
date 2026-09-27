@@ -23,6 +23,7 @@ import type {
   crosshair_action_request, crosshair_action_request_handler,
   any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state, chart_value_snapshot, comparison_legend_entry, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
+  depth_event_columns, depth_event_layer_options, depth_heatmap_options, depth_ladder_row, depth_options, depth_snapshot_columns, depth_study_snapshot, depth_update_columns,
   drawing_point, drawing_tool_change_handler, drawing_interval, drawing_property_schema, drawing_kind_options, drawing_template,
   ema_ribbon_options, ema_ribbon_periods,
   feature_series_kind, frame_stats,
@@ -40,7 +41,7 @@ import type {
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
   replay_clock_stats, replay_seek_stats, synthetic_bar_options, trade_stream_stats,
-  time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_execution, trading_hit,
+  time_and_sales_options, time_and_sales_row, time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_execution, trading_hit,
   chart_sync_event, crosshair_sync_position,
   trading_intent, trading_intent_handler, trading_position, trading_preview, trading_snapshot,
   trading_style_options, instrument_metadata, working_order, host_overlay_snapshot, host_event_hit,
@@ -109,6 +110,7 @@ function same_time_range(a: time_range | null, b: time_range | null): boolean {
 
 /** Duration of the animated `scroll_to_position` ease (matches the reference smooth-scroll feel). */
 const SCROLL_ANIM_MS = 300;
+const EMPTY_UINT32 = new Uint32Array();
 
 /**
  * Whether the candle-close countdown timer should run: any series with `countdown_visible`
@@ -4395,6 +4397,146 @@ export class chart_impl implements chart_api {
       throw new AerisChartsError("invalid_options", "trade stream options were rejected by the engine");
     }
     return id;
+  }
+
+  add_depth_stream(key: string, options: Partial<depth_options> = {}): number {
+    const id = this.wasm.add_depth_stream(key, JSON.stringify(options));
+    if (id === 0xffffffff) {
+      throw new AerisChartsError("invalid_options", "depth stream options were rejected by the engine");
+    }
+    return id;
+  }
+
+  depth_stream_id(key: string): number | null {
+    const id = this.wasm.depth_stream_id(key);
+    return id === 0 ? null : id;
+  }
+
+  remove_depth_stream(stream_id: number): boolean {
+    const removed = this.wasm.remove_depth_stream(stream_id);
+    if (removed) this.repaint();
+    return removed;
+  }
+
+  set_depth_snapshot_typed(stream_id: number, columns: depth_snapshot_columns): void {
+    const result = this.wasm.set_depth_snapshot_typed(
+      stream_id,
+      columns.timestamp_micros,
+      columns.sequence_high,
+      columns.sequence_low,
+      columns.bids.prices,
+      columns.bids.sizes,
+      columns.bids.order_counts ?? EMPTY_UINT32,
+      columns.asks.prices,
+      columns.asks.sizes,
+      columns.asks.order_counts ?? EMPTY_UINT32,
+    );
+    if (result !== "") throw new AerisChartsError("invalid_data", result);
+    this.repaint();
+  }
+
+  update_depth_typed(stream_id: number, columns: depth_update_columns): void {
+    const result = this.wasm.update_depth_typed(
+      stream_id,
+      columns.timestamps_micros,
+      columns.sequences.high,
+      columns.sequences.low,
+      columns.previous_sequences.high,
+      columns.previous_sequences.low,
+      columns.sides,
+      columns.prices,
+      columns.sizes,
+      columns.order_counts ?? EMPTY_UINT32,
+    );
+    if (result !== "") throw new AerisChartsError("invalid_data", result);
+    this.repaint();
+  }
+
+  depth_ladder(
+    stream_id: number,
+    levels_per_side: number,
+    minimum_size = 0,
+    max_distance_ticks?: number,
+  ): readonly depth_ladder_row[] | null {
+    return JSON.parse(this.wasm.depth_ladder_json(
+      stream_id,
+      levels_per_side,
+      minimum_size,
+      max_distance_ticks ?? 0xffffffff,
+    )) as depth_ladder_row[] | null;
+  }
+
+  depth_study(
+    stream_id: number,
+    levels_per_side: number,
+    minimum_size = 0,
+    max_distance_ticks?: number,
+  ): depth_study_snapshot | null {
+    return JSON.parse(this.wasm.depth_study_json(
+      stream_id,
+      levels_per_side,
+      minimum_size,
+      max_distance_ticks ?? 0xffffffff,
+    )) as depth_study_snapshot | null;
+  }
+
+  add_depth_heatmap(
+    stream_id: number,
+    options: Partial<depth_heatmap_options> & Pick<depth_heatmap_options, "price_min" | "price_max">,
+  ): number {
+    const id = this.wasm.add_depth_heatmap(stream_id, JSON.stringify(options));
+    if (id === 0xffffffff) {
+      throw new AerisChartsError("invalid_options", "depth heatmap options were rejected by the engine");
+    }
+    this.repaint();
+    return id;
+  }
+
+  remove_depth_heatmap(id: number): boolean {
+    const removed = this.wasm.remove_depth_heatmap(id);
+    if (removed) this.repaint();
+    return removed;
+  }
+
+  set_depth_events_typed(stream_id: number, columns: depth_event_columns): void {
+    const result = this.wasm.set_depth_events_typed(
+      stream_id,
+      columns.timestamps_micros,
+      columns.prices,
+      columns.sizes,
+      columns.sides,
+      columns.kinds,
+      columns.labels === undefined ? "" : JSON.stringify(columns.labels),
+    );
+    if (result !== "") throw new AerisChartsError("invalid_data", result);
+    this.repaint();
+  }
+
+  add_depth_event_layer(
+    stream_id: number,
+    options: Partial<depth_event_layer_options> = {},
+  ): number {
+    const id = this.wasm.add_depth_event_layer(stream_id, JSON.stringify(options));
+    if (id === 0xffffffff) {
+      throw new AerisChartsError("invalid_options", "depth event layer options were rejected by the engine");
+    }
+    this.repaint();
+    return id;
+  }
+
+  remove_depth_event_layer(id: number): boolean {
+    const removed = this.wasm.remove_depth_event_layer(id);
+    if (removed) this.repaint();
+    return removed;
+  }
+
+  time_and_sales(
+    stream_id: number,
+    options: Partial<time_and_sales_options> = {},
+  ): readonly time_and_sales_row[] | null {
+    return JSON.parse(
+      this.wasm.time_and_sales_json(stream_id, JSON.stringify(options)),
+    ) as time_and_sales_row[] | null;
   }
 
   replay_clock_micros(): number | null {

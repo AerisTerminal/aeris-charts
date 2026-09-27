@@ -12,6 +12,7 @@
 //!   Target H — combined 50k-bar financial + 50k-point general frame and retained memory
 //!   Target I — 100k-row numeric error bars frame, hit interaction, and retained memory
 //!   Target K — 100x replay clock advance, shared projections, frame work, and flat retained memory
+//!   Target L — sustained depth updates, bounded heatmap frame work, and live-edge upload size
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `AERIS_CHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -23,6 +24,7 @@ use std::time::Instant;
 
 use aeris_charts_engine::{
     AggressorSide, AxisDimension, ChartEngine, ChartFrame, ContinuousScaleType,
+    DepthHeatmapOptions, DepthLevel, DepthOptions, DepthSide, DepthSnapshot, DepthUpdate,
     FootprintAggregationOptions, FootprintBarAggregation, FootprintSeriesOptions, FootprintTrade,
     FootprintVisualOptions, GeneralAxisOptions, GeneralHitMode, GeneralScaleType,
     GeneralSeriesOptions, GeneralXyInput, GestureResolver, HorizontalDomain, InputDevice,
@@ -206,6 +208,10 @@ fn main() {
     const REPLAY_SPEED: usize = 100;
     const REPLAY_SECONDS: usize = 6_000;
     const REPLAY_FRAMES: usize = REPLAY_SECONDS / REPLAY_SPEED;
+    const DEPTH_SOAK_UPDATES: usize = 1_200_000;
+    const DEPTH_BATCH_UPDATES: usize = 100_000;
+    const DEPTH_BATCH_BUDGET_MS: f64 = 150.0;
+    const DEPTH_UPLOAD_BUDGET_BYTES: usize = 4_096 * 4;
 
     println!("aeris_charts perf gate (release build recommended)\n");
 
@@ -974,6 +980,145 @@ fn main() {
         replay_memory_second as f64 / (1024.0 * 1024.0),
     );
 
+    // ---- Target L: bounded depth soak and shared image heatmap -------------------------------
+    let mut depth = ChartEngine::new(1600.0, 800.0, 1.0);
+    let (times, open, high, low, close) = gen_series(2_501, 0.0);
+    depth
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .expect("valid depth time axis");
+    let depth_stream = depth
+        .add_depth_stream(
+            "PERF:DEPTH",
+            DepthOptions {
+                tick_size: 0.25,
+                max_levels_per_side: 256,
+                history_bucket_micros: 100_000,
+                max_history_buckets: 512,
+                max_history_cells: 65_536,
+                max_event_markers: 2_048,
+            },
+        )
+        .expect("valid depth stream");
+    let bids = (0..64)
+        .map(|level| DepthLevel {
+            price: 100.0 - level as f64 * 0.25,
+            size: (level + 1) as f64,
+            order_count: Some(level + 1),
+        })
+        .collect();
+    let asks = (0..64)
+        .map(|level| DepthLevel {
+            price: 100.25 + level as f64 * 0.25,
+            size: (level + 1) as f64,
+            order_count: Some(level + 1),
+        })
+        .collect();
+    depth
+        .set_depth_snapshot(
+            depth_stream,
+            DepthSnapshot {
+                timestamp_micros: 0,
+                sequence: 1,
+                bids,
+                asks,
+            },
+        )
+        .expect("valid depth snapshot");
+    depth
+        .add_depth_heatmap(
+            depth_stream,
+            DepthHeatmapOptions {
+                price_min: 84.25,
+                price_max: 116.0,
+                maximum_size: 128.0,
+                ..DepthHeatmapOptions::default()
+            },
+        )
+        .expect("valid depth heatmap");
+    depth.time_scale.set_width(1600.0);
+    depth.fit_content();
+    let run_depth_soak = |chart: &mut ChartEngine, next_sequence: &mut u64| {
+        let mut worst_batch_ms = 0.0_f64;
+        for _ in 0..DEPTH_SOAK_UPDATES / DEPTH_BATCH_UPDATES {
+            let updates = (0..DEPTH_BATCH_UPDATES)
+                .map(|offset| {
+                    let sequence = next_sequence.saturating_add(offset as u64);
+                    let side = if sequence.is_multiple_of(2) {
+                        DepthSide::Bid
+                    } else {
+                        DepthSide::Ask
+                    };
+                    let level = (sequence as usize / 2) % 64;
+                    DepthUpdate {
+                        timestamp_micros: sequence as i64 * 1_000,
+                        sequence,
+                        previous_sequence: sequence - 1,
+                        side,
+                        level: DepthLevel {
+                            price: match side {
+                                DepthSide::Bid => 100.0 - level as f64 * 0.25,
+                                DepthSide::Ask => 100.25 + level as f64 * 0.25,
+                            },
+                            size: (sequence % 127 + 1) as f64,
+                            order_count: Some((sequence % 32 + 1) as u32),
+                        },
+                    }
+                })
+                .collect::<Vec<_>>();
+            let started = Instant::now();
+            chart
+                .update_depth_batch(depth_stream, &updates)
+                .expect("valid depth update batch");
+            worst_batch_ms = worst_batch_ms.max(started.elapsed().as_secs_f64() * 1000.0);
+            *next_sequence = next_sequence.saturating_add(DEPTH_BATCH_UPDATES as u64);
+        }
+        worst_batch_ms
+    };
+    let mut next_depth_sequence = 2_u64;
+    let depth_first_ms = run_depth_soak(&mut depth, &mut next_depth_sequence);
+    let depth_memory_first = depth.memory_usage().depth_capacity_bytes;
+    let mut depth_frame = ChartFrame::default();
+    let started = Instant::now();
+    depth.build_frame_into(&mut depth_frame);
+    let depth_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let depth_images = depth_frame.panes[0]
+        .under
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Image { image, .. } => Some(image),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let live_upload_bytes = depth_images
+        .iter()
+        .filter(|image| image.width == 1)
+        .map(|image| image.pixels.len())
+        .sum::<usize>();
+    let depth_second_ms = run_depth_soak(&mut depth, &mut next_depth_sequence);
+    let depth_memory_second = depth.memory_usage().depth_capacity_bytes;
+    println!(
+        "Target L — two {DEPTH_SOAK_UPDATES}-update depth soaks, {} heatmap images:",
+        depth_images.len()
+    );
+    let l_update = report(
+        "worst 100k depth batch",
+        depth_first_ms.max(depth_second_ms),
+        DEPTH_BATCH_BUDGET_MS,
+    );
+    let l_frame = report("depth heatmap build_frame", depth_frame_ms, FRAME_BUDGET_MS);
+    let l_upload = report_bytes(
+        "incremental live-edge image",
+        live_upload_bytes,
+        DEPTH_UPLOAD_BUDGET_BYTES,
+    );
+    let l_flat_memory = depth_memory_second <= depth_memory_first;
+    println!(
+        "  [{}] flat retained depth memory: {:.2} MiB -> {:.2} MiB",
+        if l_flat_memory { "PASS" } else { "FAIL" },
+        depth_memory_first as f64 / (1024.0 * 1024.0),
+        depth_memory_second as f64 / (1024.0 * 1024.0),
+    );
+
     let all_pass = a_pass
         && b_pass
         && c_pass
@@ -993,7 +1138,11 @@ fn main() {
         && i_hit
         && i_memory
         && k_frame
-        && k_flat_memory;
+        && k_flat_memory
+        && l_update
+        && l_frame
+        && l_upload
+        && l_flat_memory;
     println!(
         "\n{}",
         if all_pass {

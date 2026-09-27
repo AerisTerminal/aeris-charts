@@ -3,8 +3,8 @@
 use super::*;
 use aeris_charts_engine::{
     AggressorSide, CumulativeDeltaReset, FootprintBarAggregation, FootprintCellMode,
-    FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind, TradeBubbleOptions,
-    TradeStudyOptions,
+    FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind, TimeAndSalesOptions,
+    TradeBubbleOptions, TradeStudyOptions,
 };
 
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -344,6 +344,31 @@ fn trades_from_columns(
 }
 
 impl ChartInner {
+    pub(super) fn time_and_sales_json(&self, stream_id: u32, options_json: &str) -> String {
+        let Ok(options) = serde_json::from_str::<TimeAndSalesOptions>(options_json) else {
+            return "null".to_string();
+        };
+        let Ok(rows) = self.engine.time_and_sales(u64::from(stream_id), options) else {
+            return "null".to_string();
+        };
+        serde_json::to_string(
+            &rows
+                .into_iter()
+                .map(|row| {
+                    serde_json::json!({
+                        "timestamp_micros": row.timestamp_micros,
+                        "price": row.price,
+                        "volume": row.volume,
+                        "aggressor": row.aggressor,
+                        "trade_id": row.trade_id.map(|id| id.to_string()),
+                        "conditions": row.conditions,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "null".to_string())
+    }
+
     pub(super) fn replay_clock_micros(&self) -> f64 {
         self.engine
             .replay_clock_micros()

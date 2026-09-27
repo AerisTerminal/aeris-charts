@@ -630,6 +630,113 @@ export type series_data = ohlc_data | single_value_data | feature_series_data | 
 
 export type footprint_aggressor_side = "buy" | "sell" | "unknown";
 
+/** Bounded chart-owned level-two order-book configuration. */
+export interface depth_options {
+  tick_size: number;
+  max_levels_per_side: number;
+  history_bucket_micros: number;
+  max_history_buckets: number;
+  max_history_cells: number;
+  max_event_markers: number;
+}
+
+/** Exact unsigned 64-bit values split into high/low words for a portable typed-array boundary. */
+export interface uint64_columns {
+  high: Uint32Array;
+  low: Uint32Array;
+}
+
+/** One side of a depth snapshot; order-count 0xffffffff means unavailable. */
+export interface depth_level_columns {
+  prices: Float64Array;
+  sizes: Float64Array;
+  order_counts?: Uint32Array;
+}
+
+export interface depth_snapshot_columns {
+  timestamp_micros: number;
+  sequence_high: number;
+  sequence_low: number;
+  bids: depth_level_columns;
+  asks: depth_level_columns;
+}
+
+/** Allocation-conscious incremental depth rows. Side 0 is bid and side 1 is ask. */
+export interface depth_update_columns {
+  timestamps_micros: Float64Array;
+  sequences: uint64_columns;
+  previous_sequences: uint64_columns;
+  sides: Uint8Array;
+  prices: Float64Array;
+  sizes: Float64Array;
+  order_counts?: Uint32Array;
+}
+
+export interface depth_ladder_row {
+  price: number;
+  bid_size: number | null;
+  ask_size: number | null;
+  bid_order_count: number | null;
+  ask_order_count: number | null;
+  distance_from_touch_ticks: number;
+}
+
+export interface depth_study_snapshot {
+  /** Exact provider sequence encoded as decimal text. */
+  sequence: string | null;
+  best_bid: { price: number; size: number; order_count: number | null } | null;
+  best_ask: { price: number; size: number; order_count: number | null } | null;
+  bid_cumulative: readonly { price: number; size: number; order_count: number | null }[];
+  ask_cumulative: readonly { price: number; size: number; order_count: number | null }[];
+  imbalance: number | null;
+}
+
+export interface depth_heatmap_options {
+  pane_index: number;
+  price_min: number;
+  price_max: number;
+  minimum_size: number;
+  maximum_size: number;
+  bid_rgba: readonly [number, number, number, number];
+  ask_rgba: readonly [number, number, number, number];
+  opacity: number;
+}
+
+export interface depth_event_columns {
+  timestamps_micros: Float64Array;
+  prices: Float64Array;
+  sizes: Float64Array;
+  /** -1 unknown, 0 bid, 1 ask. */
+  sides: Int8Array;
+  /** 0 iceberg refill, 1 pulled liquidity, 2 size cluster, 3 sweep. */
+  kinds: Uint8Array;
+  /** Optional bounded host labels aligned one-for-one with the numeric columns. */
+  labels?: readonly (string | null)[];
+}
+
+export interface depth_event_layer_options {
+  pane_index: number;
+  max_markers: number;
+}
+
+export interface time_and_sales_options {
+  minimum_volume: number;
+  /** Omit to include every classified aggressor side. */
+  side: footprint_aggressor_side | null;
+  /** Bounded to 4096 rows; results are newest first. */
+  max_rows: number;
+}
+
+export interface time_and_sales_row {
+  timestamp_micros: number;
+  price: number;
+  volume: number;
+  aggressor: footprint_aggressor_side;
+  /** Exact provider identity encoded as decimal text. */
+  trade_id: string | null;
+  conditions: number;
+}
+
 /** One raw trade consumed by a tick-driven footprint series. */
 export interface footprint_trade {
   /** Signed Unix timestamp in integer microseconds; must be a JavaScript safe integer. */
@@ -2043,6 +2150,9 @@ export interface replay_seek_stats {
 
 export interface replay_clock_stats extends replay_seek_stats {
   stream_count: number;
+  depth_stream_count: number;
+  visible_depth_events: number;
+  rebuilt_depth_events: number;
 }
 
 /** V2 adds engine-owned general pane, axis, dataset, and series state. */
@@ -2849,6 +2959,22 @@ export interface chart_api {
   comparison_legend_snapshot(): comparison_legend_entry[];
   /** Create or reuse a chart-level canonical trade stream for tape-derived studies. */
   add_trade_stream(key: string, options?: Partial<footprint_series_options>): number;
+  /** Create or reuse the canonical bounded level-two book for one host instrument. */
+  add_depth_stream(key: string, options?: Partial<depth_options>): number;
+  depth_stream_id(key: string): number | null;
+  remove_depth_stream(stream_id: number): boolean;
+  /** Atomically replace a depth book with an exact sequenced snapshot. */
+  set_depth_snapshot_typed(stream_id: number, columns: depth_snapshot_columns): void;
+  /** Apply an atomic ordered batch; a sequence gap fences mutation and requests host resync. */
+  update_depth_typed(stream_id: number, columns: depth_update_columns): void;
+  depth_ladder(stream_id: number, levels_per_side: number, minimum_size?: number, max_distance_ticks?: number): readonly depth_ladder_row[] | null;
+  depth_study(stream_id: number, levels_per_side: number, minimum_size?: number, max_distance_ticks?: number): depth_study_snapshot | null;
+  add_depth_heatmap(stream_id: number, options: Partial<depth_heatmap_options> & Pick<depth_heatmap_options, "price_min" | "price_max">): number;
+  remove_depth_heatmap(id: number): boolean;
+  set_depth_events_typed(stream_id: number, columns: depth_event_columns): void;
+  add_depth_event_layer(stream_id: number, options?: Partial<depth_event_layer_options>): number;
+  remove_depth_event_layer(id: number): boolean;
+  time_and_sales(stream_id: number, options?: Partial<time_and_sales_options>): readonly time_and_sales_row[] | null;
   replay_clock_micros(): number | null;
   set_replay_clock_micros(clock_micros: number | null): replay_clock_stats;
   /** Configure one candlestick/bar series as the chart's exclusive non-time price transform. */

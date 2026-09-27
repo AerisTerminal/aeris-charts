@@ -22,6 +22,7 @@ const MIN_TIMESTAMP_MICROS: i64 = -62_167_219_200 * MICROS_PER_SECOND;
 const MAX_TIMESTAMP_MICROS: i64 = 253_402_300_799 * MICROS_PER_SECOND + 999_999;
 pub const MAX_TRADE_STREAMS: usize = 64;
 pub const MAX_TRADE_STREAM_KEY_BYTES: usize = 128;
+pub const MAX_TIME_AND_SALES_ROWS: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TradeStudyKind {
@@ -43,7 +44,7 @@ pub struct TradeStudyOptions {
     pub anchor_timestamp_micros: Option<i64>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TradeStreamStats {
     pub revision: u64,
     pub stream_capacity_bytes: usize,
@@ -66,9 +67,12 @@ pub struct ReplayClockStats {
     pub previous_clock_micros: Option<i64>,
     pub clock_micros: Option<i64>,
     pub stream_count: usize,
+    pub depth_stream_count: usize,
     pub visible_trades: usize,
     pub rebuilt_trades: usize,
     pub incremental_trades: usize,
+    pub visible_depth_events: usize,
+    pub rebuilt_depth_events: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,13 +101,41 @@ pub(crate) struct TradeBubbleDependent {
 
 /// Which side initiated a trade. Unknown trades remain in total volume but never manufacture bid
 /// or ask volume.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AggressorSide {
     Buy,
     Sell,
     #[default]
     Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct TimeAndSalesOptions {
+    pub minimum_volume: f64,
+    pub side: Option<AggressorSide>,
+    pub max_rows: usize,
+}
+
+impl Default for TimeAndSalesOptions {
+    fn default() -> Self {
+        Self {
+            minimum_volume: 0.0,
+            side: None,
+            max_rows: 500,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct TimeAndSalesRow {
+    pub timestamp_micros: i64,
+    pub price: f64,
+    pub volume: f64,
+    pub aggressor: AggressorSide,
+    pub trade_id: Option<u64>,
+    pub conditions: u32,
 }
 
 /// One raw trade event. `timestamp_micros` is signed Unix time at microsecond resolution. The
@@ -509,6 +541,7 @@ pub enum FootprintError {
     InvalidAggregation,
     InvalidImbalance,
     InvalidVisualOptions,
+    InvalidTimeAndSalesOptions,
     InvalidTimestamp { index: usize },
     InvalidPrice { index: usize },
     OffGridPrice { index: usize },
@@ -521,6 +554,7 @@ pub enum FootprintError {
     UnsupportedTradeBarSeries(SeriesId),
     UnknownSeries(SeriesId),
     StaleSeries(SeriesId),
+    Depth(crate::DepthError),
 }
 
 impl core::fmt::Display for FootprintError {
@@ -534,6 +568,7 @@ impl core::fmt::Display for FootprintError {
             Self::InvalidAggregation => write!(f, "footprint bar aggregation is invalid"),
             Self::InvalidImbalance => write!(f, "footprint imbalance options are invalid"),
             Self::InvalidVisualOptions => write!(f, "footprint visual options are invalid"),
+            Self::InvalidTimeAndSalesOptions => write!(f, "time-and-sales options are invalid"),
             Self::InvalidTimestamp { index } => write!(f, "trade {index} has an invalid timestamp"),
             Self::InvalidPrice { index } => write!(f, "trade {index} has an invalid price"),
             Self::OffGridPrice { index } => {
@@ -562,6 +597,7 @@ impl core::fmt::Display for FootprintError {
             ),
             Self::UnknownSeries(id) => write!(f, "unknown series id {id}"),
             Self::StaleSeries(id) => write!(f, "stale series id {id}"),
+            Self::Depth(error) => write!(f, "depth replay failed: {error}"),
         }
     }
 }
@@ -572,6 +608,7 @@ impl std::error::Error for FootprintError {}
 struct StoredTrade {
     event: FootprintTrade,
     input_order: u64,
+    classified_side: AggressorSide,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -720,8 +757,8 @@ impl FootprintAggregator {
         let visible_trades = self.visible_trade_count();
         if previous_clock_micros.is_some() && visible_trades >= previously_visible {
             for index in previously_visible..visible_trades {
-                let trade = self.trades[index].event.clone();
-                self.apply_trade(&trade);
+                let stored = self.trades[index].clone();
+                self.apply_classified_trade(&stored.event, stored.classified_side);
                 self.maybe_record_replay_checkpoint(index + 1);
             }
             let incremental_trades = visible_trades - previously_visible;
@@ -807,7 +844,7 @@ impl FootprintAggregator {
                 seed.active_session = Some(trade.session_id);
                 seed.session_delta = 0.0;
             }
-            let side = classify_aggressor(trade, seed.last_trade_price, seed.last_classified_side);
+            let side = stored.classified_side;
             seed.last_trade_price = Some(trade.price);
             if side != AggressorSide::Unknown {
                 seed.last_classified_side = side;
@@ -840,6 +877,7 @@ impl FootprintAggregator {
             .map(|(index, event)| StoredTrade {
                 event,
                 input_order: base.saturating_add(index as u64),
+                classified_side: AggressorSide::Unknown,
             })
             .collect::<Vec<_>>();
         trades.sort_by_key(trade_order_key);
@@ -874,16 +912,19 @@ impl FootprintAggregator {
         }
         if self.batch_is_tip(&input) {
             for event in input {
+                let classified_side =
+                    classify_aggressor(&event, self.last_trade_price, self.last_classified_side);
                 let stored = StoredTrade {
                     event,
                     input_order: self.next_input_order,
+                    classified_side,
                 };
                 self.next_input_order = self.next_input_order.saturating_add(1);
                 if self
                     .replay_clock_micros
                     .is_none_or(|clock| stored.event.timestamp_micros <= clock)
                 {
-                    self.apply_trade(&stored.event);
+                    self.apply_classified_trade(&stored.event, stored.classified_side);
                     self.maybe_record_replay_checkpoint(self.trades.len() + 1);
                 }
                 if let Some(trade_id) = stored.event.trade_id {
@@ -903,11 +944,16 @@ impl FootprintAggregator {
                 .and_then(|trade_id| self.trade_ids.get(&trade_id).copied())
             {
                 let input_order = self.trades[position].input_order;
-                self.trades[position] = StoredTrade { event, input_order };
+                self.trades[position] = StoredTrade {
+                    event,
+                    input_order,
+                    classified_side: AggressorSide::Unknown,
+                };
             } else {
                 self.trades.push(StoredTrade {
                     event,
                     input_order: next_input_order,
+                    classified_side: AggressorSide::Unknown,
                 });
                 next_input_order = next_input_order.saturating_add(1);
             }
@@ -977,7 +1023,9 @@ impl FootprintAggregator {
             // The event has no heap-owned fields. Copying one value avoids retaining a second tape
             // while mutable derived state is rebuilt.
             let trade = self.trades[index].event.clone();
-            self.apply_trade(&trade);
+            let side = classify_aggressor(&trade, self.last_trade_price, self.last_classified_side);
+            self.trades[index].classified_side = side;
+            self.apply_classified_trade(&trade, side);
             self.maybe_record_replay_checkpoint(index + 1);
         }
         self.work.historical_rebuilds += 1;
@@ -1037,8 +1085,8 @@ impl FootprintAggregator {
             0
         };
         for index in start..visible_trades {
-            let trade = self.trades[index].event.clone();
-            self.apply_trade(&trade);
+            let stored = self.trades[index].clone();
+            self.apply_classified_trade(&stored.event, stored.classified_side);
             self.maybe_record_replay_checkpoint(index + 1);
         }
         let rebuilt_trades = visible_trades.saturating_sub(start);
@@ -1062,12 +1110,11 @@ impl FootprintAggregator {
         }
     }
 
-    fn apply_trade(&mut self, trade: &FootprintTrade) {
+    fn apply_classified_trade(&mut self, trade: &FootprintTrade, side: AggressorSide) {
         if self.active_session != Some(trade.session_id) {
             self.active_session = Some(trade.session_id);
             self.session_delta = 0.0;
         }
-        let side = classify_aggressor(trade, self.last_trade_price, self.last_classified_side);
         self.last_trade_price = Some(trade.price);
         if side != AggressorSide::Unknown {
             self.last_classified_side = side;
@@ -1230,6 +1277,7 @@ impl ChartEngine {
                 previous_clock_micros,
                 clock_micros,
                 stream_count: self.trade_streams.len(),
+                depth_stream_count: self.depth_streams.len(),
                 ..ReplayClockStats::default()
             });
         }
@@ -1240,6 +1288,7 @@ impl ChartEngine {
             previous_clock_micros,
             clock_micros,
             stream_count: stream_ids.len(),
+            depth_stream_count: self.depth_streams.len(),
             ..ReplayClockStats::default()
         };
         for stream_id in &stream_ids {
@@ -1258,6 +1307,19 @@ impl ChartEngine {
             self.refresh_trade_dependents(stream_id)?;
             self.refresh_footprint_series_from_stream(stream_id, None)?;
         }
+        for book in self.depth_streams.values_mut() {
+            let depth = book
+                .set_replay_clock_micros(clock_micros)
+                .map_err(FootprintError::Depth)?;
+            stats.visible_depth_events = stats
+                .visible_depth_events
+                .saturating_add(depth.visible_events);
+            stats.rebuilt_depth_events = stats
+                .rebuilt_depth_events
+                .saturating_add(depth.rebuilt_events);
+        }
+        self.refresh_all_depth_heatmaps()
+            .map_err(FootprintError::Depth)?;
         self.replay_clock_micros = clock_micros;
         self.refresh_synthetic_replay_projections()
             .map_err(|_| FootprintError::InvalidAggregation)?;
@@ -1371,6 +1433,42 @@ impl ChartEngine {
                     .map(|dependent| dependent.incremental_updates)
                     .sum::<u64>(),
         })
+    }
+
+    /// Return a bounded, newest-first time-and-sales projection of the canonical classified tape.
+    pub fn time_and_sales(
+        &self,
+        stream_id: u64,
+        options: TimeAndSalesOptions,
+    ) -> Result<Vec<TimeAndSalesRow>, FootprintError> {
+        if !options.minimum_volume.is_finite()
+            || options.minimum_volume < 0.0
+            || options.max_rows > MAX_TIME_AND_SALES_ROWS
+        {
+            return Err(FootprintError::InvalidTimeAndSalesOptions);
+        }
+        let stream = self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+        Ok(stream.trades[..stream.visible_trade_count()]
+            .iter()
+            .rev()
+            .filter(|stored| {
+                stored.event.volume >= options.minimum_volume
+                    && options
+                        .side
+                        .is_none_or(|side| side == stored.classified_side)
+            })
+            .take(options.max_rows)
+            .map(|stored| TimeAndSalesRow {
+                timestamp_micros: stored.event.timestamp_micros,
+                price: stored.event.price,
+                volume: stored.event.volume,
+                aggressor: stored.classified_side,
+                trade_id: stored.event.trade_id,
+                conditions: stored.event.conditions,
+            })
+            .collect())
     }
 
     pub fn remove_trade_stream(&mut self, stream_id: u64) -> Result<(), FootprintError> {
@@ -3574,6 +3672,51 @@ mod tests {
             .unwrap();
         assert!(chart.trade_stream_revision(stream).unwrap() > revision);
         assert_eq!(chart.footprint_bars(0), chart.footprint_bars(second));
+    }
+
+    #[test]
+    fn time_and_sales_is_bounded_filtered_and_uses_canonical_classification() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let stream = chart
+            .add_trade_stream("tape", FootprintAggregationOptions::default())
+            .unwrap();
+        let mut inferred_buy = trade(2, 101.0, 3.0, AggressorSide::Unknown);
+        inferred_buy.bid = Some(100.0);
+        inferred_buy.ask = Some(101.0);
+        chart
+            .set_trade_stream_trades(
+                stream,
+                vec![
+                    trade(1, 100.0, 1.0, AggressorSide::Sell),
+                    inferred_buy,
+                    trade(3, 102.0, 5.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        let rows = chart
+            .time_and_sales(
+                stream,
+                TimeAndSalesOptions {
+                    minimum_volume: 2.0,
+                    side: Some(AggressorSide::Buy),
+                    max_rows: 2,
+                },
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].timestamp_micros, 3);
+        assert_eq!(rows[1].timestamp_micros, 2);
+        assert_eq!(rows[1].aggressor, AggressorSide::Buy);
+        assert_eq!(
+            chart.time_and_sales(
+                stream,
+                TimeAndSalesOptions {
+                    max_rows: MAX_TIME_AND_SALES_ROWS + 1,
+                    ..TimeAndSalesOptions::default()
+                }
+            ),
+            Err(FootprintError::InvalidTimeAndSalesOptions)
+        );
     }
 
     #[test]

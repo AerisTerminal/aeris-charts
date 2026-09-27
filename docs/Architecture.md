@@ -384,9 +384,30 @@ through the same sidecar. Trading executions, host events, and round-trip geomet
 timestamp anchors through the same index helper. The sidecar is retired when the last live
 non-time footprint, candle/bar, or study dependent leaves the chart,
 preventing stale sequence labels from affecting later time series.
+
+Level-two depth uses the parallel chart-side projection boundary documented in `Depth.md`.
+`ChartEngine::add_depth_stream` owns one keyed, bounded book per host instrument publication. A
+validated full snapshot establishes sequence and tick-grid identity; incremental updates are
+atomic, and a gap fences all later deltas behind a typed resync request until the host supplies a
+new snapshot. The current bid/ask maps, optional per-level order counts, time-bucketed history,
+host-detected microstructure events, replay tape, and checkpoints have explicit independent caps.
+DOM ladder rows, cumulative curves, imbalance, and time-and-sales are disposable read models over
+the canonical depth or classified trade stream, never additional mutable books or tapes.
+
+Liquidity heatmaps retain immutable 32-column RGBA chunks plus one replaceable one-column live
+edge. Fixed absolute bucket alignment lets history eviction rebuild only affected edge chunks while
+stable image keys preserve executor caches. The ordered frame emits the same `Prim::Image` contract
+to Canvas2D, WebGPU, native, and GPUI, followed by ordinary trade/series geometry and explicitly
+bound, capped microstructure markers. Hosts own provider decoding, recovery, event detection,
+tooltips/panels, and the Terminal's authoritative market book; this engine state is a bounded chart
+projection of those publications. The typed WASM boundary uses parallel numeric arrays, split
+high/low words for exact `u64` sequences, an optional aligned label vector, and decimal strings for
+exact sequence/trade identifiers returned to JavaScript.
+
 The chart owns one host-supplied replay clock in microseconds and applies it to every canonical
-trade stream and the ordinary time-domain data layer. Source rows and future events remain retained
-once while series queries, studies, footprint cells, markers, sparse stepped releases, trading
+trade stream, depth projection, and the ordinary time-domain data layer. Source rows and future
+events remain retained once while series queries, studies, footprint cells, heatmap buckets,
+depth markers, sparse stepped releases, trading
 executions, round trips, and host-event geometry expose only the eligible prefix. A host window
 crossing the clock is clipped; a wholly future window is omitted. The ordered frame draws one
 engine-owned dashed replay cursor in every pane, so Canvas2D, WebGPU, native, and GPUI executors do
@@ -398,7 +419,9 @@ Moving the clock forward applies newly revealed canonical events through the ord
 Backward trade seeks restore the nearest retained aggregation checkpoint, replay only the reported
 suffix, and produce the same bars as a fresh load to that clock. Checkpoints are recorded every
 1,024 eligible trades and capped at 64 per stream; an older seek starts from the retained tape's
-rebuild seed. Retention reconstructs checkpoints for the surviving suffix. Ingest wholly beyond
+rebuild seed. Depth uses the same 1,024-event interval and 64-checkpoint cap, restores the nearest
+book snapshot, and replays only the reported suffix; its ladder, studies, heatmap, and marker
+queries all read the replay projection. Retention reconstructs checkpoints for the surviving suffix. Ingest wholly beyond
 the clock changes only source truth and performs no dependent work. The existing columnar
 `update_typed` path is the bulk ordered bar boundary, while trade batches cross as parallel typed
 arrays and update all stream dependents once. The release `perf_gate` advances a shared

@@ -18,7 +18,8 @@
 use std::time::Instant;
 
 use aeris_charts_engine::{
-    AggressorSide, ChartEngine, FootprintAggregationOptions, FootprintBarAggregation,
+    AggressorSide, ChartEngine, DepthHeatmapOptions, DepthLevel, DepthOptions, DepthSide,
+    DepthSnapshot, DepthUpdate, FootprintAggregationOptions, FootprintBarAggregation,
     FootprintSeriesOptions, FootprintTrade, SeriesKind,
 };
 use aeris_charts_render_gpui::{GpuiChartRenderer, PreparedAerisFrame};
@@ -158,6 +159,98 @@ fn build_dense_footprint_fixture() -> ChartEngine {
     engine
 }
 
+fn build_dense_depth_fixture() -> ChartEngine {
+    const BUCKETS: usize = 512;
+    const LEVELS: usize = 64;
+    let mut engine = ChartEngine::new(CSS_W, CSS_H, DPR);
+    let times = (0..=BUCKETS).map(|index| index as f64).collect::<Vec<_>>();
+    let close = vec![100.0; times.len()];
+    engine
+        .set_series_data(0, &times, &close, &close, &close, &close)
+        .expect("depth time axis is valid");
+    let stream = engine
+        .add_depth_stream(
+            "GPUI:DEPTH",
+            DepthOptions {
+                tick_size: 0.25,
+                max_levels_per_side: 128,
+                history_bucket_micros: 1_000_000,
+                max_history_buckets: BUCKETS,
+                max_history_cells: BUCKETS * LEVELS * 2,
+                max_event_markers: 2_048,
+            },
+        )
+        .expect("depth options are valid");
+    let bids = (0..LEVELS)
+        .map(|level| DepthLevel {
+            price: 100.0 - level as f64 * 0.25,
+            size: (level + 1) as f64,
+            order_count: Some((level + 1) as u32),
+        })
+        .collect();
+    let asks = (0..LEVELS)
+        .map(|level| DepthLevel {
+            price: 100.25 + level as f64 * 0.25,
+            size: (level + 1) as f64,
+            order_count: Some((level + 1) as u32),
+        })
+        .collect();
+    engine
+        .set_depth_snapshot(
+            stream,
+            DepthSnapshot {
+                timestamp_micros: 0,
+                sequence: 1,
+                bids,
+                asks,
+            },
+        )
+        .expect("depth snapshot is valid");
+    let updates = (2..=BUCKETS as u64 + 1)
+        .map(|sequence| DepthUpdate {
+            timestamp_micros: (sequence - 1) as i64 * 1_000_000,
+            sequence,
+            previous_sequence: sequence - 1,
+            side: if sequence.is_multiple_of(2) {
+                DepthSide::Bid
+            } else {
+                DepthSide::Ask
+            },
+            level: DepthLevel {
+                price: if sequence.is_multiple_of(2) {
+                    100.0
+                } else {
+                    100.25
+                },
+                size: (sequence % 64 + 1) as f64,
+                order_count: Some((sequence % 16 + 1) as u32),
+            },
+        })
+        .collect::<Vec<_>>();
+    engine
+        .update_depth_batch(stream, &updates)
+        .expect("depth history is valid");
+    engine
+        .add_depth_heatmap(
+            stream,
+            DepthHeatmapOptions {
+                price_min: 84.25,
+                price_max: 116.0,
+                maximum_size: 128.0,
+                ..DepthHeatmapOptions::default()
+            },
+        )
+        .expect("depth heatmap is valid");
+    engine.css_width = CSS_W;
+    engine.css_height = CSS_H;
+    engine.dpr = DPR;
+    let content_h = (CSS_H - engine.time_axis_height()).max(1.0);
+    engine.layout_panes(content_h);
+    engine.time_scale.set_width(CSS_W);
+    engine.fit_content();
+    engine
+}
+
 fn percentile(sorted: &[u64], p: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
@@ -276,6 +369,42 @@ fn main() {
         "dense footprint  {:>7} prims  {:>6} text  p50 {:>7.3} ms  p95 {:>7.3} ms  p99 {:>7.3} ms  {:>6}",
         first.prims,
         first.text_runs,
+        percentile(&samples, 0.50),
+        percentile(&samples, 0.95),
+        p99,
+        if pass { "PASS" } else { "FAIL" }
+    );
+
+    let mut depth = build_dense_depth_fixture();
+    let frame = depth.build_frame();
+    let prepared = PreparedAerisFrame::new(&frame);
+    let mut renderer = GpuiChartRenderer::new();
+    let first = renderer
+        .plan_frame(&prepared, DPR as f32)
+        .expect("dense depth frame plans");
+    assert!(first.image_runs > 0, "depth heatmap must lower to images");
+    for _ in 0..10 {
+        renderer.plan_frame(&prepared, DPR as f32).unwrap();
+    }
+    let mut samples = Vec::with_capacity(iters);
+    for _ in 0..iters {
+        let started = Instant::now();
+        let metrics = renderer.plan_frame(&prepared, DPR as f32).unwrap();
+        samples.push(started.elapsed().as_nanos() as u64);
+        assert_eq!(metrics.prims, first.prims, "depth prim count drifted");
+        assert_eq!(
+            metrics.image_runs, first.image_runs,
+            "depth image count drifted"
+        );
+    }
+    samples.sort_unstable();
+    let p99 = percentile(&samples, 0.99);
+    let pass = p99 <= P99_BUDGET_MS;
+    all_pass &= pass;
+    println!(
+        "dense depth      {:>7} prims  {:>6} images p50 {:>7.3} ms  p95 {:>7.3} ms  p99 {:>7.3} ms  {:>6}",
+        first.prims,
+        first.image_runs,
         percentile(&samples, 0.50),
         percentile(&samples, 0.95),
         p99,

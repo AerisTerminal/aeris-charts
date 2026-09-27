@@ -42,6 +42,7 @@ pub(crate) mod alert_geometry;
 mod axis;
 pub(crate) mod conflation;
 mod crosshair;
+mod depth_geometry;
 mod drawings;
 mod feature_geometry;
 mod footprint_geometry;
@@ -1488,6 +1489,7 @@ impl ChartEngine {
                         vpr,
                         &mut cache.under.prims,
                     );
+                    self.build_depth_heatmap_frame(pi, hpr, vpr, &mut cache.under.prims);
                 }
                 self.append_general_grid_frame(pi, hpr, vpr, &mut cache.under.prims);
                 self.build_native_image_watermark_frame(pi, hpr, vpr, &mut cache.under.prims);
@@ -1717,6 +1719,14 @@ impl ChartEngine {
                             _ => {}
                         }
                     }
+                    self.build_depth_event_frame(
+                        pi,
+                        from,
+                        to,
+                        hpr,
+                        vpr,
+                        &mut cache.top_layer.prims,
+                    );
                     self.build_price_lines_frame(
                         pi,
                         &mut cache.chrome.prims,

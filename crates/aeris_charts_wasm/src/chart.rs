@@ -16,6 +16,7 @@
 //! series maps its data onto merged indices; a series absent at an index is whitespace there.
 
 mod custom_series;
+mod depth;
 mod feature_series;
 mod footprint;
 mod general_charts;
@@ -1529,6 +1530,146 @@ impl AerisChart {
         self.inner.borrow_mut().add_trade_stream(key, options_json)
     }
 
+    pub fn add_depth_stream(&mut self, key: &str, options_json: &str) -> u32 {
+        self.inner.borrow_mut().add_depth_stream(key, options_json)
+    }
+
+    pub fn depth_stream_id(&self, key: &str) -> u32 {
+        self.inner.borrow().depth_stream_id(key)
+    }
+
+    pub fn remove_depth_stream(&mut self, stream_id: u32) -> bool {
+        self.inner.borrow_mut().remove_depth_stream(stream_id)
+    }
+
+    pub fn add_depth_heatmap(&mut self, stream_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_depth_heatmap(stream_id, options_json)
+    }
+
+    pub fn remove_depth_heatmap(&mut self, id: u32) -> bool {
+        self.inner.borrow_mut().remove_depth_heatmap(id)
+    }
+
+    pub fn add_depth_event_layer(&mut self, stream_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_depth_event_layer(stream_id, options_json)
+    }
+
+    pub fn remove_depth_event_layer(&mut self, id: u32) -> bool {
+        self.inner.borrow_mut().remove_depth_event_layer(id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_depth_events_typed(
+        &mut self,
+        stream_id: u32,
+        timestamps_micros: &Float64Array,
+        prices: &Float64Array,
+        sizes: &Float64Array,
+        sides: &js_sys::Int8Array,
+        kinds: &js_sys::Uint8Array,
+        labels_json: &str,
+    ) -> String {
+        self.inner.borrow_mut().set_depth_events_typed(
+            stream_id,
+            timestamps_micros,
+            prices,
+            sizes,
+            sides,
+            kinds,
+            labels_json,
+        )
+    }
+
+    pub fn depth_ladder_json(
+        &self,
+        stream_id: u32,
+        levels_per_side: u32,
+        minimum_size: f64,
+        max_distance_ticks: u32,
+    ) -> String {
+        self.inner.borrow().depth_ladder_json(
+            stream_id,
+            levels_per_side,
+            minimum_size,
+            max_distance_ticks,
+        )
+    }
+
+    pub fn depth_study_json(
+        &self,
+        stream_id: u32,
+        levels_per_side: u32,
+        minimum_size: f64,
+        max_distance_ticks: u32,
+    ) -> String {
+        self.inner.borrow().depth_study_json(
+            stream_id,
+            levels_per_side,
+            minimum_size,
+            max_distance_ticks,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_depth_snapshot_typed(
+        &mut self,
+        stream_id: u32,
+        timestamp_micros: f64,
+        sequence_high: u32,
+        sequence_low: u32,
+        bid_prices: &Float64Array,
+        bid_sizes: &Float64Array,
+        bid_order_counts: &js_sys::Uint32Array,
+        ask_prices: &Float64Array,
+        ask_sizes: &Float64Array,
+        ask_order_counts: &js_sys::Uint32Array,
+    ) -> String {
+        self.inner.borrow_mut().set_depth_snapshot_typed(
+            stream_id,
+            timestamp_micros,
+            sequence_high,
+            sequence_low,
+            bid_prices,
+            bid_sizes,
+            bid_order_counts,
+            ask_prices,
+            ask_sizes,
+            ask_order_counts,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_depth_typed(
+        &mut self,
+        stream_id: u32,
+        timestamps_micros: &Float64Array,
+        sequence_high: &js_sys::Uint32Array,
+        sequence_low: &js_sys::Uint32Array,
+        previous_high: &js_sys::Uint32Array,
+        previous_low: &js_sys::Uint32Array,
+        sides: &js_sys::Uint8Array,
+        prices: &Float64Array,
+        sizes: &Float64Array,
+        order_counts: &js_sys::Uint32Array,
+    ) -> String {
+        self.inner.borrow_mut().update_depth_typed(
+            stream_id,
+            timestamps_micros,
+            sequence_high,
+            sequence_low,
+            previous_high,
+            previous_low,
+            sides,
+            prices,
+            sizes,
+            order_counts,
+        )
+    }
+
     pub fn replay_clock_micros(&self) -> f64 {
         self.inner.borrow().replay_clock_micros()
     }
@@ -1583,6 +1724,12 @@ impl AerisChart {
 
     pub fn trade_stream_stats_json(&self, stream_id: u32) -> String {
         self.inner.borrow().trade_stream_stats_json(stream_id)
+    }
+
+    pub fn time_and_sales_json(&self, stream_id: u32, options_json: &str) -> String {
+        self.inner
+            .borrow()
+            .time_and_sales_json(stream_id, options_json)
     }
 
     pub fn trade_stream_replay_clock_micros(&self, stream_id: u32) -> f64 {

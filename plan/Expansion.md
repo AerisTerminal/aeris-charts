@@ -36,7 +36,7 @@ Updated 2026-09-27. Baseline source-confirmed 2026-09-24.
 | B3 | Shared tape and order flow: F2, OF1, OF2, OF11, OF12, PD10 | Footprint, CVD, delta, big-trade bubbles | **Complete** |
 | B4 | Study inputs and core indicators: F4, OF9, CT1, CT2, CT6, I1 | Professional indicator set, VWAP bands, Heikin Ashi, comparisons | **Complete** |
 | B5 | Non-time bars and replay: F1, OF14, CT3, CT4, PD2 | Tick/volume/range charts, session replay, trade review playback | **Complete** |
-| B6 | Depth: F3, OF15–OF18, PD8, PD9 | Liquidity heatmap, order-level markers, depth studies | Open |
+| B6 | Depth: F3, OF15–OF18, PD8, PD9 | Liquidity heatmap, order-level markers, depth studies | **Complete** |
 | B7 | Profiles and resampling: F6, OF3–OF8, OF10, CT5 | Session/composite profiles, TPO, anchored VWAP, multi-timeframe studies | Open |
 | B8 | Drawing catalog expansion | Full professional drawing toolset | Open |
 | B9 | Breadth and extension: I2, I3, I4, OF13 | Remaining indicators, custom studies, auction markers | Open |
@@ -361,25 +361,49 @@ clock.
 ### B6 — Depth
 
 **Scope:** F3, OF15, OF16, OF17, OF18, PD8, PD9, PD2 for depth. **Depends on:** B3 and B5.
-**Status:** open.
+**Status:** complete (2026-09-27).
 
-- [ ] **F3** Order-book model: snapshot and incremental level ingest with tick-grid validation,
+- [x] **F3** Order-book model: snapshot and incremental level ingest with tick-grid validation,
       sequence-gap detection with typed resync requests, bounded live book, time-bucketed history
       ring, queries (best bid/ask, size at price, cumulative depth, imbalance), and typed columnar
       WASM ingest.
-- [ ] **PD8** Optional per-level order counts in depth ingest; typed microstructure event markers
+- [x] **PD8** Optional per-level order counts in depth ingest; typed microstructure event markers
       (iceberg refill, pulled liquidity, size cluster, sweep) with caps and LOD collapse. Detection
       stays in the platform.
-- [ ] **OF15 / PD9** Liquidity heatmap with color scaling, thresholds and trades overlaid, lowered to
+- [x] **OF15 / PD9** Liquidity heatmap with color scaling, thresholds and trades overlaid, lowered to
       a texture/image primitive with incremental live-edge column updates on every executor.
-- [ ] **OF16** DOM ladder data model for non-Aeris hosts.
-- [ ] **OF17** Depth studies: book imbalance, cumulative depth curve, minimum-size and
+- [x] **OF16** DOM ladder data model for non-Aeris hosts.
+- [x] **OF17** Depth studies: book imbalance, cumulative depth curve, minimum-size and
       distance-from-touch filters.
-- [ ] **OF18** Time-and-sales view model for non-Aeris hosts.
-- [ ] **PD2** Replay extended to depth checkpoints and heatmap buckets.
-- [ ] `perf_gate` covers depth-update soak, heatmap frame and upload budgets.
-- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
-- [ ] Milestone evidence: screenshots, accessibility review and recorded benchmarks for depth.
+- [x] **OF18** Time-and-sales view model for non-Aeris hosts.
+- [x] **PD2** Replay extended to depth checkpoints and heatmap buckets.
+- [x] `perf_gate` covers depth-update soak, heatmap frame and upload budgets.
+- [x] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [x] Milestone evidence: screenshots, accessibility review and recorded benchmarks for depth.
+
+Implementation evidence: one keyed `DepthBook` owns fixed-grid bid/ask levels, exact provider
+sequence continuity, optional order counts, bounded near-touch retention, a bucket/cell-capped
+history ring, typed resync fencing, host event markers, replay tape and checkpoints. Ladder,
+cumulative-depth and imbalance queries derive from that owner; time and sales derives newest-first
+from the existing classified trade tape. The browser boundary ingests snapshots and batches through
+parallel typed arrays with split `u64` words and returns exact identities as decimal strings.
+
+The heatmap applies thresholds and color scaling before upload, packs finalized history into stable
+absolute 32-column images, and replaces only its one-column live edge on book updates. The shared
+underlay image and top-layer event primitives execute unchanged through Canvas2D, WebGPU, native,
+and GPUI; ordinary trade series remain above the heatmap. Replay restores the nearest capped
+1,024-event checkpoint, masks future ladder/study/heatmap/marker state without discarding live
+input, and reports suffix work.
+
+The final release Target L ran two 1.2-million-update passes: the worst 100,000-row batch was
+10.05 ms, frame construction was 0.34 ms, the 512-bucket view used 17 images, its live-edge payload
+was 512 bytes, and retained depth memory stayed flat at 66.03 MiB. The GPUI release adapter gate
+lowered the same dense heatmap's 17 image runs at 0.053 ms p99 against 2 ms. The focused browser
+fixture captured the WebGPU heatmap/marker view, and the unified accessibility contract remained
+green because depth adds no DOM focus target or live announcement. `docs/Depth.md` records the
+reproducible milestone details. The completed gate passed Rust fmt/clippy/tests, WASM lint,
+package build/type/API/namespace/release/pack checks, GPUI parity/replay, 302 Chromium tests with
+three intentional machine-only skips, and both release performance gates.
 
 **Exit:** the F3, PD8 and PD9 exit criteria pass: deterministic book replay, gap fixtures request
 resync, flat memory under soak, and the heatmap holds the target refresh rate on GPUI within parity
