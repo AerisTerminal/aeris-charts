@@ -99,9 +99,9 @@
 #general_workspace .general-toolbar button {
   min-height: 36px;
   padding: 0 12px;
-  border: var(--border-width) solid var(--input-border);
+  border: var(--border-width) solid var(--border-secondary);
   border-radius: var(--radius-default);
-  background: var(--input-fill);
+  background: var(--surface-secondary);
   color: var(--text-primary);
 }
 
@@ -109,7 +109,7 @@
 
 #general_workspace .general-toolbar button[aria-pressed="true"] {
   color: var(--primary);
-  border-color: color-mix(in srgb, var(--primary) 35%, var(--input-border));
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border-secondary));
   background: color-mix(in srgb, var(--primary) 10%, var(--surface-secondary));
 }
 

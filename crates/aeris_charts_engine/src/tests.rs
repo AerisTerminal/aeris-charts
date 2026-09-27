@@ -1130,7 +1130,7 @@ fn reset_style_to_defaults_preserves_runtime_view_and_semantic_state() {
         aeris_charts_core::style::LIGHT_SURFACE_CSS
     );
     assert_eq!(options.layout.font_size, 12.0);
-    assert!(options.grid.vert_lines.visible);
+    assert!(!options.grid.vert_lines.visible);
     assert_eq!(
         options.grid.vert_lines.color,
         aeris_charts_core::style::LIGHT_BORDER_CSS
@@ -3745,34 +3745,8 @@ fn grid_line_style_and_color_flow_from_options() {
     chart.time_scale.set_width(760.0);
     chart.fit_content();
 
-    // Canonical default: both grid families are visible and dashed.
+    // Canonical default: both grid families retain dashed styling but ship disabled.
     use aeris_charts_render::draw_list::Prim;
-    let mut frame = ChartFrame::default();
-    chart.build_frame_into(&mut frame);
-    let grid_lines: Vec<_> = frame.panes[0]
-        .under
-        .iter()
-        .filter(|p| matches!(p, Prim::VLine { .. } | Prim::HLine { .. }))
-        .collect();
-    assert!(!grid_lines.is_empty());
-    assert!(grid_lines.iter().all(|p| matches!(
-        p,
-        Prim::VLine {
-            style: LineStyle::Dashed,
-            ..
-        } | Prim::HLine {
-            style: LineStyle::Dashed,
-            ..
-        }
-    )));
-
-    // A host can hide the grid without changing its canonical style/color state.
-    chart
-        .options
-        .apply_str(
-            r##"{"grid": { "vertLines": { "visible": false }, "horzLines": { "visible": false } }}"##,
-        )
-        .unwrap();
     let mut frame = ChartFrame::default();
     chart.build_frame_into(&mut frame);
     let grid_lines: Vec<_> = frame.panes[0]

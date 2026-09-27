@@ -4061,7 +4061,7 @@ mod tests {
         let style = chart.trading_style();
         for (price, expected) in [
             (103.0, style.sell),
-            (100.5, style.working_order),
+            (100.5, style.buy),
             (101.5, style.sell),
             (99.0, style.sell),
             (104.0, style.take_profit),

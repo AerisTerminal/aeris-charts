@@ -8,146 +8,196 @@
  *   Light: default, or data-theme="light" on a root element.
  *   Dark:  class="dark" or data-theme="dark" on a root element.
  *
- * Radius has four values: small (4px), default (8px), medium (12px), and large (999px).
- *
- * Translucent eight-digit hex tokens stay in CSS for host chrome. Shared radii and the
- * opaque sRGB equivalents of chart surfaces, axis text, axis borders, and market
- * colors live in aeris_charts_core/style_tokens.json so every backend matches.
+ * The complete brand token contract stays here even when a token is currently consumed only by
+ * Aeris Terminal or the website. The opaque chart projection lives in
+ * aeris_charts_core/style_tokens.json so every rendering backend matches the CSS surface.
  */
 
 :root,
 [data-theme="light"] {
   color-scheme: light;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif;
 
+  /* Surfaces */
   --surface: #ffffff;
   --surface-secondary: #fafafa;
+  --surface-subtle: #fafafa;
+  --surface-raised: #f0f0f0;
+  --surface-overlay: color-mix(in srgb, #000000 50%, transparent);
+  --surface-inverse: #222222;
 
-  --border: #e7e9e6;
+  /* Borders */
+  --border: #e5e5e5;
   --border-secondary: var(--border);
+  --border-subtle: #f0f0f0;
+  --border-softer: #f5f5f5;
+  --border-strong: #c2c2c2;
+  --border-inverse: #222222;
   --border-width: 0.5px;
-  --input-fill: var(--surface-secondary);
-  --input-border: var(--border-secondary);
 
-  --text-primary: #333333;
-  --text-secondary: #7B7B7B;
-  --text-muted: #D1D1D1;
-  --text-bullish: #089981;
-  --text-bearish: #f7525f;
+  /* Text */
+  --text-primary: #222222;
+  --text-default: #404040;
+  --text-secondary: #646465;
+  --text-muted: #c2c2c2;
+  --text-positive: var(--positive);
+  --text-negative: var(--negative);
+  --text-danger: var(--danger);
+  --text-warning: #ff6900;
+  /* Text on interactive items (buttons, tabs, links). Keep these values in
+     step with --icon / --icon-active: normal text = normal icon colour,
+     hover/active text = active icon colour. They are separate tokens on
+     purpose, never point one at the other. */
   --text-interactive: #646465;
   --text-hover: #404040;
   --text-active: #404040;
 
+  /* Interaction states — hover / selected fill, pressed fill, disabled fill. */
   --hover-bg: #f0f0f0;
-  --active-bg: #f0f0f0;
+  --active-bg: #e5e5e5;
+  --disabled-bg: #e5e5e5;
 
+  /* Icons — normal and hovered/pressed/selected */
   --icon: #646465;
   --icon-active: #404040;
 
-  --primary: #168ef7;
-  --primary-foreground: #fff;
-  --primary-hover: var(--primary);
-  --danger: #fb3748;
+  /* Status — gains / losses, success / failure. Shared with the main platform. */
+  --positive: #089981;
+  --positive-subtle: #dbfce7;
+  --negative: #f7525f;
+  --negative-subtle: #ffe2e2;
+  --warning: #ff6900;
+  --warning-subtle: #ffedd4;
+  --indigo: #615fff;
+  --indigo-subtle: #e0e7ff;
+  --purple: #ad46ff;
+  --purple-subtle: #f3e8ff;
+
+  /* Actions */
+  --primary: #0091ff;
+  --primary-hover: #0077fa;
+  --primary-active: #0050b2;
+  --primary-disabled: #b7d9f8;
+  --primary-disabled-foreground: #5eb0ef;
+  --primary-ring: #cee7fe;
+  --primary-subtle: #e1f0ff;
+  --primary-foreground: #ffffff;
+  --danger: #f7525f;
+  --danger-disabled: #ffc9c9;
+  --danger-disabled-foreground: #ffa2a2;
+  --danger-ring: #ffc9c9;
   --danger-foreground: #ffffff;
 
+  /* Buttons — neutral default button */
   --button-fill: #333333;
+  --button-fill-hover: #404040;
+  --button-fill-active: #222222;
+  --button-fill-foreground: #ffffff;
+  --button-fill-subtle: #f5f5f5;
 
-  --ring: #14141433;
+  /* Focus */
+  --ring: color-mix(in srgb, #c2c2c2 50%, transparent);
 
+  /* Radius */
   --radius-default: 8px;
   --radius-medium: 12px;
   --radius-small: 4px;
   --radius-large: 999px;
+  --radius-button: 6px;
 
+  /* Shadows */
+  --shadow-1: 0 0 1px 0 color-mix(in srgb, #000000 20%, transparent), 0 1px 2px 0 color-mix(in srgb, #000000 5%, transparent), 0 1px 1px 0 color-mix(in srgb, #000000 1%, transparent);
+  --shadow-2: 0 1px 6px 0 color-mix(in srgb, #000000 10%, transparent);
+  --shadow-3: 0 2.75px 5.5px 0 color-mix(in srgb, #000000 10%, transparent);
+  --shadow-dialog: 0 4px 6px -4px color-mix(in srgb, #101828 10%, transparent), 0 10px 15px -3px color-mix(in srgb, #000000 10%, transparent);
+
+  /* Chart */
   --bullish: #089981;
   --bearish: #f7525f;
-  --warning: #f59e0a;
-  --overlay: oklch(0 0 0 / 50%);
-
-  --fancy-shadow-neutral: 0 1px 2px 0 #1b1c1d7a, 0 0 0 1px #242628;
-  --fancy-shadow-primary: 0 1px 2px 0 #0e121b3d, 0 0 0 1px var(--primary);
-  --fancy-shadow-destructive: 0 1px 2px 0 #0e121b3d, 0 0 0 1px var(--danger);
-  --fancy-shadow-basic: 0 1px 3px 0 #0e121b1f, 0 0 0 1px #ebebeb;
-
-  --background: var(--surface);
-  --foreground: var(--text-primary);
-  --card: var(--surface);
-  --card-foreground: var(--text-primary);
-  --muted: var(--surface-secondary);
-  --muted-foreground: var(--text-secondary);
-  --disabled-foreground: var(--text-muted);
-  --accent: var(--hover-bg);
-  --muted-border: var(--border-secondary);
-  --input: var(--input-fill);
-  --positive: var(--bullish);
-  --negative: var(--bearish);
-  --destructive: var(--danger);
-  --radius-sm: var(--radius-small);
-  --radius-df: var(--radius-default);
-  --radius-lg: var(--radius-large);
 }
 
 .dark,
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --surface: #141414;
-  --surface-secondary: #181818;
+  /* Surfaces */
+  --surface: #1f1f1f;
+  --surface-secondary: #222222;
+  --surface-subtle: #2b2b2b;
+  --surface-raised: #333333;
+  --surface-overlay: color-mix(in srgb, #000000 60%, transparent);
+  --surface-inverse: #ffffff;
 
-  --border: #f0f0f014;
+  /* Borders */
+  --border: #333333;
   --border-secondary: var(--border);
+  --border-subtle: #333333;
+  --border-softer: #2b2b2b;
+  --border-strong: #404040;
+  --border-inverse: #ffffff;
   --border-width: 0.5px;
-  --input-fill: var(--surface-secondary);
-  --input-border: var(--border-secondary);
 
-  --text-primary: #f0f0f0;
-  --text-secondary: #AEAEB2;
-  --text-muted: #f0f0f05c;
-  --text-bullish: #089981;
-  --text-bearish: #f7525f;
+  /* Text */
+  --text-primary: #f5f5f5;
+  --text-default: #f0f0f0;
+  --text-secondary: #c2c2c2;
+  --text-muted: #808080;
+  --text-positive: var(--positive);
+  --text-negative: var(--negative);
+  --text-danger: #ffa2a2;
+  --text-warning: #ffb86a;
   --text-interactive: #c2c2c2;
   --text-hover: #f0f0f0;
   --text-active: #f0f0f0;
 
-  --hover-bg: #f0f0f00d;
-  --active-bg: #f0f0f024;
+  /* Interaction states */
+  --hover-bg: #333333;
+  --active-bg: #404040;
+  --disabled-bg: #404040;
 
+  /* Icons */
   --icon: #c2c2c2;
   --icon-active: #f0f0f0;
 
-  --primary: #168ef7;
-  --primary-foreground: #fff;
-  --primary-hover: var(--primary);
-  --danger: #fb3748;
+  /* Status — gains / losses, success / failure. Shared with the main platform. */
+  --positive: #089981;
+  --positive-subtle: #0d542b;
+  --negative: #f7525f;
+  --negative-subtle: #460809;
+  --warning: #ff6900;
+  --warning-subtle: #7e2a0c;
+  --indigo: #615fff;
+  --indigo-subtle: #312c85;
+  --purple: #ad46ff;
+  --purple-subtle: #59168b;
+
+  /* Actions */
+  --primary: #0091ff;
+  --primary-hover: #0077fa;
+  --primary-active: #0050b2;
+  --primary-disabled: #5eb0ef;
+  --primary-disabled-foreground: #b7d9f8;
+  --primary-ring: #5eb0ef;
+  --primary-subtle: #0050b2;
+  --primary-foreground: #ffffff;
+  --danger: #f7525f;
+  --danger-disabled: #9f0712;
+  --danger-disabled-foreground: #ff6467;
+  --danger-ring: #c10007;
   --danger-foreground: #ffffff;
 
-  --button-fill: #EBEBEB;
+  /* Buttons — neutral default button */
+  --button-fill: #f5f5f5;
+  --button-fill-hover: #f0f0f0;
+  --button-fill-active: #e5e5e5;
+  --button-fill-foreground: #404040;
+  --button-fill-subtle: #222222;
 
-  --ring: #f0f0f026;
+  /* Focus */
+  --ring: color-mix(in srgb, #404040 50%, transparent);
 
-  --bullish: #7c8db0;
-  --bearish: #98615c;
-  --warning: #f59e0a;
-  --overlay: oklch(0 0 0 / 50%);
-
-  --fancy-shadow-neutral: 0 1px 2px 0 #00000066, 0 0 0 1px #242628;
-  --fancy-shadow-primary: 0 1px 2px 0 #00000066, 0 0 0 1px var(--primary);
-  --fancy-shadow-destructive: 0 1px 2px 0 #00000066, 0 0 0 1px var(--danger);
-  --fancy-shadow-basic: 0 1px 3px 0 #00000055, 0 0 0 1px #262626;
-
-  --background: var(--surface);
-  --foreground: var(--text-primary);
-  --card: var(--surface);
-  --card-foreground: var(--text-primary);
-  --muted: var(--surface-secondary);
-  --muted-foreground: var(--text-secondary);
-  --disabled-foreground: var(--text-muted);
-  --accent: var(--hover-bg);
-  --muted-border: var(--border-secondary);
-  --input: var(--input-fill);
-  --positive: var(--bullish);
-  --negative: var(--bearish);
-  --destructive: var(--danger);
+  /* Chart */
+  --bullish: #089981;
+  --bearish: #f7525f;
 }
 
 *,
@@ -159,7 +209,7 @@
 html {
   background: var(--surface);
   color: var(--text-primary);
-  font-family: var(--font-sans);
+  font-family: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -174,7 +224,7 @@ body {
 
 body,
 body * {
-  font-family: var(--font-sans) !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif !important;
   font-weight: 400 !important;
 }
 
@@ -254,10 +304,10 @@ input[type="number"] {
 .nc-text-muted { color: var(--text-secondary); }
 .nc-text-disabled { color: var(--text-muted); }
 .nc-text-positive,
-.nc-text-profit { color: var(--bullish); }
+.nc-text-profit { color: var(--text-positive); }
 .nc-text-negative,
-.nc-text-loss { color: var(--bearish); }
-.nc-text-warning { color: var(--warning); }
+.nc-text-loss { color: var(--text-negative); }
+.nc-text-warning { color: var(--text-warning); }
 
 .nc-button {
   display: inline-flex;
@@ -267,7 +317,7 @@ input[type="number"] {
   gap: 6px;
   padding: 0 12px;
   border: var(--border-width) solid transparent;
-  border-radius: var(--radius-default);
+  border-radius: var(--radius-button);
   font-size: 14px;
   line-height: 1;
   text-decoration: none;
@@ -279,13 +329,15 @@ input[type="number"] {
 .nc-button:disabled,
 .nc-button[aria-disabled="true"] {
   color: var(--text-muted);
+  background: var(--disabled-bg);
   cursor: not-allowed;
 }
 
 .nc-button--primary { background: var(--primary); color: var(--primary-foreground); }
 .nc-button--primary:not(:disabled):not([aria-disabled="true"]):hover { background: var(--primary-hover); }
+.nc-button--primary:not(:disabled):not([aria-disabled="true"]):active { background: var(--primary-active); }
 .nc-button--primary:disabled,
-.nc-button--primary[aria-disabled="true"] { color: var(--primary-foreground); opacity: 0.5; }
+.nc-button--primary[aria-disabled="true"] { background: var(--primary-disabled); color: var(--primary-disabled-foreground); }
 .nc-button--outline { background: var(--surface-secondary); border-color: var(--border-secondary); color: var(--text-primary); }
 .nc-button--outline:not(:disabled):not([aria-disabled="true"]):hover,
 .nc-button--outline:not(:disabled):not([aria-disabled="true"])[aria-expanded="true"] { background: var(--hover-bg); }
@@ -296,8 +348,8 @@ input[type="number"] {
 .nc-input {
   min-height: 36px;
   padding: 0 12px;
-  background: var(--input-fill);
-  border: var(--border-width) solid var(--input-border);
+  background: var(--surface-secondary);
+  border: var(--border-width) solid var(--border-secondary);
   border-radius: var(--radius-default);
   color: var(--text-primary);
   outline: none;
@@ -305,7 +357,7 @@ input[type="number"] {
 }
 
 .nc-input::placeholder { color: var(--text-secondary); }
-.nc-input:disabled { color: var(--text-muted); cursor: not-allowed; }
+.nc-input:disabled { background: var(--disabled-bg); color: var(--text-muted); cursor: not-allowed; }
 .nc-input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 25%, transparent);
@@ -329,7 +381,7 @@ input[type="number"] {
   border: var(--border-width) solid var(--nc-tooltip-border, var(--border));
   border-radius: var(--radius-default);
   color: var(--nc-tooltip-foreground, var(--text-primary));
-  font-family: var(--nc-tooltip-font-family, var(--font-sans));
+  font-family: var(--nc-tooltip-font-family, -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   line-height: 16px;

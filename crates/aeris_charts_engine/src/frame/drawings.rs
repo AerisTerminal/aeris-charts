@@ -549,6 +549,16 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
     ) {
+        if matches!(
+            drawing.kind,
+            DrawingKind::FixedRangeVolumeProfile
+                | DrawingKind::AnchoredVolumeProfile
+                | DrawingKind::AnchoredVwap
+        ) && drawing.profile.is_some()
+        {
+            self.build_profile_drawing_prims(drawing, px, pane_w_px, vpr, out, points);
+            return;
+        }
         let color = Color::parse_css(&drawing.color).unwrap_or(PRIMARY);
         let crisp_width = (drawing.width * vpr).round().max(1.0) as i32;
         let Some(pane) = self.panes.get(drawing.pane_index) else {
@@ -806,6 +816,170 @@ impl ChartEngine {
                         line_type: LineType::Simple,
                         color,
                     });
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_profile_drawing_prims(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        pane_w_px: i32,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+    ) {
+        let Ok(snapshot) = self.profile_drawing_snapshot(drawing.id) else {
+            return;
+        };
+        match snapshot {
+            crate::ProfileDrawingSnapshot::Volume(profile) => {
+                let Some(options) = drawing.profile.as_ref() else {
+                    return;
+                };
+                let left = px
+                    .first()
+                    .map_or(0.0, |point| point.0)
+                    .clamp(0.0, f64::from(pane_w_px));
+                let right = match drawing.kind {
+                    DrawingKind::FixedRangeVolumeProfile => px
+                        .get(1)
+                        .map_or(left, |point| point.0)
+                        .clamp(0.0, f64::from(pane_w_px)),
+                    _ => f64::from(pane_w_px),
+                };
+                let range_left = left.min(right);
+                let range_right = left.max(right);
+                let available = (range_right - range_left).max(1.0) * options.width_percent / 100.0;
+                let max_volume = profile
+                    .rows
+                    .iter()
+                    .map(|row| row.total_volume)
+                    .fold(0.0_f64, f64::max);
+                if max_volume <= 0.0 {
+                    return;
+                }
+                let bid = Color::rgba(247, 82, 95, 150);
+                let ask = Color::rgba(8, 153, 129, 150);
+                let unknown = Color::rgba(120, 130, 145, 130);
+                for row in &profile.rows {
+                    let Some((_, y0)) = self.drawing_to_px_for(
+                        drawing.pane_index,
+                        drawing.price_scale,
+                        crate::DrawingPoint {
+                            logical: drawing.points[0].logical,
+                            price: row.low,
+                        },
+                    ) else {
+                        continue;
+                    };
+                    let Some((_, y1)) = self.drawing_to_px_for(
+                        drawing.pane_index,
+                        drawing.price_scale,
+                        crate::DrawingPoint {
+                            logical: drawing.points[0].logical,
+                            price: row.high,
+                        },
+                    ) else {
+                        continue;
+                    };
+                    let width = available * row.total_volume / max_volume;
+                    let x0 = range_right - width;
+                    let height = ((y0 - y1).abs() * vpr).round().max(1.0) as i32;
+                    let y = (y0.min(y1) * vpr).round() as i32;
+                    let mut cursor = x0;
+                    for (volume, color) in [
+                        (row.bid_volume, bid),
+                        (row.unknown_volume, unknown),
+                        (row.ask_volume, ask),
+                    ] {
+                        if volume <= 0.0 {
+                            continue;
+                        }
+                        let segment = width * volume / row.total_volume;
+                        out.push(Prim::Rect {
+                            rect: IRect {
+                                x: (cursor * vpr).round() as i32,
+                                y,
+                                w: (segment * vpr).round().max(1.0) as i32,
+                                h: height,
+                            },
+                            color,
+                        });
+                        cursor += segment;
+                    }
+                }
+                if let Some(poc) = profile
+                    .poc
+                    .and_then(|price| {
+                        self.drawing_to_px_for(
+                            drawing.pane_index,
+                            drawing.price_scale,
+                            crate::DrawingPoint {
+                                logical: drawing.points[0].logical,
+                                price,
+                            },
+                        )
+                    })
+                    .map(|(_, y)| y * vpr)
+                {
+                    out.push(Prim::HLine {
+                        y: poc.round() as i32,
+                        x0: ((range_right - available) * vpr).round() as i32,
+                        x1: (range_right * vpr).round() as i32,
+                        width: vpr.round().max(1.0) as i32,
+                        style: LineStyle::Solid,
+                        color: Color::rgb(245, 166, 35),
+                    });
+                }
+            }
+            crate::ProfileDrawingSnapshot::Vwap(values) => {
+                let mut center = Vec::with_capacity(values.len());
+                let mut upper = Vec::with_capacity(values.len());
+                let mut lower = Vec::with_capacity(values.len());
+                for value in values {
+                    let seconds = value.timestamp_micros.div_euclid(1_000_000) as f64;
+                    let Some(logical) = self.time_to_index(seconds, true).map(|index| index as f64)
+                    else {
+                        continue;
+                    };
+                    for (price, target) in [
+                        (value.vwap, &mut center),
+                        (value.upper_band, &mut upper),
+                        (value.lower_band, &mut lower),
+                    ] {
+                        if let Some((x, y)) = self.drawing_to_px_for(
+                            drawing.pane_index,
+                            drawing.price_scale,
+                            crate::DrawingPoint { logical, price },
+                        ) {
+                            target.push([x as f32 * vpr as f32, y as f32 * vpr as f32]);
+                        }
+                    }
+                }
+                let color = Color::parse_css(&drawing.color).unwrap_or(PRIMARY);
+                super::series_geometry::push_line_stroke(
+                    out,
+                    points,
+                    &center,
+                    (drawing.width * vpr) as f32,
+                    drawing.style,
+                    LineType::Simple,
+                    color,
+                );
+                let band = Color::rgba(color.r(), color.g(), color.b(), color.a().min(150));
+                for path in [&upper, &lower] {
+                    super::series_geometry::push_line_stroke(
+                        out,
+                        points,
+                        path,
+                        vpr.max(1.0) as f32,
+                        LineStyle::Dashed,
+                        LineType::Simple,
+                        band,
+                    );
                 }
             }
         }

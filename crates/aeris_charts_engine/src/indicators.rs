@@ -1657,6 +1657,7 @@ impl ChartEngine {
         ));
         self.propagate_indicator_changes();
         self.sync_time_points();
+        self.refresh_resampled_dependents(dependency);
     }
 
     pub(crate) fn recompute_all_indicators(&mut self) {
@@ -1695,6 +1696,7 @@ impl ChartEngine {
         self.indicator_changes.push((dependency, change));
         self.propagate_indicator_changes();
         self.sync_time_points();
+        self.refresh_resampled_dependents(dependency);
     }
 
     fn propagate_indicator_changes(&mut self) {

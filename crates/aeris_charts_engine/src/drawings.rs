@@ -367,6 +367,12 @@ pub enum DrawingKind {
     LongPosition,
     /// Three-anchor Short Position annotation: entry, target, stop.
     ShortPosition,
+    /// Two-anchor fixed-range volume profile. Statistics are bound to an engine data source.
+    FixedRangeVolumeProfile,
+    /// One-anchor volume profile extending from its anchor through the latest source row.
+    AnchoredVolumeProfile,
+    /// One-anchor VWAP with optional deviation bands through the latest source row.
+    AnchoredVwap,
 }
 
 impl DrawingKind {
@@ -544,6 +550,8 @@ pub struct Drawing {
     pub labels: Vec<crate::DrawingLabelOptions>,
     pub levels: Vec<crate::DrawingLevel>,
     pub price_scale: DrawingPriceScale,
+    /// Optional engine-data binding for volume-profile and anchored-VWAP drawings.
+    pub profile: Option<crate::ProfileDrawingOptions>,
     /// Line/border color CSS string (default [`DRAWING_DEFAULT_COLOR`]).
     pub color: String,
     /// Stroke width in CSS px (default 2; 1 for a rectangle's border).
@@ -638,6 +646,7 @@ impl Drawing {
             labels: Vec::new(),
             levels: Vec::new(),
             price_scale: DrawingPriceScale::Right,
+            profile: None,
             color: DRAWING_DEFAULT_COLOR.to_string(),
             width: kind.spec().default_width,
             style: LineStyle::Solid,
@@ -1080,6 +1089,7 @@ pub(crate) struct DrawingPatch {
     box_border_color: Option<String>,
     #[serde(alias = "boxBorderWidth")]
     box_border_width: Option<f64>,
+    profile: Option<crate::ProfileDrawingOptions>,
 }
 
 /// A patch's `style`: the TS string form (`solid`/`dotted`/`dashed`), or the reference numeric
@@ -1284,6 +1294,9 @@ impl Drawing {
                 self.box_border_width = width;
             }
         }
+        if let Some(profile) = patch.profile {
+            self.profile = Some(profile);
+        }
         true
     }
 
@@ -1305,6 +1318,7 @@ impl Drawing {
             "labels": self.labels,
             "levels": self.levels,
             "price_scale_id": self.price_scale.name(),
+            "profile": self.profile,
             "color": self.color,
             "width": self.width,
             "style": style_name(self.style),
@@ -2380,6 +2394,28 @@ impl ChartEngine {
             });
             self.bump_drawing_sync_revision();
         }
+        true
+    }
+
+    pub(crate) fn set_drawing_profile_options(
+        &mut self,
+        id: DrawingId,
+        profile: crate::ProfileDrawingOptions,
+    ) -> bool {
+        self.invalidate_frame_drawings();
+        let Some(index) = self.drawings.iter().position(|drawing| drawing.id == id) else {
+            return false;
+        };
+        let before = self.drawings[index].clone();
+        self.drawings[index].profile = Some(profile);
+        self.drawings[index].revision = self.drawings[index].revision.saturating_add(1);
+        let after = self.drawings[index].clone();
+        self.update_drawing_runtime(id);
+        self.record_drawing_command(DrawingCommand::Update {
+            before,
+            after: Box::new(after),
+        });
+        self.bump_drawing_sync_revision();
         true
     }
 

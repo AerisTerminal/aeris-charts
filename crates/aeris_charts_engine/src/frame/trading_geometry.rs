@@ -111,11 +111,11 @@ const TRADING_PILL_DASH: f64 = 2.0;
 const CONTROL_PAD_Y: f64 = 12.0;
 
 /// Protection semantics take precedence over their broker-side implementation: an SL remains
-/// warning yellow and a TP remains profit green. Ordinary sell orders read bearish red. The
-/// neutral working-order accent is reserved for resting buy limits.
+/// warning yellow and a TP remains profit green. Ordinary orders always follow their side token,
+/// including resting buy and sell limits.
 pub(crate) fn trading_order_color(
     style: &crate::TradingStyle,
-    kind: crate::OrderKind,
+    _kind: crate::OrderKind,
     side: OrderSide,
     role: OrderRole,
     status: OrderStatus,
@@ -131,14 +131,7 @@ pub(crate) fn trading_order_color(
         }
         _ if role == OrderRole::TakeProfit => style.take_profit,
         _ if role == OrderRole::StopLoss => style.stop_loss,
-        OrderStatus::Filled => by_side,
-        OrderStatus::Working | OrderStatus::PartiallyFilled => {
-            if kind == crate::OrderKind::Limit && side == OrderSide::Buy {
-                style.working_order
-            } else {
-                by_side
-            }
-        }
+        OrderStatus::Filled | OrderStatus::Working | OrderStatus::PartiallyFilled => by_side,
     }
 }
 

@@ -10,7 +10,7 @@ for (const [backend, url] of [
   ["webgpu", "/"],
   ["canvas2d", "/?backend=canvas2d&forceFallbackAdapter=1"],
 ]) {
-  test(`${backend} interactive demo preserves engine defaults except hidden grid`, async ({ page }) => {
+  test(`${backend} interactive demo preserves engine defaults`, async ({ page }) => {
     await open_demo(page, url);
     const state = await page.evaluate(async () => {
       const api = await import("../dist/aeris_charts_financial.js");
@@ -19,12 +19,9 @@ for (const [backend, url] of [
       document.body.appendChild(host);
       const scratch = await api.create_chart(host, { autoSize: true, backend: "canvas2d" });
       const scratch_series = scratch.add_series("candlestick");
-      const expected_chart = structuredClone(scratch.options());
-      expected_chart.grid.vertLines.visible = false;
-      expected_chart.grid.horzLines.visible = false;
       const result = {
         actual_chart: window.__chart.options(),
-        expected_chart,
+        expected_chart: scratch.options(),
         actual_series: window.__main.options(),
         expected_series: scratch_series.options(),
       };
@@ -76,65 +73,65 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   const light = await read("light");
   expect(light.css).toEqual({
     surface: "#ffffff",
-    text_primary: "#333333",
-    text_secondary: "#7b7b7b",
-    text_muted: "#d1d1d1",
-    primary: "#168ef7",
-    primary_foreground: "#fff",
+    text_primary: "#222222",
+    text_secondary: "#646465",
+    text_muted: "#c2c2c2",
+    primary: "#0091ff",
+    primary_foreground: "#ffffff",
     button_fill: "#333333",
     border_width: "0.5px",
   });
   expect(light.palette).toMatchObject({
     background: "#ffffff",
-    foreground: "#333333",
-    muted_foreground: "#7b7b7b",
-    primary: "#168ef7",
+    foreground: "#222222",
+    muted_foreground: "#646465",
+    primary: "#0091ff",
     primary_foreground: "#ffffff",
-    primary_hover: "#168ef7",
-    border: "#e7e9e6",
+    primary_hover: "#0077fa",
+    border: "#e5e5e5",
     bullish: "#089981",
     bearish: "#f7525f",
   });
   expect(light.chart).toEqual({
     background: "#ffffff",
-    text: "#333333",
-    muted_text: "#7b7b7b",
-    border: "#e7e9e6",
-    crosshair: "#141414",
+    text: "#222222",
+    muted_text: "#646465",
+    border: "#e5e5e5",
+    crosshair: "#c2c2c2",
     bullish: "#089981",
     bearish: "#f7525f",
   });
 
   const dark = await read("dark");
   expect(dark.css).toEqual({
-    surface: "#141414",
-    text_primary: "#f0f0f0",
-    text_secondary: "#aeaeb2",
-    text_muted: "#f0f0f05c",
-    primary: "#168ef7",
-    primary_foreground: "#fff",
-    button_fill: "#ebebeb",
+    surface: "#1f1f1f",
+    text_primary: "#f5f5f5",
+    text_secondary: "#c2c2c2",
+    text_muted: "#808080",
+    primary: "#0091ff",
+    primary_foreground: "#ffffff",
+    button_fill: "#f5f5f5",
     border_width: "0.5px",
   });
   expect(dark.palette).toMatchObject({
-    background: "#141414",
-    foreground: "#f0f0f0",
-    muted_foreground: "#aeaeb2",
-    primary: "#168ef7",
+    background: "#1f1f1f",
+    foreground: "#f5f5f5",
+    muted_foreground: "#c2c2c2",
+    primary: "#0091ff",
     primary_foreground: "#ffffff",
-    primary_hover: "#168ef7",
-    border: "#252525",
-    bullish: "#7c8db0",
-    bearish: "#98615c",
+    primary_hover: "#0077fa",
+    border: "#333333",
+    bullish: "#089981",
+    bearish: "#f7525f",
   });
   expect(dark.chart).toEqual({
-    background: "#141414",
-    text: "#f0f0f0",
-    muted_text: "#aeaeb2",
-    border: "#252525",
-    crosshair: "#252525",
-    bullish: "#7c8db0",
-    bearish: "#98615c",
+    background: "#1f1f1f",
+    text: "#f5f5f5",
+    muted_text: "#c2c2c2",
+    border: "#333333",
+    crosshair: "#404040",
+    bullish: "#089981",
+    bearish: "#f7525f",
   });
 });
 
@@ -166,7 +163,7 @@ test("style reset follows a live theme switch and restores semantic series defau
   expect(state.chart.layout.background.color).toBe(state.palette.background);
   expect(state.chart.layout.textColor).toBe(state.palette.foreground);
   expect(state.chart.layout.fontSize).toBe(12);
-  expect(state.chart.grid.vertLines).toMatchObject({ color: state.palette.border, visible: true, style: 2 });
+  expect(state.chart.grid.vertLines).toMatchObject({ color: state.palette.border, visible: false, style: 2 });
   expect(state.chart.rightPriceScale.borderColor).toBe(state.palette.border);
   expect(state.chart.rightPriceScale.textColor).toBeNull();
   expect(state.series.up_color).toBe("");
@@ -444,7 +441,7 @@ test("hollow candles are a Series choice backed by the canonical candlestick ser
     kind: window.__main.series_type(),
     up: window.__main.options().up_color,
     down: window.__main.options().down_color,
-  }))).toEqual({ kind: "candlestick", up: "#7c8db0", down: "#98615c" });
+  }))).toEqual({ kind: "candlestick", up: "#089981", down: "#f7525f" });
 
   await page.locator('input[name="series"][value="histogram"]').check();
   expect(await page.evaluate(() => window.__main.series_type())).toBe("histogram");

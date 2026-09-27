@@ -216,6 +216,8 @@ struct DrawingV1 {
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct DrawingStyleV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<crate::ProfileDrawingOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     group_id: Option<String>,
@@ -682,6 +684,7 @@ impl ChartEngine {
                     anchors: drawing.points.clone(),
                     anchor_times_micros: self.drawing_anchor_times_for(drawing),
                     style: DrawingStyleV1 {
+                        profile: drawing.profile.clone(),
                         name: (!drawing.name.is_empty()).then(|| drawing.name.clone()),
                         group_id: drawing.group_id.clone(),
                         revision: (drawing.revision != 1).then_some(drawing.revision),
@@ -1293,6 +1296,15 @@ impl ChartEngine {
             })?;
             let mut drawing = Drawing::new(item.id, kind, pane_index, item.anchors);
             let style = item.style;
+            if let Some(profile) = style.profile {
+                if !profile.valid() {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid profile options",
+                        item.id
+                    )));
+                }
+                drawing.profile = Some(profile);
+            }
             if let Some(name) = style.name {
                 if name.len() > crate::MAX_DRAWING_NAME_BYTES {
                     return Err(resource(format!("drawing {} name is too large", item.id)));

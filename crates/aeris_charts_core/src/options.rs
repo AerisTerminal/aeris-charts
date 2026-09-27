@@ -261,10 +261,10 @@ impl Default for GridLineOptions {
     fn default() -> Self {
         Self {
             color: grid_color(),
-            // Aeris's canonical chart starts with a visible dashed grid. Hosts that want a
-            // cleaner presentation can hide it without replacing the engine's style/color state.
+            // Grid style and color remain configured while the canonical chart ships clean.
+            // Hosts can opt either family in without reconstructing its visual state.
             style: line_style::DASHED,
-            visible: true,
+            visible: false,
         }
     }
 }
@@ -691,8 +691,8 @@ mod tests {
         assert_eq!(o.layout.font_size, 12.0);
         assert_eq!(o.grid.vert_lines.color, DEFAULT_BORDER_CSS);
         assert_eq!(o.grid.horz_lines.style, line_style::DASHED);
-        assert!(o.grid.vert_lines.visible);
-        assert!(o.grid.horz_lines.visible);
+        assert!(!o.grid.vert_lines.visible);
+        assert!(!o.grid.horz_lines.visible);
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         assert!(!o.crosshair.do_not_snap_to_hidden_series_indices);
         assert_eq!(o.crosshair.vert_line.style, line_style::DASHED);
@@ -751,14 +751,9 @@ mod tests {
         assert_eq!(dark.layout.bearish_color, DARK_MARKET_DOWN_CSS);
         assert_eq!(dark.grid.vert_lines.color, DARK_BORDER_CSS);
         assert_eq!(dark.crosshair.vert_line.color, DARK_CROSSHAIR_LINE_CSS);
-        assert_eq!(dark.crosshair.vert_line.color, DARK_BORDER_CSS);
         assert_eq!(
             dark.crosshair.vert_line.label_background_color,
             DARK_CROSSHAIR_LABEL_CSS
-        );
-        assert_eq!(
-            dark.crosshair.vert_line.label_background_color,
-            DARK_BORDER_CSS
         );
         assert_eq!(dark.right_price_scale.border_color, DARK_BORDER_CSS);
         assert_eq!(
@@ -813,7 +808,7 @@ mod tests {
         assert_eq!(options.layout.font_size, 12.0);
         assert_eq!(options.layout.panes.separator_color, "");
         assert_eq!(options.grid.vert_lines.color, LIGHT_BORDER_CSS);
-        assert!(options.grid.vert_lines.visible);
+        assert!(!options.grid.vert_lines.visible);
         assert_eq!(options.crosshair.vert_line.color, LIGHT_CROSSHAIR_LINE_CSS);
         assert_eq!(options.crosshair.vert_line.width, 1.0);
         assert_eq!(options.crosshair.mode, crosshair_mode::HIDDEN);
@@ -883,7 +878,7 @@ mod tests {
         assert_eq!(o.grid.vert_lines.color, "#000000");
         // ...siblings within the same object survived...
         assert_eq!(o.grid.vert_lines.style, line_style::DASHED);
-        assert!(o.grid.vert_lines.visible);
+        assert!(!o.grid.vert_lines.visible);
         // ...and the neighbouring family is untouched.
         assert_eq!(o.grid.horz_lines.color, DEFAULT_BORDER_CSS);
     }

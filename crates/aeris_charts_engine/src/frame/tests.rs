@@ -230,6 +230,9 @@ fn complete_finite_numeric_domain_builds_geometry_ticks_and_runtime_views() {
 #[test]
 fn explicit_numeric_ticks_drive_labels_grids_clipping_and_live_updates() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    chart
+        .apply_options(r#"{"grid":{"vertLines":{"visible":true},"horzLines":{"visible":true}}}"#)
+        .unwrap();
     let pane = chart
         .add_pane_with_domain(
             true,

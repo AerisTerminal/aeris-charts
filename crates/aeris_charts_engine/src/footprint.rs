@@ -740,6 +740,14 @@ impl FootprintAggregator {
             .map(|trade| &trade.event)
     }
 
+    pub(crate) fn classified_trades(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&FootprintTrade, AggressorSide)> {
+        self.trades[..self.visible_trade_count()]
+            .iter()
+            .map(|trade| (&trade.event, trade.classified_side))
+    }
+
     pub fn work_stats(&self) -> FootprintWorkStats {
         self.work
     }

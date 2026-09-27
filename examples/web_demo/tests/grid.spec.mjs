@@ -97,17 +97,17 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
   expect(await theme_state()).toEqual({
     root: "dark",
     control: "dark",
-    surface: "#141414",
-    header: "rgb(20, 20, 20)",
-    chart: "#141414",
-    axis_text: "#f0f0f0",
-    axis_border: "#252525",
-    grid: "#252525",
-    border_control: "#252525",
-    crosshair_control: "#252525",
-    crosshair_label_control: "#252525",
-    bullish: "#7c8db0",
-    bearish: "#98615c",
+    surface: "#1f1f1f",
+    header: "rgb(31, 31, 31)",
+    chart: "#1f1f1f",
+    axis_text: "#f5f5f5",
+    axis_border: "#333333",
+    grid: "#333333",
+    border_control: "#333333",
+    crosshair_control: "#404040",
+    crosshair_label_control: "#404040",
+    bullish: "#089981",
+    bearish: "#f7525f",
   });
 
   await page.selectOption("#theme_select", "light");
@@ -118,12 +118,12 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     surface: "#ffffff",
     header: "rgb(255, 255, 255)",
     chart: "#ffffff",
-    axis_text: "#333333",
-    axis_border: "#e7e9e6",
-    grid: "#e7e9e6",
-    border_control: "#e7e9e6",
-    crosshair_control: "#141414",
-    crosshair_label_control: "#141414",
+    axis_text: "#222222",
+    axis_border: "#e5e5e5",
+    grid: "#e5e5e5",
+    border_control: "#e5e5e5",
+    crosshair_control: "#c2c2c2",
+    crosshair_label_control: "#c2c2c2",
     bullish: "#089981",
     bearish: "#f7525f",
   });
@@ -133,125 +133,40 @@ test("portable design tokens and disabled controls match the brand contract", as
   await page.goto("/");
   await wait_grid(page);
 
-  const tokens = () => page.evaluate(() => {
+  const brand_tokens = [
+    "surface", "surface-secondary", "surface-subtle", "surface-raised", "surface-overlay", "surface-inverse",
+    "border", "border-secondary", "border-subtle", "border-softer", "border-strong", "border-inverse", "border-width",
+    "text-primary", "text-default", "text-secondary", "text-muted", "text-positive", "text-negative", "text-danger",
+    "text-warning", "text-interactive", "text-hover", "text-active", "hover-bg", "active-bg", "disabled-bg", "icon",
+    "icon-active", "positive", "positive-subtle", "negative", "negative-subtle", "warning", "warning-subtle", "indigo",
+    "indigo-subtle", "purple", "purple-subtle", "primary", "primary-hover", "primary-active", "primary-disabled",
+    "primary-disabled-foreground", "primary-ring", "primary-subtle", "primary-foreground", "danger", "danger-disabled",
+    "danger-disabled-foreground", "danger-ring", "danger-foreground", "button-fill", "button-fill-hover", "button-fill-active",
+    "button-fill-foreground", "button-fill-subtle", "ring", "radius-default", "radius-medium", "radius-small", "radius-large",
+    "radius-button", "shadow-1", "shadow-2", "shadow-3", "shadow-dialog", "bullish", "bearish",
+  ];
+  const tokens = () => page.evaluate((names) => {
     const style = getComputedStyle(document.documentElement);
-    return Object.fromEntries([
-      "font-sans",
-      "surface",
-      "surface-secondary",
-      "border",
-      "border-secondary",
-      "border-width",
-      "input-fill",
-      "input-border",
-      "text-primary",
-      "text-secondary",
-      "text-muted",
-      "text-bullish",
-      "text-bearish",
-      "text-interactive",
-      "text-hover",
-      "text-active",
-      "hover-bg",
-      "active-bg",
-      "icon",
-      "icon-active",
-      "primary",
-      "primary-foreground",
-      "button-fill",
-      "danger",
-      "danger-foreground",
-      "ring",
-      "bullish",
-      "bearish",
-      "radius-default",
-      "radius-medium",
-      "radius-small",
-      "radius-large",
-      "fancy-shadow-neutral",
-      "fancy-shadow-primary",
-      "fancy-shadow-destructive",
-      "fancy-shadow-basic",
-    ].map((name) => [name, style.getPropertyValue(`--${name}`).trim()]));
-  });
+    return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(`--${name}`).trim().toLowerCase()]));
+  }, brand_tokens);
 
-  expect(await tokens()).toEqual({
-    "font-sans": '-apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif',
-    surface: "#141414",
-    "surface-secondary": "#181818",
-    border: "#f0f0f014",
-    "border-secondary": "#f0f0f014",
-    "border-width": "0.5px",
-    "input-fill": "#181818",
-    "input-border": "#f0f0f014",
-    "text-primary": "#f0f0f0",
-    "text-secondary": "#AEAEB2",
-    "text-muted": "#f0f0f05c",
-    "text-bullish": "#089981",
-    "text-bearish": "#f7525f",
-    "text-interactive": "#c2c2c2",
-    "text-hover": "#f0f0f0",
-    "text-active": "#f0f0f0",
-    "hover-bg": "#f0f0f00d",
-    "active-bg": "#f0f0f024",
-    icon: "#c2c2c2",
-    "icon-active": "#f0f0f0",
-    primary: "#168ef7",
-    "primary-foreground": "#fff",
-    "button-fill": "#EBEBEB",
-    danger: "#fb3748",
-    "danger-foreground": "#ffffff",
-    ring: "#f0f0f026",
-    bullish: "#7c8db0",
-    bearish: "#98615c",
-    "radius-default": "8px",
-    "radius-medium": "12px",
-    "radius-small": "4px",
-    "radius-large": "999px",
-    "fancy-shadow-neutral": "0 1px 2px 0 #00000066, 0 0 0 1px #242628",
-    "fancy-shadow-primary": "0 1px 2px 0 #00000066, 0 0 0 1px #168ef7",
-    "fancy-shadow-destructive": "0 1px 2px 0 #00000066, 0 0 0 1px #fb3748",
-    "fancy-shadow-basic": "0 1px 3px 0 #00000055, 0 0 0 1px #262626",
+  const dark = await tokens();
+  expect(Object.values(dark).every(Boolean)).toBe(true);
+  expect(dark).toMatchObject({
+    surface: "#1f1f1f", border: "#333333", "text-primary": "#f5f5f5", "text-secondary": "#c2c2c2",
+    "text-muted": "#808080", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#0091ff",
+    "primary-hover": "#0077fa", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
+    "button-fill": "#f5f5f5", "radius-button": "6px",
   });
 
   await page.selectOption("#theme_select", "light");
-  expect(await tokens()).toEqual({
-    "font-sans": '-apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif',
-    surface: "#ffffff",
-    "surface-secondary": "#fafafa",
-    border: "#e7e9e6",
-    "border-secondary": "#e7e9e6",
-    "border-width": "0.5px",
-    "input-fill": "#fafafa",
-    "input-border": "#e7e9e6",
-    "text-primary": "#333333",
-    "text-secondary": "#7B7B7B",
-    "text-muted": "#D1D1D1",
-    "text-bullish": "#089981",
-    "text-bearish": "#f7525f",
-    "text-interactive": "#646465",
-    "text-hover": "#404040",
-    "text-active": "#404040",
-    "hover-bg": "#f0f0f0",
-    "active-bg": "#f0f0f0",
-    icon: "#646465",
-    "icon-active": "#404040",
-    primary: "#168ef7",
-    "primary-foreground": "#fff",
-    "button-fill": "#333333",
-    danger: "#fb3748",
-    "danger-foreground": "#ffffff",
-    ring: "#14141433",
-    bullish: "#089981",
-    bearish: "#f7525f",
-    "radius-default": "8px",
-    "radius-medium": "12px",
-    "radius-small": "4px",
-    "radius-large": "999px",
-    "fancy-shadow-neutral": "0 1px 2px 0 #1b1c1d7a, 0 0 0 1px #242628",
-    "fancy-shadow-primary": "0 1px 2px 0 #0e121b3d, 0 0 0 1px #168ef7",
-    "fancy-shadow-destructive": "0 1px 2px 0 #0e121b3d, 0 0 0 1px #fb3748",
-    "fancy-shadow-basic": "0 1px 3px 0 #0e121b1f, 0 0 0 1px #ebebeb",
+  const light = await tokens();
+  expect(Object.values(light).every(Boolean)).toBe(true);
+  expect(light).toMatchObject({
+    surface: "#ffffff", border: "#e5e5e5", "text-primary": "#222222", "text-secondary": "#646465",
+    "text-muted": "#c2c2c2", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#0091ff",
+    "primary-hover": "#0077fa", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
+    "button-fill": "#333333", "radius-button": "6px",
   });
 
   await page.evaluate(() => {
@@ -444,7 +359,7 @@ test("demo theme persists across reloads while runtime fixtures stay determinist
   await page.reload();
   await wait_grid(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  expect(await page.evaluate(() => window.__chart.options().layout.background.color)).toBe("#141414");
+  expect(await page.evaluate(() => window.__chart.options().layout.background.color)).toBe("#1f1f1f");
 
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
@@ -572,7 +487,7 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   await page.selectOption("#theme_select", "light");
   await wait_grid(page);
   const light_border = await border_hex();
-  expect(light_border.toLowerCase()).toBe("#e7e9e6");
+  expect(light_border.toLowerCase()).toBe("#e5e5e5");
   expect(await divider_rgb()).toBe(to_rgb(light_border));
 
   // An explicit axis border change re-resolves the divider too.

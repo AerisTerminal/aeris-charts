@@ -13,7 +13,7 @@
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; overflow: hidden; background: var(--surface); }
   html { -webkit-font-smoothing: antialiased; }
-  body { color: var(--text-primary); font-family: var(--font-sans); font-size: 13px; }
+  body { color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif; font-size: 13px; }
   button, input, select { font: inherit; }
   button { cursor: pointer; }
   button:disabled { color: var(--text-muted); cursor: default; }
@@ -39,7 +39,7 @@
   .market-price { min-width: 48px; color: var(--bullish); font-weight: 600; font-variant-numeric: tabular-nums; }
   .market-price[data-direction="down"] { color: var(--bearish); }
   #comparison_controls { display: flex; gap: 6px; align-items: center; margin-left: auto; }
-  #comparison_controls select, #comparison_controls button { height: 40px; color: var(--text-primary); background: var(--input-fill); border: var(--border-width) solid var(--input-border); border-radius: var(--radius-default); }
+  #comparison_controls select, #comparison_controls button { height: 40px; color: var(--text-primary); background: var(--surface-secondary); border: var(--border-width) solid var(--border-secondary); border-radius: var(--radius-button); }
   #comparison_controls select { max-width: 148px; padding: 0 8px; font-size: 12px; }
   #comparison_controls button { padding: 0 10px; font-size: 12px; font-weight: 600; }
   #comparison_controls button:hover:not(:disabled) { background: var(--hover-bg); }
@@ -89,7 +89,7 @@
   #inspector label:has(input[type="checkbox"]), #inspector label:has(input[type="radio"]) { flex: 1 1 44%; cursor: pointer; color: var(--text-primary); }
   #inspector label > select, #inspector label > input:not([type="checkbox"]):not([type="radio"]), #inspector label > span:last-child { margin-left: auto; }
   #inspector label > input[type="range"] + span { margin-left: 0; min-width: 20px; text-align: right; }
-  #inspector button, #inspector select, #inspector input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) { min-height: 40px; max-width: 100%; background: var(--input-fill); color: var(--text-primary); border: var(--border-width) solid var(--input-border); border-radius: var(--radius-default); }
+  #inspector button, #inspector select, #inspector input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) { min-height: 40px; max-width: 100%; background: var(--surface-secondary); color: var(--text-primary); border: var(--border-width) solid var(--border-secondary); border-radius: var(--radius-button); }
   #inspector select, #inspector input[type="text"], #inspector input[type="number"] { width: 160px; padding: 6px 8px; }
   #inspector button { min-width: 40px; padding: 8px 12px; font-size: 12px; }
   #inspector button:hover { background: var(--hover-bg); }
@@ -609,14 +609,6 @@ const chart_options = {
   // to Canvas2D by the separate runtime-test consumer.
   backend: runtime_test === "backendParity" ? "auto" : requested_backend === "canvas2d" ? "canvas2d" : "auto",
 };
-// Real demos intentionally change exactly one engine-owned startup option: hide both grid families.
-// Their canonical style/color stay untouched (the engine default is dashed + visible).
-if (parity_fixture === null) {
-  chart_options.grid = {
-    vertLines: { visible: false },
-    horzLines: { visible: false },
-  };
-}
 // A query/theme, runtime fixture, or restored preference must seed the chart itself as well as the
 // page chrome. Omitting the option is safe only for an untouched default-theme startup.
 if (requested_theme !== default_theme_name || theme_param === "light" || theme_param === "dark" || runtime_test !== null) {

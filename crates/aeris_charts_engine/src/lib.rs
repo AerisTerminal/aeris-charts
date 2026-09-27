@@ -33,6 +33,8 @@ mod ordering;
 mod persistence;
 mod price_line_api;
 mod price_scale_api;
+mod profiles;
+mod resampling;
 mod series_query_api;
 #[cfg(test)]
 mod tests;
@@ -155,6 +157,16 @@ pub use persistence::{
     PERSISTENCE_MAX_POINTS_PER_DRAWING, PERSISTENCE_MAX_TOTAL_POINTS, PERSISTENCE_SCHEMA_VERSION,
     PERSISTENCE_SCHEMA_VERSION_GENERAL, PERSISTENCE_SCHEMA_VERSION_STUDIES,
 };
+pub use profiles::{
+    AnchoredVwapPoint, DevelopingValueArea, NakedProfileLevel, NakedProfileLevelKind,
+    ProfileDrawingOptions, ProfileDrawingSnapshot, ProfileError, ProfileRequest,
+    ProfileRowSnapshot, ProfileSnapshot, ProfileSource, TpoRequest, TpoRowSnapshot, TpoSnapshot,
+    MAX_PROFILE_DEVELOPING_POINTS, MAX_PROFILE_PERIODS, MAX_PROFILE_ROWS, MAX_TPO_PERIODS,
+};
+pub use resampling::{
+    ResampleBoundary, ResampleError, ResampleOptions, ResampledBar, MAX_RESAMPLED_SERIES,
+    MAX_RESAMPLE_BOUNDARIES,
+};
 pub use synthetic_bars::{
     SyntheticBar, SyntheticBarAggregator, SyntheticBarError, SyntheticBarOptions,
     SyntheticSourceBar, MAX_SYNTHETIC_BARS, MAX_SYNTHETIC_SOURCE_BARS,
@@ -222,6 +234,7 @@ pub struct EngineMemoryUsage {
     pub feature_series_capacity_bytes: usize,
     pub footprint_capacity_bytes: usize,
     pub depth_capacity_bytes: usize,
+    pub resampling_capacity_bytes: usize,
     pub native_primitive_capacity_bytes: usize,
     pub trading_capacity_bytes: usize,
     pub alert_capacity_bytes: usize,
@@ -250,6 +263,7 @@ impl EngineMemoryUsage {
             + self.feature_series_capacity_bytes
             + self.footprint_capacity_bytes
             + self.depth_capacity_bytes
+            + self.resampling_capacity_bytes
             + self.native_primitive_capacity_bytes
             + self.trading_capacity_bytes
             + self.alert_capacity_bytes
@@ -1566,6 +1580,7 @@ pub struct ChartEngine {
     /// as synthetic UTC timestamps.
     sequence_points: Option<Vec<BarSequencePoint>>,
     synthetic_series: HashMap<SeriesId, SyntheticBarAggregator>,
+    resampled_series: HashMap<SeriesId, resampling::ResampleBinding>,
     depth_streams: HashMap<u64, DepthBook>,
     depth_stream_keys: HashMap<String, u64>,
     next_depth_stream_id: u64,
@@ -1807,6 +1822,7 @@ impl ChartEngine {
             data,
             sequence_points: None,
             synthetic_series: HashMap::new(),
+            resampled_series: HashMap::new(),
             depth_streams: HashMap::new(),
             depth_stream_keys: HashMap::new(),
             next_depth_stream_id: 1,
@@ -1988,6 +2004,7 @@ impl ChartEngine {
             feature_series_capacity_bytes: self.feature_series_capacity_bytes(),
             footprint_capacity_bytes: self.footprint_capacity_bytes(),
             depth_capacity_bytes: self.depth_capacity_bytes(),
+            resampling_capacity_bytes: self.resampling_capacity_bytes(),
             native_primitive_capacity_bytes: self.native_primitive_capacity_bytes(),
             trading_capacity_bytes: self.trading_state.estimated_bytes(),
             alert_capacity_bytes: self.alert_state.estimated_bytes(),
@@ -2334,6 +2351,22 @@ impl ChartEngine {
         // Drop indicator bindings touching this series and collect their output series to tombstone
         // alongside it (a removed source leaves no derived data behind).
         let mut tombstones = self.drop_indicators_touching(id);
+        for binding in self.resampled_series.values() {
+            if binding.source == id
+                || binding.volume_source == Some(id)
+                || binding.target == id
+                || binding.volume_target == Some(id)
+            {
+                if !tombstones.contains(&binding.target) {
+                    tombstones.push(binding.target);
+                }
+                if let Some(volume_target) = binding.volume_target {
+                    if !tombstones.contains(&volume_target) {
+                        tombstones.push(volume_target);
+                    }
+                }
+            }
+        }
         if !tombstones.contains(&id) {
             tombstones.push(id);
         }
@@ -2355,6 +2388,16 @@ impl ChartEngine {
             let removed = self.data.remove_series(rid);
             debug_assert!(removed, "tracked live series must own a data slot");
         }
+        self.resampled_series.retain(|_, binding| {
+            !tombstones.contains(&binding.source)
+                && binding
+                    .volume_source
+                    .is_none_or(|source| !tombstones.contains(&source))
+                && !tombstones.contains(&binding.target)
+                && binding
+                    .volume_target
+                    .is_none_or(|target| !tombstones.contains(&target))
+        });
         let mut live_streams = self
             .series
             .iter()
@@ -3441,7 +3484,12 @@ impl ChartEngine {
     /// synthetic-bar ingestion API. Generic OHLC writes would desynchronize the visible
     /// projection from the state that owns replay, sequence identity, and incremental updates.
     fn is_source_owned_series(&self, id: SeriesId) -> bool {
-        self.is_footprint_series(id) || self.synthetic_series.contains_key(&id)
+        self.is_footprint_series(id)
+            || self.synthetic_series.contains_key(&id)
+            || self
+                .resampled_series
+                .values()
+                .any(|binding| binding.target == id || binding.volume_target == Some(id))
     }
 
     pub(crate) fn install_footprint_projection(

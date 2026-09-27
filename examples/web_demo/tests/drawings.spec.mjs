@@ -10,7 +10,7 @@ import { PNG } from "pngjs";
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/d1/candles.json", import.meta.url), "utf8"));
 const PR = fixture.pixel_ratio;
-const BLUE = [22, 142, 247]; // semantic primary #168ef7 — anchor border and drawing default
+const BLUE = [0, 145, 255]; // semantic primary #0091ff — anchor border and drawing default
 const PURPLE = [123, 31, 162]; // #7b1fa2 — text label color (collides with no fixture pixel)
 
 test.beforeEach(async ({ page }) => {
@@ -1269,7 +1269,7 @@ test("Ctrl magnets the crosshair to the hovered bar's OHLC", async ({ page }) =>
   await page.evaluate(() => window.__chart.set_drawing_tool("trend_line"));
   // The crosshair's horizontal line is the default crosshair gray — find the pane row with
   // the most of it (the dashed line covers the pane width).
-  const CROSS = [20, 20, 20]; // dedicated light-theme crosshair line #141414
+  const CROSS = [194, 194, 194]; // light border-strong crosshair line #c2c2c2
   const crosshair_row = async () => {
     const png = await capture(page);
     const pane_bottom = Math.round((fixture.css_height - fixture.time_axis_height) * PR);

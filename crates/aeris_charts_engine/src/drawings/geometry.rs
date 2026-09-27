@@ -195,6 +195,17 @@ pub(crate) fn resolve_drawing_geometry<'a>(
             let stop = *px.get(2)?;
             DrawingBodyGeometry::Position(PositionGeometry::from_points(entry, target, stop))
         }
+        DrawingKind::FixedRangeVolumeProfile => DrawingBodyGeometry::Segment {
+            a: *px.first()?,
+            b: *px.get(1)?,
+        },
+        DrawingKind::AnchoredVolumeProfile | DrawingKind::AnchoredVwap => {
+            DrawingBodyGeometry::Vertical {
+                x: px[0].0,
+                y0: pane_top,
+                y1: pane_top + pane_h,
+            }
+        }
     };
 
     let text_box = match body {

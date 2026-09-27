@@ -270,7 +270,52 @@ const SHORT_POSITION: DrawingToolSpec = DrawingToolSpec {
     requests_text_editor: false,
 };
 
-pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 10] = [
+const FIXED_RANGE_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
+    kind: DrawingKind::FixedRangeVolumeProfile,
+    wire_id: 10,
+    name: "fixed_range_volume_profile",
+    placement: DrawingPlacement::ClickAnchors { count: 2 },
+    handles: DrawingHandleMode::Anchors,
+    movement_axis: DrawingMovementAxis::HorizontalOnly,
+    straighten: DrawingStraightenMode::None,
+    logical_extent: DrawingLogicalExtent::Finite,
+    price_extent: DrawingPriceExtent::Full,
+    bounds_padding_ratio: 0.0,
+    default_width: 1.0,
+    requests_text_editor: false,
+};
+
+const ANCHORED_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
+    kind: DrawingKind::AnchoredVolumeProfile,
+    wire_id: 11,
+    name: "anchored_volume_profile",
+    placement: DrawingPlacement::ClickAnchors { count: 1 },
+    handles: DrawingHandleMode::Anchors,
+    movement_axis: DrawingMovementAxis::HorizontalOnly,
+    straighten: DrawingStraightenMode::None,
+    logical_extent: DrawingLogicalExtent::FromFirst,
+    price_extent: DrawingPriceExtent::Full,
+    bounds_padding_ratio: 0.0,
+    default_width: 1.0,
+    requests_text_editor: false,
+};
+
+const ANCHORED_VWAP: DrawingToolSpec = DrawingToolSpec {
+    kind: DrawingKind::AnchoredVwap,
+    wire_id: 12,
+    name: "anchored_vwap",
+    placement: DrawingPlacement::ClickAnchors { count: 1 },
+    handles: DrawingHandleMode::Anchors,
+    movement_axis: DrawingMovementAxis::HorizontalOnly,
+    straighten: DrawingStraightenMode::None,
+    logical_extent: DrawingLogicalExtent::FromFirst,
+    price_extent: DrawingPriceExtent::Full,
+    bounds_padding_ratio: 0.0,
+    default_width: 2.0,
+    requests_text_editor: false,
+};
+
+pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 13] = [
     TREND_LINE,
     HORIZONTAL_LINE,
     HORIZONTAL_RAY,
@@ -281,6 +326,9 @@ pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 10] = [
     PATH,
     LONG_POSITION,
     SHORT_POSITION,
+    FIXED_RANGE_VOLUME_PROFILE,
+    ANCHORED_VOLUME_PROFILE,
+    ANCHORED_VWAP,
 ];
 
 impl DrawingKind {
@@ -296,6 +344,9 @@ impl DrawingKind {
             Self::Path => &PATH,
             Self::LongPosition => &LONG_POSITION,
             Self::ShortPosition => &SHORT_POSITION,
+            Self::FixedRangeVolumeProfile => &FIXED_RANGE_VOLUME_PROFILE,
+            Self::AnchoredVolumeProfile => &ANCHORED_VOLUME_PROFILE,
+            Self::AnchoredVwap => &ANCHORED_VWAP,
         }
     }
 }
