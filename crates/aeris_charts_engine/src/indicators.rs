@@ -1586,13 +1586,16 @@ impl ChartEngine {
         // Indicator chrome defaults: no candle-close countdown (theirs is a line value, not a
         // bar close), the auto-generated name chip shows (platforms override the name through
         // the series `title` option — custom-script indicators will set their own), and the
-        // line draws at 2px — every default is overridable through the ordinary series options.
+        // line draws at 2px without a last-price pulse — every default is overridable through
+        // the ordinary series options.
         for (output_index, &id) in ids.iter().enumerate() {
             if let Some(s) = self.series.iter_mut().find(|s| s.id == id) {
                 s.countdown_visible = false;
                 s.title_visible = true;
                 s.title = indicator_output_title(&kind, output_index);
                 s.line_width = Some(2.0);
+                // The last-price pulse marks the traded series, never a derived study line.
+                s.last_price_animation = false;
                 if output_index == 0 {
                     s.threshold_region = match kind {
                         IndicatorKind::Rsi { .. } => Some(SeriesThresholdRegion {

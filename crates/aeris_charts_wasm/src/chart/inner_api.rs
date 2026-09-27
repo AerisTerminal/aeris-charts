@@ -15,7 +15,12 @@ impl ChartInner {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(state_json) else {
             return false;
         };
-        let Some(outside) = value.get("outside").and_then(parse_area_brush_style) else {
+        // Styles are engine-owned defaults (one fill strength, brand up/down hues, the series' own
+        // faded stroke outside the selection); the host sends only the fields it overrides.
+        let Some(defaults) = self.engine.area_brush_defaults(id as SeriesId) else {
+            return false;
+        };
+        let Some(outside) = parse_area_brush_style(value.get("outside"), defaults.outside) else {
             return false;
         };
         let Some(ranges) = value.get("ranges").and_then(serde_json::Value::as_array) else {
@@ -32,7 +37,12 @@ impl ChartInner {
             let Some(to) = range.get("to").and_then(serde_json::Value::as_f64) else {
                 return false;
             };
-            let Some(style) = entry.get("style").and_then(parse_area_brush_style) else {
+            let base = match entry.get("tone").and_then(serde_json::Value::as_str) {
+                None | Some("positive") => defaults.positive,
+                Some("negative") => defaults.negative,
+                Some(_) => return false,
+            };
+            let Some(style) = parse_area_brush_style(entry.get("style"), base) else {
                 return false;
             };
             parsed_ranges.push(BrushRange { from, to, style });
@@ -349,7 +359,6 @@ impl ChartInner {
     pub fn add_zigzag(&mut self, source_id: u32, deviation_percent: f64) -> u32 {
         self.engine
             .add_zigzag(source_id as SeriesId, deviation_percent)
-            .into()
     }
 
     pub fn add_keltner(&mut self, source_id: u32, period: u32, multiplier: f64) -> Vec<u32> {
@@ -1170,16 +1179,13 @@ impl ChartInner {
 
     /// Toggle the pulsing last-price ring on a series (roadmap Phase B3).
     pub fn set_series_last_price_animation(&mut self, id: u32, enabled: bool) {
-        if let Some(s) = self.series.iter_mut().find(|s| s.id == id as SeriesId) {
-            s.last_price_animation = enabled;
-        }
+        self.engine
+            .set_series_last_price_animation(id as SeriesId, enabled);
     }
 
-    /// Whether any series wants the last-price pulse (so the host can start/stop its rAF loop).
+    /// Whether the frame draws the last-price pulse (so the host can start/stop its rAF loop).
     pub fn wants_animation(&self) -> bool {
-        self.series
-            .iter()
-            .any(|s| !s.removed && s.last_price_animation)
+        self.engine.last_price_pulse_active()
     }
 
     /// Set the host animation clock (ms). The shell's rAF loop calls this then `render()`.
@@ -2965,21 +2971,27 @@ impl ChartInner {
     }
 }
 
-fn parse_area_brush_style(value: &serde_json::Value) -> Option<BrushStyle> {
+/// Overlay a host's partial brush style on the engine default. An absent style or field keeps the
+/// default; a present but invalid field rejects the whole brush update.
+fn parse_area_brush_style(
+    value: Option<&serde_json::Value>,
+    base: BrushStyle,
+) -> Option<BrushStyle> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Some(base);
+    };
+    let color = |key: &str, fallback: Color| match value.get(key) {
+        None => Some(fallback),
+        Some(field) => field.as_str().and_then(Color::parse_css),
+    };
     Some(BrushStyle {
-        line_color: value
-            .get("line_color")?
-            .as_str()
-            .and_then(Color::parse_css)?,
-        top_color: value
-            .get("top_color")?
-            .as_str()
-            .and_then(Color::parse_css)?,
-        bottom_color: value
-            .get("bottom_color")?
-            .as_str()
-            .and_then(Color::parse_css)?,
-        line_width: value.get("line_width")?.as_f64()?,
+        line_color: color("line_color", base.line_color)?,
+        top_color: color("top_color", base.top_color)?,
+        bottom_color: color("bottom_color", base.bottom_color)?,
+        line_width: match value.get("line_width") {
+            None => base.line_width,
+            Some(field) => field.as_f64()?,
+        },
     })
 }
 

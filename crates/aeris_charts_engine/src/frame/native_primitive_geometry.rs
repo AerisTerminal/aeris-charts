@@ -359,7 +359,8 @@ impl ChartEngine {
                     h: (main_height * vpr) as f32,
                     radii: [(6.0 * hpr.min(vpr)) as f32; 4],
                     fill: background,
-                    border_width: hpr.min(vpr).max(1.0) as f32,
+                    border_width: aeris_charts_core::style::border_width_device_px(hpr.min(vpr))
+                        as f32,
                     border_color: border,
                 });
                 if items.len() == 2 && delta_width > 0.0 {

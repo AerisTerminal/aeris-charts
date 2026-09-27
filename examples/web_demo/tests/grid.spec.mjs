@@ -119,9 +119,9 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     header: "rgb(255, 255, 255)",
     chart: "#ffffff",
     axis_text: "#333333",
-    axis_border: "#f1f1f1",
-    grid: "#f1f1f1",
-    border_control: "#f1f1f1",
+    axis_border: "#e7e9e6",
+    grid: "#e7e9e6",
+    border_control: "#e7e9e6",
     crosshair_control: "#141414",
     crosshair_label_control: "#141414",
     bullish: "#089981",
@@ -147,6 +147,11 @@ test("portable design tokens and disabled controls match the brand contract", as
       "text-primary",
       "text-secondary",
       "text-muted",
+      "text-bullish",
+      "text-bearish",
+      "text-interactive",
+      "text-hover",
+      "text-active",
       "hover-bg",
       "active-bg",
       "icon",
@@ -160,8 +165,13 @@ test("portable design tokens and disabled controls match the brand contract", as
       "bullish",
       "bearish",
       "radius-default",
+      "radius-medium",
       "radius-small",
       "radius-large",
+      "fancy-shadow-neutral",
+      "fancy-shadow-primary",
+      "fancy-shadow-destructive",
+      "fancy-shadow-basic",
     ].map((name) => [name, style.getPropertyValue(`--${name}`).trim()]));
   });
 
@@ -175,23 +185,33 @@ test("portable design tokens and disabled controls match the brand contract", as
     "input-fill": "#181818",
     "input-border": "#f0f0f014",
     "text-primary": "#f0f0f0",
-    "text-secondary": "#f0f0f0bd",
+    "text-secondary": "#AEAEB2",
     "text-muted": "#f0f0f05c",
-    "hover-bg": "#f0f0f014",
+    "text-bullish": "#089981",
+    "text-bearish": "#f7525f",
+    "text-interactive": "#c2c2c2",
+    "text-hover": "#f0f0f0",
+    "text-active": "#f0f0f0",
+    "hover-bg": "#f0f0f00d",
     "active-bg": "#f0f0f024",
-    icon: "#f0f0f0a8",
+    icon: "#c2c2c2",
     "icon-active": "#f0f0f0",
     primary: "#168ef7",
     "primary-foreground": "#fff",
-    "button-fill": "#F7F7F7",
+    "button-fill": "#EBEBEB",
     danger: "#fb3748",
     "danger-foreground": "#ffffff",
     ring: "#f0f0f026",
     bullish: "#7c8db0",
     bearish: "#98615c",
     "radius-default": "8px",
+    "radius-medium": "12px",
     "radius-small": "4px",
     "radius-large": "999px",
+    "fancy-shadow-neutral": "0 1px 2px 0 #00000066, 0 0 0 1px #242628",
+    "fancy-shadow-primary": "0 1px 2px 0 #00000066, 0 0 0 1px #168ef7",
+    "fancy-shadow-destructive": "0 1px 2px 0 #00000066, 0 0 0 1px #fb3748",
+    "fancy-shadow-basic": "0 1px 3px 0 #00000055, 0 0 0 1px #262626",
   });
 
   await page.selectOption("#theme_select", "light");
@@ -199,18 +219,23 @@ test("portable design tokens and disabled controls match the brand contract", as
     "font-sans": '-apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif',
     surface: "#ffffff",
     "surface-secondary": "#fafafa",
-    border: "#1414140f",
-    "border-secondary": "#1414140f",
+    border: "#e7e9e6",
+    "border-secondary": "#e7e9e6",
     "border-width": "0.5px",
     "input-fill": "#fafafa",
-    "input-border": "#1414140f",
+    "input-border": "#e7e9e6",
     "text-primary": "#333333",
     "text-secondary": "#7B7B7B",
     "text-muted": "#D1D1D1",
-    "hover-bg": "#14141409",
-    "active-bg": "#1414140d",
-    icon: "#14141480",
-    "icon-active": "#141414",
+    "text-bullish": "#089981",
+    "text-bearish": "#f7525f",
+    "text-interactive": "#646465",
+    "text-hover": "#404040",
+    "text-active": "#404040",
+    "hover-bg": "#f0f0f0",
+    "active-bg": "#f0f0f0",
+    icon: "#646465",
+    "icon-active": "#404040",
     primary: "#168ef7",
     "primary-foreground": "#fff",
     "button-fill": "#333333",
@@ -220,8 +245,13 @@ test("portable design tokens and disabled controls match the brand contract", as
     bullish: "#089981",
     bearish: "#f7525f",
     "radius-default": "8px",
+    "radius-medium": "12px",
     "radius-small": "4px",
     "radius-large": "999px",
+    "fancy-shadow-neutral": "0 1px 2px 0 #1b1c1d7a, 0 0 0 1px #242628",
+    "fancy-shadow-primary": "0 1px 2px 0 #0e121b3d, 0 0 0 1px #168ef7",
+    "fancy-shadow-destructive": "0 1px 2px 0 #0e121b3d, 0 0 0 1px #fb3748",
+    "fancy-shadow-basic": "0 1px 3px 0 #0e121b1f, 0 0 0 1px #ebebeb",
   });
 
   await page.evaluate(() => {
@@ -373,7 +403,9 @@ test("the toolbar's series type and style act on the ACTIVE cell, not always the
   expect(await page.evaluate(() => {
     const options = window.__grid.cells()[1].chart.__seed_series.options();
     return [options.color, options.area_top_color, options.area_bottom_color];
-  })).toEqual(["#089981", "#089981", "#08998100"]);
+    // The toolbar sets the series color; the engine derives the fill at the canonical strength, so
+    // no opaque explicit fill is written.
+  })).toEqual(["#089981", "", ""]);
 
   // The toolbar tracks the active cell: back on the primary, its type is selected again and
   // changes land there instead.
@@ -540,7 +572,7 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   await page.selectOption("#theme_select", "light");
   await wait_grid(page);
   const light_border = await border_hex();
-  expect(light_border.toLowerCase()).toBe("#f1f1f1");
+  expect(light_border.toLowerCase()).toBe("#e7e9e6");
   expect(await divider_rgb()).toBe(to_rgb(light_border));
 
   // An explicit axis border change re-resolves the divider too.

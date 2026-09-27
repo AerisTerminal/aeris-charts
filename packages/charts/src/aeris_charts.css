@@ -8,7 +8,7 @@
  *   Light: default, or data-theme="light" on a root element.
  *   Dark:  class="dark" or data-theme="dark" on a root element.
  *
- * Radius has exactly three values: small (4px), default (8px), and large (999px).
+ * Radius has four values: small (4px), default (8px), medium (12px), and large (999px).
  *
  * Translucent eight-digit hex tokens stay in CSS for host chrome. Shared radii and the
  * opaque sRGB equivalents of chart surfaces, axis text, axis borders, and market
@@ -23,7 +23,7 @@
   --surface: #ffffff;
   --surface-secondary: #fafafa;
 
-  --border: #1414140f;
+  --border: #e7e9e6;
   --border-secondary: var(--border);
   --border-width: 0.5px;
   --input-fill: var(--surface-secondary);
@@ -32,12 +32,17 @@
   --text-primary: #333333;
   --text-secondary: #7B7B7B;
   --text-muted: #D1D1D1;
+  --text-bullish: #089981;
+  --text-bearish: #f7525f;
+  --text-interactive: #646465;
+  --text-hover: #404040;
+  --text-active: #404040;
 
-  --hover-bg: #14141409;
-  --active-bg: #1414140d;
+  --hover-bg: #f0f0f0;
+  --active-bg: #f0f0f0;
 
-  --icon: #14141480;
-  --icon-active: #141414;
+  --icon: #646465;
+  --icon-active: #404040;
 
   --primary: #168ef7;
   --primary-foreground: #fff;
@@ -50,6 +55,7 @@
   --ring: #14141433;
 
   --radius-default: 8px;
+  --radius-medium: 12px;
   --radius-small: 4px;
   --radius-large: 999px;
 
@@ -57,6 +63,11 @@
   --bearish: #f7525f;
   --warning: #f59e0a;
   --overlay: oklch(0 0 0 / 50%);
+
+  --fancy-shadow-neutral: 0 1px 2px 0 #1b1c1d7a, 0 0 0 1px #242628;
+  --fancy-shadow-primary: 0 1px 2px 0 #0e121b3d, 0 0 0 1px var(--primary);
+  --fancy-shadow-destructive: 0 1px 2px 0 #0e121b3d, 0 0 0 1px var(--danger);
+  --fancy-shadow-basic: 0 1px 3px 0 #0e121b1f, 0 0 0 1px #ebebeb;
 
   --background: var(--surface);
   --foreground: var(--text-primary);
@@ -90,13 +101,18 @@
   --input-border: var(--border-secondary);
 
   --text-primary: #f0f0f0;
-  --text-secondary: #f0f0f0bd;
+  --text-secondary: #AEAEB2;
   --text-muted: #f0f0f05c;
+  --text-bullish: #089981;
+  --text-bearish: #f7525f;
+  --text-interactive: #c2c2c2;
+  --text-hover: #f0f0f0;
+  --text-active: #f0f0f0;
 
-  --hover-bg: #f0f0f014;
+  --hover-bg: #f0f0f00d;
   --active-bg: #f0f0f024;
 
-  --icon: #f0f0f0a8;
+  --icon: #c2c2c2;
   --icon-active: #f0f0f0;
 
   --primary: #168ef7;
@@ -105,7 +121,7 @@
   --danger: #fb3748;
   --danger-foreground: #ffffff;
 
-  --button-fill: #F7F7F7;
+  --button-fill: #EBEBEB;
 
   --ring: #f0f0f026;
 
@@ -113,6 +129,11 @@
   --bearish: #98615c;
   --warning: #f59e0a;
   --overlay: oklch(0 0 0 / 50%);
+
+  --fancy-shadow-neutral: 0 1px 2px 0 #00000066, 0 0 0 1px #242628;
+  --fancy-shadow-primary: 0 1px 2px 0 #00000066, 0 0 0 1px var(--primary);
+  --fancy-shadow-destructive: 0 1px 2px 0 #00000066, 0 0 0 1px var(--danger);
+  --fancy-shadow-basic: 0 1px 3px 0 #00000055, 0 0 0 1px #262626;
 
   --background: var(--surface);
   --foreground: var(--text-primary);

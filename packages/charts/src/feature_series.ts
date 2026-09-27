@@ -6,8 +6,13 @@ import type {
 import { set_native_area_brush_state } from "./impl.js";
 import { create_delta_tooltip } from "./primitive_features.js";
 
+/**
+ * Optional overrides for the brushable area. Every unset field keeps the engine default, which uses
+ * the same fill strength as ordinary area and baseline series.
+ */
 export interface brushable_area_interaction_options {
   base_style?: Partial<feature_brush_style>;
+  /** Overrides for the de-emphasized area outside the selection. */
   faded_style?: Partial<feature_brush_style>;
   /** Shared overrides for both selected states. */
   selected_style?: Partial<feature_brush_style>;
@@ -35,37 +40,12 @@ export function enable_brushable_area_interaction(
   if (series.series_type() !== "area") {
     throw new Error("enable_brushable_area_interaction requires an area series");
   }
-  const base: feature_brush_style = {
-    line_color: "rgb(40,98,255)",
-    top_color: "rgba(40,98,255,0.4)",
-    bottom_color: "rgba(40,98,255,0)",
-    line_width: 2,
-    ...options.base_style,
-  };
-  const faded: feature_brush_style = {
-    ...base,
-    line_color: "rgba(40,98,255,0.2)",
-    top_color: "rgba(40,98,255,0.05)",
-    ...options.faded_style,
-  };
-  const positive: feature_brush_style = {
-    ...base,
-    line_color: "rgb(4,153,129)",
-    top_color: "rgba(4,153,129,0.4)",
-    bottom_color: "rgba(4,153,129,0)",
-    line_width: 3,
-    ...options.selected_style,
-    ...options.positive_style,
-  };
-  const negative: feature_brush_style = {
-    ...base,
-    line_color: "rgb(239,83,80)",
-    top_color: "rgba(239,83,80,0.4)",
-    bottom_color: "rgba(239,83,80,0)",
-    line_width: 3,
-    ...options.selected_style,
-    ...options.negative_style,
-  };
+  // The engine owns every default: the canonical area-fill strength, the brand up/down hues for
+  // selected ranges, and the series' own stroke faded outside the selection. Only a host's explicit
+  // overrides travel with the brush state.
+  const outside: Partial<feature_brush_style> = { ...options.base_style, ...options.faded_style };
+  const positive: Partial<feature_brush_style> = { ...options.selected_style, ...options.positive_style };
+  const negative: Partial<feature_brush_style> = { ...options.selected_style, ...options.negative_style };
   const tooltip = create_delta_tooltip(chart, {
     series,
     on_active_range_change(range) {
@@ -74,9 +54,10 @@ export function enable_brushable_area_interaction(
         return;
       }
       set_native_area_brush_state(series, JSON.stringify({
-        outside: faded,
+        outside,
         ranges: [{
           range: { from: range.from, to: range.to },
+          tone: range.positive ? "positive" : "negative",
           style: range.positive ? positive : negative,
         }],
       }));

@@ -38,6 +38,15 @@ impl ChartEngine {
         true
     }
 
+    /// Engine-owned default brush styles for an Area series, derived from its rendered stroke,
+    /// its line width, and the canonical area-fill strength. Hosts override individual fields.
+    pub fn area_brush_defaults(&self, id: SeriesId) -> Option<AreaBrushDefaults> {
+        self.series
+            .iter()
+            .find(|series| series.id == id && !series.removed && series.kind == SeriesKind::Area)
+            .map(crate::frame::area_brush_defaults)
+    }
+
     pub fn clear_area_brush_state(&mut self, id: SeriesId) -> bool {
         let Some(series) = self
             .series
@@ -316,7 +325,8 @@ impl ChartEngine {
             "color",
             s.line_color
                 .clone()
-                .unwrap_or_else(|| crate::DEFAULT_LINE_COLOR.to_css())
+                // The color this series actually strokes (an unset Area reports its Area hue).
+                .unwrap_or_else(|| crate::frame::series_stroke_color(s).to_css())
                 .into(),
         );
         insert("up_color", verbatim(&s.up_color).into());

@@ -16,9 +16,9 @@ use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{Prim, RasterImage, TextAlign};
 use std::sync::LazyLock;
 use tiny_skia::{
-    Color as SkColor, FillRule, FilterQuality, GradientStop, IntSize, LinearGradient, Paint,
-    PathBuilder, Pixmap, PixmapPaint, Point, PremultipliedColorU8, Rect, Shader, SpreadMode,
-    Stroke, StrokeDash, Transform,
+    Color as SkColor, FillRule, FilterQuality, GradientStop, IntSize, LineCap, LineJoin,
+    LinearGradient, Paint, PathBuilder, Pixmap, PixmapPaint, Point, PremultipliedColorU8, Rect,
+    Shader, SpreadMode, Stroke, StrokeDash, Transform,
 };
 
 /// Host system UI sans-serif. Chart layout defaults already name this stack; native
@@ -280,8 +280,11 @@ impl Canvas2d for TinySkiaCanvas {
             shader: Shader::SolidColor(self.stroke),
             ..Paint::default()
         };
+        // The shared stroke contract: round joins, butt caps (see `Canvas2d::stroke`).
         let mut stroke = Stroke {
             width: self.line_width,
+            line_join: LineJoin::Round,
+            line_cap: LineCap::Butt,
             ..Default::default()
         };
         if !self.dash.is_empty() {

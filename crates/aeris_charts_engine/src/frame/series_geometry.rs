@@ -64,6 +64,65 @@ pub(super) fn push_line_stroke(
 /// and the last point's color shows only in its point marker. Yields `(start, end)` as an
 /// exclusive point range plus the run color; adjacent runs share their boundary point, keeping
 /// the path continuous.
+/// One sample of the last-price pulse: ring radius (CSS px) with its fill and outline alphas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PulseStage {
+    pub radius: f64,
+    pub fill_alpha: f64,
+    pub stroke_alpha: f64,
+}
+
+/// Reference last-price animation (series-last-price-animation-pane-view.ts): a 2.6 s cycle in
+/// three stages. The ring grows 4→10 px while its fill fades out and its outline brightens, then
+/// grows 10→14 px while the outline fades, then rests with nothing but the center point. Stage
+/// boundaries are continuous and each cycle ends at rest, so the ring never visibly snaps back.
+pub(crate) fn last_price_pulse_stage(animation_ms: f64) -> PulseStage {
+    /// One stage over `[start, end]` of the cycle; each field interpolates from `.0` to `.1`.
+    struct Span {
+        start: f64,
+        end: f64,
+        radius: (f64, f64),
+        fill_alpha: (f64, f64),
+        stroke_alpha: (f64, f64),
+    }
+    const PERIOD_MS: f64 = 2600.0;
+    const STAGES: [Span; 3] = [
+        Span {
+            start: 0.0,
+            end: 0.25,
+            radius: (4.0, 10.0),
+            fill_alpha: (0.25, 0.0),
+            stroke_alpha: (0.4, 0.8),
+        },
+        Span {
+            start: 0.25,
+            end: 0.525,
+            radius: (10.0, 14.0),
+            fill_alpha: (0.0, 0.0),
+            stroke_alpha: (0.8, 0.0),
+        },
+        Span {
+            start: 0.525,
+            end: 1.0,
+            radius: (14.0, 14.0),
+            fill_alpha: (0.0, 0.0),
+            stroke_alpha: (0.0, 0.0),
+        },
+    ];
+    let phase = animation_ms.rem_euclid(PERIOD_MS) / PERIOD_MS;
+    let span = STAGES
+        .iter()
+        .find(|span| phase <= span.end)
+        .unwrap_or(&STAGES[2]);
+    let t = ((phase - span.start) / (span.end - span.start)).clamp(0.0, 1.0);
+    let lerp = |(from, to): (f64, f64)| from + (to - from) * t;
+    PulseStage {
+        radius: lerp(span.radius),
+        fill_alpha: lerp(span.fill_alpha),
+        stroke_alpha: lerp(span.stroke_alpha),
+    }
+}
+
 fn color_runs(colors: &[Color]) -> Vec<(usize, usize, Color)> {
     let n = colors.len();
     if n == 0 {
@@ -505,13 +564,8 @@ impl ChartEngine {
         let first = points.len() as u32;
         points.extend_from_slice(&row_points);
         let count = row_points.len() as u32;
-        let color = if rs.color != LINE {
-            rs.color
-        } else if rs.kind == SeriesKind::Area {
-            AREA_LINE
-        } else {
-            LINE
-        };
+        // Already the rendered stroke (see `series_stroke_color`).
+        let color = rs.color;
         let point_colors = self.data.point_colors(rs.id);
         // Bollinger background fill: the band between this UPPER output and its LOWER
         // companion, in the band color at the public reference's 0.2 background alpha, painted under
@@ -1353,11 +1407,16 @@ impl ChartEngine {
         let Some(base_value) = self.visible_series_base_value(series_id) else {
             return;
         };
-        let cx = (self.time_scale.index_to_coordinate(index) * hpr) as f32;
+        // Reference centering: x snaps to the device grid with the odd-tick half-pixel correction.
+        let tick_width = hpr.floor().max(1.0);
+        let correction = (tick_width % 2.0) / 2.0;
+        let cx = ((self.time_scale.index_to_coordinate(index) * hpr).round() + correction) as f32;
         let cy = (scale.price_to_coordinate(close, base_value) * vpr) as f32;
+        // The pulse takes the series' own resolved stroke color, like the reference's
+        // `lastValueData.color`, so a recolored line or area pulses in its own color.
+        let stroke_color = || series_stroke_color(series);
         let base = match series_kind {
-            SeriesKind::Line => LINE,
-            SeriesKind::Area => AREA_LINE,
+            SeriesKind::Line | SeriesKind::Area => stroke_color(),
             SeriesKind::Histogram => HISTOGRAM,
             _ => {
                 let open = self
@@ -1370,31 +1429,48 @@ impl ChartEngine {
                     DOWN
                 }
             }
+        }
+        .solid();
+        let line_width = series.line_width.unwrap_or(LINE_WIDTH);
+        let pulse = last_price_pulse_stage(self.animation_time);
+        let with_alpha = |alpha: f64| {
+            Color::rgba(
+                base.r(),
+                base.g(),
+                base.b(),
+                (alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+            )
         };
-        const PERIOD_MS: f64 = 2600.0;
-        let phase = (self.animation_time.rem_euclid(PERIOD_MS) / PERIOD_MS) as f32;
-        let ring = Color::rgba(
-            base.r(),
-            base.g(),
-            base.b(),
-            ((1.0 - phase) * 0.35 * 255.0) as u8,
-        );
+        // Center point: `max(2, lineWidth * 1.5)` CSS px.
         out.push(Prim::Circle {
             cx,
             cy,
-            radius: (4.0 + phase * 10.0) * vpr as f32,
-            fill: ring,
-            stroke_width: 0.0,
-            stroke: ring,
-        });
-        out.push(Prim::Circle {
-            cx,
-            cy,
-            radius: 4.0 * vpr as f32,
+            radius: ((2.0_f64).max(line_width * 1.5) * hpr) as f32,
             fill: base,
             stroke_width: 0.0,
             stroke: base,
         });
+        if pulse.fill_alpha > 0.0 {
+            out.push(Prim::Circle {
+                cx,
+                cy,
+                radius: (pulse.radius * hpr) as f32,
+                fill: with_alpha(pulse.fill_alpha),
+                stroke_width: 0.0,
+                stroke: base,
+            });
+        }
+        if pulse.stroke_alpha > 0.0 {
+            let ring = with_alpha(pulse.stroke_alpha);
+            out.push(Prim::Circle {
+                cx,
+                cy,
+                radius: (pulse.radius * hpr + tick_width / 2.0) as f32,
+                fill: Color::rgba(0, 0, 0, 0),
+                stroke_width: tick_width as f32,
+                stroke: ring,
+            });
+        }
     }
 
     /// industry-standard SELECTION ANCHORS: canonical timestamps sampled when the series was

@@ -1465,7 +1465,7 @@ export interface series_options {
   wick_visible: boolean;
   /** Candlestick body-border visibility (default true; ignored by bar series). */
   border_visible: boolean;
-  /** Line/area stroke width in css px (default 3). */
+  /** Line/area stroke width in css px (default 2, matching indicator lines). */
   line_width: number;
   /** Area fill color at the line (top of the gradient). */
   area_top_color: string;
@@ -1497,7 +1497,10 @@ export interface series_options {
   point_markers: boolean;
   /** Baseline price for a baseline series (omit for auto = visible-range midpoint). */
   baseline_value: number;
-  /** Pulse an expanding ring at the last value (drives an rAF loop), roadmap Phase B3. */
+  /**
+   * Pulse an expanding ring at the last value (drives an rAF loop while visible). Default `true`
+   * for line and area series and `false` for every other type; set `false` to disable.
+   */
   last_price_animation: boolean;
   /** Keep the series in the engine while toggling its visibility. */
   visible: boolean;

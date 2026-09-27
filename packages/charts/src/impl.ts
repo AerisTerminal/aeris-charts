@@ -4170,6 +4170,9 @@ export class chart_impl implements chart_api {
       this.text_editor_reposition?.();
       this.run_canvas_primitives();
       this.emit_visible_range_changes();
+      // The engine owns whether a pulse is drawn (line/area default on, data required), so any
+      // repaint-driving change — new series, type change, data, removal — re-syncs the loop.
+      this.sync_animation();
     }
   }
 

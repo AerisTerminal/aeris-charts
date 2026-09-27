@@ -5012,10 +5012,14 @@ fn conflation_preserves_endpoints_and_pixel_bucket_extrema() {
 }
 
 #[test]
-fn normal_spacing_keeps_every_visible_row() {
+fn normal_spacing_keeps_every_visible_row_plus_one_neighbour_per_edge() {
     let plot = test_plot(32);
     let rows = visible_line_rows(plot.view(), 4, 20, 2.0, 1.0, |index| index as f64 * 2.0);
-    assert_eq!(rows, (4..=20).map(|i| i as usize).collect::<Vec<_>>());
+    // Rows 3 and 21 are off-screen, but the path must keep running to both pane edges.
+    assert_eq!(rows, (3..=21).map(|i| i as usize).collect::<Vec<_>>());
+    // At the data boundaries there is no neighbour to add.
+    let rows = visible_line_rows(plot.view(), 0, 31, 2.0, 1.0, |index| index as f64 * 2.0);
+    assert_eq!(rows, (0..=31).map(|i| i as usize).collect::<Vec<_>>());
 }
 
 #[test]
@@ -7896,8 +7900,8 @@ fn point_markers_radius_option_overrides_the_reference_auto_default() {
             })
             .expect("point marker circle")
     };
-    // reference auto radius (line-pane-view.ts): lineWidth / 2 + 2 = 3.5 at the default width 3.
-    assert_eq!(radius(&mut chart), 3.5);
+    // reference auto radius (line-pane-view.ts): lineWidth / 2 + 2 = 3 at the Aeris default width 2.
+    assert_eq!(radius(&mut chart), 3.0);
     chart.series[0].point_markers_radius = Some(6.0);
     assert_eq!(radius(&mut chart), 6.0);
 }
@@ -7980,18 +7984,19 @@ fn baseline_quadrant_options_flow_into_fills_and_strokes() {
     chart.fit_content();
     let frame = chart.build_frame();
 
-    // reference baselineStyleDefaults: two-stop gradients per quadrant (alphas 0.28 -> 71, 0.05 -> 13).
+    // Each half takes the canonical area gradient of its own line: strong at the extreme, faint
+    // at the baseline (the bottom half runs top-to-bottom, so it is faint -> strong).
+    let (top_strong, top_faint) = area_fill_gradient(BASELINE_TOP_LINE);
+    let (bottom_strong, bottom_faint) = area_fill_gradient(BASELINE_BOTTOM_LINE);
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::AreaFill { gradient, .. }
-            if gradient.top == BASELINE_TOP_FILL1
-                && gradient.bottom == BASELINE_TOP_FILL2
+            if gradient.top == top_strong && gradient.bottom == top_faint
     )));
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::AreaFill { gradient, .. }
-            if gradient.top == BASELINE_BOTTOM_FILL1
-                && gradient.bottom == BASELINE_BOTTOM_FILL2
+            if gradient.top == bottom_faint && gradient.bottom == bottom_strong
     )));
     // One continuous solid stroke per quadrant in the reference line colors.
     assert!(frame.panes[0].main.iter().any(|p| matches!(
@@ -8447,10 +8452,74 @@ fn line_per_point_colors_split_the_stroke_and_color_markers() {
 }
 
 #[test]
-fn area_defaults_share_the_positive_candle_hue() {
+fn brush_defaults_use_the_same_fill_strength_and_brand_hues() {
+    use aeris_charts_core::style::AREA_FILL_STRONG_ALPHA;
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.series[0].kind = SeriesKind::Area;
+    let defaults = chart.area_brush_defaults(0).expect("area series");
+    assert_eq!(
+        (defaults.positive.top_color, defaults.positive.bottom_color),
+        area_fill_gradient(UP)
+    );
+    assert_eq!(
+        (defaults.negative.top_color, defaults.negative.bottom_color),
+        area_fill_gradient(DOWN)
+    );
+    assert_eq!(defaults.positive.top_color.a(), AREA_FILL_STRONG_ALPHA);
+    assert_eq!(defaults.positive.line_width, LINE_WIDTH);
+    // Outside the selection: the series' own stroke, faded, with its fill derived by the same rule.
+    assert_eq!(defaults.outside.line_color.solid(), UP.solid());
+    assert!(defaults.outside.line_color.a() < UP.a());
+    assert_eq!(
+        (defaults.outside.top_color, defaults.outside.bottom_color),
+        area_fill_gradient(defaults.outside.line_color)
+    );
+    // The reported color is the one the area actually strokes.
+    let options: serde_json::Value =
+        serde_json::from_str(&chart.series_options_json(0).unwrap()).unwrap();
+    assert_eq!(options["color"], UP.to_css());
+    // Brushes exist only on Area series.
+    chart.series[0].kind = SeriesKind::Line;
+    assert!(chart.area_brush_defaults(0).is_none());
+}
+
+#[test]
+fn area_like_fills_share_one_strength_and_follow_their_own_line_color() {
+    use aeris_charts_core::style::{AREA_FILL_FAINT_ALPHA, AREA_FILL_STRONG_ALPHA};
     assert_eq!(AREA_LINE, UP);
-    assert_eq!(AREA_TOP, Color::rgba(UP.r(), UP.g(), UP.b(), 102));
-    assert_eq!(AREA_BOTTOM, Color::rgba(UP.r(), UP.g(), UP.b(), 0));
+    let fill_of = |kind: SeriesKind, line_color: Option<&str>| {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart.series[0].kind = kind;
+        chart.series[0].line_color = line_color.map(str::to_string);
+        chart.series[0].top_line_color = line_color.map(str::to_string);
+        let values = [10.0, 20.0, 12.0];
+        chart
+            .set_series_data(0, &[1.0, 2.0, 3.0], &values, &values, &values, &values)
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .find_map(|p| match p {
+                Prim::AreaFill { gradient, .. } => Some(gradient.top),
+                _ => None,
+            })
+            .expect("area fill")
+    };
+    // Area and the baseline's upper half use the same strength of the same default hue.
+    let area = fill_of(SeriesKind::Area, None);
+    let baseline = fill_of(SeriesKind::Baseline, None);
+    assert_eq!(
+        area,
+        Color::rgba(UP.r(), UP.g(), UP.b(), AREA_FILL_STRONG_ALPHA)
+    );
+    assert_eq!(baseline, area);
+    // A recolored line recolors its fill at the same strength.
+    let red = fill_of(SeriesKind::Area, Some("#ff0000"));
+    assert_eq!(red, Color::rgba(0xff, 0, 0, AREA_FILL_STRONG_ALPHA));
+    assert_eq!(fill_of(SeriesKind::Baseline, Some("#ff0000")), red);
+    assert_eq!(area_fill_gradient(UP).1.a(), AREA_FILL_FAINT_ALPHA);
 }
 
 #[test]
@@ -8471,7 +8540,7 @@ fn area_per_point_colors_split_only_the_stroke() {
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::AreaFill { gradient, .. }
-            if gradient.top == AREA_TOP && gradient.bottom == AREA_BOTTOM
+            if (gradient.top, gradient.bottom) == area_fill_gradient(AREA_LINE)
     )));
     // The stroke splits: segment 0->1 keeps the series color, 1->2 takes point 1's color.
     let stroke_colors: Vec<Color> = frame.panes[0]
@@ -9375,9 +9444,7 @@ fn boxed_labels_begin_beyond_the_axis_border_at_every_dpr() {
         let mut primitives = Vec::new();
         chart.build_axis_primitives_into(&axis, &mut primitives, |_| 0.0);
 
-        let border_w = (aeris_charts_core::style::BORDER_WIDTH * dpr)
-            .round()
-            .max(1.0) as i32;
+        let border_w = aeris_charts_core::style::border_width_device_px(dpr) as i32;
         let price_border = ((chart.pane_left + chart.pane_w) * dpr).round() as i32;
         let title_box = primitives.iter().find_map(|primitive| match primitive {
             Prim::RoundRect {
@@ -11467,4 +11534,35 @@ fn selecting_a_series_accents_its_last_value_chip() {
     assert_eq!(accents(&mut chart).len(), 1);
     chart.set_selected_series(None);
     assert!(accents(&mut chart).is_empty());
+}
+
+#[test]
+fn pulse_stages_match_the_reference_and_stay_continuous() {
+    use super::series_geometry::last_price_pulse_stage as stage;
+    let start = stage(0.0);
+    assert_eq!(
+        (start.radius, start.fill_alpha, start.stroke_alpha),
+        (4.0, 0.25, 0.4)
+    );
+    let peak = stage(2600.0 * 0.25);
+    assert_eq!(
+        (peak.radius, peak.fill_alpha, peak.stroke_alpha),
+        (10.0, 0.0, 0.8)
+    );
+    let faded = stage(2600.0 * 0.525);
+    assert!((faded.radius - 14.0).abs() < 1e-9 && faded.stroke_alpha.abs() < 1e-9);
+    // No jumps inside a cycle: 1 ms steps never move the ring more than a fraction of a pixel.
+    let mut previous = stage(0.0);
+    for ms in 1..2600 {
+        let next = stage(f64::from(ms));
+        assert!(
+            (next.radius - previous.radius).abs() < 0.05,
+            "radius jump at {ms} ms"
+        );
+        assert!(
+            (next.stroke_alpha - previous.stroke_alpha).abs() < 0.01,
+            "alpha jump at {ms} ms"
+        );
+        previous = next;
+    }
 }

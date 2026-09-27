@@ -730,6 +730,14 @@ pub struct BrushStyle {
     pub line_width: f64,
 }
 
+/// Engine-owned default brush styles for one Area series; hosts override individual fields only.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AreaBrushDefaults {
+    pub outside: BrushStyle,
+    pub positive: BrushStyle,
+    pub negative: BrushStyle,
+}
+
 /// One logical half-open range styled by the brushable-area interaction.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BrushRange {
@@ -795,6 +803,9 @@ pub struct SeriesEntry {
     pub visible: bool,
     pub baseline: Option<f64>,
     pub last_price_animation: bool,
+    /// Set once a host chooses the pulse explicitly; a kind change then keeps that choice instead
+    /// of adopting the new kind's default.
+    pub(crate) last_price_animation_explicit: bool,
     /// reference `SeriesOptionsCommon.lastValueVisible` (series-options-defaults.ts: true): draw this
     /// series' last-value label on its price scale.
     pub last_value_visible: bool,
@@ -958,7 +969,10 @@ impl SeriesEntry {
             point_markers: false,
             visible: true,
             baseline: None,
-            last_price_animation: false,
+            // Aeris product default: line and area series pulse their last price. Hosts opt out
+            // per series; every other kind stays static unless a host opts in.
+            last_price_animation: Self::default_last_price_animation(kind),
+            last_price_animation_explicit: false,
             // Reference-compatible defaults except for explicit Aeris product choices: the live
             // price line defaults to partial extent, and crosshair markers stay disabled until the
             // host opts in per series or indicator output.
@@ -1018,6 +1032,10 @@ impl SeriesEntry {
         }
     }
 
+    pub(crate) fn default_last_price_animation(kind: SeriesKind) -> bool {
+        matches!(kind, SeriesKind::Line | SeriesKind::Area)
+    }
+
     /// Restore engine-owned visual styling without replacing the live series or its semantic/runtime
     /// state. Data, visibility, title metadata, pane/scale binding, price formatting, quotes,
     /// marker payloads, indicator semantics, retention, and transient interaction state survive.
@@ -1039,6 +1057,7 @@ impl SeriesEntry {
         self.line_type = defaults.line_type;
         self.point_markers = defaults.point_markers;
         self.last_price_animation = defaults.last_price_animation;
+        self.last_price_animation_explicit = false;
         self.last_value_visible = defaults.last_value_visible;
         self.title_visible = defaults.title_visible;
         self.countdown_visible = defaults.countdown_visible;
@@ -2191,6 +2210,11 @@ impl ChartEngine {
             if kind == SeriesKind::Footprint {
                 return;
             }
+            // The last-price pulse follows the new kind's default unless the host chose it
+            // explicitly, so an opt-out or opt-in survives any chain of conversions.
+            if !s.last_price_animation_explicit {
+                s.last_price_animation = SeriesEntry::default_last_price_animation(kind);
+            }
             s.kind = kind;
             if kind != SeriesKind::Area {
                 s.area_brush = None;
@@ -2844,6 +2868,26 @@ impl ChartEngine {
     /// this fallback instead of assuming id 0 is alive.
     pub(crate) fn primary_series(&self) -> Option<&SeriesEntry> {
         self.series.iter().find(|s| !s.removed && s.visible)
+    }
+
+    /// Host choice for a series' last-price pulse. Line and area default on; this records an
+    /// explicit opt-out (or opt-in for other kinds) that later kind changes preserve.
+    pub fn set_series_last_price_animation(&mut self, id: SeriesId, enabled: bool) -> bool {
+        let Some(series) = self.series.iter_mut().find(|s| s.id == id && !s.removed) else {
+            return false;
+        };
+        series.last_price_animation = enabled;
+        series.last_price_animation_explicit = true;
+        true
+    }
+
+    /// Whether the frame draws a last-price pulse, which is exactly when a host must keep its
+    /// animation clock running. Mirrors `build_last_pulse_frame`: the primary series owns the
+    /// pulse and needs data, so an empty or opted-out chart never runs an animation loop.
+    pub fn last_price_pulse_active(&self) -> bool {
+        self.primary_series().is_some_and(|series| {
+            series.last_price_animation && !self.data.plot(series.id).is_empty()
+        })
     }
 
     /// Series ids in stable saved order (bottom to top; topmost LAST), live series only.

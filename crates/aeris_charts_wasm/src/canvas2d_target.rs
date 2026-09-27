@@ -153,6 +153,9 @@ impl Canvas2d for WasmCanvas2d<'_> {
     }
     fn stroke(&mut self) {
         self.ops += 1;
+        // Set per stroke: host plugins share this context and may leave other join/cap state.
+        self.ctx.set_line_join("round");
+        self.ctx.set_line_cap("butt");
         self.ctx.stroke();
     }
     fn fill(&mut self) {

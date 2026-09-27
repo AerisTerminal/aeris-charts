@@ -256,6 +256,7 @@
       <label><input type="radio" name="series" value="hollow_candlestick"> hollow candles</label>
       <label><input type="radio" name="series" value="bar"> bars</label>
       <label><input type="radio" name="series" value="line"> line</label>
+      <label><input type="radio" name="series" value="line_markers"> line + markers</label>
       <label><input type="radio" name="series" value="area"> area</label>
       <label><input type="radio" name="series" value="histogram"> histogram</label>
       <label><input type="radio" name="series" value="baseline"> baseline</label>
@@ -281,7 +282,9 @@
     <div class="group" id="line_style" data-caption="Line style" hidden>
       <h2>Line style</h2>
       <label id="line_color_label">color <input type="color" id="line_color" value="#2196f3"></label>
-      <label>width <input type="range" id="line_width" min="1" max="8" step="1" value="3"><span id="line_width_val">3</span></label>
+      <label>width <input type="range" id="line_width" min="1" max="8" step="1" value="2"><span id="line_width_val">2</span></label>
+      <label><input type="checkbox" id="point_markers_toggle"> point markers</label>
+      <label><input type="checkbox" id="last_price_pulse_toggle" checked> last-price pulse</label>
     </div>
 
     <!-- area fill -->
@@ -1343,10 +1346,15 @@ function apply_main_style() {
     border_visible: document.getElementById("border_visible").checked,
     color: kind === "area" ? document.getElementById("area_top").value : document.getElementById("line_color").value,
     line_width: Number(document.getElementById("line_width").value),
-    area_top_color: document.getElementById("area_top").value,
-    // fade the fill to fully-transparent at the base (standard area look)
-    area_bottom_color: document.getElementById("area_top").value + "00",
+    // No explicit area fill: the engine derives it from the series color at the canonical fill
+    // strength shared by area, baseline, and brushable area.
+    point_markers: document.getElementById("point_markers_toggle").checked,
   };
+  // The engine turns the pulse on for line and area by default; the toggle only carries a
+  // user's opt-out for those kinds and never forces the pulse onto other kinds.
+  if (kind === "line" || kind === "area") {
+    options.last_price_animation = document.getElementById("last_price_pulse_toggle").checked;
+  }
   if (candle_part_touched.wick_up && !hollow_up()) options.wick_up_color = document.getElementById("wick_up_color").value;
   if (candle_part_touched.wick_down && !hollow_down()) options.wick_down_color = document.getElementById("wick_down_color").value;
   if (candle_part_touched.border_up && !hollow_up()) options.border_up_color = document.getElementById("border_up_color").value;
@@ -1394,7 +1402,11 @@ function sync_active_toolbar() {
   const options = current.options();
   const presented_kind = kind === "candlestick" && options.up_color === "transparent" && options.down_color === "transparent"
     ? "hollow_candlestick"
-    : kind;
+    : kind === "line" && options.point_markers
+      ? "line_markers"
+      : kind;
+  document.getElementById("point_markers_toggle").checked = options.point_markers === true;
+  document.getElementById("last_price_pulse_toggle").checked = options.last_price_animation === true;
   const radio = document.querySelector(`input[name="series"][value="${presented_kind}"]`);
   for (const peer of document.querySelectorAll('input[name="series"]')) peer.checked = peer === radio;
   document.getElementById("price_line_toggle").checked = options.price_line_visible ?? true;
@@ -1504,8 +1516,20 @@ document.getElementById("line_width").addEventListener("input", (e) => {
   document.getElementById("line_width_val").textContent = e.target.value;
   active_series().apply_options({ line_width: Number(e.target.value) });
 });
+document.getElementById("point_markers_toggle").addEventListener("change", (e) => {
+  const series = active_series();
+  series.apply_options({ point_markers: e.target.checked });
+  // Keep the Series radio in step: a line with markers is presented as "line + markers".
+  if (series.series_type() === "line") {
+    const value = e.target.checked ? "line_markers" : "line";
+    for (const radio of document.querySelectorAll('input[name="series"]')) radio.checked = radio.value === value;
+  }
+});
+document.getElementById("last_price_pulse_toggle").addEventListener("change", (e) => {
+  active_series().apply_options({ last_price_animation: e.target.checked });
+});
 document.getElementById("area_top").addEventListener("input", (e) => {
-  active_series().apply_options({ color: e.target.value, area_top_color: e.target.value, area_bottom_color: e.target.value + "00" });
+  active_series().apply_options({ color: e.target.value });
 });
 
 document.getElementById("vol_toggle").addEventListener("change", (e) => {
@@ -1647,9 +1671,15 @@ if (grid !== null) {
 document.querySelectorAll('input[name="series"]').forEach((el) => {
   el.addEventListener("change", () => {
     if (active_chart() === chart) window.__demo_catalogs?.series.select_base(el.value);
-    const kind = el.value === "hollow_candlestick" ? "candlestick" : el.value;
+    const kind = el.value === "hollow_candlestick"
+      ? "candlestick"
+      : el.value === "line_markers" ? "line" : el.value;
     candle_body_mode = el.value === "hollow_candlestick" ? "hollow" : "solid";
+    // "line + markers" is a line presentation, like hollow candles are a candlestick one.
+    document.getElementById("point_markers_toggle").checked = el.value === "line_markers";
     active_series().set_type(kind);
+    // Show the engine's per-kind pulse default for the new type (or the user's retained opt-out).
+    document.getElementById("last_price_pulse_toggle").checked = active_series().options().last_price_animation === true;
     sync_style_visibility(kind);
     apply_main_style();
   });

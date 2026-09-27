@@ -953,7 +953,8 @@ impl ChartEngine {
             if let Some(border) = box_border {
                 out.push(Prim::RectFrame {
                     rect,
-                    border: (drawing.box_border_width * vpr).round().max(1.0) as i32,
+                    // Browser border semantics: whole device pixels, rounded down, at least one.
+                    border: (drawing.box_border_width * vpr).floor().max(1.0) as i32,
                     color: border,
                 });
             }

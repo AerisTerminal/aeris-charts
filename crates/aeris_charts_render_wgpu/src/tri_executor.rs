@@ -12,8 +12,8 @@
 
 use aeris_charts_render::draw_list::{LineType, Prim};
 use aeris_charts_render::line::{
-    build_area_fill, build_disc, build_line_stroke, expand_band, AreaMesh, LineParams, LinePoint,
-    LineVertex, StrokeMesh,
+    build_area_fill, build_disc, expand_band, expand_line, round_rect_polygon, stroke_aa, AreaMesh,
+    LineParams, LinePoint, LineVertex,
 };
 
 use crate::tri_pipeline::TriVertex;
@@ -46,33 +46,6 @@ fn identity(line_width: f64, line_type: LineType) -> LineParams {
         vertical_pixel_ratio: 1.0,
         line_width,
         line_type,
-    }
-}
-
-/// Approximate a rounded rectangle with a small, deterministic polygon. RoundRect is currently
-/// used by engine-owned square markers; keeping it in the shared Prim adapter means those markers
-/// render in WebGPU exactly as they do through the Canvas2D/native paths instead of disappearing.
-fn round_rect_polygon(x: f32, y: f32, w: f32, h: f32, radii: [f32; 4]) -> Vec<[f32; 2]> {
-    use std::f32::consts::PI;
-    let max_radius = (w.abs().min(h.abs()) / 2.0).max(0.0);
-    let [lt, rt, rb, lb] = radii.map(|r| r.max(0.0).min(max_radius));
-    let mut out = Vec::with_capacity(24);
-    out.push([x + lt, y]);
-    out.push([x + w - rt, y]);
-    append_arc(&mut out, x + w - rt, y + rt, rt, -PI / 2.0, 0.0);
-    out.push([x + w, y + h - rb]);
-    append_arc(&mut out, x + w - rb, y + h - rb, rb, 0.0, PI / 2.0);
-    out.push([x + lb, y + h]);
-    append_arc(&mut out, x + lb, y + h - lb, lb, PI / 2.0, PI);
-    out.push([x, y + lt]);
-    append_arc(&mut out, x + lt, y + lt, lt, PI, 3.0 * PI / 2.0);
-    out
-}
-
-fn append_arc(out: &mut Vec<[f32; 2]>, cx: f32, cy: f32, radius: f32, start: f32, end: f32) {
-    for step in 1..=4 {
-        let t = start + (end - start) * (step as f32 / 4.0);
-        out.push([cx + radius * t.cos(), cy + radius * t.sin()]);
     }
 }
 
@@ -293,15 +266,21 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
             color,
             ..
         } => {
-            let pts = pool_slice(points, *first_point, *point_count);
-            let mut mesh = StrokeMesh::default();
-            build_line_stroke(
-                &pts,
-                *color,
-                &identity(*width as f64, *line_type),
-                &mut mesh,
-            );
-            out.extend(mesh.vertices.iter().map(tri));
+            // Shared anti-aliased stroker (the one GPUI uses): per-vertex coverage gives edges a
+            // continuous ramp on top of MSAA instead of four coverage levels.
+            let pts = expand_line(&pool_slice(points, *first_point, *point_count), *line_type);
+            let rgba = [
+                color.r() as f32 / 255.0,
+                color.g() as f32 / 255.0,
+                color.b() as f32 / 255.0,
+                color.a() as f32 / 255.0,
+            ];
+            stroke_aa(&pts, *width, |triangle| {
+                out.extend(triangle.map(|vertex| TriVertex {
+                    pos: vertex.position,
+                    color: [rgba[0], rgba[1], rgba[2], rgba[3] * vertex.coverage()],
+                }));
+            });
         }
         Prim::Circle {
             cx,
@@ -408,6 +387,11 @@ mod tests {
             !stroke.is_empty(),
             "two segments + a join tessellate to tris"
         );
+        // Edges are anti-aliased in the mesh itself: a solid core plus vertices that fade to zero
+        // coverage, never a hard-edged quad left to MSAA alone.
+        assert!(stroke.iter().any(|vertex| vertex.color[3] == 1.0));
+        assert!(stroke.iter().any(|vertex| vertex.color[3] == 0.0));
+        assert!(stroke.iter().all(|vertex| vertex.color[2] == 1.0));
     }
 
     #[test]
@@ -512,5 +496,29 @@ mod tests {
             stroke.len() >= 3 * 8,
             "rounded marker must produce filled triangles"
         );
+    }
+
+    #[test]
+    fn pill_ends_stay_round_at_high_dpr() {
+        // A 24 CSS px capsule at DPR 3: every chord midpoint must sit within 0.1 device px of the
+        // true arc, otherwise the pill ends read as faceted.
+        let (h, radius) = (72.0_f32, 36.0_f32);
+        let poly = round_rect_polygon(0.0, 0.0, 300.0, h, [radius; 4]);
+        let center = [radius, radius];
+        let mut worst = 0.0_f32;
+        for pair in poly.windows(2) {
+            let on_left_arc = pair.iter().all(|p| {
+                p[0] <= radius + 1e-3
+                    && ((p[0] - center[0]).hypot(p[1] - center[1]) - radius).abs() < 1e-2
+            });
+            if on_left_arc {
+                let mid = [
+                    (pair[0][0] + pair[1][0]) / 2.0,
+                    (pair[0][1] + pair[1][1]) / 2.0,
+                ];
+                worst = worst.max(radius - (mid[0] - center[0]).hypot(mid[1] - center[1]));
+            }
+        }
+        assert!(worst > 0.0 && worst <= 0.1, "chord error {worst} device px");
     }
 }

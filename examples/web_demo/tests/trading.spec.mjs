@@ -249,6 +249,7 @@ test("trading state is chart-local and clear removes all live objects", async ({
     positions: [],
     orders: [],
     executions: [],
+    round_trips: [],
   });
 });
 

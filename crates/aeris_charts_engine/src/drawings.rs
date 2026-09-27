@@ -658,7 +658,7 @@ impl Drawing {
             text_v_align,
             box_color: None,
             box_border_color: None,
-            box_border_width: 1.0,
+            box_border_width: aeris_charts_core::style::BORDER_WIDTH,
         }
     }
 

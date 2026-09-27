@@ -405,14 +405,12 @@ impl ChartInner {
                     anchor_timestamp_micros,
                 },
             )
-            .map(|id| id as u32)
             .unwrap_or(u32::MAX)
     }
 
     pub(super) fn add_delta_series(&mut self, stream_id: u32, pane_index: usize) -> u32 {
         self.engine
             .add_delta_series(stream_id as u64, pane_index)
-            .map(|id| id as u32)
             .unwrap_or(u32::MAX)
     }
 

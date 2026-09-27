@@ -3475,7 +3475,9 @@ mod tests {
                 assert!(texts.contains(&text), "missing segment {text:?}: {texts:?}");
             }
             assert!(texts.iter().all(|text| !matches!(*text, "TP" | "SL" | "×")));
-            let expected_height = (chart.options.get().layout.font_size + 5.0) as f32;
+            let old_axis_label_height = (chart.options.get().layout.font_size + 5.0) as f32;
+            let expected_height = chart.trading_control_height() as f32;
+            assert!(expected_height > old_axis_label_height);
             let round_rect_heights = trading
                 .iter()
                 .filter_map(|primitive| match primitive {
@@ -3489,13 +3491,13 @@ mod tests {
                     .filter(|height| (**height - expected_height).abs() < f32::EPSILON)
                     .count()
                     >= 1,
-                "visible outer controls must match the axis-label height"
+                "visible outer controls must use the taller trading-label height"
             );
             assert!(
                 round_rect_heights
                     .iter()
                     .all(|height| *height <= expected_height),
-                "trading controls must not exceed the axis-label height"
+                "trading controls must not exceed the canonical trading-label height"
             );
         }
     }
@@ -3666,6 +3668,165 @@ mod tests {
     }
 
     #[test]
+    fn close_tooltip_names_the_exact_action_for_each_order_state() {
+        let partially_filled = WorkingOrder {
+            status: OrderStatus::PartiallyFilled,
+            filled_quantity: 7.0,
+            ..order("order-1", OrderRole::Working, 102.0)
+        };
+        let pending = WorkingOrder {
+            status: OrderStatus::PendingSubmit,
+            ..order("order-1", OrderRole::Working, 102.0)
+        };
+        let remaining = format!(
+            "Cancel remaining {}",
+            chart_with_market().format_trading_quantity(5.0)
+        );
+        for (order, expected) in [
+            (
+                order("order-1", OrderRole::Working, 102.0),
+                Some("Cancel order"),
+            ),
+            (partially_filled, Some(remaining.as_str())),
+            (
+                order("order-1", OrderRole::TakeProfit, 102.0),
+                Some("Cancel take profit"),
+            ),
+            (
+                order("order-1", OrderRole::StopLoss, 102.0),
+                Some("Cancel stop loss"),
+            ),
+            // The close control does nothing on a pending order, so it must not claim an action.
+            (pending, None),
+        ] {
+            let mut chart = chart_with_market();
+            chart
+                .set_trading_snapshot(TradingSnapshot {
+                    orders: vec![order],
+                    ..TradingSnapshot::default()
+                })
+                .unwrap();
+            let (cancel_x, cancel_y) = cancel_center(
+                &mut chart,
+                TradingObjectId::Order(id("order-1", OrderId::new)),
+            );
+            chart.set_trading_hover(cancel_x, cancel_y);
+            chart.arm_trading_tooltip();
+            let frame = chart.build_frame();
+            let segments = chart.frame_pane_segments(0).unwrap();
+            let labels = frame.panes[0].main[segments.drawings_end..segments.trading_end]
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::Text { text, .. }
+                        if text.starts_with("Cancel") || text.starts_with("Close") =>
+                    {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(labels, expected.into_iter().collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn close_feedback_uses_brand_hover_and_active_surfaces_not_the_order_color() {
+        use aeris_charts_core::style::{DARK_ACCENT_RGB, DARK_ACTIVE_RGB, DARK_MUTED_RGB};
+        let mut chart = chart_with_market();
+        chart
+            .update_trading_position(position(PositionSide::Long))
+            .unwrap();
+        let (cancel_x, cancel_y) = cancel_center(
+            &mut chart,
+            TradingObjectId::Position(id("position-1", PositionId::new)),
+        );
+        let close_surface = |chart: &mut ChartEngine| {
+            let frame = chart.build_frame();
+            let segments = chart.frame_pane_segments(0).unwrap();
+            frame.panes[0].main[segments.drawings_end..segments.trading_end]
+                .iter()
+                .find_map(|primitive| match primitive {
+                    Prim::RoundRect { x, w, h, fill, .. }
+                        if w == h && f64::from(*x) <= cancel_x && f64::from(x + w) >= cancel_x =>
+                    {
+                        Some(*fill)
+                    }
+                    _ => None,
+                })
+                .expect("close surface")
+        };
+        let rgb = |token: (u8, u8, u8)| Color::rgb(token.0, token.1, token.2);
+        assert_eq!(close_surface(&mut chart), rgb(DARK_MUTED_RGB));
+        assert!(chart.set_trading_hover(cancel_x, cancel_y));
+        assert_eq!(close_surface(&mut chart), rgb(DARK_ACCENT_RGB));
+        assert!(chart.set_trading_pressed(cancel_x, cancel_y));
+        assert_eq!(close_surface(&mut chart), rgb(DARK_ACTIVE_RGB));
+    }
+
+    #[test]
+    fn pill_outline_is_pixel_crisp_and_evenly_dashed_at_every_dpr() {
+        let mut chart = chart_with_market();
+        chart
+            .update_trading_position(position(PositionSide::Long))
+            .unwrap();
+        chart.build_frame();
+        for vpr in [1.0_f64, 1.5, 2.0, 3.0] {
+            let stroke = (aeris_charts_core::style::BORDER_WIDTH * vpr)
+                .floor()
+                .max(1.0);
+            let dash = (2.0 * vpr).round();
+            let (mut regions, mut out, mut points) = (Vec::new(), Vec::new(), Vec::new());
+            chart.build_trading_frame_for_test(0, vpr, vpr, &mut regions, &mut out, &mut points);
+            let mut edges: Vec<(f32, Vec<(f32, f32)>)> = Vec::new();
+            for primitive in &out {
+                let Prim::Polyline {
+                    first_point,
+                    point_count: 2,
+                    width,
+                    ..
+                } = primitive
+                else {
+                    continue;
+                };
+                let [a, b] = [
+                    points[*first_point as usize],
+                    points[*first_point as usize + 1],
+                ];
+                if a[1] != b[1] || (a[0] - b[0]).abs() > dash as f32 + 0.01 {
+                    continue;
+                }
+                assert_eq!(f64::from(*width), stroke, "outline must be --border-width");
+                // The stroke center sits so the hairline covers whole pixel rows.
+                assert_eq!(
+                    (f64::from(a[1]) - stroke / 2.0).fract(),
+                    0.0,
+                    "blurred edge at dpr {vpr}"
+                );
+                let span = (a[0].min(b[0]), a[0].max(b[0]));
+                match edges.iter_mut().find(|(y, _)| *y == a[1]) {
+                    Some((_, spans)) => spans.push(span),
+                    None => edges.push((a[1], vec![span])),
+                }
+            }
+            assert_eq!(edges.len(), 2, "top and bottom edges at dpr {vpr}");
+            for (_, spans) in &mut edges {
+                spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+                for (start, end) in spans.iter() {
+                    assert_eq!(start.fract(), 0.0);
+                    assert_eq!(f64::from(end - start), dash, "uneven dash at dpr {vpr}");
+                }
+                for pair in spans.windows(2) {
+                    assert_eq!(
+                        f64::from(pair[1].0 - pair[0].1),
+                        dash,
+                        "uneven gap at dpr {vpr}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn action_tooltips_follow_the_theme_and_hollow_outlines_stay_hairline() {
         let mut chart = chart_with_market();
         chart
@@ -3684,7 +3845,7 @@ mod tests {
         let tooltip_y = trading
             .iter()
             .find_map(|primitive| match primitive {
-                Prim::Text { text, y, .. } if text == "Close Position" => Some(*y),
+                Prim::Text { text, y, .. } if text == "Close position" => Some(*y),
                 _ => None,
             })
             .expect("armed tooltip");
@@ -3713,12 +3874,16 @@ mod tests {
             Color::parse_css(&chart.options.get().right_price_scale.border_color).unwrap();
         assert_eq!(border_color, axis_border.solid());
 
-        // Every outlined chip in the marker draws a hairline, never a doubled frame.
-        for vpr in [1.0_f64, 1.5, 2.0, 3.0] {
-            let hairline = vpr.floor().max(1.0) as f32;
+        // Every outlined chip uses the brand's 0.5 CSS px `--border-width`, snapped like a browser
+        // border: whole device pixels, never below one.
+        for vpr in [1.0_f64, 1.5, 2.0, 3.0, 4.0] {
+            let hairline = (aeris_charts_core::style::BORDER_WIDTH * vpr)
+                .floor()
+                .max(1.0) as f32;
             let mut out = Vec::new();
             let mut regions = Vec::new();
-            chart.build_trading_frame_for_test(0, vpr, vpr, &mut regions, &mut out);
+            let mut points = Vec::new();
+            chart.build_trading_frame_for_test(0, vpr, vpr, &mut regions, &mut out, &mut points);
             for primitive in &out {
                 if let Prim::RoundRect { border_width, .. } = primitive {
                     if *border_width > 0.0 {
@@ -3956,8 +4121,10 @@ mod tests {
         let frame = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
         let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
-        // Two outlined chips per marker: the readout (quantity + detail as ONE chip, no inner
-        // borders) and the close chip detached after a gap.
+        // One pill contains quantity, detail, and the integrated close cell for every marker.
+        let pill_radius = (chart.trading_control_height() / 2.0)
+            .min(aeris_charts_core::style::RADIUS_LARGE) as f32;
+        let marker_start = chart.trading_marker_start() as f32;
         let chips = trading
             .iter()
             .filter_map(|primitive| match primitive {
@@ -3968,58 +4135,46 @@ mod tests {
                     radii,
                     border_width,
                     ..
-                } if *border_width > 0.0 => Some((*x, *y, *w, *radii)),
+                } if *border_width == 0.0
+                    && *radii == [pill_radius; 4]
+                    && (*x - marker_start).abs() <= 0.5 =>
+                {
+                    Some((*x, *y, *w, *radii))
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(chips.len(), 8);
-        let marker_start = chart.trading_marker_start() as f32;
-        let readouts = chips
-            .iter()
-            .filter(|(start, _, _, _)| (*start - marker_start).abs() <= 0.5)
-            .collect::<Vec<_>>();
-        assert_eq!(readouts.len(), 4);
+        assert_eq!(chips.len(), 4);
         for (start, _, width, radii) in &chips {
             assert!(*width > 0.0);
-            assert!(*start >= marker_start - 0.5);
-            assert_eq!(*radii, [0.0; 4], "chip at {start} must stay square");
+            assert!((*start - marker_start).abs() <= 0.5);
+            assert_eq!(
+                *radii, [pill_radius; 4],
+                "chip at {start} must use the shared pill-radius token"
+            );
         }
-        // Every readout is followed by a close chip that clears it, and the separation is the
-        // same on all four markers.
-        let gaps = readouts
-            .iter()
-            .map(|(start, row, width, _)| {
-                let readout_end = *start + *width;
-                // Match the close chip on this marker's own row, not one from a neighbouring one.
-                chips
-                    .iter()
-                    .find(|(other, other_row, _, _)| {
-                        *other > readout_end && (*other_row - *row).abs() <= 0.5
-                    })
-                    .map(|(other, _, _, _)| *other - readout_end)
-                    .expect("a close chip after every readout")
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(gaps.len(), 4);
-        for gap in &gaps {
-            assert!(*gap > 0.0, "the close chip must not touch its readout");
-            assert!((*gap - gaps[0]).abs() <= 0.5, "markers disagree on the gap");
-        }
-        // The quantity cell is the only solid one, and it is painted borderless flush inside the
-        // readout chip rather than as a second bordered chip.
+        // Each marker has one quantity fill at the shared start, inset inside the dashed outline.
         assert_eq!(
             trading
                 .iter()
                 .filter(|primitive| matches!(
                     primitive,
-                    Prim::RoundRect { x, fill, border_width, .. }
+                    Prim::RoundRect { x, fill, border_width, radii, .. }
                         if *border_width == 0.0
                             && fill.a() == 255
-                            && (*x - marker_start).abs() <= 0.5
+                            && *radii != [pill_radius; 4]
+                            && (*x - (marker_start + 1.5)).abs() <= 0.5
                 ))
                 .count(),
             4
         );
+        assert!(trading.iter().any(|primitive| matches!(
+            primitive,
+            Prim::Polyline {
+                style: aeris_charts_render::draw_list::LineStyle::Solid,
+                ..
+            }
+        )));
         for expected in ["Buy Limit", "+24.00 USD", "-24.00 USD"] {
             assert!(trading
                 .iter()
@@ -4194,6 +4349,8 @@ mod tests {
         chart
             .update_trading_position(position(PositionSide::Short))
             .unwrap();
+        let pill_radius = (chart.trading_control_height() / 2.0)
+            .min(aeris_charts_core::style::RADIUS_LARGE) as f32;
         let baseline = chart.build_frame();
         let pane_segments = chart.frame_pane_segments(0).unwrap();
         let bounds = baseline.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end]
@@ -4205,8 +4362,9 @@ mod tests {
                     w,
                     h,
                     border_width,
+                    radii,
                     ..
-                } if *border_width > 0.0 => Some((*x, *y, *w, *h)),
+                } if *border_width == 0.0 && *radii == [pill_radius; 4] => Some((*x, *y, *w, *h)),
                 _ => None,
             })
             .unwrap();
@@ -4221,7 +4379,7 @@ mod tests {
             frame.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end]
                 .iter()
                 .any(|primitive| {
-                    matches!(primitive, Prim::Text { text, .. } if text == "Close Position")
+                    matches!(primitive, Prim::Text { text, .. } if text == "Close position")
                 })
         };
         // Contact alone shows nothing: the tooltip waits for the host to arm it after its dwell.
@@ -4232,7 +4390,7 @@ mod tests {
         let pane_segments = chart.frame_pane_segments(0).unwrap();
         let trading = &hovered.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end];
         assert!(trading.iter().any(
-            |primitive| matches!(primitive, Prim::Text { text, .. } if text == "Close Position")
+            |primitive| matches!(primitive, Prim::Text { text, .. } if text == "Close position")
         ));
         assert!(trading
             .iter()
@@ -4246,8 +4404,14 @@ mod tests {
                     w,
                     h,
                     border_width,
+                    radii,
                     ..
-                } if *border_width > 0.0 && (*w - bounds.2).abs() <= 0.5 => Some((*x, *y, *w, *h)),
+                } if *border_width == 0.0
+                    && *radii == [pill_radius; 4]
+                    && (*w - bounds.2).abs() <= 0.5 =>
+                {
+                    Some((*x, *y, *w, *h))
+                }
                 _ => None,
             })
             .unwrap();
@@ -4293,53 +4457,177 @@ mod tests {
             frame.panes[0].main[segments.drawings_end..segments.trading_end].to_vec()
         };
         let trading = marker(&mut chart);
+        let pill_radius = (chart.trading_control_height() / 2.0)
+            .min(aeris_charts_core::style::RADIUS_LARGE) as f32;
         let (container_x, container_w) = trading
             .iter()
             .find_map(|primitive| match primitive {
                 Prim::RoundRect {
-                    x, w, border_width, ..
-                } if *border_width > 0.0 => Some((*x, *w)),
+                    x,
+                    w,
+                    border_width,
+                    radii,
+                    ..
+                } if *border_width == 0.0 && *radii == [pill_radius; 4] => Some((*x, *w)),
                 _ => None,
             })
             .expect("marker container");
-        // The readout chip stops short of the close chip: a destructive control never shares an
-        // edge with the readout it would destroy.
-        let close_left = cancel_x - chart.trading_close_width() / 2.0;
-        assert!(f64::from(container_x + container_w) < close_left);
+        // The close cell is integrated at the container's right edge, immediately after PnL.
+        let close_left = f64::from(container_x + container_w) - chart.trading_close_width();
+        let close_surface_inset = 3.0;
+        let close_surface_left = close_left + close_surface_inset;
+        let close_surface_size = chart.trading_control_height() - 2.0 * close_surface_inset;
+        let close_surface_radius =
+            (close_surface_size / 2.0).min(aeris_charts_core::style::RADIUS_LARGE) as f32;
+        assert!((cancel_x - (close_left + chart.trading_close_width() / 2.0)).abs() <= 0.5);
         assert!((f64::from(container_x) - chart.trading_marker_start()).abs() <= 0.5);
-        let close_chip = trading
+        let close_cell = trading
             .iter()
             .filter_map(|primitive| match primitive {
                 Prim::RoundRect {
-                    x, w, border_width, ..
-                } if *border_width > 0.0 => Some((*x, *w)),
+                    x,
+                    w,
+                    radii,
+                    border_width,
+                    fill,
+                    ..
+                } if *border_width == 0.0 => Some((*x, *w, *radii, *fill)),
                 _ => None,
             })
-            .find(|(x, _)| (f64::from(*x) - close_left).abs() <= 0.5)
-            .expect("detached close chip");
-        assert!((f64::from(close_chip.1) - chart.trading_close_width()).abs() <= 0.5);
+            .find(|(x, _, _, _)| (f64::from(*x) - close_surface_left).abs() <= 0.5)
+            .expect("integrated close cell");
+        assert!((f64::from(close_cell.1) - close_surface_size).abs() <= 0.5);
+        assert_eq!(close_cell.2, [close_surface_radius; 4]);
+        // The solid quantity cell sits inside the dashed outline with a concentric rounded end;
+        // painted flush it would cover the dashes and leave stubs around its curve.
+        let container_top = line_y - chart.trading_control_height() / 2.0;
+        let quantity_fill = chart.trading_position_color(PositionSide::Long).solid();
+        let (qx, qy, qw, qh, qradii) = trading
+            .iter()
+            .find_map(|primitive| match primitive {
+                Prim::RoundRect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    radii,
+                    fill,
+                    ..
+                } if *fill == quantity_fill => Some((*x, *y, *w, *h, *radii)),
+                _ => None,
+            })
+            .expect("filled quantity cell");
+        assert!(f64::from(qx) >= f64::from(container_x) + 1.0);
+        assert!(f64::from(qy) >= container_top + 1.0);
+        assert!(f64::from(qy + qh) <= container_top + chart.trading_control_height() - 1.0);
+        assert!(qx + qw < close_left as f32);
+        assert_eq!(qradii, [qh / 2.0, 0.0, 0.0, qh / 2.0]);
+        let secondary = aeris_charts_core::style::DARK_MUTED_RGB;
+        assert_eq!(
+            close_cell.3,
+            Color::rgb(secondary.0, secondary.1, secondary.2)
+        );
+        assert!(trading.iter().any(|primitive| matches!(
+            primitive,
+            Prim::Polyline { width, style: aeris_charts_render::draw_list::LineStyle::Solid, .. }
+                if *width == 1.0
+        )));
+        let mut outline_regions = Vec::new();
+        let mut outline_lines = Vec::new();
+        let mut outline_points = Vec::new();
+        chart.build_trading_frame_for_test(
+            0,
+            1.0,
+            1.0,
+            &mut outline_regions,
+            &mut outline_lines,
+            &mut outline_points,
+        );
+        let outline_runs = outline_lines
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Polyline {
+                    first_point,
+                    point_count,
+                    width,
+                    style: aeris_charts_render::draw_list::LineStyle::Solid,
+                    ..
+                } if *width == 1.0 => {
+                    let start = *first_point as usize;
+                    let end = start + *point_count as usize;
+                    Some(&outline_points[start..end])
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            outline_runs.len() > 20,
+            "the pill border must use dense dashes"
+        );
+        for run in outline_runs {
+            let length = run
+                .windows(2)
+                .map(|pair| {
+                    let dx = pair[1][0] - pair[0][0];
+                    let dy = pair[1][1] - pair[0][1];
+                    dx.hypot(dy)
+                })
+                .sum::<f32>();
+            assert!(length <= 2.01, "dash length {length} exceeded 2px");
+        }
 
-        // No TP/SL affordances, and the close mark is stroked geometry — never a font glyph the
-        // host's `font_family` might not carry.
+        // No TP/SL affordances, and the close icon is round-capped stroked geometry — never a font
+        // glyph the host's `font_family` might not carry or a pair of skewed filled bars.
         assert!(trading.iter().all(|primitive| !matches!(
             primitive,
             Prim::Text { text, .. } if matches!(text.as_str(), "TP" | "SL" | "×" | "✕" | "↕")
         )));
+        let danger = aeris_charts_core::style::DARK_DANGER_RGB;
+        let destructive = Color::rgb(danger.0, danger.1, danger.2);
         assert_eq!(
             trading
                 .iter()
                 .filter(|primitive| matches!(primitive, Prim::Triangle { .. }))
                 .count(),
             4,
-            "the close mark is two crossing bars, two triangles each"
+            "the close icon has two stroke bodies, two triangles each"
         );
+        assert_eq!(
+            trading
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::Circle { .. }))
+                .count(),
+            4,
+            "the close icon rounds both ends of both strokes"
+        );
+        for primitive in &trading {
+            if let Prim::Triangle { color, .. } = primitive {
+                assert_eq!(*color, destructive);
+            }
+            if let Prim::Circle {
+                cx,
+                cy,
+                radius,
+                fill,
+                stroke,
+                ..
+            } = primitive
+            {
+                assert_eq!(*fill, destructive);
+                assert_eq!(*stroke, destructive);
+                assert!(
+                    (f64::from(*cx) - cancel_x).abs() + f64::from(*radius) <= 4.5
+                        && (f64::from(*cy) - cancel_y).abs() + f64::from(*radius) <= 4.5,
+                    "the close glyph must stay compact inside its hover surface"
+                );
+            }
+        }
         assert!(trading.iter().any(|primitive| matches!(
             primitive,
             Prim::Text { text, weight, .. } if text == "12" && *weight == 400
         )));
 
-        // The solid quantity cell is the marker's only borderless fill; the close chip carries its
-        // own outline, and idle, hover, and press each give it a distinguishable fill.
+        // Container, quantity, and close are borderless fills under one dashed outer outline.
         assert_eq!(
             trading
                 .iter()
@@ -4348,7 +4636,7 @@ mod tests {
                     Prim::RoundRect { border_width, .. } if *border_width == 0.0
                 ))
                 .count(),
-            1
+            3
         );
         let close_fill = |primitives: &[Prim]| {
             primitives
@@ -4359,7 +4647,9 @@ mod tests {
                         fill,
                         border_width,
                         ..
-                    } if *border_width > 0.0 && (f64::from(*x) - close_left).abs() <= 0.5 => {
+                    } if *border_width == 0.0
+                        && (f64::from(*x) - close_surface_left).abs() <= 0.5 =>
+                    {
                         Some(*fill)
                     }
                     _ => None,

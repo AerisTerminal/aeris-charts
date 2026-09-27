@@ -38,12 +38,9 @@ impl ChartEngine {
         let right_scale = &options.right_price_scale;
         let time_scale = &options.time_scale;
         let watermark = &options.watermark;
-        // Project the canonical CSS border width onto the integer device-pixel draw list. A CSS
-        // half-pixel still gets one fully covered device pixel at low DPR, while higher DPRs
-        // converge on the requested 0.5 CSS px instead of retaining the old 1 CSS px rule.
-        let border_w = (aeris_charts_core::style::BORDER_WIDTH * dpr)
-            .round()
-            .max(1.0) as i32;
+        // Project the canonical CSS border width onto the integer device-pixel draw list with
+        // browser border semantics: whole device pixels, rounded down, never below one.
+        let border_w = aeris_charts_core::style::border_width_device_px(dpr) as i32;
         let parse = |css: &str, fallback: Color| Color::parse_css(css).unwrap_or(fallback);
         let fallback = Color::rgb(
             aeris_charts_core::style::DEFAULT_BORDER_RGB.0,

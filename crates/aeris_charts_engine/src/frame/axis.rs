@@ -623,17 +623,13 @@ impl ChartEngine {
                 );
                 for (mark, bold) in marks.iter().zip(bold_round) {
                     let y = mark.coord;
-                    // A tick coordinate is the glyph center, not its visible bounds.
-                    // Internal pane edges must leave room for the complete line box plus
-                    // one CSS pixel of clearance, even when entireTextOnly is disabled.
+                    // A tick coordinate is the glyph center, not its visible bounds. Every pane
+                    // edge leaves room for the complete line box plus one CSS pixel of clearance,
+                    // even when entireTextOnly is disabled: a price label never spills into the
+                    // time axis, a neighbouring pane, or past the chart top.
                     let edge_inset = metrics.axis / 2.0 + 1.0;
-                    let top = pane.top + if pi > 0 { edge_inset } else { -0.5 };
-                    let bottom = pane.top + pane.height
-                        - if pi + 1 < self.panes.len() {
-                            edge_inset
-                        } else {
-                            -0.5
-                        };
+                    let top = pane.top + edge_inset;
+                    let bottom = pane.top + pane.height - edge_inset;
                     if y >= top && y <= bottom {
                         if ticks_visible {
                             let left = side == PriceScaleSide::Left;
@@ -679,14 +675,17 @@ impl ChartEngine {
                         &self.options.get().right_price_scale.border_color
                     };
                     let border = Color::parse_css(border_css).unwrap_or(GRID);
+                    // The brand border width, snapped like the main axis borders.
+                    let border_width =
+                        aeris_charts_core::style::border_width_device_px(self.dpr) / self.dpr;
                     out.bands.push(AxisBand {
                         x: if side == PriceScaleSide::Left {
-                            strip_x + strip_width - 1.0
+                            strip_x + strip_width - border_width
                         } else {
                             strip_x
                         },
                         y: pane.top,
-                        width: 1.0,
+                        width: border_width,
                         height: pane.height,
                         color: border,
                     });

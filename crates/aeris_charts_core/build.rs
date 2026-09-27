@@ -94,6 +94,7 @@ fn main() {
     for (field, suffix) in [
         ("small", "SMALL"),
         ("default", "DEFAULT"),
+        ("medium", "MEDIUM"),
         ("large", "LARGE"),
     ] {
         let radius = required_f64(&tokens, &["radius", field]);
@@ -107,9 +108,11 @@ fn main() {
             ("primary", "PRIMARY"),
             ("primary_foreground", "PRIMARY_FOREGROUND"),
             ("primary_hover", "PRIMARY_HOVER"),
+            ("danger", "DANGER"),
             ("muted", "MUTED"),
             ("muted_foreground", "MUTED_FOREGROUND"),
             ("accent", "ACCENT"),
+            ("active", "ACTIVE"),
             ("border", "BORDER"),
             ("muted_border", "MUTED_BORDER"),
             ("ring", "RING"),
@@ -144,6 +147,15 @@ fn main() {
     output.push_str(&format!(
         "pub const MARKET_VOLUME_ALPHA: u8 = 0x{volume_alpha:02x};\n"
     ));
+    // One fill strength for every area-like surface (area, baseline halves, brush ranges): the
+    // gradient runs from `strong` at the series extreme to `faint` at its base.
+    for (field, name) in [
+        ("area_fill_strong_alpha", "AREA_FILL_STRONG_ALPHA"),
+        ("area_fill_faint_alpha", "AREA_FILL_FAINT_ALPHA"),
+    ] {
+        let alpha = required_u8(&tokens, &["market", field]);
+        output.push_str(&format!("pub const {name}: u8 = 0x{alpha:02x};\n"));
+    }
 
     let default_prefix = default_theme.to_ascii_uppercase();
     for suffix in [
@@ -152,9 +164,11 @@ fn main() {
         "PRIMARY",
         "PRIMARY_FOREGROUND",
         "PRIMARY_HOVER",
+        "DANGER",
         "MUTED",
         "MUTED_FOREGROUND",
         "ACCENT",
+        "ACTIVE",
         "BORDER",
         "MUTED_BORDER",
         "RING",

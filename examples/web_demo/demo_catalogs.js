@@ -266,7 +266,7 @@ function series_features(bars, primary_series) {
       compose: (chart) => add_line_companion(
         chart,
         shade_data,
-        { color: PRIMARY_BLUE, line_width: 3, price_line_visible: true },
+        { color: PRIMARY_BLUE, line_width: 2, price_line_visible: true },
       ),
     },
     {

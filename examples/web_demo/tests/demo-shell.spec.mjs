@@ -91,7 +91,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     primary: "#168ef7",
     primary_foreground: "#ffffff",
     primary_hover: "#168ef7",
-    border: "#f1f1f1",
+    border: "#e7e9e6",
     bullish: "#089981",
     bearish: "#f7525f",
   });
@@ -99,7 +99,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     background: "#ffffff",
     text: "#333333",
     muted_text: "#7b7b7b",
-    border: "#f1f1f1",
+    border: "#e7e9e6",
     crosshair: "#141414",
     bullish: "#089981",
     bearish: "#f7525f",
@@ -109,17 +109,17 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   expect(dark.css).toEqual({
     surface: "#141414",
     text_primary: "#f0f0f0",
-    text_secondary: "#f0f0f0bd",
+    text_secondary: "#aeaeb2",
     text_muted: "#f0f0f05c",
     primary: "#168ef7",
     primary_foreground: "#fff",
-    button_fill: "#f7f7f7",
+    button_fill: "#ebebeb",
     border_width: "0.5px",
   });
   expect(dark.palette).toMatchObject({
     background: "#141414",
     foreground: "#f0f0f0",
-    muted_foreground: "#b7b7b7",
+    muted_foreground: "#aeaeb2",
     primary: "#168ef7",
     primary_foreground: "#ffffff",
     primary_hover: "#168ef7",
@@ -130,7 +130,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   expect(dark.chart).toEqual({
     background: "#141414",
     text: "#f0f0f0",
-    muted_text: "#b7b7b7",
+    muted_text: "#aeaeb2",
     border: "#252525",
     crosshair: "#252525",
     bullish: "#7c8db0",
@@ -171,7 +171,8 @@ test("style reset follows a live theme switch and restores semantic series defau
   expect(state.chart.rightPriceScale.textColor).toBeNull();
   expect(state.series.up_color).toBe("");
   expect(state.series.down_color).toBe("");
-  expect(state.series.line_width).toBe(3);
+  // Aeris line/area default: 2 CSS px, matching indicator lines.
+  expect(state.series.line_width).toBe(2);
 });
 
 test("charts never inject product attribution chrome", async ({ page }) => {
@@ -269,7 +270,7 @@ test("canonical series stay in Series while feature lab contains only composable
   await expect(page.locator("#series_grid .feature-card")).toHaveCount(11);
   await expect(page.locator("#feature_grid .feature-card")).toHaveCount(9);
   expect(await page.locator('input[name="series"]').evaluateAll((radios) => radios.map((radio) => radio.value))).toEqual([
-    "candlestick", "hollow_candlestick", "bar", "line", "area", "histogram", "baseline",
+    "candlestick", "hollow_candlestick", "bar", "line", "line_markers", "area", "histogram", "baseline",
   ]);
   await expect(page.locator('#series_grid [data-series-id="footprint"]')).toBeVisible();
   await expect(page.locator('#series_grid [data-series-id="heatmap-standalone"]')).toBeVisible();
@@ -503,7 +504,7 @@ test("reported plugin scenarios use full data and official line compositions", a
   });
   expect(shade_state).toMatchObject({
     shade_options: { low_value: 0, high_value: 1000 },
-    line_options: { color: primary, line_width: 3, price_line_visible: true },
+    line_options: { color: primary, line_width: 2, price_line_visible: true },
     same_data: true,
   });
   expect(shade_state.value_range[0]).toBeGreaterThan(150);

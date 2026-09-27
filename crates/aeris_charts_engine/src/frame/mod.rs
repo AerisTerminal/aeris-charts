@@ -22,8 +22,9 @@ use aeris_charts_core::model::plot_list::{MismatchDirection, PlotListView, PlotV
 use aeris_charts_core::model::price_range::PriceRange;
 use aeris_charts_core::scale::price_scale_core::{PriceScaleCore, PriceScaleMode};
 use aeris_charts_core::style::{
-    DEFAULT_BORDER_RGB, DEFAULT_CROSSHAIR_LABEL_RGB, DEFAULT_CROSSHAIR_LINE_RGB,
-    DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB, MARKET_VOLUME_ALPHA,
+    AREA_FILL_FAINT_ALPHA, AREA_FILL_STRONG_ALPHA, DEFAULT_BORDER_RGB, DEFAULT_CROSSHAIR_LABEL_RGB,
+    DEFAULT_CROSSHAIR_LINE_RGB, DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB,
+    MARKET_VOLUME_ALPHA,
 };
 use aeris_charts_render::bars::{build_bars, BarItem, BarsParams};
 use aeris_charts_render::candles::{build_candles, CandleItem, CandlesParams};
@@ -75,8 +76,17 @@ const GRID: Color = Color::rgb(
 );
 const LINE: Color = Color::rgb(0x21, 0x96, 0xf3);
 const AREA_LINE: Color = UP;
-const AREA_TOP: Color = Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 102);
-const AREA_BOTTOM: Color = Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 0);
+/// The canonical area-fill gradient for a stroke color: `AREA_FILL_STRONG_ALPHA` at the series
+/// extreme fading to `AREA_FILL_FAINT_ALPHA` at its base, scaled by the stroke's own alpha. Area,
+/// both baseline halves, and brush ranges all derive their default fill here, so every area-like
+/// surface has the same strength and follows its own line color.
+pub(crate) fn area_fill_gradient(stroke: Color) -> (Color, Color) {
+    let with = |alpha: u8| {
+        let scaled = (u16::from(alpha) * u16::from(stroke.a()) + 127) / 255;
+        Color::rgba(stroke.r(), stroke.g(), stroke.b(), scaled as u8)
+    };
+    (with(AREA_FILL_STRONG_ALPHA), with(AREA_FILL_FAINT_ALPHA))
+}
 const HISTOGRAM: Color = Color::rgba(
     MARKET_UP_RGB.0,
     MARKET_UP_RGB.1,
@@ -97,18 +107,8 @@ const VOLUME_DOWN: Color = Color::rgba(
 );
 const BASELINE_TOP_LINE: Color = UP;
 const BASELINE_BOTTOM_LINE: Color = DOWN;
-/// reference baseline quadrant fill defaults (model/series/baseline-series.ts): two-stop gradients
-/// from the line to the baseline. Alphas are the CSS 0..1 values quantized to bytes
-/// (0.28 -> 71, 0.05 -> 13, matching `Color::parse_css`).
-const BASELINE_TOP_FILL1: Color =
-    Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 71);
-const BASELINE_TOP_FILL2: Color =
-    Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 13);
-const BASELINE_BOTTOM_FILL1: Color =
-    Color::rgba(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2, 13);
-const BASELINE_BOTTOM_FILL2: Color =
-    Color::rgba(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2, 71);
-pub(crate) const LINE_WIDTH: f64 = 3.0;
+/// Aeris default stroke for line, area, and baseline series (CSS px), matching indicator lines.
+pub(crate) const LINE_WIDTH: f64 = 2.0;
 const CROSSHAIR_COLOR: Color = Color::rgb(
     DEFAULT_CROSSHAIR_LINE_RGB.0,
     DEFAULT_CROSSHAIR_LINE_RGB.1,
@@ -735,6 +735,40 @@ fn css_color(value: &str, fallback: Color) -> Color {
 /// Resolve a verbatim CSS color slot at render time (the wave-1 pattern): the stored string
 /// parses, an unset slot or an unparseable string falls back to `fallback` (the reference's default —
 /// a user string the renderer cannot parse degrades to the default rather than vanishing).
+/// The stroke color a line-like series actually renders: its explicit color, or for an Area with
+/// none, the Area default hue. Fills, brush defaults, and `options().color` all resolve through it.
+pub(crate) fn series_stroke_color(series: &crate::SeriesEntry) -> Color {
+    let color = verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR);
+    if series.kind == SeriesKind::Area && series.line_color.is_none() {
+        AREA_LINE
+    } else {
+        color
+    }
+}
+
+/// Default brushable-area styles for one series, all on the canonical fill strength: selected
+/// ranges in the market up/down hues, and everything outside the selection as the series' own
+/// stroke faded to 20% with its fill derived by the same rule.
+pub(crate) fn area_brush_defaults(series: &crate::SeriesEntry) -> crate::AreaBrushDefaults {
+    let line_width = series.line_width.unwrap_or(LINE_WIDTH);
+    let style = |line_color: Color| {
+        let (top_color, bottom_color) = area_fill_gradient(line_color);
+        crate::BrushStyle {
+            line_color,
+            top_color,
+            bottom_color,
+            line_width,
+        }
+    };
+    let stroke = series_stroke_color(series);
+    let faded_alpha = ((u16::from(stroke.a()) * 51 + 127) / 255) as u8;
+    crate::AreaBrushDefaults {
+        outside: style(Color::rgba(stroke.r(), stroke.g(), stroke.b(), faded_alpha)),
+        positive: style(UP),
+        negative: style(DOWN),
+    }
+}
+
 pub(crate) fn verbatim_color(value: &Option<String>, fallback: Color) -> Color {
     value
         .as_deref()
@@ -810,14 +844,7 @@ impl ChartEngine {
             // A line_color still holding the default placeholder resolves to the kind default,
             // exactly like the geometry builders.
             SeriesKind::Line => verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR),
-            SeriesKind::Area => {
-                let color = verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR);
-                if color != LINE {
-                    color
-                } else {
-                    AREA_LINE
-                }
-            }
+            SeriesKind::Area => series_stroke_color(series),
             SeriesKind::Histogram => {
                 let color = verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR);
                 if color != LINE {
@@ -1322,10 +1349,18 @@ impl ChartEngine {
                 };
             let up = verbatim_color(&s.up_color, fallback_up);
             let down = verbatim_color(&s.down_color, fallback_down);
+            let color = series_stroke_color(s);
+            // Area-like fills default to the canonical gradient of their own stroke color.
+            let (area_strong, area_faint) = area_fill_gradient(color);
+            let css = |value: &Option<String>| value.as_deref().and_then(Color::parse_css);
+            let top_line = css(&s.top_line_color).unwrap_or(BASELINE_TOP_LINE);
+            let bottom_line = css(&s.bottom_line_color).unwrap_or(BASELINE_BOTTOM_LINE);
+            let (top_strong, top_faint) = area_fill_gradient(top_line);
+            let (bottom_strong, bottom_faint) = area_fill_gradient(bottom_line);
             resolved.push(ResolvedSeries {
                 id: s.id,
                 kind: s.kind,
-                color: verbatim_color(&s.line_color, crate::DEFAULT_LINE_COLOR),
+                color,
                 up,
                 down,
                 // reference parity: an unset wick/border color follows the body color of its direction.
@@ -1338,8 +1373,8 @@ impl ChartEngine {
                 line_width: s.line_width.unwrap_or(LINE_WIDTH),
                 line_style: crate::line_style_from_u8(s.line_style),
                 line_visible: s.line_visible,
-                area_top: verbatim_color(&s.area_top_color, AREA_TOP),
-                area_bottom: verbatim_color(&s.area_bottom_color, AREA_BOTTOM),
+                area_top: verbatim_color(&s.area_top_color, area_strong),
+                area_bottom: verbatim_color(&s.area_bottom_color, area_faint),
                 threshold_region: s.threshold_region,
                 invert_filled_area: s.invert_filled_area,
                 point_markers: s.point_markers,
@@ -1351,41 +1386,18 @@ impl ChartEngine {
                 thin_bars: s.thin_bars,
                 heikin_ashi: s.heikin_ashi,
                 base: s.base,
-                // reference baselineStyleDefaults; an unset quadrant line width follows the series'
-                // line width (the reference's single baseline lineWidth). Quadrant colors are verbatim
-                // CSS strings parsed here, with the reference default when unset/unparseable.
-                top_fill1: s
-                    .top_fill_color1
-                    .as_deref()
-                    .and_then(Color::parse_css)
-                    .unwrap_or(BASELINE_TOP_FILL1),
-                top_fill2: s
-                    .top_fill_color2
-                    .as_deref()
-                    .and_then(Color::parse_css)
-                    .unwrap_or(BASELINE_TOP_FILL2),
-                top_line: s
-                    .top_line_color
-                    .as_deref()
-                    .and_then(Color::parse_css)
-                    .unwrap_or(BASELINE_TOP_LINE),
+                // An unset quadrant line width follows the series' line width (the reference's single
+                // baseline lineWidth). Unset quadrant fills take the canonical area gradient of their
+                // own quadrant line: strong at the extreme, faint at the baseline. Each gradient runs
+                // top-to-bottom, so the top half is (strong, faint) and the bottom half (faint, strong).
+                top_fill1: css(&s.top_fill_color1).unwrap_or(top_strong),
+                top_fill2: css(&s.top_fill_color2).unwrap_or(top_faint),
+                top_line,
                 top_line_width: s.top_line_width.or(s.line_width).unwrap_or(LINE_WIDTH),
                 top_line_style: crate::line_style_from_u8(s.top_line_style),
-                bottom_fill1: s
-                    .bottom_fill_color1
-                    .as_deref()
-                    .and_then(Color::parse_css)
-                    .unwrap_or(BASELINE_BOTTOM_FILL1),
-                bottom_fill2: s
-                    .bottom_fill_color2
-                    .as_deref()
-                    .and_then(Color::parse_css)
-                    .unwrap_or(BASELINE_BOTTOM_FILL2),
-                bottom_line: s
-                    .bottom_line_color
-                    .as_deref()
-                    .and_then(Color::parse_css)
-                    .unwrap_or(BASELINE_BOTTOM_LINE),
+                bottom_fill1: css(&s.bottom_fill_color1).unwrap_or(bottom_faint),
+                bottom_fill2: css(&s.bottom_fill_color2).unwrap_or(bottom_strong),
+                bottom_line,
                 bottom_line_width: s.bottom_line_width.or(s.line_width).unwrap_or(LINE_WIDTH),
                 bottom_line_style: crate::line_style_from_u8(s.bottom_line_style),
                 scale_target: series_scale_target(s),
@@ -1755,9 +1767,6 @@ impl ChartEngine {
                         hpr,
                         vpr,
                     );
-                    if pi == 0 {
-                        self.build_last_pulse_frame(&mut cache.chrome.prims, hpr, vpr);
-                    }
                 }
                 self.build_native_anchored_text_frame(pi, hpr, vpr, &mut cache.chrome.prims);
                 self.build_native_text_watermark_frame(pi, hpr, vpr, &mut cache.chrome.prims);
@@ -1810,6 +1819,7 @@ impl ChartEngine {
                     vpr,
                     &mut cache.trading_regions.prims,
                     &mut cache.trading.prims,
+                    &mut cache.trading.points,
                 );
                 cache.trading_regions.revision = self.frame_invalidation.trading;
                 cache.trading_regions.coordinate_revision = self.frame_invalidation.coordinate;
@@ -1837,6 +1847,12 @@ impl ChartEngine {
                 cache.cursor_under.coordinate_revision = self.frame_invalidation.coordinate;
                 cache.overlay.prims.clear();
                 cache.overlay.points.clear();
+                // The last-price pulse is a top pane view (reference `topPaneViews`): it lives in
+                // the overlay layer because the animation clock invalidates only the overlay, so
+                // it advances every tick without rebuilding series or chrome.
+                if pi == 0 {
+                    self.build_last_pulse_frame(&mut cache.overlay.prims, hpr, vpr);
+                }
                 self.build_native_accessibility_focus_frame(pi, hpr, vpr, &mut cache.overlay.prims);
                 self.build_hovered_text_frame(
                     pi,

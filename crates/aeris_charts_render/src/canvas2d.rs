@@ -47,7 +47,9 @@ pub trait Canvas2d {
     fn close_path(&mut self);
     /// Add a circular arc (radians) to the current path.
     fn arc(&mut self, cx: f32, cy: f32, r: f32, start: f32, end: f32);
-    /// Stroke the current path with the current stroke color / width / dash.
+    /// Stroke the current path with the current stroke color / width / dash, using round joins
+    /// and butt caps (the reference line renderer's `lineJoin = 'round'`): a miter join spikes
+    /// past every sharp turn of a price line.
     fn stroke(&mut self);
     /// Fill the current path with the current fill style.
     fn fill(&mut self);

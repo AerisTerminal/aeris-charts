@@ -118,10 +118,44 @@ fn visible_line_rows_policy(
     // exactly like the reference's whitespace-free plot list.
     let (visible, measured) = density_rows(plot, from, to, bar_spacing, hpr, &x_at, use_lod);
     *work = measured;
-    if bar_spacing * hpr >= 1.0 {
-        return visible;
-    }
+    let rows = if bar_spacing * hpr >= 1.0 {
+        visible
+    } else {
+        conflate_line_rows(plot, visible, &x_at)
+    };
+    with_edge_neighbours(plot, from, to, rows)
+}
 
+/// Add the nearest real row beyond each visible edge (reference `visibleTimedValues(..., extendedRange
+/// = true)`). A path must keep running to the pane edge while its next point is off-screen; without
+/// the neighbours the edge segment vanishes and pops back when that point scrolls into view. The
+/// pane clip trims the overhang.
+fn with_edge_neighbours(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    mut rows: Vec<usize>,
+) -> Vec<usize> {
+    let range = plot.visible_rows(from, to);
+    let before = plot.last_non_whitespace_row_before(range.start);
+    let after = plot
+        .index_at(range.end)
+        .and_then(|index| plot.first_non_whitespace_row(index));
+    if let Some(row) = before.filter(|row| rows.first() != Some(row)) {
+        rows.insert(0, row);
+    }
+    if let Some(row) = after.filter(|row| rows.last() != Some(row)) {
+        rows.push(row);
+    }
+    rows
+}
+
+/// Sub-pixel conflation: keep first, low, high, and last per device-pixel column.
+fn conflate_line_rows(
+    plot: PlotListView<'_>,
+    visible: Vec<usize>,
+    x_at: &impl Fn(i64) -> f64,
+) -> Vec<usize> {
     let close = plot.column(PlotValueIndex::Close);
     let mut out = Vec::new();
     let mut bucket_rows = Vec::new();

@@ -417,6 +417,197 @@ pub fn build_line_stroke(
     }
 }
 
+/// Half-width of the coverage transition centered on every anti-aliased stroke edge (device px).
+pub const STROKE_AA_HALF_PX: f32 = 0.5;
+/// Signed edge distance of a fully covered interior vertex.
+pub const STROKE_AA_SOLID: f32 = -1.0;
+
+/// One anti-aliased stroke vertex: device-space position plus signed distance (device px,
+/// positive outside) from the nominal stroke edge. Coverage is `clamp(0.5 - distance, 0, 1)`,
+/// interpolated linearly across each triangle; [`STROKE_AA_SOLID`] marks the solid core.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StrokeAaVertex {
+    pub position: [f32; 2],
+    pub distance: f32,
+}
+
+impl StrokeAaVertex {
+    /// Linear pixel coverage for backends that encode anti-aliasing in vertex alpha.
+    pub fn coverage(self) -> f32 {
+        (STROKE_AA_HALF_PX - self.distance).clamp(0.0, 1.0)
+    }
+}
+
+/// Anti-aliased polyline stroke over device-space `points` (already expanded for the line type).
+///
+/// Every segment gets a solid core ending half a device pixel inside the nominal edge plus a
+/// centered 1 px coverage transition, so integrated coverage equals `width` and edges resolve to
+/// continuous coverage instead of MSAA's few sample levels. Interior vertices get an anti-aliased
+/// round join where the turn opens a visible wedge, and both ends get a fading butt-cap strip.
+/// Triangles are emitted through `tri`, so each backend chooses its coverage encoding (vertex
+/// alpha for WebGPU, the path-shader `st` channel for GPUI) over identical geometry.
+pub fn stroke_aa(points: &[LinePoint], width: f32, mut tri: impl FnMut([StrokeAaVertex; 3])) {
+    let half = (width / 2.0).max(0.0);
+    if points.len() < 2 || half <= 0.0 {
+        return;
+    }
+    let mut emit = |a: [f32; 2], da: f32, b: [f32; 2], db: f32, c: [f32; 2], dc: f32| {
+        tri([
+            StrokeAaVertex {
+                position: a,
+                distance: da,
+            },
+            StrokeAaVertex {
+                position: b,
+                distance: db,
+            },
+            StrokeAaVertex {
+                position: c,
+                distance: dc,
+            },
+        ]);
+    };
+    let core_half = (half - STROKE_AA_HALF_PX).max(0.0);
+    let outer_half = half + STROKE_AA_HALF_PX;
+    let fade_in = core_half - half;
+    let fade_out = STROKE_AA_HALF_PX;
+    let solid = STROKE_AA_SOLID;
+    let mut prev_dir: Option<[f32; 2]> = None;
+    let mut prev_b = [0.0f32; 2];
+    for pair in points.windows(2) {
+        let a = [pair[0].x as f32, pair[0].y as f32];
+        let b = [pair[1].x as f32, pair[1].y as f32];
+        let dx = b[0] - a[0];
+        let dy = b[1] - a[1];
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < 1e-6 {
+            continue;
+        }
+        let dir = [dx / len, dy / len];
+        let n = [-dir[1], dir[0]];
+        if prev_dir.is_none() {
+            stroke_aa_cap(&mut emit, a, [-dir[0], -dir[1]], n, half);
+        }
+        let offset = |p: [f32; 2], distance: f32| [p[0] + n[0] * distance, p[1] + n[1] * distance];
+        if core_half > 0.0 {
+            let (la, lb) = (offset(a, core_half), offset(b, core_half));
+            let (ra, rb) = (offset(a, -core_half), offset(b, -core_half));
+            emit(la, solid, lb, solid, rb, solid);
+            emit(la, solid, rb, solid, ra, solid);
+        }
+        for side in [1.0f32, -1.0] {
+            let (in_a, in_b) = (offset(a, core_half * side), offset(b, core_half * side));
+            let (out_a, out_b) = (offset(a, outer_half * side), offset(b, outer_half * side));
+            emit(out_a, fade_out, out_b, fade_out, in_b, fade_in);
+            emit(out_a, fade_out, in_b, fade_in, in_a, fade_in);
+        }
+        if let Some(prev) = prev_dir {
+            let cos = (prev[0] * dir[0] + prev[1] * dir[1]).clamp(-1.0, 1.0);
+            let cross = prev[0] * dir[1] - prev[1] * dir[0];
+            let gap = (half + 2.0 * STROKE_AA_HALF_PX) * cross.abs() / (1.0 + cos).max(1e-6);
+            if gap >= 0.25 {
+                // Only the outer side of a turn opens a wedge; the segments already cover the
+                // inner side. Filling just that wedge keeps joins a few triangles instead of a
+                // full disc per vertex.
+                let side = if cross > 0.0 { -1.0 } else { 1.0 };
+                let from = [-prev[1] * side, prev[0] * side];
+                let to = [n[0] * side, n[1] * side];
+                stroke_aa_join(&mut emit, a, half, from, to, cos);
+            }
+        }
+        prev_dir = Some(dir);
+        prev_b = b;
+    }
+    if let Some(dir) = prev_dir {
+        stroke_aa_cap(&mut emit, prev_b, dir, [-dir[1], dir[0]], half);
+    }
+}
+
+/// The exterior half of the centered coverage transition across a butt cap; it meets the side
+/// transitions at the corners.
+fn stroke_aa_cap(
+    emit: &mut impl FnMut([f32; 2], f32, [f32; 2], f32, [f32; 2], f32),
+    at: [f32; 2],
+    out: [f32; 2],
+    n: [f32; 2],
+    half: f32,
+) {
+    let r = half + STROKE_AA_HALF_PX;
+    let edge = 0.0;
+    let fade_out = STROKE_AA_HALF_PX;
+    let in_l = [at[0] + n[0] * r, at[1] + n[1] * r];
+    let in_r = [at[0] - n[0] * r, at[1] - n[1] * r];
+    let out_l = [
+        at[0] + out[0] * STROKE_AA_HALF_PX + n[0] * r,
+        at[1] + out[1] * STROKE_AA_HALF_PX + n[1] * r,
+    ];
+    let out_r = [
+        at[0] + out[0] * STROKE_AA_HALF_PX - n[0] * r,
+        at[1] + out[1] * STROKE_AA_HALF_PX - n[1] * r,
+    ];
+    emit(in_l, edge, in_r, edge, out_r, fade_out);
+    emit(in_l, edge, out_r, fade_out, out_l, fade_out);
+}
+
+/// A coverage-exact round join over the outer wedge of a turn, from unit normal `from` to unit
+/// normal `to` (the offset directions of the two segments on the outer side). A solid fan stops
+/// half a device pixel inside the nominal radius, then a 1 px transition straddles it so the
+/// requested stroke width is preserved. The first and last spokes reuse the exact segment normals,
+/// so the wedge meets both segments' edges without a seam.
+fn stroke_aa_join(
+    emit: &mut impl FnMut([f32; 2], f32, [f32; 2], f32, [f32; 2], f32),
+    center: [f32; 2],
+    radius: f32,
+    from: [f32; 2],
+    to: [f32; 2],
+    cos_turn: f32,
+) {
+    let core = (radius - STROKE_AA_HALF_PX).max(0.0);
+    let rim = radius + STROKE_AA_HALF_PX;
+    let fade_in = core - radius;
+    let fade_out = STROKE_AA_HALF_PX;
+    // Keep the full-circle chord density over the wedge's share of the circle.
+    let turn = cos_turn.clamp(-1.0, 1.0).acos();
+    let steps =
+        ((join_segments(radius) as f32 * turn / std::f32::consts::TAU).ceil() as usize).max(1);
+    // Rotate `from` toward `to` by equal angles; the end spoke is `to` exactly.
+    let signed = (from[0] * to[1] - from[1] * to[0]).signum();
+    let step = turn / steps as f32;
+    let (step_cos, step_sin) = (step.cos(), step.sin() * signed);
+    let mut previous = from;
+    for index in 1..=steps {
+        let spoke = if index == steps {
+            to
+        } else {
+            [
+                previous[0] * step_cos - previous[1] * step_sin,
+                previous[0] * step_sin + previous[1] * step_cos,
+            ]
+        };
+        let at = |normal: [f32; 2], distance: f32| {
+            [
+                center[0] + normal[0] * distance,
+                center[1] + normal[1] * distance,
+            ]
+        };
+        let (p0, p1) = (at(previous, core), at(spoke, core));
+        if core > 0.0 {
+            emit(
+                center,
+                STROKE_AA_SOLID,
+                p0,
+                STROKE_AA_SOLID,
+                p1,
+                STROKE_AA_SOLID,
+            );
+        }
+        let (o0, o1) = (at(previous, rim), at(spoke, rim));
+        emit(p0, fade_in, o0, fade_out, o1, fade_out);
+        emit(p0, fade_in, o1, fade_out, p1, fade_in);
+        previous = spoke;
+    }
+}
+
 fn self_push_segment(
     out: &mut StrokeMesh,
     a: [f32; 2],
@@ -619,6 +810,36 @@ pub fn build_baseline(
 
 /// Tessellates a filled disc (triangle fan) at `center` with `radius`, all in bitmap px.
 /// Used for the crosshair marker on line and area series.
+/// Closed polygon outline of a rounded rectangle (radii clamped to half the shorter side, CSS
+/// `border-radius` semantics), shared by the WebGPU and GPUI executors so both tessellate
+/// `Prim::RoundRect` identically. Corner arcs scale their chord count with the device radius.
+pub fn round_rect_polygon(x: f32, y: f32, w: f32, h: f32, radii: [f32; 4]) -> Vec<[f32; 2]> {
+    use std::f32::consts::PI;
+    let max_radius = (w.abs().min(h.abs()) / 2.0).max(0.0);
+    let [lt, rt, rb, lb] = radii.map(|r| r.max(0.0).min(max_radius));
+    let mut out = Vec::with_capacity(24);
+    out.push([x + lt, y]);
+    out.push([x + w - rt, y]);
+    append_arc(&mut out, x + w - rt, y + rt, rt, -PI / 2.0, 0.0);
+    out.push([x + w, y + h - rb]);
+    append_arc(&mut out, x + w - rb, y + h - rb, rb, 0.0, PI / 2.0);
+    out.push([x + lb, y + h]);
+    append_arc(&mut out, x + lb, y + h - lb, lb, PI / 2.0, PI);
+    out.push([x, y + lt]);
+    append_arc(&mut out, x + lt, y + lt, lt, PI, 3.0 * PI / 2.0);
+    out
+}
+
+/// Quarter-arc chords scale with the device radius so pill ends stay round: the chord error is
+/// about `r·(π/2)²/(8·steps²)`, held near 0.05 device px, with small corners keeping 4 chords.
+fn append_arc(out: &mut Vec<[f32; 2]>, cx: f32, cy: f32, radius: f32, start: f32, end: f32) {
+    let steps = (radius.max(0.0).sqrt() * 2.5).ceil().clamp(4.0, 24.0) as usize;
+    for step in 1..=steps {
+        let t = start + (end - start) * (step as f32 / steps as f32);
+        out.push([cx + radius * t.cos(), cy + radius * t.sin()]);
+    }
+}
+
 pub fn build_disc(center: [f32; 2], radius: f32, color: Color, out: &mut Vec<LineVertex>) {
     const SEGMENTS: usize = 24;
     let rgba = color_to_rgba(color);
@@ -644,6 +865,99 @@ mod tests {
     use super::*;
 
     const BLUE: Color = Color::rgb(0x21, 0x96, 0xf3);
+
+    /// Interpolated coverage at `p`, or `None` outside every triangle.
+    fn coverage_at(tris: &[[StrokeAaVertex; 3]], p: [f32; 2]) -> Option<f32> {
+        tris.iter().find_map(|[a, b, c]| {
+            let (a, b, c) = (a, b, c);
+            let det = (b.position[1] - c.position[1]) * (a.position[0] - c.position[0])
+                + (c.position[0] - b.position[0]) * (a.position[1] - c.position[1]);
+            if det.abs() < 1e-9 {
+                return None;
+            }
+            let l1 = ((b.position[1] - c.position[1]) * (p[0] - c.position[0])
+                + (c.position[0] - b.position[0]) * (p[1] - c.position[1]))
+                / det;
+            let l2 = ((c.position[1] - a.position[1]) * (p[0] - c.position[0])
+                + (a.position[0] - c.position[0]) * (p[1] - c.position[1]))
+                / det;
+            let l3 = 1.0 - l1 - l2;
+            (l1 >= -1e-6 && l2 >= -1e-6 && l3 >= -1e-6)
+                .then(|| l1 * a.coverage() + l2 * b.coverage() + l3 * c.coverage())
+        })
+    }
+
+    #[test]
+    fn aa_round_joins_cover_the_whole_corner_for_both_turn_directions() {
+        let width = 6.0f32;
+        let half = width / 2.0;
+        // Right-angle and acute turns, both turning directions, four orientations each.
+        let turns = [
+            [[0.0, 50.0], [50.0, 50.0], [50.0, 0.0]],
+            [[0.0, 50.0], [50.0, 50.0], [50.0, 100.0]],
+            [[50.0, 0.0], [50.0, 50.0], [0.0, 50.0]],
+            [[50.0, 0.0], [50.0, 50.0], [100.0, 50.0]],
+            [[0.0, 50.0], [50.0, 50.0], [10.0, 40.0]],
+            [[0.0, 50.0], [50.0, 50.0], [10.0, 60.0]],
+        ];
+        for turn in turns {
+            let points = turn.map(|[x, y]| LinePoint { x, y });
+            let mut tris = Vec::new();
+            stroke_aa(&points, width, |tri| tris.push(tri));
+            // Every point strictly inside the join's solid core must be fully covered: no wedge on
+            // the wrong side, no seam between the wedge and the segments.
+            for step in 0..72 {
+                let angle = step as f32 / 72.0 * std::f32::consts::TAU;
+                // Probe inside the core polygon's inscribed radius: arcs are chords (the same
+                // `join_segments` density as the full-disc join), so the rim itself is approximate.
+                let inscribed = (half - STROKE_AA_HALF_PX)
+                    * (std::f32::consts::PI / join_segments(half) as f32).cos();
+                for distance in [0.3, 1.0, inscribed - 0.05] {
+                    let p = [50.0 + angle.cos() * distance, 50.0 + angle.sin() * distance];
+                    let coverage = tris
+                        .iter()
+                        .filter_map(|tri| coverage_at(std::slice::from_ref(tri), p))
+                        .fold(0.0f32, f32::max);
+                    assert!(
+                        coverage > 0.99,
+                        "turn {turn:?}: hole at angle {angle:.2} distance {distance} ({coverage})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn aa_stroke_conserves_width_and_ramps_edges_continuously() {
+        // Sub-device-pixel hairlines approximate their weight (a 0.5 px stroke integrates to
+        // ~0.56); every width a chart line can take (≥ 1 device px) is exact.
+        for width in [1.0f32, 2.0, 3.0, 4.5] {
+            let points = [
+                LinePoint { x: 0.0, y: 50.0 },
+                LinePoint { x: 100.0, y: 50.0 },
+            ];
+            let mut tris = Vec::new();
+            stroke_aa(&points, width, |tri| tris.push(tri));
+            // Integrate the vertical coverage profile through the segment's middle.
+            let step = 0.01f32;
+            let mut integral = 0.0f32;
+            let mut levels = std::collections::BTreeSet::new();
+            let mut y = 45.0f32;
+            while y < 55.0 {
+                if let Some(coverage) = coverage_at(&tris, [50.0, y]) {
+                    integral += coverage * step;
+                    levels.insert((coverage * 100.0).round() as i32);
+                }
+                y += step;
+            }
+            assert!(
+                (integral - width).abs() < 0.05,
+                "width {width}: integrated coverage {integral}"
+            );
+            // A continuous ramp, not a handful of MSAA-like steps.
+            assert!(levels.len() > 20, "width {width}: {} levels", levels.len());
+        }
+    }
 
     fn params(dpr: f64, w: f64) -> LineParams {
         LineParams {

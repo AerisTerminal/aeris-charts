@@ -14,8 +14,9 @@
 
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, LineType};
+pub(crate) use aeris_charts_render::line::round_rect_polygon;
 use aeris_charts_render::line::{
-    build_area_fill, expand_line_into, join_segments, AreaMesh, LineParams, LinePoint,
+    build_area_fill, expand_line_into, stroke_aa, AreaMesh, LineParams, LinePoint, STROKE_AA_SOLID,
 };
 
 use crate::scene::{DeviceRect, MeshVertex, Paint, SOLID_ST};
@@ -272,138 +273,23 @@ pub(crate) fn polyline_mesh(
     stroke_aa_into(pool, expanded, width)
 }
 
-/// Extrude a polyline stroke into anti-aliased triangles: every segment becomes a solid core ending
-/// half a device pixel inside the nominal edge plus a centered 1 px transition, interior vertices
-/// get a round join where the turn opens a visible
-/// wedge (same threshold as the shared tessellator), and both ends get a fading butt-cap strip.
+/// Anti-aliased polyline stroke through the shared [`stroke_aa`] tessellator. GPUI encodes each
+/// vertex's signed edge distance in the path shader's `st` channel; the solid core maps to
+/// [`SOLID_ST`] (`stroke_distance_st(-1)`), so geometry and coverage match the WebGPU executor.
 fn stroke_aa_into(pool: &mut Vec<MeshVertex>, pts: &[LinePoint], width: f32) -> (u32, u32) {
     let first = pool.len() as u32;
-    let half = (width / 2.0).max(0.0);
-    if pts.len() < 2 || half <= 0.0 {
-        return (first, 0);
-    }
-    let mut prev_dir: Option<[f32; 2]> = None;
-    let mut prev_b = [0.0f32; 2];
-    for i in 0..pts.len() - 1 {
-        let a = [pts[i].x as f32, pts[i].y as f32];
-        let b = [pts[i + 1].x as f32, pts[i + 1].y as f32];
-        let dx = b[0] - a[0];
-        let dy = b[1] - a[1];
-        let len = (dx * dx + dy * dy).sqrt();
-        if len < 1e-6 {
-            continue;
-        }
-        let dir = [dx / len, dy / len];
-        let n = [-dir[1], dir[0]];
-        let core_half = (half - STROKE_AA_HALF_PX).max(0.0);
-        let outer_half = half + STROKE_AA_HALF_PX;
-        let fade_in_st = stroke_distance_st(core_half - half);
-        let fade_out_st = stroke_distance_st(STROKE_AA_HALF_PX);
-        // Butt-cap fade at the stroke's start, past the first endpoint.
-        if prev_dir.is_none() {
-            cap_strip(pool, a, [-dir[0], -dir[1]], n, half);
-        }
-        // The fully covered core stops half a device pixel inside the nominal edge. The one-pixel
-        // transition then straddles that edge, keeping integrated coverage equal to `width`.
-        if core_half > 0.0 {
-            let la = [a[0] + n[0] * core_half, a[1] + n[1] * core_half];
-            let lb = [b[0] + n[0] * core_half, b[1] + n[1] * core_half];
-            let ra = [a[0] - n[0] * core_half, a[1] - n[1] * core_half];
-            let rb = [b[0] - n[0] * core_half, b[1] - n[1] * core_half];
-            push_tri_st(pool, la, SOLID_ST, lb, SOLID_ST, rb, SOLID_ST);
-            push_tri_st(pool, la, SOLID_ST, rb, SOLID_ST, ra, SOLID_ST);
-        }
-        // Centered 1 px coverage transition on each side.
-        for side in [1.0f32, -1.0] {
-            let in_a = [
-                a[0] + n[0] * core_half * side,
-                a[1] + n[1] * core_half * side,
-            ];
-            let in_b = [
-                b[0] + n[0] * core_half * side,
-                b[1] + n[1] * core_half * side,
-            ];
-            let out_a = [
-                a[0] + n[0] * outer_half * side,
-                a[1] + n[1] * outer_half * side,
-            ];
-            let out_b = [
-                b[0] + n[0] * outer_half * side,
-                b[1] + n[1] * outer_half * side,
-            ];
-            push_tri_st(
-                pool,
-                out_a,
-                fade_out_st,
-                out_b,
-                fade_out_st,
-                in_b,
-                fade_in_st,
-            );
-            push_tri_st(pool, out_a, fade_out_st, in_b, fade_in_st, in_a, fade_in_st);
-        }
-        // Round join at the shared interior vertex where the turn is visible.
-        if let Some(prev) = prev_dir {
-            let cos = (prev[0] * dir[0] + prev[1] * dir[1]).clamp(-1.0, 1.0);
-            let sin = (prev[0] * dir[1] - prev[1] * dir[0]).abs();
-            let gap = (half + FADE_PX) * sin / (1.0 + cos).max(1e-6);
-            if gap >= 0.25 {
-                join_fan_aa(pool, a, half);
-            }
-        }
-        prev_dir = Some(dir);
-        prev_b = b;
-    }
-    // Butt-cap fade past the stroke's end.
-    if let Some(dir) = prev_dir {
-        cap_strip(pool, prev_b, dir, [-dir[1], dir[0]], half);
-    }
+    stroke_aa(pts, width, |tri| {
+        pool.extend(tri.map(|vertex| MeshVertex {
+            x: vertex.position[0],
+            y: vertex.position[1],
+            st: if vertex.distance == STROKE_AA_SOLID {
+                SOLID_ST
+            } else {
+                stroke_distance_st(vertex.distance)
+            },
+        }));
+    });
     (first, pool.len() as u32 - first)
-}
-
-/// The half-pixel exterior half of the centered coverage transition across a butt cap. It reaches
-/// the side transitions at the corners.
-fn cap_strip(pool: &mut Vec<MeshVertex>, at: [f32; 2], out: [f32; 2], n: [f32; 2], half: f32) {
-    let r = half + STROKE_AA_HALF_PX;
-    let edge_st = stroke_distance_st(0.0);
-    let out_st = stroke_distance_st(STROKE_AA_HALF_PX);
-    let in_l = [at[0] + n[0] * r, at[1] + n[1] * r];
-    let in_r = [at[0] - n[0] * r, at[1] - n[1] * r];
-    let out_l = [
-        at[0] + out[0] * STROKE_AA_HALF_PX + n[0] * r,
-        at[1] + out[1] * STROKE_AA_HALF_PX + n[1] * r,
-    ];
-    let out_r = [
-        at[0] + out[0] * STROKE_AA_HALF_PX - n[0] * r,
-        at[1] + out[1] * STROKE_AA_HALF_PX - n[1] * r,
-    ];
-    push_tri_st(pool, in_l, edge_st, in_r, edge_st, out_r, out_st);
-    push_tri_st(pool, in_l, edge_st, out_r, out_st, out_l, out_st);
-}
-
-/// A coverage-exact round join: a solid fan stops half a device pixel inside the nominal radius,
-/// then a 1 px transition straddles it so the requested stroke width is preserved.
-fn join_fan_aa(pool: &mut Vec<MeshVertex>, center: [f32; 2], radius: f32) {
-    let core = (radius - STROKE_AA_HALF_PX).max(0.0);
-    let segments = join_segments(radius);
-    let rim = radius + STROKE_AA_HALF_PX;
-    let fade_in_st = stroke_distance_st(core - radius);
-    let fade_out_st = stroke_distance_st(STROKE_AA_HALF_PX);
-    for i in 0..segments {
-        let a0 = i as f32 / segments as f32 * std::f32::consts::TAU;
-        let a1 = (i + 1) as f32 / segments as f32 * std::f32::consts::TAU;
-        let (c0, s0) = (a0.cos(), a0.sin());
-        let (c1, s1) = (a1.cos(), a1.sin());
-        let p0 = [center[0] + core * c0, center[1] + core * s0];
-        let p1 = [center[0] + core * c1, center[1] + core * s1];
-        if core > 0.0 {
-            push_tri_st(pool, center, SOLID_ST, p0, SOLID_ST, p1, SOLID_ST);
-        }
-        let o0 = [center[0] + rim * c0, center[1] + rim * s0];
-        let o1 = [center[0] + rim * c1, center[1] + rim * s1];
-        push_tri_st(pool, p0, fade_in_st, o0, fade_out_st, o1, fade_out_st);
-        push_tri_st(pool, p0, fade_in_st, o1, fade_out_st, p1, fade_in_st);
-    }
 }
 
 /// Tessellate a dashed polyline into one mesh per solid dash run, recording the ranges in
@@ -626,32 +512,6 @@ pub(crate) fn ring_mesh(
         );
     }
     (first, pool.len() as u32 - first)
-}
-
-/// The outline of a rounded rectangle as a closed polygon, matching the wgpu executor's
-/// `round_rect_polygon` (4 line segments per corner arc, radii clamped to half the shorter side).
-pub(crate) fn round_rect_polygon(x: f32, y: f32, w: f32, h: f32, radii: [f32; 4]) -> Vec<[f32; 2]> {
-    use std::f32::consts::PI;
-    let max_radius = (w.abs().min(h.abs()) / 2.0).max(0.0);
-    let [lt, rt, rb, lb] = radii.map(|r| r.max(0.0).min(max_radius));
-    let mut out = Vec::with_capacity(24);
-    out.push([x + lt, y]);
-    out.push([x + w - rt, y]);
-    append_arc(&mut out, x + w - rt, y + rt, rt, -PI / 2.0, 0.0);
-    out.push([x + w, y + h - rb]);
-    append_arc(&mut out, x + w - rb, y + h - rb, rb, 0.0, PI / 2.0);
-    out.push([x + lb, y + h]);
-    append_arc(&mut out, x + lb, y + h - lb, lb, PI / 2.0, PI);
-    out.push([x, y + lt]);
-    append_arc(&mut out, x + lt, y + lt, lt, PI, 3.0 * PI / 2.0);
-    out
-}
-
-fn append_arc(out: &mut Vec<[f32; 2]>, cx: f32, cy: f32, radius: f32, start: f32, end: f32) {
-    for step in 1..=4 {
-        let t = start + (end - start) * (step as f32 / 4.0);
-        out.push([cx + radius * t.cos(), cy + radius * t.sin()]);
-    }
 }
 
 /// Fan-triangulate a closed convex-ish polygon around its centroid, as the wgpu executor's

@@ -4311,7 +4311,7 @@ fn series_options_json_covers_the_ts_field_set() {
     assert_eq!(options["area_bottom_color"], "");
     assert_eq!(options["wick_visible"], true);
     assert_eq!(options["border_visible"], true);
-    assert_eq!(options["line_width"], 3.0);
+    assert_eq!(options["line_width"], 2.0);
     assert_eq!(options["line_type"], "simple");
     assert_eq!(options["histogram_updown"], false);
     assert_eq!(options["baseline_value"], serde_json::Value::Null);
@@ -5474,6 +5474,137 @@ fn injected_locale_month_names_drive_labels() {
         crosshair_time_label(&mut chart, ts).as_deref(),
         Some("Junius 2018")
     );
+}
+
+// ---- last-price pulse defaults ----
+
+#[test]
+fn line_and_area_pulse_by_default_and_every_other_kind_stays_static() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    for kind in [
+        SeriesKind::Line,
+        SeriesKind::Area,
+        SeriesKind::Candlestick,
+        SeriesKind::Bar,
+        SeriesKind::Histogram,
+        SeriesKind::Baseline,
+    ] {
+        let id = chart.add_series(kind);
+        assert_eq!(
+            chart.series_entry_mut(id).unwrap().last_price_animation,
+            matches!(kind, SeriesKind::Line | SeriesKind::Area),
+            "{kind:?} pulse default"
+        );
+    }
+}
+
+#[test]
+fn line_defaults_are_two_pixels_and_indicator_lines_never_pulse() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    install_bars(&mut chart, 30);
+    let line = chart.add_series(SeriesKind::Line);
+    let options: serde_json::Value =
+        serde_json::from_str(&chart.series_options_json(line).unwrap()).unwrap();
+    assert_eq!(options["line_width"], 2.0);
+    let sma = chart.add_sma(0, 5).expect("sma output");
+    let output = chart.series_entry_mut(sma).unwrap();
+    assert_eq!(output.line_width, Some(2.0));
+    assert!(!output.last_price_animation, "study lines do not pulse");
+}
+
+#[test]
+fn pulse_follows_kind_defaults_but_an_explicit_choice_survives_type_changes() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let id = chart.add_series(SeriesKind::Candlestick);
+    let pulse = |chart: &mut ChartEngine| chart.series_entry_mut(id).unwrap().last_price_animation;
+    chart.convert_series_kind(id, SeriesKind::Line);
+    assert!(
+        pulse(&mut chart),
+        "untouched series adopts the line default"
+    );
+    chart.convert_series_kind(id, SeriesKind::Candlestick);
+    assert!(!pulse(&mut chart), "and drops it again for candles");
+
+    // An explicit opt-in on a static kind survives too.
+    assert!(chart.set_series_last_price_animation(id, true));
+    chart.convert_series_kind(id, SeriesKind::Bar);
+    assert!(pulse(&mut chart), "opt-in survives conversion");
+
+    chart.convert_series_kind(id, SeriesKind::Area);
+    assert!(chart.set_series_last_price_animation(id, false));
+    for kind in [SeriesKind::Line, SeriesKind::Candlestick, SeriesKind::Area] {
+        chart.convert_series_kind(id, kind);
+        assert!(
+            !pulse(&mut chart),
+            "opt-out survives conversion to {kind:?}"
+        );
+    }
+}
+
+#[test]
+fn pulse_clock_runs_only_while_the_primary_series_draws_a_pulse() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    // The engine starts with one candlestick main series; the primary series owns the pulse.
+    let id = 0;
+    chart.convert_series_kind(id, SeriesKind::Line);
+    assert!(
+        !chart.last_price_pulse_active(),
+        "no data, no animation loop"
+    );
+    chart
+        .set_series_data(
+            id,
+            &[1.0, 2.0],
+            &[5.0, 6.0],
+            &[5.0, 6.0],
+            &[5.0, 6.0],
+            &[5.0, 6.0],
+        )
+        .unwrap();
+    assert!(chart.last_price_pulse_active());
+    assert!(chart.set_series_last_price_animation(id, false));
+    assert!(
+        !chart.last_price_pulse_active(),
+        "host opt-out stops the loop"
+    );
+}
+
+#[test]
+fn pulse_advances_on_every_clock_tick_without_rebuilding_series_or_chrome() {
+    use aeris_charts_render::draw_list::Prim;
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.convert_series_kind(0, SeriesKind::Line);
+    install_bars(&mut chart, 20);
+    chart.fit_content();
+    let ring = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Circle {
+                    radius,
+                    stroke_width,
+                    ..
+                } if *stroke_width > 0.0 => Some(*radius),
+                _ => None,
+            })
+            .next()
+    };
+    chart.animation_time = 100.0;
+    let first = ring(&mut chart).expect("ring visible early in the cycle");
+    chart.animation_time = 500.0;
+    let second = ring(&mut chart).expect("ring still visible");
+    assert!(
+        second > first,
+        "the ring must grow between ticks ({first} -> {second})"
+    );
+    // A clock tick rebuilds only the overlay layer, never series geometry.
+    let stats = chart.frame_build_stats();
+    assert_eq!(stats.series_rebuilds, 0);
+    assert_eq!(stats.overlay_rebuilds, 1);
+    // Rest phase: only the center point remains.
+    chart.animation_time = 2000.0;
+    assert_eq!(ring(&mut chart), None);
 }
 
 // ---- primary-series removal + series ordering ----
@@ -7311,9 +7442,7 @@ fn axis_and_pane_borders_project_the_canonical_half_pixel_width() {
         let mut prims = Vec::new();
         chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
 
-        let expected = (aeris_charts_core::style::BORDER_WIDTH * dpr)
-            .round()
-            .max(1.0) as i32;
+        let expected = aeris_charts_core::style::border_width_device_px(dpr) as i32;
         let right_x = ((chart.pane_left + chart.pane_w) * dpr).round() as i32;
         let pane_bottom = (chart.pane_h * dpr).round() as i32;
         let bitmap_w = (chart.css_width * dpr).round().max(1.0) as i32;
