@@ -2852,6 +2852,16 @@ fn indicator_binding_owns_group_chrome_visibility_and_removal() {
         .iter()
         .all(|output| chart.series_entry(*output).is_none()));
     assert!(chart.indicator_bindings().is_empty());
+    assert!(!chart.has_indicator_bindings());
+
+    let sma = chart.add_sma(0, 2).expect("valid SMA");
+    let rsi = chart.add_rsi(0, 2).expect("valid RSI");
+    assert!(chart.has_indicator_bindings());
+    assert!(chart.clear_indicator_bindings());
+    assert!(!chart.has_indicator_bindings());
+    assert!(chart.series_entry(sma).is_none());
+    assert!(chart.series_entry(rsi).is_none());
+    assert!(!chart.clear_indicator_bindings());
 }
 
 #[test]

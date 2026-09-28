@@ -404,6 +404,28 @@ impl ChartEngine {
             .collect()
     }
 
+    /// Whether the chart currently owns at least one live native indicator binding.
+    #[must_use]
+    pub fn has_indicator_bindings(&self) -> bool {
+        !self.indicators.is_empty()
+    }
+
+    /// Remove every native indicator binding as one engine-owned operation.
+    pub fn clear_indicator_bindings(&mut self) -> bool {
+        let binding_ids = self
+            .indicators
+            .iter()
+            .filter_map(|binding| binding.outputs.first().copied())
+            .collect::<Vec<_>>();
+        if binding_ids.is_empty() {
+            return false;
+        }
+        for binding_id in binding_ids {
+            let _ = self.remove_indicator_binding(binding_id);
+        }
+        true
+    }
+
     /// Current chart-wide chrome policy inherited by every engine-owned indicator output.
     #[must_use]
     pub const fn indicator_chrome_options(&self) -> IndicatorChromeOptions {

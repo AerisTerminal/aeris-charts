@@ -311,6 +311,27 @@ impl ChartEngine {
             .collect()
     }
 
+    /// Return the runtime study that owns a live output series.
+    #[must_use]
+    pub fn external_study_for_series(&self, series_id: SeriesId) -> Option<u64> {
+        self.external_study_outputs
+            .iter()
+            .find_map(|(&(study_id, _), state)| {
+                (state.series_id == series_id && self.series_entry(series_id).is_some())
+                    .then_some(study_id)
+            })
+    }
+
+    pub(crate) fn external_study_series(&self, study_id: u64) -> Vec<SeriesId> {
+        self.external_study_outputs
+            .iter()
+            .filter_map(|(&(candidate, _), state)| {
+                (candidate == study_id && self.series_entry(state.series_id).is_some())
+                    .then_some(state.series_id)
+            })
+            .collect()
+    }
+
     #[must_use]
     pub fn external_study_visible(&self, study_id: u64) -> Option<bool> {
         let mut found = false;
@@ -589,6 +610,19 @@ mod tests {
         let second = chart.series_entry(outputs[1].series_id).unwrap();
         assert_ne!(first.pane_index, 0);
         assert_eq!(first.pane_index, second.pane_index);
+        assert_eq!(
+            chart.external_study_for_series(outputs[1].series_id),
+            Some(7)
+        );
+        chart.set_selected_series(Some(outputs[1].series_id));
+        assert_eq!(chart.selected_series(), Some(outputs[1].series_id));
+        assert_eq!(
+            chart.selected_series_members().collect::<Vec<_>>(),
+            outputs
+                .iter()
+                .map(|output| output.series_id)
+                .collect::<Vec<_>>()
+        );
 
         assert_eq!(
             chart.install_external_study_output(
@@ -606,6 +640,7 @@ mod tests {
         assert_eq!(chart.external_study_visible(7), Some(false));
         assert!(chart.remove_external_studies(&[7]));
         assert!(chart.external_study_outputs().is_empty());
+        assert_eq!(chart.external_study_for_series(outputs[0].series_id), None);
     }
 
     #[test]
