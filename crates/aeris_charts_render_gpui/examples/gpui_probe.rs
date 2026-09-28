@@ -207,7 +207,7 @@ fn shell_rgb(css: &str, fallback: u32) -> u32 {
 const TOOLBAR_FEATURE_MANIFEST: &[&str] = &[
     "series:candlestick,bar,line,area,brushable-area,footprint,histogram,baseline",
     "style:candle-body,wick-colors,border-colors,wick-visible,border-visible,reset-parts,line-color,line-width,area-fill",
-    "overlay:sma20,volume,rsi14",
+    "overlay:sma20,volume,volume-profile,rsi14,cvd",
     "workspace:split-horizontal,split-vertical,shortcuts,maximize,restore,close,cap,usage,active,resize",
     "drawing:trend,h-line,h-ray,v-line,rect,text,path,brush,clear,color,style,width,label,text-color,size,weight,italic",
     "crosshair:mode,color,width,style,label-background,labels",
@@ -3001,6 +3001,9 @@ struct InteractiveDemo {
     cells: Vec<DemoCell>,
     active: u64,
     maximized: Option<u64>,
+    /// The release of an Alt+click maximize press. The layout changes under the pointer, so the
+    /// mouse-up must not reach whichever chart is now there (no stray click or drawing anchor).
+    swallow_mouse_up: bool,
     theme: DemoTheme,
     max_index: usize,
     max_charts: Option<usize>,
@@ -3026,6 +3029,7 @@ impl InteractiveDemo {
             cells: vec![DemoCell { id: 1, chart }],
             active: 1,
             maximized: None,
+            swallow_mouse_up: false,
             theme: DemoTheme::Dark,
             max_index: 0,
             max_charts: None,
@@ -3139,7 +3143,7 @@ impl InteractiveDemo {
         self.maximized = (self.maximized != Some(id)).then_some(id);
         self.status = self.maximized.map_or_else(
             || format!("restored split layout; active cell {id}"),
-            |_| format!("maximized cell {id}; Ctrl/Cmd+click to restore"),
+            |_| format!("maximized cell {id}; Alt+click to restore"),
         );
     }
 
@@ -3783,26 +3787,46 @@ impl InteractiveDemo {
                     .expect("workspace snapshots reference a live GPUI cell")
                     .chart
                     .clone();
-                let activation_chart = chart.clone();
+                let maximize_entity = cx.entity();
+                let release_entity = cx.entity();
                 let entity = cx.entity();
                 let id = *id;
                 div()
                     .relative()
                     .size_full()
-                    .on_mouse_down(MouseButton::Left, move |event, _, app| {
-                        entity.update(app, |demo, cx| {
-                            let drawing_armed = activation_chart
-                                .read(cx)
-                                .engine
-                                .active_drawing_tool()
-                                .is_some();
-                            if (event.modifiers.control || event.modifiers.platform)
-                                && !drawing_armed
+                    // Alt+click toggles this cell's maximize in a multi-chart layout. Capture
+                    // phase plus stop_propagation: the chart never sees the press, so the
+                    // shortcut cannot also pan, select, or place a drawing anchor.
+                    .capture_any_mouse_down(move |event, _, app| {
+                        let toggled = maximize_entity.update(app, |demo, cx| {
+                            // A new press always starts clean, even if the previous release
+                            // landed outside every chart cell.
+                            demo.swallow_mouse_up = false;
+                            if event.button != MouseButton::Left
+                                || !event.modifiers.alt
+                                || (demo.cells.len() < 2 && demo.maximized.is_none())
                             {
-                                demo.toggle_maximize(id);
-                            } else {
-                                demo.activate(id, cx);
+                                return false;
                             }
+                            demo.toggle_maximize(id);
+                            demo.swallow_mouse_up = true;
+                            cx.notify();
+                            true
+                        });
+                        if toggled {
+                            app.stop_propagation();
+                        }
+                    })
+                    .capture_any_mouse_up(move |_, _, app| {
+                        let swallow = release_entity
+                            .update(app, |demo, _| std::mem::take(&mut demo.swallow_mouse_up));
+                        if swallow {
+                            app.stop_propagation();
+                        }
+                    })
+                    .on_mouse_down(MouseButton::Left, move |_, _, app| {
+                        entity.update(app, |demo, cx| {
+                            demo.activate(id, cx);
                             cx.notify();
                         });
                     })
