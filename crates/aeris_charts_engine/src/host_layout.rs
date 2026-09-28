@@ -13,6 +13,17 @@ pub struct FinancialFramePreparation {
     pub dpr_changed: bool,
 }
 
+/// One host viewport transaction and its reusable frame output buffers.
+pub struct FinancialFrameRequest<'a> {
+    pub width: f64,
+    pub height: f64,
+    pub dpr: f64,
+    pub force_layout: bool,
+    pub fit_content: bool,
+    pub frame: &'a mut ChartFrame,
+    pub axis_primitives: &'a mut Vec<Prim>,
+}
+
 fn negotiated_axis_width(current: f64, measured: f64, allow_shrink: bool) -> f64 {
     if allow_shrink || current <= 0.0 {
         measured
@@ -29,42 +40,37 @@ impl ChartEngine {
     /// axis-frame construction, chart-frame construction, and axis primitive construction.
     pub fn prepare_financial_frame_with_measure<F, G>(
         &mut self,
-        width: f64,
-        height: f64,
-        dpr: f64,
-        force_layout: bool,
-        fit_content: bool,
+        request: FinancialFrameRequest<'_>,
         measure: F,
         countdown_measure: G,
-        frame: &mut ChartFrame,
-        axis_primitives: &mut Vec<Prim>,
     ) -> FinancialFramePreparation
     where
         F: Fn(&str, bool) -> f64 + Copy,
         G: Fn(&str, bool) -> f64 + Copy,
     {
-        if !width.is_finite()
-            || !height.is_finite()
-            || !dpr.is_finite()
-            || width <= 0.0
-            || height <= 0.0
-            || dpr <= 0.0
+        if !request.width.is_finite()
+            || !request.height.is_finite()
+            || !request.dpr.is_finite()
+            || request.width <= 0.0
+            || request.height <= 0.0
+            || request.dpr <= 0.0
         {
             return FinancialFramePreparation::default();
         }
-        let dimensions_changed =
-            self.css_width != width || self.css_height != height || self.dpr != dpr;
-        let dpr_changed = self.dpr != dpr;
+        let dimensions_changed = self.css_width != request.width
+            || self.css_height != request.height
+            || self.dpr != request.dpr;
+        let dpr_changed = self.dpr != request.dpr;
         if dimensions_changed {
-            self.css_width = width;
-            self.css_height = height;
-            self.dpr = dpr;
+            self.css_width = request.width;
+            self.css_height = request.height;
+            self.dpr = request.dpr;
         }
-        let layout_recomputed = dimensions_changed || force_layout;
+        let layout_recomputed = dimensions_changed || request.force_layout;
         if !layout_recomputed
             && !self.frame_requires_layout()
             && !self.frame_requires_axis()
-            && !frame.panes.is_empty()
+            && !request.frame.panes.is_empty()
         {
             return FinancialFramePreparation {
                 frame_built: false,
@@ -74,7 +80,7 @@ impl ChartEngine {
         }
         if layout_recomputed {
             self.recompute_layout_with_measure(true, measure, countdown_measure);
-            if fit_content {
+            if request.fit_content {
                 self.fit_content();
                 self.recompute_layout_with_measure(true, measure, countdown_measure);
             }
@@ -83,8 +89,8 @@ impl ChartEngine {
         let max_label_width = (layout.font_size + 4.0) * 5.0 / 8.0
             * f64::from(self.tick_mark_max_character_length.max(1));
         let axis_frame = self.build_axis_frame(max_label_width, measure, countdown_measure);
-        self.build_frame_into(frame);
-        self.build_axis_primitives_into(&axis_frame, axis_primitives, |_| 0.0);
+        self.build_frame_into(request.frame);
+        self.build_axis_primitives_into(&axis_frame, request.axis_primitives, |_| 0.0);
         FinancialFramePreparation {
             frame_built: true,
             layout_recomputed,
@@ -265,7 +271,7 @@ impl ChartEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::negotiated_axis_width;
+    use super::{negotiated_axis_width, FinancialFrameRequest};
     use crate::{ChartEngine, PriceScaleSide, SeriesKind};
 
     #[test]
@@ -342,15 +348,17 @@ mod tests {
         let mut frame = crate::ChartFrame::default();
         let mut axis = Vec::new();
         let prepared = chart.prepare_financial_frame_with_measure(
-            800.0,
-            500.0,
-            2.0,
-            true,
-            true,
+            FinancialFrameRequest {
+                width: 800.0,
+                height: 500.0,
+                dpr: 2.0,
+                force_layout: true,
+                fit_content: true,
+                frame: &mut frame,
+                axis_primitives: &mut axis,
+            },
             |text, _| text.len() as f64 * 7.0,
             |text, _| text.len() as f64 * 6.0,
-            &mut frame,
-            &mut axis,
         );
         assert!(prepared.frame_built);
         assert!(prepared.layout_recomputed);
@@ -362,15 +370,17 @@ mod tests {
         assert!(!frame.panes.is_empty());
 
         let retained = chart.prepare_financial_frame_with_measure(
-            800.0,
-            500.0,
-            2.0,
-            false,
-            false,
+            FinancialFrameRequest {
+                width: 800.0,
+                height: 500.0,
+                dpr: 2.0,
+                force_layout: false,
+                fit_content: false,
+                frame: &mut frame,
+                axis_primitives: &mut axis,
+            },
             |text, _| text.len() as f64 * 7.0,
             |text, _| text.len() as f64 * 6.0,
-            &mut frame,
-            &mut axis,
         );
         assert!(!retained.frame_built);
     }

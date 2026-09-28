@@ -533,6 +533,11 @@ workspace state is a small composition of the validated generic split layout, op
 cell identity, and one unchanged chart persistence V1 document per cell. Optional instrument identities are opaque
 host strings. The host stores this composition and restores market history, subscriptions, and
 host-owned series/indicator definitions after the grid restores each Aeris chart document.
+Native and browser hosts restore that generic layout through the same typed workspace transaction.
+Hosts may issue nonzero stable `u64` cell identities when creating or splitting a workspace; the
+engine validates uniqueness and overflow before mutation, owns boundary lookup and absolute resize,
+and projects normalized legacy basis-point weights. A host must not replay splits or maintain a
+parallel engine-cell-to-host-pane identity map.
 
 ### `aeris_charts_render`
 
