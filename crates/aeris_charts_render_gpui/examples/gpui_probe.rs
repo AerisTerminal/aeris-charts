@@ -4,9 +4,8 @@
 //! independently seeded `Workspace` split cells, drawing creation, indicators, exact package
 //! themes, OHLC/click status, and host-side visual approximations of the web plugin fixtures. Those fixture
 //! toggles insert engine `Prim`s or use native engine APIs; they are explicitly not a JavaScript
-//! object bridge. With `AERIS_CHARTS_PROBE_FRAMES` set the source single-chart metrics/probe path is
-//! retained: responsive layout, native text measurement, axis/crosshair chrome, pan/zoom/scale,
-//! pane separators, drawing selection, fractional DPR, and live updates.
+//! object bridge. With `AERIS_CHARTS_PROBE_FRAMES` set a single chart paints N frames and exits
+//! silently (a smoke run of layout, native text measurement, chrome, and live updates).
 //!
 //! ```text
 //! cargo run -p aeris_charts_render_gpui --features gpui-backend --example gpui_probe
@@ -14,8 +13,8 @@
 //!
 //! Environment knobs:
 //! - `AERIS_CHARTS_PROBE_BARS` — synthetic bars to load (default 500).
-//! - `AERIS_CHARTS_PROBE_FRAMES` — quit after N painted frames and print a metrics summary. Unset runs
-//!   interactively until the window closes.
+//! - `AERIS_CHARTS_PROBE_FRAMES` — quit after N painted frames. Unset runs interactively until the
+//!   window closes. The demo never prints frame data.
 //! - `AERIS_CHARTS_PROBE_FEATURE=footprint` — finite probes start in the deterministic detailed-LOD
 //!   footprint fixture instead of the default candlestick fixture.
 
@@ -656,7 +655,6 @@ struct Probe {
     seen_scales: Vec<f32>,
     seen_sizes: Vec<(f32, f32)>,
     started: Instant,
-    reported: bool,
 }
 
 impl Probe {
@@ -746,7 +744,6 @@ impl Probe {
             seen_scales: Vec::new(),
             seen_sizes: Vec::new(),
             started: Instant::now(),
-            reported: false,
         }
     }
 
@@ -2737,67 +2734,6 @@ impl Probe {
             self.dirty = true;
         }
     }
-
-    fn report(&self) {
-        let pct = |data: &[u64], p: f64| -> f64 {
-            if data.is_empty() {
-                return 0.0;
-            }
-            let mut v = data.to_vec();
-            v.sort_unstable();
-            let idx = ((v.len() as f64 - 1.0) * p).round() as usize;
-            v[idx] as f64 / 1_000_000.0
-        };
-        println!("--- aeris_charts_render_gpui probe ---");
-        println!("frames painted  : {}", self.painted);
-        println!("bars            : {}", self.bars + self.appended);
-        println!("wall clock      : {:.2?}", self.started.elapsed());
-        println!("scale factors   : {:?}", self.seen_scales);
-        println!("sizes (logical) : {:?}", self.seen_sizes);
-        println!(
-            "last frame      : prims={} ops={} quads={} paths={} tris={} text_runs={} painted_runs={} dropped={}",
-            self.last.prims,
-            self.last.ops,
-            self.last.quads,
-            self.last.paths,
-            self.last.triangles,
-            self.last.text_runs,
-            self.last.glyph_runs_painted,
-            self.last.dropped_prims
-        );
-        println!("mesh vertices   : {}", self.last.mesh_vertices);
-        println!(
-            "quad batching   : {} quads -> {} paths ({} paint_quad calls saved)",
-            self.last.batched_quads,
-            self.last.quad_batches,
-            self.last
-                .batched_quads
-                .saturating_sub(self.last.quad_batches)
-        );
-        println!(
-            "adapter total ms: p50={:.3} p99={:.3}  (plan + gpui submission)",
-            pct(&self.total_nanos, 0.50),
-            pct(&self.total_nanos, 0.99)
-        );
-        println!(
-            "text cache      : {} hits / {} misses",
-            self.last.text_cache_hits, self.last.text_cache_misses
-        );
-        println!(
-            "plan build ms   : p50={:.3} p95={:.3} p99={:.3} max={:.3}",
-            pct(&self.plan_nanos, 0.50),
-            pct(&self.plan_nanos, 0.95),
-            pct(&self.plan_nanos, 0.99),
-            pct(&self.plan_nanos, 1.0)
-        );
-        println!(
-            "gpui paint ms   : p50={:.3} p95={:.3} p99={:.3} max={:.3}",
-            pct(&self.paint_nanos, 0.50),
-            pct(&self.paint_nanos, 0.95),
-            pct(&self.paint_nanos, 0.99),
-            pct(&self.paint_nanos, 1.0)
-        );
-    }
 }
 
 /// Build and paint one frame. Split out so both closures can hold disjoint borrows of `Probe`.
@@ -2861,10 +2797,6 @@ impl Render for Probe {
             .frame_budget
             .is_some_and(|budget| self.painted >= budget);
         if done {
-            if !self.reported {
-                self.report();
-                self.reported = true;
-            }
             cx.quit();
         } else if self.needs_animation_frame() {
             window.request_animation_frame();
@@ -4300,22 +4232,12 @@ impl Render for InteractiveDemo {
             },
             |chart| {
                 let probe = chart.read(cx);
-                // Live frame cost, so an open demo answers "how much FPS" without a finite probe.
-                let frame_ms = probe.last.total_nanos() as f64 / 1.0e6;
-                let fps = if frame_ms > 0.0 {
-                    1.0e3 / frame_ms
-                } else {
-                    0.0
-                };
                 (
                     shell_rgb(
                         &probe.engine.options.get().time_scale.border_color,
                         shell_rgb(theme_border(self.theme), 0xe5e5e5),
                     ),
-                    format!(
-                        "{}  ·  {}  ·  {frame_ms:.1} ms ({fps:.0} fps)",
-                        probe.legend, probe.click_status
-                    ),
+                    format!("{}  ·  {}", probe.legend, probe.click_status),
                 )
             },
         );
