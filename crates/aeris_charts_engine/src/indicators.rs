@@ -429,6 +429,7 @@ impl ChartEngine {
                 series.price_line_visible = options.price_lines_visible;
             }
         }
+        changed |= self.apply_indicator_chrome_to_external_studies(options);
         if changed {
             self.invalidate_frame_layout_and_axis();
         }

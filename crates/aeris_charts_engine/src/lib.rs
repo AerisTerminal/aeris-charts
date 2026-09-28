@@ -13,6 +13,7 @@ mod domains;
 mod drawing_contract;
 mod drawing_text_edit;
 mod drawings;
+mod external_studies;
 mod feature_series;
 mod footprint;
 mod frame;
@@ -44,7 +45,7 @@ mod workspace;
 
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::num::NonZeroU32;
 use std::ops::{Deref, DerefMut};
 
@@ -83,6 +84,12 @@ pub use drawings::{
 };
 pub(crate) use drawings::{
     DrawingAnchorTime, DrawingController, DrawingDrag, DrawingHistory, DrawingRuntime,
+};
+pub use external_studies::{
+    ExternalStudyError, ExternalStudyInputRequirements, ExternalStudyInputStream,
+    ExternalStudyOutputDescriptor, ExternalStudyOutputInfo, ExternalStudyPaneTarget,
+    ExternalStudyPlotKind, ExternalStudyPointStyle, ExternalStudyScaleTarget,
+    ExternalStudyThresholdRegion, MAX_EXTERNAL_STUDY_OUTPUTS,
 };
 pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
@@ -1673,6 +1680,8 @@ pub struct ChartEngine {
     pub(crate) right_builtin_axis_w: f64,
     indicators: Vec<IndicatorBinding>,
     indicator_chrome: IndicatorChromeOptions,
+    external_study_outputs: BTreeMap<(u64, usize), external_studies::ExternalStudyOutputState>,
+    external_study_panes: BTreeMap<(u64, u8), PaneId>,
     /// During study-state restore, persisted oscillator panes are empty until their studies are
     /// recreated. The cursor lets the normal placement path reuse those panes without changing
     /// interactive study creation semantics.
@@ -1883,6 +1892,8 @@ impl ChartEngine {
             right_builtin_axis_w: 0.0,
             indicators: Vec::new(),
             indicator_chrome: IndicatorChromeOptions::default(),
+            external_study_outputs: BTreeMap::new(),
+            external_study_panes: BTreeMap::new(),
             study_restore_pane_cursor: None,
             indicator_changes: Vec::new(),
             trade_streams: HashMap::new(),

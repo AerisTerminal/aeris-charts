@@ -783,6 +783,12 @@ indicator bindings are also the visibility, removal, and chrome ownership unit. 
 shows, hides, or removes every output in a binding, and the retained chart-wide indicator chrome
 policy applies name labels, value labels, and price lines to current and later outputs. Hosts choose
 that policy and render controls; they do not walk output series or predict output counts.
+Host-computed scalar studies cross the same boundary through the external-study transaction. The
+host supplies a stable study/output identity, generation, semantic presentation, stream requirement
+metadata, timestamps, and nullable values. The engine validates the complete publication before
+mutation and owns its bounded output registry, generation fence, series and dedicated-pane lifecycle,
+price-format inheritance, retained chrome, group visibility, and group removal. Provider sessions and
+the computation of those values remain host-runtime responsibilities.
 Financial
 study persistence V3 stores binding definitions, dependency references, scalar inputs, volume inputs,
 and output styles while leaving market history and ordinary series data host-owned. Trade, quote, and
