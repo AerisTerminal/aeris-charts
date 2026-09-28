@@ -2567,16 +2567,26 @@ impl Probe {
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.engine.drawing_text_edit().is_some() {
             let modifiers = event.keystroke.modifiers;
-            if (modifiers.control || modifiers.platform)
-                && !modifiers.alt
-                && event.keystroke.key == "v"
-            {
-                // Paste the clipboard's text, flattened to one line by the engine session.
-                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                    self.engine.drawing_text_edit_insert(&text);
+            let command = (modifiers.control || modifiers.platform) && !modifiers.alt;
+            match event.keystroke.key.as_str() {
+                // Clipboard shortcuts, like the browser editor: paste flattens to one line.
+                "v" if command => {
+                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                        self.engine.drawing_text_edit_insert(&text);
+                    }
                 }
-            } else {
-                self.on_text_edit_key(event);
+                "c" | "x" if command => {
+                    if let Some(selected) = self.engine.drawing_text_edit_selection() {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                            selected.to_string(),
+                        ));
+                        if event.keystroke.key == "x" {
+                            self.engine
+                                .drawing_text_edit_key(DrawingTextEditKey::Backspace, false);
+                        }
+                    }
+                }
+                _ => self.on_text_edit_key(event),
             }
             self.dirty = true;
             cx.stop_propagation();
@@ -2644,6 +2654,15 @@ impl Probe {
     /// session; chart and workspace shortcuts stay inert until the session ends.
     fn on_text_edit_key(&mut self, event: &KeyDownEvent) {
         let keystroke = &event.keystroke;
+        let modifiers = keystroke.modifiers;
+        // Word motion follows the platform convention: Ctrl on Windows/Linux, Option on macOS;
+        // Cmd+arrows jump to the line ends on macOS.
+        let word = if cfg!(target_os = "macos") {
+            modifiers.alt
+        } else {
+            modifiers.control
+        };
+        let line = cfg!(target_os = "macos") && modifiers.platform;
         let key = match keystroke.key.as_str() {
             "enter" => {
                 self.engine.commit_drawing_text_edit();
@@ -2653,16 +2672,26 @@ impl Probe {
                 self.engine.cancel_drawing_text_edit();
                 return;
             }
+            "a" if (modifiers.control || modifiers.platform) && !modifiers.alt => {
+                self.engine.drawing_text_edit_select_all();
+                return;
+            }
+            "backspace" if word => Some(DrawingTextEditKey::DeleteWordBackward),
             "backspace" => Some(DrawingTextEditKey::Backspace),
+            "delete" if word => Some(DrawingTextEditKey::DeleteWordForward),
             "delete" => Some(DrawingTextEditKey::Delete),
+            "left" if line => Some(DrawingTextEditKey::Home),
+            "right" if line => Some(DrawingTextEditKey::End),
+            "left" if word => Some(DrawingTextEditKey::WordLeft),
+            "right" if word => Some(DrawingTextEditKey::WordRight),
             "left" => Some(DrawingTextEditKey::Left),
             "right" => Some(DrawingTextEditKey::Right),
-            "home" => Some(DrawingTextEditKey::Home),
-            "end" => Some(DrawingTextEditKey::End),
+            "home" | "up" => Some(DrawingTextEditKey::Home),
+            "end" | "down" => Some(DrawingTextEditKey::End),
             _ => None,
         };
         if let Some(key) = key {
-            self.engine.drawing_text_edit_key(key);
+            self.engine.drawing_text_edit_key(key, modifiers.shift);
         } else if let Some(text) = keystroke.key_char.as_deref().filter(|_| {
             // AltGr characters arrive with Ctrl+Alt on Windows; GPUI marks them as text.
             event.prefer_character_input
@@ -4659,9 +4688,24 @@ mod tests {
         probe.on_text_edit_key(&alt_gr);
         assert_eq!(probe.engine.drawing_text_edit(), Some((id, "H@!", 2)));
 
+        // Shift+Home selects to the start; typing replaces the selection.
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        probe.on_text_edit_key(&key("home", None, shift));
+        assert_eq!(probe.engine.drawing_text_edit_selection(), Some("H@"));
+        probe.on_text_edit_key(&key("W", Some("W"), shift));
+        assert_eq!(probe.engine.drawing_text_edit(), Some((id, "W!", 1)));
+        // Select-all, then a word-delete clears the selection.
+        probe.on_text_edit_key(&key("a", Some("a"), ctrl));
+        assert_eq!(probe.engine.drawing_text_edit_selection(), Some("W!"));
+        probe.on_text_edit_key(&key("right", None, Modifiers::default()));
+        assert_eq!(probe.engine.drawing_text_edit(), Some((id, "W!", 2)));
+
         probe.on_text_edit_key(&key("enter", None, Modifiers::default()));
         assert_eq!(probe.engine.editing_drawing(), None);
-        assert_eq!(probe.engine.drawing(id).unwrap().text, "H@!");
+        assert_eq!(probe.engine.drawing(id).unwrap().text, "W!");
     }
 
     /// Indicator panes share the content height with the primary pane. Adding one must not trip

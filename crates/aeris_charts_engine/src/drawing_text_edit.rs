@@ -13,13 +13,19 @@ use crate::ChartEngine;
 /// Largest label the drawing contract accepts, in UTF-8 bytes.
 const MAX_DRAWING_TEXT_BYTES: usize = 256;
 
-/// Editing keys a host forwards while a drawing text session is open.
+/// Editing keys a host forwards while a drawing text session is open. Movement keys extend the
+/// selection when the host passes `extend_selection` (Shift); word variants follow the host's
+/// word modifier (Ctrl on Windows/Linux, Alt/Option on macOS).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrawingTextEditKey {
     Backspace,
     Delete,
+    DeleteWordBackward,
+    DeleteWordForward,
     Left,
     Right,
+    WordLeft,
+    WordRight,
     Home,
     End,
 }
@@ -31,6 +37,9 @@ pub(crate) struct DrawingTextEditSession {
     pub(crate) text: String,
     /// Caret position in `char`s from the start of `text`.
     pub(crate) caret: usize,
+    /// Selection anchor in `char`s; the selection spans anchor..caret. Like the browser editor,
+    /// the selection is not painted, but typing, deletion, copy, and cut all honor it.
+    anchor: Option<usize>,
     /// Native hosts have no editable surface of their own, so the frame paints the caret.
     pub(crate) paint_caret: bool,
 }
@@ -40,6 +49,30 @@ fn sanitize(text: &str) -> String {
     text.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
+}
+
+/// Start of the word before `caret`: skip whitespace leftwards, then the word itself.
+fn word_left(chars: &[char], caret: usize) -> usize {
+    let mut index = caret.min(chars.len());
+    while index > 0 && chars[index - 1].is_whitespace() {
+        index -= 1;
+    }
+    while index > 0 && !chars[index - 1].is_whitespace() {
+        index -= 1;
+    }
+    index
+}
+
+/// Start of the next word after `caret`: skip the current word, then whitespace.
+fn word_right(chars: &[char], caret: usize) -> usize {
+    let mut index = caret.min(chars.len());
+    while index < chars.len() && !chars[index].is_whitespace() {
+        index += 1;
+    }
+    while index < chars.len() && chars[index].is_whitespace() {
+        index += 1;
+    }
+    index
 }
 
 fn byte_index(text: &str, caret: usize) -> usize {
@@ -70,6 +103,7 @@ impl ChartEngine {
             original: text.clone(),
             text,
             caret,
+            anchor: None,
             paint_caret,
         });
         self.invalidate_frame_drawings();
@@ -83,49 +117,107 @@ impl ChartEngine {
             .map(|session| (session.id, session.text.as_str(), session.caret))
     }
 
-    /// Insert committed text input at the caret. Input that would exceed the label limit is
-    /// rejected whole so a paste never lands half-applied.
+    /// The selected `char` range, if any.
+    fn drawing_text_edit_range(session: &DrawingTextEditSession) -> Option<(usize, usize)> {
+        session
+            .anchor
+            .filter(|&anchor| anchor != session.caret)
+            .map(|anchor| (anchor.min(session.caret), anchor.max(session.caret)))
+    }
+
+    /// The selected text of the open session (for host copy/cut), if any.
+    pub fn drawing_text_edit_selection(&self) -> Option<&str> {
+        let session = self.drawing_text_edit.as_ref()?;
+        let (start, end) = Self::drawing_text_edit_range(session)?;
+        let text = session.text.as_str();
+        Some(&text[byte_index(text, start)..byte_index(text, end)])
+    }
+
+    /// Select the whole label (Ctrl/Cmd+A).
+    pub fn drawing_text_edit_select_all(&mut self) -> bool {
+        let Some(session) = self.drawing_text_edit.as_mut() else {
+            return false;
+        };
+        let len = session.text.chars().count();
+        if session.anchor == Some(0) && session.caret == len {
+            return false;
+        }
+        session.anchor = Some(0);
+        session.caret = len;
+        self.invalidate_frame_drawings();
+        true
+    }
+
+    /// Insert committed text input at the caret, replacing any selection. Input that would exceed
+    /// the label limit is rejected whole so a paste never lands half-applied.
     pub fn drawing_text_edit_insert(&mut self, input: &str) -> bool {
         let Some(session) = self.drawing_text_edit.as_ref() else {
             return false;
         };
         let input = sanitize(input);
-        if input.is_empty() || session.text.len() + input.len() > MAX_DRAWING_TEXT_BYTES {
+        let (start, end) =
+            Self::drawing_text_edit_range(session).unwrap_or((session.caret, session.caret));
+        let mut text = session.text.clone();
+        let (from, to) = (byte_index(&text, start), byte_index(&text, end));
+        if input.is_empty() || text.len() - (to - from) + input.len() > MAX_DRAWING_TEXT_BYTES {
             return false;
         }
-        let mut text = session.text.clone();
-        text.insert_str(byte_index(&text, session.caret), &input);
-        let caret = session.caret + input.chars().count();
-        self.apply_drawing_text_edit(text, caret)
+        text.replace_range(from..to, &input);
+        let caret = start + input.chars().count();
+        self.apply_drawing_text_edit_with_anchor(text, caret, None)
     }
 
-    /// Apply one editing key. Returns whether the text or caret changed.
-    pub fn drawing_text_edit_key(&mut self, key: DrawingTextEditKey) -> bool {
+    /// Apply one editing key; `extend_selection` (Shift) turns movement into selection.
+    /// Deletion removes the selection when there is one. Returns whether anything changed.
+    pub fn drawing_text_edit_key(
+        &mut self,
+        key: DrawingTextEditKey,
+        extend_selection: bool,
+    ) -> bool {
         let Some(session) = self.drawing_text_edit.as_ref() else {
             return false;
         };
-        let len = session.text.chars().count();
+        let chars: Vec<char> = session.text.chars().collect();
+        let len = chars.len();
         let caret = session.caret.min(len);
-        let mut text = session.text.clone();
-        let next_caret = match key {
-            DrawingTextEditKey::Backspace if caret > 0 => {
-                text.remove(byte_index(&text, caret - 1));
-                caret - 1
-            }
-            DrawingTextEditKey::Delete if caret < len => {
-                text.remove(byte_index(&text, caret));
-                caret
-            }
-            DrawingTextEditKey::Left => caret.saturating_sub(1),
-            DrawingTextEditKey::Right => (caret + 1).min(len),
-            DrawingTextEditKey::Home => 0,
-            DrawingTextEditKey::End => len,
-            DrawingTextEditKey::Backspace | DrawingTextEditKey::Delete => caret,
+        let range = Self::drawing_text_edit_range(session);
+        let deletion = match key {
+            DrawingTextEditKey::Backspace => Some((caret.saturating_sub(1), caret)),
+            DrawingTextEditKey::Delete => Some((caret, (caret + 1).min(len))),
+            DrawingTextEditKey::DeleteWordBackward => Some((word_left(&chars, caret), caret)),
+            DrawingTextEditKey::DeleteWordForward => Some((caret, word_right(&chars, caret))),
+            _ => None,
         };
-        if text == session.text && next_caret == session.caret {
+        let (text, next_caret, anchor) = if let Some(span) = deletion {
+            let (start, end) = range.unwrap_or(span);
+            if start == end {
+                return false;
+            }
+            let mut text = session.text.clone();
+            text.replace_range(byte_index(&text, start)..byte_index(&text, end), "");
+            (text, start, None)
+        } else {
+            let target = match key {
+                DrawingTextEditKey::Left if !extend_selection && range.is_some() => {
+                    range.map_or(caret, |(start, _)| start)
+                }
+                DrawingTextEditKey::Right if !extend_selection && range.is_some() => {
+                    range.map_or(caret, |(_, end)| end)
+                }
+                DrawingTextEditKey::Left => caret.saturating_sub(1),
+                DrawingTextEditKey::Right => (caret + 1).min(len),
+                DrawingTextEditKey::WordLeft => word_left(&chars, caret),
+                DrawingTextEditKey::WordRight => word_right(&chars, caret),
+                DrawingTextEditKey::Home => 0,
+                _ => len,
+            };
+            let anchor = extend_selection.then(|| session.anchor.unwrap_or(caret));
+            (session.text.clone(), target, anchor)
+        };
+        if text == session.text && next_caret == session.caret && anchor == session.anchor {
             return false;
         }
-        self.apply_drawing_text_edit(text, next_caret)
+        self.apply_drawing_text_edit_with_anchor(text, next_caret, anchor)
     }
 
     /// Place the caret at the character boundary nearest a media-px pointer, in the label's
@@ -181,11 +273,11 @@ impl ChartEngine {
             }
         }
         let caret = best.0;
-        if caret == session.caret {
+        if caret == session.caret && session.anchor.is_none() {
             return false;
         }
         let text = session.text.clone();
-        self.apply_drawing_text_edit(text, caret)
+        self.apply_drawing_text_edit_with_anchor(text, caret, None)
     }
 
     /// Mirror a host-owned editable surface (browser IME/clipboard) into the session: the whole
@@ -224,6 +316,15 @@ impl ChartEngine {
     }
 
     fn apply_drawing_text_edit(&mut self, text: String, caret: usize) -> bool {
+        self.apply_drawing_text_edit_with_anchor(text, caret, None)
+    }
+
+    fn apply_drawing_text_edit_with_anchor(
+        &mut self,
+        text: String,
+        caret: usize,
+        anchor: Option<usize>,
+    ) -> bool {
         let Some(session) = self.drawing_text_edit.as_mut() else {
             return false;
         };
@@ -231,6 +332,7 @@ impl ChartEngine {
         let text_changed = session.text != text;
         session.text = text;
         session.caret = caret;
+        session.anchor = anchor;
         if text_changed {
             let patch = serde_json::json!({ "text": session.text }).to_string();
             if !self.drawing_apply_options(id, &patch) {
@@ -314,13 +416,13 @@ mod tests {
         assert_eq!(chart.editing_drawing(), Some(id));
         assert!(chart.drawing_text_edit_insert("Brkoutx"));
         assert_eq!(text(&chart, id).as_deref(), Some("Brkoutx"));
-        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Backspace));
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Backspace, false));
         for _ in 0..4 {
-            chart.drawing_text_edit_key(DrawingTextEditKey::Left);
+            chart.drawing_text_edit_key(DrawingTextEditKey::Left, false);
         }
         assert!(chart.drawing_text_edit_insert("ea"));
         assert_eq!(chart.drawing_text_edit(), Some((id, "Breakout", 4)));
-        chart.drawing_text_edit_key(DrawingTextEditKey::End);
+        chart.drawing_text_edit_key(DrawingTextEditKey::End, false);
         assert!(chart.drawing_text_edit_insert("\nnow"));
         assert!(chart.commit_drawing_text_edit());
         assert_eq!(text(&chart, id).as_deref(), Some("Breakout now"));
@@ -332,7 +434,7 @@ mod tests {
     fn cancel_restores_and_empty_lifecycle_follows_the_drawing_kind() {
         let (mut chart, id) = chart_with(DrawingKind::TrendLine, "keep");
         assert!(chart.begin_drawing_text_edit(id, true));
-        chart.drawing_text_edit_key(DrawingTextEditKey::Backspace);
+        chart.drawing_text_edit_key(DrawingTextEditKey::Backspace, false);
         assert_eq!(text(&chart, id).as_deref(), Some("kee"));
         assert!(chart.cancel_drawing_text_edit());
         assert_eq!(text(&chart, id).as_deref(), Some("keep"));
@@ -347,6 +449,30 @@ mod tests {
         assert!(chart.begin_drawing_text_edit(note, false));
         assert!(chart.cancel_drawing_text_edit());
         assert!(chart.drawing(note).is_none());
+    }
+
+    #[test]
+    fn selection_extends_replaces_deletes_and_collapses_like_a_text_field() {
+        let (mut chart, id) = chart_with(DrawingKind::TrendLine, "buy the dip");
+        assert!(chart.begin_drawing_text_edit(id, true));
+        // Shift+word-left selects "dip"; typing replaces it.
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::WordLeft, true));
+        assert_eq!(chart.drawing_text_edit_selection(), Some("dip"));
+        assert!(chart.drawing_text_edit_insert("rip"));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "buy the rip", 11)));
+        assert_eq!(chart.drawing_text_edit_selection(), None);
+
+        // Ctrl+Backspace removes a word; select-all then Delete clears everything.
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::DeleteWordBackward, false));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "buy the ", 8)));
+        assert!(chart.drawing_text_edit_select_all());
+        assert_eq!(chart.drawing_text_edit_selection(), Some("buy the "));
+        // A plain arrow collapses the selection to its edge without moving past it.
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Left, false));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "buy the ", 0)));
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::End, true));
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Delete, false));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "", 0)));
     }
 
     #[test]
@@ -374,7 +500,7 @@ mod tests {
         assert!(!chart.drawing_text_edit_insert(&"x".repeat(MAX_DRAWING_TEXT_BYTES + 1)));
         assert_eq!(chart.drawing_text_edit(), Some((id, "", 0)));
         assert!(chart.drawing_text_edit_insert("€€"));
-        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Backspace));
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Backspace, false));
         assert_eq!(chart.drawing_text_edit(), Some((id, "€", 1)));
     }
 }

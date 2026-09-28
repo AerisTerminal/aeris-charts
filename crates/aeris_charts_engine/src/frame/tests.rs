@@ -10105,7 +10105,7 @@ fn native_text_session_paints_a_rotated_caret_that_follows_the_typed_run() {
         "typed text must move the caret along the label"
     );
 
-    assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Home));
+    assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Home, false));
     let home = caret(&mut chart).unwrap();
     let back = (home[0][0] - end[0][0]) * along.0 + (home[0][1] - end[0][1]) * along.1;
     assert!(
