@@ -1616,16 +1616,6 @@ impl Probe {
             [expected_x_px, expected_w_px, expected_h_px],
             "probe pane scissor must follow the physical negotiated pane extent"
         );
-        println!(
-            "aeris_charts probe viewport: canvas={width:.1}x{height:.1} logical, pane=({:.1},{:.1}) {:.1}x{:.1}, axes={:.1}/{:.1}, scissor={:?} device, dpr={scale_factor:.3}",
-            self.engine.pane_left,
-            0.0,
-            self.engine.pane_w,
-            self.engine.pane_h,
-            self.engine.left_axis_w,
-            self.engine.axis_w,
-            pane.scissor
-        );
     }
 
     /// Forward the newest coalesced captured-drawing sample (at most one per painted frame).
