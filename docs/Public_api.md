@@ -235,8 +235,7 @@ codes: `disposed`, `invalid_handle`, `stale_handle`, `invalid_data`, `invalid_op
 
 The browser package is `@aeristerminal/aeris-charts` (with `@aeristerminal/aeris-charts/react`). The former branded error
 exports were renamed to `AerisChartsError` and `AerisChartsErrorCode`; update imports and
-`instanceof` checks when migrating. Rust consumers use the `aeris_charts_*` crates listed in
-`Crates.md`.
+`instanceof` checks when migrating. Rust consumers use the repository-only `aeris_charts_*` crates.
 
 Every former brand-bearing public identifier was hard renamed:
 
