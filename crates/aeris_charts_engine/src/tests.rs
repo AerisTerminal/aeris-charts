@@ -7431,7 +7431,7 @@ fn pane_separators_span_the_full_chart_width_at_rest_and_on_hover() {
 fn axis_borders_are_one_css_px_and_pane_separators_two() {
     use aeris_charts_render::draw_list::Prim;
 
-    for dpr in [1.0_f64, 1.5, 2.0, 3.0] {
+    for dpr in [1.0_f64, 1.25, 1.5, 2.0, 3.0] {
         let mut chart = chart_with_indicator_pane();
         chart.dpr = dpr;
         chart.recompute_layout_with_measure(
@@ -7454,8 +7454,7 @@ fn axis_borders_are_one_css_px_and_pane_separators_two() {
         let pane_bottom = (chart.pane_h * dpr).round() as i32;
         let bitmap_w = (chart.css_width * dpr).round().max(1.0) as i32;
         let separator_y = (axis.separators[0] * dpr).round() as i32;
-        let separator_h =
-            ((axis.separators[0] + crate::PANE_SEPARATOR) * dpr).round() as i32 - separator_y;
+        let separator_h = (crate::PANE_SEPARATOR * dpr).round().max(1.0) as i32;
         assert_eq!(expected, dpr.floor() as i32, "1 CSS px border at dpr {dpr}");
         assert!(
             (separator_h - (2.0 * dpr) as i32).abs() <= 1,
@@ -7496,6 +7495,47 @@ fn axis_borders_are_one_css_px_and_pane_separators_two() {
             "pane separator must use {separator_h} device px at dpr {dpr}"
         );
     }
+}
+
+#[test]
+fn pane_separators_have_identical_device_thickness_at_fractional_dpr() {
+    use aeris_charts_render::draw_list::Prim;
+
+    let mut chart = chart_with_indicator_pane();
+    let extra = chart.add_series(SeriesKind::Line);
+    chart.set_series_pane(extra, 2, 1.0);
+    chart.dpr = 1.25;
+    chart.recompute_layout_with_measure(
+        true,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
+    chart.build_frame();
+
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
+    assert_eq!(axis.separators.len(), 2);
+    let mut prims = Vec::new();
+    chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
+    let expected_height = (crate::PANE_SEPARATOR * chart.dpr).round() as i32;
+    let heights = axis
+        .separators
+        .iter()
+        .map(|separator| {
+            let y = (separator * chart.dpr).round() as i32;
+            prims
+                .iter()
+                .find_map(|primitive| match primitive {
+                    Prim::Rect { rect, .. } if rect.x == 0 && rect.y == y => Some(rect.h),
+                    _ => None,
+                })
+                .expect("full-width separator primitive")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(heights, vec![expected_height; 2]);
 }
 
 /// A hollow candle's chrome follows what is painted, not the invisible body.

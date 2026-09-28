@@ -176,14 +176,14 @@ impl ChartEngine {
             // chart width, crossing every visible left/right price-scale strip, so the resting
             // line describes the same full-width boundary as the hover band and the hit test.
             // The rule fills the whole `PANE_SEPARATOR` layout slot on the device grid, so it
-            // never overlaps either pane and leaves no unpainted gap at any DPR.
+            // never leaves an unpainted gap. Resolve its height once per DPR instead of snapping
+            // both edges independently: at fractional DPRs edge snapping can otherwise make two
+            // identical separators alternate between adjacent device-pixel thicknesses.
             let separator_color = parse(&layout.panes.separator_color, right_border);
+            let separator_h = (crate::PANE_SEPARATOR * dpr).round().max(1.0);
             for separator in &axis_frame.separators {
                 let y0 = (separator * dpr).round();
-                let y1 = ((separator + crate::PANE_SEPARATOR) * dpr)
-                    .round()
-                    .max(y0 + 1.0);
-                rect(0.0, y0, bitmap_w, y1 - y0, separator_color);
+                rect(0.0, y0, bitmap_w, separator_h, separator_color);
             }
             if let Some(separator) = axis_frame
                 .separator_hover
@@ -191,12 +191,11 @@ impl ChartEngine {
             {
                 // The hover band extends 4 CSS px beyond both sides of the separator rule.
                 let y0 = ((separator - 4.0) * dpr).round();
-                let y1 = ((separator + crate::PANE_SEPARATOR + 4.0) * dpr).round();
                 rect(
                     0.0,
                     y0,
                     bitmap_w,
-                    y1 - y0,
+                    ((crate::PANE_SEPARATOR + 8.0) * dpr).round().max(1.0),
                     parse(&layout.panes.separator_hover_color, separator_color),
                 );
             }
