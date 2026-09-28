@@ -428,7 +428,7 @@ test("rectangle tool uses official two-click preview, data-time snapping, and en
     let band_pixels = 0;
     const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     for (let index = 0; index < pixels.length; index += 4) {
-      if (Math.abs(pixels[index] - 197) <= 3 && Math.abs(pixels[index + 1] - 227) <= 3 && Math.abs(pixels[index + 2] - 253) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index] - 191) <= 3 && Math.abs(pixels[index + 1] - 227) <= 3 && Math.abs(pixels[index + 2] - 255) <= 3 && pixels[index + 3] === 255) {
         band_pixels += 1;
       }
     }
@@ -457,10 +457,10 @@ test("rectangle tool uses official two-click preview, data-time snapping, and en
     let band_pixels = 0;
     const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     for (let index = 0; index < pixels.length; index += 4) {
-      if (Math.abs(pixels[index] - 22) <= 3 && Math.abs(pixels[index + 1] - 142) <= 3 && Math.abs(pixels[index + 2] - 247) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index] - 0) <= 3 && Math.abs(pixels[index + 1] - 145) <= 3 && Math.abs(pixels[index + 2] - 255) <= 3 && pixels[index + 3] === 255) {
         label_pixels += 1;
       }
-      if (Math.abs(pixels[index] - 197) <= 3 && Math.abs(pixels[index + 1] - 227) <= 3 && Math.abs(pixels[index + 2] - 253) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index] - 191) <= 3 && Math.abs(pixels[index + 1] - 227) <= 3 && Math.abs(pixels[index + 2] - 255) <= 3 && pixels[index + 3] === 255) {
         band_pixels += 1;
       }
     }
@@ -704,7 +704,7 @@ test("tooltip presents themed OHLC market data with explicit volume", async ({ p
     { label: "Volume", value: target.expected.volume },
   ]);
   expect(content.background).toBe("rgb(31, 31, 31)");
-  expect(content.color).toBe("rgb(240, 240, 240)");
+  expect(content.color).toBe("rgb(245, 245, 245)");
   expect(content.borderRadius).toBe("8px");
   expect(content.shadow).toBe("none");
   expect(content.transform).toContain("20px");
@@ -714,7 +714,7 @@ test("tooltip presents themed OHLC market data with explicit volume", async ({ p
     window.__chart.apply_options(api.theme_options("light"));
   });
   await expect.poll(() => page.locator(".aeris_charts-tooltip").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)");
-  expect(await page.locator(".aeris_charts-tooltip").evaluate((element) => getComputedStyle(element).color)).toBe("rgb(51, 51, 51)");
+  expect(await page.locator(".aeris_charts-tooltip").evaluate((element) => getComputedStyle(element).color)).toBe("rgb(34, 34, 34)");
 
   const after = await page.screenshot();
   expect(after.equals(before)).toBe(false);

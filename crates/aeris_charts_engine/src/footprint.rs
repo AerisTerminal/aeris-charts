@@ -1997,7 +1997,7 @@ impl ChartEngine {
             .trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
         let options = stream.options();
-        let bars = stream.bars().to_vec();
+        let time_bars = matches!(options.bars, FootprintBarAggregation::Time { .. });
         let series_ids = self
             .series
             .iter()
@@ -2010,25 +2010,45 @@ impl ChartEngine {
                     .then_some(series.id)
             })
             .collect::<Vec<_>>();
+        // Time bars are keyed by timestamp, so retention trimming the front cannot misalign an
+        // appended suffix. Non-time bars share a logical sequence sidecar whose prefix a
+        // series-local retention cap can evict, so they keep the full projection path.
+        let incremental_for =
+            |engine: &Self, id: SeriesId| time_bars || engine.series_max_points(id).is_none();
+        // Snapshot before any install: a capped series trims the shared stream as it installs.
+        let bars = stream.bars();
+        let from = incremental_from.map(|from| from.min(bars.len()));
+        let suffix = from.map(|from| bars[from..].to_vec());
+        let full = (from.is_none() || series_ids.iter().any(|id| !incremental_for(self, *id)))
+            .then(|| bars.to_vec());
         for id in series_ids {
-            let from = incremental_from.unwrap_or(0).min(bars.len());
-            let incrementally_installed =
-                if incremental_from.is_some() && self.series_max_points(id).is_none() {
-                    if matches!(options.bars, FootprintBarAggregation::Time { .. }) {
-                        let (times, open, high, low, close) = projection_columns(&bars[from..])?;
+            let incrementally_installed = match (from, &suffix) {
+                (Some(from), Some(suffix)) if incremental_for(self, id) => {
+                    if time_bars {
+                        let (times, open, high, low, close) = projection_columns(suffix)?;
                         self.update_footprint_projection_bars(id, times, open, high, low, close) > 0
                     } else {
-                        self.update_footprint_sequence_projection_bars(
-                            id,
-                            from,
-                            sequence_projection_columns(&bars[from..]),
-                        ) > 0
+                        let projection = sequence_projection_columns(suffix);
+                        self.update_footprint_sequence_projection_bars(id, from, projection) > 0
                     }
-                } else {
-                    false
-                };
+                }
+                _ => false,
+            };
             if !incrementally_installed {
-                self.install_footprint_bars_projection(id, options, &bars)?;
+                // A rejected suffix falls back to the stream's current canonical bars.
+                let current;
+                let bars = match &full {
+                    Some(bars) => bars.as_slice(),
+                    None => {
+                        current = self
+                            .trade_stream(stream_id)
+                            .ok_or(FootprintError::UnknownTradeStream(stream_id))?
+                            .bars()
+                            .to_vec();
+                        current.as_slice()
+                    }
+                };
+                self.install_footprint_bars_projection(id, options, bars)?;
             }
             self.invalidate_frame_series(id);
         }
@@ -2079,6 +2099,12 @@ impl ChartEngine {
             }
             let _ = self.refresh_trade_bubbles(stream_id);
         }
+    }
+
+    fn trade_stream_bars(&self, stream_id: u64) -> Result<&[FootprintBar], FootprintError> {
+        self.trade_stream(stream_id)
+            .map(FootprintAggregator::bars)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))
     }
 
     pub(crate) fn trade_stream(&self, stream_id: u64) -> Option<&FootprintAggregator> {
@@ -2148,7 +2174,8 @@ impl ChartEngine {
         let stream = self
             .trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
-        let bars = stream.bars().to_vec();
+        // Borrowed, not copied: every dependent column is computed before any series mutation.
+        let bars = stream.bars();
         let revision = stream.revision();
         let sequence_axis = !matches!(stream.options().bars, FootprintBarAggregation::Time { .. });
         let dependents = self
@@ -2168,9 +2195,7 @@ impl ChartEngine {
                     .collect::<Vec<_>>()
             };
             let values = match dependent.kind {
-                TradeStudyKind::CumulativeDelta => {
-                    cumulative_delta_values(&bars, dependent.options)
-                }
+                TradeStudyKind::CumulativeDelta => cumulative_delta_values(bars, dependent.options),
                 TradeStudyKind::DeltaHistogram => bars.iter().map(|bar| bar.delta).collect(),
             };
             let point_colors = match dependent.kind {
@@ -2261,18 +2286,21 @@ impl ChartEngine {
         let stream = self
             .trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
-        let bars = stream.bars().to_vec();
         let aggregation = stream.options();
         let revision = stream.revision();
+        let time_bars = matches!(aggregation.bars, FootprintBarAggregation::Time { .. });
         let dependents = self
             .trade_bar_dependents
             .get(&stream_id)
             .cloned()
             .unwrap_or_default();
+        // Candle/bar dependents never trim the stream, so each pass projects owned columns from
+        // the borrowed bars instead of copying the whole footprint history per update.
         for dependent in &dependents {
-            let from = incremental_from.unwrap_or(0).min(bars.len());
-            let incrementally_installed = if incremental_from.is_some() {
-                if matches!(aggregation.bars, FootprintBarAggregation::Time { .. }) {
+            let incrementally_installed = if let Some(from) = incremental_from {
+                let bars = self.trade_stream_bars(stream_id)?;
+                let from = from.min(bars.len());
+                if time_bars {
                     let (times, open, high, low, close) = projection_columns(&bars[from..])?;
                     self.update_series_bars_sanitized(
                         dependent.series_id,
@@ -2294,12 +2322,12 @@ impl ChartEngine {
                 false
             };
             if !incrementally_installed {
-                let installed = if matches!(aggregation.bars, FootprintBarAggregation::Time { .. })
-                {
-                    let (times, open, high, low, close) = projection_columns(&bars)?;
+                let bars = self.trade_stream_bars(stream_id)?;
+                let installed = if time_bars {
+                    let (times, open, high, low, close) = projection_columns(bars)?;
                     self.install_series_data(dependent.series_id, times, open, high, low, close)
                 } else {
-                    let (points, open, high, low, close) = sequence_projection_columns(&bars);
+                    let (points, open, high, low, close) = sequence_projection_columns(bars);
                     self.install_trade_bar_sequence_projection(
                         dependent.series_id,
                         points,
@@ -2334,20 +2362,22 @@ impl ChartEngine {
         let stream = self
             .trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
-        let trades = stream.trades().cloned().collect::<Vec<_>>();
-        let bars = stream.bars().to_vec();
         let revision = stream.revision();
         let sequence_axis = !matches!(stream.options().bars, FootprintBarAggregation::Time { .. });
-        let trade_bar_indices = sequence_axis.then(|| bar_indices_for_trades(&bars, &trades));
+        let trade_bar_indices =
+            sequence_axis.then(|| bar_indices_for_trades(stream.bars(), stream.trades().len()));
         let dependents = self
             .trade_bubbles
             .get(&stream_id)
             .cloned()
             .unwrap_or_default();
+        // Markers are derived from the borrowed tape before any series mutation, so the full
+        // trade tape and bar list are never copied per update.
+        let mut updates = Vec::with_capacity(dependents.len());
         for dependent in &dependents {
             // Newest prints matter most: retain the latest `max_markers` bubbles.
             let mut bubbles = VecDeque::with_capacity(dependent.options.max_markers);
-            for (trade_index, trade) in trades.iter().enumerate() {
+            for (trade_index, trade) in stream.trades().enumerate() {
                 if trade.volume < dependent.options.minimum_volume {
                     continue;
                 }
@@ -2383,20 +2413,21 @@ impl ChartEngine {
                     volume: trade.volume,
                     aggressor: trade.aggressor,
                     last_timestamp_micros: trade.timestamp_micros,
-                    id: trade
-                        .trade_id
-                        .map_or_else(|| format!("trade-{time}"), |id| format!("trade-{id}")),
+                    trade_id: trade.trade_id,
                 });
             }
             let peak_volume = bubbles
                 .iter()
                 .map(|bubble| bubble.volume)
                 .fold(0.0_f64, f64::max);
-            let markers = bubbles
+            let markers: Vec<Marker> = bubbles
                 .into_iter()
                 .map(|bubble| bubble.into_marker(peak_volume))
                 .collect();
-            self.set_series_markers(dependent.series_id, markers);
+            updates.push((dependent.series_id, markers));
+        }
+        for (series_id, markers) in updates {
+            self.set_series_markers(series_id, markers);
         }
         if let Some(dependents) = self.trade_bubbles.get_mut(&stream_id) {
             for dependent in dependents {
@@ -2418,7 +2449,8 @@ struct TradeBubble {
     volume: f64,
     aggressor: AggressorSide,
     last_timestamp_micros: i64,
-    id: String,
+    /// Formatted into the marker id only for retained bubbles: most candidates are evicted.
+    trade_id: Option<u64>,
 }
 
 impl TradeBubble {
@@ -2443,21 +2475,24 @@ impl TradeBubble {
             shape: marker_shape::CIRCLE,
             color,
             text: String::new(),
-            id: self.id,
+            id: self.trade_id.map_or_else(
+                || format!("trade-{}", self.time),
+                |id| format!("trade-{id}"),
+            ),
             size,
             price: Some(self.price),
         }
     }
 }
 
-fn bar_indices_for_trades(bars: &[FootprintBar], trades: &[FootprintTrade]) -> Vec<usize> {
+fn bar_indices_for_trades(bars: &[FootprintBar], trade_count: usize) -> Vec<usize> {
     if bars.is_empty() {
-        return vec![0; trades.len()];
+        return vec![0; trade_count];
     }
     let mut bar_index = 0usize;
     let mut remaining = bars[0].trade_count as usize;
-    let mut indices = Vec::with_capacity(trades.len());
-    for _trade in trades {
+    let mut indices = Vec::with_capacity(trade_count);
+    for _ in 0..trade_count {
         while remaining == 0 && bar_index + 1 < bars.len() {
             bar_index += 1;
             remaining = bars[bar_index].trade_count as usize;
@@ -3545,6 +3580,61 @@ mod tests {
         assert_eq!(historical, FootprintUpdateKind::Historical);
         assert_eq!(chart.data_layer().series_data(0).unwrap().0.len(), 2);
         assert_eq!(chart.footprint_bar(0, 0).unwrap().delta, 12.0);
+    }
+
+    #[test]
+    fn retained_time_footprint_appends_live_bars_like_a_full_reinstall() {
+        let options = FootprintSeriesOptions {
+            aggregation: FootprintAggregationOptions {
+                tick_size: 1.0,
+                ticks_per_row: 1,
+                bars: FootprintBarAggregation::Time {
+                    interval_micros: 1_000_000,
+                    anchor_micros: 0,
+                },
+                imbalance: FootprintImbalanceOptions::default(),
+            },
+            visual: FootprintVisualOptions::default(),
+        };
+        let history = (1..=4)
+            .map(|second| {
+                trade(
+                    second * 1_000_000,
+                    100.0 + second as f64,
+                    1.0,
+                    AggressorSide::Buy,
+                )
+            })
+            .collect::<Vec<_>>();
+        let live = vec![
+            trade(4_500_000, 90.0, 2.0, AggressorSide::Sell),
+            trade(5_000_000, 106.0, 3.0, AggressorSide::Buy),
+            trade(6_000_000, 107.0, 1.0, AggressorSide::Buy),
+        ];
+
+        // A retention cap must not force time bars through a full reinstall per live batch:
+        // timestamps key the suffix, so the appended result matches a fresh projection.
+        let mut live_chart = ChartEngine::new(600.0, 400.0, 1.0);
+        live_chart
+            .configure_footprint_series(0, options.clone())
+            .unwrap();
+        live_chart.set_footprint_trades(0, history.clone()).unwrap();
+        assert!(live_chart.set_series_max_points(0, Some(3)));
+        let update = live_chart.update_footprint_trades(0, live.clone()).unwrap();
+        assert_eq!(update, FootprintUpdateKind::Tip);
+
+        let mut fresh = ChartEngine::new(600.0, 400.0, 1.0);
+        fresh.configure_footprint_series(0, options).unwrap();
+        fresh
+            .set_footprint_trades(0, history.into_iter().chain(live).collect())
+            .unwrap();
+        assert!(fresh.set_series_max_points(0, Some(3)));
+
+        assert_eq!(live_chart.footprint_bars(0), fresh.footprint_bars(0));
+        assert_eq!(
+            live_chart.data_layer().series_data(0),
+            fresh.data_layer().series_data(0)
+        );
     }
 
     #[test]

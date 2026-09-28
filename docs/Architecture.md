@@ -83,7 +83,10 @@ Cartesian numeric, temporal, and category ticks share that cap, reject duplicate
 and retain optional preformatted labels as portable engine state; out-of-view ticks are clipped by
 the same transform that places generated ticks and grid rules. Automatic band
 and numeric domains now resolve from visible bound general series without rewriting configured axis
-options; hidden series stop contributing immediately. A single extreme numeric value expands inward
+options; hidden series stop contributing immediately. Each series' O(rows) numeric scan is memoized in
+the general-series registry per axis dimension and scale, keyed by dataset identity and generation, series
+kind, and stacking, bounded per series and dropped with the series, so hit tests and frames resolve auto
+domains without rescanning unchanged data. A single extreme numeric value expands inward
 when outward padding would overflow; logarithmic domains use the adjacent positive value when a
 percentage expansion rounds back to the same endpoint. Continuous X/Y axes execute linear, logarithmic,
 or symmetric-log transforms consistently for ticks, geometry, hit testing, and runtime pan/zoom; a

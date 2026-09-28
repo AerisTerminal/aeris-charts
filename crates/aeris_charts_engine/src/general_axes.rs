@@ -1162,166 +1162,17 @@ impl ChartEngine {
                     let Some(dataset) = self.general_dataset(series.dataset()) else {
                         continue;
                     };
-                    if axis.dimension == AxisDimension::Y {
-                        if series.kind() == crate::GeneralSeriesKind::HeatmapGrid {
-                            if let Some(values) = dataset.heatmap_y_numeric() {
-                                for &value in values {
-                                    if axis.scale == GeneralScaleType::Logarithmic && value <= 0.0 {
-                                        continue;
-                                    }
-                                    extend_numeric_bounds(&mut bounds, value);
-                                }
-                                continue;
-                            }
-                        }
-                        if series.kind() == crate::GeneralSeriesKind::Column {
-                            include_zero = true;
-                            continue;
-                        }
-                        if series.kind() == crate::GeneralSeriesKind::XyArea
-                            && series.stack_id().is_some()
-                        {
-                            include_zero = true;
-                            continue;
-                        }
-                        if matches!(
-                            series.kind(),
-                            crate::GeneralSeriesKind::RangeArea
-                                | crate::GeneralSeriesKind::RangeBar
-                        ) {
-                            let Some(low_values) = dataset.low() else {
-                                continue;
-                            };
-                            for (index, &high) in dataset.y().iter().enumerate() {
-                                let low = low_values[index];
-                                if !dataset.y_is_valid(index)
-                                    || !dataset.low_is_valid(index)
-                                    || (axis.scale == GeneralScaleType::Logarithmic
-                                        && (low <= 0.0 || high <= 0.0))
-                                {
-                                    continue;
-                                }
-                                extend_numeric_bounds(&mut bounds, low);
-                                extend_numeric_bounds(&mut bounds, high);
-                            }
-                            continue;
-                        }
-                        if series.kind() == crate::GeneralSeriesKind::BoxPlot {
-                            let (
-                                Some(min_values),
-                                Some(max_values),
-                                Some(q1_values),
-                                Some(q3_values),
-                            ) = (
-                                dataset.low(),
-                                dataset.high(),
-                                dataset.x_low(),
-                                dataset.x_high(),
-                            )
-                            else {
-                                continue;
-                            };
-                            for (index, &median) in dataset.y().iter().enumerate() {
-                                if !dataset.y_is_valid(index)
-                                    || !dataset.low_is_valid(index)
-                                    || !dataset.high_is_valid(index)
-                                    || !dataset.x_low_is_valid(index)
-                                    || !dataset.x_high_is_valid(index)
-                                {
-                                    continue;
-                                }
-                                let values = [
-                                    min_values[index],
-                                    q1_values[index],
-                                    median,
-                                    q3_values[index],
-                                    max_values[index],
-                                ];
-                                if axis.scale == GeneralScaleType::Logarithmic
-                                    && values.iter().any(|value| *value <= 0.0)
-                                {
-                                    continue;
-                                }
-                                extend_numeric_bounds(&mut bounds, min_values[index]);
-                                extend_numeric_bounds(&mut bounds, max_values[index]);
-                            }
-                            continue;
-                        }
-                        if series.kind() == crate::GeneralSeriesKind::ErrorBar {
-                            let (Some(low_values), Some(high_values)) =
-                                (dataset.low(), dataset.high())
-                            else {
-                                continue;
-                            };
-                            for (index, &value) in dataset.y().iter().enumerate() {
-                                if !dataset.y_is_valid(index)
-                                    || (axis.scale == GeneralScaleType::Logarithmic && value <= 0.0)
-                                {
-                                    continue;
-                                }
-                                extend_numeric_bounds(&mut bounds, value);
-                                if dataset.low_is_valid(index) {
-                                    let low = low_values[index];
-                                    if axis.scale != GeneralScaleType::Logarithmic || low > 0.0 {
-                                        extend_numeric_bounds(&mut bounds, low);
-                                    }
-                                }
-                                if dataset.high_is_valid(index) {
-                                    let high = high_values[index];
-                                    if axis.scale != GeneralScaleType::Logarithmic || high > 0.0 {
-                                        extend_numeric_bounds(&mut bounds, high);
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-                        for (index, &value) in dataset.y().iter().enumerate() {
-                            if !dataset.y_is_valid(index)
-                                || (axis.scale == GeneralScaleType::Logarithmic && value <= 0.0)
-                            {
-                                continue;
-                            }
-                            extend_numeric_bounds(&mut bounds, value);
-                        }
-                    } else if series.kind() == crate::GeneralSeriesKind::HorizontalBar {
-                        include_zero = true;
-                        if series.stack_id().is_some() {
-                            continue;
-                        }
-                        for (index, &value) in dataset.y().iter().enumerate() {
-                            if dataset.y_is_valid(index) {
-                                extend_numeric_bounds(&mut bounds, value);
-                            }
-                        }
-                    } else if let Some(values) = dataset.numeric_x() {
-                        for (index, &value) in values.iter().enumerate() {
-                            if axis.scale == GeneralScaleType::Logarithmic && value <= 0.0 {
-                                continue;
-                            }
-                            extend_numeric_bounds(&mut bounds, value);
-                            if series.kind() == crate::GeneralSeriesKind::ErrorBar
-                                && dataset.y_is_valid(index)
-                            {
-                                if let Some(low_values) = dataset.x_low() {
-                                    if dataset.x_low_is_valid(index) {
-                                        let low = low_values[index];
-                                        if axis.scale != GeneralScaleType::Logarithmic || low > 0.0
-                                        {
-                                            extend_numeric_bounds(&mut bounds, low);
-                                        }
-                                    }
-                                }
-                                if let Some(high_values) = dataset.x_high() {
-                                    if dataset.x_high_is_valid(index) {
-                                        let high = high_values[index];
-                                        if axis.scale != GeneralScaleType::Logarithmic || high > 0.0
-                                        {
-                                            extend_numeric_bounds(&mut bounds, high);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    let (series_bounds, series_zero) = self.cached_general_series_axis_scan(
+                        series,
+                        dataset,
+                        axis.dimension,
+                        axis.scale,
+                        || scan_general_series_numeric_bounds(axis, series, dataset),
+                    );
+                    include_zero |= series_zero;
+                    if let Some((low, high)) = series_bounds {
+                        extend_numeric_bounds(&mut bounds, low);
+                        extend_numeric_bounds(&mut bounds, high);
                     }
                 }
                 for reference in self.general_reference_iter().filter(|reference| {
@@ -2140,6 +1991,164 @@ fn format_temporal_tick(
         TemporalTickInterval::Months(_) => format!("{month_name} {year}"),
         TemporalTickInterval::Years(_) => year.to_string(),
     }
+}
+
+/// One series' contribution to an automatic numeric axis domain: its data bounds and whether the
+/// series anchors the domain at zero. This is the O(rows) part of auto-domain resolution, so
+/// callers memoize it per dataset generation.
+fn scan_general_series_numeric_bounds(
+    axis: &GeneralAxis,
+    series: &crate::GeneralSeries,
+    dataset: &crate::general_data::GeneralDataset,
+) -> (Option<(f64, f64)>, bool) {
+    let mut bounds: Option<(f64, f64)> = None;
+    let mut include_zero = false;
+    if axis.dimension == AxisDimension::Y {
+        if series.kind() == crate::GeneralSeriesKind::HeatmapGrid {
+            if let Some(values) = dataset.heatmap_y_numeric() {
+                for &value in values {
+                    if axis.scale == GeneralScaleType::Logarithmic && value <= 0.0 {
+                        continue;
+                    }
+                    extend_numeric_bounds(&mut bounds, value);
+                }
+                return (bounds, include_zero);
+            }
+        }
+        if series.kind() == crate::GeneralSeriesKind::Column {
+            include_zero = true;
+            return (bounds, include_zero);
+        }
+        if series.kind() == crate::GeneralSeriesKind::XyArea && series.stack_id().is_some() {
+            include_zero = true;
+            return (bounds, include_zero);
+        }
+        if matches!(
+            series.kind(),
+            crate::GeneralSeriesKind::RangeArea | crate::GeneralSeriesKind::RangeBar
+        ) {
+            let Some(low_values) = dataset.low() else {
+                return (bounds, include_zero);
+            };
+            for (index, &high) in dataset.y().iter().enumerate() {
+                let low = low_values[index];
+                if !dataset.y_is_valid(index)
+                    || !dataset.low_is_valid(index)
+                    || (axis.scale == GeneralScaleType::Logarithmic && (low <= 0.0 || high <= 0.0))
+                {
+                    continue;
+                }
+                extend_numeric_bounds(&mut bounds, low);
+                extend_numeric_bounds(&mut bounds, high);
+            }
+            return (bounds, include_zero);
+        }
+        if series.kind() == crate::GeneralSeriesKind::BoxPlot {
+            let (Some(min_values), Some(max_values), Some(q1_values), Some(q3_values)) = (
+                dataset.low(),
+                dataset.high(),
+                dataset.x_low(),
+                dataset.x_high(),
+            ) else {
+                return (bounds, include_zero);
+            };
+            for (index, &median) in dataset.y().iter().enumerate() {
+                if !dataset.y_is_valid(index)
+                    || !dataset.low_is_valid(index)
+                    || !dataset.high_is_valid(index)
+                    || !dataset.x_low_is_valid(index)
+                    || !dataset.x_high_is_valid(index)
+                {
+                    continue;
+                }
+                let values = [
+                    min_values[index],
+                    q1_values[index],
+                    median,
+                    q3_values[index],
+                    max_values[index],
+                ];
+                if axis.scale == GeneralScaleType::Logarithmic
+                    && values.iter().any(|value| *value <= 0.0)
+                {
+                    continue;
+                }
+                extend_numeric_bounds(&mut bounds, min_values[index]);
+                extend_numeric_bounds(&mut bounds, max_values[index]);
+            }
+            return (bounds, include_zero);
+        }
+        if series.kind() == crate::GeneralSeriesKind::ErrorBar {
+            let (Some(low_values), Some(high_values)) = (dataset.low(), dataset.high()) else {
+                return (bounds, include_zero);
+            };
+            for (index, &value) in dataset.y().iter().enumerate() {
+                if !dataset.y_is_valid(index)
+                    || (axis.scale == GeneralScaleType::Logarithmic && value <= 0.0)
+                {
+                    continue;
+                }
+                extend_numeric_bounds(&mut bounds, value);
+                if dataset.low_is_valid(index) {
+                    let low = low_values[index];
+                    if axis.scale != GeneralScaleType::Logarithmic || low > 0.0 {
+                        extend_numeric_bounds(&mut bounds, low);
+                    }
+                }
+                if dataset.high_is_valid(index) {
+                    let high = high_values[index];
+                    if axis.scale != GeneralScaleType::Logarithmic || high > 0.0 {
+                        extend_numeric_bounds(&mut bounds, high);
+                    }
+                }
+            }
+            return (bounds, include_zero);
+        }
+        for (index, &value) in dataset.y().iter().enumerate() {
+            if !dataset.y_is_valid(index)
+                || (axis.scale == GeneralScaleType::Logarithmic && value <= 0.0)
+            {
+                continue;
+            }
+            extend_numeric_bounds(&mut bounds, value);
+        }
+    } else if series.kind() == crate::GeneralSeriesKind::HorizontalBar {
+        include_zero = true;
+        if series.stack_id().is_some() {
+            return (bounds, include_zero);
+        }
+        for (index, &value) in dataset.y().iter().enumerate() {
+            if dataset.y_is_valid(index) {
+                extend_numeric_bounds(&mut bounds, value);
+            }
+        }
+    } else if let Some(values) = dataset.numeric_x() {
+        for (index, &value) in values.iter().enumerate() {
+            if axis.scale == GeneralScaleType::Logarithmic && value <= 0.0 {
+                continue;
+            }
+            extend_numeric_bounds(&mut bounds, value);
+            if series.kind() == crate::GeneralSeriesKind::ErrorBar && dataset.y_is_valid(index) {
+                if let Some(low_values) = dataset.x_low() {
+                    if dataset.x_low_is_valid(index) {
+                        let low = low_values[index];
+                        if axis.scale != GeneralScaleType::Logarithmic || low > 0.0 {
+                            extend_numeric_bounds(&mut bounds, low);
+                        }
+                    }
+                }
+                if let Some(high_values) = dataset.x_high() {
+                    if dataset.x_high_is_valid(index) {
+                        let high = high_values[index];
+                        if axis.scale != GeneralScaleType::Logarithmic || high > 0.0 {
+                            extend_numeric_bounds(&mut bounds, high);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (bounds, include_zero)
 }
 
 fn extend_numeric_bounds(bounds: &mut Option<(f64, f64)>, value: f64) {
@@ -2962,6 +2971,53 @@ mod tests {
         assert!(format_numeric_ticks(&[1.0e9, 2.0e9])
             .iter()
             .all(|label| label.contains('e')));
+    }
+
+    #[test]
+    fn memoized_auto_domains_follow_dataset_generations() {
+        use crate::{GeneralSeriesOptions, GeneralXyInput};
+
+        let mut chart = ChartEngine::new(800.0, 400.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+            chart
+                .add_general_axis(GeneralAxisOptions::new(
+                    id,
+                    pane,
+                    dimension,
+                    GeneralScaleType::Linear,
+                ))
+                .unwrap();
+        }
+        let input = |high: f64| GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0, 2.0, 3.0],
+            y: vec![1.0, high / 2.0, high],
+            y_valid: None,
+        };
+        let dataset = chart.create_general_xy_dataset(input(10.0)).unwrap();
+        chart
+            .add_general_series(GeneralSeriesOptions::xy_line(pane, dataset, "x", "y"))
+            .unwrap();
+        let y_high = |chart: &ChartEngine| match chart.general_axis_effective_domain("y") {
+            Some(GeneralAxisDomain::Numeric([_, high])) => high,
+            other => panic!("unexpected domain {other:?}"),
+        };
+        let small = y_high(&chart);
+        assert!((10.0..100.0).contains(&small));
+        // Repeated resolution reuses the scan; a new dataset generation must rescan it.
+        assert_eq!(y_high(&chart), small);
+        chart
+            .replace_general_xy_dataset(dataset, input(1_000.0))
+            .unwrap();
+        assert!(y_high(&chart) >= 1_000.0);
     }
 
     #[test]

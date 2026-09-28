@@ -104,8 +104,8 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     axis_border: "#333333",
     grid: "#333333",
     border_control: "#333333",
-    crosshair_control: "#404040",
-    crosshair_label_control: "#404040",
+    crosshair_control: "#333333",
+    crosshair_label_control: "#222222",
     bullish: "#089981",
     bearish: "#f7525f",
   });
@@ -122,8 +122,8 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     axis_border: "#e5e5e5",
     grid: "#e5e5e5",
     border_control: "#e5e5e5",
-    crosshair_control: "#c2c2c2",
-    crosshair_label_control: "#c2c2c2",
+    crosshair_control: "#333333",
+    crosshair_label_control: "#222222",
     bullish: "#089981",
     bearish: "#f7525f",
   });

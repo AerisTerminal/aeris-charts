@@ -128,6 +128,26 @@ This reset is tied to the Phase 2 engine-owned Cartesian surface (additional dat
 shared-tooltip APIs, heatmap variants, persistence, and WASM bindings). Future growth is again blocked at the v3
 ceilings rather than inheriting an open-ended exception.
 
+Budget policy v4 records the Phase 3 package-size reset after the trading-workstation surface landed: order-flow
+footprints and trade streams, depth heatmaps and liquidity replay, session replay with non-time bars, profile
+workflows, the expanded indicator catalog, and additional chart types. Before changing ceilings, the release
+`wasm-opt -Oz` output was re-run with `--converge` and with producer/debug stripping; neither reduced the module
+(3,826,918 and 3,833,897 bytes). JavaScript stays well inside its unchanged ceilings. Remaining growth is
+compiled engine code, so the WASM and package-container ceilings take the same ~7% release headroom as v3:
+
+| Phase 3 metric | Observed bytes | Blocking maximum |
+| --- | ---: | ---: |
+| npm tarball | 1,549,907 | 1,650,000 |
+| npm unpacked | 4,628,626 | 4,950,000 |
+| JavaScript raw | 372,974 | 620,000 |
+| JavaScript Brotli | 66,155 | 95,000 |
+| WASM raw | 3,827,699 | 4,100,000 |
+| WASM Brotli | 977,494 | 1,050,000 |
+
+The largest reducible share measured in the unstripped module is serde JSON (de)serialization
+monomorphization (about a fifth of pre-optimization code), led by the internally tagged `IndicatorKind`
+enum. Future growth is blocked at the v4 ceilings.
+
 Phase 2 adds release-blocking maxima for `general-dashboard-100k`: p50 startup through the first following rAF
 must stay at or below 2,000 ms, and first-frame WebGPU vertex uploads must stay at or below 96 MiB. These are
 guardrails for catastrophic host regressions, not cross-machine performance claims.
