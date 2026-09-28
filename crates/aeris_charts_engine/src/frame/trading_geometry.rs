@@ -272,7 +272,7 @@ impl ChartEngine {
         }
     }
 
-    /// `--border-width` (0.5 CSS px) on the device grid with browser border semantics: whole
+    /// `--border-width` (1 CSS px) on the device grid with browser border semantics: whole
     /// device pixels, rounded down, never thinner than one device pixel.
     fn trading_border_width(vpr: f64) -> f64 {
         aeris_charts_core::style::border_width_device_px(vpr)

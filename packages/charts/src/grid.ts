@@ -278,7 +278,7 @@ export async function create_chart_grid(
     requestAnimationFrame(() => {
       if (!el.isConnected) return;
       const dpr = window.devicePixelRatio || 1;
-      const device_w = Math.max(1, Math.round(style_tokens.border_width * dpr));
+      const device_w = Math.max(1, Math.floor(style_tokens.border_width * dpr));
       const w = device_w / dpr; // css px per full-coverage device pixel(s)
       const rect = el.getBoundingClientRect();
       const edge = horizontal ? rect.left : rect.top;

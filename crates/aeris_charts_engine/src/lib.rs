@@ -1208,10 +1208,9 @@ impl<'a> IntoIterator for &'a mut SeriesStore {
     }
 }
 
-/// Stable pane-boundary layout slot in CSS pixels. The visible separator rule is thinner and uses
-/// the canonical design-system border width during axis-frame lowering; hover/hit geometry is also
-/// independently expanded for usability.
-pub const PANE_SEPARATOR: f64 = 1.0;
+/// Pane-boundary layout slot in CSS pixels. The visible separator rule fills exactly this slot on
+/// the device-pixel grid; hover/hit geometry is independently expanded for usability.
+pub const PANE_SEPARATOR: f64 = 2.0;
 
 /// `pane_index` sentinel for a series whose pane was removed (reference `removePane` orphans the
 /// pane's series — `paneForSource` turns null): the series keeps its data but renders and

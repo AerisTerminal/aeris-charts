@@ -32,7 +32,7 @@
   --border-softer: #f5f5f5;
   --border-strong: #c2c2c2;
   --border-inverse: #222222;
-  --border-width: 0.5px;
+  --border-width: 1px;
 
   /* Text */
   --text-primary: #222222;
@@ -134,7 +134,7 @@
   --border-softer: #2b2b2b;
   --border-strong: #404040;
   --border-inverse: #ffffff;
-  --border-width: 0.5px;
+  --border-width: 1px;
 
   /* Text */
   --text-primary: #f5f5f5;

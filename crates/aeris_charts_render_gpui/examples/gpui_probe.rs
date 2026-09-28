@@ -4046,10 +4046,8 @@ impl Render for InteractiveDemo {
             },
         );
         let dpr = window.scale_factor();
-        let divider_line_width = (aeris_charts_core::style::BORDER_WIDTH as f32 * dpr)
-            .round()
-            .max(1.0)
-            / dpr;
+        let divider_line_width =
+            aeris_charts_core::style::border_width_device_px(f64::from(dpr)) as f32 / dpr;
         let chart = if let Some(id) = self.maximized {
             self.render_node(
                 &WorkspaceLayout::Cell { id },
