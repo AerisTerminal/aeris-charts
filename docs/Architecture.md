@@ -590,6 +590,12 @@ retokenize only followers. Native hosts consume and apply the typed financial ap
 and must not infer provenance by comparing resolved CSS strings, create dummy engines for defaults,
 or send empty-string color sentinels to clear series overrides.
 
+The engine also projects the ordered financial legend model from its canonical value snapshot. It
+owns primary OHLC formatting and tone, native indicator output grouping, external-study grouping,
+visibility, pane placement, output labels and colors. Hosts may describe a bounded set of genuinely
+product-owned series roles (for example Terminal's reusable volume series) and then map the returned
+typed identities to their UI controls; they must not rebuild engine-owned groups by walking series.
+
 `chart.value_snapshot(logical_index?)` crosses WebAssembly once and returns all live series. The package adds live handles to the engine records and derives legacy crosshair `series_data` by retaining only valued entries. Engine-owned feature series expose their scalar scale projection and retain the legacy scalar event shape. Arbitrary custom-series callbacks remain host-owned: exact snapshots are null, while latest snapshots can expose only the last value recorded during a visible frame and are explicitly render-state-dependent. Symbol/exchange metadata, volume association outside VWAP bindings, bar/day change math, session calendars, visibility settings, and legend DOM remain host-owned.
 
 The supported, experimental, internal-but-exposed, and legacy surfaces are classified in

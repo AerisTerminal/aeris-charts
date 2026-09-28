@@ -16,6 +16,7 @@ mod drawings;
 mod external_studies;
 mod feature_series;
 mod financial_appearance;
+mod financial_legend;
 mod footprint;
 mod frame;
 mod general_axes;
@@ -97,6 +98,10 @@ pub use feature_series::{
     StackedAreaColor,
 };
 pub use financial_appearance::{AppearanceColor, FinancialAppearance, FinancialThemeColors};
+pub use financial_legend::{
+    FinancialLegendIdentity, FinancialLegendRequest, FinancialLegendRow, FinancialLegendTone,
+    FinancialLegendValue, HostLegendSeries,
+};
 pub use footprint::{
     adaptive_trade_bubble_threshold, auto_footprint_ticks_per_row, AggressorSide, BarSequence,
     BarSequenceMapping, BarSequencePoint, CumulativeDeltaReset, FootprintAggregationOptions,
