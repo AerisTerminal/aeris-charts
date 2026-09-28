@@ -158,6 +158,32 @@ pub fn measure_text(
     weight: u16,
     italic: bool,
 ) -> GpuiTextMetrics {
+    measure_with(window.text_system(), text, family, size, weight, italic)
+}
+
+/// A live engine text measurer (`ChartEngine::set_text_measure`) backed by the window's native
+/// shaper. Every engine request is shaped exactly as painting shapes it — full labels, caret
+/// prefixes, the trend `+ Add text` prompt, and device-scaled frame runs alike — the native
+/// counterpart of the browser host's canvas `measureText` hook. It holds only the shared text
+/// system, so it stays valid across frames without borrowing the window.
+pub fn text_measurer(window: &Window) -> impl Fn(&str, f64, &str, u16, bool) -> f64 + 'static {
+    let text_system = window.text_system().clone();
+    move |text, size, family, weight, italic| {
+        if text.is_empty() || !(size.is_finite() && size > 0.0) {
+            return 0.0;
+        }
+        f64::from(measure_with(&text_system, text, family, size as f32, weight, italic).width)
+    }
+}
+
+fn measure_with(
+    text_system: &Arc<gpui::WindowTextSystem>,
+    text: &str,
+    family: &str,
+    size: f32,
+    weight: u16,
+    italic: bool,
+) -> GpuiTextMetrics {
     let run = TextRun {
         x: 0.0,
         y: 0.0,
@@ -171,7 +197,6 @@ pub fn measure_text(
         angle: 0.0,
     };
     let font = to_font(&run);
-    let text_system = window.text_system().clone();
     let font_size = px(size);
     let font_id = text_system.resolve_font(&font);
     let ascent: f32 = text_system.ascent(font_id, font_size).into();

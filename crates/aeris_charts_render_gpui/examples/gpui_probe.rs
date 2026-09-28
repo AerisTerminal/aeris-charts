@@ -19,10 +19,7 @@
 //! - `AERIS_CHARTS_PROBE_FEATURE=footprint` — finite probes start in the deterministic detailed-LOD
 //!   footprint fixture instead of the default candlestick fixture.
 
-use std::{
-    collections::HashMap,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use aeris_charts_core::model::data_layer::SeriesId;
 use aeris_charts_engine::{
@@ -38,7 +35,8 @@ use aeris_charts_engine::{
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, Prim, TextAlign};
 use aeris_charts_render_gpui::{
-    backend::measure_text, AerisViewport, GpuiChartRenderer, GpuiFrameMetrics, PreparedAerisFrame,
+    backend::{measure_text, text_measurer},
+    AerisViewport, GpuiChartRenderer, GpuiFrameMetrics, PreparedAerisFrame,
 };
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, size, AnyElement, App, Bounds, Context,
@@ -1642,42 +1640,10 @@ impl Probe {
             return;
         }
         let layout = self.engine.options.get().layout.clone();
-        let mut drawing_widths = HashMap::new();
-        for drawing in self.engine.drawings() {
-            let text = drawing.display_text();
-            let size = drawing.resolved_text_size(layout.font_size);
-            let weight = if drawing.kind == DrawingKind::Text && drawing.text.is_empty() {
-                700
-            } else {
-                drawing.text_weight.unwrap_or(400)
-            };
-            let key = format!(
-                "{text}\u{0}{size}\u{0}{}\u{0}{weight}\u{0}{}",
-                layout.font_family, drawing.text_italic
-            );
-            drawing_widths.insert(
-                key,
-                f64::from(
-                    measure_text(
-                        window,
-                        text,
-                        &layout.font_family,
-                        size as f32,
-                        weight,
-                        drawing.text_italic,
-                    )
-                    .width,
-                ),
-            );
-        }
+        // Live native measurement for every engine request (labels, caret prefixes, the trend
+        // prompt, device-scaled frame runs), matching the browser host's canvas measurer.
         self.engine
-            .set_text_measure(Some(Box::new(move |text, size, family, weight, italic| {
-                let key = format!("{text}\u{0}{size}\u{0}{family}\u{0}{weight}\u{0}{italic}");
-                drawing_widths
-                    .get(&key)
-                    .copied()
-                    .unwrap_or_else(|| text.chars().count() as f64 * size * 0.6)
-            })));
+            .set_text_measure(Some(Box::new(text_measurer(window))));
         let axis_size = self.engine.axis_font_size();
         let countdown_size = self.engine.countdown_font_size();
         self.rebuild_with_measure(
@@ -2112,6 +2078,10 @@ impl Probe {
         // stays in the session, any other press commits it (blur) and proceeds normally.
         self.press_in_text_editor = self.on_text_editor(pane_x, y);
         if self.press_in_text_editor {
+            // Like the browser editor: a click inside the label places the caret there.
+            if self.engine.drawing_text_edit_caret_at(pane_x, y) {
+                self.dirty = true;
+            }
             cx.notify();
             return;
         }
@@ -2596,7 +2566,18 @@ impl Probe {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.engine.drawing_text_edit().is_some() {
-            self.on_text_edit_key(event);
+            let modifiers = event.keystroke.modifiers;
+            if (modifiers.control || modifiers.platform)
+                && !modifiers.alt
+                && event.keystroke.key == "v"
+            {
+                // Paste the clipboard's text, flattened to one line by the engine session.
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    self.engine.drawing_text_edit_insert(&text);
+                }
+            } else {
+                self.on_text_edit_key(event);
+            }
             self.dirty = true;
             cx.stop_propagation();
             cx.notify();

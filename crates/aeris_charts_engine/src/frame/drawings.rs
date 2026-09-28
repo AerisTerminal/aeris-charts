@@ -1041,8 +1041,27 @@ impl ChartEngine {
             DrawingTextHAlign::Center => -advance / 2.0,
             DrawingTextHAlign::Right => -advance,
         };
-        let local_x = start + self.measure_drawing_frame_text(drawing, &prefix, size);
+        // Browser caret parity: a 1 CSS px bar at the next whole CSS px after the prefix run,
+        // spanning the label's 1.2em line box, rotated with the label.
+        let prefix_css = self.measure_drawing_frame_text(drawing, &prefix, size) / vpr;
+        let local_x = start + prefix_css.ceil() * vpr;
         let half_height = size * 0.6;
+        let color = self.drawing_text_color(drawing);
+        if angle.abs() <= 1e-6 {
+            // An unrotated caret snaps to the device grid like every other crisp 1px rule, so
+            // it keeps one thickness wherever the caret moves.
+            let width = vpr.round().max(1.0) as i32;
+            out.push(Prim::Rect {
+                rect: IRect {
+                    x: (x + local_x).round() as i32,
+                    y: (y - half_height).round() as i32,
+                    w: width,
+                    h: ((y + half_height).round() - (y - half_height).round()).max(1.0) as i32,
+                },
+                color,
+            });
+            return;
+        }
         let (sin, cos) = angle.sin_cos();
         let at = |local_y: f64| {
             [
@@ -1058,7 +1077,7 @@ impl ChartEngine {
             width: vpr.max(1.0) as f32,
             style: LineStyle::Solid,
             line_type: LineType::Simple,
-            color: self.drawing_text_color(drawing),
+            color,
         });
     }
 

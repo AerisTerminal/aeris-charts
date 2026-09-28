@@ -128,6 +128,66 @@ impl ChartEngine {
         self.apply_drawing_text_edit(text, next_caret)
     }
 
+    /// Place the caret at the character boundary nearest a media-px pointer, in the label's
+    /// rotated coordinates (the browser editor's click-to-place behavior for native hosts).
+    pub fn drawing_text_edit_caret_at(&mut self, x: f64, y: f64) -> bool {
+        let Some(session) = self.drawing_text_edit.as_ref() else {
+            return false;
+        };
+        let Some(drawing) = self.drawing(session.id) else {
+            return false;
+        };
+        let Some(px) = self.drawing_px(drawing) else {
+            return false;
+        };
+        let Some(pane) = self.panes.get(drawing.pane_index) else {
+            return false;
+        };
+        let layout = &self.options.get().layout;
+        let size = drawing.resolved_text_size(layout.font_size);
+        let (tx, ty, align, angle) = Self::drawing_text_placement(
+            drawing,
+            &px,
+            self.pane_w,
+            pane.top,
+            pane.height,
+            size,
+            crate::drawings::TEXT_PAD,
+        );
+        let measure = |text: &str| {
+            self.measure_text_run(
+                text,
+                size,
+                &layout.font_family,
+                drawing.text_weight.unwrap_or(400),
+                drawing.text_italic,
+            )
+        };
+        let text = session.text.as_str();
+        let advance = if text.is_empty() { size } else { measure(text) };
+        let start = match align {
+            crate::drawings::DrawingTextHAlign::Left => 0.0,
+            crate::drawings::DrawingTextHAlign::Center => -advance / 2.0,
+            crate::drawings::DrawingTextHAlign::Right => -advance,
+        };
+        let local_x = (x - tx) * angle.cos() + (y - ty) * angle.sin() - start;
+        let mut best = (0, local_x.abs());
+        let mut prefix = String::with_capacity(text.len());
+        for (index, c) in text.chars().enumerate() {
+            prefix.push(c);
+            let distance = (measure(&prefix) - local_x).abs();
+            if distance < best.1 {
+                best = (index + 1, distance);
+            }
+        }
+        let caret = best.0;
+        if caret == session.caret {
+            return false;
+        }
+        let text = session.text.clone();
+        self.apply_drawing_text_edit(text, caret)
+    }
+
     /// Mirror a host-owned editable surface (browser IME/clipboard) into the session: the whole
     /// current value plus its caret in `char`s.
     pub fn set_drawing_text_edit(&mut self, text: &str, caret: usize) -> bool {
@@ -217,6 +277,8 @@ mod tests {
         chart
             .set_series_data(0, &times, &values, &values, &values, &values)
             .expect("valid bars");
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
         let points = match kind {
             DrawingKind::Text => vec![DrawingPoint {
                 logical: 5.0,
@@ -285,6 +347,24 @@ mod tests {
         assert!(chart.begin_drawing_text_edit(note, false));
         assert!(chart.cancel_drawing_text_edit());
         assert!(chart.drawing(note).is_none());
+    }
+
+    #[test]
+    fn a_click_places_the_caret_at_the_nearest_character_boundary() {
+        let (mut chart, id) = chart_with(DrawingKind::Text, "");
+        chart.set_text_measure(Some(Box::new(|text, _, _, _, _| {
+            text.chars().count() as f64 * 10.0
+        })));
+        assert!(chart.drawing_apply_options(id, r#"{"text":"abcd","text_h_align":"left"}"#));
+        chart.build_frame();
+        assert!(chart.begin_drawing_text_edit(id, true));
+        let (x, y, _) = chart.drawing_text_transform(id).unwrap();
+        assert!(chart.drawing_text_edit_caret_at(x + 12.0, y));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abcd", 1)));
+        assert!(chart.drawing_text_edit_caret_at(x + 26.0, y));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abcd", 3)));
+        assert!(chart.drawing_text_edit_caret_at(x - 30.0, y));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abcd", 0)));
     }
 
     #[test]
