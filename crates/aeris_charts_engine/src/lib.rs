@@ -15,6 +15,7 @@ mod drawing_text_edit;
 mod drawings;
 mod external_studies;
 mod feature_series;
+mod financial_appearance;
 mod footprint;
 mod frame;
 mod general_axes;
@@ -95,6 +96,7 @@ pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
     StackedAreaColor,
 };
+pub use financial_appearance::{AppearanceColor, FinancialAppearance, FinancialThemeColors};
 pub use footprint::{
     adaptive_trade_bubble_threshold, auto_footprint_ticks_per_row, AggressorSide, BarSequence,
     BarSequenceMapping, BarSequencePoint, CumulativeDeltaReset, FootprintAggregationOptions,
@@ -1618,6 +1620,8 @@ pub struct ChartEngine {
     general_series: Option<general_series::GeneralSeriesRegistry>,
     pub options: ChartOptionsStore,
     theme: ChartTheme,
+    grid_color_follows_theme: bool,
+    crosshair_color_follows_theme: bool,
     pub crosshair_mode: CrosshairMode,
     /// the public reference's Ctrl-held magnet: while set, a Normal-mode crosshair snaps to the hovered
     /// bar's rendered prices exactly like `CrosshairMode::MagnetOhlc` (OHLC for candles/bars,
@@ -1860,6 +1864,8 @@ impl ChartEngine {
             general_series: None,
             options: ChartOptionsStore::new(),
             theme: ChartTheme::default(),
+            grid_color_follows_theme: true,
+            crosshair_color_follows_theme: true,
             crosshair_mode: CrosshairMode::Normal,
             crosshair_ohlc_magnet: false,
             animation_time: 0.0,
@@ -4303,6 +4309,26 @@ impl ChartEngine {
     /// public time-scale API. Returns the parse error for a malformed patch.
     pub fn apply_options(&mut self, patch_json: &str) -> Result<(), serde_json::Error> {
         let patch: serde_json::Value = serde_json::from_str(patch_json)?;
+        if patch
+            .get("grid")
+            .and_then(|grid| grid.get("vertLines").or_else(|| grid.get("horzLines")))
+            .and_then(|lines| lines.get("color"))
+            .is_some()
+        {
+            self.grid_color_follows_theme = false;
+        }
+        if patch
+            .get("crosshair")
+            .and_then(|crosshair| {
+                crosshair
+                    .get("vertLine")
+                    .or_else(|| crosshair.get("horzLine"))
+            })
+            .and_then(|line| line.get("color"))
+            .is_some()
+        {
+            self.crosshair_color_follows_theme = false;
+        }
         self.options.apply(&patch);
         // Re-derive runtime state that isn't read straight from the store each frame.
         self.crosshair_mode = crosshair_mode_from_u8(self.options.get().crosshair.mode);
@@ -4315,9 +4341,37 @@ impl ChartEngine {
 
     /// Switch all chart cosmetics using Aeris's canonical style-token source.
     pub fn set_theme(&mut self, theme: ChartTheme) {
+        let custom_grid = (!self.grid_color_follows_theme).then(|| {
+            (
+                self.options.get().grid.vert_lines.color.clone(),
+                self.options.get().grid.horz_lines.color.clone(),
+            )
+        });
+        let custom_crosshair = (!self.crosshair_color_follows_theme).then(|| {
+            (
+                self.options.get().crosshair.vert_line.color.clone(),
+                self.options.get().crosshair.horz_line.color.clone(),
+            )
+        });
         self.theme = theme;
         let patch = chart_theme_patch(theme);
         self.options.apply(&patch);
+        if let Some((vert, horz)) = custom_grid {
+            self.options.apply(&serde_json::json!({
+                "grid": {
+                    "vertLines": { "color": vert },
+                    "horzLines": { "color": horz },
+                }
+            }));
+        }
+        if let Some((vert, horz)) = custom_crosshair {
+            self.options.apply(&serde_json::json!({
+                "crosshair": {
+                    "vertLine": { "color": vert },
+                    "horzLine": { "color": horz },
+                }
+            }));
+        }
         self.route_price_scale_patch(&patch);
         self.invalidate_frame_all();
     }
@@ -4335,6 +4389,8 @@ impl ChartEngine {
     /// Theme-aware form used by hosts whose selected theme lives outside the headless engine.
     pub fn reset_style_to_theme_defaults(&mut self, theme: ChartTheme) {
         self.theme = theme;
+        self.grid_color_follows_theme = true;
+        self.crosshair_color_follows_theme = true;
         self.options.reset_style_to_defaults(theme);
 
         for pane in &mut self.panes {
