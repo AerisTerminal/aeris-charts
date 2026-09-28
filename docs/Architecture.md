@@ -341,6 +341,12 @@ per-symbol values from one canonical time identity.
 
 Hosts send input and data to the engine. The engine returns query results and a prepared `ChartFrame`. Browser and GPUI adapters normalize native events into CSS-logical `PointerSample`/`WheelSample` values and feed the same fixed-capacity `GestureResolver`. The resolver owns pointer membership, the 5 px Manhattan drag threshold, explicit gesture state, fixed starting pinch centroid/distance, cumulative pinch scale, primary-touch continuation/termination, and cancellation; it retains at most two pointers and performs no move-sample allocation. Pinch moves zoom only around the starting centroid and cannot begin after a one-finger move or long press. Hosts still own platform capture, cursor application, event-default policy, and frame/timer scheduling. Normalization includes pointer cadence: browsers already coalesce pointer motion to display frames, and a native host must do the same for brush capture — Wayland delivers per-HID-report motion (~1000 Hz, often one axis per event), and feeding every sample to `brush_create_add` records that axis-alternating staircase as stroke knots. The GPUI host therefore retains only the newest brush sample per painted frame and flushes it once during prepaint (and on pointer-up before commit), so stroke knots sample the drag trajectory at display cadence on every host. Horizontal kinetic scroll follows the reference domain exactly: drag samples are the time scale's logical `rightOffset`, while the reference 0.2/7 px-per-ms speed limits and 15 px minimum move are divided by the bar spacing captured when the drag starts. The resulting coast is therefore zoom-invariant instead of being tuned in raw pointer pixels. Browser keyboard Left/Right pan is velocity-owned rather than destination-owned: key-down gives an immediate bounded velocity kick, the engine adds further low-friction kicks at a fixed cadence while the key remains held, and browser key-repeat is ignored except when it changes the requested Ctrl/Shift speed. Key-up cancels the kinetic state immediately. Ctrl/Shift retain the existing 10x strength relationship to plain arrows. Zoom, scroll, kinetic motion, snapping, selection, drawing/trading preview semantics, and rollback belong here.
 
+Linked-chart ingress is origin-aware. Local mutations publish into the bounded synchronization queue;
+`apply_external_sync_event` applies coordinator-originated crosshair and visible-range state without
+echoing it and without draining unrelated local events already awaiting delivery. Hosts coordinate
+chart groups and transport events, but they never clear the engine queue to manufacture no-echo
+behavior.
+
 Secondary clicks use the engine-owned Chart Context query. It resolves chart-space coordinates,
 pane, time, logical index, hit series, and price on that series' exact scale (or the pane's canonical
 default scale on empty space) without running primary-click selection or activation. Browser and
@@ -773,6 +779,11 @@ are never changed merely to satisfy a different host.
 
 Indicator multi-input validation is engine-owned: VWAP and VWAP-band bindings require a distinct
 live scalar volume series, while missing volume remains the explicit unit-weight fallback. Financial
+indicator bindings are also the visibility, removal, and chrome ownership unit. One engine operation
+shows, hides, or removes every output in a binding, and the retained chart-wide indicator chrome
+policy applies name labels, value labels, and price lines to current and later outputs. Hosts choose
+that policy and render controls; they do not walk output series or predict output counts.
+Financial
 study persistence V3 stores binding definitions, dependency references, scalar inputs, volume inputs,
 and output styles while leaving market history and ordinary series data host-owned. Trade, quote, and
 depth study inputs remain owned by the host market runtime: it supplies typed stream requirements and

@@ -248,6 +248,28 @@ pub const EMA_RIBBON_DEFAULT_PERIODS: [usize; aeris_charts_indicators::MAX_OUTPU
 pub const EMA_RIBBON_DEFAULT_COLORS: [&str; aeris_charts_indicators::MAX_OUTPUTS] =
     ["#335cff", "#FF9800", "#7d52f4", "#fb4ba3", "#fb3748"];
 
+/// Chart-wide chrome policy for engine-owned indicator bindings.
+///
+/// The engine retains this policy so newly-created and restored bindings cannot silently diverge
+/// from existing outputs. Hosts choose the preference; they do not walk output series to enforce
+/// it themselves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IndicatorChromeOptions {
+    pub name_labels_visible: bool,
+    pub value_labels_visible: bool,
+    pub price_lines_visible: bool,
+}
+
+impl Default for IndicatorChromeOptions {
+    fn default() -> Self {
+        Self {
+            name_labels_visible: true,
+            value_labels_visible: true,
+            price_lines_visible: true,
+        }
+    }
+}
+
 /// MACD histogram four-state palette: strong when moving away from zero, weak when falling
 /// back toward it (industry-standard). Packed `0xRRGGBBAA`.
 const MACD_UP: u32 = rgb_u32(aeris_charts_core::style::MARKET_UP_RGB, 0xff);
@@ -380,6 +402,69 @@ impl ChartEngine {
                     .collect(),
             })
             .collect()
+    }
+
+    /// Current chart-wide chrome policy inherited by every engine-owned indicator output.
+    #[must_use]
+    pub const fn indicator_chrome_options(&self) -> IndicatorChromeOptions {
+        self.indicator_chrome
+    }
+
+    /// Apply one chart-wide indicator chrome policy to current and future bindings.
+    pub fn set_indicator_chrome_options(&mut self, options: IndicatorChromeOptions) -> bool {
+        let mut changed = self.indicator_chrome != options;
+        self.indicator_chrome = options;
+        let outputs = self
+            .indicators
+            .iter()
+            .flat_map(|binding| binding.outputs.iter().copied())
+            .collect::<Vec<_>>();
+        for output in outputs {
+            if let Some(series) = self.series_entry_mut(output) {
+                changed |= series.title_visible != options.name_labels_visible
+                    || series.last_value_visible != options.value_labels_visible
+                    || series.price_line_visible != options.price_lines_visible;
+                series.title_visible = options.name_labels_visible;
+                series.last_value_visible = options.value_labels_visible;
+                series.price_line_visible = options.price_lines_visible;
+            }
+        }
+        if changed {
+            self.invalidate_frame_layout_and_axis();
+        }
+        changed
+    }
+
+    /// Set every output in one binding visible or hidden as one engine-owned operation.
+    pub fn set_indicator_binding_visible(&mut self, binding_id: SeriesId, visible: bool) -> bool {
+        let Some(outputs) = self
+            .indicators
+            .iter()
+            .find(|binding| binding.outputs.first() == Some(&binding_id))
+            .map(|binding| binding.outputs.clone())
+        else {
+            return false;
+        };
+        let changed = outputs.iter().any(|&output| {
+            self.series_entry(output)
+                .is_some_and(|series| series.visible != visible)
+        });
+        for output in outputs {
+            self.set_series_visible(output, visible);
+        }
+        changed
+    }
+
+    /// Remove one complete indicator binding by its stable binding identity.
+    pub fn remove_indicator_binding(&mut self, binding_id: SeriesId) -> bool {
+        if !self
+            .indicators
+            .iter()
+            .any(|binding| binding.outputs.first() == Some(&binding_id))
+        {
+            return false;
+        }
+        self.remove_series(binding_id)
     }
 
     /// Replace one output's presentation atomically while retaining the binding and output id.
@@ -1591,7 +1676,9 @@ impl ChartEngine {
         for (output_index, &id) in ids.iter().enumerate() {
             if let Some(s) = self.series.iter_mut().find(|s| s.id == id) {
                 s.countdown_visible = false;
-                s.title_visible = true;
+                s.title_visible = self.indicator_chrome.name_labels_visible;
+                s.last_value_visible = self.indicator_chrome.value_labels_visible;
+                s.price_line_visible = self.indicator_chrome.price_lines_visible;
                 s.title = indicator_output_title(&kind, output_index);
                 s.line_width = Some(2.0);
                 // The last-price pulse marks the traded series, never a derived study line.

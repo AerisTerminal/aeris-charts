@@ -132,9 +132,10 @@ pub use general_series::{
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use indicators::{
-    IndicatorBindingInfo, IndicatorInputSource, IndicatorKind, IndicatorOutputDescriptor,
-    IndicatorOutputStyle, IndicatorParameterDescriptor, IndicatorParameterType, IndicatorSchema,
-    EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS, INDICATOR_SCHEMA_REVISION,
+    IndicatorBindingInfo, IndicatorChromeOptions, IndicatorInputSource, IndicatorKind,
+    IndicatorOutputDescriptor, IndicatorOutputStyle, IndicatorParameterDescriptor,
+    IndicatorParameterType, IndicatorSchema, EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS,
+    INDICATOR_SCHEMA_REVISION,
 };
 pub use interaction::{
     pinch_zoom_scale, wheel_zoom_scale, CancelReason, ChartContext, GestureResolver, GestureState,
@@ -1671,6 +1672,7 @@ pub struct ChartEngine {
     pub(crate) left_builtin_axis_w: f64,
     pub(crate) right_builtin_axis_w: f64,
     indicators: Vec<IndicatorBinding>,
+    indicator_chrome: IndicatorChromeOptions,
     /// During study-state restore, persisted oscillator panes are empty until their studies are
     /// recreated. The cursor lets the normal placement path reuse those panes without changing
     /// interactive study creation semantics.
@@ -1880,6 +1882,7 @@ impl ChartEngine {
             left_builtin_axis_w: 0.0,
             right_builtin_axis_w: 0.0,
             indicators: Vec::new(),
+            indicator_chrome: IndicatorChromeOptions::default(),
             study_restore_pane_cursor: None,
             indicator_changes: Vec::new(),
             trade_streams: HashMap::new(),
@@ -4160,6 +4163,22 @@ impl ChartEngine {
         changed
     }
 
+    /// Apply one coordinator-originated synchronization event without publishing it back to the
+    /// local synchronization queue. This is the canonical linked-chart ingress: hosts must not
+    /// drain the queue after applying an external event because doing so can discard unrelated
+    /// user-originated events that were already waiting for delivery.
+    pub fn apply_external_sync_event(&mut self, kind: &ChartSyncEventKind) -> bool {
+        match kind {
+            ChartSyncEventKind::Crosshair { position } => {
+                self.apply_external_crosshair(Some(*position))
+            }
+            ChartSyncEventKind::ClearCrosshair => self.apply_external_crosshair(None),
+            ChartSyncEventKind::VisibleTimeRange { range } => {
+                self.set_visible_time_range_impl(range.from, range.to, false)
+            }
+        }
+    }
+
     #[must_use]
     pub fn take_sync_events(&mut self) -> Vec<ChartSyncEvent> {
         self.sync_events.drain(..).collect()
@@ -4599,12 +4618,16 @@ impl ChartEngine {
 
     /// Set the visible window to the points bracketing a UTC-seconds range.
     pub fn set_visible_time_range(&mut self, from: f64, to: f64) {
+        let _ = self.set_visible_time_range_impl(from, to, true);
+    }
+
+    fn set_visible_time_range_impl(&mut self, from: f64, to: f64, publish: bool) -> bool {
         if !from.is_finite() || !to.is_finite() || from > to {
-            return;
+            return false;
         }
         let point_count = self.data.merged_times().len();
         if point_count == 0 {
-            return;
+            return false;
         }
         let (left, right) = if let Some(points) = self.sequence_points() {
             let left = points
@@ -4620,19 +4643,27 @@ impl ChartEngine {
             )
         };
         if right == 0 || left >= point_count {
-            return;
+            return false;
         }
         let last = point_count - 1;
         let left = left.min(last) as i64;
         let right = (right - 1).min(last) as i64;
-        if left <= right {
-            self.time_scale
-                .set_visible_range(StrictRange::new(left, right), false);
-            self.queue_sync_event(ChartSyncEventKind::VisibleTimeRange {
-                range: VisibleTimeRangeSync { from, to },
-            });
+        if left > right {
+            return false;
+        }
+        let before = self.visible_logical_range();
+        self.time_scale
+            .set_visible_range(StrictRange::new(left, right), false);
+        let changed = before != self.visible_logical_range();
+        if changed {
+            if publish {
+                self.queue_sync_event(ChartSyncEventKind::VisibleTimeRange {
+                    range: VisibleTimeRangeSync { from, to },
+                });
+            }
             self.invalidate_frame_scene();
         }
+        changed
     }
 
     /// Lay out stacked panes inside the chart content area. This is shared by hosts that need

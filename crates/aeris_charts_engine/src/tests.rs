@@ -2798,6 +2798,63 @@ fn indicator_outputs_drop_the_countdown_show_the_name_chip_and_default_to_2px() 
 }
 
 #[test]
+fn indicator_binding_owns_group_chrome_visibility_and_removal() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [1.0, 2.0, 3.0, 4.0, 5.0];
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    let chrome = IndicatorChromeOptions {
+        name_labels_visible: false,
+        value_labels_visible: false,
+        price_lines_visible: false,
+    };
+    assert!(chart.set_indicator_chrome_options(chrome));
+    let outputs = chart.add_macd(0, 2, 3, 2);
+    assert_eq!(outputs.len(), 3);
+    assert_eq!(chart.indicator_chrome_options(), chrome);
+    assert!(outputs.iter().all(|output| {
+        chart.series_entry(*output).is_some_and(|series| {
+            !series.title_visible && !series.last_value_visible && !series.price_line_visible
+        })
+    }));
+
+    chart
+        .series_entry_mut(outputs[0])
+        .expect("MACD output exists")
+        .title_visible = true;
+    assert!(
+        chart.set_indicator_chrome_options(chrome),
+        "reapplying the retained policy must repair a drifted output"
+    );
+    assert!(
+        !chart
+            .series_entry(outputs[0])
+            .expect("MACD output exists")
+            .title_visible
+    );
+
+    assert!(chart.set_indicator_binding_visible(outputs[0], false));
+    assert!(outputs.iter().all(|output| {
+        chart
+            .series_entry(*output)
+            .is_some_and(|series| !series.visible)
+    }));
+    assert!(chart.remove_indicator_binding(outputs[0]));
+    assert!(outputs
+        .iter()
+        .all(|output| chart.series_entry(*output).is_none()));
+    assert!(chart.indicator_bindings().is_empty());
+}
+
+#[test]
 fn a_dragged_short_pane_contracts_its_scale_instead_of_flipping_it() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let values = [1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0];

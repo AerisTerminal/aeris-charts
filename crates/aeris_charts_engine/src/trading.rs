@@ -4748,4 +4748,33 @@ mod tests {
         })));
         assert!(chart.take_sync_events().is_empty());
     }
+
+    #[test]
+    fn external_sync_application_preserves_pending_local_events() {
+        let mut chart = chart_with_market();
+        chart.fit_content();
+        chart.build_frame();
+        let data = chart.series_data(0);
+        let time = data[1].time as f64;
+        assert!(chart.set_crosshair_position(102.0, time, 0));
+
+        let range = crate::VisibleTimeRangeSync {
+            from: data[0].time as f64,
+            to: data[1].time as f64,
+        };
+        assert!(
+            chart.apply_external_sync_event(&crate::ChartSyncEventKind::VisibleTimeRange { range })
+        );
+
+        let events = chart.take_sync_events();
+        assert_eq!(
+            events.len(),
+            1,
+            "external application must not drain local work"
+        );
+        assert!(matches!(
+            events[0].kind,
+            crate::ChartSyncEventKind::Crosshair { .. }
+        ));
+    }
 }
