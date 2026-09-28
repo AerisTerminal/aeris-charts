@@ -311,6 +311,14 @@ impl ChartEngine {
             .collect()
     }
 
+    /// Whether the chart currently owns at least one live external study output.
+    #[must_use]
+    pub fn has_external_studies(&self) -> bool {
+        self.external_study_outputs
+            .values()
+            .any(|state| self.series_entry(state.series_id).is_some())
+    }
+
     /// Return the runtime study that owns a live output series.
     #[must_use]
     pub fn external_study_for_series(&self, series_id: SeriesId) -> Option<u64> {
@@ -602,6 +610,7 @@ mod tests {
         );
         let outputs = chart.external_study_outputs();
         assert_eq!(outputs.len(), 2);
+        assert!(chart.has_external_studies());
         assert_eq!(
             outputs[0].input_requirements,
             descriptor("", pane).input_requirements
@@ -640,6 +649,7 @@ mod tests {
         assert_eq!(chart.external_study_visible(7), Some(false));
         assert!(chart.remove_external_studies(&[7]));
         assert!(chart.external_study_outputs().is_empty());
+        assert!(!chart.has_external_studies());
         assert_eq!(chart.external_study_for_series(outputs[0].series_id), None);
     }
 
