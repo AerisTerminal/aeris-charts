@@ -993,6 +993,18 @@ impl ChartEngine {
         self.options.get().crosshair.mode
     }
 
+    /// Set the configured crosshair mode from its stable public wire value.
+    pub fn set_configured_crosshair_mode(&mut self, mode: u8) -> bool {
+        if mode > 3 || self.configured_crosshair_mode() == mode {
+            return false;
+        }
+        self.options
+            .apply(&serde_json::json!({"crosshair": {"mode": mode}}));
+        self.crosshair_mode = crosshair_mode_from_u8(mode);
+        self.invalidate_frame_overlay();
+        true
+    }
+
     /// Resolve a pane separator using a host-selected interaction halo.
     #[must_use]
     pub fn pane_separator_at(&self, y: f64, hit_radius: f64) -> Option<usize> {
@@ -1300,6 +1312,9 @@ mod tests {
         assert!(chart.set_crosshair_ohlc_magnet(true));
         assert!(!chart.set_crosshair_ohlc_magnet(true));
         assert!(chart.crosshair_ohlc_magnet);
+        assert!(chart.set_configured_crosshair_mode(2));
+        assert_eq!(chart.configured_crosshair_mode(), 2);
+        assert!(!chart.set_configured_crosshair_mode(4));
     }
 
     #[test]

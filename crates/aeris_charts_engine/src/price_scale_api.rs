@@ -603,6 +603,20 @@ impl ChartEngine {
         }
     }
 
+    /// Toggle label collision alignment for one live price scale.
+    pub fn toggle_price_scale_align_labels(
+        &mut self,
+        pane: usize,
+        target: PriceScaleTarget,
+    ) -> bool {
+        let Some(scale) = self.price_scale_for_mut(pane, target) else {
+            return false;
+        };
+        scale.set_align_labels(!scale.options().align_labels);
+        self.invalidate_frame_all();
+        true
+    }
+
     pub fn set_series_price_scale(&mut self, id: SeriesId, target: PriceScaleTarget) {
         let Some(pane_index) = self.series_entry(id).map(|series| series.pane_index) else {
             return;

@@ -220,8 +220,9 @@ use aeris_charts_core::model::price_range::PriceRange;
 use aeris_charts_core::model::range::{LogicalRange, StrictRange};
 pub use aeris_charts_core::options::ChartTheme;
 use aeris_charts_core::options::{chart_theme_patch, ChartOptionsStore};
+pub use aeris_charts_core::scale::price_scale_core::PriceScaleMode;
 use aeris_charts_core::scale::price_scale_core::{
-    PriceScaleCore, PriceScaleCoreOptions, PriceScaleMargins, PriceScaleMode,
+    PriceScaleCore, PriceScaleCoreOptions, PriceScaleMargins,
 };
 use aeris_charts_core::scale::time_scale_core::{TimeScaleCore, TimeScaleOptions};
 use aeris_charts_core::scale::time_tick_marks::TimeTickMarks;

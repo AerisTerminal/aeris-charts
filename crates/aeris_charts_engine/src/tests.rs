@@ -2847,7 +2847,7 @@ fn indicator_binding_owns_group_chrome_visibility_and_removal() {
             .series_entry(*output)
             .is_some_and(|series| !series.visible)
     }));
-    assert!(chart.remove_indicator_binding(outputs[0]));
+    assert!(chart.remove_indicator_for_series(outputs[1]));
     assert!(outputs
         .iter()
         .all(|output| chart.series_entry(*output).is_none()));
@@ -2890,6 +2890,20 @@ fn price_scale_series_operations_are_typed_and_atomic() {
         Some(second)
     );
     assert_eq!(chart.series_visible(second), Some(true));
+    let align = chart
+        .price_scale_for(0, PriceScaleTarget::Right)
+        .unwrap()
+        .options()
+        .align_labels;
+    assert!(chart.toggle_price_scale_align_labels(0, PriceScaleTarget::Right));
+    assert_eq!(
+        chart
+            .price_scale_for(0, PriceScaleTarget::Right)
+            .unwrap()
+            .options()
+            .align_labels,
+        !align
+    );
     assert!(chart.toggle_series_chrome(0, SeriesChromeFlag::PriceLine));
     assert!(!chart.series_entry(0).unwrap().price_line_visible);
 

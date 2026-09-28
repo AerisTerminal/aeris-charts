@@ -491,6 +491,14 @@ impl ChartEngine {
         self.remove_series(binding_id)
     }
 
+    /// Remove the complete native indicator binding that owns one output series.
+    pub fn remove_indicator_for_series(&mut self, series_id: SeriesId) -> bool {
+        let Some(binding_id) = self.indicator_binding_id(series_id) else {
+            return false;
+        };
+        self.remove_indicator_binding(binding_id)
+    }
+
     /// Replace one output's presentation atomically while retaining the binding and output id.
     /// Invalid widths are rejected before any series state is changed.
     pub fn set_indicator_output_style(
