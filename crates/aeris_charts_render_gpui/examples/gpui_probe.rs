@@ -5,7 +5,7 @@
 //! themes, OHLC/click status, and host-side visual approximations of the web plugin fixtures. Those fixture
 //! toggles insert engine `Prim`s or use native engine APIs; they are explicitly not a JavaScript
 //! object bridge. With `AERIS_CHARTS_PROBE_FRAMES` set a single chart paints N frames and exits
-//! silently (a smoke run of layout, native text measurement, chrome, and live updates).
+//! silently (a smoke run of layout, native text measurement, and chrome). The demo data is static.
 //!
 //! ```text
 //! cargo run -p aeris_charts_render_gpui --features gpui-backend --example gpui_probe
@@ -216,12 +216,11 @@ const TOOLBAR_FEATURE_MANIFEST: &[&str] = &[
     "native-visual-approximations:day-bands,position-band,autoscale-band,markers,vertical-line",
 ];
 
-/// The CVD study's canonical trade stream, its line series, and the next synthetic trade id.
+/// The CVD study's canonical trade stream and its line series.
 #[derive(Clone, Copy)]
 struct CvdDemoState {
     stream_id: u64,
     series_id: SeriesId,
-    next_trade_id: u64,
 }
 
 /// Column-major OHLC, in the shape `ChartEngine::set_series_data` takes.
@@ -260,19 +259,6 @@ fn synthetic_bars(count: usize) -> Bars {
         low,
         close,
     }
-}
-
-fn next_bar_timestamp(times: &[f64]) -> f64 {
-    let Some(&latest) = times.last() else {
-        return 1_600_000_000.0;
-    };
-    let cadence = times
-        .windows(2)
-        .rev()
-        .map(|pair| pair[1] - pair[0])
-        .find(|cadence| cadence.is_finite() && *cadence > 0.0)
-        .unwrap_or(60.0);
-    latest + cadence
 }
 
 /// Match the Web demo's root-cell fixture: 1,000 deterministic hourly bars by default.
@@ -643,13 +629,8 @@ struct Probe {
     legend: String,
     click_status: String,
     bars: usize,
-    appended: usize,
-    last_append_epoch: u64,
     painted: u64,
     frame_budget: Option<u64>,
-    plan_nanos: Vec<u64>,
-    paint_nanos: Vec<u64>,
-    total_nanos: Vec<u64>,
     last: GpuiFrameMetrics,
     /// Distinct scale factors and sizes observed, to prove the propagation actually happened.
     seen_scales: Vec<f32>,
@@ -733,13 +714,8 @@ impl Probe {
             legend: "O —  H —  L —  C —".to_string(),
             click_status: "ready".to_string(),
             bars,
-            appended: 0,
-            last_append_epoch: 0,
             painted: 0,
             frame_budget,
-            plan_nanos: Vec::new(),
-            paint_nanos: Vec::new(),
-            total_nanos: Vec::new(),
             last: GpuiFrameMetrics::default(),
             seen_scales: Vec::new(),
             seen_sizes: Vec::new(),
@@ -778,8 +754,6 @@ impl Probe {
             .expect("split-cell synthetic series is well formed");
         self.bars = bars.times.len();
         self.source_bars = bars;
-        self.appended = 0;
-        self.last_append_epoch = 0;
         self.fitted = false;
         self.dirty = true;
     }
@@ -1302,7 +1276,6 @@ impl Probe {
                 self.cvd = Some(CvdDemoState {
                     stream_id,
                     series_id,
-                    next_trade_id,
                 });
             }
             Err(error) => {
@@ -1676,75 +1649,7 @@ impl Probe {
         );
     }
 
-    /// Append one live bar, forcing a rebuild on the next prepaint.
-    fn append_bar(&mut self) {
-        let i = self.bars + self.appended;
-        let t = i as f64;
-        let c = 100.0 + (t * 0.11).sin() * 6.0 + (t * 0.031).cos() * 14.0;
-        let o = self.source_bars.close.last().copied().unwrap_or(c);
-        let high = o.max(c) + 2.0;
-        let low = o.min(c) - 2.0;
-        let time = next_bar_timestamp(&self.source_bars.times);
-        self.engine.update_series_bar(0, time, [o, high, low, c]);
-        if let Some(id) = self.volume_id {
-            let volume = (high - low) * 25_000.0 + i as f64 * 31.0;
-            self.engine
-                .update_series_bar(id, time, [volume, volume, volume, volume]);
-        }
-        if let Some((_, id)) = self.volume_profile {
-            let volume = (800.0 + (c - o).abs() * 4000.0).round();
-            self.engine.update_series_bar(id, time, [volume; 4]);
-        }
-        self.source_bars.times.push(time);
-        self.source_bars.open.push(o);
-        self.source_bars.high.push(high);
-        self.source_bars.low.push(low);
-        self.source_bars.close.push(c);
-        if let Some(cvd) = self.cvd.as_mut() {
-            let index = self.source_bars.times.len() - 1;
-            let trades = cvd_demo_bar_trades(&self.source_bars, index, &mut cvd.next_trade_id);
-            self.engine
-                .update_trade_stream_trades(cvd.stream_id, trades)
-                .expect("the live GPUI CVD prints extend the stream tip");
-        }
-        if let Some(footprint) = self.footprint {
-            self.engine
-                .set_footprint_trades(
-                    footprint.series_id,
-                    footprint_demo_trades(&self.source_bars),
-                )
-                .expect("the refreshed GPUI footprint tape is valid");
-        }
-        self.appended += 1;
-        self.dirty = true;
-    }
-
-    fn maybe_append_live_bar(&mut self) {
-        if self
-            .frame_budget
-            .is_some_and(|budget| self.painted >= budget)
-        {
-            return;
-        }
-        let epoch = if self.frame_budget.is_some() {
-            self.painted / 60
-        } else {
-            self.started.elapsed().as_secs()
-        };
-        if self.painted > 0 && epoch > self.last_append_epoch {
-            self.last_append_epoch = epoch;
-            self.append_bar();
-        }
-    }
-
     fn record_frame_metrics(&mut self, metrics: GpuiFrameMetrics) {
-        // Finite probe mode retains full samples for percentile reporting. Interactive charts
-        // keep only the latest aggregate so an indefinitely open split workspace is bounded.
-        if self.frame_budget.is_some() {
-            self.plan_nanos.push(metrics.plan_nanos);
-            self.paint_nanos.push(metrics.paint_nanos);
-            self.total_nanos.push(metrics.total_nanos());
-        }
         self.last = metrics;
         self.painted += 1;
     }
@@ -2849,7 +2754,6 @@ impl Render for Probe {
                             }
                             probe.viewport_offset = (offset_x, offset_y);
                             probe.tick_animations();
-                            probe.maybe_append_live_bar();
                             probe.rebuild(w, h, scale_factor, window);
                         });
                         bounds
@@ -4664,15 +4568,6 @@ mod tests {
             .zip(candle_times)
             .all(|(cvd, candle)| (*cvd as f64 - candle).abs() < 1e-9));
 
-        probe.append_bar();
-        rebuild(&mut probe);
-        let (times, ..) = probe
-            .engine
-            .data_layer()
-            .series_data(cvd.series_id)
-            .unwrap();
-        assert_eq!(times.len(), probe.source_bars.times.len());
-
         probe.toggle_cvd();
         probe.toggle_rsi();
         rebuild(&mut probe);
@@ -4768,20 +4663,11 @@ mod tests {
     }
 
     #[test]
-    fn volume_profile_demo_owns_sources_and_tracks_live_append() {
+    fn volume_profile_demo_owns_its_sources() {
         let mut probe = Probe::new_interactive(32);
         probe.toggle_volume_profile();
         let (id, volume) = probe.volume_profile.unwrap();
         probe.engine.time_scale.set_width(1024.0);
-        probe.engine.fit_content();
-        probe.engine.build_frame();
-        let before = probe
-            .engine
-            .volume_profile_indicator_snapshot(id)
-            .unwrap()
-            .profile
-            .total_volume;
-        probe.append_bar();
         probe.engine.fit_content();
         probe.engine.build_frame();
         assert!(
@@ -4791,33 +4677,12 @@ mod tests {
                 .unwrap()
                 .profile
                 .total_volume
-                > before
+                > 0.0
         );
         probe.toggle_volume_profile();
         assert!(probe.volume_profile.is_none());
         assert!(probe.engine.volume_profile_indicator_snapshot(id).is_none());
         assert!(!probe.engine.remove_series(volume));
-    }
-
-    #[test]
-    fn live_append_uses_the_latest_source_cadence() {
-        let mut probe = Probe::new_interactive(3);
-        let previous = *probe.source_bars.times.last().unwrap();
-        probe.append_bar();
-        assert_eq!(probe.source_bars.times.len(), 4);
-        assert_eq!(*probe.source_bars.times.last().unwrap(), previous + 3_600.0);
-
-        let mut hourly = vec![1_600_000_000.0, 1_600_003_600.0, 1_600_007_200.0];
-        let first_append = next_bar_timestamp(&hourly);
-        assert_eq!(first_append, 1_600_010_800.0);
-        hourly.push(first_append);
-        assert_eq!(next_bar_timestamp(&hourly), 1_600_014_400.0);
-
-        assert_eq!(
-            next_bar_timestamp(&[1_600_000_000.0, 1_600_000_060.0]),
-            1_600_000_120.0,
-            "the finite probe's minute cadence remains unchanged"
-        );
     }
 
     #[test]
@@ -5285,25 +5150,6 @@ mod semantic_regressions {
     }
 
     #[test]
-    fn interactive_metrics_are_bounded_while_finite_metrics_are_retained() {
-        let mut interactive = Probe::new(8, None);
-        for _ in 0..10_000 {
-            interactive.record_frame_metrics(GpuiFrameMetrics::default());
-        }
-        assert_eq!(interactive.painted, 10_000);
-        assert!(interactive.plan_nanos.is_empty());
-        assert!(interactive.paint_nanos.is_empty());
-        assert!(interactive.total_nanos.is_empty());
-
-        let mut finite = Probe::new(8, Some(2));
-        finite.record_frame_metrics(GpuiFrameMetrics::default());
-        finite.record_frame_metrics(GpuiFrameMetrics::default());
-        assert_eq!(finite.plan_nanos.len(), 2);
-        assert_eq!(finite.paint_nanos.len(), 2);
-        assert_eq!(finite.total_nanos.len(), 2);
-    }
-
-    #[test]
     fn idle_interactive_probe_stops_requesting_frames() {
         let mut interactive = Probe::new(8, None);
         assert!(!interactive.needs_animation_frame());
@@ -5397,21 +5243,6 @@ mod semantic_regressions {
             .series
             .iter()
             .all(|series| series.id != state.series_id || series.removed));
-    }
-
-    #[test]
-    fn finite_live_append_occurs_once_per_epoch_before_the_frame_budget() {
-        let mut probe = Probe::new(8, Some(120));
-        probe.painted = 59;
-        probe.maybe_append_live_bar();
-        assert_eq!(probe.appended, 0);
-        probe.painted = 60;
-        probe.maybe_append_live_bar();
-        probe.maybe_append_live_bar();
-        assert_eq!(probe.appended, 1);
-        probe.painted = 120;
-        probe.maybe_append_live_bar();
-        assert_eq!(probe.appended, 1);
     }
 
     #[test]
