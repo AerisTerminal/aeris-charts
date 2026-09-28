@@ -45,6 +45,8 @@ pub struct HostLegendSeries<'a> {
     pub series_id: SeriesId,
     pub title: &'a str,
     pub settings_available: bool,
+    /// Use the primary OHLC direction for product series whose value follows the active bar.
+    pub tone_from_primary: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -237,7 +239,11 @@ fn append_host_rows(
             } else {
                 Vec::new()
             },
-            tone: FinancialLegendTone::Neutral,
+            tone: if descriptor.tone_from_primary {
+                snapshot_for(snapshots, 0).map_or(FinancialLegendTone::Neutral, snapshot_tone)
+            } else {
+                FinancialLegendTone::Neutral
+            },
             visible: series.visible,
             settings_available: descriptor.settings_available,
         });
@@ -325,6 +331,7 @@ mod tests {
                 series_id: volume,
                 title: "Volume",
                 settings_available: false,
+                tone_from_primary: true,
             }],
             trailing_series: &[],
         };
@@ -349,6 +356,7 @@ mod tests {
                 series_id: 0,
                 title: "Host",
                 settings_available: false,
+                tone_from_primary: false,
             })
             .collect::<Vec<_>>();
         let rows = chart.financial_legend(FinancialLegendRequest {
