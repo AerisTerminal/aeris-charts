@@ -1557,6 +1557,7 @@ impl ChartEngine {
         self.drawing_controller.pending = None;
         self.drawing_controller.brush = None;
         self.editing_drawing = None;
+        self.drawing_text_edit = None;
         self.hovered_drawing = None;
         self.hovered_text = None;
         #[cfg(not(target_arch = "wasm32"))]
@@ -1877,6 +1878,7 @@ impl ChartEngine {
         self.drawing_controller.pending = None;
         self.drawing_controller.brush = None;
         self.editing_drawing = None;
+        self.drawing_text_edit = None;
         self.hovered_drawing = None;
         self.hovered_text = None;
         for series in &mut self.series {

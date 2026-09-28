@@ -27,13 +27,13 @@ use std::{
 use aeris_charts_core::model::data_layer::SeriesId;
 use aeris_charts_engine::{
     crosshair_mode_from_u8, marker_pos, marker_shape, AggressorSide, BrushRange, BrushStyle,
-    ChartEngine, ChartFrame, DeltaTooltipActiveRange, DeltaTooltipOptions, DrawingKind,
-    DrawingModifiers, DrawingPoint, FootprintAggregationOptions, FootprintBarAggregation,
-    FootprintImbalanceOptions, FootprintSeriesOptions, FootprintTrade, GestureResolver,
-    GestureUpdateKind, InputDevice, InputModifiers, InputTarget, Marker, NativePrimitiveId,
-    PointerSample, PriceLineExtent, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
-    SplitDirection, TradeStudyOptions, WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample,
-    Workspace, WorkspaceLayout,
+    ChartEngine, ChartFrame, DeltaTooltipActiveRange, DeltaTooltipOptions, DrawingId, DrawingKind,
+    DrawingModifiers, DrawingPoint, DrawingTextEditKey, FootprintAggregationOptions,
+    FootprintBarAggregation, FootprintImbalanceOptions, FootprintSeriesOptions, FootprintTrade,
+    GestureResolver, GestureUpdateKind, InputDevice, InputModifiers, InputTarget, Marker,
+    NativePrimitiveId, PointerSample, PriceLineExtent, PriceScaleTarget,
+    PrimitiveAutoscaleContribution, SeriesKind, SplitDirection, TradeStudyOptions, WheelBehavior,
+    WheelDeltaMode, WheelIntent, WheelSample, Workspace, WorkspaceLayout,
 };
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, Prim, TextAlign};
@@ -613,6 +613,12 @@ struct Probe {
     cursor_style: CursorStyle,
     press_start: Option<(f64, f64)>,
     press_moved: bool,
+    /// The drawing selected when the current press began: a selected text drawing opens its
+    /// editor on the next click (the browser host's two-step select-then-type model).
+    text_press_selected: Option<DrawingId>,
+    /// A press on the label being edited: the engine session keeps it, so its release must not
+    /// fall through to click selection (which would reopen and reset the session).
+    press_in_text_editor: bool,
     drag: Option<DragMode>,
     drag_started: bool,
     kinetic_active: bool,
@@ -702,6 +708,8 @@ impl Probe {
             cursor_style: CursorStyle::Crosshair,
             press_start: None,
             press_moved: false,
+            text_press_selected: None,
+            press_in_text_editor: false,
             drag: None,
             drag_started: false,
             kinetic_active: false,
@@ -796,13 +804,37 @@ impl Probe {
         self.dirty = true;
     }
 
+    /// A committed placement. Text-capable tools that request typing open the engine session.
+    fn drawing_created(&mut self, id: DrawingId) {
+        self.click_status = format!("created drawing #{id}");
+        if self.engine.drawing_requests_text_edit(id) {
+            self.engine.begin_drawing_text_edit(id, true);
+        }
+        self.dirty = true;
+    }
+
+    /// Whether a pane point lies on the label the open text session is editing.
+    fn on_text_editor(&self, pane_x: f64, y: f64) -> bool {
+        let Some((editing, _, _)) = self.engine.drawing_text_edit() else {
+            return false;
+        };
+        self.engine.drawing_text_hit_at(pane_x, y) == Some(editing)
+            || self.engine.hit_test_drawing(pane_x, y).is_some_and(|hit| {
+                hit.id == editing
+                    && self
+                        .engine
+                        .drawing(editing)
+                        .is_some_and(|drawing| drawing.kind == DrawingKind::Text)
+            })
+    }
+
     fn place_drawing_anchor(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) -> i64 {
         if self.engine.active_drawing_tool().is_none() {
             return 0;
         }
         let update = self.engine.drawing_tool_activate(x, y, modifiers);
         if let Some(id) = update.created {
-            self.click_status = format!("created drawing #{id}");
+            self.drawing_created(id);
             return i64::from(id);
         }
         if update.consumed {
@@ -817,7 +849,7 @@ impl Probe {
         let Some(id) = update.created else {
             return false;
         };
-        self.click_status = format!("created drawing #{id}");
+        self.drawing_created(id);
         self.dirty = true;
         true
     }
@@ -2079,6 +2111,17 @@ impl Probe {
         self.engine.time_scale_end_scroll();
         self.engine.cancel_scroll_animation();
         let (chart_x, pane_x, y) = self.local_position(event.position);
+        // Typing mode behaves like the browser's focused editor: a press on the edited label
+        // stays in the session, any other press commits it (blur) and proceeds normally.
+        self.press_in_text_editor = self.on_text_editor(pane_x, y);
+        if self.press_in_text_editor {
+            cx.notify();
+            return;
+        }
+        if self.engine.commit_drawing_text_edit() {
+            self.dirty = true;
+        }
+        self.text_press_selected = self.engine.selected_drawing();
         self.input_target = self.input_target_at(chart_x, pane_x, y);
         let sample = self.mouse_sample(pane_x, y, self.input_target, event.modifiers);
         self.input.pointer_down(sample);
@@ -2121,7 +2164,7 @@ impl Probe {
             );
             self.creation_press_committed = update.created.is_some();
             if let Some(id) = update.created {
-                self.click_status = format!("created drawing #{id}");
+                self.drawing_created(id);
             }
             if update.pointer_capture {
                 self.drag = Some(DragMode::DrawingCreation);
@@ -2336,6 +2379,9 @@ impl Probe {
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.press_in_text_editor) {
+            return;
+        }
         let (chart_x, pane_x, y) = self.local_position(event.position);
         let sample = self.mouse_sample(pane_x, y, self.input_target, event.modifiers);
         self.input.pointer_up(sample);
@@ -2394,7 +2440,7 @@ impl Probe {
                 self.flush_pending_drawing_creation();
                 let update = self.engine.drawing_tool_pointer_up(pane_x, y, modifiers);
                 if let Some(id) = update.created {
-                    self.click_status = format!("created drawing #{id}");
+                    self.drawing_created(id);
                 }
                 false
             }
@@ -2419,7 +2465,24 @@ impl Probe {
         if select_click {
             let selected = self.engine.hit_test_series(pane_x, y);
             self.engine.set_selected_series(selected);
-            self.engine.select_drawing_at(pane_x, y);
+            // Browser-host parity: a trend label (or its `+ Add text` prompt) opens typing on the
+            // first click; a text drawing opens it when empty or already selected at press.
+            if let Some(id) = self.engine.drawing_text_hit_at(pane_x, y) {
+                self.engine.set_selected_drawing(Some(id));
+                self.engine.begin_drawing_text_edit(id, true);
+            } else if self.engine.select_drawing_at(pane_x, y) {
+                if let Some(drawing) = self
+                    .engine
+                    .selected_drawing()
+                    .and_then(|id| self.engine.drawing(id))
+                    .filter(|drawing| drawing.kind == DrawingKind::Text)
+                {
+                    let id = drawing.id;
+                    if drawing.text.trim().is_empty() || self.text_press_selected == Some(id) {
+                        self.engine.begin_drawing_text_edit(id, true);
+                    }
+                }
+            }
             self.update_legend(pane_x);
             self.click_status = format!("click x={pane_x:.1} y={y:.1}");
         }
@@ -2535,6 +2598,13 @@ impl Probe {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.engine.drawing_text_edit().is_some() {
+            self.on_text_edit_key(event);
+            self.dirty = true;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         let step = if event.keystroke.modifiers.control || event.keystroke.modifiers.shift {
             10.0
         } else {
@@ -2589,6 +2659,38 @@ impl Probe {
             self.dirty = true;
             cx.stop_propagation();
             cx.notify();
+        }
+    }
+
+    /// Typing mode owns the keyboard: editing keys and committed characters go to the engine
+    /// session; chart and workspace shortcuts stay inert until the session ends.
+    fn on_text_edit_key(&mut self, event: &KeyDownEvent) {
+        let keystroke = &event.keystroke;
+        let key = match keystroke.key.as_str() {
+            "enter" => {
+                self.engine.commit_drawing_text_edit();
+                return;
+            }
+            "escape" => {
+                self.engine.cancel_drawing_text_edit();
+                return;
+            }
+            "backspace" => Some(DrawingTextEditKey::Backspace),
+            "delete" => Some(DrawingTextEditKey::Delete),
+            "left" => Some(DrawingTextEditKey::Left),
+            "right" => Some(DrawingTextEditKey::Right),
+            "home" => Some(DrawingTextEditKey::Home),
+            "end" => Some(DrawingTextEditKey::End),
+            _ => None,
+        };
+        if let Some(key) = key {
+            self.engine.drawing_text_edit_key(key);
+        } else if let Some(text) = keystroke.key_char.as_deref().filter(|_| {
+            // AltGr characters arrive with Ctrl+Alt on Windows; GPUI marks them as text.
+            event.prefer_character_input
+                || (!keystroke.modifiers.control && !keystroke.modifiers.platform)
+        }) {
+            self.engine.drawing_text_edit_insert(text);
         }
     }
 
@@ -4530,6 +4632,57 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Typing mode is engine-owned in GPUI: a new text drawing opens the session, committed
+    /// characters and editing keys reach it, shortcuts never type, and Enter commits.
+    #[test]
+    fn text_drawing_typing_mode_edits_through_the_engine_session() {
+        use gpui::{Keystroke, Modifiers};
+
+        let key = |key: &str, key_char: Option<&str>, modifiers: Modifiers| KeyDownEvent {
+            keystroke: Keystroke {
+                modifiers,
+                key: key.into(),
+                key_char: key_char.map(str::to_string),
+            },
+            is_held: false,
+            prefer_character_input: false,
+        };
+        let mut probe = Probe::new(32, Some(1));
+        let id = probe
+            .engine
+            .add_drawing(
+                DrawingKind::Text,
+                0,
+                vec![DrawingPoint {
+                    logical: 10.0,
+                    price: 100.0,
+                }],
+                None,
+            )
+            .expect("text drawing");
+        probe.drawing_created(id);
+        assert_eq!(probe.engine.editing_drawing(), Some(id));
+
+        for c in ["H", "i", "!"] {
+            probe.on_text_edit_key(&key(c, Some(c), Modifiers::default()));
+        }
+        probe.on_text_edit_key(&key("left", None, Modifiers::default()));
+        probe.on_text_edit_key(&key("backspace", None, Modifiers::default()));
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        probe.on_text_edit_key(&key("z", Some("z"), ctrl));
+        let mut alt_gr = key("q", Some("@"), Modifiers { alt: true, ..ctrl });
+        alt_gr.prefer_character_input = true;
+        probe.on_text_edit_key(&alt_gr);
+        assert_eq!(probe.engine.drawing_text_edit(), Some((id, "H@!", 2)));
+
+        probe.on_text_edit_key(&key("enter", None, Modifiers::default()));
+        assert_eq!(probe.engine.editing_drawing(), None);
+        assert_eq!(probe.engine.drawing(id).unwrap().text, "H@!");
+    }
 
     /// Indicator panes share the content height with the primary pane. Adding one must not trip
     /// the layout self-check, and CVD must be a real trade-derived study aligned to the candles.

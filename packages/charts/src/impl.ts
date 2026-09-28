@@ -3762,7 +3762,6 @@ export class chart_impl implements chart_api {
   private text_editor_id = 0;
   /** Snapshot of the drawing's text when the editor opened — restored on Escape. */
   private text_editor_original = "";
-  private text_editor_mode: "standalone_text" | "trend_label" | null = null;
   /**
    * The drawing selection snapshotted at pointer-DOWN, before the engine's drag grab selects
    * the hit (gestures.ts calls `note_drawing_press`). `emit_click` reads it for the public reference's
@@ -6001,8 +6000,8 @@ export class chart_impl implements chart_api {
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Inline drawing editors. Standalone text and trend labels share only the low-level caret
-  // surface; each enters with an explicit product mode and owns a different empty lifecycle.
+  // Inline drawing editors. The DOM surface supplies IME/clipboard-aware input and the caret;
+  // the engine typing session owns live text and the per-kind commit/cancel/empty lifecycle.
   // ---------------------------------------------------------------------------------------------
 
   /**
@@ -6013,17 +6012,14 @@ export class chart_impl implements chart_api {
    * restores the pre-edit text. Leaving empty removes the drawing.
    */
   open_text_editor(drawing: drawing_api): void {
-    this.open_inline_editor(drawing, "standalone_text");
+    this.open_inline_editor(drawing);
   }
 
   private open_trend_label_editor(drawing: drawing_api): void {
-    this.open_inline_editor(drawing, "trend_label");
+    this.open_inline_editor(drawing);
   }
 
-  private open_inline_editor(
-    drawing: drawing_api,
-    mode: "standalone_text" | "trend_label",
-  ): void {
+  private open_inline_editor(drawing: drawing_api): void {
     this.close_text_editor(true);
     let transform = this.wasm.drawing_text_transform(drawing.id);
     if (transform.length !== 3) return;
@@ -6173,9 +6169,21 @@ export class chart_impl implements chart_api {
       wrap.style.transform = `rotate(${transform[2]!}rad)`;
       position_caret();
     };
+    // The engine session owns the live label and its lifecycle; the DOM surface only supplies
+    // IME/clipboard-aware input, so it mirrors its value and caret on every change.
+    const caret_offset = (text: string) => {
+      const selection = window.getSelection();
+      if (selection?.anchorNode && editor.contains(selection.anchorNode)) {
+        const prefix = document.createRange();
+        prefix.selectNodeContents(editor);
+        prefix.setEnd(selection.anchorNode, selection.anchorOffset);
+        return Array.from(prefix.toString()).length;
+      }
+      return Array.from(text).length;
+    };
     const push_live_text = () => {
       const text = (editor.textContent ?? "").replace(/\s*\n\s*/g, " ");
-      this.wasm.drawing_apply_options(this.text_editor_id, JSON.stringify({ text }));
+      this.wasm.set_drawing_text_edit(text, caret_offset(text));
       this.repaint();
     };
     const set_width = () => {
@@ -6218,7 +6226,6 @@ export class chart_impl implements chart_api {
     this.text_editor = editor;
     this.text_editor_id = drawing.id;
     this.text_editor_original = options.text ?? "";
-    this.text_editor_mode = mode;
     // Width without a live push yet (avoids a redundant apply of the same text).
     if (measure_ctx !== null) {
       measure_ctx.font = font;
@@ -6242,7 +6249,12 @@ export class chart_impl implements chart_api {
     };
     // Marks typing mode for hosts; the engine keeps painting the label and the focus border
     // underneath this borderless caret overlay (no outline handoff).
-    this.wasm.set_editing_drawing(drawing.id);
+    if (!this.wasm.begin_drawing_text_edit(drawing.id, false)) {
+      this.text_editor = null;
+      this.text_editor_reposition = null;
+      wrap.remove();
+      return;
+    }
     this.repaint();
     editor.focus();
     const selection = window.getSelection();
@@ -6267,22 +6279,13 @@ export class chart_impl implements chart_api {
     this.text_editor_reposition = null;
     const wrap = this.container.querySelector("#aeris_charts-text-editor");
     wrap?.remove();
-    this.wasm.set_editing_drawing(undefined);
-    const id = this.text_editor_id;
-    const text = (editor.textContent ?? "").replace(/\s*\n\s*/g, " ").trim();
-    if (commit) {
-      if (text === "" && this.text_editor_mode === "standalone_text") {
-        this.wasm.remove_drawing(id);
-      } else {
-        this.wasm.drawing_apply_options(id, JSON.stringify({ text }));
-      }
-    } else if (!this.text_editor_original.trim() && this.text_editor_mode === "standalone_text") {
-      this.wasm.remove_drawing(id);
-    } else {
-      this.wasm.drawing_apply_options(id, JSON.stringify({ text: this.text_editor_original }));
-    }
+    // Commit/cancel semantics (trim, restore, empty standalone removal) are engine-owned so
+    // every host shares them; the final DOM value is mirrored first.
+    const text = (editor.textContent ?? "").replace(/\s*\n\s*/g, " ");
+    this.wasm.set_drawing_text_edit(text, Array.from(text).length);
+    if (commit) this.wasm.commit_drawing_text_edit();
+    else this.wasm.cancel_drawing_text_edit();
     this.text_editor_original = "";
-    this.text_editor_mode = null;
     this.repaint();
     this.overlay_el().focus();
   }

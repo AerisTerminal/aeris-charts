@@ -1484,6 +1484,7 @@ impl ChartEngine {
         }
         if self.editing_drawing == Some(id) {
             self.editing_drawing = None;
+            self.drawing_text_edit = None;
         }
         if self.hovered_text == Some(id) {
             self.hovered_text = None;
@@ -1540,6 +1541,7 @@ impl ChartEngine {
                 self.selected_drawing = None;
                 self.drawing_drag = None;
                 self.editing_drawing = None;
+                self.drawing_text_edit = None;
                 self.hovered_drawing = None;
                 self.hovered_text = None;
             }
@@ -2482,6 +2484,7 @@ impl ChartEngine {
         self.hovered_drawing = None;
         self.hovered_text = None;
         self.editing_drawing = None;
+        self.drawing_text_edit = None;
         self.record_drawing_command(DrawingCommand::Clear { drawings });
         self.bump_drawing_sync_revision();
     }
@@ -3051,6 +3054,14 @@ impl ChartEngine {
             self.invalidate_frame_overlay();
         }
         self.editing_drawing = valid;
+        // A session belongs to exactly one editing drawing; any other target ends it.
+        if self
+            .drawing_text_edit
+            .as_ref()
+            .is_some_and(|session| Some(session.id) != valid)
+        {
+            self.drawing_text_edit = None;
+        }
     }
 
     pub fn editing_drawing(&self) -> Option<DrawingId> {

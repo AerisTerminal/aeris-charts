@@ -262,6 +262,7 @@ impl ChartEngine {
                 .collect::<Vec<_>>();
             self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
             self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+            self.build_drawing_text_caret(drawing, &px, pane_w_px, vpr, out, points);
             self.build_drawing_labels(drawing, &px, vpr, out);
         }
     }
@@ -304,6 +305,7 @@ impl ChartEngine {
                 let point_start = points.len();
                 self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+                self.build_drawing_text_caret(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_labels(drawing, &px, vpr, out);
                 parts.push(super::RetainedDrawingPart {
                     id: drawing.id,
@@ -340,6 +342,7 @@ impl ChartEngine {
                 let point_start = points.len();
                 self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+                self.build_drawing_text_caret(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_labels(drawing, &px, vpr, out);
                 parts.push(super::RetainedDrawingPart {
                     id: drawing.id,
@@ -988,6 +991,77 @@ impl ChartEngine {
     /// The text run's resolved glyph size (bitmap px, placeholder floor included), aligned
     /// anchor point, and horizontal alignment — shared by the label prim, the container box,
     /// and the focus/hover chrome so every consumer draws the same geometry.
+    /// Label ink: explicit text color, then a trend label's line color, then chart foreground.
+    fn drawing_text_color(&self, drawing: &Drawing) -> Color {
+        drawing
+            .text_color
+            .as_deref()
+            .and_then(Color::parse_css)
+            .or_else(|| {
+                (drawing.kind == DrawingKind::TrendLine)
+                    .then(|| Color::parse_css(&drawing.color))
+                    .flatten()
+            })
+            .or_else(|| Color::parse_css(&self.options.get().layout.text_color))
+            .unwrap_or_else(|| {
+                let fallback = aeris_charts_core::style::DEFAULT_FOREGROUND_RGB;
+                Color::rgb(fallback.0, fallback.1, fallback.2)
+            })
+    }
+
+    /// The engine-painted caret of an open drawing text session (native hosts). It sits on the
+    /// label's own transform: the run's measured advance places it, and it rotates with a trend
+    /// label. An empty run uses the one-em editing slot the middle-line cutout reserves.
+    fn build_drawing_text_caret(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        pane_w_px: i32,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+    ) {
+        let Some(session) = self
+            .drawing_text_edit
+            .as_ref()
+            .filter(|session| session.id == drawing.id && session.paint_caret)
+        else {
+            return;
+        };
+        let (size, x, y, align, angle) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
+        let text = drawing.display_text();
+        let advance = if text.is_empty() {
+            size
+        } else {
+            self.measure_drawing_frame_text(drawing, text, size)
+        };
+        let prefix: String = text.chars().take(session.caret).collect();
+        let start = match align {
+            DrawingTextHAlign::Left => 0.0,
+            DrawingTextHAlign::Center => -advance / 2.0,
+            DrawingTextHAlign::Right => -advance,
+        };
+        let local_x = start + self.measure_drawing_frame_text(drawing, &prefix, size);
+        let half_height = size * 0.6;
+        let (sin, cos) = angle.sin_cos();
+        let at = |local_y: f64| {
+            [
+                (x + cos * local_x - sin * local_y) as f32,
+                (y + sin * local_x + cos * local_y) as f32,
+            ]
+        };
+        let first_point = points.len() as u32;
+        points.extend([at(-half_height), at(half_height)]);
+        out.push(Prim::Polyline {
+            first_point,
+            point_count: 2,
+            width: vpr.max(1.0) as f32,
+            style: LineStyle::Solid,
+            line_type: LineType::Simple,
+            color: self.drawing_text_color(drawing),
+        });
+    }
+
     fn text_run_geometry(
         &self,
         drawing: &Drawing,
@@ -1073,20 +1147,7 @@ impl ChartEngine {
         let is_text_tool = drawing.kind == DrawingKind::Text;
         let (size, x, y, align, angle) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
         let layout = &self.options.get().layout;
-        let mut color = drawing
-            .text_color
-            .as_deref()
-            .and_then(Color::parse_css)
-            .or_else(|| {
-                (drawing.kind == DrawingKind::TrendLine)
-                    .then(|| Color::parse_css(&drawing.color))
-                    .flatten()
-            })
-            .or_else(|| Color::parse_css(&layout.text_color))
-            .unwrap_or_else(|| {
-                let fallback = aeris_charts_core::style::DEFAULT_FOREGROUND_RGB;
-                Color::rgb(fallback.0, fallback.1, fallback.2)
-            });
+        let mut color = self.drawing_text_color(drawing);
         if placeholder {
             color = Color::rgba(
                 color.r(),

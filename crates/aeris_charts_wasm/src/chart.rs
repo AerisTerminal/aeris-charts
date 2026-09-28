@@ -4934,6 +4934,30 @@ impl AerisChart {
     pub fn set_editing_drawing(&mut self, id: Option<u32>) {
         self.inner.borrow_mut().engine.set_editing_drawing(id);
     }
+    /// Open the engine-owned typing session for a text drawing or trend label. The browser keeps
+    /// its native editable surface (IME, clipboard, accessibility) and paints its own caret, so it
+    /// passes `paint_caret = false`; the engine owns the live text and commit/cancel lifecycle.
+    pub fn begin_drawing_text_edit(&mut self, id: u32, paint_caret: bool) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .begin_drawing_text_edit(id, paint_caret)
+    }
+    /// Mirror the editable surface into the session: its whole value and caret (in chars).
+    pub fn set_drawing_text_edit(&mut self, text: &str, caret: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_drawing_text_edit(text, caret as usize)
+    }
+    /// Enter/blur: keep the typed text (an empty standalone text drawing is removed).
+    pub fn commit_drawing_text_edit(&mut self) -> bool {
+        self.inner.borrow_mut().engine.commit_drawing_text_edit()
+    }
+    /// Escape: restore the pre-edit text (a fresh empty standalone text drawing is removed).
+    pub fn cancel_drawing_text_edit(&mut self) -> bool {
+        self.inner.borrow_mut().engine.cancel_drawing_text_edit()
+    }
     pub fn selected_drawing(&self) -> Option<u32> {
         self.inner.borrow().selected_drawing()
     }

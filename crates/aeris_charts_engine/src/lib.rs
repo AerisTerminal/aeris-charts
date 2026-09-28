@@ -11,6 +11,7 @@ mod axis_primitives;
 mod depth;
 mod domains;
 mod drawing_contract;
+mod drawing_text_edit;
 mod drawings;
 mod feature_series;
 mod footprint;
@@ -74,6 +75,7 @@ pub use drawing_contract::{
     MAX_DRAWING_LEVELS, MAX_DRAWING_NAME_BYTES, MAX_DRAWING_OBJECTS, MAX_DRAWING_TEMPLATES,
     MAX_DRAWING_TEMPLATE_BYTES,
 };
+pub use drawing_text_edit::DrawingTextEditKey;
 pub use drawings::{
     Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId, DrawingKind,
     DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats, TextMeasureFn,
@@ -1748,6 +1750,9 @@ pub struct ChartEngine {
     /// Frame construction keeps committed glyphs for the transparent overlay-caret model and
     /// keeps an empty trend label's measured middle gap while its editor is open.
     editing_drawing: Option<DrawingId>,
+    /// Engine-owned typing session for `editing_drawing` (drawing_text_edit.rs): live text,
+    /// caret, and the commit/cancel lifecycle shared by every host.
+    drawing_text_edit: Option<drawing_text_edit::DrawingTextEditSession>,
     /// The text drawing under the host's pointer (drawings.rs): the overlay frame paints its
     /// focus border at hover opacity (the public reference's hover ring). Only the text tool has hover
     /// chrome — other kinds show nothing until selected.
@@ -1906,6 +1911,7 @@ impl ChartEngine {
             drawing_sync_source: String::new(),
             drawing_sync_revision: 0,
             editing_drawing: None,
+            drawing_text_edit: None,
             hovered_text: None,
             hovered_drawing: None,
             text_measure_fn: None,

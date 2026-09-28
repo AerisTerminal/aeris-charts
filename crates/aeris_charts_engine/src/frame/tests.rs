@@ -10045,6 +10045,80 @@ fn rotated_trend_label_hit_test_uses_label_local_coordinates() {
 }
 
 #[test]
+fn native_text_session_paints_a_rotated_caret_that_follows_the_typed_run() {
+    use crate::{DrawingKind, DrawingPoint, DrawingTextEditKey};
+
+    // The caret is the one polyline in the label's ink that is not a line segment.
+    fn caret(chart: &mut ChartEngine) -> Option<[[f32; 2]; 2]> {
+        let frame = chart.build_frame();
+        let pane = &frame.panes[0];
+        pane.main.iter().find_map(|prim| match prim {
+            Prim::Polyline {
+                first_point,
+                point_count: 2,
+                color,
+                ..
+            } if *color == Color::rgb(0x24, 0x68, 0xac) => {
+                let first = *first_point as usize;
+                Some([pane.points[first], pane.points[first + 1]])
+            }
+            _ => None,
+        })
+    }
+
+    let mut chart = anchor_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 4.0,
+                    price: 12.5,
+                },
+            ],
+            Some(r##"{"color":"#123456","text_color":"#2468ac","text_h_align":"center"}"##),
+        )
+        .unwrap();
+
+    // A browser host paints its own caret, so the engine draws none.
+    assert!(chart.begin_drawing_text_edit(id, false));
+    assert!(caret(&mut chart).is_none());
+    assert!(chart.cancel_drawing_text_edit());
+
+    assert!(chart.begin_drawing_text_edit(id, true));
+    let empty = caret(&mut chart).expect("native session paints a caret on an empty label");
+    assert!(chart.drawing_text_edit_insert("breakout"));
+    let end = caret(&mut chart).unwrap();
+    let (_, _, angle) = chart.drawing_text_transform(id).unwrap();
+    // The caret stands perpendicular to the rotated run and advances along it as text grows.
+    let stroke = (end[1][0] - end[0][0], end[1][1] - end[0][1]);
+    let along = (angle.cos() as f32, angle.sin() as f32);
+    assert!((stroke.0 * along.0 + stroke.1 * along.1).abs() < 1e-3);
+    let advance = (end[0][0] - empty[0][0]) * along.0 + (end[0][1] - empty[0][1]) * along.1;
+    assert!(
+        advance > 1.0,
+        "typed text must move the caret along the label"
+    );
+
+    assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Home));
+    let home = caret(&mut chart).unwrap();
+    let back = (home[0][0] - end[0][0]) * along.0 + (home[0][1] - end[0][1]) * along.1;
+    assert!(
+        back < -1.0,
+        "Home must move the caret to the start of the run"
+    );
+
+    assert!(chart.commit_drawing_text_edit());
+    assert!(caret(&mut chart).is_none());
+    assert_eq!(chart.drawing(id).unwrap().text, "breakout");
+}
+
+#[test]
 fn middle_trend_label_gap_shrinks_to_the_caret_then_expands_with_text() {
     use crate::{DrawingKind, DrawingPoint};
 
