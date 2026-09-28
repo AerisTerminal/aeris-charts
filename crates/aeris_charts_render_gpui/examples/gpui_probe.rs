@@ -1841,9 +1841,10 @@ impl Probe {
             && pane_x <= self.engine.pane_w
             && y >= 0.0
             && y <= self.engine.pane_h)
-            .then(|| self.engine.hit_test_drawing(pane_x, y))
+            .then(|| self.engine.drawing_hover_at(pane_x, y))
             .flatten()
-            .map(|hit| match hit.cursor {
+            .map(|(_, cursor)| match cursor {
+                "text" => CursorStyle::IBeam,
                 "pointer" => CursorStyle::PointingHand,
                 "move" => CursorStyle::ClosedHand,
                 "ns-resize" => CursorStyle::ResizeUpDown,
@@ -2008,13 +2009,11 @@ impl Probe {
             // overlaps stay selectable, clears the series bump, and drives generic hover
             // promotion plus the text-only hover ring. Hit testing stays on stable order so
             // promotion cannot oscillate hover.
-            if let Some(drawing) = self.engine.hit_test_drawing(pane_x, y) {
+            // Engine-owned arbitration: a trend label or its `+ Add text` prompt wins before
+            // the drawing body, so moving onto the label keeps the prompt clickable.
+            if self.engine.update_drawing_hover(pane_x, y).is_some() {
                 self.engine.set_hovered_series(None);
-                self.engine.set_hovered_text(Some(drawing.id));
-                self.engine.set_hovered_drawing(Some(drawing.id));
             } else {
-                self.engine.set_hovered_text(None);
-                self.engine.set_hovered_drawing(None);
                 let hovered = self.engine.hit_test_series(pane_x, y);
                 self.engine.set_hovered_series(hovered);
             }
@@ -5075,6 +5074,42 @@ mod tests {
         assert_eq!(probe.drawing_template.color, "#ff9800");
         assert_eq!(probe.drawing_template.width, 4);
         assert!(probe.drawing_template.text_italic);
+    }
+
+    /// Moving from a trend line onto its `+ Add text` prompt keeps the prompt hovered with the
+    /// text cursor (the browser's engine-owned arbitration), so the label stays clickable.
+    #[test]
+    fn trend_label_prompt_stays_hovered_with_a_text_cursor() {
+        let mut probe = Probe::new(64, Some(1));
+        let rebuild = |probe: &mut Probe| {
+            probe.rebuild_with_measure(
+                1024.0,
+                640.0,
+                1.0,
+                |text, _bold| text.chars().count() as f64 * 7.0,
+                |text, _bold| text.chars().count() as f64 * 6.0,
+            );
+        };
+        rebuild(&mut probe);
+        probe.engine.clear_drawings();
+        probe.arm_drawing(DrawingKind::TrendLine);
+        probe.place_drawing_anchor(200.0, 300.0, DrawingModifiers::default());
+        let id = probe.place_drawing_anchor(600.0, 300.0, DrawingModifiers::default()) as u32;
+        rebuild(&mut probe);
+
+        // Right/top template: the prompt sits above the line near its right end, off the body.
+        let (x, y, _) = probe.engine.drawing_text_transform(id).unwrap();
+        let (label_x, label_y) = (x - 20.0, y);
+        assert!(probe.engine.hit_test_drawing(label_x, label_y).is_none());
+        probe.update_crosshair(label_x, label_y);
+        probe.update_cursor(label_x + probe.engine.pane_left, label_y);
+        assert_eq!(probe.engine.hovered_text(), Some(id));
+        assert_eq!(probe.cursor_style, CursorStyle::IBeam);
+        rebuild(&mut probe);
+        assert!(probe.frame.panes[0].main.iter().any(|prim| matches!(
+            prim,
+            Prim::RotatedText { text, .. } if text == "+ Add text"
+        )));
     }
 
     /// The native template matches the browser toolbar: a new trend line has no label (so it

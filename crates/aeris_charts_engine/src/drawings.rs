@@ -2987,6 +2987,28 @@ impl ChartEngine {
         hit
     }
 
+    /// The drawing under a media-px pointer and the cursor it shows. A trend label or its
+    /// `+ Add text` prompt wins with the text cursor, so moving from the line onto the label
+    /// keeps the affordance; otherwise the body/handle hit and its drag cursor. Pure: hosts use
+    /// it to resolve cursors without changing hover state.
+    pub fn drawing_hover_at(&self, x: f64, y: f64) -> Option<(DrawingId, &'static str)> {
+        if let Some(id) = self.drawing_text_hit_at(x, y) {
+            return Some((id, "text"));
+        }
+        self.hit_test_drawing(x, y).map(|hit| (hit.id, hit.cursor))
+    }
+
+    /// Canonical drawing hover for every host: resolves [`Self::drawing_hover_at`] and applies
+    /// the generic hover promotion plus the text hover ring / trend `+ Add text` prompt, or
+    /// clears both. Returns the hovered drawing and its cursor.
+    pub fn update_drawing_hover(&mut self, x: f64, y: f64) -> Option<(DrawingId, &'static str)> {
+        let hover = self.drawing_hover_at(x, y);
+        let id = hover.map(|(id, _)| id);
+        self.set_hovered_text(id);
+        self.set_hovered_drawing(id);
+        hover
+    }
+
     /// Every drawing as a JSON array of `{id, kind, pane_index, points, ...options}` in z-order.
     pub fn drawings_json(&self) -> String {
         let list: Vec<serde_json::Value> = self
