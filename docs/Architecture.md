@@ -789,6 +789,12 @@ metadata, timestamps, and nullable values. The engine validates the complete pub
 mutation and owns its bounded output registry, generation fence, series and dedicated-pane lifecycle,
 price-format inheritance, retained chrome, group visibility, and group removal. Provider sessions and
 the computation of those values remain host-runtime responsibilities.
+Order-flow presentation is likewise installed and removed as one engine transaction. The engine
+owns the shared trade-stream graph, footprint/CVD/delta series and panes, candle-to-footprint
+cutover, retained indicator chrome, bounded adaptive bubble threshold, and automatic 1-2-5 row-size
+policy. A product host supplies instrument/provider generation fencing, canonical bounded trades,
+bar aggregation intent, current price metadata, and presentation preferences; it does not assemble
+or tear down the dependent chart graph itself.
 Financial
 study persistence V3 stores binding definitions, dependency references, scalar inputs, volume inputs,
 and output styles while leaving market history and ordinary series data host-owned. Trade, quote, and

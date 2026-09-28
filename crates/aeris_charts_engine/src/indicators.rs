@@ -430,6 +430,7 @@ impl ChartEngine {
             }
         }
         changed |= self.apply_indicator_chrome_to_external_studies(options);
+        changed |= self.apply_indicator_chrome_to_trade_studies(options);
         if changed {
             self.invalidate_frame_layout_and_axis();
         }

@@ -96,13 +96,15 @@ pub use feature_series::{
     StackedAreaColor,
 };
 pub use footprint::{
-    AggressorSide, BarSequence, BarSequenceMapping, BarSequencePoint, CumulativeDeltaReset,
-    FootprintAggregationOptions, FootprintAggregator, FootprintBar, FootprintBarAggregation,
-    FootprintCellMode, FootprintError, FootprintImbalanceOptions, FootprintLevel,
-    FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind, FootprintVisualOptions,
-    FootprintWorkStats, ReplayClockStats, ReplaySeekStats, TimeAndSalesOptions, TimeAndSalesRow,
-    TradeBubbleOptions, TradeStreamStats, TradeStudyKind, TradeStudyOptions,
+    adaptive_trade_bubble_threshold, auto_footprint_ticks_per_row, AggressorSide, BarSequence,
+    BarSequenceMapping, BarSequencePoint, CumulativeDeltaReset, FootprintAggregationOptions,
+    FootprintAggregator, FootprintBar, FootprintBarAggregation, FootprintCellMode, FootprintError,
+    FootprintImbalanceOptions, FootprintLevel, FootprintSeriesOptions, FootprintTrade,
+    FootprintUpdateKind, FootprintVisualOptions, FootprintWorkStats, OrderFlowPresentation,
+    OrderFlowPresentationOptions, ReplayClockStats, ReplaySeekStats, TimeAndSalesOptions,
+    TimeAndSalesRow, TradeBubbleOptions, TradeStreamStats, TradeStudyKind, TradeStudyOptions,
     MAX_TIME_AND_SALES_ROWS, MAX_TRADE_STREAMS, MAX_TRADE_STREAM_KEY_BYTES,
+    ORDER_FLOW_SWEEP_WINDOW_MICROS, ORDER_FLOW_TRADE_BUBBLE_CAPACITY,
 };
 pub use frame::{
     AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,
