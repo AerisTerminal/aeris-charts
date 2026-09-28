@@ -32,8 +32,8 @@ use aeris_charts_engine::{
     FootprintImbalanceOptions, FootprintSeriesOptions, FootprintTrade, GestureResolver,
     GestureUpdateKind, InputDevice, InputModifiers, InputTarget, Marker, NativePrimitiveId,
     PointerSample, PriceLineExtent, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
-    SplitDirection, WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample, Workspace,
-    WorkspaceLayout,
+    SplitDirection, TradeStudyOptions, WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample,
+    Workspace, WorkspaceLayout,
 };
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, Prim, TextAlign};
@@ -219,6 +219,14 @@ const TOOLBAR_FEATURE_MANIFEST: &[&str] = &[
     "native-visual-approximations:day-bands,position-band,autoscale-band,markers,vertical-line",
 ];
 
+/// The CVD study's canonical trade stream, its line series, and the next synthetic trade id.
+#[derive(Clone, Copy)]
+struct CvdDemoState {
+    stream_id: u64,
+    series_id: SeriesId,
+    next_trade_id: u64,
+}
+
 /// Column-major OHLC, in the shape `ChartEngine::set_series_data` takes.
 #[derive(Clone)]
 struct Bars {
@@ -375,6 +383,51 @@ fn footprint_demo_trades(bars: &Bars) -> Vec<FootprintTrade> {
                 session_id: Some(1),
             });
             trade_id += 1;
+        }
+    }
+    trades
+}
+
+/// One minute bar's synthetic prints for the CVD study: an open → extreme → extreme → close
+/// path whose aggressor mix follows the bar direction, so cumulative delta tracks the candles.
+fn cvd_demo_bar_trades(bars: &Bars, index: usize, trade_id: &mut u64) -> Vec<FootprintTrade> {
+    let (open, high, low, close) = (
+        bars.open[index],
+        bars.high[index],
+        bars.low[index],
+        bars.close[index],
+    );
+    let path = if close >= open {
+        [open, low, high, close]
+    } else {
+        [open, high, low, close]
+    };
+    let start_micros = bars.times[index] as i64 * 1_000_000;
+    let buy_share = (0.5 + (close - open) / (high - low).max(1e-9) * 0.4).clamp(0.1, 0.9);
+    let mut trades = Vec::with_capacity(path.len() * 2);
+    for (step, price) in path.into_iter().enumerate() {
+        let volume = 40.0 + ((index * 7 + step * 13) % 23) as f64;
+        for (offset, (side, share)) in [
+            (AggressorSide::Buy, buy_share),
+            (AggressorSide::Sell, 1.0 - buy_share),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            trades.push(FootprintTrade {
+                timestamp_micros: start_micros + (step * 2 + offset) as i64 * 1_000_000 + 1,
+                // Real prints trade on the stream's 0.01 tick grid.
+                price: (price * 100.0).round() / 100.0,
+                volume: (volume * share).round().max(1.0),
+                aggressor: side,
+                bid: None,
+                ask: None,
+                sequence: None,
+                trade_id: Some(*trade_id),
+                conditions: 0,
+                session_id: Some(1),
+            });
+            *trade_id += 1;
         }
     }
     trades
@@ -575,6 +628,7 @@ struct Probe {
     volume_id: Option<SeriesId>,
     volume_profile: Option<(u32, SeriesId)>,
     rsi_id: Option<SeriesId>,
+    cvd: Option<CvdDemoState>,
     legend: String,
     click_status: String,
     bars: usize,
@@ -663,6 +717,7 @@ impl Probe {
             volume_id: None,
             volume_profile: None,
             rsi_id: None,
+            cvd: None,
             legend: "O —  H —  L —  C —".to_string(),
             click_status: "ready".to_string(),
             bars,
@@ -1155,6 +1210,74 @@ impl Probe {
         self.dirty = true;
     }
 
+    /// CVD derives from trades, not OHLC: build a one-minute trade stream from the demo candles
+    /// and let the engine's cumulative-delta study own the line in its own pane.
+    fn toggle_cvd(&mut self) {
+        if let Some(cvd) = self.cvd.take() {
+            self.engine.remove_series(cvd.series_id);
+            let _ = self.engine.remove_trade_stream(cvd.stream_id);
+            self.dirty = true;
+            return;
+        }
+        // Anchor the one-minute buckets on the candle opens so every CVD point shares its
+        // candle's timestamp instead of interleaving new time points.
+        let anchor_micros = self
+            .source_bars
+            .times
+            .first()
+            .map_or(0, |&time| (time as i64).rem_euclid(60) * 1_000_000);
+        let Ok(stream_id) = self.engine.add_trade_stream(
+            "GPUI:CVD",
+            FootprintAggregationOptions {
+                tick_size: 0.01,
+                ticks_per_row: 1,
+                bars: FootprintBarAggregation::Time {
+                    interval_micros: 60_000_000,
+                    anchor_micros,
+                },
+                imbalance: FootprintImbalanceOptions::default(),
+            },
+        ) else {
+            self.click_status = "CVD: trade stream unavailable".into();
+            return;
+        };
+        let mut next_trade_id = 1;
+        let trades = (0..self.source_bars.times.len())
+            .flat_map(|index| cvd_demo_bar_trades(&self.source_bars, index, &mut next_trade_id))
+            .collect::<Vec<_>>();
+        let pane = self.engine.panes.len();
+        let installed = self
+            .engine
+            .set_trade_stream_trades(stream_id, trades)
+            .and_then(|_| {
+                self.engine
+                    .add_cvd_series(stream_id, pane, TradeStudyOptions::default())
+            });
+        match installed {
+            Ok(series_id) => {
+                if let Some(series) = self
+                    .engine
+                    .series
+                    .iter_mut()
+                    .find(|series| series.id == series_id && !series.removed)
+                {
+                    series.line_color = Some("#26a69a".into());
+                    series.line_width = Some(2.0);
+                }
+                self.cvd = Some(CvdDemoState {
+                    stream_id,
+                    series_id,
+                    next_trade_id,
+                });
+            }
+            Err(error) => {
+                let _ = self.engine.remove_trade_stream(stream_id);
+                self.click_status = format!("CVD: {error}");
+            }
+        }
+        self.dirty = true;
+    }
+
     fn toggle_markers(&mut self) {
         self.fixtures.markers = !self.fixtures.markers;
         let markers = if self.fixtures.markers && !self.source_bars.times.is_empty() {
@@ -1431,7 +1554,10 @@ impl Probe {
             .expect("the probe engine always has a primary pane");
         let expected_x_px = (self.engine.pane_left * self.engine.dpr).round() as u32;
         let expected_w_px = (self.engine.pane_w * self.engine.dpr).round() as u32;
-        let expected_h_px = (content_h * self.engine.dpr).round() as u32;
+        // The primary pane shares the content height with any indicator panes below it, so its
+        // scissor follows the engine's own vertical pixel ratio for that pane's height.
+        let vpr = (content_h * self.engine.dpr).round().max(1.0) / content_h.max(1.0);
+        let expected_h_px = (self.engine.panes[0].height * vpr).round() as u32;
         assert!(
             (self.engine.pane_left + self.engine.pane_w + self.engine.axis_w - f64::from(width))
                 .abs()
@@ -1581,6 +1707,13 @@ impl Probe {
         self.source_bars.high.push(high);
         self.source_bars.low.push(low);
         self.source_bars.close.push(c);
+        if let Some(cvd) = self.cvd.as_mut() {
+            let index = self.source_bars.times.len() - 1;
+            let trades = cvd_demo_bar_trades(&self.source_bars, index, &mut cvd.next_trade_id);
+            self.engine
+                .update_trade_stream_trades(cvd.stream_id, trades)
+                .expect("the live GPUI CVD prints extend the stream tip");
+        }
         if let Some(footprint) = self.footprint {
             self.engine
                 .set_footprint_trades(
@@ -2798,6 +2931,7 @@ enum DemoAction {
     Volume,
     VolumeProfile,
     Rsi,
+    Cvd,
     Split(SplitDirection),
     Close,
     Cap,
@@ -3167,6 +3301,7 @@ impl InteractiveDemo {
             DemoAction::Volume => self.update_root(cx, Probe::toggle_volume),
             DemoAction::VolumeProfile => self.update_root(cx, Probe::toggle_volume_profile),
             DemoAction::Rsi => self.update_root(cx, Probe::toggle_rsi),
+            DemoAction::Cvd => self.update_root(cx, Probe::toggle_cvd),
             DemoAction::Split(direction) => self.split(direction, true, cx),
             DemoAction::Close => self.close_active(),
             DemoAction::Cap => {
@@ -3428,6 +3563,9 @@ impl InteractiveDemo {
             DemoAction::Rsi => root
                 .as_ref()
                 .is_some_and(|chart| chart.read(cx).rsi_id.is_some()),
+            DemoAction::Cvd => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).cvd.is_some()),
             DemoAction::Cap => self.max_index != 0,
             DemoAction::Drawing(kind) => root
                 .as_ref()
@@ -3897,6 +4035,7 @@ impl Render for InteractiveDemo {
                     b("volume overlay", DemoAction::Volume),
                     b("volume profile", DemoAction::VolumeProfile),
                     b("RSI(14) pane", DemoAction::Rsi),
+                    b("CVD pane", DemoAction::Cvd),
                 ],
             ),
             self.group(
@@ -4367,6 +4506,55 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Indicator panes share the content height with the primary pane. Adding one must not trip
+    /// the layout self-check, and CVD must be a real trade-derived study aligned to the candles.
+    #[test]
+    fn indicator_panes_rebuild_and_cvd_follows_the_candle_times() {
+        let mut probe = Probe::new(64, Some(1));
+        let rebuild = |probe: &mut Probe| {
+            probe.rebuild_with_measure(
+                1024.0,
+                640.0,
+                1.25,
+                |text, _| text.len() as f64 * 7.0,
+                |text, _| text.len() as f64 * 6.0,
+            );
+        };
+        rebuild(&mut probe);
+        probe.toggle_rsi();
+        rebuild(&mut probe);
+        probe.toggle_cvd();
+        rebuild(&mut probe);
+        assert_eq!(probe.engine.panes.len(), 3, "{}", probe.click_status);
+
+        let cvd = probe.cvd.expect("CVD installs from the demo trade tape");
+        let (times, ..) = probe
+            .engine
+            .data_layer()
+            .series_data(cvd.series_id)
+            .unwrap();
+        let candle_times = &probe.source_bars.times;
+        assert_eq!(times.len(), candle_times.len());
+        assert!(times
+            .iter()
+            .zip(candle_times)
+            .all(|(cvd, candle)| (*cvd as f64 - candle).abs() < 1e-9));
+
+        probe.append_bar();
+        rebuild(&mut probe);
+        let (times, ..) = probe
+            .engine
+            .data_layer()
+            .series_data(cvd.series_id)
+            .unwrap();
+        assert_eq!(times.len(), probe.source_bars.times.len());
+
+        probe.toggle_cvd();
+        probe.toggle_rsi();
+        rebuild(&mut probe);
+        assert_eq!(probe.engine.panes.len(), 1);
+    }
 
     #[test]
     fn action_chip_hover_uses_click_cursor_and_control_input_target() {
