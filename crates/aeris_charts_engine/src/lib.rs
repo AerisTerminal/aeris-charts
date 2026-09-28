@@ -155,11 +155,11 @@ pub use indicators::{
     INDICATOR_SCHEMA_REVISION,
 };
 pub use interaction::{
-    pinch_zoom_scale, wheel_zoom_scale, CancelReason, ChartContext, GestureResolver, GestureState,
-    GestureUpdate, GestureUpdateKind, HitProfile, InputDevice, InputEvent, InputModifiers,
-    InputTarget, PointerSample, ScrollAnimation, WheelBehavior, WheelDeltaMode, WheelIntent,
-    WheelSample, KINETIC_DUMPING, KINETIC_MAX_SPEED, KINETIC_MIN_MOVE, KINETIC_MIN_SPEED,
-    MAX_ACTIVE_POINTERS, PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
+    pinch_zoom_scale, wheel_zoom_scale, CancelReason, ChartContext, FinancialDrag, GestureResolver,
+    GestureState, GestureUpdate, GestureUpdateKind, HitProfile, InputDevice, InputEvent,
+    InputModifiers, InputTarget, PointerSample, ScrollAnimation, WheelBehavior, WheelDeltaMode,
+    WheelIntent, WheelSample, KINETIC_DUMPING, KINETIC_MAX_SPEED, KINETIC_MIN_MOVE,
+    KINETIC_MIN_SPEED, MAX_ACTIVE_POINTERS, PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
 };
 pub use native_primitives::{
     AccessibilityFocusOptions, AnchoredTextHorizontalAlign, AnchoredTextOptions,
@@ -1794,6 +1794,7 @@ pub struct ChartEngine {
     /// Velocity-owned keyboard pan. This is separate from public `scroll_to_position(..., true)`:
     /// a held arrow receives bounded engine-timed velocity kicks with light drag; key-up stops it.
     keyboard_scroll_animation: Option<interaction::KeyboardKineticScroll>,
+    financial_drag: Option<FinancialDrag>,
     /// In-flight eased scroll-to-position (engine interaction module); the host schedules the
     /// ticks, the engine owns the easing and applies each step.
     scroll_animation: Option<interaction::ScrollAnimation>,
@@ -1945,6 +1946,7 @@ impl ChartEngine {
             text_measure_fn: None,
             kinetic: None,
             keyboard_scroll_animation: None,
+            financial_drag: None,
             scroll_animation: None,
             price_formatter_fn: None,
             tick_mark_formatter_fn: None,
