@@ -355,8 +355,8 @@ layout/axis work is required, performs optional initial fit, negotiates axes, ow
 policy, and builds the chart frame plus axis primitives. The host retains renderer-cache invalidation
 and paint scheduling, but does not reproduce the preparation sequence.
 
-Linked-chart ingress is origin-aware. Local mutations publish into the bounded synchronization queue;
-`apply_external_sync_event` applies coordinator-originated crosshair and visible-range state without
+Linked-chart ingress is source-aware. Local mutations publish into the bounded synchronization queue;
+`apply_external_sync_event` applies host-supplied crosshair and visible-range state without
 echoing it and without draining unrelated local events already awaiting delivery. Hosts coordinate
 chart groups and transport events, but they never clear the engine queue to manufacture no-echo
 behavior.
