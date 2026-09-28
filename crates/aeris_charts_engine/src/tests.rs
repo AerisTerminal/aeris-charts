@@ -2865,6 +2865,52 @@ fn indicator_binding_owns_group_chrome_visibility_and_removal() {
 }
 
 #[test]
+fn price_scale_series_operations_are_typed_and_atomic() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [10.0, 11.0, 12.0];
+    chart
+        .set_series_data(0, &[1.0, 2.0, 3.0], &values, &values, &values, &values)
+        .unwrap();
+    let second = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(second, &[1.0, 2.0, 3.0], &values, &values, &values, &values)
+        .unwrap();
+    chart.set_series_price_scale(second, PriceScaleTarget::Left);
+
+    assert_eq!(
+        chart
+            .primary_series_on_price_scale(0, PriceScaleTarget::Right)
+            .map(|series| series.series_id),
+        Some(0)
+    );
+    assert_eq!(
+        chart
+            .primary_series_on_price_scale(0, PriceScaleTarget::Left)
+            .map(|series| series.series_id),
+        Some(second)
+    );
+    assert_eq!(chart.series_visible(second), Some(true));
+    assert!(chart.toggle_series_chrome(0, SeriesChromeFlag::PriceLine));
+    assert!(!chart.series_entry(0).unwrap().price_line_visible);
+
+    assert!(chart.set_price_format_for_scale(0, PriceScaleTarget::Right, 4, 0.0001));
+    assert_eq!(chart.series_entry(0).unwrap().price_format.precision, 4);
+    assert_eq!(
+        chart.series_entry(second).unwrap().price_format.precision,
+        2
+    );
+    assert!(!chart.set_price_format_for_scale(0, PriceScaleTarget::Right, 4, f64::NAN));
+
+    assert!(chart.rebind_price_scale_series(0, PriceScaleTarget::Right, PriceScaleTarget::Left));
+    assert_eq!(
+        chart.series_entry(0).unwrap().price_scale_target,
+        PriceScaleTarget::Left
+    );
+    assert!(!chart.price_scale_visible_for(0, PriceScaleTarget::Right));
+    assert!(chart.price_scale_visible_for(0, PriceScaleTarget::Left));
+}
+
+#[test]
 fn a_dragged_short_pane_contracts_its_scale_instead_of_flipping_it() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let values = [1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0];

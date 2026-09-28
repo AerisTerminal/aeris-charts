@@ -582,6 +582,27 @@ pub struct PriceScaleInfo {
     pub series_ids: Vec<SeriesId>,
 }
 
+/// Chrome state of the engine-resolved primary series attached to one price scale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PriceScalePrimarySeries {
+    pub series_id: SeriesId,
+    pub price_line_visible: bool,
+    pub last_value_visible: bool,
+    pub title_visible: bool,
+    pub countdown_visible: bool,
+    pub bid_ask_visible: bool,
+}
+
+/// One independently toggled piece of built-in series chrome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeriesChromeFlag {
+    PriceLine,
+    LastValue,
+    Title,
+    Countdown,
+    BidAsk,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SeriesDataPoint {
     pub time: i64,
@@ -3038,6 +3059,30 @@ impl ChartEngine {
             self.invalidate_frame_scene();
             self.invalidate_frame_layout_and_axis();
         }
+    }
+
+    /// Current visibility of a live series.
+    #[must_use]
+    pub fn series_visible(&self, id: SeriesId) -> Option<bool> {
+        self.series_entry(id).map(|series| series.visible)
+    }
+
+    /// Toggle one typed series-chrome flag without a JSON round trip.
+    pub fn toggle_series_chrome(&mut self, id: SeriesId, flag: SeriesChromeFlag) -> bool {
+        let Some(series) = self.series_entry_mut(id) else {
+            return false;
+        };
+        match flag {
+            SeriesChromeFlag::PriceLine => series.price_line_visible = !series.price_line_visible,
+            SeriesChromeFlag::LastValue => series.last_value_visible = !series.last_value_visible,
+            SeriesChromeFlag::Title => series.title_visible = !series.title_visible,
+            SeriesChromeFlag::Countdown => {
+                series.countdown_visible = !series.countdown_visible;
+            }
+            SeriesChromeFlag::BidAsk => series.bid_ask_visible = !series.bid_ask_visible,
+        }
+        self.invalidate_frame_layout_and_axis();
+        true
     }
 
     /// The effective primary series: the first visible, non-removed entry. reference lets any

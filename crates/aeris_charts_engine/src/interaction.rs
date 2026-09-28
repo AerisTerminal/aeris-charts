@@ -83,6 +83,17 @@ pub enum FinancialDrag {
     },
 }
 
+/// Semantic keyboard navigation actions for a native financial chart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FinancialNavigation {
+    PreviousBar,
+    NextBar,
+    PreviousPage,
+    NextPage,
+    ZoomIn,
+    ZoomOut,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WheelSample {
     pub x: f64,
@@ -937,6 +948,51 @@ impl ChartEngine {
         self.financial_drag
     }
 
+    /// Apply one canonical keyboard navigation action. Hosts own key mapping only.
+    pub fn apply_financial_navigation(&mut self, action: FinancialNavigation, accelerated: bool) {
+        let step = if accelerated { 10.0 } else { 1.0 };
+        let page = (self.pane_w / self.bar_spacing() * 0.8).max(1.0);
+        let center = self.pane_w / 2.0;
+        match action {
+            FinancialNavigation::PreviousBar => {
+                self.scroll_to_position(self.scroll_position() - step);
+            }
+            FinancialNavigation::NextBar => {
+                self.scroll_to_position(self.scroll_position() + step);
+            }
+            FinancialNavigation::PreviousPage => {
+                self.scroll_to_position(self.scroll_position() - page);
+            }
+            FinancialNavigation::NextPage => {
+                self.scroll_to_position(self.scroll_position() + page);
+            }
+            FinancialNavigation::ZoomIn => self.time_scale.zoom(center, 0.5),
+            FinancialNavigation::ZoomOut => self.time_scale.zoom(center, -0.5),
+        }
+    }
+
+    /// Enable or disable the temporary modifier-driven OHLC magnet.
+    pub fn set_crosshair_ohlc_magnet(&mut self, enabled: bool) -> bool {
+        if self.crosshair_ohlc_magnet == enabled {
+            return false;
+        }
+        self.crosshair_ohlc_magnet = enabled;
+        self.invalidate_frame_overlay();
+        true
+    }
+
+    /// Current pane-separator hover target.
+    #[must_use]
+    pub const fn separator_hover(&self) -> Option<usize> {
+        self.separator_hover
+    }
+
+    /// Configured crosshair mode in the public wire representation.
+    #[must_use]
+    pub fn configured_crosshair_mode(&self) -> u8 {
+        self.options.get().crosshair.mode
+    }
+
     /// Resolve a pane separator using a host-selected interaction halo.
     #[must_use]
     pub fn pane_separator_at(&self, y: f64, hit_radius: f64) -> Option<usize> {
@@ -1235,6 +1291,15 @@ mod tests {
         let spacing = chart.bar_spacing();
         chart.apply_financial_wheel(200.0, 100.0, 0.0, 1.0);
         assert_ne!(chart.bar_spacing(), spacing);
+
+        let scroll = chart.scroll_position();
+        chart.apply_financial_navigation(FinancialNavigation::PreviousBar, true);
+        assert_eq!(chart.scroll_position(), scroll - 10.0);
+        chart.apply_financial_navigation(FinancialNavigation::NextPage, false);
+        assert!(chart.scroll_position() > scroll - 10.0);
+        assert!(chart.set_crosshair_ohlc_magnet(true));
+        assert!(!chart.set_crosshair_ohlc_magnet(true));
+        assert!(chart.crosshair_ohlc_magnet);
     }
 
     #[test]
