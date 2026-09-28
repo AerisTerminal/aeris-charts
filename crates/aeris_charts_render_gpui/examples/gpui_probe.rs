@@ -508,70 +508,78 @@ struct DrawingTemplate {
     color: String,
     style: &'static str,
     width: u8,
+    /// Content for the standalone Text tool only. Trend-line labels are typed in place, so the
+    /// template never writes a label onto a trend line or over a selected drawing's text.
     text: String,
-    text_color: String,
+    /// `None` keeps the engine default: a trend label follows its line color and standalone
+    /// text follows the chart foreground. Set only once the user explicitly picks a color.
+    text_color: Option<String>,
     text_size: u8,
     text_weight: u16,
     text_italic: bool,
+    text_h_align: &'static str,
+    text_v_align: &'static str,
 }
 
 impl Default for DrawingTemplate {
+    /// The browser demo's toolbar defaults, so both hosts create identical drawings.
     fn default() -> Self {
         Self {
-            color: "#2962ff".into(),
+            color: "#168ef7".into(),
             style: "solid",
             width: 2,
-            text: "Native".into(),
-            text_color: "#0a0a0a".into(),
-            text_size: 12,
+            text: String::new(),
+            text_color: None,
+            text_size: 14,
             text_weight: 400,
             text_italic: false,
+            text_h_align: "right",
+            text_v_align: "top",
         }
     }
 }
 
 impl DrawingTemplate {
-    fn json(&self) -> String {
-        format!(
-            r#"{{"color":"{}","style":"{}","width":{},"text":"{}","text_color":"{}","text_size":{},"text_weight":{},"text_italic":{}}}"#,
-            self.color,
-            self.style,
-            self.width,
-            self.text,
-            self.text_color,
-            self.text_size,
-            self.text_weight,
-            self.text_italic
-        )
+    /// Style fields every tool shares; label content and ink stay opt-in.
+    fn style_fields(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut fields = serde_json::Map::new();
+        fields.insert("color".into(), self.color.clone().into());
+        fields.insert("style".into(), self.style.into());
+        fields.insert("width".into(), self.width.into());
+        fields.insert("text_size".into(), self.text_size.into());
+        fields.insert("text_weight".into(), self.text_weight.into());
+        fields.insert("text_italic".into(), self.text_italic.into());
+        fields.insert("text_h_align".into(), self.text_h_align.into());
+        fields.insert("text_v_align".into(), self.text_v_align.into());
+        if let Some(color) = &self.text_color {
+            fields.insert("text_color".into(), color.clone().into());
+        }
+        fields
     }
 
+    /// Options for arming `kind`. Only the Text tool receives template content.
+    fn json(&self, kind: DrawingKind) -> String {
+        let mut fields = self.style_fields();
+        if kind == DrawingKind::Text {
+            fields.insert("text".into(), self.text.clone().into());
+        }
+        serde_json::Value::Object(fields).to_string()
+    }
+
+    /// Changed style fields only, merged into an in-flight creation and the selected drawing.
+    /// Label content is never part of a live patch, so it cannot wipe a drawing's real text.
     fn patch_from(&self, previous: &Self) -> String {
-        let mut fields = Vec::new();
-        if self.color != previous.color {
-            fields.push(format!(r#""color":"{}""#, self.color));
+        let current = self.style_fields();
+        let before = previous.style_fields();
+        let mut patch: serde_json::Map<String, serde_json::Value> = current
+            .into_iter()
+            .filter(|(key, value)| before.get(key) != Some(value))
+            .collect();
+        if self.text_color.is_none() && previous.text_color.is_some() {
+            // Back to the inherited default: an empty color clears the explicit override.
+            patch.insert("text_color".into(), "".into());
         }
-        if self.style != previous.style {
-            fields.push(format!(r#""style":"{}""#, self.style));
-        }
-        if self.width != previous.width {
-            fields.push(format!(r#""width":{}"#, self.width));
-        }
-        if self.text != previous.text {
-            fields.push(format!(r#""text":"{}""#, self.text));
-        }
-        if self.text_color != previous.text_color {
-            fields.push(format!(r#""text_color":"{}""#, self.text_color));
-        }
-        if self.text_size != previous.text_size {
-            fields.push(format!(r#""text_size":{}"#, self.text_size));
-        }
-        if self.text_weight != previous.text_weight {
-            fields.push(format!(r#""text_weight":{}"#, self.text_weight));
-        }
-        if self.text_italic != previous.text_italic {
-            fields.push(format!(r#""text_italic":{}"#, self.text_italic));
-        }
-        format!("{{{}}}", fields.join(","))
+        serde_json::Value::Object(patch).to_string()
     }
 }
 
@@ -792,10 +800,10 @@ impl Probe {
         self.pending_creation_point = None;
         self.creation_press_committed = false;
         let next = (self.engine.active_drawing_tool() != Some(kind)).then_some(kind);
-        let template = self.drawing_template.json();
+        let template = next.map(|kind| self.drawing_template.json(kind));
         let armed = self
             .engine
-            .set_drawing_tool(next, next.map(|_| template.as_str()), None);
+            .set_drawing_tool(next, template.as_deref(), None);
         debug_assert!(armed, "native drawing template is always valid JSON");
         self.click_status = self.engine.active_drawing_tool().map_or_else(
             || "drawing tool disarmed".to_string(),
@@ -3420,7 +3428,7 @@ impl InteractiveDemo {
             DemoAction::ClearDrawings => self.update_root(cx, |p| p.engine.clear_drawings()),
             DemoAction::DrawingColor => self.update_root(cx, |p| {
                 p.update_drawing_template(|t| {
-                    t.color = if t.color == "#2962ff" { "#ff9800" } else { "#2962ff" }.into();
+                    t.color = if t.color == "#168ef7" { "#ff9800" } else { "#168ef7" }.into();
                 });
             }),
             DemoAction::DrawingStyle => self.update_root(cx, |p| {
@@ -3432,13 +3440,15 @@ impl InteractiveDemo {
                 p.update_drawing_template(|t| t.width = if t.width >= 4 { 1 } else { t.width + 1 });
             }),
             DemoAction::DrawingText => self.update_root(cx, |p| {
-                p.update_drawing_template(|t| t.text = if t.text == "Native" { "Aeris native" } else { "Native" }.into());
+                // Content for the next standalone Text drawing only (trend labels are typed).
+                p.update_drawing_template(|t| t.text = if t.text.is_empty() { "Note".into() } else { String::new() });
             }),
             DemoAction::DrawingTextColor => self.update_root(cx, |p| {
-                p.update_drawing_template(|t| t.text_color = if t.text_color == "#0a0a0a" { "#ab47bc" } else { "#0a0a0a" }.into());
+                // Explicit ink, then back to the inherited default (line color / foreground).
+                p.update_drawing_template(|t| t.text_color = match t.text_color { None => Some("#ab47bc".into()), Some(_) => None });
             }),
             DemoAction::DrawingTextSize => self.update_root(cx, |p| {
-                p.update_drawing_template(|t| t.text_size = if t.text_size >= 18 { 12 } else { t.text_size + 2 });
+                p.update_drawing_template(|t| t.text_size = if t.text_size >= 20 { 12 } else { t.text_size + 2 });
             }),
             DemoAction::DrawingTextWeight => self.update_root(cx, |p| {
                 p.update_drawing_template(|t| t.text_weight = if t.text_weight >= 700 { 400 } else { t.text_weight + 100 });
@@ -5065,6 +5075,53 @@ mod tests {
         assert_eq!(probe.drawing_template.color, "#ff9800");
         assert_eq!(probe.drawing_template.width, 4);
         assert!(probe.drawing_template.text_italic);
+    }
+
+    /// The native template matches the browser toolbar: a new trend line has no label (so it
+    /// shows the `+ Add text` prompt) and its label ink follows the line color; only the
+    /// standalone Text tool takes template content, and live style patches never touch labels.
+    #[test]
+    fn drawing_template_matches_the_browser_defaults() {
+        let template = DrawingTemplate::default();
+        let trend: serde_json::Value =
+            serde_json::from_str(&template.json(DrawingKind::TrendLine)).unwrap();
+        assert!(trend.get("text").is_none());
+        assert!(trend.get("text_color").is_none());
+        assert_eq!(trend["color"], "#168ef7");
+        assert_eq!(trend["text_size"], 14);
+
+        let mut probe = Probe::new(64, Some(1));
+        probe.rebuild_with_measure(
+            1024.0,
+            640.0,
+            1.0,
+            |text, _bold| text.chars().count() as f64 * 7.0,
+            |text, _bold| text.chars().count() as f64 * 6.0,
+        );
+        probe.engine.clear_drawings();
+        probe.arm_drawing(DrawingKind::TrendLine);
+        probe.place_drawing_anchor(200.0, 180.0, DrawingModifiers::default());
+        let id = probe.place_drawing_anchor(500.0, 300.0, DrawingModifiers::default());
+        assert!(id > 0);
+        let drawing = probe.engine.drawing(id as u32).unwrap();
+        assert!(drawing.text.is_empty(), "a new trend line starts unlabeled");
+        assert!(
+            drawing.text_color.is_none(),
+            "trend label ink follows the line"
+        );
+
+        // Typing a label, then restyling, keeps the label; resetting ink restores inheritance.
+        probe.engine.set_selected_drawing(Some(id as u32));
+        assert!(probe.engine.begin_drawing_text_edit(id as u32, true));
+        assert!(probe.engine.drawing_text_edit_insert("breakout"));
+        assert!(probe.engine.commit_drawing_text_edit());
+        probe.update_drawing_template(|t| t.text_color = Some("#ab47bc".into()));
+        probe.update_drawing_template(|t| t.width = 3);
+        probe.update_drawing_template(|t| t.text_color = None);
+        let drawing = probe.engine.drawing(id as u32).unwrap();
+        assert_eq!(drawing.text, "breakout");
+        assert_eq!(drawing.width, 3.0);
+        assert!(drawing.text_color.is_none());
     }
 
     #[test]

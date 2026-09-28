@@ -171,6 +171,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
+ "serde_json",
  "sha2 0.11.0",
  "smallvec",
  "tiny-skia 0.12.0",
