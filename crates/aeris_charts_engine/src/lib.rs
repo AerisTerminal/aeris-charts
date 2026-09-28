@@ -196,11 +196,11 @@ pub use trading::{
     AccountId, ExecutionId, ExecutionKind, ExecutionMarkerShape, HostEventHit, HostEventMarker,
     HostOverlaySnapshot, HostTimeWindow, InstrumentMetadata, OrderId, OrderKind, OrderRole,
     OrderSide, OrderStatus, PositionId, PositionSide, TradingAnnotation,
-    TradingAnnotationPlacement, TradingAnnotationTone, TradingExecution, TradingGroupId,
-    TradingHit, TradingHitKind, TradingIntent, TradingIntentAction, TradingObjectId,
-    TradingPosition, TradingPreview, TradingPreviewSource, TradingPriceScale, TradingRoundTrip,
-    TradingRoundTripOutcome, TradingSnapshot, TradingStyle, TradingStyleOptions, WorkingOrder,
-    MAX_HOST_EVENTS, MAX_HOST_WINDOWS, MAX_TRADING_ANNOTATIONS, MAX_TRADING_OBJECTS,
+    TradingAnnotationPlacement, TradingAnnotationTone, TradingCursor, TradingExecution,
+    TradingGroupId, TradingHit, TradingHitKind, TradingIntent, TradingIntentAction,
+    TradingObjectId, TradingPosition, TradingPreview, TradingPreviewSource, TradingPriceScale,
+    TradingRoundTrip, TradingRoundTripOutcome, TradingSnapshot, TradingStyle, TradingStyleOptions,
+    WorkingOrder, MAX_HOST_EVENTS, MAX_HOST_WINDOWS, MAX_TRADING_ANNOTATIONS, MAX_TRADING_OBJECTS,
     MAX_TRADING_ROUND_TRIPS,
 };
 pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout};

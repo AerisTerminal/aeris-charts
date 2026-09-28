@@ -204,8 +204,10 @@ impl ChartEngine {
     pub(crate) fn format_trading_quantity(&self, value: f64) -> String {
         match self.trading_state.instrument.quantity_precision {
             Some(precision) => format!("{value:.precision$}", precision = precision as usize),
+            // Without host precision, show the exact size without trailing zeros. Eight places
+            // covers fractional crypto sizes that four places would round away.
             None if value.fract().abs() < f64::EPSILON => format!("{value:.0}"),
-            None => format!("{value:.4}")
+            None => format!("{value:.8}")
                 .trim_end_matches('0')
                 .trim_end_matches('.')
                 .to_string(),
@@ -592,13 +594,14 @@ impl ChartEngine {
         });
     }
 
-    /// Draw the close icon as two proper round-capped strokes. It remains primitive geometry so
-    /// every backend receives the same icon without depending on the host font or rotating a glyph.
+    /// Draw the close icon as two anti-aliased strokes. `Polyline` is the one stroke primitive
+    /// every executor antialiases identically; separate triangles and cap discs are not, and
+    /// GPUI feathered the tiny cap discs into blobs around hard-edged arms.
     fn push_trading_close_icon(
         &self,
         out: &mut Vec<Prim>,
-        center_x: f64,
-        center_y: f64,
+        points: &mut Vec<[f32; 2]>,
+        center: (f64, f64),
         color: Color,
         hpr: f64,
         vpr: f64,
@@ -606,55 +609,35 @@ impl ChartEngine {
         // Keep the icon optically compact inside its inset hover surface. The surrounding cell,
         // not the visible glyph, owns the larger interaction target.
         let arm = (self.options.get().layout.font_size * 0.30).max(3.5);
-        let stroke_width = (1.25 * hpr.min(vpr)).max(1.0) as f32;
-        let half_width = stroke_width / 2.0;
+        let width = (1.5 * hpr.min(vpr)).max(1.0) as f32;
+        let (center_x, center_y) = center;
         for slope in [1.0_f64, -1.0] {
-            let start = [
-                ((center_x - arm) * hpr) as f32,
-                ((center_y - arm * slope) * vpr) as f32,
-            ];
-            let end = [
-                ((center_x + arm) * hpr) as f32,
-                ((center_y + arm * slope) * vpr) as f32,
-            ];
-            let dx = end[0] - start[0];
-            let dy = end[1] - start[1];
-            let length = dx.hypot(dy).max(f32::EPSILON);
-            let offset = [-dy / length * half_width, dx / length * half_width];
-            let corners = [
-                [start[0] + offset[0], start[1] + offset[1]],
-                [end[0] + offset[0], end[1] + offset[1]],
-                [end[0] - offset[0], end[1] - offset[1]],
-                [start[0] - offset[0], start[1] - offset[1]],
-            ];
-            out.push(Prim::Triangle {
-                a: corners[0],
-                b: corners[1],
-                c: corners[2],
+            let first_point = points.len() as u32;
+            points.extend([
+                [
+                    ((center_x - arm) * hpr) as f32,
+                    ((center_y - arm * slope) * vpr) as f32,
+                ],
+                [
+                    ((center_x + arm) * hpr) as f32,
+                    ((center_y + arm * slope) * vpr) as f32,
+                ],
+            ]);
+            out.push(Prim::Polyline {
+                first_point,
+                point_count: 2,
+                width,
+                style: LineStyle::Solid,
+                line_type: LineType::Simple,
                 color,
             });
-            out.push(Prim::Triangle {
-                a: corners[0],
-                b: corners[2],
-                c: corners[3],
-                color,
-            });
-            for endpoint in [start, end] {
-                out.push(Prim::Circle {
-                    cx: endpoint[0],
-                    cy: endpoint[1],
-                    radius: half_width,
-                    fill: color,
-                    stroke_width: 0.0,
-                    stroke: color,
-                });
-            }
         }
     }
 
     fn push_trading_cluster(
         &self,
         out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
         cluster: &TradingControlCluster<'_>,
         hovered: Option<TradingControlSegmentKind>,
         pressed: Option<TradingControlSegmentKind>,
@@ -781,8 +764,11 @@ impl ChartEngine {
             }
             self.push_trading_close_icon(
                 out,
-                (surface_left + surface_size / 2.0) / hpr,
-                (surface_top + surface_size / 2.0) / vpr,
+                points,
+                (
+                    (surface_left + surface_size / 2.0) / hpr,
+                    (surface_top + surface_size / 2.0) / vpr,
+                ),
                 color,
                 hpr,
                 vpr,
@@ -915,7 +901,8 @@ impl ChartEngine {
         regions: &mut Vec<Prim>,
         lines: &mut Vec<Prim>,
     ) {
-        self.build_trading_frame(pane_index, hpr, vpr, regions, lines);
+        let mut points = Vec::new();
+        self.build_trading_frame(pane_index, hpr, vpr, regions, lines, &mut points);
     }
 
     pub(super) fn build_trading_frame(
@@ -925,6 +912,7 @@ impl ChartEngine {
         vpr: f64,
         regions: &mut Vec<Prim>,
         lines: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
     ) {
         let Some(pane) = self.panes.get(pane_index) else {
             return;
@@ -1072,13 +1060,15 @@ impl ChartEngine {
                 y: (y * vpr).round() as i32,
                 x0: 0,
                 x1: (self.trading_marker_end() * hpr).round() as i32,
-                width: if hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::PositionLine)
+                // A draggable position line signals its protection drag the same way a working
+                // order does: a hairline dash on hover, never a thickness jump.
+                width: min_line_width,
+                style: if hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::PositionLine)
                 {
-                    min_line_width.max(2)
+                    LineStyle::Dashed
                 } else {
-                    min_line_width
+                    LineStyle::Solid
                 },
-                style: LineStyle::Solid,
                 color: position_color,
             });
             if hovered.is_some() {
@@ -1130,6 +1120,7 @@ impl ChartEngine {
             let pressed_segment = pressed.and_then(|hit| Self::trading_control_kind(hit.kind));
             self.push_trading_cluster(
                 lines,
+                points,
                 &cluster,
                 hovered_segment,
                 pressed_segment,
@@ -1328,6 +1319,7 @@ impl ChartEngine {
             };
             self.push_trading_cluster(
                 lines,
+                points,
                 &cluster,
                 hovered_segment,
                 pressed_segment,
@@ -1485,6 +1477,7 @@ impl ChartEngine {
                     };
                     self.push_trading_cluster(
                         lines,
+                        points,
                         &cluster,
                         None,
                         None,

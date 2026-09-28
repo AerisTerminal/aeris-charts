@@ -648,7 +648,7 @@ test("existing TP and SL adjustments release into intents with no confirmation s
 });
 
 for (const backend of ["canvas2d", "webgpu"]) {
-  test(`${backend} compact position marker has no TP/SL creation surface and uses an attached close chip`, async ({ page }) => {
+  test(`${backend} compact position marker drags into attached protection and uses an attached close chip`, async ({ page }) => {
     await open_trading_demo(page, backend);
     const probe = await page.evaluate(() => {
       const trading = window.__chart.trading();
@@ -683,13 +683,24 @@ for (const backend of ["canvas2d", "webgpu"]) {
       { steps: 6 },
     );
     await page.mouse.up();
-    expect(await page.evaluate(() => ({
+    // Dragging a long position above its average price requests an attached take profit.
+    const drag = await page.evaluate(() => ({
       intents: window.__creation_intents,
       preview: window.__chart.trading().preview(),
-    }))).toEqual({ intents: [], preview: null });
+    }));
+    expect(drag.preview).toBeNull();
+    expect(drag.intents).toEqual([
+      expect.objectContaining({
+        action: "create_take_profit",
+        position_id: "position-only",
+        role: "take_profit",
+        side: "sell",
+      }),
+    ]);
+    await page.evaluate((sequence) => window.__chart.trading().resolve_intent(sequence, false), drag.intents[0].sequence);
 
     await page.mouse.click(probe.overlay.left + probe.close_x, probe.overlay.top + probe.entry_y);
-    expect(await page.evaluate(() => window.__creation_intents)).toEqual([
+    expect(await page.evaluate(() => window.__creation_intents.slice(1))).toEqual([
       expect.objectContaining({
         action: "close_position",
         position_id: "position-only",

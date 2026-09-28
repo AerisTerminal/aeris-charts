@@ -1219,11 +1219,10 @@ impl AerisChart {
     }
 
     pub fn trading_cursor_at(&self, x_css: f64, y_css: f64) -> u8 {
-        match self.inner.borrow().engine.trading_hit_at(x_css, y_css) {
+        match self.inner.borrow().engine.trading_cursor_at(x_css, y_css) {
             None => 0,
-            Some(hit) if hit.kind == aeris_charts_engine::TradingHitKind::OrderLine => 2,
-            Some(hit) if matches!(hit.kind, aeris_charts_engine::TradingHitKind::CancelButton) => 1,
-            Some(_) => 0,
+            Some(aeris_charts_engine::TradingCursor::Pointer) => 1,
+            Some(aeris_charts_engine::TradingCursor::Grab) => 2,
         }
     }
 

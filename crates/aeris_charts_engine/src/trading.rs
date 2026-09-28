@@ -766,6 +766,14 @@ pub enum TradingHitKind {
     Annotation,
 }
 
+/// Pointer affordance for a trading object: `Grab` over a draggable line, `Pointer` over a
+/// close control.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TradingCursor {
+    Grab,
+    Pointer,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TradingHit {
     pub object: TradingObjectId,
@@ -1111,6 +1119,30 @@ impl ChartEngine {
         None
     }
 
+    /// Pointer affordance for the trading object under the cursor, shared by every host so a
+    /// line reads as draggable exactly when a drag would start there.
+    pub fn trading_cursor_at(&self, x_css: f64, y_css: f64) -> Option<TradingCursor> {
+        let hit = self.trading_hit_at(x_css, y_css)?;
+        match (&hit.object, hit.kind) {
+            (_, TradingHitKind::CancelButton) => Some(TradingCursor::Pointer),
+            (TradingObjectId::Order(id), TradingHitKind::OrderLine) => self
+                .trading_state
+                .orders
+                .iter()
+                .find(|order| &order.id == id)
+                .and_then(|order| self.trading_order_drag_preview(order))
+                .map(|_| TradingCursor::Grab),
+            (TradingObjectId::Position(id), TradingHitKind::PositionLine) => self
+                .trading_state
+                .positions
+                .iter()
+                .find(|position| &position.id == id)
+                .and_then(|position| self.trading_position_drag_preview(position))
+                .map(|_| TradingCursor::Grab),
+            _ => None,
+        }
+    }
+
     pub fn set_trading_hover(&mut self, x_css: f64, y_css: f64) -> bool {
         let next = self.trading_hit_at(x_css, y_css);
         let feedback_changed = self.trading_state.feedback_hover.as_ref() != next.as_ref();
@@ -1275,32 +1307,50 @@ impl ChartEngine {
         })
     }
 
-    /// A new attached protection drag changes role while it crosses the entry. Once the host
-    /// supplies that protection as an ordinary order, its `Order` preview no longer enters this
-    /// path and the role remains fixed wherever the user subsequently moves it.
-    fn reclassify_order_protection_preview(&mut self) {
+    /// A new attached protection drag changes role while it crosses its anchor: the entry order's
+    /// price, or the position's average price. Once the host supplies that protection as an
+    /// ordinary order, its `Order` preview no longer enters this path and the role remains fixed
+    /// wherever the user subsequently moves it.
+    fn reclassify_protection_preview(&mut self) {
         let Some(preview) = self.trading_state.interaction.preview() else {
             return;
         };
-        let order_id = match &preview.source {
-            TradingPreviewSource::OrderStopLoss { order_id }
-            | TradingPreviewSource::OrderTakeProfit { order_id } => order_id.clone(),
-            _ => return,
-        };
-        let Some(order) = self
-            .trading_state
-            .orders
-            .iter()
-            .find(|order| order.id == order_id)
-        else {
+        if matches!(preview.source, TradingPreviewSource::Order { .. }) {
+            return;
+        }
+        let Some((anchor, long)) = self.trading_preview_relation(preview) else {
             return;
         };
-        let role = match (order.side, preview.price.total_cmp(&order.price)) {
+        let role = match (long, preview.price.total_cmp(&anchor)) {
             (_, std::cmp::Ordering::Equal) => return,
-            (OrderSide::Buy, std::cmp::Ordering::Less)
-            | (OrderSide::Sell, std::cmp::Ordering::Greater) => OrderRole::StopLoss,
-            (OrderSide::Buy, std::cmp::Ordering::Greater)
-            | (OrderSide::Sell, std::cmp::Ordering::Less) => OrderRole::TakeProfit,
+            (true, std::cmp::Ordering::Less) | (false, std::cmp::Ordering::Greater) => {
+                OrderRole::StopLoss
+            }
+            (true, std::cmp::Ordering::Greater) | (false, std::cmp::Ordering::Less) => {
+                OrderRole::TakeProfit
+            }
+        };
+        let stop = role == OrderRole::StopLoss;
+        let source = match &preview.source {
+            TradingPreviewSource::OrderStopLoss { order_id }
+            | TradingPreviewSource::OrderTakeProfit { order_id } => {
+                let order_id = order_id.clone();
+                if stop {
+                    TradingPreviewSource::OrderStopLoss { order_id }
+                } else {
+                    TradingPreviewSource::OrderTakeProfit { order_id }
+                }
+            }
+            TradingPreviewSource::StopLoss { position_id }
+            | TradingPreviewSource::TakeProfit { position_id } => {
+                let position_id = position_id.clone();
+                if stop {
+                    TradingPreviewSource::StopLoss { position_id }
+                } else {
+                    TradingPreviewSource::TakeProfit { position_id }
+                }
+            }
+            TradingPreviewSource::Order { .. } => return,
         };
         let preview = self
             .trading_state
@@ -1308,11 +1358,40 @@ impl ChartEngine {
             .dragging_preview_mut()
             .expect("protection classification requires a live drag");
         preview.role = role;
-        preview.source = if role == OrderRole::StopLoss {
-            TradingPreviewSource::OrderStopLoss { order_id }
-        } else {
-            TradingPreviewSource::OrderTakeProfit { order_id }
+        preview.source = source;
+    }
+
+    /// Dragging a position line requests a new attached protection. It starts as a stop at the
+    /// average price and reclassifies to a target when it crosses to the profitable side. A
+    /// position that already carries both protections has nothing left to create.
+    fn trading_position_drag_preview(&self, position: &TradingPosition) -> Option<TradingPreview> {
+        if !position.quantity.is_finite() || position.quantity <= 0.0 {
+            return None;
+        }
+        let attached = |role| {
+            self.trading_state
+                .orders
+                .iter()
+                .any(|order| order.position_id.as_ref() == Some(&position.id) && order.role == role)
         };
+        if attached(OrderRole::StopLoss) && attached(OrderRole::TakeProfit) {
+            return None;
+        }
+        Some(TradingPreview {
+            source: TradingPreviewSource::StopLoss {
+                position_id: position.id.clone(),
+            },
+            pane_index: position.pane_index,
+            price_scale: position.price_scale,
+            price: position.average_price,
+            quantity: position.quantity,
+            side: match position.side {
+                PositionSide::Long => OrderSide::Sell,
+                PositionSide::Short => OrderSide::Buy,
+            },
+            role: OrderRole::StopLoss,
+            base_revision: 0,
+        })
     }
 
     pub(crate) fn trading_preview_relation(&self, preview: &TradingPreview) -> Option<(f64, bool)> {
@@ -1451,24 +1530,32 @@ impl ChartEngine {
                     )
                 }
                 TradingPreviewSource::StopLoss { position_id }
-                | TradingPreviewSource::TakeProfit { position_id } => (
-                    if preview.role == OrderRole::StopLoss {
-                        TradingIntentAction::CreateStopLoss
-                    } else {
-                        TradingIntentAction::CreateTakeProfit
-                    },
-                    None,
-                    Some(position_id.clone()),
-                    Some(if preview.role == OrderRole::StopLoss {
-                        OrderKind::Stop
-                    } else {
-                        OrderKind::Limit
-                    }),
-                    TradingRollback::CreatedProtection,
-                    None,
-                    None,
-                    None,
-                ),
+                | TradingPreviewSource::TakeProfit { position_id } => {
+                    if self.trading_state.orders.iter().any(|order| {
+                        order.position_id.as_ref() == Some(position_id)
+                            && order.role == preview.role
+                    }) {
+                        return None;
+                    }
+                    (
+                        if preview.role == OrderRole::StopLoss {
+                            TradingIntentAction::CreateStopLoss
+                        } else {
+                            TradingIntentAction::CreateTakeProfit
+                        },
+                        None,
+                        Some(position_id.clone()),
+                        Some(if preview.role == OrderRole::StopLoss {
+                            OrderKind::Stop
+                        } else {
+                            OrderKind::Limit
+                        }),
+                        TradingRollback::CreatedProtection,
+                        None,
+                        None,
+                        None,
+                    )
+                }
             };
         let intent = TradingIntent {
             sequence,
@@ -1568,7 +1655,7 @@ impl ChartEngine {
             return false;
         }
         preview.price = price;
-        self.reclassify_order_protection_preview();
+        self.reclassify_protection_preview();
         self.invalidate_frame_trading();
         true
     }
@@ -1591,19 +1678,22 @@ impl ChartEngine {
         let Some(hit) = self.trading_hit_at_with_profile(x_css, y_css, profile) else {
             return false;
         };
-        let (TradingObjectId::Order(id), TradingHitKind::OrderLine) = (&hit.object, hit.kind)
-        else {
-            return false;
+        let preview = match (&hit.object, hit.kind) {
+            (TradingObjectId::Order(id), TradingHitKind::OrderLine) => self
+                .trading_state
+                .orders
+                .iter()
+                .find(|order| &order.id == id)
+                .and_then(|order| self.trading_order_drag_preview(order)),
+            (TradingObjectId::Position(id), TradingHitKind::PositionLine) => self
+                .trading_state
+                .positions
+                .iter()
+                .find(|position| &position.id == id)
+                .and_then(|position| self.trading_position_drag_preview(position)),
+            _ => None,
         };
-        let Some(order) = self
-            .trading_state
-            .orders
-            .iter()
-            .find(|order| &order.id == id)
-        else {
-            return false;
-        };
-        let Some(preview) = self.trading_order_drag_preview(order) else {
+        let Some(preview) = preview else {
             return false;
         };
         self.trading_state.interaction = TradingInteractionState::DraggingOrder {
@@ -1642,7 +1732,7 @@ impl ChartEngine {
             .dragging_preview_mut()
             .expect("dragging interaction owns a preview")
             .price = price;
-        self.reclassify_order_protection_preview();
+        self.reclassify_protection_preview();
         self.invalidate_frame_trading();
         true
     }
@@ -4381,6 +4471,89 @@ mod tests {
     }
 
     #[test]
+    fn quantity_without_host_precision_keeps_fractional_sizes_exact() {
+        let chart = chart_with_market();
+        assert_eq!(chart.format_trading_quantity(1.0), "1");
+        assert_eq!(chart.format_trading_quantity(0.00012), "0.00012");
+        assert_eq!(chart.format_trading_quantity(2.5), "2.5");
+    }
+
+    #[test]
+    fn position_line_drags_create_attached_protection_on_the_correct_side() {
+        let mut chart = chart_with_market();
+        chart
+            .update_trading_position(position(PositionSide::Long))
+            .unwrap();
+        chart.build_frame();
+        let line_y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
+            .unwrap();
+        let grab_x = chart.trading_marker_start() + 20.0;
+
+        // Hover advertises the drag with the same hairline dash as a working order.
+        assert!(chart.set_trading_hover(grab_x, line_y));
+        let hovered = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        assert!(
+            hovered.panes[0].main[segments.drawings_end..segments.trading_end]
+                .iter()
+                .any(|primitive| matches!(
+                    primitive,
+                    Prim::HLine {
+                        y,
+                        width: 1,
+                        style: aeris_charts_render::draw_list::LineStyle::Dashed,
+                        ..
+                    } if *y == line_y.round() as i32
+                ))
+        );
+
+        // Below a long position's average price the drag is a stop loss.
+        let below = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 99.0)
+            .unwrap();
+        assert!(chart.trading_drag_start_at(grab_x, line_y));
+        assert!(chart.trading_drag_to(below));
+        let intent = chart.trading_drag_end().expect("stop-loss intent");
+        assert_eq!(intent.action, TradingIntentAction::CreateStopLoss);
+        assert_eq!(intent.role, Some(OrderRole::StopLoss));
+        assert_eq!(intent.kind, Some(OrderKind::Stop));
+        assert_eq!(intent.side, Some(OrderSide::Sell));
+        assert_eq!(intent.price, Some(99.0));
+        assert_eq!(intent.position_id.as_ref().unwrap().as_str(), "position-1");
+        chart.resolve_trading_intent(intent.sequence, true);
+
+        // Crossing to the profitable side reclassifies the same drag as a take profit.
+        let mut stop = order("position-stop", OrderRole::StopLoss, 99.0);
+        stop.position_id = Some(id("position-1", PositionId::new));
+        chart.update_working_order(stop).unwrap();
+        chart.build_frame();
+        let above = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 103.0)
+            .unwrap();
+        assert!(chart.trading_drag_start_at(grab_x, line_y));
+        assert!(chart.trading_drag_to(below));
+        assert!(chart.trading_drag_to(above));
+        let intent = chart.trading_drag_end().expect("take-profit intent");
+        assert_eq!(intent.action, TradingIntentAction::CreateTakeProfit);
+        assert_eq!(intent.kind, Some(OrderKind::Limit));
+        chart.resolve_trading_intent(intent.sequence, true);
+
+        // A second stop for the same position is never requested.
+        assert!(chart.trading_drag_start_at(grab_x, line_y));
+        assert!(chart.trading_drag_to(below));
+        assert!(chart.trading_drag_end().is_none());
+        assert!(chart.trading_preview().is_none());
+
+        // With both protections attached, the position line has nothing left to create.
+        let mut target = order("position-target", OrderRole::TakeProfit, 103.0);
+        target.position_id = Some(id("position-1", PositionId::new));
+        chart.update_working_order(target).unwrap();
+        chart.build_frame();
+        assert!(!chart.trading_drag_start_at(grab_x, line_y));
+    }
+
+    #[test]
     fn close_control_terminates_the_marker_container_and_tp_sl_controls_do_not_exist() {
         let mut chart = chart_with_market();
         chart
@@ -4478,48 +4651,37 @@ mod tests {
                     && *border_color == chart.trading_position_color(PositionSide::Long)
         )));
 
-        // No TP/SL affordances, and the close icon is round-capped stroked geometry — never a font
-        // glyph the host's `font_family` might not carry or a pair of skewed filled bars.
+        // No TP/SL affordances, and the close icon is stroked geometry — never a font glyph the
+        // host's `font_family` might not carry.
         assert!(trading.iter().all(|primitive| !matches!(
             primitive,
             Prim::Text { text, .. } if matches!(text.as_str(), "TP" | "SL" | "×" | "✕" | "↕")
         )));
-        // The close icon takes the same semantic color as the marker line and outline.
+        // The close icon is two anti-aliased strokes in the marker's semantic color. Separate
+        // triangles and cap discs rendered unevenly across executors.
         let line_color = chart.trading_position_color(PositionSide::Long);
-        assert_eq!(
-            trading
-                .iter()
-                .filter(|primitive| matches!(primitive, Prim::Triangle { .. }))
-                .count(),
-            4,
-            "the close icon has two stroke bodies, two triangles each"
-        );
-        assert_eq!(
-            trading
-                .iter()
-                .filter(|primitive| matches!(primitive, Prim::Circle { .. }))
-                .count(),
-            4,
-            "the close icon rounds both ends of both strokes"
-        );
-        for primitive in &trading {
-            if let Prim::Triangle { color, .. } = primitive {
-                assert_eq!(*color, line_color);
-            }
-            if let Prim::Circle {
-                cx,
-                cy,
-                radius,
-                fill,
-                stroke,
-                ..
-            } = primitive
-            {
-                assert_eq!(*fill, line_color);
-                assert_eq!(*stroke, line_color);
+        assert!(!trading
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::Triangle { .. } | Prim::Circle { .. })));
+        let frame = chart.build_frame();
+        let icon_strokes = trading
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Polyline {
+                    first_point,
+                    point_count: 2,
+                    color,
+                    ..
+                } if *color == line_color => Some(*first_point as usize),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(icon_strokes.len(), 2, "the close icon has two strokes");
+        for first in icon_strokes {
+            for [x, y] in &frame.panes[0].points[first..first + 2] {
                 assert!(
-                    (f64::from(*cx) - cancel_x).abs() + f64::from(*radius) <= 4.5
-                        && (f64::from(*cy) - cancel_y).abs() + f64::from(*radius) <= 4.5,
+                    (f64::from(*x) - cancel_x).abs() <= 4.5
+                        && (f64::from(*y) - cancel_y).abs() <= 4.5,
                     "the close glyph must stay compact inside its hover surface"
                 );
             }
