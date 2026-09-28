@@ -139,6 +139,7 @@ pub use general_series::{
     MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
+pub use host_layout::FinancialFramePreparation;
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use indicators::{
     IndicatorBindingInfo, IndicatorChromeOptions, IndicatorInputSource, IndicatorKind,

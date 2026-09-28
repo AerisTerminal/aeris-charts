@@ -3,7 +3,15 @@
 //! Hosts supply glyph widths, while the engine owns label formatting, axis visibility, grow-fast /
 //! shrink-on-full policy, even-pixel axis snapping, pane geometry, and time-scale width.
 
-use crate::{ChartEngine, PriceScaleSide, PriceScaleTarget};
+use crate::{ChartEngine, ChartFrame, PriceScaleSide, PriceScaleTarget};
+use aeris_charts_render::draw_list::Prim;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FinancialFramePreparation {
+    pub frame_built: bool,
+    pub layout_recomputed: bool,
+    pub dpr_changed: bool,
+}
 
 fn negotiated_axis_width(current: f64, measured: f64, allow_shrink: bool) -> f64 {
     if allow_shrink || current <= 0.0 {
@@ -14,6 +22,76 @@ fn negotiated_axis_width(current: f64, measured: f64, allow_shrink: bool) -> f64
 }
 
 impl ChartEngine {
+    /// Prepare one complete backend-neutral financial frame for a native host.
+    ///
+    /// The host supplies only viewport values and text measurement. The engine owns dimension
+    /// installation, layout invalidation checks, optional initial fit, axis label-width policy,
+    /// axis-frame construction, chart-frame construction, and axis primitive construction.
+    pub fn prepare_financial_frame_with_measure<F, G>(
+        &mut self,
+        width: f64,
+        height: f64,
+        dpr: f64,
+        force_layout: bool,
+        fit_content: bool,
+        measure: F,
+        countdown_measure: G,
+        frame: &mut ChartFrame,
+        axis_primitives: &mut Vec<Prim>,
+    ) -> FinancialFramePreparation
+    where
+        F: Fn(&str, bool) -> f64 + Copy,
+        G: Fn(&str, bool) -> f64 + Copy,
+    {
+        if !width.is_finite()
+            || !height.is_finite()
+            || !dpr.is_finite()
+            || width <= 0.0
+            || height <= 0.0
+            || dpr <= 0.0
+        {
+            return FinancialFramePreparation::default();
+        }
+        let dimensions_changed =
+            self.css_width != width || self.css_height != height || self.dpr != dpr;
+        let dpr_changed = self.dpr != dpr;
+        if dimensions_changed {
+            self.css_width = width;
+            self.css_height = height;
+            self.dpr = dpr;
+        }
+        let layout_recomputed = dimensions_changed || force_layout;
+        if !layout_recomputed
+            && !self.frame_requires_layout()
+            && !self.frame_requires_axis()
+            && !frame.panes.is_empty()
+        {
+            return FinancialFramePreparation {
+                frame_built: false,
+                layout_recomputed: false,
+                dpr_changed,
+            };
+        }
+        if layout_recomputed {
+            self.recompute_layout_with_measure(true, measure, countdown_measure);
+            if fit_content {
+                self.fit_content();
+                self.recompute_layout_with_measure(true, measure, countdown_measure);
+            }
+        }
+        let layout = &self.options.get().layout;
+        let max_label_width = (layout.font_size + 4.0) * 5.0 / 8.0
+            * f64::from(self.tick_mark_max_character_length.max(1));
+        let axis_frame = self.build_axis_frame(max_label_width, measure, countdown_measure);
+        self.build_frame_into(frame);
+        self.build_axis_primitives_into(&axis_frame, axis_primitives, |_| 0.0);
+        FinancialFramePreparation {
+            frame_built: true,
+            layout_recomputed,
+            dpr_changed,
+        }
+    }
+
     /// Recompute pane and axis geometry from the current CSS size using host-native text widths.
     ///
     /// The operation is idempotent and performs the same two-pass refinement used by the browser
@@ -246,5 +324,54 @@ mod tests {
 
         assert_eq!(chart.right_builtin_axis_w, builtin_width);
         assert!(chart.price_scale_axis_width(0, named).unwrap() > builtin_width);
+    }
+
+    #[test]
+    fn one_preparation_operation_owns_viewport_layout_axis_and_frame() {
+        let mut chart = ChartEngine::new(1.0, 1.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0],
+                &[10.0, 11.0],
+                &[10.0, 11.0],
+                &[10.0, 11.0],
+                &[10.0, 11.0],
+            )
+            .unwrap();
+        let mut frame = crate::ChartFrame::default();
+        let mut axis = Vec::new();
+        let prepared = chart.prepare_financial_frame_with_measure(
+            800.0,
+            500.0,
+            2.0,
+            true,
+            true,
+            |text, _| text.len() as f64 * 7.0,
+            |text, _| text.len() as f64 * 6.0,
+            &mut frame,
+            &mut axis,
+        );
+        assert!(prepared.frame_built);
+        assert!(prepared.layout_recomputed);
+        assert!(prepared.dpr_changed);
+        assert_eq!(
+            (chart.css_width, chart.css_height, chart.dpr),
+            (800.0, 500.0, 2.0)
+        );
+        assert!(!frame.panes.is_empty());
+
+        let retained = chart.prepare_financial_frame_with_measure(
+            800.0,
+            500.0,
+            2.0,
+            false,
+            false,
+            |text, _| text.len() as f64 * 7.0,
+            |text, _| text.len() as f64 * 6.0,
+            &mut frame,
+            &mut axis,
+        );
+        assert!(!retained.frame_built);
     }
 }
