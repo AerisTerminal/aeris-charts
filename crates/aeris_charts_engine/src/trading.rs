@@ -990,9 +990,6 @@ impl ChartEngine {
             if order.pane_index != pane_index {
                 continue;
             }
-            if x_css < self.trading_marker_start() || x_css > self.pane_w {
-                continue;
-            }
             let Some(y) = self.trading_price_coordinate(
                 pane_index,
                 order.price_scale,
@@ -1041,9 +1038,6 @@ impl ChartEngine {
                 continue;
             }
             if position.pane_index != pane_index {
-                continue;
-            }
-            if x_css < self.trading_marker_start() || x_css > self.pane_w {
                 continue;
             }
             let Some(y) = self.trading_price_coordinate(
@@ -3105,12 +3099,16 @@ mod tests {
             let y = chart
                 .trading_price_coordinate(0, TradingPriceScale::Right, take_profit)
                 .unwrap();
-            let hit = chart
-                .trading_hit_at(chart.trading_marker_start() + 20.0, y)
-                .unwrap();
+            let line_x = 24.0;
+            assert!(line_x < chart.trading_marker_start());
+            let hit = chart.trading_hit_at(line_x, y).unwrap();
             assert_eq!(hit.kind, TradingHitKind::OrderLine);
             assert!(matches!(hit.object, TradingObjectId::Order(_)));
-            assert!(chart.trading_drag_start_at(chart.trading_marker_start() + 20.0, y));
+            assert_eq!(
+                chart.trading_cursor_at(line_x, y),
+                Some(TradingCursor::Grab)
+            );
+            assert!(chart.trading_drag_start_at(line_x, y));
             let preview_price = if side == PositionSide::Long {
                 take_profit + 0.5
             } else {
@@ -4488,10 +4486,15 @@ mod tests {
         let line_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
             .unwrap();
-        let grab_x = chart.trading_marker_start() + 20.0;
+        let grab_x = 24.0;
+        assert!(grab_x < chart.trading_marker_start());
 
         // Hover advertises the drag with the same hairline dash as a working order.
         assert!(chart.set_trading_hover(grab_x, line_y));
+        assert_eq!(
+            chart.trading_cursor_at(grab_x, line_y),
+            Some(TradingCursor::Grab)
+        );
         let hovered = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
         assert!(
@@ -4584,7 +4587,13 @@ mod tests {
                 ..
             })
         ));
-        assert!(chart.trading_hit_at(20.0, line_y).is_none());
+        assert!(matches!(
+            chart.trading_hit_at(20.0, line_y),
+            Some(TradingHit {
+                kind: TradingHitKind::PositionLine,
+                ..
+            })
+        ));
 
         let marker = |chart: &mut ChartEngine| {
             let frame = chart.build_frame();

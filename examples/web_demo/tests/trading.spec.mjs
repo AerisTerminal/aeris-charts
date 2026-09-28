@@ -660,25 +660,28 @@ for (const backend of ["canvas2d", "webgpu"]) {
       trading.subscribe_intents((intent) => window.__creation_intents.push(intent));
       const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
       const width = window.__chart.time_scale().width();
+      const left_x = width / 2;
       const entry_y = window.__main.price_to_coordinate(100);
       return {
         overlay: { left: overlay.left, top: overlay.top },
         width,
+        left_x,
         entry_y,
-        empty_left: trading.hit_at(40, entry_y),
+        left_line: trading.hit_at(left_x, entry_y),
         marker: trading.hit_at(width - 200, entry_y),
         close_x: window.__close_x("position-only", entry_y),
         close: trading.hit_at(window.__close_x("position-only", entry_y), entry_y),
       };
     });
-    expect(probe.empty_left).toBeNull();
+    expect(probe.left_line).toMatchObject({ id: "position-only", kind: "position_line" });
     expect(probe.marker).toMatchObject({ id: "position-only", kind: "position_line" });
     expect(probe.close).toMatchObject({ id: "position-only", kind: "cancel_button" });
 
-    await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.entry_y);
+    await page.mouse.move(probe.overlay.left + probe.left_x, probe.overlay.top + probe.entry_y);
+    expect(await page.locator("#chart_container canvas:last-of-type").evaluate((canvas) => canvas.style.cursor)).toBe("grab");
     await page.mouse.down();
     await page.mouse.move(
-      probe.overlay.left + probe.width - 200,
+      probe.overlay.left + probe.left_x,
       probe.overlay.top + probe.entry_y - 40,
       { steps: 6 },
     );
