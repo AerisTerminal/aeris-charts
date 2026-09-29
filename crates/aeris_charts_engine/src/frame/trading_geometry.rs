@@ -29,8 +29,6 @@ pub(crate) struct TradingExecutionMark {
     pub size: f64,
     /// Vertical extent in CSS px: `size` for one fill, taller for the stacked-chevron mark.
     pub height: f64,
-    /// Whether an OHLC bar is painted here, so exact fills can be marked on it.
-    pub on_bar: bool,
 }
 
 #[derive(Default)]
@@ -209,32 +207,42 @@ impl ChartEngine {
         self.runtime_price_coordinate(pane_index, target, price)
     }
 
-    /// Vertical extent `(top, bottom)` in CSS px of what the pane paints on bar `index` for
-    /// `target`: the wick for OHLC series (Heikin-Ashi when shown) and the plotted value for line,
-    /// area, baseline, and histogram series. Execution marks sit outside this extent, so they hug
-    /// the rendered shape on every series type instead of floating at a price the line never
-    /// reaches. The flag reports whether any contributing series paints an OHLC bar.
+    /// Vertical extent `(top, bottom)` in CSS px of what the pane paints within `half_width` of
+    /// bar `index` for `target`: the wick for OHLC series (Heikin-Ashi when shown), the column
+    /// top for histograms, and for line, area, and baseline series the stroked line itself across
+    /// the mark's width (the slope toward each neighbor, or a stepped line's riser) padded by half
+    /// the line width. Execution marks sit outside this extent, so they clear the rendered shape
+    /// on every series type instead of touching a sloped line.
     fn trading_bar_extent(
         &self,
         pane_index: usize,
         target: PriceScaleTarget,
         index: i64,
         from: i64,
-    ) -> Option<(f64, f64, bool)> {
+        half_width: f64,
+    ) -> Option<(f64, f64)> {
         let pane = self.panes.get(pane_index)?;
         let scale = pane_scale(pane, target);
         if scale.is_empty() {
             return None;
         }
+        let bar_spacing = self.time_scale.bar_spacing();
         let mut extent: Option<(f64, f64)> = None;
-        let mut on_bar = false;
+        let mut include = |y: f64, pad: f64| {
+            if y.is_finite() {
+                extent = Some(extent.map_or((y - pad, y + pad), |(top, bottom)| {
+                    (top.min(y - pad), bottom.max(y + pad))
+                }));
+            }
+        };
         for series in &self.series {
+            let render_end = self.series_render_end(series.id, i64::MAX);
             if !series.visible
                 || series.removed
                 || series.pane_index != pane_index
                 || series_scale_target(series) != target
                 || self.indicator_binding_id(series.id).is_some()
-                || index > self.series_render_end(series.id, index)
+                || index > render_end
             {
                 continue;
             }
@@ -248,36 +256,75 @@ impl ChartEngine {
             let Some(base_value) = self.series_base_value(series.id, from) else {
                 continue;
             };
-            let [high, low] = match series.kind {
+            let y_of = |price: f64| {
+                if price.is_finite() {
+                    scale.price_to_coordinate(price, base_value)
+                } else {
+                    f64::NAN
+                }
+            };
+            match series.kind {
                 SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint => {
-                    on_bar = true;
-                    self.heikin_ashi_row(series.id, row)
+                    let [high, low] = self
+                        .heikin_ashi_row(series.id, row)
                         .map(|values| [values[1], values[2]])
                         .unwrap_or_else(|| {
                             [
                                 plot.value_at(row, PlotValueIndex::High),
                                 plot.value_at(row, PlotValueIndex::Low),
                             ]
-                        })
+                        });
+                    include(y_of(high), 0.0);
+                    include(y_of(low), 0.0);
                 }
-                SeriesKind::Line
-                | SeriesKind::Area
-                | SeriesKind::Histogram
-                | SeriesKind::Baseline => {
-                    let value = plot.value_at(row, PlotValueIndex::Close);
-                    [value, value]
+                SeriesKind::Histogram => {
+                    include(y_of(plot.value_at(row, PlotValueIndex::Close)), 0.0);
                 }
-                SeriesKind::Custom | SeriesKind::Feature => continue,
-            };
-            for price in [high, low] {
-                let y = scale.price_to_coordinate(price, base_value);
-                if price.is_finite() && y.is_finite() {
-                    extent =
-                        Some(extent.map_or((y, y), |(top, bottom)| (top.min(y), bottom.max(y))));
+                SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline => {
+                    // Baseline quadrants may override the width; clear the widest stroke.
+                    let width = [series.top_line_width, series.bottom_line_width]
+                        .into_iter()
+                        .flatten()
+                        .fold(series.line_width.unwrap_or(LINE_WIDTH), f64::max);
+                    let pad = width / 2.0;
+                    let y = y_of(plot.value_at(row, PlotValueIndex::Close));
+                    include(y, pad);
+                    for step in [-1_isize, 1] {
+                        let Some(neighbor) = row
+                            .checked_add_signed(step)
+                            .filter(|&neighbor| !plot.is_whitespace_row(neighbor))
+                        else {
+                            continue;
+                        };
+                        let Some(neighbor_index) = plot.index_at(neighbor) else {
+                            continue;
+                        };
+                        if neighbor_index > render_end {
+                            continue;
+                        }
+                        let neighbor_y = y_of(plot.value_at(neighbor, PlotValueIndex::Close));
+                        let gap = (neighbor_index - index).abs() as f64 * bar_spacing;
+                        match series.line_type {
+                            // A stepped line runs flat at its own value, then turns at the next
+                            // bar: the previous bar's riser stands exactly on this bar's x.
+                            LineType::WithSteps => {
+                                if step < 0 {
+                                    include(neighbor_y, pad);
+                                }
+                            }
+                            LineType::Simple | LineType::Curved => {
+                                if gap > 0.0 {
+                                    let t = (half_width / gap).min(1.0);
+                                    include(y + (neighbor_y - y) * t, pad);
+                                }
+                            }
+                        }
+                    }
                 }
+                SeriesKind::Custom | SeriesKind::Feature => {}
             }
         }
-        extent.map(|(top, bottom)| (top, bottom, on_bar))
+        extent
     }
 
     /// Lay out execution marks for one pane, shared by the frame and hit testing. Each fill
@@ -327,42 +374,39 @@ impl ChartEngine {
                     .count();
             let fills = &layout.order[start..end];
             let executions = &self.trading_state.executions;
-            let first = &executions[fills[0]];
-            let target = PriceScaleTarget::from(first.price_scale);
+            let quantity: f64 = fills.iter().map(|&slot| executions[slot].quantity).sum();
+            let scale = if fills.iter().any(|&slot| executions[slot].size_by_quantity) {
+                (quantity.abs().sqrt() / 2.0).clamp(0.75, 2.0)
+            } else {
+                1.0
+            };
+            let size = envelope.clamp(16.0, 22.0) * scale;
+            let stacked = fills.len() > 1
+                && executions[fills[fills.len() - 1]].marker_shape
+                    == crate::ExecutionMarkerShape::Arrow;
+            let height = if stacked {
+                size * STACKED_EXECUTION_HEIGHT / 70.0
+            } else {
+                size
+            };
+            let target = PriceScaleTarget::from(executions[fills[0]].price_scale);
             let extent = self
-                .trading_bar_extent(pane_index, target, index, from)
+                .trading_bar_extent(pane_index, target, index, from, size / 2.0)
                 .or_else(|| {
                     // No painted bar here (whitespace or a custom series): bracket the fills.
                     fills
                         .iter()
-                        .fold(None, |extent: Option<(f64, f64, bool)>, &slot| {
+                        .fold(None, |extent: Option<(f64, f64)>, &slot| {
                             let fill = &executions[slot];
                             let y = self.trading_price_coordinate(
                                 pane_index,
                                 fill.price_scale,
                                 fill.price,
                             )?;
-                            Some(extent.map_or((y, y, true), |(top, bottom, _)| {
-                                (top.min(y), bottom.max(y), true)
-                            }))
+                            Some(extent.map_or((y, y), |(top, bottom)| (top.min(y), bottom.max(y))))
                         })
                 });
-            if let Some((top, bottom, on_bar)) = extent {
-                let quantity: f64 = fills.iter().map(|&slot| executions[slot].quantity).sum();
-                let scale = if fills.iter().any(|&slot| executions[slot].size_by_quantity) {
-                    (quantity.abs().sqrt() / 2.0).clamp(0.75, 2.0)
-                } else {
-                    1.0
-                };
-                let size = envelope.clamp(16.0, 22.0) * scale;
-                let stacked = fills.len() > 1
-                    && executions[fills[fills.len() - 1]].marker_shape
-                        == crate::ExecutionMarkerShape::Arrow;
-                let height = if stacked {
-                    size * STACKED_EXECUTION_HEIGHT / 70.0
-                } else {
-                    size
-                };
+            if let Some((top, bottom)) = extent {
                 let side = if side == 0 {
                     OrderSide::Buy
                 } else {
@@ -379,7 +423,6 @@ impl ChartEngine {
                     y,
                     size,
                     height,
-                    on_bar,
                 });
             }
             start = end;
@@ -1394,12 +1437,6 @@ impl ChartEngine {
             let fill = &executions[slot];
             quantity += fill.quantity;
             notional += fill.price * fill.quantity;
-            // Exact-fill ticks belong on a painted candle or bar. A line-type series draws no
-            // bar there, so its fills are reported by the tooltip alone rather than as dots in
-            // empty space.
-            if !mark.on_bar {
-                continue;
-            }
             let Some(fill_y) =
                 self.trading_price_coordinate(pane_index, fill.price_scale, fill.price)
             else {

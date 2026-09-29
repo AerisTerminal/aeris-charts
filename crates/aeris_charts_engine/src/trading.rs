@@ -3219,7 +3219,8 @@ mod tests {
             }
         }
 
-        // A line paints only the close: the arrows hug the line, not the (off-line) fill prices.
+        // A line paints only the close. The arrows clear the stroked line across their whole
+        // width (the line rises toward bar 2), not just the point on their own bar.
         chart.convert_series_kind(0, crate::SeriesKind::Line);
         chart
             .set_trading_snapshot(TradingSnapshot {
@@ -3228,29 +3229,52 @@ mod tests {
             })
             .unwrap();
         chart.build_frame();
-        let close_y = price_y(&chart, 102.0);
         let layout = chart.trading_execution_layout(0);
+        let points: Vec<(f64, f64)> = [101.0, 102.0, 103.0]
+            .iter()
+            .enumerate()
+            .map(|(index, &close)| {
+                (
+                    chart.time_scale.index_to_coordinate(index as i64),
+                    price_y(&chart, close),
+                )
+            })
+            .collect();
+        let line_y = |x: f64| {
+            let segment = points.windows(2).find(|pair| x <= pair[1].0).unwrap();
+            let t = (x - segment[0].0) / (segment[1].0 - segment[0].0);
+            segment[0].1 + (segment[1].1 - segment[0].1) * t
+        };
+        let half_line = crate::frame::LINE_WIDTH / 2.0;
+        for mark in &layout.marks {
+            for step in 0..=20 {
+                // Only where the line is actually drawn: between the first and last point.
+                let x = (mark.x - mark.size / 2.0 + mark.size * f64::from(step) / 20.0)
+                    .clamp(points[0].0, points[2].0);
+                match mark.side {
+                    OrderSide::Buy => {
+                        assert!(mark.y - mark.height / 2.0 >= line_y(x) + half_line);
+                    }
+                    OrderSide::Sell => {
+                        assert!(mark.y + mark.height / 2.0 <= line_y(x) - half_line);
+                    }
+                }
+            }
+        }
         let buy = layout
             .marks
             .iter()
             .find(|mark| mark.side == OrderSide::Buy)
             .unwrap();
-        let sell = layout
-            .marks
-            .iter()
-            .find(|mark| mark.side == OrderSide::Sell)
-            .unwrap();
-        let gap = |edge: f64| (edge - close_y).abs();
-        assert!(buy.y > close_y && gap(buy.y - buy.height / 2.0) <= 4.0);
-        assert!(sell.y < close_y && gap(sell.y + sell.height / 2.0) <= 4.0);
         assert!(
             (buy.y - price_y(&chart, 100.0)).abs() > buy.size,
             "a line-chart buy arrow must not float at the fill price"
         );
 
-        // A line paints no candle, so hovering reports the exact fill in the tooltip only: no
-        // tick, dot, or lead is drawn in the empty space around the line.
+        // Hover marks the exact fill price even where the line draws nothing: the fill really
+        // happened there. A dotted lead joins the arrow to it and the tooltip clears both.
         let (x, arrow_bottom) = (buy.x, buy.y + buy.height / 2.0);
+        let fill_y = price_y(&chart, 100.0);
         assert_eq!(
             chart.trading_cursor_at(x, buy.y),
             Some(TradingCursor::Pointer)
@@ -3259,9 +3283,14 @@ mod tests {
         let mut regions = Vec::new();
         let mut lines = Vec::new();
         chart.build_trading_frame_for_test(0, 1.0, 1.0, &mut regions, &mut lines);
-        assert!(!lines.iter().any(|p| matches!(
+        assert!(lines.iter().any(|p| matches!(
             p,
-            Prim::HLine { .. } | Prim::VLine { .. } | Prim::Circle { .. }
+            Prim::HLine { y, .. } if *y == fill_y.round() as i32
+        )));
+        assert!(lines.iter().any(|p| matches!(
+            p,
+            Prim::VLine { y0, y1, .. }
+                if *y0 == arrow_bottom.round() as i32 && *y1 == fill_y.round() as i32
         )));
         assert!(lines.iter().any(|p| matches!(
             p,
@@ -3269,7 +3298,7 @@ mod tests {
         )));
         assert!(lines.iter().any(|p| matches!(
             p,
-            Prim::RoundRect { y, .. } if f64::from(*y) > arrow_bottom
+            Prim::RoundRect { y, .. } if f64::from(*y) > fill_y
         )));
         // The arrow is an open stroke in the execution color, not a filled glyph.
         let execution_buy = chart.trading_style().execution_buy;
@@ -3280,6 +3309,26 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn execution_arrows_clear_a_stepped_line_riser() {
+        // Closes 101 → 102 → 103. A stepped line holds 101 until bar 1, then rises there, so the
+        // riser from 101 stands on bar 1's x even at a wide spacing where a slope would not reach.
+        let mut chart = chart_with_market();
+        chart.convert_series_kind(0, crate::SeriesKind::Line);
+        chart.series[0].line_type = aeris_charts_render::draw_list::LineType::WithSteps;
+        chart.set_bar_spacing(60.0);
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                executions: vec![fill("buy", OrderSide::Buy, 20, 100.0, 1.0)],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        chart.build_frame();
+        let mark = &chart.trading_execution_layout(0).marks[0];
+        let riser_bottom = price_y(&chart, 101.0) + crate::frame::LINE_WIDTH / 2.0;
+        assert!(mark.y - mark.height / 2.0 >= riser_bottom);
     }
 
     #[test]

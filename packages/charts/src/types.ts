@@ -2695,9 +2695,9 @@ export interface trading_execution {
   position_id?: string;
   /**
    * Mark drawn outside the bar that contains `time`: buys below its rendered low, sells above
-   * its rendered high (the plotted value for line-type series). Fills of one side on one bar
-   * share one mark (an arrow with stacked chevrons when there are several); hovering it shows each
-   * fill's exact price on a painted bar. Defaults to `"arrow"`.
+   * its rendered high (the plotted line for line-type series). Fills of one side on one bar
+   * share one mark (an arrow with stacked chevrons when there are several) that clears a line
+   * series across its width; hovering it marks each fill's exact price. Defaults to `"arrow"`.
    */
   marker_shape?: "circle" | "arrow" | "triangle";
   size_by_quantity?: boolean;
