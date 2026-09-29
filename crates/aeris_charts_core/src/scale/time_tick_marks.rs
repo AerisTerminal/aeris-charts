@@ -233,13 +233,21 @@ impl TimeTickMarks {
     /// Full rebuild from per-point weights (incremental `firstChangedPointIndex` variant
     /// comes with the data layer).
     pub fn set_weights(&mut self, weights: &[u8]) {
+        self.set_weights_from(0, weights);
+    }
+
+    /// Full rebuild from per-point weights whose first logical index may be negative.
+    pub fn set_weights_from(&mut self, start_index: TimePointIndex, weights: &[u8]) {
         self.marks_by_weight.clear();
         self.cache = None;
         for (index, &weight) in weights.iter().enumerate() {
-            self.marks_by_weight
-                .entry(weight)
-                .or_default()
-                .push(index as TimePointIndex);
+            let Ok(index) = TimePointIndex::try_from(index) else {
+                break;
+            };
+            let Some(index) = start_index.checked_add(index) else {
+                break;
+            };
+            self.marks_by_weight.entry(weight).or_default().push(index);
         }
     }
 
@@ -471,6 +479,17 @@ mod tests {
         marks.set_weights(&[50]);
         marks.append_weights(1, &[50, 50]);
         let built = marks.build(10.0, 10.0);
+        assert!(built.iter().any(|mark| mark.index == 0));
+        assert!(built.iter().any(|mark| mark.index == 1));
+    }
+
+    #[test]
+    fn full_rebuild_preserves_negative_projected_indices() {
+        let mut marks = TimeTickMarks::new();
+        marks.set_weights_from(-2, &[70, 60, 50, 40]);
+        let built = marks.build(100.0, 1.0);
+        assert!(built.iter().any(|mark| mark.index == -2));
+        assert!(built.iter().any(|mark| mark.index == -1));
         assert!(built.iter().any(|mark| mark.index == 0));
         assert!(built.iter().any(|mark| mark.index == 1));
     }

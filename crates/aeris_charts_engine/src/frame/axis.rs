@@ -592,7 +592,7 @@ impl ChartEngine {
         let visible_time_axis = self
             .time_scale
             .visible_strict_range()
-            .map(|range| (range.left().max(0), range.right()));
+            .map(|range| (range.left(), range.right()));
         let layout_text_color = self.primary_text_color();
         // Per-scale label color (reference `textColor`): the scale's own color when set, else the
         // layout text color (price-axis-widget.ts:569).
@@ -711,7 +711,7 @@ impl ChartEngine {
                 if index < from || index > to {
                     continue;
                 }
-                let Some(ts) = self.axis_time_key_at(index as usize) else {
+                let Some(ts) = self.axis_time_key_at_logical(index) else {
                     continue;
                 };
                 // A hidden time axis (reference `timeScale.visible` false) drops its whole strip,
@@ -2511,12 +2511,9 @@ impl ChartEngine {
         }
         if ch.vert_line.label_visible && x_css <= self.pane_w && self.time_axis_visible {
             let index = self.snapped_crosshair_index(x_css);
-            // reference `indexToTime` returns null in the empty area — the time label is hidden
-            // when the snapped index has no bar (past either data edge).
-            if index >= 0 {
-                let Some(time) = self.axis_time_key_at(index as usize) else {
-                    return;
-                };
+            // Deterministic time-based charts may have display-only projected timestamps in the
+            // empty area on either side of canonical data. Sequence axes still return `None`.
+            if let Some(time) = self.axis_time_key_at_logical(index) {
                 let text = self.format_crosshair_ts(time);
                 let width = AxisMetrics::time_tag_width(measure(&text, false));
                 let height = metrics.time_strip_height();

@@ -1694,6 +1694,11 @@ pub struct ChartEngine {
     future_time_projection: Option<(i64, usize)>,
     future_time_projection_revision: u64,
     synced_future_time_projection_revision: u64,
+    /// Display-only historical time projection for deterministic time-based bars. These points
+    /// extend axis/crosshair labels into left-side whitespace without entering the data layer.
+    past_time_projection: Option<(i64, usize)>,
+    past_time_projection_revision: u64,
+    synced_past_time_projection_revision: u64,
     pub css_width: f64,
     pub css_height: f64,
     pub dpr: f64,
@@ -1928,6 +1933,9 @@ impl ChartEngine {
             future_time_projection: None,
             future_time_projection_revision: 0,
             synced_future_time_projection_revision: 0,
+            past_time_projection: None,
+            past_time_projection_revision: 0,
+            synced_past_time_projection_revision: 0,
             css_width,
             css_height,
             dpr,
@@ -2039,6 +2047,14 @@ impl ChartEngine {
         self.projected_axis_time_at(index).map(|time| time as f64)
     }
 
+    pub(crate) fn axis_time_seconds_at_logical(&self, index: i64) -> Option<f64> {
+        if index >= 0 {
+            return self.axis_time_seconds_at(usize::try_from(index).ok()?);
+        }
+        self.projected_axis_time_at_logical(index)
+            .map(|time| time as f64)
+    }
+
     pub(crate) fn axis_time_key_at(&self, index: usize) -> Option<i64> {
         if let Some(points) = self.sequence_points() {
             return points
@@ -2046,6 +2062,13 @@ impl ChartEngine {
                 .map(|point| point.open_timestamp_micros.div_euclid(1_000_000));
         }
         self.projected_axis_time_at(index)
+    }
+
+    pub(crate) fn axis_time_key_at_logical(&self, index: i64) -> Option<i64> {
+        if index >= 0 {
+            return self.axis_time_key_at(usize::try_from(index).ok()?);
+        }
+        self.projected_axis_time_at_logical(index)
     }
 
     fn projected_axis_time_at(&self, index: usize) -> Option<i64> {
@@ -2060,6 +2083,22 @@ impl ChartEngine {
         }
         let multiple = i64::try_from(future_index.checked_add(1)?).ok()?;
         last.checked_add(step.checked_mul(multiple)?)
+    }
+
+    fn projected_axis_time_at_logical(&self, index: i64) -> Option<i64> {
+        if index >= 0 {
+            return self.projected_axis_time_at(usize::try_from(index).ok()?);
+        }
+        let (&first, (step, count)) = (
+            self.data.merged_times().first()?,
+            self.past_time_projection?,
+        );
+        let distance = usize::try_from(index.checked_neg()?).ok()?;
+        if distance == 0 || distance > count {
+            return None;
+        }
+        let multiple = i64::try_from(distance).ok()?;
+        first.checked_sub(step.checked_mul(multiple)?)
     }
 
     /// The bar that contains `time`: the last bar opening at or before it, so an intraday event
@@ -2352,6 +2391,38 @@ impl ChartEngine {
         self.invalidate_frame_layout_and_axis();
         self.invalidate_frame_overlay();
         true
+    }
+
+    /// Configure display-only historical timestamps for deterministic time-based bars.
+    ///
+    /// These timestamps participate only in time-axis/crosshair labeling. They never enter the
+    /// canonical data layer, never create candle/volume rows, and never change the base index.
+    /// Passing `None` or `points == 0` disables the projection.
+    pub fn set_past_time_projection(
+        &mut self,
+        cadence_seconds: Option<i64>,
+        points: usize,
+    ) -> bool {
+        const MAX_PAST_TIME_POINTS: usize = 4_096;
+        let next = cadence_seconds
+            .filter(|step| *step > 0)
+            .filter(|_| points > 0)
+            .map(|step| (step, points.min(MAX_PAST_TIME_POINTS)));
+        if self.past_time_projection == next {
+            return false;
+        }
+        self.past_time_projection = next;
+        self.past_time_projection_revision = self.past_time_projection_revision.wrapping_add(1);
+        self.rebuild_time_tick_weights();
+        self.invalidate_frame_layout_and_axis();
+        self.invalidate_frame_overlay();
+        true
+    }
+
+    /// Whether this chart currently has display-only historical time points configured.
+    #[must_use]
+    pub const fn has_past_time_projection(&self) -> bool {
+        self.past_time_projection.is_some()
     }
 
     /// Whether this chart currently has display-only future time points configured.
@@ -4302,7 +4373,7 @@ impl ChartEngine {
     pub fn crosshair_sync_position(&self) -> Option<CrosshairSyncPosition> {
         let (x, y) = self.crosshair?;
         let logical = self.time_scale.coordinate_to_index(x);
-        let time = self.axis_time_seconds_at(logical as usize)?;
+        let time = self.axis_time_seconds_at_logical(logical)?;
         let pane_index = self.pane_at_y(y).unwrap_or(0);
         let pane = self.panes.get(pane_index)?;
         Some(CrosshairSyncPosition {
@@ -4814,7 +4885,7 @@ impl ChartEngine {
             return None;
         }
         let index = self.time_scale.coordinate_to_index(x);
-        (index >= 0).then(|| self.axis_time_seconds_at(index as usize))?
+        self.axis_time_seconds_at_logical(index)
     }
 
     pub fn visible_logical_range(&self) -> Option<(f64, f64)> {
@@ -4969,11 +5040,16 @@ impl ChartEngine {
         }
 
         let data_times_len = self.data.merged_times().len();
-        let tick_times = self.axis_tick_times();
+        let (tick_start_index, tick_times) = self.axis_tick_times();
         let time_points_changed = self.data.time_points_generation()
             != self.synced_time_points_generation
-            || self.future_time_projection_revision != self.synced_future_time_projection_revision;
-        let appended = time_points_changed
+            || self.future_time_projection_revision != self.synced_future_time_projection_revision
+            || self.past_time_projection_revision != self.synced_past_time_projection_revision;
+        let has_projected_axis =
+            self.future_time_projection.is_some() || self.past_time_projection.is_some();
+        let appended = !has_projected_axis
+            && tick_start_index == 0
+            && time_points_changed
             && tick_times.len() > self.synced_points_len
             && self.synced_points_len > 0
             && self.synced_last_time.is_some_and(|last| {
@@ -4993,11 +5069,12 @@ impl ChartEngine {
         } else if time_points_changed {
             let mut weights = vec![0u8; tick_times.len()];
             fill_weights_for_points_in_time_zone(&tick_times, &mut weights, 0, self.time_zone);
-            self.tick_marks.set_weights(&weights);
+            self.tick_marks.set_weights_from(tick_start_index, &weights);
         }
         self.synced_points_len = tick_times.len();
         self.synced_time_points_generation = self.data.time_points_generation();
         self.synced_future_time_projection_revision = self.future_time_projection_revision;
+        self.synced_past_time_projection_revision = self.past_time_projection_revision;
         self.synced_last_time = tick_times.last().copied();
         self.synced_first_time = tick_times.first().copied();
         // Future projection points are labels only. Keeping the core point count at canonical data
@@ -5036,40 +5113,63 @@ impl ChartEngine {
     }
 
     fn rebuild_time_tick_weights(&mut self) {
-        let times = self.axis_tick_times();
+        let (start_index, times) = self.axis_tick_times();
         let mut weights = vec![0u8; times.len()];
         fill_weights_for_points_in_time_zone(&times, &mut weights, 0, self.time_zone);
-        self.tick_marks.set_weights(&weights);
+        self.tick_marks.set_weights_from(start_index, &weights);
     }
 
-    fn axis_tick_times(&self) -> Vec<i64> {
+    fn axis_tick_times(&self) -> (i64, Vec<i64>) {
         if let Some(points) = self.sequence_points() {
-            return points
-                .iter()
-                .map(|point| point.open_timestamp_micros.div_euclid(1_000_000))
-                .collect();
+            return (
+                0,
+                points
+                    .iter()
+                    .map(|point| point.open_timestamp_micros.div_euclid(1_000_000))
+                    .collect(),
+            );
         }
-        let mut times = self.data.merged_times().to_vec();
-        let Some((step, count)) = self.future_time_projection else {
-            return times;
+        let canonical = self.data.merged_times();
+        let Some(&first) = canonical.first() else {
+            return (0, Vec::new());
         };
-        let Some(&last) = times.last() else {
-            return times;
-        };
-        times.reserve(count);
-        for offset in 1..=count {
-            let Ok(offset) = i64::try_from(offset) else {
-                break;
-            };
-            let Some(time) = step
-                .checked_mul(offset)
-                .and_then(|delta| last.checked_add(delta))
-            else {
-                break;
-            };
-            times.push(time);
+        let mut past = Vec::new();
+        if let Some((step, count)) = self.past_time_projection {
+            past.reserve(count);
+            for offset in (1..=count).rev() {
+                let Ok(offset) = i64::try_from(offset) else {
+                    continue;
+                };
+                let Some(time) = step
+                    .checked_mul(offset)
+                    .and_then(|delta| first.checked_sub(delta))
+                else {
+                    continue;
+                };
+                past.push(time);
+            }
         }
-        times
+        let start_index = -i64::try_from(past.len()).unwrap_or(i64::MAX);
+        let future_count = self.future_time_projection.map_or(0, |(_, count)| count);
+        let mut times = Vec::with_capacity(past.len() + canonical.len() + future_count);
+        times.extend(past);
+        times.extend_from_slice(canonical);
+        if let (Some(&last), Some((step, count))) = (canonical.last(), self.future_time_projection)
+        {
+            for offset in 1..=count {
+                let Ok(offset) = i64::try_from(offset) else {
+                    break;
+                };
+                let Some(time) = step
+                    .checked_mul(offset)
+                    .and_then(|delta| last.checked_add(delta))
+                else {
+                    break;
+                };
+                times.push(time);
+            }
+        }
+        (start_index, times)
     }
 
     fn clear_sequence_axis_if_unused(&mut self) {
