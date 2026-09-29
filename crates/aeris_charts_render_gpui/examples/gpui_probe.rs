@@ -34,7 +34,7 @@ use aeris_charts_engine::{
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, Prim, TextAlign};
 use aeris_charts_render_gpui::{
-    backend::{measure_text, text_measurer},
+    backend::{measure_text, text_cap_centerer, text_measurer},
     AerisViewport, GpuiChartRenderer, GpuiFrameMetrics, PreparedAerisFrame,
 };
 use gpui::{
@@ -1614,6 +1614,8 @@ impl Probe {
         // prompt, device-scaled frame runs), matching the browser host's canvas measurer.
         self.engine
             .set_text_measure(Some(Box::new(text_measurer(window))));
+        self.engine
+            .set_text_cap_center(Some(Box::new(text_cap_centerer(window))));
         let axis_size = self.engine.axis_font_size();
         let countdown_size = self.engine.countdown_font_size();
         self.rebuild_with_measure(

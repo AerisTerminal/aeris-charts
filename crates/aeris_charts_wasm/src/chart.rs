@@ -791,6 +791,26 @@ pub async fn create_chart(
                 .unwrap_or(0.0)
         },
     )));
+    let cap_ctx = inner.axis_ctx.clone();
+    inner.engine.set_text_cap_center(Some(Box::new(
+        move |size: f64, family: &str, weight: u16, italic: bool| {
+            cap_ctx.set_font(&aeris_charts_render::draw_list::text_font_spec(
+                size as f32,
+                family,
+                weight,
+                italic,
+            ));
+            cap_ctx.set_text_baseline("middle");
+            // Figures carry the trading readouts; their ink spans the cap height on the baseline.
+            cap_ctx
+                .measure_text("0")
+                .map(|metrics| {
+                    (metrics.actual_bounding_box_ascent() - metrics.actual_bounding_box_descent())
+                        / 2.0
+                })
+                .unwrap_or(0.0)
+        },
+    )));
 
     Ok(AerisChart {
         inner: Rc::new(RefCell::new(inner)),
@@ -924,6 +944,26 @@ pub async fn create_offscreen_chart(
             measure_ctx
                 .measure_text(text)
                 .map(|metrics| metrics.width())
+                .unwrap_or(0.0)
+        },
+    )));
+    let cap_ctx = inner.axis_ctx.clone();
+    inner.engine.set_text_cap_center(Some(Box::new(
+        move |size: f64, family: &str, weight: u16, italic: bool| {
+            cap_ctx.set_font(&aeris_charts_render::draw_list::text_font_spec(
+                size as f32,
+                family,
+                weight,
+                italic,
+            ));
+            cap_ctx.set_text_baseline("middle");
+            // Figures carry the trading readouts; their ink spans the cap height on the baseline.
+            cap_ctx
+                .measure_text("0")
+                .map(|metrics| {
+                    (metrics.actual_bounding_box_ascent() - metrics.actual_bounding_box_descent())
+                        / 2.0
+                })
                 .unwrap_or(0.0)
         },
     )));
@@ -1195,6 +1235,8 @@ impl AerisChart {
                 let kind = match hit.kind {
                     aeris_charts_engine::TradingHitKind::PositionLine => "position_line",
                     aeris_charts_engine::TradingHitKind::OrderLine => "order_line",
+                    aeris_charts_engine::TradingHitKind::TakeProfitButton => "take_profit_button",
+                    aeris_charts_engine::TradingHitKind::StopLossButton => "stop_loss_button",
                     aeris_charts_engine::TradingHitKind::CancelButton => "cancel_button",
                     aeris_charts_engine::TradingHitKind::ExecutionMarker => "execution_marker",
                     aeris_charts_engine::TradingHitKind::Annotation => "annotation",

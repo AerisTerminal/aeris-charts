@@ -27,6 +27,8 @@ enum TradingControlSegmentKind {
     Quantity,
     Pnl,
     OrderType,
+    TakeProfit,
+    StopLoss,
     Cancel,
 }
 
@@ -94,6 +96,8 @@ const QUANTITY_PAD_X: f64 = 8.0;
 const MAX_QUANTITY_WIDTH: f64 = 120.0;
 const PNL_WIDTH: f64 = 96.0;
 const ORDER_TYPE_WIDTH: f64 = 92.0;
+const PROTECTION_BUTTON_WIDTH: f64 = 30.0;
+const PROTECTION_BUTTON_GAP: f64 = 4.0;
 /// Separation between independent annotation chips.
 const ANNOTATION_GAP: f64 = 5.0;
 const ORDER_MARKER_SPAN: f64 = 304.0;
@@ -136,6 +140,8 @@ pub(crate) fn trading_order_color(
 impl ChartEngine {
     fn trading_control_kind(kind: crate::TradingHitKind) -> Option<TradingControlSegmentKind> {
         match kind {
+            crate::TradingHitKind::TakeProfitButton => Some(TradingControlSegmentKind::TakeProfit),
+            crate::TradingHitKind::StopLossButton => Some(TradingControlSegmentKind::StopLoss),
             crate::TradingHitKind::CancelButton => Some(TradingControlSegmentKind::Cancel),
             _ => None,
         }
@@ -284,10 +290,27 @@ impl ChartEngine {
         self.options.get().layout.font_size + CONTROL_PAD_Y
     }
 
-    /// Resolve the shared 999px token with CSS border-radius semantics before frame emission.
-    /// Backends receive final device-space geometry and must not reinterpret an oversized radius.
-    fn trading_pill_radius(&self, hpr: f64, vpr: f64) -> f32 {
-        (RADIUS_LARGE.min(self.trading_control_height() / 2.0) * hpr.min(vpr)) as f32
+    /// Device-pixel `(left, top, right, bottom)` of a control box centered on `y`, snapped once.
+    /// The marker pill and the TP/SL buttons share this rect, so every control on a line has the
+    /// same whole-pixel height instead of a fractional box antialiasing into an extra row.
+    fn trading_control_rect(&self, left: f64, width: f64, y: f64, hpr: f64, vpr: f64) -> [f64; 4] {
+        let height = self.trading_control_height();
+        let top = ((y - height / 2.0) * vpr).round();
+        [
+            (left * hpr).round(),
+            top,
+            ((left + width) * hpr).round(),
+            top + (height * vpr).round(),
+        ]
+    }
+
+    /// Logical offset from a control's vertical center to its text anchor. `Prim::Text` anchors on
+    /// the em-box middle, which leaves capitals and figures visibly high inside a padded control;
+    /// the host glyph metric moves their ink onto the center so top and bottom padding match.
+    /// Every cell of a marker shares this one offset, so adjacent readouts keep one baseline.
+    fn trading_text_offset(&self) -> f64 {
+        let layout = &self.options.get().layout;
+        self.text_cap_center(layout.font_size, &layout.font_family, 400, false)
     }
 
     /// The close chip keeps equal width and height, so its glyph sits on the marker's rhythm.
@@ -357,6 +380,57 @@ impl ChartEngine {
             + self.trading_close_width()
     }
 
+    fn trading_protection_button_hit(
+        &self,
+        show_take_profit: bool,
+        show_stop_loss: bool,
+        x: f64,
+    ) -> Option<crate::TradingHitKind> {
+        let mut right = self.trading_marker_start() - PROTECTION_BUTTON_GAP;
+        for (visible, kind) in [
+            (show_stop_loss, crate::TradingHitKind::StopLossButton),
+            (show_take_profit, crate::TradingHitKind::TakeProfitButton),
+        ] {
+            if !visible {
+                continue;
+            }
+            let left = right - PROTECTION_BUTTON_WIDTH;
+            if x >= left && x <= right {
+                return Some(kind);
+            }
+            right = left - PROTECTION_BUTTON_GAP;
+        }
+        None
+    }
+
+    pub(crate) fn trading_order_protection_hit(
+        &self,
+        order: &crate::WorkingOrder,
+        x: f64,
+    ) -> Option<crate::TradingHitKind> {
+        self.trading_protection_button_hit(
+            self.trading_order_protection_preview(order, OrderRole::TakeProfit)
+                .is_some(),
+            self.trading_order_protection_preview(order, OrderRole::StopLoss)
+                .is_some(),
+            x,
+        )
+    }
+
+    pub(crate) fn trading_position_protection_hit(
+        &self,
+        position: &crate::TradingPosition,
+        x: f64,
+    ) -> Option<crate::TradingHitKind> {
+        self.trading_protection_button_hit(
+            self.trading_position_protection_preview(position, OrderRole::TakeProfit)
+                .is_some(),
+            self.trading_position_protection_preview(position, OrderRole::StopLoss)
+                .is_some(),
+            x,
+        )
+    }
+
     pub(crate) fn trading_annotation_hit(
         &self,
         annotations: &[crate::TradingAnnotation],
@@ -412,6 +486,7 @@ impl ChartEngine {
         vpr: f64,
     ) {
         let height = self.trading_control_height();
+        let text_offset = self.trading_text_offset();
         let mut cursor = self.trading_marker_start();
         let visible = annotations.len().min(3);
         for annotation in annotations.iter().take(visible) {
@@ -434,7 +509,7 @@ impl ChartEngine {
             });
             out.push(Prim::Text {
                 x: ((cursor + width / 2.0) * hpr) as f32,
-                y: (center_y * vpr) as f32,
+                y: ((center_y + text_offset) * vpr) as f32,
                 text: annotation.text.clone(),
                 color,
                 size: (self.options.get().layout.font_size * vpr) as f32,
@@ -460,7 +535,7 @@ impl ChartEngine {
             });
             out.push(Prim::Text {
                 x: ((cursor + width / 2.0) * hpr) as f32,
-                y: (line_y * vpr) as f32,
+                y: ((line_y + text_offset) * vpr) as f32,
                 text,
                 color: self.trading_state.style.control,
                 size: (self.options.get().layout.font_size * vpr) as f32,
@@ -557,12 +632,8 @@ impl ChartEngine {
         } = segment;
         let TradingChipLayout { x, y, hpr, vpr } = layout;
         let font_size = self.options.get().layout.font_size;
-        let height = self.trading_control_height();
-        let bx = (x * hpr) as f32;
-        let by = ((y - height / 2.0) * vpr) as f32;
-        let bw = (width * hpr) as f32;
-        let bh = (height * vpr) as f32;
-        let radius = self.trading_pill_radius(hpr, vpr);
+        let [left, top, right, bottom] = self.trading_control_rect(x, width, y, hpr, vpr);
+        let radius = (RADIUS_LARGE * hpr.min(vpr)).min((bottom - top) / 2.0) as f32;
         let fill = match (filled, feedback) {
             (true, TradingControlFeedback::Idle) => color.solid(),
             (true, TradingControlFeedback::Hovered) => color.solid().lighten(0.16),
@@ -572,18 +643,18 @@ impl ChartEngine {
                 .unwrap_or_else(|| self.trading_chip_background()),
         };
         out.push(Prim::RoundRect {
-            x: bx,
-            y: by,
-            w: bw,
-            h: bh,
+            x: left as f32,
+            y: top as f32,
+            w: (right - left) as f32,
+            h: (bottom - top) as f32,
             radii: [radius; 4],
             fill,
             border_width: Self::trading_border_width(vpr) as f32,
             border_color: color,
         });
         out.push(Prim::Text {
-            x: ((x + width / 2.0) * hpr) as f32,
-            y: (y * vpr) as f32,
+            x: ((left + right) / 2.0) as f32,
+            y: ((top + bottom) / 2.0 + self.trading_text_offset() * vpr) as f32,
             text: text.to_string(),
             color: if filled { color.contrast_text() } else { color },
             size: (font_size * vpr) as f32,
@@ -592,6 +663,65 @@ impl ChartEngine {
             weight: 400,
             italic: false,
         });
+    }
+
+    fn push_trading_protection_buttons(
+        &self,
+        out: &mut Vec<Prim>,
+        show_take_profit: bool,
+        show_stop_loss: bool,
+        hovered: Option<crate::TradingHitKind>,
+        pressed: Option<crate::TradingHitKind>,
+        layout: TradingChipLayout,
+    ) {
+        let TradingChipLayout { y, hpr, vpr, .. } = layout;
+        let mut right = self.trading_marker_start() - PROTECTION_BUTTON_GAP;
+        for (visible, kind, segment_kind, label, color) in [
+            (
+                show_stop_loss,
+                crate::TradingHitKind::StopLossButton,
+                TradingControlSegmentKind::StopLoss,
+                "SL",
+                self.trading_state.style.stop_loss,
+            ),
+            (
+                show_take_profit,
+                crate::TradingHitKind::TakeProfitButton,
+                TradingControlSegmentKind::TakeProfit,
+                "TP",
+                self.trading_state.style.take_profit,
+            ),
+        ] {
+            if !visible {
+                continue;
+            }
+            let left = right - PROTECTION_BUTTON_WIDTH;
+            let feedback = if pressed == Some(kind) {
+                TradingControlFeedback::Pressed
+            } else if hovered == Some(kind) {
+                TradingControlFeedback::Hovered
+            } else {
+                TradingControlFeedback::Idle
+            };
+            self.push_trading_segment(
+                out,
+                TradingControlSegment {
+                    kind: segment_kind,
+                    text: label,
+                    width: PROTECTION_BUTTON_WIDTH,
+                    color,
+                    filled: false,
+                },
+                feedback,
+                TradingChipLayout {
+                    x: left,
+                    y,
+                    hpr,
+                    vpr,
+                },
+            );
+            right = left - PROTECTION_BUTTON_GAP;
+        }
     }
 
     /// Draw the close icon as two anti-aliased strokes. `Polyline` is the one stroke primitive
@@ -645,18 +775,16 @@ impl ChartEngine {
     ) {
         let TradingChipLayout { y, hpr, vpr, .. } = layout;
         let font_size = self.options.get().layout.font_size;
-        let height = self.trading_control_height();
         let color = cluster.color;
         let left = cluster.start();
-        let top = y - height / 2.0;
         // Snap the pill to whole device pixels once. The container, cell fills, close surface,
         // and outline all derive from this rect, so their edges agree exactly and stay crisp.
-        let pill_left = (left * hpr).round();
-        let pill_right = ((left + cluster.width()) * hpr).round();
-        let pill_top = (top * vpr).round();
-        let pill_bottom = pill_top + (height * vpr).round();
+        let [pill_left, pill_top, pill_right, pill_bottom] =
+            self.trading_control_rect(left, cluster.width(), y, hpr, vpr);
         // The shared 999px token resolves with CSS border-radius clamping to half the height.
         let radius = (RADIUS_LARGE * hpr.min(vpr)).min((pill_bottom - pill_top) / 2.0) as f32;
+        // Anchor text on the snapped pill's own center so glyphs and outline share one axis.
+        let text_y = (pill_top + pill_bottom) / 2.0 + self.trading_text_offset() * vpr;
         let cell_feedback = |kind: TradingControlSegmentKind| {
             if pressed == Some(kind) {
                 TradingControlFeedback::Pressed
@@ -727,7 +855,7 @@ impl ChartEngine {
             }
             out.push(Prim::Text {
                 x: ((cursor + segment.width / 2.0) * hpr) as f32,
-                y: (y * vpr) as f32,
+                y: text_y as f32,
                 text: segment.text.to_string(),
                 color: if segment.filled {
                     color.contrast_text()
@@ -881,7 +1009,7 @@ impl ChartEngine {
         });
         out.push(Prim::Text {
             x: ((x + width / 2.0) * hpr) as f32,
-            y: ((y + height / 2.0) * vpr) as f32,
+            y: ((y + height / 2.0 + self.trading_text_offset()) * vpr) as f32,
             text: text.to_string(),
             color: self.primary_text_color(),
             size: (font_size * vpr) as f32,
@@ -1060,15 +1188,8 @@ impl ChartEngine {
                 y: (y * vpr).round() as i32,
                 x0: 0,
                 x1: (self.trading_marker_end() * hpr).round() as i32,
-                // A draggable position line signals its protection drag the same way a working
-                // order does: a hairline dash on hover, never a thickness jump.
                 width: min_line_width,
-                style: if hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::PositionLine)
-                {
-                    LineStyle::Dashed
-                } else {
-                    LineStyle::Solid
-                },
+                style: LineStyle::Solid,
                 color: position_color,
             });
             if hovered.is_some() {
@@ -1118,6 +1239,21 @@ impl ChartEngine {
             };
             let hovered_segment = hovered.and_then(|hit| Self::trading_control_kind(hit.kind));
             let pressed_segment = pressed.and_then(|hit| Self::trading_control_kind(hit.kind));
+            self.push_trading_protection_buttons(
+                lines,
+                self.trading_position_protection_preview(position, OrderRole::TakeProfit)
+                    .is_some(),
+                self.trading_position_protection_preview(position, OrderRole::StopLoss)
+                    .is_some(),
+                hovered.map(|hit| hit.kind),
+                pressed.map(|hit| hit.kind),
+                TradingChipLayout {
+                    x: self.trading_marker_start(),
+                    y,
+                    hpr,
+                    vpr,
+                },
+            );
             self.push_trading_cluster(
                 lines,
                 points,
@@ -1204,10 +1340,7 @@ impl ChartEngine {
                 // scale with stroke width in every executor, so keeping the hairline also keeps
                 // the hover dashes compact and consistent across DPRs.
                 width: min_line_width,
-                style: if creating_protection
-                    || (order.role == OrderRole::Working
-                        && hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::OrderLine))
-                {
+                style: if creating_protection {
                     LineStyle::Dashed
                 } else if preview.is_some()
                     || matches!(
@@ -1317,6 +1450,21 @@ impl ChartEngine {
                 left: main_x,
                 color,
             };
+            self.push_trading_protection_buttons(
+                lines,
+                self.trading_order_protection_preview(order, OrderRole::TakeProfit)
+                    .is_some(),
+                self.trading_order_protection_preview(order, OrderRole::StopLoss)
+                    .is_some(),
+                hovered.map(|hit| hit.kind),
+                pressed.map(|hit| hit.kind),
+                TradingChipLayout {
+                    x: self.trading_marker_start(),
+                    y,
+                    hpr,
+                    vpr,
+                },
+            );
             self.push_trading_cluster(
                 lines,
                 points,

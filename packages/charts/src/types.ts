@@ -2751,6 +2751,8 @@ export interface trading_hit {
   kind:
     | "position_line"
     | "order_line"
+    | "take_profit_button"
+    | "stop_loss_button"
     | "cancel_button"
     | "execution_marker"
     | "annotation";

@@ -5380,7 +5380,15 @@ fn trading_objects_suppress_the_visual_crosshair_without_clearing_its_position()
     let y = chart
         .trading_price_coordinate(0, crate::TradingPriceScale::Right, 11.5)
         .unwrap();
-    assert!(chart.set_trading_hover(chart.trading_marker_start() + 20.0, y));
+    let stop_x = (0..=(chart.pane_w * 2.0) as usize)
+        .map(|step| step as f64 / 2.0)
+        .find(|x| {
+            chart
+                .trading_hit_at(*x, y)
+                .is_some_and(|hit| hit.kind == crate::TradingHitKind::StopLossButton)
+        })
+        .expect("visible stop-loss button");
+    assert!(chart.set_trading_hover(stop_x, y));
     assert!(chart.crosshair_suppressed_by_interaction());
     assert_eq!(visual_crosshair_presence(&mut chart), (false, false));
     assert!(
@@ -5388,7 +5396,7 @@ fn trading_objects_suppress_the_visual_crosshair_without_clearing_its_position()
         "callbacks retain the pointer position"
     );
 
-    assert!(chart.trading_drag_start_at(chart.trading_marker_start() + 20.0, y));
+    assert!(chart.trading_drag_start_at(stop_x, y));
     assert!(chart.clear_trading_hover());
     assert_eq!(visual_crosshair_presence(&mut chart), (false, false));
     assert!(chart.cancel_trading_drag());

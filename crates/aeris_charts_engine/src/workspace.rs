@@ -195,6 +195,12 @@ impl Workspace {
         self.cell_ids().len()
     }
 
+    /// The identity the next [`Self::split`] will issue, so a host with a narrower id space can
+    /// refuse the split before mutating the layout.
+    pub fn next_cell_id(&self) -> u64 {
+        self.next_id
+    }
+
     /// Split a cell in two; the existing chart keeps its state in the first half and the new
     /// cell (returned id) fills the second. `NotFound` for an unknown cell.
     pub fn split(&mut self, id: u64, direction: SplitDirection) -> Result<u64, WorkspaceError> {

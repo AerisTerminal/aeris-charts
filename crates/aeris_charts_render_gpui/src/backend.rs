@@ -176,6 +176,37 @@ pub fn text_measurer(window: &Window) -> impl Fn(&str, f64, &str, u16, bool) -> 
     }
 }
 
+/// A live engine glyph metric (`ChartEngine::set_text_cap_center`) backed by the window's native
+/// font metrics, the counterpart of the browser host's `measureText` ink bounds. `paint_text`
+/// places the baseline `(ascent - descent) / 2` below the middle anchor, so capitals and figures
+/// center on the anchor once it moves by `cap_height / 2` minus that distance.
+pub fn text_cap_centerer(window: &Window) -> impl Fn(f64, &str, u16, bool) -> f64 + 'static {
+    let text_system = window.text_system().clone();
+    move |size, family, weight, italic| {
+        if !(size.is_finite() && size > 0.0) {
+            return 0.0;
+        }
+        let font = to_font(&TextRun {
+            x: 0.0,
+            y: 0.0,
+            text: String::new(),
+            color: Color::rgb(0, 0, 0),
+            size: size as f32,
+            family: family.to_owned(),
+            align: aeris_charts_render::draw_list::TextAlign::Left,
+            weight,
+            italic,
+            angle: 0.0,
+        });
+        let font_size = px(size as f32);
+        let font_id = text_system.resolve_font(&font);
+        let ascent: f32 = text_system.ascent(font_id, font_size).into();
+        let descent: f32 = text_system.descent(font_id, font_size).into();
+        let cap_height: f32 = text_system.cap_height(font_id, font_size).into();
+        f64::from(cap_height / 2.0 - (ascent - descent) / 2.0)
+    }
+}
+
 fn measure_with(
     text_system: &Arc<gpui::WindowTextSystem>,
     text: &str,

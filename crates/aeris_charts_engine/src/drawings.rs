@@ -827,6 +827,13 @@ pub struct DrawingModifiers {
 /// tests).
 pub type TextMeasureFn = Box<dyn Fn(&str, f64, &str, u16, bool) -> f64>;
 
+/// Host vertical glyph metric for `{italic} {weight} {size}px {family}`: the offset, in the same px
+/// units as `size`, that moves a `Prim::Text` anchor (Canvas `textBaseline: "middle"`, the em-box
+/// center) so the ink of capitals and figures is centered on the intended line instead. Browser
+/// hosts derive it from `measureText` ink bounds and native hosts from the font's cap height.
+/// Without one the engine uses no correction (deterministic for native tests).
+pub type TextCapCenterFn = Box<dyn Fn(f64, &str, u16, bool) -> f64>;
+
 /// Active anchor/body drag session (the interaction.rs session pattern: the engine owns the
 /// start snapshot and the math; hosts forward drag positions).
 pub(crate) struct DrawingDrag {
@@ -2281,6 +2288,30 @@ impl ChartEngine {
             entry.text_key = u64::MAX;
         }
         self.invalidate_frame_drawings();
+        // Trading marker cells size themselves from measured quantity text.
+        self.invalidate_frame_trading();
+    }
+
+    /// Cap-and-figure ink correction for a middle-anchored run (see [`TextCapCenterFn`]).
+    pub(crate) fn text_cap_center(
+        &self,
+        size: f64,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> f64 {
+        self.text_cap_center_fn
+            .as_ref()
+            .map(|correction| correction(size, family, weight, italic))
+            .filter(|correction| correction.is_finite())
+            .unwrap_or(0.0)
+    }
+
+    /// Install (or clear with `None`) the host vertical glyph metric used to optically center
+    /// control text inside its box (see [`TextCapCenterFn`]).
+    pub fn set_text_cap_center(&mut self, f: Option<TextCapCenterFn>) {
+        self.text_cap_center_fn = f;
+        self.invalidate_frame_trading();
     }
 
     fn insert_drawing_runtime(&self, id: DrawingId) {

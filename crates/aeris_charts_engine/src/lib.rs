@@ -81,8 +81,8 @@ pub use drawing_contract::{
 pub use drawing_text_edit::DrawingTextEditKey;
 pub use drawings::{
     Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId, DrawingKind,
-    DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats, TextMeasureFn,
-    DRAWING_DEFAULT_COLOR,
+    DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats, TextCapCenterFn,
+    TextMeasureFn, DRAWING_DEFAULT_COLOR,
 };
 pub(crate) use drawings::{
     DrawingAnchorTime, DrawingController, DrawingDrag, DrawingHistory, DrawingRuntime,
@@ -1811,6 +1811,9 @@ pub struct ChartEngine {
     /// Optional host text-measure callback for drawing-label hit boxes (drawings.rs
     /// [`TextMeasureFn`]); without one the engine estimates widths by character count.
     text_measure_fn: Option<TextMeasureFn>,
+    /// Optional host vertical glyph metric that optically centers control text (drawings.rs
+    /// [`TextCapCenterFn`]); without one text stays on the em-box middle.
+    text_cap_center_fn: Option<TextCapCenterFn>,
     /// Kinetic (momentum) scroll sampler/coast for the active drag (engine interaction module,
     /// reference `KineticAnimation`); the host feeds samples and drives the coast per frame.
     kinetic: Option<aeris_charts_core::model::kinetic_animation::KineticAnimation>,
@@ -1967,6 +1970,7 @@ impl ChartEngine {
             hovered_text: None,
             hovered_drawing: None,
             text_measure_fn: None,
+            text_cap_center_fn: None,
             kinetic: None,
             keyboard_scroll_animation: None,
             financial_drag: None,
