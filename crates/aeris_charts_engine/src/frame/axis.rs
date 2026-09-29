@@ -490,12 +490,13 @@ impl ChartEngine {
                 return s;
             }
         }
-        format_crosshair_time_with(
+        format_crosshair_time_with_time_zone(
             ts,
             self.time_visible,
             self.seconds_visible,
             &self.date_format,
             &self.month_names,
+            self.time_zone,
         )
     }
 
@@ -722,8 +723,9 @@ impl ChartEngine {
                     .as_ref()
                     .and_then(|formatter| formatter(ts, kind as u8));
                 let built_in = custom_text.is_none();
-                let text = custom_text
-                    .unwrap_or_else(|| format_tick_label_with(ts, kind, &self.month_names));
+                let text = custom_text.unwrap_or_else(|| {
+                    format_tick_label_with_time_zone(ts, kind, &self.month_names, self.time_zone)
+                });
                 if kind == TickMarkType::Year
                     && built_in
                     && text.chars().count() > self.tick_mark_max_character_length as usize
@@ -1007,7 +1009,12 @@ impl ChartEngine {
                 else {
                     continue;
                 };
-                let text = format_date_pattern(time, "M/d/yyyy", &self.month_names);
+                let text = format_date_pattern_with_time_zone(
+                    time,
+                    "M/d/yyyy",
+                    &self.month_names,
+                    self.time_zone,
+                );
                 let width = AxisMetrics::time_tag_width(measure(&text, false));
                 let height = metrics.time_strip_height();
                 let chart_x = self.pane_left + x;

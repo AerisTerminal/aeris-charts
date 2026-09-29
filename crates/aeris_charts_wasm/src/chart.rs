@@ -4281,6 +4281,23 @@ impl AerisChart {
         self.inner.borrow_mut().set_seconds_visible(visible);
     }
 
+    /// Set the chart display time zone using an IANA identifier. Canonical timestamps stay UTC;
+    /// axis/crosshair calendar boundaries and labels are localized with DST-aware rules.
+    pub fn set_time_zone(&mut self, time_zone: &str) -> bool {
+        self.inner.borrow_mut().set_time_zone(time_zone)
+    }
+
+    /// Current IANA chart display time-zone identifier.
+    pub fn time_zone(&self) -> String {
+        self.inner.borrow().time_zone().to_string()
+    }
+
+    /// Exact built-in TradingView-parity time-zone identifiers as JSON.
+    pub fn supported_time_zones_json(&self) -> String {
+        serde_json::to_string(aeris_charts_engine::TRADINGVIEW_TIME_ZONES)
+            .unwrap_or_else(|_| "[]".to_string())
+    }
+
     /// reference `timeScale.minBarSpacing` (CSS px).
     pub fn set_min_bar_spacing(&mut self, spacing: f64) {
         self.inner.borrow_mut().set_min_bar_spacing(spacing);

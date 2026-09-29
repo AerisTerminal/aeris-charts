@@ -12,6 +12,7 @@
 use std::sync::LazyLock;
 
 use crate::scale::time_tick_marks::{civil_from_timestamp, TickMarkWeight};
+use crate::time_zone::{ChartTimeZone, LocalTimeParts};
 
 const MONTHS_SHORT: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -118,6 +119,22 @@ fn hms(ts: i64) -> (i64, i64, i64) {
     )
 }
 
+fn localized_parts(ts: i64, time_zone: ChartTimeZone) -> LocalTimeParts {
+    time_zone.local_parts(ts).unwrap_or_else(|| {
+        let (year, month, day) = civil_from_timestamp(ts);
+        let (hour, minute, second) = hms(ts);
+        LocalTimeParts {
+            year: year as i32,
+            month,
+            day,
+            hour: hour as u32,
+            minute: minute as u32,
+            second: second as u32,
+            offset_seconds: 0,
+        }
+    })
+}
+
 /// Tick label for a UTC timestamp — matches `defaultTickMarkFormatter` output for en-US.
 pub fn format_tick_label(ts: i64, mark_type: TickMarkType) -> String {
     format_tick_label_with(ts, mark_type, english_months())
@@ -126,18 +143,24 @@ pub fn format_tick_label(ts: i64, mark_type: TickMarkType) -> String {
 /// [`format_tick_label`] with per-locale month names for the `Month` mark (reference
 /// `localization.locale` applied to the time axis).
 pub fn format_tick_label_with(ts: i64, mark_type: TickMarkType, months: &MonthNames) -> String {
-    let (year, month, day) = civil_from_timestamp(ts);
+    format_tick_label_with_time_zone(ts, mark_type, months, ChartTimeZone::default())
+}
+
+pub fn format_tick_label_with_time_zone(
+    ts: i64,
+    mark_type: TickMarkType,
+    months: &MonthNames,
+    time_zone: ChartTimeZone,
+) -> String {
+    let parts = localized_parts(ts, time_zone);
+    let (year, month, day) = (parts.year, parts.month, parts.day);
     match mark_type {
         TickMarkType::Year => format!("{year}"),
         TickMarkType::Month => months.short[(month - 1) as usize].clone(),
         TickMarkType::DayOfMonth => format!("{day}"),
-        TickMarkType::Time => {
-            let (h, m, _) = hms(ts);
-            format!("{h:02}:{m:02}")
-        }
+        TickMarkType::Time => format!("{:02}:{:02}", parts.hour, parts.minute),
         TickMarkType::TimeWithSeconds => {
-            let (h, m, s) = hms(ts);
-            format!("{h:02}:{m:02}:{s:02}")
+            format!("{:02}:{:02}:{:02}", parts.hour, parts.minute, parts.second)
         }
     }
 }
@@ -152,7 +175,17 @@ pub fn format_tick_label_with(ts: i64, mark_type: TickMarkType, months: &MonthNa
 /// gracefully: `d`/`M` runs pad to two digits at `dd`/`MM`, name forms cap at `MMMM`, and
 /// `y` runs other than 2/4 pass through literally.
 pub fn format_date_pattern(ts: i64, pattern: &str, months: &MonthNames) -> String {
-    let (year, month, day) = civil_from_timestamp(ts);
+    format_date_pattern_with_time_zone(ts, pattern, months, ChartTimeZone::default())
+}
+
+pub fn format_date_pattern_with_time_zone(
+    ts: i64,
+    pattern: &str,
+    months: &MonthNames,
+    time_zone: ChartTimeZone,
+) -> String {
+    let parts = localized_parts(ts, time_zone);
+    let (year, month, day) = (i64::from(parts.year), parts.month, parts.day);
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::new();
     let mut i = 0;
@@ -257,11 +290,30 @@ pub fn format_crosshair_time_with(
     date_format: &str,
     months: &MonthNames,
 ) -> String {
-    let date = format_date_pattern(ts, date_format, months);
+    format_crosshair_time_with_time_zone(
+        ts,
+        time_visible,
+        seconds_visible,
+        date_format,
+        months,
+        ChartTimeZone::default(),
+    )
+}
+
+pub fn format_crosshair_time_with_time_zone(
+    ts: i64,
+    time_visible: bool,
+    seconds_visible: bool,
+    date_format: &str,
+    months: &MonthNames,
+    time_zone: ChartTimeZone,
+) -> String {
+    let date = format_date_pattern_with_time_zone(ts, date_format, months, time_zone);
     if !time_visible {
         return date;
     }
-    let (h, m, s) = hms(ts);
+    let parts = localized_parts(ts, time_zone);
+    let (h, m, s) = (parts.hour, parts.minute, parts.second);
     if seconds_visible {
         format!("{date}   {h:02}:{m:02}:{s:02}")
     } else {
@@ -285,6 +337,32 @@ mod tests {
         assert_eq!(
             format_tick_label(TS, TickMarkType::TimeWithSeconds),
             "14:30:45"
+        );
+    }
+
+    #[test]
+    fn time_zone_changes_tick_and_crosshair_calendar_text() {
+        let new_york = ChartTimeZone::parse("America/New_York").unwrap();
+        // 2026-01-02 04:30 UTC = 2026-01-01 23:30 EST.
+        let ts = 1_767_328_200;
+        assert_eq!(
+            format_tick_label_with_time_zone(ts, TickMarkType::Time, english_months(), new_york),
+            "23:30"
+        );
+        assert_eq!(
+            format_date_pattern_with_time_zone(ts, "dd MMM yyyy", english_months(), new_york),
+            "01 Jan 2026"
+        );
+        assert_eq!(
+            format_crosshair_time_with_time_zone(
+                ts,
+                true,
+                false,
+                "dd MMM yyyy",
+                english_months(),
+                new_york,
+            ),
+            "01 Jan 2026   23:30"
         );
     }
 

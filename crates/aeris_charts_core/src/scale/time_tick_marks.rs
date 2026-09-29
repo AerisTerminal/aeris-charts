@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::time_zone::ChartTimeZone;
 use crate::TimePointIndex;
 
 /// Exact values from the reference's `TickMarkWeight` (`horz-scale-behavior-time/types.ts`).
@@ -92,8 +93,34 @@ const INTRADAY_DIVISORS: [(i64, TickMarkWeight); 8] = [
 
 /// Port of `weightByTime`: weight of `current` given the previous point's timestamp.
 pub fn weight_by_time(current_ts: i64, prev_ts: i64) -> TickMarkWeight {
-    let (cy, cm, cd) = civil_from_timestamp(current_ts);
-    let (py, pm, pd) = civil_from_timestamp(prev_ts);
+    weight_by_time_in_time_zone(current_ts, prev_ts, ChartTimeZone::default())
+}
+
+/// Tick weight using the selected chart display time zone. Canonical inputs stay in UTC; only
+/// the civil/calendar boundary classification is localized.
+pub fn weight_by_time_in_time_zone(
+    current_ts: i64,
+    prev_ts: i64,
+    time_zone: ChartTimeZone,
+) -> TickMarkWeight {
+    let (cy, cm, cd, py, pm, pd) = match (
+        time_zone.local_parts(current_ts),
+        time_zone.local_parts(prev_ts),
+    ) {
+        (Some(current), Some(previous)) => (
+            i64::from(current.year),
+            current.month,
+            current.day,
+            i64::from(previous.year),
+            previous.month,
+            previous.day,
+        ),
+        _ => {
+            let (cy, cm, cd) = civil_from_timestamp(current_ts);
+            let (py, pm, pd) = civil_from_timestamp(prev_ts);
+            (cy, cm, cd, py, pm, pd)
+        }
+    };
 
     if cy != py {
         return TickMarkWeight::Year;
@@ -103,8 +130,10 @@ pub fn weight_by_time(current_ts: i64, prev_ts: i64) -> TickMarkWeight {
         return TickMarkWeight::Day;
     }
 
+    let current_local = time_zone.local_epoch_seconds(current_ts);
+    let previous_local = time_zone.local_epoch_seconds(prev_ts);
     for &(divisor, weight) in INTRADAY_DIVISORS.iter().rev() {
-        if prev_ts.div_euclid(divisor) != current_ts.div_euclid(divisor) {
+        if previous_local.div_euclid(divisor) != current_local.div_euclid(divisor) {
             return weight;
         }
     }
@@ -116,6 +145,15 @@ pub fn weight_by_time(current_ts: i64, prev_ts: i64) -> TickMarkWeight {
 /// `weights[start_index..]`. The first point's weight is guessed by extrapolating the
 /// average time diff backwards.
 pub fn fill_weights_for_points(times: &[i64], weights: &mut [u8], start_index: usize) {
+    fill_weights_for_points_in_time_zone(times, weights, start_index, ChartTimeZone::default());
+}
+
+pub fn fill_weights_for_points_in_time_zone(
+    times: &[i64],
+    weights: &mut [u8],
+    start_index: usize,
+    time_zone: ChartTimeZone,
+) {
     debug_assert_eq!(times.len(), weights.len());
     if times.is_empty() {
         return;
@@ -131,7 +169,7 @@ pub fn fill_weights_for_points(times: &[i64], weights: &mut [u8], start_index: u
     for index in start_index..times.len() {
         let current = times[index];
         if let Some(prev) = prev_time {
-            weights[index] = weight_by_time(current, prev) as u8;
+            weights[index] = weight_by_time_in_time_zone(current, prev, time_zone) as u8;
         }
         total_time_diff += current - prev_time.unwrap_or(current);
         prev_time = Some(current);
@@ -143,7 +181,7 @@ pub fn fill_weights_for_points(times: &[i64], weights: &mut [u8], start_index: u
         let average_time_diff =
             ((total_time_diff as f64) / (times.len() as f64 - 1.0)).ceil() as i64;
         let approx_prev = times[0] - average_time_diff;
-        weights[0] = weight_by_time(times[0], approx_prev) as u8;
+        weights[0] = weight_by_time_in_time_zone(times[0], approx_prev, time_zone) as u8;
     }
 }
 
@@ -316,6 +354,20 @@ mod tests {
             assert_eq!(civil_from_timestamp(days * 86_400), (year, month, day));
         }
         assert_eq!(days_from_civil(2021, 2, 29), None);
+    }
+
+    #[test]
+    fn selected_time_zone_controls_calendar_tick_boundaries() {
+        let new_york = ChartTimeZone::parse("America/New_York").unwrap();
+        // 2026-01-02 04:59 -> 05:00 UTC is 2026-01-01 23:59 -> 2026-01-02 00:00 in New York.
+        assert_eq!(
+            weight_by_time_in_time_zone(1_767_330_000, 1_767_329_940, new_york),
+            TickMarkWeight::Day
+        );
+        assert_eq!(
+            weight_by_time(1_767_330_000, 1_767_329_940),
+            TickMarkWeight::Hour1
+        );
     }
 
     #[test]

@@ -225,7 +225,10 @@ use aeris_charts_core::scale::price_scale_core::{
     PriceScaleCore, PriceScaleCoreOptions, PriceScaleMargins,
 };
 use aeris_charts_core::scale::time_scale_core::{TimeScaleCore, TimeScaleOptions};
-use aeris_charts_core::scale::time_tick_marks::TimeTickMarks;
+use aeris_charts_core::scale::time_tick_marks::{
+    fill_weights_for_points_in_time_zone, weight_by_time_in_time_zone, TimeTickMarks,
+};
+pub use aeris_charts_core::time_zone::{ChartTimeZone, DEFAULT_TIME_ZONE, TRADINGVIEW_TIME_ZONES};
 use aeris_charts_core::TimePointIndex;
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{LineStyle, LineType};
@@ -1683,6 +1686,8 @@ pub struct ChartEngine {
     /// reference `timeScale.secondsVisible` — include seconds in axis/crosshair time labels when
     /// `time_visible` is set. Defaults to false (reference default).
     pub seconds_visible: bool,
+    /// IANA display time zone. Canonical data and public timestamps remain UTC.
+    time_zone: ChartTimeZone,
     pub css_width: f64,
     pub css_height: f64,
     pub dpr: f64,
@@ -1913,6 +1918,7 @@ impl ChartEngine {
             tick_mark_max_character_length: 8,
             separator_hover: None,
             seconds_visible: false,
+            time_zone: ChartTimeZone::default(),
             css_width,
             css_height,
             dpr,
@@ -2276,6 +2282,40 @@ impl ChartEngine {
     pub fn set_time_formatter(&mut self, f: Option<TimeFormatterFn>) {
         self.time_formatter_fn = f;
         self.invalidate_frame_overlay();
+    }
+
+    /// Current chart display time-zone identifier. Canonical data remains UTC.
+    pub fn time_zone_id(&self) -> &'static str {
+        self.time_zone.id()
+    }
+
+    /// Change the chart display time zone using an IANA identifier. Rebuilds calendar-sensitive
+    /// tick weights because local day/month/year/hour boundaries can differ from UTC and across DST.
+    pub fn set_time_zone(&mut self, value: &str) -> Result<bool, String> {
+        let Some(time_zone) = ChartTimeZone::parse(value) else {
+            return Err(format!("unsupported IANA time zone: {value}"));
+        };
+        if self.time_zone == time_zone {
+            return Ok(false);
+        }
+        self.time_zone = time_zone;
+        self.rebuild_time_tick_weights();
+        self.invalidate_frame_layout_and_axis();
+        self.invalidate_frame_overlay();
+        Ok(true)
+    }
+
+    /// Live clock text in the selected chart time zone, suitable for host chrome.
+    pub fn time_zone_clock_text(&self, utc_seconds: i64, show_seconds: bool) -> String {
+        let Some(parts) = self.time_zone.local_parts(utc_seconds) else {
+            return "--:--".to_string();
+        };
+        let clock = if show_seconds {
+            format!("{:02}:{:02}:{:02}", parts.hour, parts.minute, parts.second)
+        } else {
+            format!("{:02}:{:02}", parts.hour, parts.minute)
+        };
+        format!("{clock} {}", self.time_zone.abbreviation(utc_seconds))
     }
 
     /// reference `localization.dateFormat` (default `dd MMM \'yy`): the pattern driving the
@@ -4390,6 +4430,9 @@ impl ChartEngine {
         {
             self.crosshair_color_follows_theme = false;
         }
+        if let Some(time_zone) = patch.get("timezone").and_then(serde_json::Value::as_str) {
+            let _ = self.set_time_zone(time_zone);
+        }
         self.options.apply(&patch);
         // Re-derive runtime state that isn't read straight from the store each frame.
         self.crosshair_mode = crosshair_mode_from_u8(self.options.get().crosshair.mode);
@@ -4627,6 +4670,7 @@ impl ChartEngine {
             "right_offset_pixels": options.right_offset_pixels,
             "time_visible": self.time_visible,
             "seconds_visible": self.seconds_visible,
+            "time_zone": self.time_zone_id(),
             "visible": self.time_axis_visible,
             "ticks_visible": self.time_ticks_visible,
             "minimum_height": self.time_axis_minimum_height,
@@ -4889,19 +4933,16 @@ impl ChartEngine {
             });
         if appended {
             for index in self.synced_points_len..tick_times.len() {
-                let weight = aeris_charts_core::scale::time_tick_marks::weight_by_time(
+                let weight = weight_by_time_in_time_zone(
                     tick_times[index],
                     tick_times[index - 1],
+                    self.time_zone,
                 ) as u8;
                 self.tick_marks.push_weight(index as i64, weight);
             }
         } else if time_points_changed {
             let mut weights = vec![0u8; tick_times.len()];
-            aeris_charts_core::scale::time_tick_marks::fill_weights_for_points(
-                tick_times,
-                &mut weights,
-                0,
-            );
+            fill_weights_for_points_in_time_zone(tick_times, &mut weights, 0, self.time_zone);
             self.tick_marks.set_weights(&weights);
         }
         self.synced_points_len = tick_times.len();
@@ -4927,13 +4968,28 @@ impl ChartEngine {
             .map(|point| point.open_timestamp_micros.div_euclid(1_000_000))
             .collect::<Vec<_>>();
         let mut weights = vec![0u8; times.len()];
-        aeris_charts_core::scale::time_tick_marks::fill_weights_for_points(&times, &mut weights, 0);
+        fill_weights_for_points_in_time_zone(&times, &mut weights, 0, self.time_zone);
         self.tick_marks.set_weights(&weights);
         self.synced_points_len = times.len();
         self.synced_last_time = times.last().copied();
         self.synced_first_time = times.first().copied();
         self.time_scale.set_points_len(times.len());
         self.time_scale.set_base_index(self.data.base_index());
+    }
+
+    fn rebuild_time_tick_weights(&mut self) {
+        let times = self.sequence_points().map_or_else(
+            || self.data.merged_times().to_vec(),
+            |points| {
+                points
+                    .iter()
+                    .map(|point| point.open_timestamp_micros.div_euclid(1_000_000))
+                    .collect::<Vec<_>>()
+            },
+        );
+        let mut weights = vec![0u8; times.len()];
+        fill_weights_for_points_in_time_zone(&times, &mut weights, 0, self.time_zone);
+        self.tick_marks.set_weights(&weights);
     }
 
     fn clear_sequence_axis_if_unused(&mut self) {

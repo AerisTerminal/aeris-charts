@@ -982,6 +982,34 @@ fn reset_view_restores_time_defaults_and_reenables_autoscale() {
 }
 
 #[test]
+fn chart_time_zone_rebuilds_tick_weights_and_formats_live_clock() {
+    let mut chart = ChartEngine::new(300.0, 200.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1_767_329_940.0, 1_767_330_000.0],
+            &[100.0, 101.0],
+            &[101.0, 102.0],
+            &[99.0, 100.0],
+            &[100.5, 101.5],
+        )
+        .unwrap();
+    assert_eq!(chart.time_zone_id(), DEFAULT_TIME_ZONE);
+    assert!(chart.set_time_zone("America/New_York").unwrap());
+    assert_eq!(chart.time_zone_id(), "America/New_York");
+    let marks = chart.time_marks(1.0);
+    assert!(marks.iter().any(|&(index, weight)| {
+        index == 1 && weight == aeris_charts_core::scale::time_tick_marks::TickMarkWeight::Day as u8
+    }));
+    assert_eq!(
+        chart.time_zone_clock_text(1_784_116_800, true),
+        "08:00:00 EDT"
+    );
+    assert!(!chart.set_time_zone("America/New_York").unwrap());
+    assert!(chart.set_time_zone("Mars/Olympus_Mons").is_err());
+}
+
+#[test]
 fn reset_style_to_defaults_preserves_runtime_view_and_semantic_state() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     chart

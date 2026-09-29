@@ -5,7 +5,7 @@ use crate::native_primitives::{
     NativeSeriesPrimitiveKind, OverlayPriceScaleSide,
 };
 use aeris_charts_core::format::time_formatter::{
-    format_date_pattern, format_tick_label_with, TickMarkType,
+    format_date_pattern_with_time_zone, format_tick_label_with_time_zone, TickMarkType,
 };
 use aeris_charts_render::draw_list::TextAlign;
 
@@ -253,13 +253,19 @@ impl ChartEngine {
                 let tooltip_lines = |item: &(f64, i64, f64, i64)| {
                     let mut lines = vec![
                         format!("{:.2}", item.2),
-                        format_date_pattern(item.3, "dd MMM yyyy", &self.month_names),
+                        format_date_pattern_with_time_zone(
+                            item.3,
+                            "dd MMM yyyy",
+                            &self.month_names,
+                            self.time_zone,
+                        ),
                     ];
                     if state.options.show_time {
-                        lines.push(format_tick_label_with(
+                        lines.push(format_tick_label_with_time_zone(
                             item.3,
                             TickMarkType::Time,
                             &self.month_names,
+                            self.time_zone,
                         ));
                     }
                     lines

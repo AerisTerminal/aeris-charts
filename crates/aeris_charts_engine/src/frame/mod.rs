@@ -12,8 +12,8 @@ use crate::{
 use aeris_charts_core::format::percentage_formatter::PercentageFormatter;
 use aeris_charts_core::format::price_formatter::PriceFormatter;
 use aeris_charts_core::format::time_formatter::{
-    format_crosshair_time_with, format_date_pattern, format_tick_label_with,
-    weight_to_tick_mark_type, TickMarkType,
+    format_crosshair_time_with_time_zone, format_date_pattern_with_time_zone,
+    format_tick_label_with_time_zone, weight_to_tick_mark_type, TickMarkType,
 };
 use aeris_charts_core::format::volume_formatter::VolumeFormatter;
 use aeris_charts_core::model::data_layer::{PointColorChannel, SeriesId};
