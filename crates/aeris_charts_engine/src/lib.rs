@@ -1688,6 +1688,12 @@ pub struct ChartEngine {
     pub seconds_visible: bool,
     /// IANA display time zone. Canonical data and public timestamps remain UTC.
     time_zone: ChartTimeZone,
+    /// Display-only future time projection for deterministic time-based bars. These points extend
+    /// axis/crosshair labels into right-side whitespace without entering the data layer or moving
+    /// the canonical base index.
+    future_time_projection: Option<(i64, usize)>,
+    future_time_projection_revision: u64,
+    synced_future_time_projection_revision: u64,
     pub css_width: f64,
     pub css_height: f64,
     pub dpr: f64,
@@ -1919,6 +1925,9 @@ impl ChartEngine {
             separator_hover: None,
             seconds_visible: false,
             time_zone: ChartTimeZone::default(),
+            future_time_projection: None,
+            future_time_projection_revision: 0,
+            synced_future_time_projection_revision: 0,
             css_width,
             css_height,
             dpr,
@@ -2027,7 +2036,7 @@ impl ChartEngine {
                 .get(index)
                 .map(|point| point.open_timestamp_micros as f64 / 1_000_000.0);
         }
-        self.data.merged_times().get(index).map(|&time| time as f64)
+        self.projected_axis_time_at(index).map(|time| time as f64)
     }
 
     pub(crate) fn axis_time_key_at(&self, index: usize) -> Option<i64> {
@@ -2036,7 +2045,21 @@ impl ChartEngine {
                 .get(index)
                 .map(|point| point.open_timestamp_micros.div_euclid(1_000_000));
         }
-        self.data.merged_times().get(index).copied()
+        self.projected_axis_time_at(index)
+    }
+
+    fn projected_axis_time_at(&self, index: usize) -> Option<i64> {
+        let times = self.data.merged_times();
+        if let Some(&time) = times.get(index) {
+            return Some(time);
+        }
+        let (&last, (step, count)) = (times.last()?, self.future_time_projection?);
+        let future_index = index.checked_sub(times.len())?;
+        if future_index >= count {
+            return None;
+        }
+        let multiple = i64::try_from(future_index.checked_add(1)?).ok()?;
+        last.checked_add(step.checked_mul(multiple)?)
     }
 
     /// The bar that contains `time`: the last bar opening at or before it, so an intraday event
@@ -2303,6 +2326,32 @@ impl ChartEngine {
         self.invalidate_frame_layout_and_axis();
         self.invalidate_frame_overlay();
         Ok(true)
+    }
+
+    /// Configure display-only future timestamps for deterministic time-based bars.
+    ///
+    /// These timestamps participate only in time-axis/crosshair labeling. They never enter the
+    /// canonical data layer, never create candle/volume rows, and never advance the base index.
+    /// Passing `None` or `points == 0` disables the projection.
+    pub fn set_future_time_projection(
+        &mut self,
+        cadence_seconds: Option<i64>,
+        points: usize,
+    ) -> bool {
+        const MAX_FUTURE_TIME_POINTS: usize = 4_096;
+        let next = cadence_seconds
+            .filter(|step| *step > 0)
+            .filter(|_| points > 0)
+            .map(|step| (step, points.min(MAX_FUTURE_TIME_POINTS)));
+        if self.future_time_projection == next {
+            return false;
+        }
+        self.future_time_projection = next;
+        self.future_time_projection_revision = self.future_time_projection_revision.wrapping_add(1);
+        self.rebuild_time_tick_weights();
+        self.invalidate_frame_layout_and_axis();
+        self.invalidate_frame_overlay();
+        true
     }
 
     /// Live clock text in the selected chart time zone, suitable for host chrome.
@@ -4913,16 +4962,11 @@ impl ChartEngine {
             }
         }
 
-        let times = self.data.merged_times();
-        let sequence_tick_times = self.sequence_points().map(|points| {
-            points
-                .iter()
-                .map(|point| point.open_timestamp_micros.div_euclid(1_000_000))
-                .collect::<Vec<_>>()
-        });
-        let tick_times = sequence_tick_times.as_deref().unwrap_or(times);
-        let time_points_changed =
-            self.data.time_points_generation() != self.synced_time_points_generation;
+        let data_times_len = self.data.merged_times().len();
+        let tick_times = self.axis_tick_times();
+        let time_points_changed = self.data.time_points_generation()
+            != self.synced_time_points_generation
+            || self.future_time_projection_revision != self.synced_future_time_projection_revision;
         let appended = time_points_changed
             && tick_times.len() > self.synced_points_len
             && self.synced_points_len > 0
@@ -4942,14 +4986,22 @@ impl ChartEngine {
             }
         } else if time_points_changed {
             let mut weights = vec![0u8; tick_times.len()];
-            fill_weights_for_points_in_time_zone(tick_times, &mut weights, 0, self.time_zone);
+            fill_weights_for_points_in_time_zone(&tick_times, &mut weights, 0, self.time_zone);
             self.tick_marks.set_weights(&weights);
         }
         self.synced_points_len = tick_times.len();
         self.synced_time_points_generation = self.data.time_points_generation();
+        self.synced_future_time_projection_revision = self.future_time_projection_revision;
         self.synced_last_time = tick_times.last().copied();
         self.synced_first_time = tick_times.first().copied();
-        self.time_scale.set_points_len(tick_times.len());
+        // Future projection points are labels only. Keeping the core point count at canonical data
+        // length preserves fit-content, scrolling clamps, base-index semantics and whitespace data.
+        self.time_scale
+            .set_points_len(if self.sequence_points().is_some() {
+                tick_times.len()
+            } else {
+                data_times_len
+            });
         self.time_scale.set_base_index(self.data.base_index());
         if merged_time_mapping.is_some() {
             self.refresh_drawing_pixel_baselines();
@@ -4978,18 +5030,40 @@ impl ChartEngine {
     }
 
     fn rebuild_time_tick_weights(&mut self) {
-        let times = self.sequence_points().map_or_else(
-            || self.data.merged_times().to_vec(),
-            |points| {
-                points
-                    .iter()
-                    .map(|point| point.open_timestamp_micros.div_euclid(1_000_000))
-                    .collect::<Vec<_>>()
-            },
-        );
+        let times = self.axis_tick_times();
         let mut weights = vec![0u8; times.len()];
         fill_weights_for_points_in_time_zone(&times, &mut weights, 0, self.time_zone);
         self.tick_marks.set_weights(&weights);
+    }
+
+    fn axis_tick_times(&self) -> Vec<i64> {
+        if let Some(points) = self.sequence_points() {
+            return points
+                .iter()
+                .map(|point| point.open_timestamp_micros.div_euclid(1_000_000))
+                .collect();
+        }
+        let mut times = self.data.merged_times().to_vec();
+        let Some((step, count)) = self.future_time_projection else {
+            return times;
+        };
+        let Some(&last) = times.last() else {
+            return times;
+        };
+        times.reserve(count);
+        for offset in 1..=count {
+            let Ok(offset) = i64::try_from(offset) else {
+                break;
+            };
+            let Some(time) = step
+                .checked_mul(offset)
+                .and_then(|delta| last.checked_add(delta))
+            else {
+                break;
+            };
+            times.push(time);
+        }
+        times
     }
 
     fn clear_sequence_axis_if_unused(&mut self) {

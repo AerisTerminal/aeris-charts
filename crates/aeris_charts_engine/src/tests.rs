@@ -1010,6 +1010,35 @@ fn chart_time_zone_rebuilds_tick_weights_and_formats_live_clock() {
 }
 
 #[test]
+fn future_time_projection_labels_empty_space_without_creating_data() {
+    let mut chart = ChartEngine::new(600.0, 300.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1_000.0, 1_060.0, 1_120.0],
+            &[100.0, 101.0, 102.0],
+            &[101.0, 102.0, 103.0],
+            &[99.0, 100.0, 101.0],
+            &[100.5, 101.5, 102.5],
+        )
+        .unwrap();
+    let canonical_len = chart.data_layer().merged_times().len();
+    let base_index = chart.time_scale.base_index();
+
+    assert!(chart.set_future_time_projection(Some(60), 32));
+    assert_eq!(chart.axis_time_key_at(3), Some(1_180));
+    assert_eq!(chart.axis_time_key_at(34), Some(3_040));
+    assert_eq!(chart.axis_time_key_at(35), None);
+    assert_eq!(chart.data_layer().merged_times().len(), canonical_len);
+    assert_eq!(chart.time_scale.base_index(), base_index);
+    assert_eq!(chart.time_scale.points_len(), canonical_len);
+    assert!(chart
+        .time_marks(1.0)
+        .iter()
+        .any(|(index, _)| *index > base_index));
+}
+
+#[test]
 fn reset_style_to_defaults_preserves_runtime_view_and_semantic_state() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     chart
