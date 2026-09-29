@@ -3,7 +3,7 @@
 //! Canonical chart data remains UTC. This module converts UTC instants to local civil time only
 //! for presentation semantics: time-axis tick weighting, labels, crosshair labels, and host clocks.
 
-use chrono::{Datelike, Offset, TimeZone, Timelike};
+use chrono::{Datelike, Duration, LocalResult, Offset, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 
 pub const DEFAULT_TIME_ZONE: &str = "Etc/UTC";
@@ -141,6 +141,37 @@ impl Default for ChartTimeZone {
 }
 
 impl ChartTimeZone {
+    fn resolve_local(self, naive: chrono::NaiveDateTime) -> Option<chrono::DateTime<Tz>> {
+        match self.inner.from_local_datetime(&naive) {
+            LocalResult::Single(value) => Some(value),
+            LocalResult::Ambiguous(first, second) => {
+                Some(if first.timestamp_millis() <= second.timestamp_millis() {
+                    first
+                } else {
+                    second
+                })
+            }
+            LocalResult::None => {
+                // A civil boundary can land in a DST gap. Advance to the first representable
+                // local minute rather than dropping a whole day/month/year tick.
+                (1..=180).find_map(|minutes| {
+                    let candidate = naive.checked_add_signed(Duration::minutes(minutes))?;
+                    match self.inner.from_local_datetime(&candidate) {
+                        LocalResult::Single(value) => Some(value),
+                        LocalResult::Ambiguous(first, second) => {
+                            Some(if first.timestamp_millis() <= second.timestamp_millis() {
+                                first
+                            } else {
+                                second
+                            })
+                        }
+                        LocalResult::None => None,
+                    }
+                })
+            }
+        }
+    }
+
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         let id = TRADINGVIEW_TIME_ZONES
@@ -186,6 +217,15 @@ impl ChartTimeZone {
         self.local_parts(utc_seconds).map_or(utc_seconds, |parts| {
             utc_seconds.saturating_add(i64::from(parts.offset_seconds))
         })
+    }
+
+    /// Resolve a pseudo-epoch millisecond value whose civil fields represent local wall time into
+    /// the corresponding UTC instant. Ambiguous fall-back times choose the earlier occurrence;
+    /// nonexistent spring-forward times advance to the first representable local minute.
+    #[must_use]
+    pub fn utc_millis_from_local_epoch_millis(self, local_millis: i64) -> Option<i64> {
+        let naive = chrono::DateTime::<Utc>::from_timestamp_millis(local_millis)?.naive_utc();
+        Some(self.resolve_local(naive)?.timestamp_millis())
     }
 
     #[must_use]
