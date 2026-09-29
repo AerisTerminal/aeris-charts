@@ -5,7 +5,7 @@ use aeris_charts_core::format::time_formatter::MonthNames;
 use aeris_charts_core::scale::general_scale::{
     BandScale, LinearScale, LogScale, PointScale, SymLogScale, DEFAULT_SYMLOG_CONSTANT,
 };
-use aeris_charts_core::scale::time_tick_marks::days_from_civil;
+use aeris_charts_core::scale::time_tick_marks::{civil_from_timestamp, days_from_civil};
 use aeris_charts_core::style::DEFAULT_BORDER_RGB;
 use aeris_charts_core::time_zone::ChartTimeZone;
 use aeris_charts_render::color::Color;
@@ -1939,11 +1939,15 @@ fn temporal_tick_values(
             }
         }
         TemporalTickInterval::Months(step) => {
-            let Some(parts) = time_zone.local_parts(domain[0].div_euclid(1_000)) else {
-                return values;
+            let seconds = domain[0].div_euclid(1_000);
+            let (year, month, _) = if time_zone == ChartTimeZone::default() {
+                civil_from_timestamp(seconds)
+            } else {
+                let Some(parts) = time_zone.local_parts(seconds) else {
+                    return values;
+                };
+                (i64::from(parts.year), parts.month, parts.day)
             };
-            let year = i64::from(parts.year);
-            let month = parts.month;
             let Some(total_month) = year
                 .checked_mul(12)
                 .and_then(|value| value.checked_add(i64::from(month) - 1))
@@ -1974,10 +1978,15 @@ fn temporal_tick_values(
             }
         }
         TemporalTickInterval::Years(step) => {
-            let Some(parts) = time_zone.local_parts(domain[0].div_euclid(1_000)) else {
-                return values;
+            let seconds = domain[0].div_euclid(1_000);
+            let year = if time_zone == ChartTimeZone::default() {
+                civil_from_timestamp(seconds).0
+            } else {
+                let Some(parts) = time_zone.local_parts(seconds) else {
+                    return values;
+                };
+                i64::from(parts.year)
             };
-            let year = i64::from(parts.year);
             let aligned = year.div_euclid(step).saturating_mul(step);
             let first_year = days_from_civil(aligned, 1, 1)
                 .and_then(|days| days.checked_mul(DAY))
@@ -2020,15 +2029,30 @@ fn format_temporal_tick(
     time_zone: ChartTimeZone,
 ) -> String {
     let seconds = epoch_ms.div_euclid(1_000);
-    let Some(parts) = time_zone.local_parts(seconds) else {
-        return String::new();
+    let (year, month, day, hour, minute, second) = if time_zone == ChartTimeZone::default() {
+        let (year, month, day) = civil_from_timestamp(seconds);
+        let seconds_of_day = seconds.rem_euclid(86_400);
+        (
+            year,
+            month,
+            day,
+            seconds_of_day / 3_600,
+            seconds_of_day.rem_euclid(3_600) / 60,
+            seconds_of_day.rem_euclid(60),
+        )
+    } else {
+        let Some(parts) = time_zone.local_parts(seconds) else {
+            return String::new();
+        };
+        (
+            i64::from(parts.year),
+            parts.month,
+            parts.day,
+            i64::from(parts.hour),
+            i64::from(parts.minute),
+            i64::from(parts.second),
+        )
     };
-    let year = i64::from(parts.year);
-    let month = parts.month;
-    let day = parts.day;
-    let hour = i64::from(parts.hour);
-    let minute = i64::from(parts.minute);
-    let second = i64::from(parts.second);
     let seconds_of_day = hour * 3_600 + minute * 60 + second;
     let month_name = &month_names.short[(month - 1) as usize];
     match interval {

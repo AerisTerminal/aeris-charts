@@ -224,6 +224,9 @@ impl ChartTimeZone {
     /// nonexistent spring-forward times advance to the first representable local minute.
     #[must_use]
     pub fn utc_millis_from_local_epoch_millis(self, local_millis: i64) -> Option<i64> {
+        if self == Self::default() {
+            return Some(local_millis);
+        }
         let naive = chrono::DateTime::<Utc>::from_timestamp_millis(local_millis)?.naive_utc();
         Some(self.resolve_local(naive)?.timestamp_millis())
     }
