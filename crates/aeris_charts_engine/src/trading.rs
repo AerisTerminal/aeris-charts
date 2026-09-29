@@ -917,6 +917,8 @@ fn validate_execution(execution: &TradingExecution) -> Result<(), ChartError> {
             "execution price must be finite and quantity positive",
         ));
     }
+    aeris_charts_core::model::data_validation::validate_timestamp(execution.time as f64)
+        .map_err(|error| invalid(format!("execution time is invalid: {error}")))?;
     Ok(())
 }
 
@@ -3340,6 +3342,20 @@ mod tests {
         // Before the loaded history there is no bar to sit on.
         let chart = chart_with_fills(vec![fill("early", OrderSide::Buy, 5, 100.0, 1.0)]);
         assert!(chart.trading_execution_layout(0).marks.is_empty());
+    }
+
+    #[test]
+    fn execution_timestamps_reject_nanoseconds_instead_of_binding_to_the_last_bar() {
+        let mut chart = chart_with_market();
+        let nanos = 1_725_000_000_i64 * 1_000_000_000;
+        let error = chart
+            .set_trading_snapshot(TradingSnapshot {
+                executions: vec![fill("nanos", OrderSide::Buy, nanos, 100.0, 1.0)],
+                ..TradingSnapshot::default()
+            })
+            .expect_err("nanosecond timestamps must fail closed");
+        assert!(error.to_string().contains("UTC seconds"));
+        assert!(error.to_string().contains("nanoseconds"));
     }
 
     #[test]
