@@ -2354,6 +2354,12 @@ impl ChartEngine {
         true
     }
 
+    /// Whether this chart currently has display-only future time points configured.
+    #[must_use]
+    pub const fn has_future_time_projection(&self) -> bool {
+        self.future_time_projection.is_some()
+    }
+
     /// Live clock text in the selected chart time zone, suitable for host chrome.
     pub fn time_zone_clock_text(&self, utc_seconds: i64, show_seconds: bool) -> String {
         let Some(parts) = self.time_zone.local_parts(utc_seconds) else {
