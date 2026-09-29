@@ -1,7 +1,5 @@
 use super::*;
-use crate::trading::{
-    ExecutionKind, OrderRole, OrderSide, OrderStatus, PositionSide, TradingGroupVisualState,
-};
+use crate::trading::{OrderRole, OrderSide, OrderStatus, PositionSide, TradingGroupVisualState};
 use crate::Pane;
 use aeris_charts_core::style::{
     DARK_ACCENT_RGB, DARK_ACTIVE_RGB, LIGHT_ACCENT_RGB, LIGHT_ACTIVE_RGB, RADIUS_LARGE,
@@ -14,6 +12,32 @@ struct TradingChipLayout {
     y: f64,
     hpr: f64,
     vpr: f64,
+}
+
+/// Design-unit height of the stacked multi-fill mark (the single arrow is 70 units tall).
+const STACKED_EXECUTION_HEIGHT: f64 = 152.0;
+
+/// One execution arrow: every visible fill of one side on one bar.
+pub(crate) struct TradingExecutionMark {
+    /// Range of this mark's fills in [`TradingExecutionLayout::order`].
+    pub fills: std::ops::Range<usize>,
+    pub side: OrderSide,
+    /// Bar center and arrow center in CSS px.
+    pub x: f64,
+    pub y: f64,
+    /// Arrow width envelope in CSS px; one design unit is `size / 70`.
+    pub size: f64,
+    /// Vertical extent in CSS px: `size` for one fill, taller for the stacked-chevron mark.
+    pub height: f64,
+    /// Whether an OHLC bar is painted here, so exact fills can be marked on it.
+    pub on_bar: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct TradingExecutionLayout {
+    /// Execution slots sorted by bar, side, and time; marks index contiguous runs of it.
+    pub order: Vec<usize>,
+    pub marks: Vec<TradingExecutionMark>,
 }
 
 #[derive(Clone)]
@@ -183,6 +207,184 @@ impl ChartEngine {
     ) -> Option<f64> {
         let target = PriceScaleTarget::from(target);
         self.runtime_price_coordinate(pane_index, target, price)
+    }
+
+    /// Vertical extent `(top, bottom)` in CSS px of what the pane paints on bar `index` for
+    /// `target`: the wick for OHLC series (Heikin-Ashi when shown) and the plotted value for line,
+    /// area, baseline, and histogram series. Execution marks sit outside this extent, so they hug
+    /// the rendered shape on every series type instead of floating at a price the line never
+    /// reaches. The flag reports whether any contributing series paints an OHLC bar.
+    fn trading_bar_extent(
+        &self,
+        pane_index: usize,
+        target: PriceScaleTarget,
+        index: i64,
+        from: i64,
+    ) -> Option<(f64, f64, bool)> {
+        let pane = self.panes.get(pane_index)?;
+        let scale = pane_scale(pane, target);
+        if scale.is_empty() {
+            return None;
+        }
+        let mut extent: Option<(f64, f64)> = None;
+        let mut on_bar = false;
+        for series in &self.series {
+            if !series.visible
+                || series.removed
+                || series.pane_index != pane_index
+                || series_scale_target(series) != target
+                || self.indicator_binding_id(series.id).is_some()
+                || index > self.series_render_end(series.id, index)
+            {
+                continue;
+            }
+            let plot = self.data.plot(series.id);
+            let Some(row) = plot.search(index, MismatchDirection::None) else {
+                continue;
+            };
+            if plot.is_whitespace_row(row) {
+                continue;
+            }
+            let Some(base_value) = self.series_base_value(series.id, from) else {
+                continue;
+            };
+            let [high, low] = match series.kind {
+                SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint => {
+                    on_bar = true;
+                    self.heikin_ashi_row(series.id, row)
+                        .map(|values| [values[1], values[2]])
+                        .unwrap_or_else(|| {
+                            [
+                                plot.value_at(row, PlotValueIndex::High),
+                                plot.value_at(row, PlotValueIndex::Low),
+                            ]
+                        })
+                }
+                SeriesKind::Line
+                | SeriesKind::Area
+                | SeriesKind::Histogram
+                | SeriesKind::Baseline => {
+                    let value = plot.value_at(row, PlotValueIndex::Close);
+                    [value, value]
+                }
+                SeriesKind::Custom | SeriesKind::Feature => continue,
+            };
+            for price in [high, low] {
+                let y = scale.price_to_coordinate(price, base_value);
+                if price.is_finite() && y.is_finite() {
+                    extent =
+                        Some(extent.map_or((y, y), |(top, bottom)| (top.min(y), bottom.max(y))));
+                }
+            }
+        }
+        extent.map(|(top, bottom)| (top, bottom, on_bar))
+    }
+
+    /// Lay out execution marks for one pane, shared by the frame and hit testing. Each fill
+    /// resolves to the bar that contains its time, and every visible fill of one side on one bar
+    /// becomes a single arrow: buys below the bar, sells above it. Only visible bars are laid out,
+    /// so work stays bounded by the viewport rather than the fill history.
+    pub(crate) fn trading_execution_layout(&self, pane_index: usize) -> TradingExecutionLayout {
+        let mut layout = TradingExecutionLayout::default();
+        let Some((from, to)) = self.visible_range_for_frame() else {
+            return layout;
+        };
+        let first_time = self.axis_time_key_at(0);
+        let mut entries = Vec::new();
+        for (slot, execution) in self.trading_state.executions.iter().enumerate() {
+            if execution.pane_index != pane_index
+                || !self
+                    .trading_state
+                    .account_visible(execution.account_id.as_ref())
+                || !self.replay_time_is_visible(execution.time)
+                // A fill before the loaded history has no bar to sit on yet.
+                || first_time.is_some_and(|first| execution.time < first)
+            {
+                continue;
+            }
+            let Some(index) = self.axis_index_for_time(execution.time) else {
+                continue;
+            };
+            let index = index as i64;
+            if (from..=to).contains(&index) {
+                let side = u8::from(execution.side == OrderSide::Sell);
+                entries.push((index, side, execution.time, slot));
+            }
+        }
+        entries.sort_unstable();
+        layout.order = entries.iter().map(|&(.., slot)| slot).collect();
+
+        let bar_spacing = self.time_scale.bar_spacing();
+        let envelope = marker_envelope_size(bar_spacing);
+        let margin = marker_margin(bar_spacing);
+        let mut start = 0;
+        while start < entries.len() {
+            let (index, side, ..) = entries[start];
+            let end = start
+                + entries[start..]
+                    .iter()
+                    .take_while(|entry| entry.0 == index && entry.1 == side)
+                    .count();
+            let fills = &layout.order[start..end];
+            let executions = &self.trading_state.executions;
+            let first = &executions[fills[0]];
+            let target = PriceScaleTarget::from(first.price_scale);
+            let extent = self
+                .trading_bar_extent(pane_index, target, index, from)
+                .or_else(|| {
+                    // No painted bar here (whitespace or a custom series): bracket the fills.
+                    fills
+                        .iter()
+                        .fold(None, |extent: Option<(f64, f64, bool)>, &slot| {
+                            let fill = &executions[slot];
+                            let y = self.trading_price_coordinate(
+                                pane_index,
+                                fill.price_scale,
+                                fill.price,
+                            )?;
+                            Some(extent.map_or((y, y, true), |(top, bottom, _)| {
+                                (top.min(y), bottom.max(y), true)
+                            }))
+                        })
+                });
+            if let Some((top, bottom, on_bar)) = extent {
+                let quantity: f64 = fills.iter().map(|&slot| executions[slot].quantity).sum();
+                let scale = if fills.iter().any(|&slot| executions[slot].size_by_quantity) {
+                    (quantity.abs().sqrt() / 2.0).clamp(0.75, 2.0)
+                } else {
+                    1.0
+                };
+                let size = envelope.clamp(16.0, 22.0) * scale;
+                let stacked = fills.len() > 1
+                    && executions[fills[fills.len() - 1]].marker_shape
+                        == crate::ExecutionMarkerShape::Arrow;
+                let height = if stacked {
+                    size * STACKED_EXECUTION_HEIGHT / 70.0
+                } else {
+                    size
+                };
+                let side = if side == 0 {
+                    OrderSide::Buy
+                } else {
+                    OrderSide::Sell
+                };
+                let y = match side {
+                    OrderSide::Buy => bottom + margin + height / 2.0,
+                    OrderSide::Sell => top - margin - height / 2.0,
+                };
+                layout.marks.push(TradingExecutionMark {
+                    fills: start..end,
+                    side,
+                    x: self.time_scale.index_to_coordinate(index),
+                    y,
+                    size,
+                    height,
+                    on_bar,
+                });
+            }
+            start = end;
+        }
+        layout
     }
 
     pub(crate) fn trading_coordinate_to_price(
@@ -974,14 +1176,33 @@ impl ChartEngine {
         pane: &Pane,
         layout: TradingChipLayout,
     ) {
-        let TradingChipLayout {
-            x: center_x,
-            y: line_y,
-            hpr,
-            vpr,
-        } = layout;
         let font_size = self.options.get().layout.font_size;
-        let height = font_size + 7.0;
+        let above =
+            layout.y - (font_size + 5.0) / 2.0 - Self::trading_tooltip_height(font_size) - 5.0;
+        let y = if above >= pane.top + 2.0 {
+            above
+        } else {
+            layout.y + (font_size + 5.0) / 2.0 + 5.0
+        };
+        self.push_trading_tooltip_box(out, text, layout.x, y, layout.hpr, layout.vpr);
+    }
+
+    fn trading_tooltip_height(font_size: f64) -> f64 {
+        font_size + 7.0
+    }
+
+    /// Tooltip chrome centered on `center_x` with its top edge at `y` (CSS px).
+    fn push_trading_tooltip_box(
+        &self,
+        out: &mut Vec<Prim>,
+        text: &str,
+        center_x: f64,
+        y: f64,
+        hpr: f64,
+        vpr: f64,
+    ) {
+        let font_size = self.options.get().layout.font_size;
+        let height = Self::trading_tooltip_height(font_size);
         let radius = (RADIUS_SMALL * hpr.min(vpr)) as f32;
         let width = self.measure_text_run(
             text,
@@ -991,12 +1212,6 @@ impl ChartEngine {
             false,
         ) + 12.0;
         let x = (center_x - width / 2.0).clamp(4.0, (self.pane_w - width - 4.0).max(4.0));
-        let above = line_y - (font_size + 5.0) / 2.0 - height - 5.0;
-        let y = if above >= pane.top + 2.0 {
-            above
-        } else {
-            line_y + (font_size + 5.0) / 2.0 + 5.0
-        };
         out.push(Prim::RoundRect {
             x: (x * hpr) as f32,
             y: (y * vpr) as f32,
@@ -1018,6 +1233,241 @@ impl ChartEngine {
             weight: 400,
             italic: false,
         });
+    }
+
+    /// One execution mark centered on `(x_device, mark.y)`, drawn as open strokes with
+    /// `Polyline`, the stroke primitive every executor antialiases identically. In design units
+    /// (`size / 70`): a single fill is a 60-unit shaft with one chevron (wings 22 out and back
+    /// from the tip, stroke 10); several fills on one side of one bar become a 72-unit shaft
+    /// leading into four stacked chevrons 24 apart (wings 28 out and back, stroke 11), so a busy
+    /// bar reads as one mark rather than a pile of arrows.
+    fn push_trading_execution_arrow(
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+        mark: &TradingExecutionMark,
+        shape: crate::ExecutionMarkerShape,
+        color: Color,
+        layout: TradingChipLayout,
+    ) {
+        let TradingChipLayout {
+            x: x_device,
+            hpr,
+            vpr,
+            ..
+        } = layout;
+        let unit = mark.size / 70.0;
+        // Up for buys, down for sells.
+        let direction = if mark.side == OrderSide::Buy {
+            -1.0
+        } else {
+            1.0
+        };
+        let point = |dx: f64, dy: f64| {
+            [
+                (x_device + dx * unit * hpr) as f32,
+                ((mark.y + direction * dy * unit) * vpr) as f32,
+            ]
+        };
+        match shape {
+            crate::ExecutionMarkerShape::Arrow => {
+                let mut stroke = |path: &[[f32; 2]], stroke_units: f64| {
+                    let first_point = points.len() as u32;
+                    points.extend_from_slice(path);
+                    out.push(Prim::Polyline {
+                        first_point,
+                        point_count: path.len() as u32,
+                        width: ((stroke_units * unit).max(1.5) * hpr.min(vpr)) as f32,
+                        style: LineStyle::Solid,
+                        line_type: LineType::Simple,
+                        color,
+                    });
+                };
+                if mark.height > mark.size {
+                    // Centered on the 152-unit stacked extent: shaft from -76, tips at -4 + 24k.
+                    stroke(&[point(0.0, -76.0), point(0.0, -4.0)], 11.0);
+                    for k in 0..4 {
+                        let tip = -4.0 + 24.0 * f64::from(k);
+                        stroke(
+                            &[
+                                point(-28.0, tip - 28.0),
+                                point(0.0, tip),
+                                point(28.0, tip - 28.0),
+                            ],
+                            11.0,
+                        );
+                    }
+                } else {
+                    stroke(&[point(0.0, -30.0), point(0.0, 30.0)], 10.0);
+                    stroke(
+                        &[point(-22.0, 8.0), point(0.0, 30.0), point(22.0, 8.0)],
+                        10.0,
+                    );
+                }
+            }
+            crate::ExecutionMarkerShape::Triangle => out.push(Prim::Triangle {
+                a: point(0.0, 30.0),
+                b: point(-30.0, -30.0),
+                c: point(30.0, -30.0),
+                color,
+            }),
+            crate::ExecutionMarkerShape::Circle => out.push(Prim::Circle {
+                cx: x_device as f32,
+                cy: (mark.y * vpr) as f32,
+                radius: (mark.size * 0.4 * hpr) as f32,
+                fill: color,
+                stroke_width: 0.0,
+                stroke: color,
+            }),
+        }
+    }
+
+    /// Execution arrows, then the exact-fill detail of the hovered or pressed arrow: a tick at
+    /// every fill's own price on the bar, a dotted lead from the arrow, and a fill tooltip placed
+    /// on the arrow's outer side so it never covers the bar.
+    fn push_trading_executions(
+        &self,
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+        pane: &Pane,
+        pane_index: usize,
+        hpr: f64,
+        vpr: f64,
+    ) {
+        let min_line_width = vpr.floor().max(1.0) as i32;
+        let layout = self.trading_execution_layout(pane_index);
+        if layout.marks.is_empty() {
+            return;
+        }
+        let executions = &self.trading_state.executions;
+        let focused = |slot: &usize| {
+            [
+                &self.trading_state.feedback_hover,
+                &self.trading_state.feedback_pressed,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|hit| {
+                matches!(&hit.object, crate::TradingObjectId::Execution(id) if id == &executions[*slot].id)
+            })
+        };
+        // Same device-pixel centering as series markers, so both arrow kinds align on a bar.
+        let correction = (hpr.floor() as i64).rem_euclid(2) as f64 * 0.5;
+        let mut detail = None;
+        for mark in &layout.marks {
+            let fills = &layout.order[mark.fills.clone()];
+            let color = match mark.side {
+                OrderSide::Buy => self.trading_state.style.execution_buy,
+                OrderSide::Sell => self.trading_state.style.execution_sell,
+            };
+            let x = (mark.x * hpr).round() + correction;
+            let shape = executions[fills[fills.len() - 1]].marker_shape;
+            Self::push_trading_execution_arrow(
+                out,
+                points,
+                mark,
+                shape,
+                color,
+                TradingChipLayout {
+                    x,
+                    y: mark.y,
+                    hpr,
+                    vpr,
+                },
+            );
+            if detail.is_none() && fills.iter().any(focused) {
+                detail = Some((mark, fills, color));
+            }
+        }
+
+        let Some((mark, fills, color)) = detail else {
+            return;
+        };
+        let tick_half = (self.time_scale.bar_spacing() * 0.5).clamp(4.0, 12.0);
+        let x = (mark.x * hpr).round() as i32;
+        let (arrow_top, arrow_bottom) = (mark.y - mark.height / 2.0, mark.y + mark.height / 2.0);
+        // Fills may sit on either side of the arrow (a line paints only the close), so the lead
+        // and tooltip span whichever side the exact prices fall on.
+        let (mut fills_top, mut fills_bottom) = (arrow_top, arrow_bottom);
+        let mut quantity = 0.0;
+        let mut notional = 0.0;
+        for &slot in fills {
+            let fill = &executions[slot];
+            quantity += fill.quantity;
+            notional += fill.price * fill.quantity;
+            // Exact-fill ticks belong on a painted candle or bar. A line-type series draws no
+            // bar there, so its fills are reported by the tooltip alone rather than as dots in
+            // empty space.
+            if !mark.on_bar {
+                continue;
+            }
+            let Some(fill_y) =
+                self.trading_price_coordinate(pane_index, fill.price_scale, fill.price)
+            else {
+                continue;
+            };
+            fills_top = fills_top.min(fill_y);
+            fills_bottom = fills_bottom.max(fill_y);
+            out.push(Prim::HLine {
+                y: (fill_y * vpr).round() as i32,
+                x0: ((mark.x - tick_half) * hpr).round() as i32,
+                x1: ((mark.x + tick_half) * hpr).round() as i32,
+                width: min_line_width,
+                style: LineStyle::Solid,
+                color,
+            });
+            out.push(Prim::Circle {
+                cx: (mark.x * hpr) as f32,
+                cy: (fill_y * vpr) as f32,
+                radius: (2.5 * vpr) as f32,
+                fill: self.trading_chip_background(),
+                stroke_width: (1.0 * vpr) as f32,
+                stroke: color,
+            });
+        }
+        for (y0, y1) in [(fills_top, arrow_top), (arrow_bottom, fills_bottom)] {
+            if y1 > y0 {
+                out.push(Prim::VLine {
+                    x,
+                    y0: (y0 * vpr).round() as i32,
+                    y1: (y1 * vpr).round() as i32,
+                    width: min_line_width,
+                    style: LineStyle::Dotted,
+                    color,
+                });
+            }
+        }
+
+        let side = match mark.side {
+            OrderSide::Buy => "Buy",
+            OrderSide::Sell => "Sell",
+        };
+        let text = if fills.len() == 1 {
+            let fill = &executions[fills[0]];
+            format!(
+                "{side} {} @ {}",
+                self.format_trading_quantity(fill.quantity),
+                self.format_trading_price(fill.price)
+            )
+        } else {
+            format!(
+                "{side} {} @ {} avg · {} fills",
+                self.format_trading_quantity(quantity),
+                self.format_trading_price(notional / quantity),
+                fills.len()
+            )
+        };
+        let height = Self::trading_tooltip_height(self.options.get().layout.font_size);
+        let above = fills_top - 4.0 - height;
+        let below = fills_bottom + 4.0;
+        let fits_above = above >= pane.top + 2.0;
+        let fits_below = below + height <= pane.top + pane.height - 2.0;
+        let y = match mark.side {
+            OrderSide::Buy if fits_below || !fits_above => below,
+            OrderSide::Sell if fits_above || !fits_below => above,
+            OrderSide::Buy => above,
+            OrderSide::Sell => below,
+        };
+        self.push_trading_tooltip_box(out, &text, mark.x, y, hpr, vpr);
     }
 
     #[cfg(test)]
@@ -1886,97 +2336,7 @@ impl ChartEngine {
                 italic: false,
             });
         }
-        for execution in &self.trading_state.executions {
-            if !self
-                .trading_state
-                .account_visible(execution.account_id.as_ref())
-            {
-                continue;
-            }
-            if execution.pane_index != pane_index
-                || !self.replay_time_is_visible(execution.time)
-                || self.data.merged_times().is_empty()
-            {
-                continue;
-            }
-            let Some(logical) = self
-                .axis_index_for_time(execution.time)
-                .map(|index| index as i64)
-            else {
-                continue;
-            };
-            let x = self.time_scale.index_to_coordinate(logical);
-            let Some(y) =
-                self.trading_price_coordinate(pane_index, execution.price_scale, execution.price)
-            else {
-                continue;
-            };
-            let color = match execution.side {
-                OrderSide::Buy => self.trading_state.style.buy,
-                OrderSide::Sell => self.trading_state.style.sell,
-            };
-            let hovered = self.trading_state.feedback_hover.as_ref().is_some_and(|hit| {
-                matches!(&hit.object, crate::TradingObjectId::Execution(id) if id == &execution.id)
-            });
-            let radius = (if hovered { 10.0 } else { 8.0 })
-                * if execution.size_by_quantity {
-                    (execution.quantity.abs().sqrt() / 2.0).clamp(0.75, 2.0)
-                } else {
-                    1.0
-                }
-                * vpr;
-            match execution.marker_shape {
-                crate::ExecutionMarkerShape::Circle => lines.push(Prim::Circle {
-                    cx: (x * hpr) as f32,
-                    cy: (y * vpr) as f32,
-                    radius: radius as f32,
-                    fill: color,
-                    stroke_width: (1.0 * vpr) as f32,
-                    stroke: color.contrast_text(),
-                }),
-                crate::ExecutionMarkerShape::Triangle | crate::ExecutionMarkerShape::Arrow => {
-                    let direction = if execution.side == OrderSide::Buy {
-                        -1.0
-                    } else {
-                        1.0
-                    };
-                    let tip = [(x * hpr) as f32, ((y * vpr) + direction * radius) as f32];
-                    let left = [
-                        ((x * hpr) - radius) as f32,
-                        ((y * vpr) - direction * radius) as f32,
-                    ];
-                    let right = [
-                        ((x * hpr) + radius) as f32,
-                        ((y * vpr) - direction * radius) as f32,
-                    ];
-                    lines.push(Prim::Triangle {
-                        a: tip,
-                        b: left,
-                        c: right,
-                        color,
-                    });
-                }
-            }
-            lines.push(Prim::Text {
-                x: (x * hpr) as f32,
-                y: (y * vpr) as f32,
-                text: match (execution.side, execution.kind) {
-                    (OrderSide::Buy, _) => "B",
-                    (OrderSide::Sell, _) => "S",
-                }
-                .to_string(),
-                color: color.contrast_text(),
-                size: (10.0 * vpr) as f32,
-                family: self.options.get().layout.font_family.clone(),
-                align: TextAlign::Center,
-                weight: if execution.kind == ExecutionKind::PartialFill {
-                    400
-                } else {
-                    700
-                },
-                italic: false,
-            });
-        }
+        self.push_trading_executions(lines, points, pane, pane_index, hpr, vpr);
         if let Some(tooltip) = tooltip {
             self.push_trading_tooltip(lines, &tooltip.text, pane, tooltip.layout);
         }

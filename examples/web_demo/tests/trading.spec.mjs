@@ -725,3 +725,39 @@ for (const backend of ["canvas2d", "webgpu"]) {
     ]);
   });
 }
+
+test("execution marks sit outside their bar, stack same-bar fills, and read as clickable", async ({ page }) => {
+  await page.goto("/?feature=executions&backend=canvas2d");
+  await page.waitForFunction(() => window.__demo_catalogs?.lab.active_ids().includes("execution-marks"));
+  // The scenario frames its fills after the first painted frames.
+  await page.waitForFunction(() => window.__chart.timeScale().getVisibleLogicalRange().from > window.__data.length - 50);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const bars = window.__data;
+    const probe = (back, id) => {
+      const logical = bars.length - back;
+      const bar = bars[logical];
+      const x = chart.timeScale().logical_to_coordinate(logical);
+      const high = window.__main.price_to_coordinate(bar.high);
+      const low = window.__main.price_to_coordinate(bar.low);
+      const ys = [];
+      for (let y = 0; y < 2000; y += 1) {
+        const hit = chart.trading_hit_at(x, y);
+        if (hit?.object_type === "execution" && hit.id.startsWith(id)) ys.push(y);
+      }
+      return { high, low, top: Math.min(...ys), bottom: Math.max(...ys), id: chart.trading_hit_at(x, ys[0])?.id,
+        cursor: chart.trading_cursor_at(x, ys[0]),
+        inside: chart.trading_hit_at(x, (high + low) / 2) };
+    };
+    return { buy: probe(23, "multi-buy"), sell: probe(17, "multi-sell"), single: probe(34, "single-buy") };
+  });
+  // Buys answer only below the bar's low, sells only above its high; the candle body is free.
+  expect(result.buy.top).toBeGreaterThan(result.buy.low);
+  expect(result.sell.bottom).toBeLessThan(result.sell.high);
+  expect(result.buy.inside).toBeNull();
+  // A stacked mark answers with the bar's latest fill and is taller than a single arrow.
+  expect(result.buy.id).toBe("multi-buy-2");
+  expect(result.sell.id).toBe("multi-sell-3");
+  expect(result.buy.bottom - result.buy.top).toBeGreaterThan(result.single.bottom - result.single.top);
+  expect(result.buy.cursor).toBe("pointer");
+});

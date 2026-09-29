@@ -753,6 +753,7 @@ const volume_data = volume_fixture(data);
 let vol_series = null;
 window.__demo_catalogs = install_demo_catalogs({ chart, series: main, data, on_series_change: sync_style_visibility });
 if (requested_feature === "trading") window.__demo_catalogs.lab.activate("trading-bracket");
+if (requested_feature === "executions") window.__demo_catalogs.lab.activate("execution-marks");
 if (requested_feature === "footprint") window.__demo_catalogs.series.activate("footprint");
 
 // Fidelity fixtures use only the package's public handles. The demo supplies data and options;

@@ -287,8 +287,8 @@ pub enum ExecutionKind {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionMarkerShape {
-    #[default]
     Circle,
+    #[default]
     Arrow,
     Triangle,
 }
@@ -393,6 +393,10 @@ pub struct TradingStyle {
     pub rejected: Color,
     pub control: Color,
     pub label: Color,
+    /// Execution arrows use their own blue/red pair, distinct from the green/red order chrome,
+    /// so a past fill never reads as a live order.
+    pub execution_buy: Color,
+    pub execution_sell: Color,
 }
 
 impl Default for TradingStyle {
@@ -425,6 +429,8 @@ impl Default for TradingStyle {
             rejected: Color::rgb(0x78, 0x7b, 0x86),
             control: primary,
             label: Color::rgb(0xff, 0xff, 0xff),
+            execution_buy: Color::rgb(0x29, 0x62, 0xff),
+            execution_sell: Color::rgb(0xf2, 0x36, 0x45),
         }
     }
 }
@@ -444,6 +450,8 @@ pub struct TradingStyleOptions {
     pub rejected: Option<String>,
     pub control: Option<String>,
     pub label: Option<String>,
+    pub execution_buy: Option<String>,
+    pub execution_sell: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1094,37 +1102,22 @@ impl ChartEngine {
             });
         }
 
-        for execution in self.trading_state.executions.iter().rev() {
-            if !self
-                .trading_state
-                .account_visible(execution.account_id.as_ref())
-            {
+        // Hits resolve against the exact marks the frame draws; the topmost (last drawn) wins and
+        // answers with the bar's latest fill on that side.
+        let layout = self.trading_execution_layout(pane_index);
+        for mark in layout.marks.iter().rev() {
+            let half_w = (mark.size / 2.0).max(profile.control_half_size);
+            let half_h = (mark.height / 2.0).max(profile.control_half_size);
+            if (x_css - mark.x).abs() > half_w || (y_css - mark.y).abs() > half_h {
                 continue;
             }
-            if execution.pane_index != pane_index || !self.replay_time_is_visible(execution.time) {
-                continue;
-            }
-            let Some(logical) = self
-                .axis_index_for_time(execution.time)
-                .map(|index| index as i64)
-            else {
-                continue;
-            };
-            let x = self.time_scale.index_to_coordinate(logical);
-            let Some(y) =
-                self.trading_price_coordinate(pane_index, execution.price_scale, execution.price)
-            else {
-                continue;
-            };
-            let distance = (x_css - x).hypot(y_css - y);
-            if distance <= profile.control_half_size {
-                return Some(TradingHit {
-                    object: TradingObjectId::Execution(execution.id.clone()),
-                    kind: TradingHitKind::ExecutionMarker,
-                    distance,
-                    annotation_id: None,
-                });
-            }
+            let execution = &self.trading_state.executions[layout.order[mark.fills.end - 1]];
+            return Some(TradingHit {
+                object: TradingObjectId::Execution(execution.id.clone()),
+                kind: TradingHitKind::ExecutionMarker,
+                distance: (x_css - mark.x).hypot(y_css - mark.y),
+                annotation_id: None,
+            });
         }
         None
     }
@@ -1134,7 +1127,10 @@ impl ChartEngine {
     pub fn trading_cursor_at(&self, x_css: f64, y_css: f64) -> Option<TradingCursor> {
         let hit = self.trading_hit_at(x_css, y_css)?;
         match (&hit.object, hit.kind) {
-            (_, TradingHitKind::CancelButton) => Some(TradingCursor::Pointer),
+            // An execution arrow is clickable detail: it reveals the exact fill on its bar.
+            (_, TradingHitKind::CancelButton | TradingHitKind::ExecutionMarker) => {
+                Some(TradingCursor::Pointer)
+            }
             // A protection button reads as a button: it answers with the click affordance even
             // though pressing and dragging it also places the protection price.
             (TradingObjectId::Order(id), TradingHitKind::TakeProfitButton) => self
@@ -2452,6 +2448,8 @@ impl ChartEngine {
         apply!(rejected);
         apply!(control);
         apply!(label);
+        apply!(execution_buy);
+        apply!(execution_sell);
         self.trading_state.style = style;
         self.invalidate_frame_trading();
         Ok(())
@@ -3120,9 +3118,9 @@ mod tests {
         assert!(trading
             .iter()
             .any(|primitive| matches!(primitive, Prim::Circle { .. })));
-        assert!(trading
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "B")));
+        assert!(!trading.iter().any(
+            |primitive| matches!(primitive, Prim::Text { text, .. } if text == "B" || text == "S")
+        ));
 
         let axis = chart.build_axis_frame(
             100.0,
@@ -3164,6 +3162,185 @@ mod tests {
             })
             .expect("solid position price label");
         assert!(position_label.border.is_none());
+    }
+
+    fn fill(name: &str, side: OrderSide, time: i64, price: f64, quantity: f64) -> TradingExecution {
+        TradingExecution {
+            id: id(name, ExecutionId::new),
+            account_id: None,
+            pane_index: 0,
+            price_scale: TradingPriceScale::Right,
+            side,
+            kind: ExecutionKind::Entry,
+            time,
+            price,
+            quantity,
+            order_id: None,
+            position_id: None,
+            marker_shape: ExecutionMarkerShape::default(),
+            size_by_quantity: false,
+        }
+    }
+
+    fn chart_with_fills(executions: Vec<TradingExecution>) -> ChartEngine {
+        let mut chart = chart_with_market();
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                executions,
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        chart.build_frame();
+        chart
+    }
+
+    fn price_y(chart: &ChartEngine, price: f64) -> f64 {
+        chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, price)
+            .unwrap()
+    }
+
+    #[test]
+    fn execution_arrows_sit_outside_the_rendered_bar_on_every_series_kind() {
+        // Bar at time 20 paints high 103 / low 99 / close 102. Both fills are inside the candle.
+        let executions = vec![
+            fill("buy", OrderSide::Buy, 20, 100.0, 1.0),
+            fill("sell", OrderSide::Sell, 20, 102.5, 1.0),
+        ];
+        let mut chart = chart_with_fills(executions.clone());
+        let layout = chart.trading_execution_layout(0);
+        assert_eq!(layout.marks.len(), 2);
+        let bar_x = chart.time_scale.index_to_coordinate(1);
+        for mark in &layout.marks {
+            assert_eq!(mark.x, bar_x);
+            match mark.side {
+                OrderSide::Buy => assert!(mark.y - mark.height / 2.0 > price_y(&chart, 99.0)),
+                OrderSide::Sell => assert!(mark.y + mark.height / 2.0 < price_y(&chart, 103.0)),
+            }
+        }
+
+        // A line paints only the close: the arrows hug the line, not the (off-line) fill prices.
+        chart.convert_series_kind(0, crate::SeriesKind::Line);
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                executions,
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        chart.build_frame();
+        let close_y = price_y(&chart, 102.0);
+        let layout = chart.trading_execution_layout(0);
+        let buy = layout
+            .marks
+            .iter()
+            .find(|mark| mark.side == OrderSide::Buy)
+            .unwrap();
+        let sell = layout
+            .marks
+            .iter()
+            .find(|mark| mark.side == OrderSide::Sell)
+            .unwrap();
+        let gap = |edge: f64| (edge - close_y).abs();
+        assert!(buy.y > close_y && gap(buy.y - buy.height / 2.0) <= 4.0);
+        assert!(sell.y < close_y && gap(sell.y + sell.height / 2.0) <= 4.0);
+        assert!(
+            (buy.y - price_y(&chart, 100.0)).abs() > buy.size,
+            "a line-chart buy arrow must not float at the fill price"
+        );
+
+        // A line paints no candle, so hovering reports the exact fill in the tooltip only: no
+        // tick, dot, or lead is drawn in the empty space around the line.
+        let (x, arrow_bottom) = (buy.x, buy.y + buy.height / 2.0);
+        assert_eq!(
+            chart.trading_cursor_at(x, buy.y),
+            Some(TradingCursor::Pointer)
+        );
+        assert!(chart.set_trading_hover(x, buy.y));
+        let mut regions = Vec::new();
+        let mut lines = Vec::new();
+        chart.build_trading_frame_for_test(0, 1.0, 1.0, &mut regions, &mut lines);
+        assert!(!lines.iter().any(|p| matches!(
+            p,
+            Prim::HLine { .. } | Prim::VLine { .. } | Prim::Circle { .. }
+        )));
+        assert!(lines.iter().any(|p| matches!(
+            p,
+            Prim::Text { text, .. } if text == "Buy 1 @ 100.00"
+        )));
+        assert!(lines.iter().any(|p| matches!(
+            p,
+            Prim::RoundRect { y, .. } if f64::from(*y) > arrow_bottom
+        )));
+        // The arrow is an open stroke in the execution color, not a filled glyph.
+        let execution_buy = chart.trading_style().execution_buy;
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|p| matches!(p, Prim::Polyline { color, .. } if *color == execution_buy))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn executions_land_on_the_bar_that_contains_their_time() {
+        // Bars open at 10, 20, 30. A fill at 29 belongs to the bar opened at 20, never the next.
+        let chart = chart_with_fills(vec![fill("f", OrderSide::Buy, 29, 100.0, 1.0)]);
+        let layout = chart.trading_execution_layout(0);
+        assert_eq!(layout.marks[0].x, chart.time_scale.index_to_coordinate(1));
+        // Before the loaded history there is no bar to sit on.
+        let chart = chart_with_fills(vec![fill("early", OrderSide::Buy, 5, 100.0, 1.0)]);
+        assert!(chart.trading_execution_layout(0).marks.is_empty());
+    }
+
+    #[test]
+    fn same_bar_fills_share_one_arrow_that_reveals_each_exact_price() {
+        let chart = &mut chart_with_fills(vec![
+            fill("a", OrderSide::Buy, 20, 100.0, 1.0),
+            fill("b", OrderSide::Buy, 25, 101.0, 3.0),
+        ]);
+        let layout = chart.trading_execution_layout(0);
+        assert_eq!(layout.marks.len(), 1);
+        let (x, y) = (layout.marks[0].x, layout.marks[0].y);
+
+        // The fill price inside the candle is not the mark; the arrow is.
+        assert!(chart.trading_hit_at(x, price_y(chart, 100.0)).is_none());
+        let hit = chart.trading_hit_at(x, y).expect("arrow hit");
+        assert_eq!(hit.kind, TradingHitKind::ExecutionMarker);
+        assert_eq!(
+            hit.object,
+            TradingObjectId::Execution(id("b", ExecutionId::new))
+        );
+
+        assert!(chart.set_trading_hover(x, y));
+        let mut regions = Vec::new();
+        let mut lines = Vec::new();
+        chart.build_trading_frame_for_test(0, 1.0, 1.0, &mut regions, &mut lines);
+        for price in [100.0, 101.0] {
+            let tick_y = price_y(chart, price).round() as i32;
+            assert!(
+                lines
+                    .iter()
+                    .any(|p| matches!(p, Prim::HLine { y, .. } if *y == tick_y)),
+                "hover must mark the exact fill price {price} on the bar"
+            );
+        }
+        assert!(lines.iter().any(|p| matches!(
+            p,
+            Prim::Text { text, .. } if text == "Buy 4 @ 100.75 avg · 2 fills"
+        )));
+        // Several fills draw one stacked mark: a shaft plus four chevrons, under the bar's low.
+        let mark = &chart.trading_execution_layout(0).marks[0];
+        assert!(mark.height > mark.size * 2.0);
+        assert!(mark.y - mark.height / 2.0 > price_y(chart, 99.0));
+        let execution_buy = chart.trading_style().execution_buy;
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|p| matches!(p, Prim::Polyline { color, .. } if *color == execution_buy))
+                .count(),
+            5
+        );
     }
 
     #[test]

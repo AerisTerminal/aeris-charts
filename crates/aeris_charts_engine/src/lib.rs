@@ -2033,6 +2033,9 @@ impl ChartEngine {
         self.data.merged_times().get(index).copied()
     }
 
+    /// The bar that contains `time`: the last bar opening at or before it, so an intraday event
+    /// lands on its own daily candle rather than the next one. Times before the first bar clamp
+    /// to it, matching the sequence-axis path.
     pub(crate) fn axis_index_for_time(&self, time: i64) -> Option<usize> {
         if self.sequence_points().is_some() {
             return self
@@ -2045,8 +2048,8 @@ impl ChartEngine {
         }
         Some(
             times
-                .binary_search(&time)
-                .unwrap_or_else(|index| index.min(times.len() - 1)),
+                .partition_point(|&open| open <= time)
+                .saturating_sub(1),
         )
     }
 
