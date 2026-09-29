@@ -9042,6 +9042,54 @@ fn allow_bold_labels_gates_major_time_ticks() {
     );
 }
 
+#[test]
+fn future_time_projection_paints_axis_labels_past_the_last_real_bar() {
+    let mut chart = ChartEngine::new(600.0, 300.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1_000.0, 1_060.0, 1_120.0],
+            &[100.0, 101.0, 102.0],
+            &[101.0, 102.0, 103.0],
+            &[99.0, 100.0, 101.0],
+            &[100.5, 101.5, 102.5],
+        )
+        .unwrap();
+    chart.set_future_time_projection(Some(60), 64);
+    chart.recompute_layout_with_measure(
+        true,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
+    chart.set_right_offset(12.0);
+    chart.set_tick_mark_formatter(Some(Box::new(|timestamp, _| Some(timestamp.to_string()))));
+
+    let visible = chart.time_scale.visible_strict_range().unwrap();
+    assert!(visible.right() > 2, "future logical space must be visible");
+    let marks = chart.time_marks(40.0);
+    assert!(
+        marks.iter().any(|(index, _)| *index > 2),
+        "future projected tick marks must exist before axis rendering"
+    );
+
+    let frame = chart.build_axis_frame(
+        40.0,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
+
+    assert!(
+        frame.labels.iter().any(|label| {
+            label.midpoint == AxisTextMidpoint::None
+                && label
+                    .text
+                    .parse::<i64>()
+                    .is_ok_and(|timestamp| timestamp > 1_120)
+        }),
+        "future projected timestamps must survive the frame's visible-range filter"
+    );
+}
+
 // ---- industry-standard last-value cluster: title chip + price + candle-close countdown ----
 
 #[test]

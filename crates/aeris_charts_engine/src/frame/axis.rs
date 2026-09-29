@@ -585,7 +585,14 @@ impl ChartEngine {
             separator_hover: self.separator_hover,
             ..AxisFrame::default()
         };
-        let visible = self.visible_range_for_frame();
+        // Time-axis ticks may legitimately extend beyond the last canonical data row when the
+        // host enables display-only future time projection. Price/series geometry must continue
+        // using the canonical visible data range above, but time labels should follow the full
+        // logical viewport and let `axis_time_key_at` decide whether a projected timestamp exists.
+        let visible_time_axis = self
+            .time_scale
+            .visible_strict_range()
+            .map(|range| (range.left().max(0), range.right()));
         let layout_text_color = self.primary_text_color();
         // Per-scale label color (reference `textColor`): the scale's own color when set, else the
         // layout text color (price-axis-widget.ts:569).
@@ -693,7 +700,7 @@ impl ChartEngine {
                 }
             }
         }
-        if let Some((from, to)) = visible {
+        if let Some((from, to)) = visible_time_axis {
             let time_marks = self.time_marks(max_label_width);
             let maximum_weight = time_marks
                 .iter()
