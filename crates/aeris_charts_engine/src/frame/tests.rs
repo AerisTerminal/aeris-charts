@@ -6298,6 +6298,123 @@ fn last_value_labels_cover_every_visible_series_and_resolve_overlap() {
     assert_eq!(boxed(&mut chart).len(), 1);
 }
 
+#[test]
+fn price_line_tag_makes_room_for_live_label_then_returns_to_its_price() {
+    let mut chart = two_identical_line_series();
+    chart.set_series_visible(1, false);
+    let line = chart.create_price_line(0, 12.5, LINE, 1, LineStyle::Solid, "target");
+    assert_ne!(line, 0);
+    let labels = |chart: &mut ChartEngine| {
+        chart
+            .build_axis_frame(
+                80.0,
+                |t, _| t.len() as f64 * 7.0,
+                |t, _| t.len() as f64 * 6.0,
+            )
+            .labels
+    };
+    let crowded = labels(&mut chart);
+    let live = crowded
+        .iter()
+        .find(|label| label.text == "12.50" && label.background.is_some())
+        .unwrap();
+    let target = crowded.iter().find(|label| label.text == "target").unwrap();
+    let live_box = live.background.unwrap();
+    let target_box = target.background.unwrap();
+    assert!(
+        target_box.1 + target_box.3 <= live_box.1 || live_box.1 + live_box.3 <= target_box.1,
+        "the target and live price tags must not cover each other"
+    );
+
+    for (close, above) in [(12.49, true), (12.51, false)] {
+        let values = [10.0, 11.0, 12.0, 11.5, close];
+        chart
+            .set_series_data(
+                0,
+                &[0.0, 60.0, 120.0, 180.0, 240.0],
+                &values,
+                &values,
+                &values,
+                &values,
+            )
+            .unwrap();
+        let crossing = labels(&mut chart);
+        let target = crossing
+            .iter()
+            .find(|label| label.text == "target")
+            .unwrap();
+        let raw = chart
+            .runtime_price_coordinate(0, PriceScaleTarget::Right, 12.5)
+            .unwrap();
+        assert_eq!(
+            target.y < raw,
+            above,
+            "tag should move to the free side as the live price crosses"
+        );
+    }
+
+    let values = [10.0, 11.0, 12.0, 11.5, 14.0];
+    chart
+        .set_series_data(
+            0,
+            &[0.0, 60.0, 120.0, 180.0, 240.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    let clear = labels(&mut chart);
+    let target = clear.iter().find(|label| label.text == "target").unwrap();
+    let raw = chart
+        .runtime_price_coordinate(0, PriceScaleTarget::Right, 12.5)
+        .unwrap();
+    assert!(
+        (target.y - raw).abs() < 1e-9,
+        "tag must return to its price when clear"
+    );
+}
+
+#[test]
+fn overfull_price_axis_omits_tags_that_have_no_free_slot() {
+    let mut chart = ChartEngine::new(800.0, 120.0, 1.0);
+    let values = [10.0, 11.0, 12.0, 11.5, 12.5];
+    chart
+        .set_series_data(
+            0,
+            &[0.0, 60.0, 120.0, 180.0, 240.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    for i in 0..12 {
+        chart.create_price_line(0, 12.5, LINE, 1, LineStyle::Solid, &format!("tag-{i}"));
+    }
+    let labels = chart
+        .build_axis_frame(
+            80.0,
+            |t, _| t.len() as f64 * 7.0,
+            |t, _| t.len() as f64 * 6.0,
+        )
+        .labels;
+    let tags: Vec<_> = labels
+        .iter()
+        .filter(|label| label.text.starts_with("tag-") && label.background.is_some())
+        .collect();
+    assert!(!tags.is_empty() && tags.len() < 12);
+    for (index, tag) in tags.iter().enumerate() {
+        let first = tag.background.unwrap();
+        for other in &tags[index + 1..] {
+            let second = other.background.unwrap();
+            assert!(first.1 + first.3 <= second.1 || second.1 + second.3 <= first.1);
+        }
+    }
+}
+
 /// the public reference marks a last-value chip hollow only when its value is no longer live — i.e. the
 /// series' final bar has been scrolled out of view (what a negative right offset produces).
 #[test]
@@ -9979,6 +10096,33 @@ fn last_value_cluster_overlap_resolution_uses_the_total_height() {
     assert!(
         (gap - cluster_height).abs() < 1e-9,
         "two-row clusters must be pushed a cluster height apart, got {gap}"
+    );
+}
+
+#[test]
+fn mixed_height_series_clusters_do_not_overlap() {
+    let mut chart = two_identical_line_series();
+    chart.now_override = Some(12.0);
+    chart.series[1].countdown_visible = true;
+    let labels = chart
+        .build_axis_frame(
+            80.0,
+            |t, _| t.len() as f64 * 7.0,
+            |t, _| t.len() as f64 * 6.0,
+        )
+        .labels;
+    let live: Vec<_> = labels
+        .iter()
+        .filter(|label| label.text == "12.50" && label.background.is_some())
+        .collect();
+    assert_eq!(live.len(), 2);
+    let countdown = labels.iter().find(|label| label.text == "04:48").unwrap();
+    let plain_box = live[0].background.unwrap();
+    let countdown_box = countdown.background.unwrap();
+    assert!(
+        plain_box.1 + plain_box.3 <= countdown_box.1
+            || countdown_box.1 + countdown_box.3 <= plain_box.1,
+        "a taller indicator cluster must clear the plain live-price label"
     );
 }
 
