@@ -290,16 +290,13 @@ impl ChartEngine {
                     let y = y_of(plot.value_at(row, PlotValueIndex::Close));
                     include(y, pad);
                     for step in [-1_isize, 1] {
-                        let Some(neighbor) = row
-                            .checked_add_signed(step)
-                            .filter(|&neighbor| !plot.is_whitespace_row(neighbor))
-                        else {
+                        let Some(neighbor) = row.checked_add_signed(step) else {
                             continue;
                         };
                         let Some(neighbor_index) = plot.index_at(neighbor) else {
                             continue;
                         };
-                        if neighbor_index > render_end {
+                        if neighbor_index > render_end || plot.is_whitespace_row(neighbor) {
                             continue;
                         }
                         let neighbor_y = y_of(plot.value_at(neighbor, PlotValueIndex::Close));

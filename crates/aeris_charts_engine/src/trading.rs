@@ -3314,6 +3314,28 @@ mod tests {
     }
 
     #[test]
+    fn execution_on_last_bar_keeps_line_like_series_frame_in_bounds() {
+        for kind in [
+            crate::SeriesKind::Line,
+            crate::SeriesKind::Area,
+            crate::SeriesKind::Baseline,
+        ] {
+            let mut chart = chart_with_market();
+            chart.convert_series_kind(0, kind);
+            chart.fit_content();
+            chart
+                .set_trading_snapshot(TradingSnapshot {
+                    executions: vec![fill("last", OrderSide::Buy, 30, 102.0, 1.0)],
+                    ..TradingSnapshot::default()
+                })
+                .unwrap();
+
+            chart.build_frame();
+            assert_eq!(chart.trading_execution_layout(0).marks.len(), 1);
+        }
+    }
+
+    #[test]
     fn execution_arrows_clear_a_stepped_line_riser() {
         // Closes 101 → 102 → 103. A stepped line holds 101 until bar 1, then rises there, so the
         // riser from 101 stands on bar 1's x even at a wide spacing where a slope would not reach.
