@@ -239,10 +239,6 @@ pub(crate) struct IndicatorChange {
     pub(crate) full_replace: bool,
 }
 
-/// Stretch factor of the pane a separate-pane indicator creates for itself (the public reference
-/// oscillators stack as a shorter strip under the price pane).
-pub(crate) const OSCILLATOR_PANE_STRETCH: f64 = 0.3;
-
 pub const EMA_RIBBON_DEFAULT_PERIODS: [usize; aeris_charts_indicators::MAX_OUTPUTS] =
     [5, 10, 20, 50, 200];
 pub const EMA_RIBBON_DEFAULT_COLORS: [&str; aeris_charts_indicators::MAX_OUTPUTS] =
@@ -1552,10 +1548,10 @@ impl ChartEngine {
             return;
         };
         if let Some(p) = self.panes.get_mut(pane) {
-            p.stretch_factor = OSCILLATOR_PANE_STRETCH;
+            p.stretch_factor = crate::SEPARATE_INDICATOR_PANE_STRETCH;
         }
         for &id in ids {
-            self.set_series_pane(id, pane, OSCILLATOR_PANE_STRETCH);
+            self.set_series_pane(id, pane, crate::SEPARATE_INDICATOR_PANE_STRETCH);
         }
     }
 

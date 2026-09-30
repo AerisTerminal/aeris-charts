@@ -5,13 +5,12 @@
 
 use crate::{
     ChartEngine, IndicatorChromeOptions, SeriesId, SeriesKind, SeriesThresholdRegion,
-    EMA_RIBBON_DEFAULT_COLORS,
+    EMA_RIBBON_DEFAULT_COLORS, SEPARATE_INDICATOR_PANE_STRETCH,
 };
 use aeris_charts_core::model::data_validation::{validate_timestamp, MAX_SAFE_VALUE};
 use std::fmt;
 
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
-const STUDY_PANE_STRETCH: f64 = 0.3;
 const MAX_EXTERNAL_STUDY_TITLE_BYTES: usize = 256;
 const MAX_EXTERNAL_STUDY_LEGEND_LABEL_BYTES: usize = 128;
 
@@ -273,7 +272,7 @@ impl ChartEngine {
         if !self.try_set_series_pane_and_scale(
             series_id,
             pane_index,
-            STUDY_PANE_STRETCH,
+            SEPARATE_INDICATOR_PANE_STRETCH,
             scale_id(descriptor.scale),
         ) {
             let _ = self.remove_series(series_id);

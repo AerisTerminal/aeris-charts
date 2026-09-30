@@ -829,6 +829,9 @@ indicator bindings are also the visibility, removal, and chrome ownership unit. 
 shows, hides, or removes every output in a binding, and the retained chart-wide indicator chrome
 policy applies name labels, value labels, and price lines to current and later outputs. Hosts choose
 that policy and render controls; they do not walk output series or predict output counts.
+The engine gives each newly created dedicated indicator pane the same 0.3 stretch, including
+financial oscillators, external studies, CVD, and delta. A study placed into an explicitly selected
+existing pane keeps that pane's user-selected height; every backend renders the shared layout.
 Host-computed scalar studies cross the same boundary through the external-study transaction. The
 host supplies a stable study/output identity, generation, semantic presentation, stream requirement
 metadata, timestamps, and nullable values. The engine validates the complete publication before

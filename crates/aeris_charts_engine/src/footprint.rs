@@ -13,6 +13,7 @@ use aeris_charts_render::color::Color;
 
 use crate::{
     marker_pos, marker_shape, ChartEngine, Marker, PriceFormatKind, SeriesKind, SeriesPriceFormat,
+    SEPARATE_INDICATOR_PANE_STRETCH,
 };
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
@@ -1718,7 +1719,7 @@ impl ChartEngine {
             return Err(FootprintError::InvalidAggregation);
         }
         let id = self.add_series(SeriesKind::Line);
-        self.set_series_pane(id, pane_index, 1.0);
+        self.set_series_pane(id, pane_index, SEPARATE_INDICATOR_PANE_STRETCH);
         if let Some(series) = self.series_entry_mut(id) {
             series.title = "CVD".to_string();
         }
@@ -1738,7 +1739,7 @@ impl ChartEngine {
         self.trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
         let id = self.add_series(SeriesKind::Histogram);
-        self.set_series_pane(id, pane_index, 1.0);
+        self.set_series_pane(id, pane_index, SEPARATE_INDICATOR_PANE_STRETCH);
         if let Some(series) = self.series_entry_mut(id) {
             series.title = "Delta".to_string();
         }
@@ -1839,6 +1840,7 @@ impl ChartEngine {
                 let pane = self
                     .add_pane(false)
                     .ok_or(FootprintError::InvalidAggregation)?;
+                self.panes[pane].stretch_factor = SEPARATE_INDICATOR_PANE_STRETCH;
                 presentation.cumulative_delta_series =
                     Some(self.add_cvd_series(stream, pane, TradeStudyOptions::default())?);
             }
@@ -1846,6 +1848,7 @@ impl ChartEngine {
                 let pane = self
                     .add_pane(false)
                     .ok_or(FootprintError::InvalidAggregation)?;
+                self.panes[pane].stretch_factor = SEPARATE_INDICATOR_PANE_STRETCH;
                 presentation.delta_series = Some(self.add_delta_series(stream, pane)?);
             }
             if options.show_trade_bubbles {
@@ -5246,6 +5249,33 @@ mod tests {
     }
 
     #[test]
+    fn trade_studies_open_at_the_same_small_height_as_other_indicators() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let stream = chart
+            .add_trade_stream("pane-sizing", FootprintAggregationOptions::default())
+            .unwrap();
+        let cvd = chart
+            .add_cvd_series(stream, 1, TradeStudyOptions::default())
+            .unwrap();
+        let delta = chart.add_delta_series(stream, 2).unwrap();
+        assert_eq!(chart.series_entry(cvd).unwrap().pane_index, 1);
+        assert_eq!(chart.series_entry(delta).unwrap().pane_index, 2);
+        assert_eq!(chart.panes[1].stretch_factor, 0.3);
+        assert_eq!(chart.panes[2].stretch_factor, 0.3);
+
+        chart.layout_panes(400.0);
+        assert_eq!(chart.panes[1].height, chart.panes[2].height);
+        assert!(chart.panes[1].height < chart.panes[0].height);
+
+        let custom_pane = chart.add_pane(true).unwrap();
+        chart.panes[custom_pane].stretch_factor = 0.8;
+        chart
+            .add_cvd_series(stream, custom_pane, TradeStudyOptions::default())
+            .unwrap();
+        assert_eq!(chart.panes[custom_pane].stretch_factor, 0.8);
+    }
+
+    #[test]
     fn order_flow_presentation_is_atomic_and_owns_cutover_and_policy() {
         let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
         let presentation = chart
@@ -5273,6 +5303,8 @@ mod tests {
         assert!(presentation.footprint_series().is_some());
         assert!(presentation.cumulative_delta_series().is_some());
         assert!(presentation.delta_series().is_some());
+        assert_eq!(chart.panes[1].stretch_factor, 0.3);
+        assert_eq!(chart.panes[2].stretch_factor, 0.3);
 
         chart
             .update_order_flow_presentation(

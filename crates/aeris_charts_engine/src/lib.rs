@@ -45,6 +45,9 @@ mod tests;
 mod trading;
 mod workspace;
 
+/// Initial stretch for engine-created separate indicator panes across all hosts.
+pub(crate) const SEPARATE_INDICATOR_PANE_STRETCH: f64 = 0.3;
+
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, VecDeque};
