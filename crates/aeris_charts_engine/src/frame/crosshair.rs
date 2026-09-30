@@ -254,7 +254,8 @@ impl ChartEngine {
 
     /// Resolve the rendered source-series candidate nearest `(x_css, y_css)` in pixel space.
     /// Drawings and the crosshair share this path so they choose the same bar, visible series, and
-    /// field. Derived indicator outputs remain inspectable but never attract the magnet.
+    /// field. Derived indicator and external-study outputs remain inspectable but never attract
+    /// the magnet.
     /// OHLC mode exposes all four prices only for series that paint them; scalar-rendered series
     /// expose their close/value so hidden input columns cannot attract the magnet.
     pub(crate) fn magnet_snap_coordinate(
@@ -275,6 +276,7 @@ impl ChartEngine {
             if !series.visible
                 || series.removed
                 || self.indicator_binding_id(series.id).is_some()
+                || self.external_study_for_series(series.id).is_some()
                 || series.price_scale_target == PriceScaleTarget::Overlay
                 || series.pane_index != pane_index
             {

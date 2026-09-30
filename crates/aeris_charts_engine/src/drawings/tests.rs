@@ -2698,6 +2698,45 @@ fn ctrl_magnet_snaps_the_crosshair_to_ohlc() {
 }
 
 #[test]
+fn ctrl_crosshair_magnet_ignores_external_study_on_price_pane() {
+    let mut chart = ohlc_chart();
+    let times = (0..10)
+        .map(|index| i64::from(index) * 3_600_000_000_000)
+        .collect::<Vec<_>>();
+    let values = [Some(11.8); 10];
+    chart
+        .install_external_study_output(
+            7,
+            0,
+            ExternalStudyOutputDescriptor {
+                title: "EMA",
+                legend_label: None,
+                plot: ExternalStudyPlotKind::Line,
+                pane: ExternalStudyPaneTarget::Price,
+                scale: ExternalStudyScaleTarget::Primary,
+                settings_available: true,
+                threshold_region: None,
+                point_style: ExternalStudyPointStyle::Uniform,
+                input_requirements: ExternalStudyInputRequirements::BARS,
+            },
+            1,
+            &times,
+            &values,
+        )
+        .unwrap();
+    chart.build_frame();
+
+    let x = x_at(&chart, 3.0);
+    chart.crosshair = Some((x, y_at(&chart, 11.8)));
+    chart.crosshair_ohlc_magnet = true;
+    assert_eq!(
+        crosshair_hline_y(&mut chart),
+        Some(y_at(&chart, 12.0).round() as i32),
+        "the external EMA must remain inspectable without attracting Ctrl magnetism"
+    );
+}
+
+#[test]
 fn ohlc_magnet_snaps_scalar_series_to_the_rendered_value() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart.convert_series_kind(0, SeriesKind::Area);
