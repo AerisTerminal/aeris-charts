@@ -1578,7 +1578,7 @@ export interface series_options {
   wick_visible: boolean;
   /** Candlestick body-border visibility (default true; ignored by bar series). */
   border_visible: boolean;
-  /** Line/area stroke width in css px (default 2, matching indicator lines). */
+  /** Line/area stroke width in CSS px (default 2; EMA-family indicators default to 1). */
   line_width: number;
   /** Area fill color at the line (top of the gradient). */
   area_top_color: string;
@@ -2030,7 +2030,7 @@ export interface drawing_options {
   fill_color: string;
   /** Interactive rectangle preview fill (`""` = `fill_color`). */
   preview_fill_color: string;
-  /** Rectangle outline visibility (generic drawings default true; official plugin false). */
+  /** Rectangle outline visibility (default false). */
   border_visible: boolean;
   /** Rectangle endpoint labels on the price and time axes. */
   show_labels: boolean;

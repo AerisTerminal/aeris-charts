@@ -715,7 +715,9 @@ impl ChartEngine {
                         line_style: Some(line_style_name(drawing.style).to_string()),
                         fill_color: drawing.fill_color.clone(),
                         preview_fill_color: drawing.preview_fill_color.clone(),
-                        border_visible: (!drawing.border_visible).then_some(false),
+                        border_visible: (drawing.kind == DrawingKind::Rectangle
+                            || !drawing.border_visible)
+                            .then_some(drawing.border_visible),
                         show_labels: drawing.show_labels.then_some(true),
                         axis_bands_visible: drawing.axis_bands_visible.then_some(true),
                         label_color: drawing.label_color.clone(),
@@ -1296,6 +1298,10 @@ impl ChartEngine {
             })?;
             let mut drawing = Drawing::new(item.id, kind, pane_index, item.anchors);
             let style = item.style;
+            if kind == DrawingKind::Rectangle && style.border_visible.is_none() {
+                // Older documents omitted the then-visible default. Preserve their appearance.
+                drawing.border_visible = true;
+            }
             if let Some(profile) = style.profile {
                 if !profile.valid() {
                     return Err(invalid(format!(

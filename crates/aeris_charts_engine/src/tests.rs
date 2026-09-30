@@ -1662,6 +1662,40 @@ fn indicators_are_engine_owned_series() {
 }
 
 #[test]
+fn ema_family_defaults_to_one_pixel_and_respects_explicit_widths() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = (0..30).map(|i| i as f64).collect::<Vec<_>>();
+    let values = times.iter().map(|v| v + 100.0).collect::<Vec<_>>();
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+
+    let sma = chart.add_sma(0, 5).unwrap();
+    let mut ema_outputs = vec![
+        chart.add_ema(0, 5).unwrap(),
+        chart.add_dema(0, 5).unwrap(),
+        chart.add_tema(0, 5).unwrap(),
+    ];
+    ema_outputs.extend(chart.add_ema_ribbon(0, [2, 3, 5, 8, 13]));
+    assert_eq!(chart.series_entry(sma).unwrap().line_width, Some(2.0));
+    for &id in &ema_outputs {
+        assert_eq!(chart.series_entry(id).unwrap().line_width, Some(1.0));
+    }
+
+    let customized = ema_outputs[0];
+    assert!(chart.series_apply_options_json(customized, r#"{"line_width":3}"#));
+    assert_eq!(
+        chart.series_entry(customized).unwrap().line_width,
+        Some(3.0)
+    );
+    chart.reset_style_to_defaults();
+    for &id in &ema_outputs {
+        assert_eq!(chart.series_entry(id).unwrap().line_width, Some(1.0));
+    }
+    assert_eq!(chart.series_entry(sma).unwrap().line_width, Some(2.0));
+}
+
+#[test]
 fn ema_ribbon_owns_five_colored_outputs_and_updates_periods_atomically() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let times = (0..300).map(|index| index as f64).collect::<Vec<_>>();

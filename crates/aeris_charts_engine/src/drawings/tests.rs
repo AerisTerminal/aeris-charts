@@ -975,14 +975,16 @@ fn a_selected_rectangle_paints_eight_handles_and_a_styleable_border() {
         rounds, 8,
         "four midpoint squares (border + fill each), got {rounds}"
     );
+    assert!(!chart.drawing(id).unwrap().border_visible);
     assert!(
-        main.iter()
+        !main
+            .iter()
             .any(|p| matches!(p, Prim::RectFrame { color, .. } if *color == drawing_color)),
-        "the default border is the solid frame"
+        "the default rectangle has no border"
     );
 
     // Dotted/dashed borders: the frame becomes four crisp line prims in the drawing color.
-    assert!(chart.drawing_apply_options(id, r#"{"style":"dotted"}"#));
+    assert!(chart.drawing_apply_options(id, r#"{"style":"dotted","border_visible":true}"#));
     let frame = chart.build_frame();
     let main = &frame.panes[0].main;
     assert!(
@@ -1003,6 +1005,49 @@ fn a_selected_rectangle_paints_eight_handles_and_a_styleable_border() {
         })
         .count();
     assert_eq!(dotted_lines, 4, "four dotted border segments");
+}
+
+#[test]
+fn rectangle_border_default_and_explicit_override_survive_persistence() {
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::Rectangle,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 6.0,
+                    price: 12.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let saved = chart.export_state_json().unwrap();
+    assert!(saved.contains("\"border_visible\":false"));
+    let mut restored = settled_chart();
+    restored.import_state_json(&saved).unwrap();
+    assert!(!restored.drawing(id).unwrap().border_visible);
+
+    assert!(chart.drawing_apply_options(id, r#"{"border_visible":true}"#));
+    let saved = chart.export_state_json().unwrap();
+    assert!(saved.contains("\"border_visible\":true"));
+    let mut restored = settled_chart();
+    restored.import_state_json(&saved).unwrap();
+    assert!(restored.drawing(id).unwrap().border_visible);
+
+    let mut legacy: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    legacy["drawings"][0]["style"]
+        .as_object_mut()
+        .unwrap()
+        .remove("border_visible");
+    let mut restored = settled_chart();
+    restored.import_state_json(&legacy.to_string()).unwrap();
+    assert!(restored.drawing(id).unwrap().border_visible);
 }
 
 #[test]

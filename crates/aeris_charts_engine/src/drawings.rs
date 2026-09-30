@@ -652,7 +652,7 @@ impl Drawing {
             style: LineStyle::Solid,
             fill_color: None,
             preview_fill_color: None,
-            border_visible: true,
+            border_visible: kind != DrawingKind::Rectangle,
             show_labels: false,
             axis_bands_visible: false,
             label_color: None,

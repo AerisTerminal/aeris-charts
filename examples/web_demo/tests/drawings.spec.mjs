@@ -2056,6 +2056,7 @@ test("rectangle: middle pans unselected, drags selected, 8 anchors from the firs
   }, s);
   await settle_frames(page);
   const before = (await drawings(page))[0];
+  expect(await page.evaluate(() => window.__chart.drawings()[0].options().border_visible)).toBe(false);
   const center_of = (points) => page.evaluate(({ points }) => ({
     x: (window.__chart.time_scale().logical_to_coordinate(points[0].logical) + window.__chart.time_scale().logical_to_coordinate(points[1].logical)) / 2,
     y: (window.__main.price_to_coordinate(points[0].price) + window.__main.price_to_coordinate(points[1].price)) / 2,

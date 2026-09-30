@@ -323,6 +323,20 @@ pub struct IndicatorParameters {
     pub percent: Option<f64>,
 }
 
+fn indicator_default_line_width(kind: &IndicatorKind) -> f64 {
+    if matches!(
+        kind,
+        IndicatorKind::Ema { .. }
+            | IndicatorKind::Dema { .. }
+            | IndicatorKind::Tema { .. }
+            | IndicatorKind::EmaRibbon { .. }
+    ) {
+        1.0
+    } else {
+        2.0
+    }
+}
+
 impl ChartEngine {
     pub(crate) fn reset_indicator_output_styles_to_defaults(&mut self) {
         let outputs = self
@@ -337,7 +351,7 @@ impl ChartEngine {
                 };
                 series.countdown_visible = false;
                 series.title_visible = true;
-                series.line_width = Some(2.0);
+                series.line_width = Some(indicator_default_line_width(&kind));
                 series.line_color = indicator_output_color(&kind, output_index).map(str::to_string);
             }
         }
@@ -1699,8 +1713,8 @@ impl ChartEngine {
         // Indicator chrome defaults: no candle-close countdown (theirs is a line value, not a
         // bar close), the auto-generated name chip shows (platforms override the name through
         // the series `title` option — custom-script indicators will set their own), and the
-        // line draws at 2px without a last-price pulse — every default is overridable through
-        // the ordinary series options.
+        // line draws at its kind's default width without a last-price pulse — every default is
+        // overridable through the ordinary series options.
         for (output_index, &id) in ids.iter().enumerate() {
             if let Some(s) = self.series.iter_mut().find(|s| s.id == id) {
                 s.countdown_visible = false;
@@ -1708,7 +1722,7 @@ impl ChartEngine {
                 s.last_value_visible = self.indicator_chrome.value_labels_visible;
                 s.price_line_visible = self.indicator_chrome.price_lines_visible;
                 s.title = indicator_output_title(&kind, output_index);
-                s.line_width = Some(2.0);
+                s.line_width = Some(indicator_default_line_width(&kind));
                 // The last-price pulse marks the traded series, never a derived study line.
                 s.last_price_animation = false;
                 if output_index == 0 {
