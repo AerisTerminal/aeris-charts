@@ -1728,6 +1728,45 @@ impl ChartEngine {
         })
     }
 
+    /// Position levels use the instrument's orderable grid, or their bound scale's display tick.
+    /// Resolve this in price space: a tick can be much smaller than a device pixel.
+    fn position_price_tick(
+        &self,
+        pane_index: usize,
+        price_scale: DrawingPriceScale,
+    ) -> Option<f64> {
+        let target = match price_scale {
+            DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
+            DrawingPriceScale::Left => crate::PriceScaleTarget::Left,
+            DrawingPriceScale::Overlay => crate::PriceScaleTarget::Overlay,
+        };
+        self.trading_state
+            .instrument
+            .tick_size
+            .or_else(|| {
+                self.scale_formatter_source(pane_index, target)
+                    .map(|series| series.price_format.min_move)
+            })
+            .filter(|tick| tick.is_finite() && *tick > 0.0)
+    }
+
+    fn snap_position_price(
+        &self,
+        pane_index: usize,
+        price_scale: DrawingPriceScale,
+        price: f64,
+    ) -> f64 {
+        let Some(tick) = self.position_price_tick(pane_index, price_scale) else {
+            return price;
+        };
+        let snapped = (price / tick).round() * tick;
+        if snapped.is_finite() {
+            snapped
+        } else {
+            price
+        }
+    }
+
     fn snap_drawing_time_to_data(&self, mut point: DrawingPoint) -> Option<DrawingPoint> {
         let logical = point.logical.round() as i64;
         if logical < 0 || logical as usize >= self.data.merged_times().len() {
@@ -3580,6 +3619,7 @@ impl ChartEngine {
                     if modifiers.magnet && index != 2 {
                         cursor_pt = self.magnet_snap_point_at(pane, price_scale, x, y, cursor_pt);
                     }
+                    cursor_pt.price = self.snap_position_price(pane, price_scale, cursor_pt.price);
                     match index {
                         // Target: vertical level only.
                         0 => {
@@ -3764,6 +3804,7 @@ impl ChartEngine {
                     (dx, dy)
                 };
                 let single_anchor = points.len() == 1;
+                let position = kind.spec().handles == DrawingHandleMode::Position;
                 for (index, slot) in points.iter_mut().enumerate() {
                     let (dx, dy) = kind.spec().movement_axis.constrain(dx, dy);
                     let Some(mut point) = convert(index, dx, dy) else {
@@ -3791,6 +3832,9 @@ impl ChartEngine {
                             },
                             DrawingMovementAxis::Both => snapped,
                         };
+                    }
+                    if position {
+                        point.price = self.snap_position_price(pane, price_scale, point.price);
                     }
                     *slot = point;
                 }
@@ -4268,6 +4312,10 @@ impl ChartEngine {
             return None;
         }
         let pane_geometry = self.panes.get(pane)?;
+        let entry = DrawingPoint {
+            price: self.snap_position_price(pane, price_scale, entry.price),
+            ..entry
+        };
         let (entry_x, entry_y) = self.drawing_to_px_for(pane, price_scale, entry)?;
 
         // A position is born at a useful editable size from one click. Horizontal extent prefers
@@ -4299,11 +4347,21 @@ impl ChartEngine {
             DrawingKind::ShortPosition => (high, -1.0),
             _ => return None,
         };
-        let risk_distance = (entry.price - stop_price).abs();
+        let mut risk_distance =
+            (entry.price - self.snap_position_price(pane, price_scale, stop_price)).abs();
+        if risk_distance <= f64::EPSILON {
+            risk_distance = self.position_price_tick(pane, price_scale).unwrap_or(0.0);
+        }
         if !risk_distance.is_finite() || risk_distance <= f64::EPSILON {
             return None;
         }
-        let target_price = entry.price + reward_sign * risk_distance * 2.0;
+        let stop_price =
+            self.snap_position_price(pane, price_scale, entry.price - reward_sign * risk_distance);
+        let target_price = self.snap_position_price(
+            pane,
+            price_scale,
+            entry.price + reward_sign * risk_distance * 2.0,
+        );
         Some(vec![
             entry,
             DrawingPoint {

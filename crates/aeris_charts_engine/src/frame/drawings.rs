@@ -1958,25 +1958,18 @@ fn build_position_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Ve
         } else {
             let side = (2.0 * (ANCHOR_RADIUS + ANCHOR_BORDER_WIDTH) * vpr)
                 .round()
-                .max(1.0) as i32;
-            let inner_side = (2.0 * ANCHOR_RADIUS * vpr).round().max(1.0) as i32;
-            out.push(Prim::Rect {
-                rect: IRect {
-                    x: (cx - f64::from(side) / 2.0).round() as i32,
-                    y: (cy - f64::from(side) / 2.0).round() as i32,
-                    w: side,
-                    h: side,
-                },
-                color: ANCHOR_BORDER,
-            });
-            out.push(Prim::Rect {
-                rect: IRect {
-                    x: (cx - f64::from(inner_side) / 2.0).round() as i32,
-                    y: (cy - f64::from(inner_side) / 2.0).round() as i32,
-                    w: inner_side,
-                    h: inner_side,
-                },
-                color: fill,
+                .max(1.0);
+            // One shape owns both fill and inside border; independent rect rounding made
+            // opposite sides acquire different thicknesses at fractional coordinates/DPR.
+            out.push(Prim::RoundRect {
+                x: (cx - side / 2.0).round() as f32,
+                y: (cy - side / 2.0).round() as f32,
+                w: side as f32,
+                h: side as f32,
+                radii: [(2.0 * vpr).round().max(1.0) as f32; 4],
+                fill,
+                border_width: (ANCHOR_BORDER_WIDTH * vpr).floor().max(1.0) as f32,
+                border_color: ANCHOR_BORDER,
             });
         }
     }

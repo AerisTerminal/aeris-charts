@@ -690,6 +690,14 @@ invalidation drops stale resources.
 
 One-click bracket placement crosses the drawing/trading boundary only through an explicit engine command. A host passes a Long/Short Position drawing identity plus its own quantity; the engine reads the drawing's semantic entry, target, stop, pane, and price scale, snaps all prices to instrument ticks, and emits one atomic `place_bracket_order` intent. It creates no speculative order or position. The broker host owns submission, venue-specific entry interpretation, generated order/bracket/OCO identities, acceptance or rejection, and the authoritative snapshot that materializes the resulting lines. The web demo's quantity input and intent handler are an example host, not account-sizing or broker policy inside Aeris.
 
+Long/Short Position creation, body movement, and entry/target/stop handle drags resolve prices to
+the instrument `tick_size`, falling back to the bound price scale's display `min_move`. The engine
+converts the original `f64` pointer coordinates directly to price before rounding to ticks, so
+ticks smaller than one device pixel remain reachable. Horizontal logical time stays continuous
+between bars unless an explicit data-time constraint or magnet applies. Square position controls
+emit one opaque, theme-filled `RoundRect` with rounded corners and a device-snapped inside border;
+all executors receive that same fill and border geometry.
+
 ## Plugins and host extensions
 
 User-defined custom series and primitives remain explicit host boundaries. The engine owns their identity, layout participation, hit-test context, autoscale contribution, and built-in chrome integration. A host may execute an arbitrary user callback, then records the values the engine needs for the next canonical frame. The official plugin implementations above do not use that callback path.

@@ -7306,6 +7306,81 @@ fn position_drawings_paint_information_and_entry_target_stop_axis_prices() {
 }
 
 #[test]
+fn position_square_controls_have_one_rounded_fill_and_inside_border() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    for dpr in [1.0, 1.5, 2.0] {
+        for (background, fill) in [
+            ("#ffffff", Color::rgb(255, 255, 255)),
+            ("#000000", Color::rgb(0, 0, 0)),
+        ] {
+            let mut chart = countdown_chart();
+            chart.dpr = dpr;
+            chart
+                .apply_options(&format!(
+                    r##"{{"layout":{{"background":{{"color":"{background}"}}}}}}"##
+                ))
+                .unwrap();
+            let id = chart
+                .add_drawing(
+                    DrawingKind::LongPosition,
+                    0,
+                    vec![
+                        DrawingPoint {
+                            logical: 1.17,
+                            price: 12.13,
+                        },
+                        DrawingPoint {
+                            logical: 3.17,
+                            price: 13.13,
+                        },
+                        DrawingPoint {
+                            logical: 1.17,
+                            price: 11.13,
+                        },
+                    ],
+                    None,
+                )
+                .unwrap();
+            chart.set_selected_drawing(Some(id));
+            let frame = chart.build_frame();
+            let squares = frame.panes[0]
+                .main
+                .iter()
+                .filter_map(|prim| match prim {
+                    Prim::RoundRect {
+                        x,
+                        y,
+                        w,
+                        h,
+                        radii,
+                        fill: actual_fill,
+                        border_width,
+                        border_color,
+                    } if *border_width > 0.0 => {
+                        assert_eq!(*actual_fill, fill);
+                        assert_eq!(*border_color, super::PRIMARY);
+                        assert_eq!(*border_width, (1.5_f64 * dpr).floor().max(1.0) as f32);
+                        assert_eq!(*w, *h);
+                        assert_eq!(x.fract(), 0.0);
+                        assert_eq!(y.fract(), 0.0);
+                        assert!(radii
+                            .iter()
+                            .all(|radius| *radius > 0.0 && *radius == radii[0]));
+                        Some(())
+                    }
+                    _ => None,
+                })
+                .count();
+            assert_eq!(
+                squares, 3,
+                "one bordered rounded shape per square position control"
+            );
+        }
+    }
+}
+
+#[test]
 fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
     use crate::drawings::{DrawingKind, DrawingPoint};
 
