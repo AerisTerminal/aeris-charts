@@ -218,6 +218,10 @@ struct DrawingStyleV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     profile: Option<crate::ProfileDrawingOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    position_account_size: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    position_risk_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     group_id: Option<String>,
@@ -685,6 +689,16 @@ impl ChartEngine {
                     anchor_times_micros: self.drawing_anchor_times_for(drawing),
                     style: DrawingStyleV1 {
                         profile: drawing.profile.clone(),
+                        position_account_size: matches!(
+                            drawing.kind,
+                            DrawingKind::LongPosition | DrawingKind::ShortPosition
+                        )
+                        .then_some(drawing.position_account_size),
+                        position_risk_percent: matches!(
+                            drawing.kind,
+                            DrawingKind::LongPosition | DrawingKind::ShortPosition
+                        )
+                        .then_some(drawing.position_risk_percent),
                         name: (!drawing.name.is_empty()).then(|| drawing.name.clone()),
                         group_id: drawing.group_id.clone(),
                         revision: (drawing.revision != 1).then_some(drawing.revision),
@@ -1301,6 +1315,24 @@ impl ChartEngine {
             if kind == DrawingKind::Rectangle && style.border_visible.is_none() {
                 // Older documents omitted the then-visible default. Preserve their appearance.
                 drawing.border_visible = true;
+            }
+            if let Some(value) = style.position_account_size {
+                if !value.is_finite() || value <= 0.0 || value > 1e15 {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid position account size",
+                        item.id
+                    )));
+                }
+                drawing.position_account_size = value;
+            }
+            if let Some(value) = style.position_risk_percent {
+                if !value.is_finite() || !(0.0..=100.0).contains(&value) {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid position risk percent",
+                        item.id
+                    )));
+                }
+                drawing.position_risk_percent = value;
             }
             if let Some(profile) = style.profile {
                 if !profile.valid() {

@@ -1104,3 +1104,86 @@ for (const kind of ["long_position", "short_position"]) {
     });
   }
 }
+
+for (const kind of ["long_position", "short_position"]) {
+  test(`${kind} stats render amounts, quantity and adaptive borders on both backends`, async ({ page }) => {
+    await page.addInitScript(() => {
+      const original = CanvasRenderingContext2D.prototype.fillText;
+      window.__position_stats_text = [];
+      CanvasRenderingContext2D.prototype.fillText = function (text, ...args) {
+        if (/^(Target:|Stop:|Open P&L:|Closed P&L:|Risk\/reward ratio:)/.test(String(text))) {
+          window.__position_stats_text.push(String(text));
+        }
+        return original.call(this, text, ...args);
+      };
+    });
+    for (const backend of ["auto", "canvas2d"]) {
+      await page.goto(`/?backend=${backend}&theme=dark&forceFallbackAdapter=1`);
+      await wait_for_chart(page);
+      await page.evaluate(() => window.__chart.trading().apply_snapshot({
+        instrument: { tick_size: 0.25, point_value: 20, quantity_precision: 3 },
+        positions: [], orders: [], executions: [],
+      }));
+      const placement = await page.evaluate(() => {
+        const range = window.__chart.time_scale().get_visible_logical_range();
+        const logical = Math.floor(range.from + (range.to - range.from) * 0.4);
+        const bar = window.__main.data_by_index(logical);
+        const box = document.getElementById("chart_container").getBoundingClientRect();
+        return { x: box.left + window.__chart.time_scale().logical_to_coordinate(logical), y: box.top + window.__main.price_to_coordinate(bar.close) };
+      });
+      await page.click(`#drawings_group [data-tool="${kind}"]`);
+      await page.mouse.click(placement.x, placement.y);
+      await page.mouse.move(2, 2);
+      await settle_page(page);
+      const stats = await page.evaluate(() => {
+        const [entry, target, stop] = window.__chart.drawings().at(-1).points();
+        const risk = Math.abs(entry.price - stop.price);
+        const reward = Math.abs(target.price - entry.price);
+        return { risk, reward, quantity: 250 / risk / 20, text: window.__position_stats_text };
+      });
+      expect(stats.text.some((text) => text.startsWith("Target:") && text.endsWith(", Amount: 1500"))).toBe(true);
+      expect(stats.text.some((text) => text.startsWith("Stop:") && text.endsWith(", Amount: 750"))).toBe(true);
+      const quantity = String(Number(stats.quantity.toFixed(3)));
+      expect(stats.text.some((text) => text.includes(`, Qty: ${quantity}`))).toBe(true);
+      expect(stats.text).toContain("Risk/reward ratio: 2");
+      for (const [color, border] of [["#089981", 0], ["#f7525f", 0], ["#0000ff", 255], ["#000000", 255], ["#ffffff", 0]]) {
+        const label = await page.evaluate((color) => {
+          window.__chart.apply_options({ layout: { background: { type: "solid", color } } });
+          const [entry, target] = window.__chart.drawings().at(-1).points();
+          const scale = window.__chart.time_scale();
+          const box = document.getElementById("chart_container").getBoundingClientRect();
+          const x = (scale.logical_to_coordinate(entry.logical) + scale.logical_to_coordinate(target.logical)) / 2;
+          const target_y = window.__main.price_to_coordinate(target.price);
+          const entry_y = window.__main.price_to_coordinate(entry.price);
+          const y = target_y + (target_y < entry_y ? -14 : 14);
+          const size = Math.max(window.__chart.options().layout.fontSize * 0.92, 10);
+          return { x: box.left + x, top: box.top + y - (size * 1.25 + 6) / 2, dpr: window.devicePixelRatio };
+        }, color);
+        await settle_page(page);
+        const png = PNG.sync.read(await page.screenshot({ animations: "disabled", path: color === "#000000" ? `test-results/position-stats-${kind}-${backend}.png` : undefined }));
+        let best = 0;
+        for (let dy = -2; dy <= 2; dy += 1) {
+          const y = Math.round(label.top * label.dpr) + dy;
+          let pixels = 0;
+          for (let dx = -15; dx <= 15; dx += 1) {
+            const x = Math.round(label.x * label.dpr) + dx;
+            const offset = (y * png.width + x) * 4;
+            if ([0, 1, 2].every((channel) => Math.abs(png.data[offset + channel] - border) < 16)) pixels += 1;
+          }
+          best = Math.max(best, pixels);
+        }
+        expect(best, `${backend} border remains visible on ${color}`).toBeGreaterThan(25);
+      }
+      await page.locator("#position_account_size").fill("2000");
+      await page.locator("#position_account_size").press("Tab");
+      await page.locator("#position_risk_percent").fill("2");
+      await page.locator("#position_risk_percent").press("Tab");
+      await settle_page(page);
+      const updated = await page.evaluate(() => ({ options: window.__chart.drawings().at(-1).options(), text: window.__position_stats_text }));
+      expect(updated.options.position_account_size).toBe(2000);
+      expect(updated.options.position_risk_percent).toBe(2);
+      expect(updated.text.some((text) => text.startsWith("Target:") && text.endsWith(", Amount: 2080"))).toBe(true);
+      expect(updated.text.some((text) => text.startsWith("Stop:") && text.endsWith(", Amount: 1960"))).toBe(true);
+    }
+  });
+}

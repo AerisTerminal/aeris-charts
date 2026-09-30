@@ -7271,10 +7271,10 @@ fn position_drawings_paint_information_and_entry_target_stop_axis_prices() {
         .collect::<Vec<_>>();
     assert!(text.iter().any(|text| text.starts_with("Target: ")));
     assert!(text.iter().any(|text| text.starts_with("Stop: ")));
-    assert!(!text.iter().any(|text| text.starts_with("Open PnL: ")));
-    assert!(!text
-        .iter()
-        .any(|text| text.starts_with("Risk / reward ratio: ")));
+    assert!(text.iter().any(|text| text.contains(", Amount: 1250")));
+    assert!(text.iter().any(|text| text.contains(", Amount: 750")));
+    assert!(text.iter().any(|text| text.contains(", Qty: 250")));
+    assert!(text.contains(&"Risk/reward ratio: 1"));
 
     let labels = chart
         .build_axis_frame(
@@ -7357,7 +7357,7 @@ fn position_square_controls_have_one_rounded_fill_and_inside_border() {
                         fill: actual_fill,
                         border_width,
                         border_color,
-                    } if *border_width > 0.0 => {
+                    } if *border_width > 0.0 && *border_color == super::PRIMARY => {
                         assert_eq!(*actual_fill, fill);
                         assert_eq!(*border_color, super::PRIMARY);
                         assert_eq!(*border_width, (1.5_f64 * dpr).floor().max(1.0) as f32);
@@ -7491,10 +7491,9 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
         last_progress_prim < first_position_label,
         "position labels must paint over the dashed run line"
     );
-    assert!(!frame.panes[0].main.iter().any(|prim| matches!(
+    assert!(frame.panes[0].main.iter().any(|prim| matches!(
         prim,
-        Prim::Text { text, .. }
-            if text.starts_with("Open PnL: ") || text.starts_with("Risk / reward ratio: ")
+        Prim::Text { text, .. } if text.starts_with("Open P&L: ")
     )));
 }
 
@@ -12039,4 +12038,242 @@ fn render_cutoff_stops_drawing_rows_without_dropping_series_data() {
     assert_eq!(candle_bodies(&mut chart), 0);
     chart.set_series_render_before_time(0, None);
     assert_eq!(candle_bodies(&mut chart), all);
+}
+
+#[test]
+fn position_stats_have_opaque_rounded_fills_and_srgb_surface_borders() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+    for dpr in [1.0, 1.5, 2.0] {
+        for (surface, border) in [
+            ("#089981", Color::rgb(0, 0, 0)),
+            ("#f7525f", Color::rgb(0, 0, 0)),
+            ("#0000ff", Color::rgb(255, 255, 255)),
+            ("#000000", Color::rgb(255, 255, 255)),
+            ("#ffffff", Color::rgb(0, 0, 0)),
+        ] {
+            let mut chart = countdown_chart();
+            chart.dpr = dpr;
+            chart
+                .apply_options(&format!(
+                    r##"{{"layout":{{"background":{{"color":"{surface}"}}}}}}"##
+                ))
+                .unwrap();
+            chart
+                .add_drawing(
+                    DrawingKind::LongPosition,
+                    0,
+                    vec![
+                        DrawingPoint {
+                            logical: 1.0,
+                            price: 12.0,
+                        },
+                        DrawingPoint {
+                            logical: 3.0,
+                            price: 13.0,
+                        },
+                        DrawingPoint {
+                            logical: 1.0,
+                            price: 11.0,
+                        },
+                    ],
+                    None,
+                )
+                .unwrap();
+            let frame = chart.build_frame();
+            let stats = frame.panes[0]
+                .main
+                .iter()
+                .filter_map(|prim| match prim {
+                    Prim::RoundRect {
+                        fill,
+                        border_color,
+                        border_width,
+                        radii,
+                        ..
+                    } if fill.r() == 8 || fill.r() == 247 => {
+                        Some((fill, border_color, border_width, radii))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(stats.len(), 3, "target, stop and two-line PnL block");
+            for (fill, stroke, width, radii) in stats {
+                assert_eq!(fill.a(), 255);
+                assert_eq!(*stroke, border);
+                assert_eq!(*width, dpr.round().max(1.0) as f32);
+                assert!(radii.iter().all(|radius| *radius > 0.0));
+            }
+        }
+    }
+}
+
+#[test]
+fn position_stats_follow_open_and_frozen_exit_prices_for_both_sides() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+    for kind in [DrawingKind::LongPosition, DrawingKind::ShortPosition] {
+        let direction = if kind == DrawingKind::LongPosition {
+            1.0
+        } else {
+            -1.0
+        };
+        for (terminal, closed) in [(102.0, false), (110.0, true), (90.0, true)] {
+            let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+            chart.series[0].kind = SeriesKind::Candlestick;
+            chart
+                .set_series_data(
+                    0,
+                    &[0.0, 60.0, 120.0],
+                    &[100.0, terminal, 100.0],
+                    &[101.0, terminal + 0.5, 101.0],
+                    &[99.0, terminal - 0.5, 99.0],
+                    &[100.0, terminal, 100.0],
+                )
+                .unwrap();
+            chart.time_scale.set_width(800.0);
+            chart.fit_content();
+            chart
+                .set_instrument_metadata(crate::InstrumentMetadata {
+                    tick_size: Some(0.25),
+                    point_value: Some(20.0),
+                    ..Default::default()
+                })
+                .unwrap();
+            // Keep an open run's right edge at candle 1. Closed runs must freeze there even
+            // though candle 2 returns to entry.
+            chart
+                .add_drawing(
+                    kind,
+                    0,
+                    vec![
+                        DrawingPoint {
+                            logical: 0.0,
+                            price: 100.0,
+                        },
+                        DrawingPoint {
+                            logical: if closed { 2.0 } else { 1.0 },
+                            price: 100.0 + direction * 10.0,
+                        },
+                        DrawingPoint {
+                            logical: 0.0,
+                            price: 100.0 - direction * 5.0,
+                        },
+                    ],
+                    None,
+                )
+                .unwrap();
+            let frame = chart.build_frame();
+            let pnl = if !closed {
+                (terminal - 100.0) * direction
+            } else if (terminal - 100.0) * direction > 0.0 {
+                10.0
+            } else {
+                -5.0
+            };
+            let expected = format!(
+                "{} P&L: {pnl:.2}, Qty: 2.5",
+                if closed { "Closed" } else { "Open" }
+            )
+            .replace('-', "\u{2212}");
+            assert!(
+                frame.panes[0]
+                    .main
+                    .iter()
+                    .any(|prim| matches!(prim, Prim::Text { text, .. } if *text == expected)),
+                "{kind:?} {terminal}: {expected}; texts {:?}",
+                frame.panes[0]
+                    .main
+                    .iter()
+                    .filter_map(|prim| if let Prim::Text { text, .. } = prim {
+                        Some(text)
+                    } else {
+                        None
+                    })
+                    .collect::<Vec<_>>()
+            );
+            assert!(frame.panes[0].main.iter().any(|prim| matches!(prim, Prim::Text { text, .. } if text == "Target: 10.00 (10.000%) 40, Amount: 1500")));
+        }
+    }
+}
+
+#[test]
+fn position_stats_refresh_instrument_metadata_and_handle_future_zero_risk_and_visibility() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+    fn texts(chart: &mut ChartEngine) -> Vec<String> {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+    let mut chart = countdown_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 6.0,
+                    price: 12.0,
+                },
+                DrawingPoint {
+                    logical: 8.0,
+                    price: 13.0,
+                },
+                DrawingPoint {
+                    logical: 6.0,
+                    price: 11.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    assert!(texts(&mut chart)
+        .iter()
+        .any(|text| text == "Open P&L: 0.50, Qty: 250"));
+    chart
+        .set_trading_snapshot(crate::TradingSnapshot {
+            instrument: crate::InstrumentMetadata {
+                tick_size: Some(0.25),
+                point_value: Some(20.0),
+                quantity_precision: Some(1),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    let refreshed = texts(&mut chart);
+    assert!(refreshed
+        .iter()
+        .any(|text| text == "Open P&L: 0.50, Qty: 12.5"));
+    assert!(refreshed
+        .iter()
+        .any(|text| text == "Target: 1.00 (8.333%) 4, Amount: 1250"));
+    chart
+        .set_instrument_metadata(crate::InstrumentMetadata {
+            tick_size: Some(0.5),
+            point_value: Some(10.0),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(texts(&mut chart)
+        .iter()
+        .any(|text| text == "Open P&L: 0.50, Qty: 25"));
+    assert!(chart.drawing_set_points(
+        id,
+        r#"[{"logical":6,"price":12},{"logical":8,"price":13},{"logical":6,"price":12}]"#
+    ));
+    let zero = texts(&mut chart);
+    assert!(zero
+        .iter()
+        .any(|text| text == "Risk/reward ratio: \u{2014}"));
+    assert!(zero.iter().any(|text| text.ends_with("Qty: \u{2014}")));
+    assert!(chart.drawing_apply_options(id, r#"{"visible":false}"#));
+    assert!(!texts(&mut chart)
+        .iter()
+        .any(|text| text.starts_with("Target:")
+            || text.starts_with("Stop:")
+            || text.contains("Qty:")));
 }

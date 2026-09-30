@@ -2290,6 +2290,7 @@ impl ChartEngine {
             snapshot.round_trips.iter().map(|value| value.id.as_str()),
             "round-trip",
         )?;
+        let instrument_changed = self.trading_state.instrument != snapshot.instrument;
         let prior = std::mem::take(&mut self.trading_state);
         self.trading_state = TradingState {
             instrument: snapshot.instrument,
@@ -2311,6 +2312,9 @@ impl ChartEngine {
         self.reconcile_trading_interaction();
         self.reconcile_trading_group_visual();
         self.invalidate_frame_trading();
+        if instrument_changed {
+            self.invalidate_frame_drawings();
+        }
         Ok(())
     }
 
@@ -2420,6 +2424,8 @@ impl ChartEngine {
         validate_instrument(&instrument)?;
         self.trading_state.instrument = instrument;
         self.invalidate_frame_trading();
+        // Position drawing statistics depend on tick size, point value and quantity precision.
+        self.invalidate_frame_drawings();
         Ok(())
     }
 

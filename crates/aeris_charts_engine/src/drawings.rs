@@ -552,6 +552,10 @@ pub struct Drawing {
     pub price_scale: DrawingPriceScale,
     /// Optional engine-data binding for volume-profile and anchored-VWAP drawings.
     pub profile: Option<crate::ProfileDrawingOptions>,
+    /// Hypothetical account balance for position drawing statistics; never a broker balance.
+    pub position_account_size: f64,
+    /// Percentage of the hypothetical balance risked at the stop (0..=100).
+    pub position_risk_percent: f64,
     /// Line/border color CSS string (default [`DRAWING_DEFAULT_COLOR`]).
     pub color: String,
     /// Stroke width in CSS px (default 2; 1 for a rectangle's border).
@@ -647,6 +651,8 @@ impl Drawing {
             levels: Vec::new(),
             price_scale: DrawingPriceScale::Right,
             profile: None,
+            position_account_size: 1000.0,
+            position_risk_percent: 25.0,
             color: DRAWING_DEFAULT_COLOR.to_string(),
             width: kind.spec().default_width,
             style: LineStyle::Solid,
@@ -763,6 +769,8 @@ impl Drawing {
             DrawingKind::LongPosition | DrawingKind::ShortPosition => {
                 crate::DrawingKindOptions::Position {
                     levels: self.levels.clone(),
+                    account_size: self.position_account_size,
+                    risk_percent: self.position_risk_percent,
                 }
             }
             _ => crate::DrawingKindOptions::Generic,
@@ -1097,6 +1105,10 @@ pub(crate) struct DrawingPatch {
     #[serde(alias = "boxBorderWidth")]
     box_border_width: Option<f64>,
     profile: Option<crate::ProfileDrawingOptions>,
+    #[serde(alias = "positionAccountSize")]
+    position_account_size: Option<f64>,
+    #[serde(alias = "positionRiskPercent")]
+    position_risk_percent: Option<f64>,
 }
 
 /// A patch's `style`: the TS string form (`solid`/`dotted`/`dashed`), or the reference numeric
@@ -1135,6 +1147,15 @@ fn update_css_slot(slot: &mut Option<String>, value: String) {
 
 impl Drawing {
     fn apply_patch(&mut self, patch: DrawingPatch) -> bool {
+        if patch
+            .position_account_size
+            .is_some_and(|value| !value.is_finite() || value <= 0.0 || value > 1e15)
+            || patch
+                .position_risk_percent
+                .is_some_and(|value| !value.is_finite() || !(0.0..=100.0).contains(&value))
+        {
+            return false;
+        }
         if let Some(name) = patch.name.as_ref() {
             if name.len() > crate::MAX_DRAWING_NAME_BYTES {
                 return false;
@@ -1301,6 +1322,12 @@ impl Drawing {
                 self.box_border_width = width;
             }
         }
+        if let Some(value) = patch.position_account_size {
+            self.position_account_size = value;
+        }
+        if let Some(value) = patch.position_risk_percent {
+            self.position_risk_percent = value;
+        }
         if let Some(profile) = patch.profile {
             self.profile = Some(profile);
         }
@@ -1326,6 +1353,8 @@ impl Drawing {
             "levels": self.levels,
             "price_scale_id": self.price_scale.name(),
             "profile": self.profile,
+            "position_account_size": self.position_account_size,
+            "position_risk_percent": self.position_risk_percent,
             "color": self.color,
             "width": self.width,
             "style": style_name(self.style),
@@ -1730,7 +1759,7 @@ impl ChartEngine {
 
     /// Position levels use the instrument's orderable grid, or their bound scale's display tick.
     /// Resolve this in price space: a tick can be much smaller than a device pixel.
-    fn position_price_tick(
+    pub(crate) fn position_price_tick(
         &self,
         pane_index: usize,
         price_scale: DrawingPriceScale,

@@ -198,6 +198,7 @@ pub(super) struct PositionRunProgress {
     pub(super) start: crate::drawings::DrawingPoint,
     pub(super) point: crate::drawings::DrawingPoint,
     pub(super) side: PositionRunSide,
+    pub(super) closed: bool,
 }
 
 impl ChartEngine {
@@ -1395,14 +1396,99 @@ impl ChartEngine {
         } else {
             0.0
         };
+        let scale_target = match drawing.price_scale {
+            crate::DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
+            crate::DrawingPriceScale::Left => crate::PriceScaleTarget::Left,
+            crate::DrawingPriceScale::Overlay => crate::PriceScaleTarget::Overlay,
+        };
+        let tick = self.position_price_tick(drawing.pane_index, drawing.price_scale);
+        let format_price = |value: f64| {
+            if let Some(text) = self
+                .price_formatter_fn
+                .as_ref()
+                .and_then(|formatter| formatter(value))
+            {
+                return text;
+            }
+            if let Some(precision) = self.trading_state.instrument.price_precision {
+                return super::PriceFormatter::from_precision(
+                    precision,
+                    tick.unwrap_or(10.0_f64.powi(-(precision as i32))),
+                )
+                .format(value);
+            }
+            self.scale_formatter_source(drawing.pane_index, scale_target)
+                .and_then(|series| self.format_with_price_format(&series.price_format, value))
+                .unwrap_or_else(|| self.price_formatter.format(value))
+        };
+        let ticks = |distance: f64| {
+            tick.map_or_else(
+                || "—".to_string(),
+                |tick| position_stat_number(distance / tick, 0),
+            )
+        };
+        let point_value = self.trading_state.instrument.point_value.unwrap_or(1.0);
+        let risk_amount = drawing.position_account_size * drawing.position_risk_percent / 100.0;
+        let quantity = if risk_distance > 0.0 {
+            risk_amount / risk_distance / point_value
+        } else {
+            f64::NAN
+        };
+        let quantity_precision = self
+            .trading_state
+            .instrument
+            .quantity_precision
+            .unwrap_or(3) as usize;
+        let target_amount =
+            drawing.position_account_size + reward_distance * quantity * point_value;
+        let stop_amount = drawing.position_account_size - risk_distance * quantity * point_value;
         let target_text = format!(
-            "Target: {} ({reward_percent:.2}%)",
-            self.price_formatter.format(reward_distance)
+            "Target: {} ({reward_percent:.3}%) {}, Amount: {}",
+            format_price(reward_distance),
+            ticks(reward_distance),
+            position_stat_number(target_amount, 2),
         );
         let stop_text = format!(
-            "Stop: {} ({risk_percent:.2}%)",
-            self.price_formatter.format(risk_distance)
+            "Stop: {} ({risk_percent:.3}%) {}, Amount: {}",
+            format_price(risk_distance),
+            ticks(risk_distance),
+            position_stat_number(stop_amount, 2),
         );
+        let run = self.position_run_progress(drawing);
+        // Unfilled/historical/future drawings still show the right-edge or latest close.
+        // This is an estimate, not a broker execution; preserve the run's exact frozen exit.
+        let current = run.map(|run| run.point.price).or_else(|| {
+            let series = self.scale_formatter_source(drawing.pane_index, scale_target)?;
+            if series.kind == crate::SeriesKind::Custom {
+                return None;
+            }
+            let plot = self.data.plot(series.id);
+            let row = plot.last_non_whitespace_row(target.logical.floor() as i64)?;
+            let close = plot.value_at(row, PlotValueIndex::Close);
+            close.is_finite().then_some(close)
+        });
+        let direction = if drawing.kind == DrawingKind::LongPosition {
+            1.0
+        } else {
+            -1.0
+        };
+        let pnl = current.map(|price| (price - entry.price) * direction);
+        let status = if run.is_some_and(|run| run.closed) {
+            "Closed"
+        } else {
+            "Open"
+        };
+        let middle = [
+            format!(
+                "{status} P&L: {}, Qty: {}",
+                pnl.map_or_else(|| "—".to_string(), format_price),
+                position_stat_number(quantity, quantity_precision)
+            ),
+            format!(
+                "Risk/reward ratio: {}",
+                position_stat_number(reward_distance / risk_distance, 2)
+            ),
+        ];
         let center_x = (position.left + position.right) / 2.0;
         let label_offset = 14.0 * vpr;
         let target_label_y = if position.target_y < position.entry_y {
@@ -1415,8 +1501,35 @@ impl ChartEngine {
         } else {
             position.stop_y + label_offset
         };
-        self.push_position_label_block(out, center_x, target_label_y, &[target_text], reward, vpr);
-        self.push_position_label_block(out, center_x, stop_label_y, &[stop_text], risk, vpr);
+        self.push_position_label_block(
+            drawing.pane_index,
+            out,
+            (center_x, target_label_y),
+            &[target_text],
+            reward,
+            vpr,
+        );
+        self.push_position_label_block(
+            drawing.pane_index,
+            out,
+            (center_x, stop_label_y),
+            &[stop_text],
+            risk,
+            vpr,
+        );
+        let pnl_color = if pnl.is_some_and(|value| value < 0.0) {
+            risk
+        } else {
+            reward
+        };
+        self.push_position_label_block(
+            drawing.pane_index,
+            out,
+            (center_x, position.entry_y),
+            &middle,
+            pnl_color,
+            vpr,
+        );
     }
 
     /// Dynamic position progress belongs to pane chrome rather than retained drawing geometry:
@@ -1432,6 +1545,8 @@ impl ChartEngine {
     ) {
         for drawing in self.drawings.iter().filter(|drawing| {
             drawing.pane_index == pane_index
+                && drawing.visible
+                && drawing.interval_visibility.allows(self.drawing_interval)
                 && matches!(
                     drawing.kind,
                     DrawingKind::LongPosition | DrawingKind::ShortPosition
@@ -1754,6 +1869,7 @@ impl ChartEngine {
                 price,
             },
             side,
+            closed,
         })
     }
 
@@ -1772,6 +1888,8 @@ impl ChartEngine {
             .unwrap_or(Color::rgb(247, 82, 95));
         for drawing in self.drawings.iter().filter(|drawing| {
             drawing.pane_index == pane_index
+                && drawing.visible
+                && drawing.interval_visibility.allows(self.drawing_interval)
                 && matches!(
                     drawing.kind,
                     DrawingKind::LongPosition | DrawingKind::ShortPosition
@@ -1809,13 +1927,14 @@ impl ChartEngine {
 
     fn push_position_label_block(
         &self,
+        pane_index: usize,
         out: &mut Vec<Prim>,
-        x: f64,
-        y: f64,
+        center: (f64, f64),
         lines: &[String],
         background: Color,
         vpr: f64,
     ) {
+        let (x, y) = center;
         if lines.is_empty() {
             return;
         }
@@ -1836,15 +1955,35 @@ impl ChartEngine {
             w: width.round().max(1.0) as i32,
             h: height.round().max(1.0) as i32,
         };
-        out.push(Prim::Rect {
-            rect,
-            color: Color::rgba(background.r(), background.g(), background.b(), 224),
+        let fallback = aeris_charts_core::style::DEFAULT_SURFACE_RGB;
+        let mut surface = Color::parse_css(&layout.background.color)
+            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
+        if matches!(
+            layout.background.kind.as_str(),
+            "gradient" | "vertical_gradient"
+        ) {
+            let pane = &self.panes[pane_index];
+            let mix = ((y / vpr - pane.top) / pane.height.max(1.0)).clamp(0.0, 1.0);
+            let top = Color::parse_css(&layout.background.top_color).unwrap_or(surface);
+            let bottom = Color::parse_css(&layout.background.bottom_color).unwrap_or(surface);
+            let blend = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * mix).round() as u8;
+            surface = Color::rgb(
+                blend(top.r(), bottom.r()),
+                blend(top.g(), bottom.g()),
+                blend(top.b(), bottom.b()),
+            );
+        }
+        out.push(Prim::RoundRect {
+            x: rect.x as f32,
+            y: rect.y as f32,
+            w: rect.w as f32,
+            h: rect.h as f32,
+            radii: [(3.0 * vpr).round().max(1.0) as f32; 4],
+            fill: background.solid(),
+            border_width: vpr.round().max(1.0) as f32,
+            border_color: surface.contrast_srgb(),
         });
-        let text_color = if background.luminance() > 175.0 {
-            Color::rgb(0, 0, 0)
-        } else {
-            Color::rgb(255, 255, 255)
-        };
+        let text_color = background.contrast_text();
         let first_y = y - ((lines.len() as f64 - 1.0) * line_height) / 2.0;
         for (index, text) in lines.iter().enumerate() {
             out.push(Prim::Text {
@@ -2026,5 +2165,22 @@ fn build_rectangle_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut V
                 border_color: fill,
             });
         }
+    }
+}
+
+fn position_stat_number(value: f64, precision: usize) -> String {
+    if !value.is_finite() {
+        return "—".to_string();
+    }
+    let text = format!("{value:.precision$}");
+    let text = if precision > 0 {
+        text.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        &text
+    };
+    if text == "-0" {
+        "0".to_string()
+    } else {
+        text.to_string()
     }
 }

@@ -345,6 +345,8 @@
       <button type="button" data-tool="brush" title="Freehand brush: drag to draw a smooth stroke; when selected its two end anchors re-anchor, the body moves">brush</button>
       <button type="button" data-tool="long_position" title="Long Position: one click places entry, target, stop, and width">long position</button>
       <button type="button" data-tool="short_position" title="Short Position: one click places entry, target, stop, and width">short position</button>
+      <label title="Hypothetical balance used by position drawing statistics">balance <input type="number" id="position_account_size" min="0.01" max="1000000000000000" step="any" value="1000"></label>
+      <label title="Percentage of the hypothetical balance risked at the stop">risk % <input type="number" id="position_risk_percent" min="0" max="100" step="any" value="25"></label>
       <label title="Host-supplied quantity for placing the selected Long/Short Position drawing">order qty <input type="number" id="position_order_quantity" min="0.00000001" step="any" value="1"></label>
       <button id="place_position_order" type="button" disabled title="Place one host-authoritative bracket order from the selected Long/Short Position drawing">place order</button>
       <label title="Stroke/border color — templates new drawings and applies live to the selected one">color <input type="color" id="drawing_color" value="#168ef7"></label>
@@ -1135,6 +1137,8 @@ function sync_drawing_tool_buttons(tool) {
 let drawing_text_color_explicit = false;
 function drawing_options_from_inputs(kind = null) {
   const options = {
+    position_account_size: Number(document.getElementById("position_account_size").value),
+    position_risk_percent: Number(document.getElementById("position_risk_percent").value),
     color: document.getElementById("drawing_color").value,
     style: document.getElementById("drawing_style").value,
     width: Number(document.getElementById("drawing_width").value),
@@ -1179,6 +1183,8 @@ function sync_drawing_inputs_from_selection() {
   if (selected === null) return;
   const o = selected.options();
   const set = (id, value) => { if (value !== null && value !== undefined) document.getElementById(id).value = value; };
+  set("position_account_size", o.position_account_size);
+  set("position_risk_percent", o.position_risk_percent);
   set("drawing_color", css_to_hex(o.color));
   set("drawing_style", o.style);
   document.getElementById("drawing_width").value = String(o.width);
@@ -1197,7 +1203,7 @@ function sync_drawing_inputs_from_selection() {
   set("drawing_text_v_align", o.text_v_align);
 }
 document.getElementById("chart_container").addEventListener("pointerup", () => setTimeout(sync_drawing_inputs_from_selection, 0));
-for (const id of ["drawing_color", "drawing_style", "drawing_width", "drawing_text_color", "drawing_text_size", "drawing_weight", "drawing_italic", "drawing_text_h_align", "drawing_text_v_align"]) {
+for (const id of ["position_account_size", "position_risk_percent", "drawing_color", "drawing_style", "drawing_width", "drawing_text_color", "drawing_text_size", "drawing_weight", "drawing_italic", "drawing_text_h_align", "drawing_text_v_align"]) {
   document.getElementById(id).addEventListener("change", () => {
     if (id === "drawing_text_color") drawing_text_color_explicit = true;
     if (id === "drawing_color" && !drawing_text_color_explicit) {

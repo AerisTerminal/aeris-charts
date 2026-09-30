@@ -4029,3 +4029,55 @@ fn drawing_runtime_is_isolated_per_chart_even_when_ids_overlap() {
     first.clear_drawings();
     assert_eq!(second.drawings().len(), 45);
 }
+
+#[test]
+fn position_account_settings_are_atomic_and_survive_history_and_persistence() {
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 11.0,
+                },
+                DrawingPoint {
+                    logical: 6.0,
+                    price: 12.0,
+                },
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    assert!(chart.drawing_apply_options(
+        id,
+        r#"{"position_account_size":2000,"position_risk_percent":2}"#
+    ));
+    let updated = chart.drawing(id).unwrap().clone();
+    assert_eq!(updated.position_account_size, 2000.0);
+    assert_eq!(updated.position_risk_percent, 2.0);
+    for patch in [
+        r#"{"position_account_size":0,"color":"red"}"#,
+        r#"{"position_risk_percent":101,"position_account_size":1000}"#,
+    ] {
+        assert!(!chart.drawing_apply_options(id, patch));
+        assert_eq!(chart.drawing(id).unwrap(), &updated);
+    }
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawing(id).unwrap().position_account_size, 1000.0);
+    assert!(chart.redo_drawing());
+    let saved = chart.export_state_json().unwrap();
+    let mut restored = settled_chart();
+    restored.import_state_json(&saved).unwrap();
+    assert_eq!(restored.drawing(id).unwrap().position_account_size, 2000.0);
+    assert_eq!(restored.drawing(id).unwrap().position_risk_percent, 2.0);
+    let mut invalid: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    invalid["drawings"][0]["style"]["position_risk_percent"] = serde_json::json!(-1.0);
+    assert!(restored.import_state_json(&invalid.to_string()).is_err());
+    assert_eq!(restored.drawing(id).unwrap().position_risk_percent, 2.0);
+}

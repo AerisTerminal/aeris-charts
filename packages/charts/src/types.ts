@@ -1992,7 +1992,7 @@ export interface drawing_template { name: string; kind: drawing_kind; options: P
 export type drawing_kind_options =
   | { kind: "rectangle"; fill_color?: string; preview_fill_color?: string; border_visible: boolean; show_labels: boolean; axis_bands_visible: boolean; label_color?: string; label_text_color?: string; snap_time_to_data: boolean }
   | { kind: "text"; box_color?: string; box_border_color?: string; box_border_width: number }
-  | { kind: "position"; levels: drawing_level[] }
+  | { kind: "position"; levels: drawing_level[]; account_size: number; risk_percent: number }
   | { kind: "generic" };
 
 /**
@@ -2003,6 +2003,10 @@ export type drawing_kind_options =
  * `text_size: null` follows `layout.fontSize`.
  */
 export interface drawing_options {
+  /** Hypothetical balance for Long/Short Position statistics (default 1,000); independent of broker orders. */
+  position_account_size: number;
+  /** Percentage of the hypothetical balance risked at the stop, 0–100 (default 25). */
+  position_risk_percent: number;
   name: string;
   group_id: string;
   revision: number;
@@ -2085,6 +2089,8 @@ export interface persisted_pane_v1 {
 
 /** Stable semantic drawing style persisted by schema V1. Omitted fields restore defaults. */
 export interface persisted_drawing_style_v1 {
+  position_account_size?: number;
+  position_risk_percent?: number;
   name?: string;
   group_id?: string;
   revision?: number;
