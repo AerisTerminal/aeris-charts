@@ -1899,7 +1899,8 @@ impl Probe {
     }
 
     fn update_crosshair_modifier(&mut self, control: bool, platform: bool) {
-        let enabled = (control || platform) && self.engine.active_drawing_tool().is_some();
+        let enabled = (control || platform)
+            && (self.engine.active_drawing_tool().is_some() || self.engine.drawing_drag_active());
         if self.engine.crosshair_ohlc_magnet != enabled {
             self.engine.crosshair_ohlc_magnet = enabled;
             self.dirty = true;
@@ -5023,6 +5024,8 @@ mod tests {
             |text, _bold| text.chars().count() as f64 * 6.0,
         );
         probe.engine.clear_drawings();
+        probe.update_crosshair_modifier(true, false);
+        assert!(!probe.engine.crosshair_ohlc_magnet);
         probe.arm_drawing(DrawingKind::TrendLine);
         assert!(!probe.engine.drawing_create_active());
 

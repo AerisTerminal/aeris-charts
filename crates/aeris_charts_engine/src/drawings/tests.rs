@@ -2671,26 +2671,27 @@ fn ctrl_magnet_snaps_the_crosshair_to_ohlc() {
     chart.crosshair = Some((x, y_free));
     // Normal mode without the flag: the horizontal line follows the raw cursor y.
     assert_eq!(crosshair_hline_y(&mut chart), Some(y_free.round() as i32));
-    // Ctrl held (the public reference's temporary magnet): the line snaps to the bar's high.
+    // A host can forward Ctrl while browsing. Without drawing work it stays at the raw price.
     chart.crosshair_ohlc_magnet = true;
-    assert_eq!(
-        crosshair_hline_y(&mut chart),
-        Some(y_at(&chart, 12.0).round() as i32)
-    );
-    let crosshair_y = crosshair_hline_y(&mut chart).unwrap();
+    assert_eq!(crosshair_hline_y(&mut chart), Some(y_free.round() as i32));
+    // Drawing creation: Ctrl now resolves the same OHLC candidate as the anchor.
     assert!(chart.drawing_create_begin(DrawingKind::HorizontalLine, None));
+    let (from, to) = chart.visible_range_for_frame().unwrap();
+    let snapped_y = chart.crosshair_snap(0, x, y_free, from, to).1;
+    assert_eq!(snapped_y.round() as i32, y_at(&chart, 12.0).round() as i32);
+    assert_eq!(crosshair_hline_y(&mut chart), None);
     let drawing_id = chart.drawing_create_click(x, y_free, MAGNET) as DrawingId;
     let (_, drawing_y) = chart
         .drawing_to_px(0, chart.drawing(drawing_id).unwrap().points[0])
         .unwrap();
     assert_eq!(
         drawing_y.round() as i32,
-        crosshair_y,
+        snapped_y.round() as i32,
         "crosshair and drawing magnets must resolve the same pixel-space OHLC candidate"
     );
-    // Released: raw again (the configured mode is untouched).
-    chart.crosshair_ohlc_magnet = false;
+    // Creation finished: free browsing is raw even if the modifier flag remains set.
     assert_eq!(crosshair_hline_y(&mut chart), Some(y_free.round() as i32));
+    chart.crosshair_ohlc_magnet = false;
     // Hidden mode stays hidden even with the flag set.
     chart.crosshair_ohlc_magnet = true;
     chart.crosshair_mode = aeris_charts_core::model::magnet::CrosshairMode::Hidden;
@@ -2728,10 +2729,15 @@ fn ctrl_crosshair_magnet_ignores_external_study_on_price_pane() {
 
     let x = x_at(&chart, 3.0);
     chart.crosshair = Some((x, y_at(&chart, 11.8)));
+    assert!(chart.drawing_create_begin(DrawingKind::HorizontalLine, None));
     chart.crosshair_ohlc_magnet = true;
+    let (from, to) = chart.visible_range_for_frame().unwrap();
     assert_eq!(
-        crosshair_hline_y(&mut chart),
-        Some(y_at(&chart, 12.0).round() as i32),
+        chart
+            .crosshair_snap(0, x, y_at(&chart, 11.8), from, to)
+            .1
+            .round() as i32,
+        y_at(&chart, 12.0).round() as i32,
         "the external EMA must remain inspectable without attracting Ctrl magnetism"
     );
 }
@@ -2758,14 +2764,15 @@ fn ohlc_magnet_snaps_scalar_series_to_the_rendered_value() {
     let empty_y = y_at(&chart, 25.0);
     let rendered_y = y_at(&chart, 20.0);
     chart.crosshair = Some((x, empty_y));
+    assert!(chart.drawing_create_begin(DrawingKind::HorizontalLine, None));
     chart.crosshair_ohlc_magnet = true;
+    let (from, to) = chart.visible_range_for_frame().unwrap();
     assert_eq!(
-        crosshair_hline_y(&mut chart),
-        Some(rendered_y.round() as i32),
+        chart.crosshair_snap(0, x, empty_y, from, to).1.round() as i32,
+        rendered_y.round() as i32,
         "an area series exposes only its rendered close/value to the OHLC magnet"
     );
 
-    assert!(chart.drawing_create_begin(DrawingKind::HorizontalLine, None));
     let drawing_id = chart.drawing_create_click(x, empty_y, MAGNET) as DrawingId;
     assert!((chart.drawing(drawing_id).unwrap().points[0].price - 20.0).abs() < 1e-9);
 }

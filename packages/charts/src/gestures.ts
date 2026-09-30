@@ -234,11 +234,11 @@ export function install_gestures(chart: chart_impl): () => void {
 
   // the public reference's Ctrl-held magnet, scoped to DRAWING work: the Normal-mode crosshair snaps
   // to the hovered bar's rendered prices only while a drawing tool is armed (anchor
-  // placement/preview) —
+  // placement/preview) or an existing drawing is being dragged —
   // plain browsing never price-snaps on Ctrl. Forwarded on every pointer move/down and on
   // modifier key events, so a press/release without mouse movement still refreshes the snap live.
   const apply_crosshair_magnet = (e: { ctrlKey: boolean; metaKey: boolean }) => {
-    wasm.set_crosshair_ohlc_magnet((e.ctrlKey || e.metaKey) && chart.creation_armed());
+    wasm.set_crosshair_ohlc_magnet((e.ctrlKey || e.metaKey) && (chart.creation_armed() || drawing_dragging));
   };
   const on_modifier_key = (e: KeyboardEvent) => {
     if (e.key !== "Control" && e.key !== "Meta") return;
@@ -764,6 +764,7 @@ export function install_gestures(chart: chart_impl): () => void {
       // never started). The click that follows (no move) routes to selection.
       drawing_dragging = false;
       wasm.drawing_drag_end();
+      apply_crosshair_magnet(e);
       chart.repaint();
       return;
     }
@@ -940,6 +941,7 @@ export function install_gestures(chart: chart_impl): () => void {
       drawing_dragging = false;
       wasm.drawing_drag_cancel();
     }
+    wasm.set_crosshair_ohlc_magnet(false);
     trading_press = false;
     alert_press = false;
     touch_tracking = false;

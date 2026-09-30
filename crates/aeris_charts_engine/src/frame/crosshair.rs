@@ -345,7 +345,14 @@ impl ChartEngine {
         let include_ohlc = match self.crosshair_mode {
             CrosshairMode::MagnetOhlc => Some(true),
             CrosshairMode::Magnet => Some(false),
-            CrosshairMode::Normal if self.crosshair_ohlc_magnet => Some(true),
+            CrosshairMode::Normal
+                if self.crosshair_ohlc_magnet
+                    && (self.active_drawing_tool().is_some()
+                        || self.drawing_create_active()
+                        || self.drawing_drag_active()) =>
+            {
+                Some(true)
+            }
             _ => None,
         };
         let Some(include_ohlc) = include_ohlc else {

@@ -1654,9 +1654,10 @@ pub struct ChartEngine {
     grid_color_follows_theme: bool,
     crosshair_color_follows_theme: bool,
     pub crosshair_mode: CrosshairMode,
-    /// the public reference's Ctrl-held magnet: while set, a Normal-mode crosshair snaps to the hovered
-    /// bar's rendered prices exactly like `CrosshairMode::MagnetOhlc` (OHLC for candles/bars,
-    /// close/value for scalar series; frame/crosshair.rs `crosshair_snap`). The gesture layer
+    /// The temporary Ctrl-held drawing magnet: while set during drawing creation or drag, a
+    /// Normal-mode crosshair snaps to the hovered bar's rendered prices exactly like
+    /// `CrosshairMode::MagnetOhlc` (OHLC for candles/bars, close/value for scalar series;
+    /// frame/crosshair.rs `crosshair_snap`). Free browsing stays raw. The gesture layer
     /// forwards the live modifier state; the configured `crosshair_mode` is untouched
     /// (Magnet/MagnetOhlc stay as configured, Hidden stays hidden).
     pub crosshair_ohlc_magnet: bool,

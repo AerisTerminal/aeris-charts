@@ -348,6 +348,10 @@ indicators and external studies. Typed scale commands resolve the effective seri
 format across a scale, toggle series/axis chrome, and move every attached series between price axes as
 one operation. Hosts retain cursor choice, menu presentation, platform capture, product persistence,
 and repaint/layout scheduling; they do not walk engine series to reproduce these transactions.
+The temporary Ctrl/Cmd OHLC magnet affects a Normal-mode crosshair only while a drawing tool is
+armed, a drawing is being created, or an existing drawing is being dragged. Free browsing retains
+the raw cursor price even if a host has not yet cleared the modifier flag; explicitly configured
+Magnet and MagnetOhlc crosshair modes remain independent of this drawing interaction.
 
 Native financial-frame preparation is also one engine operation. A host supplies the viewport and
 native glyph measurement callbacks; the engine installs CSS dimensions and DPR, decides whether

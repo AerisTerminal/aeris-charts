@@ -2135,7 +2135,7 @@ test("a vertical line body-drag with Ctrl snaps to the bar center (the public re
   expect(Number.isInteger(points[0].logical), "snapped onto a bar center").toBe(true);
 });
 
-test("Ctrl magnet engages only while a drawing tool is armed", async ({ page }) => {
+test("Ctrl OHLC magnet engages only during drawing creation or drag", async ({ page }) => {
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
   await page.waitForFunction(() => performance.now() > 600);
@@ -2162,6 +2162,26 @@ test("Ctrl magnet engages only while a drawing tool is armed", async ({ page }) 
   await focus_overlay(page);
   await page.keyboard.press("Escape");
   await hover();
+  expect(await magnet()).toBe(false);
+
+  // Grabbing an existing drawing also counts as drawing work, even with no tool armed.
+  const drag = await page.evaluate(() => {
+    const range = window.__chart.time_scale().get_visible_logical_range();
+    const index = Math.floor((range.from + range.to) / 2);
+    const bar = window.__main.data_by_index(index);
+    window.__chart.add_drawing("horizontal_line", [{ logical: index, price: bar.close }]);
+    return {
+      x: window.__chart.time_scale().logical_to_coordinate(index),
+      y: window.__main.price_to_coordinate(bar.close),
+    };
+  });
+  await settle_frames(page);
+  await page.mouse.move(box.x + drag.x, box.y + drag.y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + drag.x + 8, box.y + drag.y + 8);
+  expect(await page.evaluate(() => window.__chart.wasm.drawing_drag_active())).toBe(true);
+  expect(await magnet()).toBe(true);
+  await page.mouse.up();
   expect(await magnet()).toBe(false);
   await page.keyboard.up("Control");
 });
