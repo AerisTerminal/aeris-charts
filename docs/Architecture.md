@@ -565,6 +565,10 @@ inspector visibility, and responsive shell layout belong to these example hosts.
 native scroll and keyboard-focus facilities; the browser uses semantic headings, labeled controls,
 and a dismissible compact inspector. These shells retain the existing engine/API action paths;
 the finite GPUI probe and browser runtime fixtures keep their dedicated measurement layouts.
+GPUI paints rotated text through transformed SVG sprites because its shaped-line painter has no
+rotation parameter. Each sprite leaves a one-em transparent margin around the measured run while
+keeping the same anchor to accommodate font fallback and glyph overhang without clipping the
+trend-label ink.
 
 ### `aeris_charts_render_wgpu`
 
@@ -653,7 +657,8 @@ segment-local transform, and middle-stroke cutout. New trend labels default to t
 their 3×3 slots resolve along and perpendicular to the actual segment. The direction is normalized
 into the readable half-plane, including a
 deterministic vertical orientation, so endpoint crossing preserves visual left/right and never
-turns glyphs upside down. Pointer hits are inverse-transformed into the measured local text
+turns glyphs upside down. Top and bottom slots clear the stroke by the 1.2em line box's half-height
+plus the text padding. Pointer hits are inverse-transformed into the measured local text
 rectangle. An unset trend-label text color follows the drawing stroke dynamically; an explicit text
 color remains independent. Empty labels use that same resolved RGB at reduced alpha for
 `+ Add text`; entering or

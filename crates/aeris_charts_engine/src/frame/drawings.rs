@@ -157,9 +157,9 @@ mod trend_label_tests {
             ] {
                 drawing.text_h_align = h_align;
                 for (v_align, expected_normal) in [
-                    (DrawingTextVAlign::Top, 10.0),
+                    (DrawingTextVAlign::Top, 11.2),
                     (DrawingTextVAlign::Middle, 0.0),
-                    (DrawingTextVAlign::Bottom, -10.0),
+                    (DrawingTextVAlign::Bottom, -11.2),
                 ] {
                     drawing.text_v_align = v_align;
                     let (x, y, align, angle) = ChartEngine::drawing_text_placement(

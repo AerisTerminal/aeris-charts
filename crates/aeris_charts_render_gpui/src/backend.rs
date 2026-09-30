@@ -692,6 +692,22 @@ fn escape_svg_text(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// The SVG renderer may resolve a different font face from GPUI's text shaper. Leave one em
+/// around the measured run so descenders, italic overhang, and antialiasing are not cut by the
+/// SVG viewport. The origin moves by the same amount, keeping the visible text at its anchor.
+fn rotated_text_sprite_bounds(
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+    pad: f32,
+) -> Bounds<Pixels> {
+    Bounds {
+        origin: point(px(left - pad), px(top - pad)),
+        size: size(px(width + 2.0 * pad), px(height + 2.0 * pad)),
+    }
+}
+
 /// GPUI's shaped-line painter has no affine-transform parameter. Rotated runs therefore use
 /// GPUI's transformed monochrome-sprite path: the same system font is rasterized once into the
 /// sprite atlas and the sprite is rotated around the canonical aligned anchor. The atlas key
@@ -749,16 +765,17 @@ fn paint_rotated_text(
     let anchor_y = f32::from(transform.y(run.y));
     let left = text::aligned_left(anchor_x, width, run.align);
     let top = anchor_y - height / 2.0;
-    let bounds = Bounds {
-        origin: point(px(left), px(top)),
-        size: size(px(width), px(height)),
-    };
+    // Use a whole device-pixel margin so GPUI's bounds snapping does not shift the glyphs.
+    let pad = run.size.ceil().max(1.0) * transform.inv_scale;
+    let bounds = rotated_text_sprite_bounds(left, top, width, height, pad);
+    let sprite_width = width + 2.0 * pad;
+    let sprite_height = height + 2.0 * pad;
     let family = escape_svg_text(&run.family);
     let value = escape_svg_text(&run.text);
     let style = if run.italic { "italic" } else { "normal" };
     let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}"><text x="0" y="{ascent}" font-family="{family}" font-size="{font_size_value}" font-weight="{weight}" font-style="{style}" fill="white">{value}</text></svg>"#,
-        ascent = cached.ascent,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{sprite_width}" height="{sprite_height}" viewBox="0 0 {sprite_width} {sprite_height}"><text x="{pad}" y="{baseline}" font-family="{family}" font-size="{font_size_value}" font-weight="{weight}" font-style="{style}" fill="white">{value}</text></svg>"#,
+        baseline = pad + cached.ascent,
         weight = run.weight,
     );
     let scale_factor = 1.0 / transform.inv_scale;
@@ -1040,6 +1057,18 @@ mod tests {
 
     const OPAQUE: Color = Color::rgb(0x26, 0xa6, 0x9a);
     const OPAQUE2: Color = Color::rgb(0xef, 0x53, 0x50);
+
+    #[test]
+    fn rotated_label_sprite_leaves_ink_room_without_moving_the_run() {
+        let bounds = rotated_text_sprite_bounds(23.5, 36.0, 42.0, 15.0, 12.0);
+        assert_eq!(f32::from(bounds.origin.x), 11.5);
+        assert_eq!(f32::from(bounds.origin.y), 24.0);
+        assert_eq!(f32::from(bounds.size.width), 66.0);
+        assert_eq!(f32::from(bounds.size.height), 39.0);
+        // The SVG text starts at (pad, pad + ascent), retaining the original ink origin.
+        assert_eq!(f32::from(bounds.origin.x) + 12.0, 23.5);
+        assert_eq!(f32::from(bounds.origin.y) + 12.0, 36.0);
+    }
 
     #[test]
     fn a_run_of_identical_opaque_quads_is_batchable() {

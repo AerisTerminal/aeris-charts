@@ -2233,10 +2233,13 @@ impl ChartEngine {
                 };
                 let mut x = start.0 + ux * distance;
                 let mut y = start.1 + uy * distance;
+                // Placement and hit testing use the same 1.2em line box. Half a bare em can
+                // put descenders against the stroke, particularly when the line is tilted.
+                let half_line_height = size * 0.6;
                 let normal_distance = match drawing.text_v_align {
-                    DrawingTextVAlign::Top => pad + size / 2.0,
+                    DrawingTextVAlign::Top => pad + half_line_height,
                     DrawingTextVAlign::Middle => 0.0,
-                    DrawingTextVAlign::Bottom => -pad - size / 2.0,
+                    DrawingTextVAlign::Bottom => -pad - half_line_height,
                 };
                 // Screen y grows downward, so `(uy, -ux)` is the readable line's top normal.
                 x += uy * normal_distance;

@@ -10065,6 +10065,47 @@ fn trend_line_middle_label_follows_the_segment_and_opens_a_gap() {
 }
 
 #[test]
+fn tilted_trend_label_keeps_its_line_box_clear_of_the_stroke() {
+    use crate::{DrawingKind, DrawingPoint};
+
+    let mut chart = anchor_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 4.0,
+                    price: 10.4,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    chart.build_frame();
+    let start = chart.drawing_point_to_coordinate(id, 0).unwrap();
+    let end = chart.drawing_point_to_coordinate(id, 1).unwrap();
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    let length = dx.hypot(dy);
+    let top_normal = (dy / length, -dx / length);
+
+    for (slot, sign) in [("top", 1.0), ("bottom", -1.0)] {
+        assert!(chart.drawing_apply_options(
+            id,
+            &format!(r#"{{"text":"Devraj","text_size":12,"text_v_align":"{slot}"}}"#),
+        ));
+        let (x, y) = chart.drawing_text_coordinate(id).unwrap();
+        let distance = (x - start.0) * top_normal.0 + (y - start.1) * top_normal.1;
+        assert!((distance - sign * (4.0 + 12.0 * 0.6)).abs() < 0.001);
+    }
+}
+
+#[test]
 fn trend_label_color_follows_its_line_until_explicitly_overridden() {
     use crate::{DrawingKind, DrawingPoint};
 
