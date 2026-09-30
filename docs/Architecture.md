@@ -693,8 +693,11 @@ One-click bracket placement crosses the drawing/trading boundary only through an
 Long/Short Position creation, body movement, and entry/target/stop handle drags resolve prices to
 the instrument `tick_size`, falling back to the bound price scale's display `min_move`. The engine
 converts the original `f64` pointer coordinates directly to price before rounding to ticks, so
-ticks smaller than one device pixel remain reachable. Horizontal logical time stays continuous
-between bars unless an explicit data-time constraint or magnet applies. Square position controls
+ticks smaller than one device pixel remain reachable. Horizontal creation and entry/extent handles
+use the vertical crosshair's shared time-slot resolver, including its visible-range and hidden-series
+rules. Body movement applies the difference between the pointer's starting and current crosshair
+slots to every anchor, preserving width and grab offset while holding between slot changes. Future
+empty slots remain editable unless an explicit data-time constraint applies. Square position controls
 emit one opaque, theme-filled `RoundRect` with rounded corners and a device-snapped inside border;
 all executors receive that same fill and border geometry.
 

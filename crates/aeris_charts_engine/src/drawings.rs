@@ -3589,7 +3589,8 @@ impl ChartEngine {
         };
         drag.current_x = x;
         drag.current_y = y;
-        let (dx, dy) = (x - drag.start_x, y - drag.start_y);
+        let start_x = drag.start_x;
+        let (dx, dy) = (x - start_x, y - drag.start_y);
         let (id, part) = (drag.id, drag.part);
         let (start_points, start_px) = (drag.start_points.clone(), drag.start_px.clone());
         let Some(drawing) = self.drawing(id) else {
@@ -3618,6 +3619,9 @@ impl ChartEngine {
                     };
                     if modifiers.magnet && index != 2 {
                         cursor_pt = self.magnet_snap_point_at(pane, price_scale, x, y, cursor_pt);
+                    }
+                    if matches!(index, 1 | 2) {
+                        cursor_pt.logical = self.snapped_crosshair_index(x) as f64;
                     }
                     cursor_pt.price = self.snap_position_price(pane, price_scale, cursor_pt.price);
                     match index {
@@ -3805,11 +3809,22 @@ impl ChartEngine {
                 };
                 let single_anchor = points.len() == 1;
                 let position = kind.spec().handles == DrawingHandleMode::Position;
+                // Follow the crosshair's slot changes from the grabbed point. One shared
+                // logical delta moves the body rigidly and preserves the grab offset/width.
+                let time_steps = if position {
+                    (self.snapped_crosshair_index(start_x + dx)
+                        - self.snapped_crosshair_index(start_x)) as f64
+                } else {
+                    0.0
+                };
                 for (index, slot) in points.iter_mut().enumerate() {
                     let (dx, dy) = kind.spec().movement_axis.constrain(dx, dy);
                     let Some(mut point) = convert(index, dx, dy) else {
                         return;
                     };
+                    if position {
+                        point.logical = slot.logical + time_steps;
+                    }
                     if snap_time_to_data {
                         let Some(snapped) = self.snap_drawing_time_to_data(point) else {
                             return;
@@ -4313,8 +4328,10 @@ impl ChartEngine {
         }
         let pane_geometry = self.panes.get(pane)?;
         let entry = DrawingPoint {
+            logical: self
+                .snapped_crosshair_index(self.time_scale.logical_to_coordinate(entry.logical))
+                as f64,
             price: self.snap_position_price(pane, price_scale, entry.price),
-            ..entry
         };
         let (entry_x, entry_y) = self.drawing_to_px_for(pane, price_scale, entry)?;
 
@@ -4337,6 +4354,7 @@ impl ChartEngine {
         let upper = self.drawing_from_px_for(pane, price_scale, entry_x, upper_y)?;
         let lower = self.drawing_from_px_for(pane, price_scale, entry_x, lower_y)?;
         let mut extent = self.drawing_from_px_for(pane, price_scale, extent_x, entry_y)?;
+        extent.logical = self.snapped_crosshair_index(extent_x) as f64;
         if snap_time_to_data {
             extent = self.snap_drawing_time_to_data(extent)?;
         }

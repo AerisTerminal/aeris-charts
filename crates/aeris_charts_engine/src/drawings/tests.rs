@@ -1496,7 +1496,85 @@ fn position_drag_resolves_price_ticks_smaller_than_a_device_pixel() {
 }
 
 #[test]
-fn position_creation_and_drag_use_instrument_ticks_with_free_horizontal_time() {
+fn position_horizontal_drag_follows_crosshair_steps_in_both_directions() {
+    for kind in [DrawingKind::LongPosition, DrawingKind::ShortPosition] {
+        for spacing in [6.0, 14.25] {
+            for part in [
+                DrawingDragPart::Body,
+                DrawingDragPart::Anchor(1),
+                DrawingDragPart::Anchor(2),
+            ] {
+                let mut chart = settled_chart();
+                chart.time_scale.set_bar_spacing(spacing);
+                chart.time_scale.set_right_offset(5.0);
+                let sign = if kind == DrawingKind::LongPosition {
+                    1.0
+                } else {
+                    -1.0
+                };
+                let initial = vec![
+                    DrawingPoint {
+                        logical: 2.0,
+                        price: 11.5,
+                    },
+                    DrawingPoint {
+                        logical: 7.0,
+                        price: 11.5 + sign,
+                    },
+                    DrawingPoint {
+                        logical: 2.0,
+                        price: 11.5 - sign,
+                    },
+                ];
+                let id = chart.add_drawing(kind, 0, initial.clone(), None).unwrap();
+                chart.set_selected_drawing(Some(id));
+                let px = chart.drawing_px(chart.drawing(id).unwrap()).unwrap();
+                let grab = match part {
+                    DrawingDragPart::Body => (px[0].0 + (px[1].0 - px[0].0) * 0.37, px[0].1),
+                    DrawingDragPart::Anchor(1) => px[0],
+                    DrawingDragPart::Anchor(2) => (px[1].0, px[0].1),
+                    _ => unreachable!(),
+                };
+                assert!(chart.drawing_drag_start_at(grab.0, grab.1));
+                assert_eq!(chart.drawing_drag.as_ref().unwrap().part, part);
+                let cursor_start = chart.snapped_crosshair_index(grab.0);
+                for fraction in [0.2, 0.4, 0.7, 1.2, 1.7, -0.2, -0.4, -0.7, -1.2, -1.7, 8.7] {
+                    let x = grab.0 + spacing * fraction;
+                    let cursor = chart.snapped_crosshair_index(x);
+                    chart.drawing_drag_to(x, grab.1, DrawingModifiers::default());
+                    for (index, (before, after)) in initial
+                        .iter()
+                        .zip(&chart.drawing(id).unwrap().points)
+                        .enumerate()
+                    {
+                        let expected = match part {
+                            DrawingDragPart::Body => {
+                                before.logical + (cursor - cursor_start) as f64
+                            }
+                            DrawingDragPart::Anchor(1) if index != 1 => cursor as f64,
+                            DrawingDragPart::Anchor(2) if index == 1 => cursor as f64,
+                            _ => before.logical,
+                        };
+                        assert!((after.logical - expected).abs() < 1e-9, "{kind:?} {part:?}, spacing {spacing}, movement {fraction}: {after:?}, cursor {cursor}");
+                        assert!((after.price - before.price).abs() < 1e-9);
+                    }
+                }
+                assert!(
+                    chart
+                        .drawing(id)
+                        .unwrap()
+                        .points
+                        .iter()
+                        .any(|point| point.logical > 9.0),
+                    "time-slot snapping must allow future empty space"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn position_creation_and_drag_use_instrument_and_crosshair_ticks() {
     for kind in [DrawingKind::LongPosition, DrawingKind::ShortPosition] {
         let mut chart = settled_chart();
         chart
@@ -1508,13 +1586,15 @@ fn position_creation_and_drag_use_instrument_ticks_with_free_horizontal_time() {
         assert!(chart.set_drawing_tool(Some(kind), None, None));
         let id = chart
             .drawing_tool_activate(
-                x_at(&chart, 4.0),
+                x_at(&chart, 4.0) + (x_at(&chart, 5.0) - x_at(&chart, 4.0)) * 0.24,
                 y_at(&chart, 11.4),
                 DrawingModifiers::default(),
             )
             .created
             .unwrap();
         let initial = chart.drawing(id).unwrap().points.clone();
+        assert_eq!(initial[0].logical, 4.0);
+        assert!(initial.iter().all(|point| point.logical.fract() == 0.0));
         assert!(initial
             .iter()
             .all(|point| (point.price / 0.25 - (point.price / 0.25).round()).abs() < 1e-9));
@@ -1524,6 +1604,8 @@ fn position_creation_and_drag_use_instrument_ticks_with_free_horizontal_time() {
         let entry = chart.drawing_px(chart.drawing(id).unwrap()).unwrap()[0];
         let tick_px = y_at(&chart, initial[0].price + 0.25) - entry.1;
         let dx = (x_at(&chart, 5.0) - x_at(&chart, 4.0)) * 0.4;
+        let cursor_start = chart.snapped_crosshair_index(entry.0 + 30.0);
+        let cursor_end = chart.snapped_crosshair_index(entry.0 + 30.0 + dx);
         assert!(chart.drawing_drag_start_at(entry.0 + 30.0, entry.1));
         chart.drawing_drag_to(
             entry.0 + 30.0 + dx,
@@ -1532,7 +1614,9 @@ fn position_creation_and_drag_use_instrument_ticks_with_free_horizontal_time() {
         );
         for (before, after) in initial.iter().zip(&chart.drawing(id).unwrap().points) {
             assert!((after.price - before.price - 0.25).abs() < 1e-9);
-            assert!((after.logical - before.logical - 0.4).abs() < 1e-6);
+            assert!(
+                (after.logical - before.logical - (cursor_end - cursor_start) as f64).abs() < 1e-6
+            );
         }
     }
 }

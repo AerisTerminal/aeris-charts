@@ -1040,11 +1040,42 @@ async function drag_position(page, backend, kind, theme) {
       }
       trail.push(points);
     }
-    if (part === "body") {
-      await page.mouse.move(grab.x + grab.bar_px * 0.4, grab.y + grab.tick_px * 1.7);
-      const points = await page.evaluate(() => window.__chart.drawings().at(-1).points());
+    await page.mouse.up();
+  }
+  await page.evaluate(() => window.__chart.subscribe_crosshair_move((event) => {
+    window.__position_cursor_logical = event.logical;
+  }));
+  for (const part of ["body", "entry", "extent"]) {
+    const grab = await page.evaluate((part) => {
+      const start = window.__chart.drawings().at(-1).points();
+      const box = document.getElementById("chart_container").getBoundingClientRect();
+      const scale = window.__chart.time_scale();
+      const point = start[part === "extent" ? 1 : 0];
+      const logical = Math.floor(point.logical);
+      const left = scale.logical_to_coordinate(logical);
+      const spacing = scale.logical_to_coordinate(logical + 1) - left;
+      return {
+        x: box.left + left + spacing * (point.logical - logical) + (part === "body" ? 30 : 0),
+        y: box.top + window.__main.price_to_coordinate(start[0].price),
+        spacing, start,
+      };
+    }, part);
+    await page.mouse.move(grab.x, grab.y);
+    const cursor_start = await page.evaluate(() => window.__position_cursor_logical);
+    expect(Number.isInteger(cursor_start)).toBe(true);
+    await page.mouse.down();
+    for (const fraction of [0.2, 0.3, 0.7, 1.3, 1.7, -0.2, -0.3, -0.7, -1.3, -1.7]) {
+      await page.mouse.move(grab.x + grab.spacing * fraction, grab.y);
+      const { points, cursor } = await page.evaluate(() => ({
+        points: window.__chart.drawings().at(-1).points(),
+        cursor: window.__position_cursor_logical,
+      }));
       for (let index = 0; index < points.length; index += 1) {
-        expect(points[index].logical - grab.start[index].logical).toBeCloseTo(0.4, 5);
+        const expected = part === "body" ? grab.start[index].logical + cursor - cursor_start
+          : ((part === "entry" && index !== 1) || (part === "extent" && index === 1)) ? cursor
+          : grab.start[index].logical;
+        expect(points[index].logical, `${part} follows cursor at ${fraction} bars`).toBeCloseTo(expected, 6);
+        expect(points[index].price).toBeCloseTo(grab.start[index].price, 8);
       }
       trail.push(points);
     }
@@ -1055,7 +1086,7 @@ async function drag_position(page, backend, kind, theme) {
 
 for (const kind of ["long_position", "short_position"]) {
   for (const theme of ["light", "dark"]) {
-    test(`${kind} uses exact default price ticks and filled rounded anchors in ${theme}`, async ({ page }) => {
+    test(`${kind} uses crosshair time steps, exact price ticks and filled rounded anchors in ${theme}`, async ({ page }) => {
       const gpu = await drag_position(page, "auto", kind, theme);
       const canvas = await drag_position(page, "canvas2d", kind, theme);
       expect(gpu.backend).toBe("webgpu");
