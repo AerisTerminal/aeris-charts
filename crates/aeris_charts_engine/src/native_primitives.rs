@@ -1562,6 +1562,48 @@ mod tests {
         }
     }
 
+    /// The comparison tooltip's bordered box lands on whole device pixels, and its colored delta
+    /// band spans exactly the box's rows, so all four borders stay one crisp device pixel.
+    #[test]
+    fn delta_tooltip_box_and_band_land_on_whole_device_pixels() {
+        use aeris_charts_render::draw_list::Prim;
+        for dpr in [1.0_f64, 1.25, 1.5, 1.75, 2.0, 2.5] {
+            let mut chart = delta_chart();
+            chart.dpr = dpr;
+            chart
+                .add_delta_tooltip(0, DeltaTooltipOptions::default())
+                .unwrap();
+            let x2 = chart.time_scale.index_to_coordinate(2) + 0.37;
+            let x7 = chart.time_scale.index_to_coordinate(7) + 0.61;
+            assert!(chart.delta_tooltip_mouse_down(x2));
+            assert!(chart.delta_tooltip_mouse_move(x7));
+            let frame = chart.build_frame();
+            let prims = frame.panes.iter().flat_map(|pane| pane.main.iter());
+            let mut boxes = Vec::new();
+            let mut bands = Vec::new();
+            for primitive in prims {
+                match primitive {
+                    Prim::RoundRect {
+                        x,
+                        y,
+                        w,
+                        h,
+                        border_width,
+                        ..
+                    } if *border_width > 0.0 => boxes.push((*x, *y, *w, *h)),
+                    Prim::Rect { rect, color } if color.a() == 51 => bands.push(*rect),
+                    _ => {}
+                }
+            }
+            let &(x, y, w, h) = boxes.first().expect("tooltip box");
+            for edge in [x, y, x + w, y + h] {
+                assert_eq!(edge.fract(), 0.0, "box {x},{y} {w}x{h} at dpr {dpr}");
+            }
+            let band = bands.first().expect("delta band");
+            assert_eq!((band.y as f32, band.h as f32), (y, h), "dpr {dpr}");
+        }
+    }
+
     #[test]
     fn converting_a_delta_series_to_candlestick_removes_the_interaction() {
         let mut chart = delta_chart();

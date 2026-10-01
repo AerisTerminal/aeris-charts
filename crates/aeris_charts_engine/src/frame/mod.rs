@@ -123,6 +123,38 @@ const CROSSHAIR_LABEL_BG: Color = Color::rgb(
     DEFAULT_CROSSHAIR_LABEL_RGB.2,
 );
 
+/// A bordered chrome box (tooltip, chip) in device px with every edge on a whole device pixel.
+/// `RoundRect` borders paint inside the rect, so an edge at a fractional coordinate spreads a
+/// 1 px border across two pixel rows or columns: the same border reads crisp on one side and
+/// blurred on another, and the blur changes as the box moves. Snapping each edge independently
+/// (rather than position and size separately) keeps all four borders one device pixel wide.
+pub(crate) struct DeviceBox {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) w: f32,
+    pub(crate) h: f32,
+}
+
+impl DeviceBox {
+    /// Snap a CSS-px box at `(left, top)` of `width × height` with the frame's ratios.
+    pub(crate) fn snap(left: f64, top: f64, width: f64, height: f64, hpr: f64, vpr: f64) -> Self {
+        let x0 = (left * hpr).round();
+        let y0 = (top * vpr).round();
+        let x1 = ((left + width) * hpr).round().max(x0 + 1.0);
+        let y1 = ((top + height) * vpr).round().max(y0 + 1.0);
+        Self {
+            x: x0 as f32,
+            y: y0 as f32,
+            w: (x1 - x0) as f32,
+            h: (y1 - y0) as f32,
+        }
+    }
+
+    pub(crate) fn center_x(&self) -> f32 {
+        self.x + self.w / 2.0
+    }
+}
+
 fn ceiled_odd(value: f64) -> f64 {
     let ceiled = value.ceil() as i64;
     if ceiled % 2 == 0 {
