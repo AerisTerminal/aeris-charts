@@ -3271,14 +3271,18 @@ impl ChartEngine {
         self.series.iter().find(|s| !s.removed && s.visible)
     }
 
-    /// Host choice for a series' last-price pulse. Line and area default on; this records an
-    /// explicit opt-out (or opt-in for other kinds) that later kind changes preserve.
+    /// Host choice for a series' last-price pulse. Line and area default on; a value that differs
+    /// from the current kind's default records an explicit opt-out (or opt-in for other kinds)
+    /// that later kind changes preserve. Restating the default is not a preference: hosts re-send
+    /// their whole style, and treating a line's default-on pulse as an opt-in would carry it onto
+    /// candles after a type change.
     pub fn set_series_last_price_animation(&mut self, id: SeriesId, enabled: bool) -> bool {
         let Some(series) = self.series.iter_mut().find(|s| s.id == id && !s.removed) else {
             return false;
         };
         series.last_price_animation = enabled;
-        series.last_price_animation_explicit = true;
+        series.last_price_animation_explicit =
+            enabled != SeriesEntry::default_last_price_animation(series.kind);
         true
     }
 

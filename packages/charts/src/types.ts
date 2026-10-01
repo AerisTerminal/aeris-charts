@@ -1612,7 +1612,9 @@ export interface series_options {
   baseline_value: number;
   /**
    * Pulse an expanding ring at the last value (drives an rAF loop while visible). Default `true`
-   * for line and area series and `false` for every other type; set `false` to disable.
+   * for line and area series and `false` for every other type; set `false` to disable. A value
+   * equal to the current type's default keeps following the default when the series type
+   * changes; a value that differs from it (an opt-out on a line, an opt-in on candles) is kept.
    */
   last_price_animation: boolean;
   /** Keep the series in the engine while toggling its visibility. */
