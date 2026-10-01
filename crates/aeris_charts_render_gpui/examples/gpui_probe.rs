@@ -471,6 +471,8 @@ enum DragMode {
     DrawingCreation,
     DeltaTooltip,
     CrosshairAction,
+    /// A press consumed by the engine's transient Shift-click measure.
+    Measure,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1696,7 +1698,9 @@ impl Probe {
             self.engine.set_separator_hover(separator_hover);
             self.dirty = true;
         }
+        // A live measure keeps the measuring crosshair cursor over every chart object.
         let drawing_cursor = (self.engine.active_drawing_tool().is_none()
+            && !self.engine.measure_active()
             && pane_x >= 0.0
             && pane_x <= self.engine.pane_w
             && y >= 0.0
@@ -1927,8 +1931,12 @@ impl Probe {
                 self.engine.cancel_drawing_creation();
                 self.pending_creation_point = None;
             }
+            // Leaving the chart keeps a measure on screen, like the browser host's mouse leave.
             Some(
-                DragMode::PaneSeparator { .. } | DragMode::DeltaTooltip | DragMode::CrosshairAction,
+                DragMode::PaneSeparator { .. }
+                | DragMode::DeltaTooltip
+                | DragMode::CrosshairAction
+                | DragMode::Measure,
             )
             | None => {}
         }
@@ -2005,6 +2013,32 @@ impl Probe {
 
         if self.input_target == InputTarget::Alert {
             self.drag = Some(DragMode::CrosshairAction);
+            cx.notify();
+            return;
+        }
+
+        let magnet = event.modifiers.control || event.modifiers.platform;
+        let in_pane = chart_x >= self.engine.pane_left
+            && chart_x <= self.engine.pane_left + self.engine.pane_w
+            && (0.0..=self.engine.pane_h).contains(&y)
+            && self.separator_at(y).is_none();
+        // Browser-host parity: a live measure owns the next pane press (freeze or dismiss)
+        // before any object under the pointer is considered.
+        if in_pane
+            && self.engine.measure_active()
+            && self.engine.measure_pointer_down(
+                pane_x,
+                y,
+                false,
+                DrawingModifiers {
+                    magnet,
+                    straighten: false,
+                },
+            )
+        {
+            self.drag = Some(DragMode::Measure);
+            self.update_crosshair(pane_x, y);
+            self.dirty = true;
             cx.notify();
             return;
         }
@@ -2107,6 +2141,20 @@ impl Probe {
         {
             self.sync_brushable_area();
             Some(DragMode::DeltaTooltip)
+        } else if event.modifiers.shift
+            && self.engine.measure_pointer_down(
+                pane_x,
+                y,
+                true,
+                DrawingModifiers {
+                    magnet,
+                    straighten: false,
+                },
+            )
+        {
+            // Shift on empty chart space starts the transient measure (browser parity).
+            self.dirty = true;
+            Some(DragMode::Measure)
         } else if self.gesture_config.pan {
             let price_pan = self
                 .engine
@@ -2142,6 +2190,17 @@ impl Probe {
         self.update_crosshair_modifier(event.modifiers.control, event.modifiers.platform);
         if event.dragging() {
             self.mark_press_moved(pane_x, y);
+        }
+        // A live measure follows with or without a held button (press-drag or click-move-click).
+        if self.engine.measure_pointer_move(
+            pane_x,
+            y,
+            DrawingModifiers {
+                magnet: event.modifiers.control || event.modifiers.platform,
+                straighten: false,
+            },
+        ) {
+            self.dirty = true;
         }
         match self.drag {
             Some(DragMode::Pan { price_pan })
@@ -2223,6 +2282,7 @@ impl Probe {
             }
             Some(DragMode::DeltaTooltip) => {}
             Some(DragMode::CrosshairAction) => {}
+            Some(DragMode::Measure) => {}
             _ => {
                 if self.engine.active_drawing_tool().is_some() {
                     let update = self.engine.drawing_tool_pointer_move(
@@ -2317,6 +2377,17 @@ impl Probe {
                 false
             }
             Some(DragMode::DeltaTooltip) => false,
+            Some(DragMode::Measure) => {
+                self.dirty |= self.engine.measure_pointer_up(
+                    pane_x,
+                    y,
+                    DrawingModifiers {
+                        magnet: event.modifiers.control || event.modifiers.platform,
+                        straighten: false,
+                    },
+                );
+                false
+            }
             None if committed_on_press => false,
             None if self.engine.active_drawing_tool().is_some() => {
                 if !moved {
@@ -4042,6 +4113,12 @@ impl Render for InteractiveDemo {
                     b("text", DemoAction::Drawing(DrawingKind::Text)),
                     b("path", DemoAction::Drawing(DrawingKind::Path)),
                     b("brush", DemoAction::Drawing(DrawingKind::Brush)),
+                    b("price range", DemoAction::Drawing(DrawingKind::PriceRange)),
+                    b("date range", DemoAction::Drawing(DrawingKind::DateRange)),
+                    b(
+                        "date & price",
+                        DemoAction::Drawing(DrawingKind::DatePriceRange),
+                    ),
                     b("clear", DemoAction::ClearDrawings),
                 ],
             ),
@@ -4879,6 +4956,68 @@ mod tests {
         assert_eq!(probe.drawing_template.color, "#ff9800");
         assert_eq!(probe.drawing_template.width, 4);
         assert!(probe.drawing_template.text_italic);
+    }
+
+    /// Browser parity for the measuring tools: the toolbar tool places a snapped date-and-price
+    /// range, and a live Shift-click measure paints in the native frame while keeping the
+    /// crosshair cursor even over another drawing's body.
+    #[test]
+    fn measure_tools_paint_natively_and_a_live_measure_keeps_the_crosshair_cursor() {
+        let mut probe = Probe::new(64, Some(1));
+        let rebuild = |probe: &mut Probe| {
+            probe.rebuild_with_measure(
+                1024.0,
+                640.0,
+                1.0,
+                |text, _bold| text.chars().count() as f64 * 7.0,
+                |text, _bold| text.chars().count() as f64 * 6.0,
+            );
+        };
+        rebuild(&mut probe);
+        probe.engine.clear_drawings();
+        probe.arm_drawing(DrawingKind::DatePriceRange);
+        assert_eq!(
+            probe.place_drawing_anchor(200.0, 200.0, DrawingModifiers::default()),
+            -1
+        );
+        let id = probe.place_drawing_anchor(500.0, 400.0, DrawingModifiers::default());
+        assert!(id > 0);
+        let drawing = probe.engine.drawing(id as u32).unwrap();
+        assert_eq!(drawing.kind, DrawingKind::DatePriceRange);
+        assert!(drawing
+            .points
+            .iter()
+            .all(|point| point.logical.fract() == 0.0));
+        rebuild(&mut probe);
+
+        let inside = (350.0, 300.0);
+        probe.update_crosshair(inside.0, inside.1);
+        probe.update_cursor(inside.0 + probe.engine.pane_left, inside.1);
+        assert_eq!(probe.cursor_style, CursorStyle::ClosedHand);
+
+        let modifiers = DrawingModifiers::default();
+        assert!(probe
+            .engine
+            .measure_pointer_down(100.0, 150.0, true, modifiers));
+        assert!(probe
+            .engine
+            .measure_pointer_move(inside.0, inside.1, modifiers));
+        probe.update_crosshair(inside.0, inside.1);
+        probe.update_cursor(inside.0 + probe.engine.pane_left, inside.1);
+        assert_eq!(probe.cursor_style, CursorStyle::Crosshair);
+        rebuild(&mut probe);
+        let labels = probe.frame.panes[0]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::Text { text, .. } if text.contains(" bars, ")))
+            .count();
+        assert_eq!(
+            labels, 2,
+            "the tool and the live measure both label elapsed time"
+        );
+        // Escape's native route dismisses the measure.
+        probe.engine.cancel_drawing_tool();
+        assert!(!probe.engine.measure_active());
     }
 
     /// Moving from a trend line onto its `+ Add text` prompt keeps the prompt hovered with the

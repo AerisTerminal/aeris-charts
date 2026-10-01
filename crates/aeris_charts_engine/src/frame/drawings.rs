@@ -15,8 +15,9 @@ use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign
 use super::{POSITION_ENTRY, PRIMARY};
 use crate::drawings::{
     resolve_drawing_geometry, Drawing, DrawingBodyGeometry, DrawingGeometryOptions,
-    DrawingHandleMode, DrawingId, DrawingKind, DrawingTextHAlign, PositionGeometry, PositionZone,
-    TEXT_CHROME_PAD, TEXT_PAD, TREND_TEXT_PLACEHOLDER,
+    DrawingHandleMode, DrawingId, DrawingKind, DrawingPoint, DrawingTextHAlign, MeasureAxes,
+    MeasureGeometry, PositionGeometry, PositionZone, MEASURE_LABEL_GAP, TEXT_CHROME_PAD, TEXT_PAD,
+    TREND_TEXT_PLACEHOLDER,
 };
 use crate::ChartEngine;
 use aeris_charts_core::model::plot_list::PlotValueIndex;
@@ -402,6 +403,9 @@ impl ChartEngine {
                         let px: Vec<(f64, f64)> =
                             px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
                         let mut preview_drawing = pending.drawing.clone();
+                        // Semantic statistics (measure direction, labels) read the full
+                        // placed-plus-preview anchor set, exactly as the commit will store it.
+                        preview_drawing.points = anchors.clone();
                         if preview_drawing.kind.spec().handles == DrawingHandleMode::RectangleBounds
                         {
                             if let Some(fill) = preview_drawing.preview_fill_color.clone() {
@@ -435,6 +439,17 @@ impl ChartEngine {
                     {
                         build_anchor_handles(&[(x * hpr, y * vpr)], vpr, self.anchor_fill(), out);
                     }
+                }
+            }
+        }
+        // The transient Shift-click measure paints the date-and-price range geometry without
+        // handles; it is never a committed drawing.
+        if let Some(session) = self.measure_session() {
+            if session.drawing.pane_index == pane_index {
+                if let Some(px) = self.drawing_px(&session.drawing) {
+                    let px: Vec<(f64, f64)> =
+                        px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
+                    self.build_drawing_prims(&session.drawing, &px, pane_w_px, vpr, out, points);
                 }
             }
         }
@@ -767,6 +782,9 @@ impl ChartEngine {
                         POSITION_ENTRY,
                     );
                 }
+            }
+            DrawingBodyGeometry::Measure(measure) => {
+                self.build_measure_prims(drawing, measure, vpr, out, points);
             }
             // The text tool's geometry is its label (emitted by `build_drawing_text`).
             DrawingBodyGeometry::Empty => {}
@@ -1367,6 +1385,246 @@ impl ChartEngine {
         }
     }
 
+    /// Measured quantities between a measuring tool's start and end anchors. Bars and elapsed
+    /// time come from the anchors' time slots (projected beyond canonical data like the time
+    /// axis); ticks use the instrument tick, falling back to the bound scale's `min_move`.
+    fn measure_stats(
+        &self,
+        drawing: &Drawing,
+        start: DrawingPoint,
+        end: DrawingPoint,
+    ) -> MeasureStats {
+        let price_change = end.price - start.price;
+        let percent =
+            (start.price.abs() > f64::EPSILON).then(|| price_change / start.price.abs() * 100.0);
+        let ticks = self
+            .position_price_tick(drawing.pane_index, drawing.price_scale)
+            .map(|tick| (price_change / tick).round());
+        let start_index = start.logical.round() as i64;
+        let end_index = end.logical.round() as i64;
+        let seconds = self
+            .axis_time_seconds_at_logical(start_index)
+            .zip(self.axis_time_seconds_at_logical(end_index))
+            .map(|(from, to)| (to - from).round() as i64);
+        MeasureStats {
+            price_change,
+            percent,
+            ticks,
+            bars: end_index - start_index,
+            seconds,
+        }
+    }
+
+    /// The measured direction picks the tool color: the date tool follows time, the price tools
+    /// follow price. Rising/forward measurements use the drawing color, falling/backward ones
+    /// the market-down token, so a pull upward reads positive and a pull downward negative.
+    pub(crate) fn measure_color(&self, drawing: &Drawing) -> Color {
+        let negative = match (drawing.points.first(), drawing.points.get(1)) {
+            (Some(start), Some(end)) if drawing.kind == DrawingKind::DateRange => {
+                end.logical.round() < start.logical.round()
+            }
+            (Some(start), Some(end)) => end.price < start.price,
+            _ => false,
+        };
+        if negative {
+            Color::parse_css(aeris_charts_core::style::MARKET_DOWN_CSS)
+                .unwrap_or(Color::rgb(247, 82, 95))
+        } else {
+            Color::parse_css(&drawing.color).unwrap_or(PRIMARY)
+        }
+    }
+
+    fn measure_label_lines(&self, drawing: &Drawing, stats: MeasureStats) -> Vec<String> {
+        let Some(axes) = MeasureAxes::for_kind(drawing.kind) else {
+            return Vec::new();
+        };
+        let mut lines = Vec::with_capacity(2);
+        if axes.price() {
+            let percent = stats
+                .percent
+                .map_or_else(|| "—".to_string(), |value| signed_stat(value, 2));
+            let mut line = format!(
+                "{} ({percent}%)",
+                self.format_drawing_price(drawing, stats.price_change)
+            );
+            if let Some(ticks) = stats.ticks {
+                line.push(' ');
+                line.push_str(&signed_stat(ticks, 0));
+            }
+            lines.push(line);
+        }
+        if axes.date() {
+            let bars = signed_stat(stats.bars as f64, 0);
+            lines.push(match stats.seconds {
+                Some(seconds) => format!("{bars} bars, {}", format_measure_duration(seconds)),
+                None => format!("{bars} bars"),
+            });
+        }
+        lines
+    }
+
+    /// One measuring tool: translucent measured area, crisp boundary rules, start→end arrows,
+    /// and a solid statistics label beyond the end (below for the date tool). Every edge snaps to
+    /// whole device pixels and arrow tips sit on the shaft's pixel center, so all executors
+    /// receive identical crisp rects plus one shared chevron stroke per arrow.
+    fn build_measure_prims(
+        &self,
+        drawing: &Drawing,
+        measure: MeasureGeometry,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+    ) {
+        let (Some(&start), Some(&end)) = (drawing.points.first(), drawing.points.get(1)) else {
+            return;
+        };
+        let color = self.measure_color(drawing);
+        let width = (drawing.width * vpr).round().max(1.0) as i32;
+        let left = measure.left().round() as i32;
+        let right = measure.right().round() as i32;
+        let top = measure.top().round() as i32;
+        let bottom = measure.bottom().round() as i32;
+        let (start_x, start_y) = (
+            measure.start.0.round() as i32,
+            measure.start.1.round() as i32,
+        );
+        let (end_x, end_y) = (measure.end.0.round() as i32, measure.end.1.round() as i32);
+        if drawing.fill_enabled {
+            let fill = drawing
+                .fill_color
+                .as_deref()
+                .and_then(Color::parse_css)
+                .unwrap_or(Color::rgba(
+                    color.r(),
+                    color.g(),
+                    color.b(),
+                    MEASURE_FILL_ALPHA,
+                ));
+            // Both endpoint pixels belong to the area, matching the rectangle tool's box.
+            out.push(Prim::Rect {
+                rect: IRect {
+                    x: left,
+                    y: top,
+                    w: right - left + 1,
+                    h: bottom - top + 1,
+                },
+                color: fill,
+            });
+        }
+        match measure.axes {
+            MeasureAxes::Price => {
+                for y in [start_y, end_y] {
+                    out.push(Prim::HLine {
+                        y,
+                        x0: left,
+                        x1: right + 1,
+                        width,
+                        style: drawing.style,
+                        color,
+                    });
+                }
+            }
+            MeasureAxes::Date => {
+                for x in [start_x, end_x] {
+                    out.push(Prim::VLine {
+                        x,
+                        y0: top,
+                        y1: bottom + 1,
+                        width,
+                        style: drawing.style,
+                        color,
+                    });
+                }
+            }
+            MeasureAxes::DatePrice => {}
+        }
+        if measure.axes.price() && start_y != end_y {
+            let x = (left + right).div_euclid(2);
+            out.push(Prim::VLine {
+                x,
+                y0: start_y.min(end_y),
+                y1: start_y.max(end_y) + 1,
+                width,
+                style: LineStyle::Solid,
+                color,
+            });
+            // VLine covers columns `[x - width/2, x - width/2 + width)`; its center is the tip.
+            let center = f64::from(x - width / 2) + f64::from(width) / 2.0;
+            let tip = (center, f64::from(end_y) + 0.5);
+            let direction = if end_y > start_y { 1.0 } else { -1.0 };
+            push_measure_arrowhead(tip, (0.0, direction), width, vpr, color, out, points);
+        }
+        if measure.axes.date() && start_x != end_x {
+            let y = (top + bottom).div_euclid(2);
+            out.push(Prim::HLine {
+                y,
+                x0: start_x.min(end_x),
+                x1: start_x.max(end_x) + 1,
+                width,
+                style: LineStyle::Solid,
+                color,
+            });
+            let center = f64::from(y - width / 2) + f64::from(width) / 2.0;
+            let tip = (f64::from(end_x) + 0.5, center);
+            let direction = if end_x > start_x { 1.0 } else { -1.0 };
+            push_measure_arrowhead(tip, (direction, 0.0), width, vpr, color, out, points);
+        }
+
+        let lines = self.measure_label_lines(drawing, self.measure_stats(drawing, start, end));
+        if lines.is_empty() {
+            return;
+        }
+        let layout = &self.options.get().layout;
+        let half_height = stat_label_height(layout.font_size, lines.len()) * vpr / 2.0;
+        let gap = MEASURE_LABEL_GAP * vpr;
+        let center_x = (measure.left() + measure.right()) / 2.0;
+        // Price labels sit beyond the end level (above a rise, below a fall); the date tool
+        // labels below its range.
+        let center_y = if measure.axes.price() && measure.end.1 < measure.start.1 {
+            measure.end.1 - gap - half_height
+        } else if measure.axes.price() {
+            measure.end.1.max(measure.start.1) + gap + half_height
+        } else {
+            measure.bottom() + gap + half_height
+        };
+        self.push_stat_label_block(
+            drawing.pane_index,
+            out,
+            (center_x, center_y),
+            &lines,
+            color,
+            vpr,
+        );
+    }
+
+    /// A price-valued drawing statistic in the drawing's own price format: the host formatter,
+    /// then instrument precision on the tick grid, then the bound scale's series format.
+    fn format_drawing_price(&self, drawing: &Drawing, value: f64) -> String {
+        if let Some(text) = self
+            .price_formatter_fn
+            .as_ref()
+            .and_then(|formatter| formatter(value))
+        {
+            return text;
+        }
+        let tick = self.position_price_tick(drawing.pane_index, drawing.price_scale);
+        if let Some(precision) = self.trading_state.instrument.price_precision {
+            return super::PriceFormatter::from_precision(
+                precision,
+                tick.unwrap_or(10.0_f64.powi(-(precision as i32))),
+            )
+            .format(value);
+        }
+        let scale_target = match drawing.price_scale {
+            crate::DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
+            crate::DrawingPriceScale::Left => crate::PriceScaleTarget::Left,
+            crate::DrawingPriceScale::Overlay => crate::PriceScaleTarget::Overlay,
+        };
+        self.scale_formatter_source(drawing.pane_index, scale_target)
+            .and_then(|series| self.format_with_price_format(&series.price_format, value))
+            .unwrap_or_else(|| self.price_formatter.format(value))
+    }
+
     fn build_position_labels(
         &self,
         drawing: &Drawing,
@@ -1402,25 +1660,7 @@ impl ChartEngine {
             crate::DrawingPriceScale::Overlay => crate::PriceScaleTarget::Overlay,
         };
         let tick = self.position_price_tick(drawing.pane_index, drawing.price_scale);
-        let format_price = |value: f64| {
-            if let Some(text) = self
-                .price_formatter_fn
-                .as_ref()
-                .and_then(|formatter| formatter(value))
-            {
-                return text;
-            }
-            if let Some(precision) = self.trading_state.instrument.price_precision {
-                return super::PriceFormatter::from_precision(
-                    precision,
-                    tick.unwrap_or(10.0_f64.powi(-(precision as i32))),
-                )
-                .format(value);
-            }
-            self.scale_formatter_source(drawing.pane_index, scale_target)
-                .and_then(|series| self.format_with_price_format(&series.price_format, value))
-                .unwrap_or_else(|| self.price_formatter.format(value))
-        };
+        let format_price = |value: f64| self.format_drawing_price(drawing, value);
         let ticks = |distance: f64| {
             tick.map_or_else(
                 || "—".to_string(),
@@ -1501,7 +1741,7 @@ impl ChartEngine {
         } else {
             position.stop_y + label_offset
         };
-        self.push_position_label_block(
+        self.push_stat_label_block(
             drawing.pane_index,
             out,
             (center_x, target_label_y),
@@ -1509,7 +1749,7 @@ impl ChartEngine {
             reward,
             vpr,
         );
-        self.push_position_label_block(
+        self.push_stat_label_block(
             drawing.pane_index,
             out,
             (center_x, stop_label_y),
@@ -1522,7 +1762,7 @@ impl ChartEngine {
         } else {
             reward
         };
-        self.push_position_label_block(
+        self.push_stat_label_block(
             drawing.pane_index,
             out,
             (center_x, position.entry_y),
@@ -1925,7 +2165,7 @@ impl ChartEngine {
         }
     }
 
-    fn push_position_label_block(
+    fn push_stat_label_block(
         &self,
         pane_index: usize,
         out: &mut Vec<Prim>,
@@ -1939,16 +2179,15 @@ impl ChartEngine {
             return;
         }
         let layout = &self.options.get().layout;
-        let size = (layout.font_size * 0.92).max(10.0) * vpr;
+        let size = stat_label_size(layout.font_size) * vpr;
         let line_height = size * 1.25;
         let pad_x = 6.0 * vpr;
-        let pad_y = 3.0 * vpr;
         let width = lines
             .iter()
             .map(|line| self.measure_text_run(line, size, &layout.font_family, 400, false))
             .fold(0.0_f64, f64::max)
             + 2.0 * pad_x;
-        let height = lines.len() as f64 * line_height + 2.0 * pad_y;
+        let height = stat_label_height(layout.font_size, lines.len()) * vpr;
         let rect = IRect {
             x: (x - width / 2.0).round() as i32,
             y: (y - height / 2.0).round() as i32,
@@ -2012,6 +2251,131 @@ impl ChartEngine {
             Color::rgb(0, 0, 0)
         }
     }
+}
+
+/// Measured quantities between a measuring tool's anchors (`ChartEngine::measure_stats`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MeasureStats {
+    price_change: f64,
+    percent: Option<f64>,
+    ticks: Option<f64>,
+    bars: i64,
+    seconds: Option<i64>,
+}
+
+/// Default measured-area wash: the tool color at 20% alpha, like the rectangle tool.
+const MEASURE_FILL_ALPHA: u8 = 51;
+/// Arrowhead wing reach along and across the shaft, in CSS px.
+const MEASURE_ARROW_CSS: f64 = 5.0;
+
+/// Open chevron at `tip` pointing along the unit `direction`, stroked at the shaft's width.
+fn push_measure_arrowhead(
+    tip: (f64, f64),
+    direction: (f64, f64),
+    width: i32,
+    vpr: f64,
+    color: Color,
+    out: &mut Vec<Prim>,
+    points: &mut Vec<[f32; 2]>,
+) {
+    let reach = MEASURE_ARROW_CSS * vpr;
+    let base = (tip.0 - direction.0 * reach, tip.1 - direction.1 * reach);
+    let side = (-direction.1 * reach, direction.0 * reach);
+    let first_point = points.len() as u32;
+    points.extend([
+        [(base.0 + side.0) as f32, (base.1 + side.1) as f32],
+        [tip.0 as f32, tip.1 as f32],
+        [(base.0 - side.0) as f32, (base.1 - side.1) as f32],
+    ]);
+    out.push(Prim::Polyline {
+        first_point,
+        point_count: 3,
+        width: width as f32,
+        style: LineStyle::Solid,
+        line_type: LineType::Simple,
+        color,
+    });
+}
+
+/// A signed statistic with the typographic minus used by price formatting; zero is unsigned.
+fn signed_stat(value: f64, precision: usize) -> String {
+    if !value.is_finite() {
+        return "—".to_string();
+    }
+    let text = format!("{:.precision$}", value.abs());
+    if value < 0.0 && text.chars().any(|c| c.is_ascii_digit() && c != '0') {
+        format!(
+            "{}{text}",
+            aeris_charts_core::format::price_formatter::MINUS_SIGN
+        )
+    } else {
+        text
+    }
+}
+
+/// Elapsed time as its two most significant non-zero units (`1d 4h`, `45m`, `30s`).
+fn format_measure_duration(seconds: i64) -> String {
+    let magnitude = seconds.unsigned_abs();
+    let parts = [
+        (magnitude / 86_400, "d"),
+        (magnitude % 86_400 / 3_600, "h"),
+        (magnitude % 3_600 / 60, "m"),
+        (magnitude % 60, "s"),
+    ];
+    let mut text = String::new();
+    if seconds < 0 {
+        text.push(aeris_charts_core::format::price_formatter::MINUS_SIGN);
+    }
+    let mut written = 0;
+    for (value, unit) in parts {
+        if value == 0 || written == 2 {
+            continue;
+        }
+        if written == 1 {
+            text.push(' ');
+        }
+        text.push_str(&format!("{value}{unit}"));
+        written += 1;
+    }
+    if written == 0 {
+        return "0s".to_string();
+    }
+    text
+}
+
+#[cfg(test)]
+mod measure_format_tests {
+    use super::{format_measure_duration, signed_stat};
+
+    #[test]
+    fn durations_show_the_two_most_significant_units_with_a_typographic_sign() {
+        assert_eq!(format_measure_duration(0), "0s");
+        assert_eq!(format_measure_duration(45), "45s");
+        assert_eq!(format_measure_duration(2_700), "45m");
+        assert_eq!(format_measure_duration(9_000), "2h 30m");
+        assert_eq!(format_measure_duration(90_061), "1d 1h");
+        assert_eq!(format_measure_duration(86_400 * 3 + 120), "3d 2m");
+        assert_eq!(format_measure_duration(-3_600), "\u{2212}1h");
+    }
+
+    #[test]
+    fn signed_statistics_never_show_negative_zero() {
+        assert_eq!(signed_stat(-12.5, 2), "\u{2212}12.50");
+        assert_eq!(signed_stat(12.5, 2), "12.50");
+        assert_eq!(signed_stat(-0.001, 2), "0.00");
+        assert_eq!(signed_stat(-6.0, 0), "\u{2212}6");
+        assert_eq!(signed_stat(f64::NAN, 0), "—");
+    }
+}
+
+/// Statistic label glyph size in CSS px for the chart's layout font size.
+pub(crate) fn stat_label_size(layout_font_size: f64) -> f64 {
+    (layout_font_size * 0.92).max(10.0)
+}
+
+/// Statistic label container height in CSS px: `lines` line boxes plus 3 px padding per side.
+pub(crate) fn stat_label_height(layout_font_size: f64, lines: usize) -> f64 {
+    lines as f64 * stat_label_size(layout_font_size) * 1.25 + 6.0
 }
 
 fn push_position_zone(out: &mut Vec<Prim>, zone: PositionZone, color: Color) {

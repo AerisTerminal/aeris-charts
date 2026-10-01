@@ -32,6 +32,7 @@ pub(crate) enum DrawingBodyGeometry<'a> {
         bottom: f64,
     },
     Position(PositionGeometry),
+    Measure(MeasureGeometry),
     Polyline {
         points: &'a [(f64, f64)],
         line_type: LineType,
@@ -46,6 +47,61 @@ pub(crate) struct PositionGeometry {
     pub(crate) entry_y: f64,
     pub(crate) target_y: f64,
     pub(crate) stop_y: f64,
+}
+
+/// Which dimensions a measuring tool reports. Price arrows run vertically, time arrows
+/// horizontally; the combined tool draws both through the box center.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MeasureAxes {
+    Price,
+    Date,
+    DatePrice,
+}
+
+impl MeasureAxes {
+    pub(crate) const fn for_kind(kind: DrawingKind) -> Option<Self> {
+        match kind {
+            DrawingKind::PriceRange => Some(Self::Price),
+            DrawingKind::DateRange => Some(Self::Date),
+            DrawingKind::DatePriceRange => Some(Self::DatePrice),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn price(self) -> bool {
+        matches!(self, Self::Price | Self::DatePrice)
+    }
+
+    pub(crate) const fn date(self) -> bool {
+        matches!(self, Self::Date | Self::DatePrice)
+    }
+}
+
+/// A measuring tool's oriented start/end pair. Orientation is semantic: arrows point from
+/// `start` to `end`, and the measured sign follows the same direction.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MeasureGeometry {
+    pub(crate) start: (f64, f64),
+    pub(crate) end: (f64, f64),
+    pub(crate) axes: MeasureAxes,
+}
+
+impl MeasureGeometry {
+    pub(crate) fn left(self) -> f64 {
+        self.start.0.min(self.end.0)
+    }
+
+    pub(crate) fn right(self) -> f64 {
+        self.start.0.max(self.end.0)
+    }
+
+    pub(crate) fn top(self) -> f64 {
+        self.start.1.min(self.end.1)
+    }
+
+    pub(crate) fn bottom(self) -> f64 {
+        self.start.1.max(self.end.1)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -206,6 +262,13 @@ pub(crate) fn resolve_drawing_geometry<'a>(
                 y1: pane_top + pane_h,
             }
         }
+        DrawingKind::PriceRange | DrawingKind::DateRange | DrawingKind::DatePriceRange => {
+            DrawingBodyGeometry::Measure(MeasureGeometry {
+                start: *px.first()?,
+                end: *px.get(1)?,
+                axes: MeasureAxes::for_kind(kind)?,
+            })
+        }
     };
 
     let text_box = match body {
@@ -256,6 +319,12 @@ pub(crate) fn resolve_drawing_geometry<'a>(
             right: position.right,
             top: position.top(),
             bottom: position.bottom(),
+        },
+        DrawingBodyGeometry::Measure(measure) => TextBox {
+            left: measure.left(),
+            right: measure.right(),
+            top: measure.top(),
+            bottom: measure.bottom(),
         },
     };
     Some(ResolvedDrawingGeometry { body, text_box })

@@ -19,6 +19,15 @@ The supported root surface is:
   `"long_position"` and `"short_position"`; each stores three editable anchors in entry, target,
   stop order, paints target/entry/stop information, projects all three prices onto the owning Y-axis,
   and uses the shared drawing history, persistence, hit testing, and backend frame path;
+- measuring drawings through the canonical `drawing_kind` values `"price_range"`, `"date_range"`,
+  and `"date_price_range"`; each stores an editable start and end anchor snapped to whole bars and
+  price ticks, labels the signed price change, percentage, ticks, bar count, and elapsed time, and
+  paints rising/forward measurements in the drawing color and falling/backward ones in the
+  market-down color;
+- the Shift-click quick measure in the built-in pointer handling: Shift + press on empty chart
+  space starts a transient date-and-price measurement that follows the pointer, freezes on release
+  after a drag or on the next click, and is dismissed by the following click or Escape. It is never
+  a drawing, history entry, or persisted object;
 - visible-range volume profiles through `chart.add_volume_profile(prices, volume, options)`,
   returning a distribution handle with `options()`, `apply_options()`, `snapshot()` and `remove()`;
 - first-class tick-driven footprint / numbers-bar series through `chart.add_series("footprint")`,

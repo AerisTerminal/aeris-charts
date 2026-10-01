@@ -27,8 +27,8 @@ mod geometry;
 mod tools;
 
 pub(crate) use geometry::{
-    resolve_drawing_geometry, DrawingBodyGeometry, DrawingGeometryOptions, PositionGeometry,
-    PositionZone,
+    resolve_drawing_geometry, DrawingBodyGeometry, DrawingGeometryOptions, MeasureAxes,
+    MeasureGeometry, PositionGeometry, PositionZone,
 };
 pub(crate) use tools::{
     DrawingHandleMode, DrawingLogicalExtent, DrawingMovementAxis, DrawingPlacement,
@@ -373,6 +373,12 @@ pub enum DrawingKind {
     AnchoredVolumeProfile,
     /// One-anchor VWAP with optional deviation bands through the latest source row.
     AnchoredVwap,
+    /// Two-anchor price measurement: signed price change, percentage, and ticks.
+    PriceRange,
+    /// Two-anchor time measurement: signed bar count and elapsed time.
+    DateRange,
+    /// Two-anchor combined price and time measurement (also the Shift-click quick measure).
+    DatePriceRange,
 }
 
 impl DrawingKind {
@@ -645,7 +651,7 @@ impl Drawing {
             stroke_end: Default::default(),
             extend_left: false,
             extend_right: false,
-            fill_enabled: kind == DrawingKind::Rectangle,
+            fill_enabled: kind == DrawingKind::Rectangle || kind.is_measure(),
             magnet: Default::default(),
             labels: Vec::new(),
             levels: Vec::new(),
@@ -980,6 +986,19 @@ pub(crate) struct ArmedDrawingTool {
     pub(crate) template: Drawing,
 }
 
+/// The transient Shift-click measure: a date-and-price range that follows the pointer, freezes
+/// on release (after a drag) or on the next click, and is dismissed by the click after that or
+/// by Escape. It never enters the committed drawings, history, persistence, or sync.
+pub(crate) struct MeasureSession {
+    /// Start/end anchors plus the bound pane and price scale, in drawing form so the frame and
+    /// axis paths reuse the date-and-price range geometry unchanged.
+    pub(crate) drawing: Drawing,
+    /// Press position in pane-relative media px (the drag threshold reference).
+    pub(crate) press: (f64, f64),
+    /// Whether the end anchor still follows the pointer.
+    pub(crate) following: bool,
+}
+
 /// All transient drawing-tool creation state.  Keeping arming, click/multi-click placement and
 /// freehand capture under one owner prevents browser and native hosts from growing independent
 /// per-tool state machines.
@@ -988,6 +1007,7 @@ pub(crate) struct DrawingController {
     pub(crate) armed: Option<ArmedDrawingTool>,
     pub(crate) pending: Option<PendingDrawing>,
     pub(crate) brush: Option<BrushCapture>,
+    pub(crate) measure: Option<MeasureSession>,
 }
 
 /// Result of forwarding a platform drawing-creation event into the engine.  Platform hosts use
@@ -1008,6 +1028,13 @@ pub(crate) const BRUSH_MIN_POINT_DISTANCE: f64 = 1.5;
 
 /// Padding between a tool's reference box and its text label, in CSS px.
 pub(crate) const TEXT_PAD: f64 = 4.0;
+
+/// Gap between a measuring tool's measured area and its statistics label, in CSS px.
+pub(crate) const MEASURE_LABEL_GAP: f64 = 6.0;
+/// Conservative horizontal reach of a measuring label beyond its area for viewport culling.
+const MEASURE_LABEL_REACH_X: f64 = 400.0;
+/// A press-release farther than the shared 5 px Manhattan click slop is a drag-measure.
+const MEASURE_DRAG_SLOP: f64 = 5.0;
 
 /// reference `distanceToSegment` (renderers/hit-test-common.ts), duplicated from hit_test.rs so
 /// the drawing geometry stays self-contained.
@@ -1431,6 +1458,9 @@ impl ChartEngine {
             transient_changed |= rebase_points_with(&mut capture.points, map);
             transient_changed |= capture.options.rebase_logical_with(map);
         }
+        if let Some(session) = self.drawing_controller.measure.as_mut() {
+            transient_changed |= session.drawing.rebase_logical_with(map);
+        }
         if let Some(drag) = self.drawing_drag.as_mut() {
             transient_changed |= rebase_points_with(&mut drag.start_points, map);
             transient_changed |= rebase_points_with(&mut drag.history_points, map);
@@ -1796,6 +1826,27 @@ impl ChartEngine {
         }
     }
 
+    /// Grid-snapped tools place anchors on the crosshair's time slot under `x` (unless the magnet
+    /// already chose a bar) and on the price tick grid.
+    fn grid_snap_point(
+        &self,
+        kind: DrawingKind,
+        pane_index: usize,
+        price_scale: DrawingPriceScale,
+        x: f64,
+        mut point: DrawingPoint,
+        magnet: bool,
+    ) -> DrawingPoint {
+        if !kind.spec().grid_snap {
+            return point;
+        }
+        if !magnet {
+            point.logical = self.snapped_crosshair_index(x) as f64;
+        }
+        point.price = self.snap_position_price(pane_index, price_scale, point.price);
+        point
+    }
+
     fn snap_drawing_time_to_data(&self, mut point: DrawingPoint) -> Option<DrawingPoint> {
         let logical = point.logical.round() as i64;
         if logical < 0 || logical as usize >= self.data.merged_times().len() {
@@ -2048,6 +2099,12 @@ impl ChartEngine {
         font_size: f64,
         font_family: &str,
     ) -> Option<(f64, f64)> {
+        if drawing.kind.is_measure() {
+            // The statistics label (at most two lines) sits beyond the measured area; report a
+            // reach that keeps a visible label's drawing in the candidate set.
+            let size = crate::frame::stat_label_height(font_size, 2) + MEASURE_LABEL_GAP;
+            return Some((MEASURE_LABEL_REACH_X, size / 1.2));
+        }
         if drawing.text.is_empty()
             && !matches!(drawing.kind, DrawingKind::Text | DrawingKind::TrendLine)
         {
@@ -3498,6 +3555,13 @@ impl ChartEngine {
                     && y >= position.top() - tolerance
                     && y <= position.bottom() + tolerance
             }
+            // The measured area is the drag surface, matching the filled box the tool paints.
+            DrawingBodyGeometry::Measure(measure) => {
+                x >= measure.left() - tolerance
+                    && x <= measure.right() + tolerance
+                    && y >= measure.top() - tolerance
+                    && y <= measure.bottom() + tolerance
+            }
             DrawingBodyGeometry::Polyline {
                 points,
                 line_type,
@@ -3823,6 +3887,15 @@ impl ChartEngine {
                         point = snapped;
                     }
                 }
+                let anchor_x = start_px.get(index).map_or(x, |&(px, _)| px + dx);
+                point = self.grid_snap_point(
+                    kind,
+                    pane,
+                    price_scale,
+                    anchor_x,
+                    point,
+                    modifiers.magnet,
+                );
                 points[index] = point;
             }
             DrawingDragPart::Body => {
@@ -3837,10 +3910,10 @@ impl ChartEngine {
                     (dx, dy)
                 };
                 let single_anchor = points.len() == 1;
-                let position = kind.spec().handles == DrawingHandleMode::Position;
+                let grid = kind.spec().grid_snap;
                 // Follow the crosshair's slot changes from the grabbed point. One shared
                 // logical delta moves the body rigidly and preserves the grab offset/width.
-                let time_steps = if position {
+                let time_steps = if grid {
                     (self.snapped_crosshair_index(start_x + dx)
                         - self.snapped_crosshair_index(start_x)) as f64
                 } else {
@@ -3851,7 +3924,7 @@ impl ChartEngine {
                     let Some(mut point) = convert(index, dx, dy) else {
                         return;
                     };
-                    if position {
+                    if grid {
                         point.logical = slot.logical + time_steps;
                     }
                     if snap_time_to_data {
@@ -3877,7 +3950,7 @@ impl ChartEngine {
                             DrawingMovementAxis::Both => snapped,
                         };
                     }
-                    if position {
+                    if grid {
                         point.price = self.snap_position_price(pane, price_scale, point.price);
                     }
                     *slot = point;
@@ -4007,6 +4080,7 @@ impl ChartEngine {
         self.invalidate_frame_overlay();
         self.drawing_controller.pending = None;
         self.drawing_controller.brush = None;
+        self.drawing_controller.measure = None;
         self.drawing_controller.armed = match (kind, template) {
             (Some(kind), Some(template)) => Some(ArmedDrawingTool {
                 kind,
@@ -4295,13 +4369,179 @@ impl ChartEngine {
             && self.drawing_create_pop_anchor()
     }
 
-    /// Cancel creation and disarm the tool as one atomic controller operation.
+    /// Cancel creation and disarm the tool as one atomic controller operation. Escape routes
+    /// here, so it also dismisses a transient measure.
     pub fn cancel_drawing_tool(&mut self) {
         self.invalidate_frame_drawings();
         self.invalidate_frame_overlay();
         self.drawing_controller.armed = None;
         self.drawing_controller.pending = None;
         self.drawing_controller.brush = None;
+        self.drawing_controller.measure = None;
+    }
+
+    // --- transient Shift-click measure ------------------------------------------------------
+
+    /// The measure anchor under a pointer: clamped into the bound pane, magnet-snapped on
+    /// request, then placed on the crosshair time slot and price tick like the measure tools.
+    fn measure_point_at(
+        &self,
+        pane_index: usize,
+        price_scale: DrawingPriceScale,
+        x: f64,
+        y: f64,
+        magnet: bool,
+    ) -> Option<DrawingPoint> {
+        let pane = self.panes.get(pane_index)?;
+        let x = x.clamp(0.0, self.pane_w);
+        let y = y.clamp(pane.top, pane.top + pane.height);
+        let mut point = self.drawing_from_px_for(pane_index, price_scale, x, y)?;
+        if magnet {
+            point = self.magnet_snap_point_at(pane_index, price_scale, x, y, point);
+        }
+        Some(self.grid_snap_point(
+            DrawingKind::DatePriceRange,
+            pane_index,
+            price_scale,
+            x,
+            point,
+            magnet,
+        ))
+    }
+
+    /// Forward a primary press to the transient measure. A live measure always consumes it: a
+    /// following measure freezes at the press, a frozen one is dismissed. Otherwise `begin`
+    /// (the host's Shift state, after its own object hit tests) starts a measure in the pane
+    /// under the pointer on that pane's default price scale. Returns whether the press was
+    /// consumed; an armed drawing tool keeps ownership of its presses.
+    pub fn measure_pointer_down(
+        &mut self,
+        x: f64,
+        y: f64,
+        begin: bool,
+        modifiers: DrawingModifiers,
+    ) -> bool {
+        if let Some(session) = self.drawing_controller.measure.as_ref() {
+            if session.following {
+                let (pane, scale) = (session.drawing.pane_index, session.drawing.price_scale);
+                let end = self.measure_point_at(pane, scale, x, y, modifiers.magnet);
+                if let Some(session) = self.drawing_controller.measure.as_mut() {
+                    if let Some(end) = end {
+                        session.drawing.points[1] = end;
+                    }
+                    session.following = false;
+                }
+            } else {
+                self.drawing_controller.measure = None;
+            }
+            self.invalidate_frame_drawings();
+            return true;
+        }
+        if !begin || !x.is_finite() || self.drawing_controller.armed.is_some() {
+            return false;
+        }
+        let Some(pane) = self.pane_at_y(y) else {
+            return false;
+        };
+        if !self.pane_uses_financial_time(pane) || x < 0.0 || x > self.pane_w {
+            return false;
+        }
+        let price_scale = match self.pane_default_scale_target(pane) {
+            PriceScaleTarget::Left => DrawingPriceScale::Left,
+            PriceScaleTarget::Overlay => DrawingPriceScale::Overlay,
+            PriceScaleTarget::Right | PriceScaleTarget::Named(_) => DrawingPriceScale::Right,
+        };
+        let Some(start) = self.measure_point_at(pane, price_scale, x, y, modifiers.magnet) else {
+            return false;
+        };
+        let mut drawing = Drawing::new(0, DrawingKind::DatePriceRange, pane, vec![start, start]);
+        drawing.price_scale = price_scale;
+        self.drawing_controller.measure = Some(MeasureSession {
+            drawing,
+            press: (x, y),
+            following: true,
+        });
+        self.invalidate_frame_drawings();
+        true
+    }
+
+    /// Follow the pointer with a live measure's end anchor (button held or not). Returns whether
+    /// the measure changed.
+    pub fn measure_pointer_move(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) -> bool {
+        let Some(session) = self
+            .drawing_controller
+            .measure
+            .as_ref()
+            .filter(|session| session.following)
+        else {
+            return false;
+        };
+        let (pane, scale) = (session.drawing.pane_index, session.drawing.price_scale);
+        let Some(end) = self.measure_point_at(pane, scale, x, y, modifiers.magnet) else {
+            return false;
+        };
+        let Some(session) = self.drawing_controller.measure.as_mut() else {
+            return false;
+        };
+        if session.drawing.points[1] == end {
+            return false;
+        }
+        session.drawing.points[1] = end;
+        self.invalidate_frame_drawings();
+        true
+    }
+
+    /// Release after a measure press. A release beyond the click slop ends a press-drag
+    /// measure; a click leaves it following until the next press. Returns whether it changed.
+    pub fn measure_pointer_up(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) -> bool {
+        let Some(session) = self
+            .drawing_controller
+            .measure
+            .as_ref()
+            .filter(|session| session.following)
+        else {
+            return false;
+        };
+        if (x - session.press.0).abs() + (y - session.press.1).abs() < MEASURE_DRAG_SLOP {
+            return false;
+        }
+        self.measure_pointer_move(x, y, modifiers);
+        if let Some(session) = self.drawing_controller.measure.as_mut() {
+            session.following = false;
+        }
+        self.invalidate_frame_drawings();
+        true
+    }
+
+    /// Dismiss the transient measure (Escape, focus/capture loss). Returns whether one existed.
+    pub fn cancel_measure(&mut self) -> bool {
+        if self.drawing_controller.measure.take().is_none() {
+            return false;
+        }
+        self.invalidate_frame_drawings();
+        true
+    }
+
+    pub fn measure_active(&self) -> bool {
+        self.drawing_controller.measure.is_some()
+    }
+
+    /// Whether the measure's end anchor still follows the pointer.
+    pub fn measure_following(&self) -> bool {
+        self.drawing_controller
+            .measure
+            .as_ref()
+            .is_some_and(|session| session.following)
+    }
+
+    /// The transient measure's start/end anchors, for hosts and tests.
+    pub fn measure_points(&self) -> Option<[DrawingPoint; 2]> {
+        let points = &self.drawing_controller.measure.as_ref()?.drawing.points;
+        Some([points[0], points[1]])
+    }
+
+    pub(crate) fn measure_session(&self) -> Option<&MeasureSession> {
+        self.drawing_controller.measure.as_ref()
     }
 
     /// Abort only the in-flight placement/capture while leaving the currently armed tool intact.
@@ -4479,6 +4719,7 @@ impl ChartEngine {
                 }
             }
         }
+        point = self.grid_snap_point(kind, pane, price_scale, x, point, modifiers.magnet);
         let preset_points = if matches!(
             kind.spec().placement,
             DrawingPlacement::SingleClickPreset { .. }
@@ -4627,6 +4868,14 @@ impl ChartEngine {
                     }
                 }
             }
+        }
+        if let Some(kind) = self
+            .drawing_controller
+            .pending
+            .as_ref()
+            .map(|pending| pending.drawing.kind)
+        {
+            point = self.grid_snap_point(kind, pane, price_scale, x, point, modifiers.magnet);
         }
         if let Some(pending) = self.drawing_controller.pending.as_mut() {
             pending.drawing.pane_index = pane;

@@ -4822,7 +4822,8 @@ impl AerisChart {
 
     // --- drawing tools (engine-owned drawing objects; aeris_charts_engine drawings.rs) ---
     // Kinds: 0 trend_line, 1 horizontal_line, 2 horizontal_ray, 3 vertical_line, 4 rectangle,
-    // 5 text, 6 brush, 7 path, 8 long_position, 9 short_position. All coordinates are pane-relative CSS px (x from the pane's left, y from the
+    // 5 text, 6 brush, 7 path, 8 long_position, 9 short_position, 13 price_range, 14 date_range,
+    // 15 date_price_range. All coordinates are pane-relative CSS px (x from the pane's left, y from the
     // chart's top — the crosshair's space). Call `render()` after mutations.
 
     /// Add a drawing to `pane` from a JSON `[{logical, price}, ...]` anchor array and an
@@ -5155,6 +5156,45 @@ impl AerisChart {
     }
     pub fn cancel_drawing_tool(&mut self) {
         self.inner.borrow_mut().cancel_drawing_tool();
+    }
+
+    // --- transient Shift-click measure (engine-owned; never a committed drawing) ---
+
+    /// Forward a primary pane press. A live measure always consumes it (freeze or dismiss);
+    /// otherwise `begin` (Shift held, after the host's object hit tests) starts one.
+    pub fn measure_pointer_down(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        begin: bool,
+        magnet: bool,
+    ) -> bool {
+        self.inner
+            .borrow_mut()
+            .measure_pointer_down(x_css, y_css, begin, magnet)
+    }
+    /// Follow the pointer with a live measure's end anchor. Returns whether it changed.
+    pub fn measure_pointer_move(&mut self, x_css: f64, y_css: f64, magnet: bool) -> bool {
+        self.inner
+            .borrow_mut()
+            .measure_pointer_move(x_css, y_css, magnet)
+    }
+    /// Release after a measure press; a drag release freezes the measure.
+    pub fn measure_pointer_up(&mut self, x_css: f64, y_css: f64, magnet: bool) -> bool {
+        self.inner
+            .borrow_mut()
+            .measure_pointer_up(x_css, y_css, magnet)
+    }
+    /// Dismiss the transient measure. Returns whether one existed.
+    pub fn cancel_measure(&mut self) -> bool {
+        self.inner.borrow_mut().cancel_measure()
+    }
+    pub fn measure_active(&self) -> bool {
+        self.inner.borrow().measure_active()
+    }
+    /// `[{logical, price}, {logical, price}]` for the live measure, or `null`.
+    pub fn measure_points_json(&self) -> String {
+        self.inner.borrow().measure_points_json()
     }
 
     /// Arm interactive creation of a tool kind ("" options = defaults): the next clicks place

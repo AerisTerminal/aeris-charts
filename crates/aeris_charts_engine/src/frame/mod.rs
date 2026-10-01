@@ -53,6 +53,8 @@ mod series_geometry;
 mod tests;
 mod trading_geometry;
 
+pub(crate) use drawings::stat_label_height;
+
 #[cfg(test)]
 use conflation::{visible_histogram_rows, visible_ohlc};
 use conflation::{
@@ -447,6 +449,8 @@ pub(crate) struct RetainedFrame {
     last_series_revision: u64,
     last_time_scale_revision: u64,
     last_price_scale_revisions: Vec<Vec<u64>>,
+    /// Timestamp union and display-projection identity read by measuring-tool elapsed time.
+    last_time_label_key: [u64; 3],
 }
 
 impl RetainedFrame {
@@ -1274,6 +1278,27 @@ impl ChartEngine {
                 .any(|(pane, revisions)| pane.scale_revisions() != *revisions);
         if price_scales_changed {
             self.frame_invalidation.coordinates();
+        }
+        // Measuring labels read elapsed time from timestamps, which can change (a new bar in a
+        // projected slot, a projection change) without moving any coordinate.
+        let time_label_key = [
+            self.data.time_points_generation(),
+            self.future_time_projection_revision,
+            self.past_time_projection_revision,
+        ];
+        if self.retained_frame.last_time_label_key != time_label_key {
+            self.retained_frame.last_time_label_key = time_label_key;
+            if self.measure_active()
+                || self
+                    .pending_drawing()
+                    .is_some_and(|pending| pending.drawing.kind.is_measure())
+                || self
+                    .drawings
+                    .iter()
+                    .any(|drawing| drawing.kind.is_measure())
+            {
+                self.frame_invalidation.drawings();
+            }
         }
         self.retained_frame.last_layout_key = Some(layout_key);
         self.retained_frame.last_overlay_key = Some(overlay_key);

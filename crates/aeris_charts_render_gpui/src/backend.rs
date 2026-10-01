@@ -694,7 +694,7 @@ fn escape_svg_text(value: &str) -> String {
 
 /// The SVG renderer may resolve a different font face from GPUI's text shaper. Leave one em
 /// around the measured run so descenders, italic overhang, and antialiasing are not cut by the
-/// SVG viewport. The origin moves by the same amount, keeping the visible text at its anchor.
+/// SVG viewport. The sprite corner moves by the same amount, keeping the visible text at its anchor.
 fn rotated_text_sprite_bounds(
     left: f32,
     top: f32,
@@ -1065,7 +1065,7 @@ mod tests {
         assert_eq!(f32::from(bounds.origin.y), 24.0);
         assert_eq!(f32::from(bounds.size.width), 66.0);
         assert_eq!(f32::from(bounds.size.height), 39.0);
-        // The SVG text starts at (pad, pad + ascent), retaining the original ink origin.
+        // The SVG text starts at (pad, pad + ascent), retaining the original ink anchor.
         assert_eq!(f32::from(bounds.origin.x) + 12.0, 23.5);
         assert_eq!(f32::from(bounds.origin.y) + 12.0, 36.0);
     }

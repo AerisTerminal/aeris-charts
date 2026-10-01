@@ -118,6 +118,9 @@ pub(crate) struct DrawingToolSpec {
     /// Placement commits directly into a platform text-edit session.  The editor itself remains a
     /// host concern, but the decision that this tool requests one is canonical engine metadata.
     pub(crate) requests_text_editor: bool,
+    /// Anchors land on the crosshair's time slot and the instrument/scale price tick during
+    /// creation, anchor drags, and body moves, so derived statistics read whole bars and ticks.
+    pub(crate) grid_snap: bool,
 }
 
 const TREND_LINE: DrawingToolSpec = DrawingToolSpec {
@@ -133,6 +136,7 @@ const TREND_LINE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 2.0,
     requests_text_editor: false,
+    grid_snap: false,
 };
 
 const HORIZONTAL_LINE: DrawingToolSpec = DrawingToolSpec {
@@ -148,6 +152,7 @@ const HORIZONTAL_LINE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 2.0,
     requests_text_editor: false,
+    grid_snap: false,
 };
 
 const HORIZONTAL_RAY: DrawingToolSpec = DrawingToolSpec {
@@ -163,6 +168,7 @@ const HORIZONTAL_RAY: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 2.0,
     requests_text_editor: false,
+    grid_snap: false,
 };
 
 const VERTICAL_LINE: DrawingToolSpec = DrawingToolSpec {
@@ -178,6 +184,7 @@ const VERTICAL_LINE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 2.0,
     requests_text_editor: false,
+    grid_snap: false,
 };
 
 const RECTANGLE: DrawingToolSpec = DrawingToolSpec {
@@ -193,6 +200,7 @@ const RECTANGLE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
+    grid_snap: false,
 };
 
 const TEXT: DrawingToolSpec = DrawingToolSpec {
@@ -208,6 +216,7 @@ const TEXT: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 2.0,
     requests_text_editor: true,
+    grid_snap: false,
 };
 
 const BRUSH: DrawingToolSpec = DrawingToolSpec {
@@ -223,6 +232,7 @@ const BRUSH: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.25,
     default_width: 2.0,
     requests_text_editor: false,
+    grid_snap: false,
 };
 
 const PATH: DrawingToolSpec = DrawingToolSpec {
@@ -238,6 +248,7 @@ const PATH: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 2.0,
     requests_text_editor: false,
+    grid_snap: false,
 };
 
 const LONG_POSITION: DrawingToolSpec = DrawingToolSpec {
@@ -253,6 +264,7 @@ const LONG_POSITION: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
+    grid_snap: true,
 };
 
 const SHORT_POSITION: DrawingToolSpec = DrawingToolSpec {
@@ -268,6 +280,7 @@ const SHORT_POSITION: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
+    grid_snap: true,
 };
 
 const FIXED_RANGE_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
@@ -283,6 +296,7 @@ const FIXED_RANGE_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
+    grid_snap: false,
 };
 
 const ANCHORED_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
@@ -298,6 +312,7 @@ const ANCHORED_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
+    grid_snap: false,
 };
 
 const ANCHORED_VWAP: DrawingToolSpec = DrawingToolSpec {
@@ -313,9 +328,35 @@ const ANCHORED_VWAP: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 2.0,
     requests_text_editor: false,
+    grid_snap: false,
 };
 
-pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 13] = [
+/// Measuring tools share one placement contract: two clicks (or a Shift press-drag for the
+/// transient measure), slot/tick-snapped anchors, and an editable start/end pair.
+const fn measure_spec(kind: DrawingKind, wire_id: u8, name: &'static str) -> DrawingToolSpec {
+    DrawingToolSpec {
+        kind,
+        wire_id,
+        name,
+        placement: DrawingPlacement::ClickAnchors { count: 2 },
+        handles: DrawingHandleMode::Anchors,
+        movement_axis: DrawingMovementAxis::Both,
+        straighten: DrawingStraightenMode::None,
+        logical_extent: DrawingLogicalExtent::Finite,
+        price_extent: DrawingPriceExtent::Finite,
+        bounds_padding_ratio: 0.0,
+        default_width: 1.0,
+        requests_text_editor: false,
+        grid_snap: true,
+    }
+}
+
+const PRICE_RANGE: DrawingToolSpec = measure_spec(DrawingKind::PriceRange, 13, "price_range");
+const DATE_RANGE: DrawingToolSpec = measure_spec(DrawingKind::DateRange, 14, "date_range");
+const DATE_PRICE_RANGE: DrawingToolSpec =
+    measure_spec(DrawingKind::DatePriceRange, 15, "date_price_range");
+
+pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 16] = [
     TREND_LINE,
     HORIZONTAL_LINE,
     HORIZONTAL_RAY,
@@ -329,9 +370,20 @@ pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 13] = [
     FIXED_RANGE_VOLUME_PROFILE,
     ANCHORED_VOLUME_PROFILE,
     ANCHORED_VWAP,
+    PRICE_RANGE,
+    DATE_RANGE,
+    DATE_PRICE_RANGE,
 ];
 
 impl DrawingKind {
+    /// The measuring tools (price, date, and date-and-price range).
+    pub(crate) const fn is_measure(self) -> bool {
+        matches!(
+            self,
+            Self::PriceRange | Self::DateRange | Self::DatePriceRange
+        )
+    }
+
     pub(crate) const fn spec(self) -> &'static DrawingToolSpec {
         match self {
             Self::TrendLine => &TREND_LINE,
@@ -347,6 +399,9 @@ impl DrawingKind {
             Self::FixedRangeVolumeProfile => &FIXED_RANGE_VOLUME_PROFILE,
             Self::AnchoredVolumeProfile => &ANCHORED_VOLUME_PROFILE,
             Self::AnchoredVwap => &ANCHORED_VWAP,
+            Self::PriceRange => &PRICE_RANGE,
+            Self::DateRange => &DATE_RANGE,
+            Self::DatePriceRange => &DATE_PRICE_RANGE,
         }
     }
 }

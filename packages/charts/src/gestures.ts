@@ -78,6 +78,9 @@ export function install_gestures(chart: chart_impl): () => void {
   // A drawing placement that committed directly on pointer-down. The trailing click/tap is
   // swallowed generically; which placement classes commit on press is engine-owned.
   let creation_press_committed = false;
+  // A press consumed by the engine's transient Shift-click measure (start, freeze, or dismiss).
+  // Its release and trailing click belong to the measure, never to selection or pane clicks.
+  let measure_press = false;
   // Vertical price pan session (reference `startScrollPrice`): the engine holds the range
   // snapshot and shift math; armed only while the scale is NOT in autoscale (its no-op gate).
   let price_pan: { pane: number; target: number } | null = null;
@@ -534,11 +537,26 @@ export function install_gestures(chart: chart_impl): () => void {
     if (pointers.size !== 1) return;
     press_start = p;
     moved = false;
+    measure_press = false;
     const region = arm_press(p);
     if (region !== "pane") {
       const target = region_target(region);
       pointer_targets.set(e.pointerId, target);
       feed_pointer("down", e, target);
+      return;
+    }
+    const magnet = e.ctrlKey || e.metaKey;
+    // A live measure owns the next pane press: it freezes a following measure or dismisses a
+    // frozen one before any object under the pointer is considered.
+    const claim_measure = () => {
+      measure_press = true;
+      pointer_targets.set(e.pointerId, InputTargetCode.Drawing);
+      feed_pointer("down", e, InputTargetCode.Drawing);
+      set_crosshair(p.x, p.y);
+      chart.repaint();
+    };
+    if (wasm.measure_active() && wasm.measure_pointer_down(p.x, p.y, false, magnet)) {
+      claim_measure();
       return;
     }
     const trading_hit = chart.trading_hit_at(p.x, p.y);
@@ -589,6 +607,12 @@ export function install_gestures(chart: chart_impl): () => void {
     // A Delta Tooltip gets first refusal on the pane gesture. Brushable Area intentionally uses
     // that capture so primary dragging compares instead of starting a competing canvas pan.
     delta_tooltip_dragging = chart.native_delta_tooltip_mouse_down(p.x, e.shiftKey);
+    // Shift on empty chart space starts the engine's transient measure: pulling up measures a
+    // rise, pulling down a fall, in any direction.
+    if (!delta_tooltip_dragging && e.shiftKey && wasm.measure_pointer_down(p.x, p.y, true, magnet)) {
+      claim_measure();
+      return;
+    }
     if (!delta_tooltip_dragging && chart.gesture_config().pan) {
       // Resolve the directly hit/selected scale at press time while the pointer is still on its
       // geometry. This snapshots only; no scale mutates before the resolver opens the drag.
@@ -653,7 +677,11 @@ export function install_gestures(chart: chart_impl): () => void {
       set_sep_hover(chart.gesture_config().panes_resize ? separator_at(p.y) : -1);
     }
 
-    if (trading_dragging) {
+    if (wasm.measure_active()) {
+      // Follows with or without a held button: press-drag-release and click-move-click both
+      // measure.
+      wasm.measure_pointer_move(p.x, p.y, e.ctrlKey || e.metaKey);
+    } else if (trading_dragging) {
       chart.trading_drag_to(p.y);
     } else if (chart.creation_armed()) {
       chart.creation_pointer_move(
@@ -713,8 +741,9 @@ export function install_gestures(chart: chart_impl): () => void {
       // the pane (the hover state is not refreshed over the axis strips). A series hit shows
       // the click affordance (industry-standard: a series is selectable), falling back to the
       // region cursor off the geometry.
+      // A live measure keeps the measuring crosshair cursor over every chart object.
       overlay.style.cursor =
-        region_cursor === "crosshair"
+        region_cursor === "crosshair" && !wasm.measure_active()
           ? (chart.trading_cursor_at(p.x, p.y) ?? (chart.alert_create_hit_at(p.x, p.y) ? "pointer" : null) ??
             chart.hover_cursor() ?? (chart.hover_series_id() !== null ? "pointer" : region_cursor))
           : region_cursor;
@@ -743,6 +772,11 @@ export function install_gestures(chart: chart_impl): () => void {
     }
     if (axis_drag !== null) {
       end_axis_drag();
+      return;
+    }
+    if (measure_press) {
+      wasm.measure_pointer_up(p.x, p.y, e.ctrlKey || e.metaKey);
+      chart.repaint();
       return;
     }
     if (chart.creation_capture_active()) {
@@ -853,6 +887,11 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const on_click = (e: MouseEvent) => {
+    if (measure_press) {
+      measure_press = false;
+      reset_mouse_click();
+      return;
+    }
     if (moved) return;
     if (suppress_compatibility_click) {
       suppress_compatibility_click = false;
@@ -941,6 +980,8 @@ export function install_gestures(chart: chart_impl): () => void {
       drawing_dragging = false;
       wasm.drawing_drag_cancel();
     }
+    measure_press = false;
+    wasm.cancel_measure();
     wasm.set_crosshair_ohlc_magnet(false);
     trading_press = false;
     alert_press = false;

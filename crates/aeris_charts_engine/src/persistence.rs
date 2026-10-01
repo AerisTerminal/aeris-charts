@@ -716,8 +716,9 @@ impl ChartEngine {
                         extend_left: drawing.extend_left.then_some(true),
                         extend_right: drawing.extend_right.then_some(true),
                         fill_enabled: (drawing.fill_enabled
-                            != (drawing.kind == DrawingKind::Rectangle))
-                            .then_some(drawing.fill_enabled),
+                            != (drawing.kind == DrawingKind::Rectangle
+                                || drawing.kind.is_measure()))
+                        .then_some(drawing.fill_enabled),
                         magnet: (drawing.magnet != crate::DrawingMagnetMode::Off)
                             .then_some(drawing.magnet),
                         labels: (!drawing.labels.is_empty()).then_some(drawing.labels.clone()),
@@ -1594,6 +1595,7 @@ impl ChartEngine {
         // state and historically survived import. Abort only the in-flight placement/capture.
         self.drawing_controller.pending = None;
         self.drawing_controller.brush = None;
+        self.drawing_controller.measure = None;
         self.editing_drawing = None;
         self.drawing_text_edit = None;
         self.hovered_drawing = None;
@@ -1915,6 +1917,7 @@ impl ChartEngine {
         self.drawing_history = crate::DrawingHistory::default();
         self.drawing_controller.pending = None;
         self.drawing_controller.brush = None;
+        self.drawing_controller.measure = None;
         self.editing_drawing = None;
         self.drawing_text_edit = None;
         self.hovered_drawing = None;

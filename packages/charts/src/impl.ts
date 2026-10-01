@@ -60,18 +60,9 @@ import { default_theme_name, theme_options, theme_palette, type theme_name } fro
 
 let init_promise: Promise<unknown> | null = null;
 
-const DRAWING_KIND_FROM_U8: readonly drawing_kind[] = [
-  "trend_line",
-  "horizontal_line",
-  "horizontal_ray",
-  "vertical_line",
-  "rectangle",
-  "text",
-  "brush",
-  "path",
-  "long_position",
-  "short_position",
-];
+const DRAWING_KIND_FROM_U8: ReadonlyMap<number, drawing_kind> = new Map(
+  (Object.entries(DRAWING_KIND_TO_U8) as [drawing_kind, number][]).map(([kind, wire]) => [wire, kind]),
+);
 
 type persistence_error_result = {
   ok: false;
@@ -5876,7 +5867,7 @@ export class chart_impl implements chart_api {
 
   active_drawing_tool(): drawing_kind | null {
     const wire = Number(this.wasm.active_drawing_tool());
-    return wire >= 0 ? (DRAWING_KIND_FROM_U8[wire] ?? null) : null;
+    return DRAWING_KIND_FROM_U8.get(wire) ?? null;
   }
 
   set_drawing_tool_listener(listener: ((tool: drawing_kind | null) => void) | null): void {

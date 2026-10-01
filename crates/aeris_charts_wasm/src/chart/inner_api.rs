@@ -2917,6 +2917,61 @@ impl ChartInner {
         self.engine.cancel_drawing_tool();
     }
 
+    pub fn measure_pointer_down(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        begin: bool,
+        magnet: bool,
+    ) -> bool {
+        self.engine.measure_pointer_down(
+            x_css,
+            y_css,
+            begin,
+            DrawingModifiers {
+                magnet,
+                straighten: false,
+            },
+        )
+    }
+
+    pub fn measure_pointer_move(&mut self, x_css: f64, y_css: f64, magnet: bool) -> bool {
+        self.engine.measure_pointer_move(
+            x_css,
+            y_css,
+            DrawingModifiers {
+                magnet,
+                straighten: false,
+            },
+        )
+    }
+
+    pub fn measure_pointer_up(&mut self, x_css: f64, y_css: f64, magnet: bool) -> bool {
+        self.engine.measure_pointer_up(
+            x_css,
+            y_css,
+            DrawingModifiers {
+                magnet,
+                straighten: false,
+            },
+        )
+    }
+
+    pub fn cancel_measure(&mut self) -> bool {
+        self.engine.cancel_measure()
+    }
+
+    pub fn measure_active(&self) -> bool {
+        self.engine.measure_active()
+    }
+
+    pub fn measure_points_json(&self) -> String {
+        self.engine
+            .measure_points()
+            .and_then(|points| serde_json::to_string(&points).ok())
+            .unwrap_or_else(|| "null".to_string())
+    }
+
     /// Arm interactive creation of a tool kind ("" options = defaults).
     pub fn drawing_create_begin(&mut self, kind: u8, options_json: &str) -> bool {
         let Some(kind) = DrawingKind::from_u8(kind) else {
