@@ -314,6 +314,11 @@ pub(crate) struct FrameInvalidation {
 }
 
 impl FrameInvalidation {
+    /// Advances on every invalidation of any layer.
+    pub(crate) const fn clock(&self) -> u64 {
+        self.clock
+    }
+
     fn tick(&mut self) -> u64 {
         self.clock = self.clock.wrapping_add(1).max(1);
         self.clock
@@ -483,6 +488,8 @@ pub(crate) struct RetainedFrame {
     last_price_scale_revisions: Vec<Vec<u64>>,
     /// Timestamp union and display-projection identity read by measuring-tool elapsed time.
     last_time_label_key: [u64; 3],
+    /// Invalidation clock observed by the last prepared host frame.
+    prepared_clock: u64,
 }
 
 impl RetainedFrame {
@@ -1139,6 +1146,12 @@ impl ChartEngine {
         self.frame_invalidation.overlay();
     }
 
+    /// Paint order changed while every retained layer stays valid: the next prepared frame must
+    /// reassemble, but no geometry is rebuilt.
+    pub(crate) fn invalidate_frame_assembly(&mut self) {
+        self.frame_invalidation.tick();
+    }
+
     pub(crate) fn invalidate_frame_axis(&mut self) {
         self.frame_invalidation.axis();
     }
@@ -1187,6 +1200,15 @@ impl ChartEngine {
 
     pub fn frame_requires_axis(&self) -> bool {
         self.retained_frame.axis_generation != self.frame_invalidation.axis
+    }
+
+    /// Whether any layer was invalidated since the last prepared host frame.
+    pub(crate) fn frame_invalidated_since_prepare(&self) -> bool {
+        self.retained_frame.prepared_clock != self.frame_invalidation.clock()
+    }
+
+    pub(crate) fn frame_prepared(&mut self) {
+        self.retained_frame.prepared_clock = self.frame_invalidation.clock();
     }
 
     /// Force the next axis build to start from engine-owned labels. Browser extensions use this

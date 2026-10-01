@@ -339,15 +339,28 @@ anchor may replace that base for every overlay without copying rows. The same an
 feeds the bounded engine-owned comparison legend snapshot, so browser and native hosts present
 per-symbol values from one canonical time identity.
 
-Hosts send input and data to the engine. The engine returns query results and a prepared `ChartFrame`. Browser and GPUI adapters normalize native events into CSS-logical `PointerSample`/`WheelSample` values and feed the same fixed-capacity `GestureResolver`. The resolver owns pointer membership, the 5 px Manhattan drag threshold, explicit gesture state, fixed starting pinch centroid/distance, cumulative pinch scale, primary-touch continuation/termination, and cancellation; it retains at most two pointers and performs no move-sample allocation. Pinch moves zoom only around the starting centroid and cannot begin after a one-finger move or long press. Hosts still own platform capture, cursor application, event-default policy, and frame/timer scheduling. Normalization includes pointer cadence: browsers already coalesce pointer motion to display frames, and a native host must do the same for brush capture — Wayland delivers per-HID-report motion (~1000 Hz, often one axis per event), and feeding every sample to `brush_create_add` records that axis-alternating staircase as stroke knots. The GPUI host therefore retains only the newest brush sample per painted frame and flushes it once during prepaint (and on pointer-up before commit), so stroke knots sample the drag trajectory at display cadence on every host. Horizontal kinetic scroll follows the reference domain exactly: drag samples are the time scale's logical `rightOffset`, while the reference 0.2/7 px-per-ms speed limits and 15 px minimum move are divided by the bar spacing captured when the drag starts. The resulting coast is therefore zoom-invariant instead of being tuned in raw pointer pixels. Browser keyboard Left/Right pan is velocity-owned rather than destination-owned: key-down gives an immediate bounded velocity kick, the engine adds further low-friction kicks at a fixed cadence while the key remains held, and browser key-repeat is ignored except when it changes the requested Ctrl/Shift speed. Key-up cancels the kinetic state immediately. Ctrl/Shift retain the existing 10x strength relationship to plain arrows. Zoom, scroll, kinetic motion, snapping, selection, drawing/trading preview semantics, and rollback belong here.
+Hosts send input and data to the engine. The engine returns query results and a prepared `ChartFrame`. Browser and GPUI adapters normalize native events into CSS-logical `PointerSample`/`WheelSample` values and feed the same fixed-capacity `GestureResolver`. The resolver owns pointer membership, the 5 px Manhattan drag threshold, explicit gesture state, fixed starting pinch centroid/distance, cumulative pinch scale, primary-touch continuation/termination, and cancellation; it retains at most two pointers and performs no move-sample allocation. Pinch moves zoom only around the starting centroid and cannot begin after a one-finger move or long press. Hosts still own platform capture, cursor application, event-default policy, and frame/timer scheduling. Normalization includes pointer cadence: browsers already coalesce pointer motion to display frames, and a native host must do the same for brush capture — Wayland delivers per-HID-report motion (~1000 Hz, often one axis per event), and feeding every sample to `brush_create_add` records that axis-alternating staircase as stroke knots. The engine input controller therefore retains only the newest captured sample; native hosts call `flush_coalesced_input` once per prepaint (pointer-up flushes before commit), so stroke knots sample the drag trajectory at display cadence on every host. Horizontal kinetic scroll follows the reference domain exactly: drag samples are the time scale's logical `rightOffset`, while the reference 0.2/7 px-per-ms speed limits and 15 px minimum move are divided by the bar spacing captured when the drag starts. The resulting coast is therefore zoom-invariant instead of being tuned in raw pointer pixels. Browser keyboard Left/Right pan is velocity-owned rather than destination-owned: key-down gives an immediate bounded velocity kick, the engine adds further low-friction kicks at a fixed cadence while the key remains held, and browser key-repeat is ignored except when it changes the requested Ctrl/Shift speed. Key-up cancels the kinetic state immediately. Ctrl/Shift retain the existing 10x strength relationship to plain arrows. Zoom, scroll, kinetic motion, snapping, selection, drawing/trading preview semantics, and rollback belong here.
 
-Native financial hosts likewise translate platform events but do not reconstruct chart mechanics.
-The engine resolves pane separators and price-axis targets, owns drag lifecycle, crosshair exclusion,
-wheel and keyboard navigation formulas, temporary OHLC magnet state, and grouped selection for native
-indicators and external studies. Typed scale commands resolve the effective series, propagate price
-format across a scale, toggle series/axis chrome, and move every attached series between price axes as
-one operation. Hosts retain cursor choice, menu presentation, platform capture, product persistence,
-and repaint/layout scheduling; they do not walk engine series to reproduce these transactions.
+Native hosts route all pointer, wheel, and keyboard input through one engine input controller
+(`chart_input.rs`). A host translates platform events into `PointerInput`, `WheelSample`, and
+`ChartKey` values and calls `ChartEngine::input_*`; the controller owns the complete interaction
+policy: chart-region resolution, press arbitration (live measure, trading controls, crosshair action
+chip, armed drawing tool, drawing drag, delta tooltip, Shift measure, pan), the shared 5 px threshold
+through the `GestureResolver`, axis and separator drags, kinetic coasting, click-to-select and
+text-edit activation, double-click resets, keyboard bindings, wheel routing, hover promotion, the
+trading-tooltip dwell deadline, and a semantic `ChartCursor`. Motion that arrives with the primary
+button already up (a release the host never saw), Escape, and `input_cancel` abandon the open gesture
+without committing it, exactly like browser pointer-capture loss. Host-configurable switches live in
+`InteractionOptions` (the reference `handleScroll`/`handleScale` family plus Aeris's
+`price_axis_wheel_zoom`). Work only a host can perform arrives as a bounded queue of
+`ChartInputEvent`s (context menu, created drawing, removal of a host-owned series). Hosts keep event
+translation, pointer capture, applying the cursor, timer and frame scheduling, menus, clipboard, and
+product persistence; they never re-implement routing, cursor priority, or key bindings. A new
+interaction is therefore added to the controller once and every native host inherits it. Typed scale
+commands resolve the effective series, propagate price format across a scale, toggle series/axis
+chrome, and move every attached series between price axes as one operation; hosts do not walk engine
+series to reproduce these transactions. Committed drawing edits advance `drawing_revision`, so hosts
+persist on that revision instead of tracking gestures.
 The temporary Ctrl/Cmd OHLC magnet affects a Normal-mode crosshair only while a drawing tool is
 armed, a drawing is being created, or an existing drawing is being dragged. Free browsing retains
 the raw cursor price even if a host has not yet cleared the modifier flag; explicitly configured
@@ -356,8 +369,11 @@ Magnet and MagnetOhlc crosshair modes remain independent of this drawing interac
 Native financial-frame preparation is also one engine operation. A host supplies the viewport and
 native glyph measurement callbacks; the engine installs CSS dimensions and DPR, decides whether
 layout/axis work is required, performs optional initial fit, negotiates axes, owns maximum-label
-policy, and builds the chart frame plus axis primitives. The host retains renderer-cache invalidation
-and paint scheduling, but does not reproduce the preparation sequence.
+policy, and builds the chart frame plus axis primitives. It rebuilds whenever any frame layer was
+invalidated (one invalidation clock covers every layer, including hover-promotion assembly order) or
+input changed state since the last prepared frame, and relayouts after an input-driven pane resize.
+The host retains renderer-cache invalidation and paint scheduling, but neither reproduces the
+preparation sequence nor clears frames by hand to force a rebuild.
 
 Linked-chart ingress is source-aware. Local mutations publish into the bounded synchronization queue;
 `apply_external_sync_event` applies host-supplied crosshair and visible-range state without
@@ -379,7 +395,7 @@ All interaction hit tests use an engine `HitProfile`. Mouse and pen retain preci
 
 Built-in frame geometry and series hit testing share one viewport-density query. Resolvable spacing uses the raw rows unchanged. Below one physical pixel per row, the query chooses the deepest summary level whose group fits the average pixel density, uses aligned summary nodes for pixel-bucket interiors, and refines partial boundaries through lower levels or raw rows. The existing per-kind conflation then preserves chronological line endpoints and close extrema, candle first-open/high/low/last-close semantics, and histogram greatest absolute value. The resulting ordered `ChartFrame` remains the only backend contract. Crosshair and trading data lookup remain exact raw/cached canonical queries rather than LOD approximations. Heikin Ashi candlesticks use a generation-keyed engine presentation cache over canonical OHLC: frame geometry, autoscale, and candle chrome may consume the derived values, while `series_data`, crosshair, and trading paths continue to expose raw OHLC.
 
-The official advanced-series examples are engine-owned feature series, not browser drawing callbacks. Each retains its complete validated payload beside an OHLC-shaped canonical projection used by the shared time/price-scale and query machinery. Grouped bars, heatmap, HLC area, pretty histogram, background shade, stacked area/bars, and whisker boxes construct backend-neutral primitives in the same ordered series layer as built-in geometry. Their official defaults, visible-range rules, pixel snapping, autoscale semantics, and source-data lifecycle are therefore identical in browser and native hosts. Brushable Area is deliberately not an advanced-series data type: it is an ordinary built-in Area series plus transient engine-owned range styling, so data ingestion, retention, LOD, hit testing, price-scale ownership, and all ordinary Area APIs remain on the canonical Area path. The legacy browser input name `brushable_area` is only a compatibility alias and normalizes to `area` immediately. Area-like fills share one design token (`market.area_fill_strong_alpha` → `area_fill_faint_alpha`): an unset Area fill, both unset baseline halves, and the brushable range defaults all derive their gradient from their own stroke color at that strength, strong at the series extreme and faint at its base. Brush default styles are engine-owned (`area_brush_defaults`); hosts send only the fields they override plus each range's positive/negative tone.
+The official advanced-series examples are engine-owned feature series, not browser drawing callbacks. Each retains its complete validated payload beside an OHLC-shaped canonical projection used by the shared time/price-scale and query machinery. Grouped bars, heatmap, HLC area, pretty histogram, background shade, stacked area/bars, and whisker boxes construct backend-neutral primitives in the same ordered series layer as built-in geometry. Their official defaults, visible-range rules, pixel snapping, autoscale semantics, and source-data lifecycle are therefore identical in browser and native hosts. Brushable Area is deliberately not an advanced-series data type: it is an ordinary built-in Area series plus transient engine-owned range styling, so data ingestion, retention, LOD, hit testing, price-scale ownership, and all ordinary Area APIs remain on the canonical Area path. The legacy browser input name `brushable_area` is only a compatibility alias and normalizes to `area` immediately. Area-like fills share one design token (`market.area_fill_strong_alpha` → `area_fill_faint_alpha`): an unset Area fill, both unset baseline halves, and the brushable range defaults all derive their gradient from their own stroke color at that strength, strong at the series extreme and faint at its base. Brush default styles are engine-owned (`area_brush_defaults`); hosts send only the fields they override plus each range's positive/negative tone. Native hosts compose the whole interaction with one call, `set_brushable_area(series, Some(options))`: the engine attaches the Delta Tooltip, restyles the area from its active range with those defaults after every gesture, clears the range on pane double-click and Escape, and drops the composition when the series stops being an Area series.
 
 Professional footprint / numbers-bar data has a chart-level tick-truth owner described in
 `Footprint.md`. `ChartEngine::add_trade_stream` retains one bounded keyed canonical microsecond tape;
@@ -557,7 +573,9 @@ Backend-neutral drawing primitives, colors, geometry, bar-width rules, and the o
 
 ### `aeris_charts_render_gpui`
 
-The native GPUI executor. It converts the prepared primitive stream into GPUI scene operations and owns GPUI-specific text, image caches, geometry conversion, backend metrics, and fixtures. It must not fork chart behavior or recalculate engine geometry. The repository's interactive Linux probes enable GPUI's Wayland and X11 platforms; macOS and Windows continue through GPUI's native platform selection. CI compiles and tests the GPUI backend on all three operating systems.
+The native GPUI executor. It converts the prepared primitive stream into GPUI scene operations and owns GPUI-specific text, image caches, geometry conversion, backend metrics, and fixtures. It must not fork chart behavior or recalculate engine geometry.
+
+Its `input` module is the one GPUI adapter for the engine input controller, shared by every GPUI host (the `gpui_probe` example and Aeris Terminal). `GpuiChartInput` converts GPUI mouse, wheel (32 px per line), modifier, and key events into engine input against the chart's canvas origin and a monotonic clock; `cursor_style` is the single `ChartCursor` → `CursorStyle` mapping (on Windows, whose GPUI backend draws hand cursors as the arrow, vertically dragged trading lines use the vertical-resize cursor); `text_edit_key` applies platform text-editing conventions to the engine typing session, with clipboard shortcuts layered on in `key_down`; and `install_text_metrics` installs the native text measurer and cap-height metric. A host binds each GPUI listener with one adapter call and never routes chart input itself. The repository's interactive Linux probes enable GPUI's Wayland and X11 platforms; macOS and Windows continue through GPUI's native platform selection. CI compiles and tests the GPUI backend on all three operating systems.
 
 GPUI's path pass cannot rely on MSAA — its sample count is picked from the surface and can fall back to 1x on Linux — so stroke, disc, and ring meshes carry a per-vertex Loop-Blinn signed-distance encoding in the path shader's `st` coordinates. Polyline geometry comes from the shared `line::stroke_aa` stroker; GPUI only maps its signed distances onto `st`. Polyline strokes keep `s` constant and encode signed device-pixel distance in `t`, which is compatible with GPUI's Windows solid-triangle branch; their one-pixel coverage transition is centered on the nominal edge so integrated coverage remains the requested width. Ring strokes use the same constant-s, centered coverage encoding as polylines, preventing Windows from treating the antialiasing fringe as solid stroke. Filled discs retain their shape-specific exterior encoding. A mesh larger than a bounded chunk is split into multiple GPUI paths so one stroke cannot overflow GPUI's fixed path instance buffer and trigger its grow-and-redraw retry loop; the mesh is a triangle soup, so coverage and paint order are unchanged.
 
@@ -628,11 +646,11 @@ Each chart has one engine owner. Mutations invalidate only the state that change
 
 Coordinate-authoritative scale objects advance canonical revisions inside their mutating methods. Browser and GPUI hosts express gestures through `ChartEngine` commands; legacy direct Rust access remains coherent because it cannot bypass the scale-owned revision. `SeriesStore` likewise advances its canonical presentation revision whenever a Rust host takes mutable access, replacing read-side hashing of every style field. Retained coordinate-dependent layers are derived caches stamped with the engine's current coordinate revision. Frame assembly asserts that the grid, visible series, chrome, drawings, and interaction overlay all carry that same revision, so a frame cannot mix transforms.
 
-For native financial surfaces the engine owns the complete pane/time-axis/price-axis/separator drag
-state machine, separator and axis target resolution, crosshair exclusion at dividers, and wheel
-pan/zoom routing. A platform adapter translates OS events and cursor names, arbitrates genuinely
-product-owned interactions before falling through, and schedules repaint; it must not reproduce the
-native chart gesture lifecycle or retain parallel axis/separator drag state.
+For native surfaces the engine input controller owns the complete pane/time-axis/price-axis/separator
+drag state machine, separator and axis target resolution, crosshair exclusion at dividers, and wheel
+pan/zoom routing. A platform adapter translates OS events and maps `ChartCursor` to one platform
+cursor, and schedules repaint; it must not reproduce the gesture lifecycle or retain parallel press,
+drag, hover, or cursor state.
 
 Frame invalidation is an engine-owned generation graph. Layout, coordinates/autoscale, grid and underlay, each series, drawings (with per-drawing prim/point segments plus a trailing controller-owned creation-preview block), and interaction overlays have independent generations. Coordinate-range changes fan out to coordinate-dependent layers; a value-only current-bar update stays on its source series when autoscale bounds do not change. Ordering-only promotion (hover/selection/drag/edit) reassembles retained series layers and drawing segments without rebuilding geometry; drawing drag rebuilds the drawings layer with fresh segments while reusing the runtime per-entry cache. Public option and series-style mutation are included in the generation inputs, so direct native callers cannot bypass retention accidentally.
 
@@ -742,8 +760,8 @@ click slop freezes a press-drag measure, while a click leaves it following until
 Arming a tool, Escape (`cancel_drawing_tool`), host cancellation, and persistence restore clear it.
 It is painted after creation previews in the trailing drawing preview block, keeps the crosshair
 visible and its cursor while following, rebases with drawing logicals, and never enters drawings,
-history, sync, or persistence. The browser gesture layer and the native GPUI probe route the same
-engine calls, so both hosts share one measuring state machine.
+history, sync, or persistence. The browser gesture layer and the engine input controller used by
+native hosts route the same engine calls, so all hosts share one measuring state machine.
 
 ## Plugins and host extensions
 
@@ -768,7 +786,7 @@ handles release their engine primitive
 plus any host subscription,
 timer, or DOM node exactly once; none of that runtime state enters engine persistence.
 
-The GPUI demo uses the shared crosshair-action hit test for its pointing-hand cursor and `Alert` input target. Its dedicated press/release state prevents chart pan and selection underneath the button; an unmoved release within the hit area emits the shared action request and displays its pane and price in the demo status line. Pointer cancellation discards the pending press.
+The engine input controller owns the crosshair-action chip as a press target: hovering it resolves the pointer cursor, its press prevents chart pan and selection underneath, and an unmoved release within the hit area emits the shared action request. Pointer cancellation discards the pending press. The GPUI demo shows the request's pane and price in its status line.
 
 Interactive chart objects own pointer feedback: the shared frame suppresses the complete visual crosshair (lines, markers, and axis labels) while any trading object or drawing is hovered, created, or dragged. A following Shift-click measure is the exception: it reads the pointer through the crosshair, so the crosshair stays visible even over other objects. The engine retains the crosshair position for snapping and host callbacks, while each host continues to show the object's pointer, click, grab, or drag cursor.
 

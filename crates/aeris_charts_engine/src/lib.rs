@@ -8,6 +8,7 @@
 mod alerts;
 mod axis_metrics;
 mod axis_primitives;
+mod chart_input;
 mod depth;
 mod domains;
 mod drawing_contract;
@@ -58,6 +59,10 @@ pub use aeris_charts_indicators::{PivotKind, VwapReset};
 pub use alerts::{
     AlertCondition, AlertCreateRequest, AlertFrequency, AlertId, AlertLine, AlertLineStatus,
     AlertPriceScale, AlertSnapshot, MAX_ALERT_LINES,
+};
+pub use chart_input::{
+    ChartContextMenu, ChartCursor, ChartInputEvent, ChartKey, ChartRegion, InteractionOptions,
+    PointerInput, PANE_SEPARATOR_HIT, TRADING_TOOLTIP_DWELL_MS,
 };
 pub use depth::{
     DepthBook, DepthBucket, DepthError, DepthEventCluster, DepthEventKind, DepthEventLayerOptions,
@@ -158,12 +163,11 @@ pub use indicators::{
     INDICATOR_SCHEMA_REVISION,
 };
 pub use interaction::{
-    pinch_zoom_scale, wheel_zoom_scale, CancelReason, ChartContext, FinancialDrag,
-    FinancialNavigation, GestureResolver, GestureState, GestureUpdate, GestureUpdateKind,
-    HitProfile, InputDevice, InputEvent, InputModifiers, InputTarget, PointerSample,
-    ScrollAnimation, WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample, KINETIC_DUMPING,
-    KINETIC_MAX_SPEED, KINETIC_MIN_MOVE, KINETIC_MIN_SPEED, MAX_ACTIVE_POINTERS,
-    PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
+    pinch_zoom_scale, wheel_zoom_scale, CancelReason, ChartContext, GestureResolver, GestureState,
+    GestureUpdate, GestureUpdateKind, HitProfile, InputDevice, InputEvent, InputModifiers,
+    InputTarget, PointerSample, ScrollAnimation, WheelBehavior, WheelDeltaMode, WheelIntent,
+    WheelSample, KINETIC_DUMPING, KINETIC_MAX_SPEED, KINETIC_MIN_MOVE, KINETIC_MIN_SPEED,
+    MAX_ACTIVE_POINTERS, PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
 };
 pub use native_primitives::{
     AccessibilityFocusOptions, AnchoredTextHorizontalAlign, AnchoredTextOptions,
@@ -1812,6 +1816,8 @@ pub struct ChartEngine {
     /// loops without making the host coordinator stateful inside the renderer.
     drawing_sync_source: String,
     drawing_sync_revision: u64,
+    /// Committed drawing-semantic revision (see `drawing_revision`). Runtime-only.
+    drawing_revision: u64,
     /// The drawing whose dedicated host editor currently owns text input (drawings.rs).
     /// Frame construction keeps committed glyphs for the transparent overlay-caret model and
     /// keeps an empty trend label's measured middle gap while its editor is open.
@@ -1840,7 +1846,11 @@ pub struct ChartEngine {
     /// Velocity-owned keyboard pan. This is separate from public `scroll_to_position(..., true)`:
     /// a held arrow receives bounded engine-timed velocity kicks with light drag; key-up stops it.
     keyboard_scroll_animation: Option<interaction::KeyboardKineticScroll>,
-    financial_drag: Option<FinancialDrag>,
+    /// Host-neutral pointer, wheel and keyboard routing (chart_input.rs). Runtime-only.
+    input: chart_input::InputController,
+    /// Area series composed with a Delta Tooltip into a brushable comparison: the tooltip owns the
+    /// range gesture and the engine restyles the area from its active range. At most one per series.
+    brushable_areas: Vec<native_primitives::BrushableArea>,
     /// In-flight eased scroll-to-position (engine interaction module); the host schedules the
     /// ticks, the engine owns the easing and applies each step.
     scroll_animation: Option<interaction::ScrollAnimation>,
@@ -1992,6 +2002,7 @@ impl ChartEngine {
             drawing_controller: DrawingController::default(),
             drawing_sync_source: String::new(),
             drawing_sync_revision: 0,
+            drawing_revision: 0,
             editing_drawing: None,
             drawing_text_edit: None,
             hovered_text: None,
@@ -2000,7 +2011,8 @@ impl ChartEngine {
             text_cap_center_fn: None,
             kinetic: None,
             keyboard_scroll_animation: None,
-            financial_drag: None,
+            input: chart_input::InputController::default(),
+            brushable_areas: Vec::new(),
             scroll_animation: None,
             price_formatter_fn: None,
             tick_mark_formatter_fn: None,

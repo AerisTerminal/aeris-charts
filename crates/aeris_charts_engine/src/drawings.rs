@@ -1521,6 +1521,14 @@ impl ChartEngine {
         }
         self.drawing_history.undo.push(command);
         self.drawing_history.redo.clear();
+        self.drawing_revision = self.drawing_revision.wrapping_add(1);
+    }
+
+    /// Monotonic revision of committed drawing semantics: every recorded create, delete, anchor,
+    /// style, lock, text, or clear operation and every undo/redo step advances it. Hover,
+    /// selection, previews, and in-flight drags do not. Hosts persist when it changes.
+    pub fn drawing_revision(&self) -> u64 {
+        self.drawing_revision
     }
 
     fn bump_drawing_sync_revision(&mut self) {
@@ -1636,6 +1644,7 @@ impl ChartEngine {
         self.drawing_controller.brush = None;
         self.apply_drawing_command(&command, true);
         self.bump_drawing_sync_revision();
+        self.drawing_revision = self.drawing_revision.wrapping_add(1);
         self.drawing_history.redo.push(command);
         true
     }
@@ -1650,6 +1659,7 @@ impl ChartEngine {
         self.drawing_controller.brush = None;
         self.apply_drawing_command(&command, false);
         self.bump_drawing_sync_revision();
+        self.drawing_revision = self.drawing_revision.wrapping_add(1);
         self.drawing_history.undo.push(command);
         true
     }
