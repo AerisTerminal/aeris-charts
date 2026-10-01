@@ -151,12 +151,15 @@ semantic follow states such as unpinned series colors and price-scale text. Wate
 visibility, scale modes/ranges/margins/layout constraints, viewport zoom/scroll, and indicator/data
 semantics survive the reset; only their engine-owned visual styling is restored.
 
-Default mouse-wheel behavior is informed by measurements from the pinned public reference fixture:
-a saturated vertical step uses a 1.0 zoom increment, smaller trackpad deltas stay proportional, and the logical point under
-the cursor remains anchored because `right_bar_stays_on_scroll` defaults to `false`. Vertical and
-horizontal deltas independently zoom and pan the time scale on the pane, time axis, or price axis;
-Ctrl and Shift do not change routing. `wheel_behavior: "pan"` and `"zoom"` are explicit Aeris
-extensions; explicit zoom retains price-axis wheel zoom and focused Ctrl zoom.
+Default mouse-wheel zoom follows measurements of TradingView: a saturated vertical step changes bar
+spacing by exactly 10% (smaller trackpad deltas stay proportional) and keeps the right edge pinned,
+because `right_bar_stays_on_scroll` defaults to `true`: the gap after the latest bar stays constant
+while history compresses or expands. Ctrl/Cmd + wheel, macOS trackpad pinch (delivered as Ctrl +
+wheel), and touch pinch zoom around the pointer instead. Setting `right_bar_stays_on_scroll: false`
+restores cursor-anchored ordinary zoom. Vertical and horizontal deltas independently zoom and pan
+the time scale on the pane, time axis, or price axis; Shift does not change routing.
+`wheel_behavior: "pan"` and `"zoom"` are explicit Aeris extensions; explicit zoom retains
+price-axis wheel zoom.
 
 The built-in series live-price line is engine-owned. `price_line_extent` defaults to `"partial"`
 (tracked bar/value to the pane's right edge); `"full"` preserves the conventional pane-wide line.

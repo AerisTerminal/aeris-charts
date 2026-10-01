@@ -4462,6 +4462,13 @@ impl AerisChart {
     pub fn zoom_focused(&mut self, x_css: f64, scale: f64) {
         self.inner.borrow_mut().zoom_focused(x_css, scale);
     }
+    /// Ordinary wheel zoom: the engine resolves the anchor (Ctrl/Cmd zooms around the pointer,
+    /// otherwise the time scale's right-edge pin policy applies).
+    pub fn wheel_zoom_time(&mut self, x_css: f64, scale: f64, control: bool, meta: bool) {
+        self.inner
+            .borrow_mut()
+            .wheel_zoom_time(x_css, scale, control, meta);
+    }
     pub fn scroll_start(&mut self, x_css: f64) {
         self.inner.borrow_mut().scroll_start(x_css);
     }

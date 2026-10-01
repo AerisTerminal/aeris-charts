@@ -496,10 +496,9 @@ export function install_gestures(chart: chart_impl): () => void {
           zoom,
         );
       } else {
-        // Auto mode is informed by the public reference's chart-level behavior: every surface zooms time,
-        // modifiers are ignored, and the engine clamps the pane-relative anchor into the plot.
-        if (cfg.wheel_behavior === "zoom" && e.ctrlKey) wasm.zoom_focused(point.x, zoom);
-        else wasm.zoom(point.x, zoom);
+        // Every chart surface zooms time. The engine owns the anchor: Ctrl/Cmd zooms around the
+        // pointer, otherwise the right edge stays pinned (measured TradingView behavior).
+        wasm.wheel_zoom_time(point.x, zoom, e.ctrlKey, e.metaKey);
       }
     }
     if (do_scroll) {
@@ -1127,8 +1126,9 @@ export function install_gestures(chart: chart_impl): () => void {
       if (e.cancelable && update.prevent_default) e.preventDefault();
       if (chart.gesture_config().pinch_zoom && update.scale_delta !== 0) {
         // The resolver reports the fixed starting centroid and cumulative-scale difference.
-        // Centroid drift never pans either scale.
-        wasm.zoom(update.x, wasm.pinch_zoom_scale(update.scale_delta));
+        // Centroid drift never pans either scale. Pinching is direct manipulation, so it stays
+        // anchored at the centroid even though wheel zoom pins the right edge.
+        wasm.zoom_focused(update.x, wasm.pinch_zoom_scale(update.scale_delta));
       }
       chart.repaint();
       return;

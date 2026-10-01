@@ -2180,6 +2180,18 @@ impl ChartInner {
         let x = x_css.max(1.0).min(self.time_scale.width());
         self.time_scale_zoom_focused(x, scale);
     }
+    pub fn wheel_zoom_time(&mut self, x_css: f64, scale: f64, control: bool, meta: bool) {
+        let x = x_css.max(1.0).min(self.time_scale.width());
+        self.wheel_zoom_time_scale(
+            x,
+            scale,
+            aeris_charts_engine::InputModifiers {
+                control,
+                meta,
+                ..Default::default()
+            },
+        );
+    }
     pub fn scroll_start(&mut self, x_css: f64) {
         self.time_scale_start_scroll(x_css);
     }

@@ -710,10 +710,8 @@ impl ChartEngine {
                 });
             if let Some(target) = price_target {
                 self.price_axis_wheel_zoom(pane, target, sample.y, scale);
-            } else if options.wheel_behavior == WheelBehavior::Zoom && sample.modifiers.control {
-                self.time_scale_zoom_focused(sample.x, scale);
             } else {
-                self.time_scale_zoom(sample.x, scale);
+                self.wheel_zoom_time_scale(sample.x, scale, sample.modifiers);
             }
         }
         if scroll {
@@ -723,6 +721,32 @@ impl ChartEngine {
         }
         self.input.frame_dirty = true;
         self.refresh_pointer_hover(sample.x, sample.y, sample.timestamp_ms);
+        self.refresh_input_cursor();
+        true
+    }
+
+    /// Wheel zoom of the time scale at pane x `x`. Ctrl/Cmd zooms around the pointer; otherwise the
+    /// time scale's right-bar policy decides the anchor (by default the right edge stays pinned, as
+    /// measured on TradingView). Every host's wheel path resolves the anchor here.
+    pub fn wheel_zoom_time_scale(&mut self, x: f64, scale: f64, modifiers: InputModifiers) {
+        if modifiers.control || modifiers.meta {
+            self.time_scale_zoom_focused(x, scale);
+        } else {
+            self.time_scale_zoom(x, scale);
+        }
+    }
+
+    /// A trackpad or touch pinch step (`scale_delta` is the ratio change since the previous step).
+    /// Pinching is direct manipulation, so it always zooms around the pinch point regardless of the
+    /// wheel's right-edge policy. Returns whether the chart consumed it.
+    pub fn input_pinch(&mut self, x: f64, y: f64, scale_delta: f64, timestamp_ms: f64) -> bool {
+        if !self.input.options.wheel_zoom || !scale_delta.is_finite() || scale_delta == 0.0 {
+            return false;
+        }
+        self.stop_input_motion();
+        self.time_scale_zoom_focused(x, pinch_zoom_scale(scale_delta));
+        self.input.frame_dirty = true;
+        self.refresh_pointer_hover(x, y, timestamp_ms);
         self.refresh_input_cursor();
         true
     }
@@ -1606,6 +1630,56 @@ mod tests {
             ..InteractionOptions::default()
         });
         assert!(!chart.input_wheel(wheel(300.0, 100.0, 1.0)));
+    }
+
+    #[test]
+    fn wheel_zoom_pins_the_right_edge_while_modifiers_and_pinch_zoom_at_the_pointer() {
+        let mut chart = chart();
+        let cursor = 300.0;
+        let wheel = |delta_y, modifiers| WheelSample {
+            x: cursor,
+            y: 100.0,
+            delta_y,
+            modifiers,
+            ..WheelSample::default()
+        };
+        // Plain wheel (measured TradingView behavior): exact 10% steps with the right offset
+        // in bars (the gap after the latest bar) unchanged, wherever the pointer is.
+        let spacing = chart.bar_spacing();
+        let offset = chart.time_scale.right_offset();
+        assert!(chart.input_wheel(wheel(-1.0, InputModifiers::default())));
+        assert!((chart.bar_spacing() - spacing * 0.9).abs() < 1e-9);
+        assert_eq!(chart.time_scale.right_offset(), offset);
+
+        // Ctrl (and macOS Cmd) wheel and pinch keep the point under the pointer fixed.
+        for modifiers in [
+            InputModifiers {
+                control: true,
+                ..InputModifiers::default()
+            },
+            InputModifiers {
+                meta: true,
+                ..InputModifiers::default()
+            },
+        ] {
+            let before = chart.time_scale.coordinate_to_float_index(cursor);
+            assert!(chart.input_wheel(wheel(1.0, modifiers)));
+            let after = chart.time_scale.coordinate_to_float_index(cursor);
+            assert!(
+                (before - after).abs() < 1e-6,
+                "{modifiers:?}: {before} -> {after}"
+            );
+        }
+        let before = chart.time_scale.coordinate_to_float_index(cursor);
+        assert!(chart.input_pinch(cursor, 100.0, 0.1, 0.0));
+        let after = chart.time_scale.coordinate_to_float_index(cursor);
+        assert!((before - after).abs() < 1e-6, "pinch: {before} -> {after}");
+
+        chart.set_interaction_options(InteractionOptions {
+            wheel_zoom: false,
+            ..InteractionOptions::default()
+        });
+        assert!(!chart.input_pinch(cursor, 100.0, 0.1, 0.0));
     }
 
     #[test]

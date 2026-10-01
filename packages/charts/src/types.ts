@@ -1213,8 +1213,10 @@ export interface time_scale_options {
   /** Keep the visible range constant across chart resizes (reference `lockVisibleTimeRangeOnResize`). */
   lock_visible_time_range_on_resize?: boolean;
   /**
-   * Keep the right-most bar pinned during ordinary time-scale zoom. Defaults to `false`, matching
-   * reference-informed cursor anchoring.
+   * Keep the right-most bar pinned during ordinary time-scale zoom. Defaults to `true`, matching
+   * measured TradingView wheel zoom: the gap after the latest bar stays constant while history
+   * compresses or expands. Ctrl/Cmd + wheel and pinch always zoom around the pointer. Set `false`
+   * for cursor-anchored ordinary zoom (the Lightweight Charts default).
    */
   right_bar_stays_on_scroll?: boolean;
   /**

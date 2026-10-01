@@ -126,8 +126,10 @@ export interface offscreen_wheel_event {
   delta_y: number;
   /** 0 = pixels, 1 = lines, 2 = pages (the WheelEvent values). */
   delta_mode?: 0 | 1 | 2;
+  /** Ctrl (or `meta_key`, macOS Cmd) zooms around the pointer instead of pinning the right edge. */
   ctrl_key?: boolean;
   shift_key?: boolean;
+  meta_key?: boolean;
 }
 
 export interface offscreen_key_event {
@@ -555,8 +557,7 @@ export class offscreen_chart {
         );
       } else {
         const zoom = this.wasm.wheel_zoom_scale(delta_y);
-        if (event.ctrl_key) this.wasm.zoom_focused(event.x - pane_left, zoom);
-        else this.wasm.zoom(event.x - pane_left, zoom);
+        this.wasm.wheel_zoom_time(event.x - pane_left, zoom, event.ctrl_key === true, event.meta_key === true);
       }
     }
     if ((intent & 1) !== 0 && pan_delta !== 0) {

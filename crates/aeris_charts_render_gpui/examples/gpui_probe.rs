@@ -1513,14 +1513,10 @@ impl Probe {
     }
 
     fn on_pinch(&mut self, event: &PinchEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self.engine.interaction_options().wheel_zoom {
-            return;
+        if self.input.pinch(&mut self.engine, event) {
+            cx.stop_propagation();
+            self.after_input(cx);
         }
-        let (x, _) = self.input.pane_point(&self.engine, event.position);
-        let scale = aeris_charts_engine::pinch_zoom_scale(f64::from(event.delta));
-        self.engine.time_scale_zoom(x, scale);
-        cx.stop_propagation();
-        self.after_input(cx);
     }
 
     fn on_modifiers_changed(
@@ -1658,7 +1654,7 @@ impl Render for Probe {
                             {
                                 return;
                             }
-                            probe.input.set_origin(bounds.origin);
+                            probe.input.set_canvas_bounds(bounds);
                             probe.dirty |= probe.input.prepare_frame(&mut probe.engine);
                             probe.rebuild(w, h, scale_factor, window);
                         });

@@ -13,8 +13,8 @@ use aeris_charts_engine::{
     WheelDeltaMode, WheelSample,
 };
 use gpui::{
-    px, App, ClipboardItem, CursorStyle, KeyDownEvent, KeyUpEvent, Modifiers,
-    ModifiersChangedEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    point, px, App, Bounds, ClipboardItem, CursorStyle, KeyDownEvent, KeyUpEvent, Modifiers,
+    ModifiersChangedEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PinchEvent, Pixels, Point,
     ScrollDelta, ScrollWheelEvent, Window,
 };
 
@@ -23,27 +23,27 @@ use crate::backend::{text_cap_centerer, text_measurer};
 /// Browser-equivalent pixels per wheel line (the reference `DOM_DELTA_LINE` adjustment).
 pub const WHEEL_LINE_HEIGHT: f32 = 32.0;
 
-/// Per-chart GPUI input state: the chart's window origin and a monotonic clock. Everything else
-/// lives in the engine.
+/// Per-chart GPUI input state: the chart canvas's top-left window position and a monotonic
+/// clock. Everything else lives in the engine.
 #[derive(Clone, Copy, Debug)]
 pub struct GpuiChartInput {
-    origin: Point<Pixels>,
+    canvas_corner: Point<Pixels>,
     epoch: Instant,
 }
 
 impl Default for GpuiChartInput {
     fn default() -> Self {
         Self {
-            origin: Point::default(),
+            canvas_corner: Point::default(),
             epoch: Instant::now(),
         }
     }
 }
 
 impl GpuiChartInput {
-    /// Record the chart canvas origin from its prepaint bounds.
-    pub fn set_origin(&mut self, origin: Point<Pixels>) {
-        self.origin = origin;
+    /// Record the chart canvas position from its prepaint bounds.
+    pub fn set_canvas_bounds(&mut self, bounds: Bounds<Pixels>) {
+        self.canvas_corner = point(bounds.origin.x, bounds.origin.y);
     }
 
     /// Milliseconds on the clock every input timestamp and [`ChartEngine::input_tick`] share.
@@ -68,8 +68,8 @@ impl GpuiChartInput {
 
     /// A window position in the engine's pane space.
     pub fn pane_point(&self, engine: &ChartEngine, position: Point<Pixels>) -> (f64, f64) {
-        let x: f32 = (position.x - self.origin.x).into();
-        let y: f32 = (position.y - self.origin.y).into();
+        let x: f32 = (position.x - self.canvas_corner.x).into();
+        let y: f32 = (position.y - self.canvas_corner.y).into();
         (f64::from(x) - engine.pane_left, f64::from(y))
     }
 
@@ -132,6 +132,12 @@ impl GpuiChartInput {
             modifiers: input_modifiers(&event.modifiers),
             timestamp_ms: self.now_ms(),
         })
+    }
+
+    /// Returns whether the chart consumed the trackpad pinch.
+    pub fn pinch(&self, engine: &mut ChartEngine, event: &PinchEvent) -> bool {
+        let (x, y) = self.pane_point(engine, event.position);
+        engine.input_pinch(x, y, f64::from(event.delta), self.now_ms())
     }
 
     pub fn modifiers_changed(&self, engine: &mut ChartEngine, event: &ModifiersChangedEvent) {
