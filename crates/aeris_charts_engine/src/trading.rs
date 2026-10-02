@@ -3422,9 +3422,10 @@ mod tests {
             p,
             Prim::Text { text, .. } if text == "Buy 4 @ 100.75 avg · 2 fills"
         )));
-        // Several fills draw one stacked mark: a shaft plus four chevrons, under the bar's low.
+        // Two fills draw one stacked mark: one shaft plus one chevron per fill, under the low.
         let mark = &chart.trading_execution_layout(0).marks[0];
-        assert!(mark.height > mark.size * 2.0);
+        assert_eq!(mark.chevrons, 2);
+        assert!((mark.height - mark.size * 94.0 / 70.0).abs() < 1e-9);
         assert!(mark.y - mark.height / 2.0 > price_y(chart, 99.0));
         let execution_buy = chart.trading_style().execution_buy;
         assert_eq!(
@@ -3432,8 +3433,51 @@ mod tests {
                 .iter()
                 .filter(|p| matches!(p, Prim::Polyline { color, .. } if *color == execution_buy))
                 .count(),
-            5
+            3
         );
+    }
+
+    #[test]
+    fn stacked_execution_marks_draw_one_single_sized_chevron_per_fill_with_one_tail() {
+        let single = chart_with_fills(vec![fill("a", OrderSide::Buy, 20, 100.0, 1.0)]);
+        let single_mark = &single.trading_execution_layout(0).marks[0];
+        let strokes = |chart: &ChartEngine| {
+            let mut regions = Vec::new();
+            let mut lines = Vec::new();
+            chart.build_trading_frame_for_test(0, 1.0, 1.0, &mut regions, &mut lines);
+            let color = chart.trading_style().execution_buy;
+            lines
+                .into_iter()
+                .filter_map(|p| match p {
+                    Prim::Polyline {
+                        color: c,
+                        point_count,
+                        width,
+                        ..
+                    } if c == color => Some((point_count, width)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let single_strokes = strokes(&single);
+        for count in 2..=7 {
+            let fills = (0..count)
+                .map(|i| fill(&format!("f{i}"), OrderSide::Buy, 20, 100.0, 1.0))
+                .collect();
+            let chart = chart_with_fills(fills);
+            let mark = &chart.trading_execution_layout(0).marks[0];
+            let chevrons = count.min(5);
+            assert_eq!(mark.chevrons, chevrons);
+            // Same arrow size as one fill; only the stack height grows, one pitch per chevron.
+            assert_eq!(mark.size, single_mark.size);
+            let expected = mark.size * (70.0 + 24.0 * (chevrons - 1) as f64) / 70.0;
+            assert!((mark.height - expected).abs() < 1e-9);
+            let strokes = strokes(&chart);
+            // Exactly one two-point shaft; every chevron is the single arrow's three-point stroke.
+            assert_eq!(strokes.iter().filter(|(n, _)| *n == 2).count(), 1);
+            assert_eq!(strokes.iter().filter(|(n, _)| *n == 3).count(), chevrons);
+            assert!(strokes.iter().all(|(_, w)| *w == single_strokes[0].1));
+        }
     }
 
     #[test]

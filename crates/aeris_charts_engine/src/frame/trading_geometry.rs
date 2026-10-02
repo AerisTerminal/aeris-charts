@@ -14,8 +14,12 @@ struct TradingChipLayout {
     vpr: f64,
 }
 
-/// Design-unit height of the stacked multi-fill mark (the single arrow is 70 units tall).
-const STACKED_EXECUTION_HEIGHT: f64 = 152.0;
+/// Design-unit envelope of one execution arrow (`size` CSS px is 70 units).
+const EXECUTION_ARROW_UNITS: f64 = 70.0;
+/// Design-unit pitch between the chevrons of a multi-fill mark.
+const EXECUTION_CHEVRON_PITCH: f64 = 24.0;
+/// Most chevrons one mark draws, so a busy bar cannot grow its mark without limit.
+const MAX_EXECUTION_CHEVRONS: usize = 5;
 
 /// One execution arrow: every visible fill of one side on one bar.
 pub(crate) struct TradingExecutionMark {
@@ -27,8 +31,10 @@ pub(crate) struct TradingExecutionMark {
     pub y: f64,
     /// Arrow width envelope in CSS px; one design unit is `size / 70`.
     pub size: f64,
-    /// Vertical extent in CSS px: `size` for one fill, taller for the stacked-chevron mark.
+    /// Vertical extent in CSS px: `size` for one chevron, one pitch taller per extra chevron.
     pub height: f64,
+    /// Chevrons drawn: one per fill up to [`MAX_EXECUTION_CHEVRONS`]; 1 for non-arrow shapes.
+    pub chevrons: usize,
 }
 
 #[derive(Default)]
@@ -377,15 +383,17 @@ impl ChartEngine {
             } else {
                 1.0
             };
-            let size = envelope.clamp(16.0, 22.0) * scale;
-            let stacked = fills.len() > 1
-                && executions[fills[fills.len() - 1]].marker_shape
-                    == crate::ExecutionMarkerShape::Arrow;
-            let height = if stacked {
-                size * STACKED_EXECUTION_HEIGHT / 70.0
+            let size = envelope.clamp(13.0, 18.0) * scale;
+            let chevrons = if executions[fills[fills.len() - 1]].marker_shape
+                == crate::ExecutionMarkerShape::Arrow
+            {
+                fills.len().min(MAX_EXECUTION_CHEVRONS)
             } else {
-                size
+                1
             };
+            let height = size
+                * (EXECUTION_ARROW_UNITS + EXECUTION_CHEVRON_PITCH * (chevrons - 1) as f64)
+                / EXECUTION_ARROW_UNITS;
             let target = PriceScaleTarget::from(executions[fills[0]].price_scale);
             let extent = self
                 .trading_bar_extent(pane_index, target, index, from, size / 2.0)
@@ -420,6 +428,7 @@ impl ChartEngine {
                     y,
                     size,
                     height,
+                    chevrons,
                 });
             }
             start = end;
@@ -1283,9 +1292,9 @@ impl ChartEngine {
     /// One execution mark centered on `(x_device, mark.y)`, drawn as open strokes with
     /// `Polyline`, the stroke primitive every executor antialiases identically. In design units
     /// (`size / 70`): a single fill is a 60-unit shaft with one chevron (wings 22 out and back
-    /// from the tip, stroke 10); several fills on one side of one bar become a 72-unit shaft
-    /// leading into four stacked chevrons 24 apart (wings 28 out and back, stroke 11), so a busy
-    /// bar reads as one mark rather than a pile of arrows.
+    /// from the tip, stroke 10). Each further fill on one side of one bar stacks one identical,
+    /// tailless chevron 24 units nearer the bar (up to [`MAX_EXECUTION_CHEVRONS`]), so the mark
+    /// counts the fills while only the outermost chevron carries the shaft.
     fn push_trading_execution_arrow(
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
@@ -1327,24 +1336,18 @@ impl ChartEngine {
                         color,
                     });
                 };
-                if mark.height > mark.size {
-                    // Centered on the 152-unit stacked extent: shaft from -76, tips at -4 + 24k.
-                    stroke(&[point(0.0, -76.0), point(0.0, -4.0)], 11.0);
-                    for k in 0..4 {
-                        let tip = -4.0 + 24.0 * f64::from(k);
-                        stroke(
-                            &[
-                                point(-28.0, tip - 28.0),
-                                point(0.0, tip),
-                                point(28.0, tip - 28.0),
-                            ],
-                            11.0,
-                        );
-                    }
-                } else {
-                    stroke(&[point(0.0, -30.0), point(0.0, 30.0)], 10.0);
+                // The outermost chevron (the newest fill) keeps the single arrow's shaft; every
+                // earlier fill adds one tailless chevron of the same size, one pitch nearer the bar.
+                let outer_tip = 30.0 - EXECUTION_CHEVRON_PITCH * (mark.chevrons - 1) as f64 / 2.0;
+                stroke(&[point(0.0, outer_tip - 60.0), point(0.0, outer_tip)], 10.0);
+                for k in 0..mark.chevrons {
+                    let tip = outer_tip + EXECUTION_CHEVRON_PITCH * k as f64;
                     stroke(
-                        &[point(-22.0, 8.0), point(0.0, 30.0), point(22.0, 8.0)],
+                        &[
+                            point(-22.0, tip - 22.0),
+                            point(0.0, tip),
+                            point(22.0, tip - 22.0),
+                        ],
                         10.0,
                     );
                 }
