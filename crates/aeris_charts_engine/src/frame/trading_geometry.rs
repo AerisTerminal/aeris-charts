@@ -213,12 +213,14 @@ impl ChartEngine {
         self.runtime_price_coordinate(pane_index, target, price)
     }
 
-    /// Vertical extent `(top, bottom)` in CSS px of what the pane paints within `half_width` of
-    /// bar `index` for `target`: the wick for OHLC series (Heikin-Ashi when shown), the column
-    /// top for histograms, and for line, area, and baseline series the stroked line itself across
-    /// the mark's width (the slope toward each neighbor, or a stepped line's riser) padded by half
-    /// the line width. Execution marks sit outside this extent, so they clear the rendered shape
-    /// on every series type instead of touching a sloped line.
+    /// Vertical extent `(top, bottom)` in CSS px of what the primary series of `target` paints
+    /// within `half_width` of bar `index`: the wick for OHLC series (Heikin-Ashi when shown), the
+    /// column top for histograms, and for line, area, and baseline series the stroked line itself
+    /// across the mark's width (the slope toward each neighbor, or a stepped line's riser) padded
+    /// by half the line width. Execution marks sit outside this extent, so they clear the rendered
+    /// shape on every series type instead of touching a sloped line. Only the primary series
+    /// anchors them: fills belong to the traded instrument's bars, so overlays on the same scale
+    /// (moving averages, host studies, compare lines) must not push them away from their bar.
     fn trading_bar_extent(
         &self,
         pane_index: usize,
@@ -232,6 +234,20 @@ impl ChartEngine {
         if scale.is_empty() {
             return None;
         }
+        let anchor = self
+            .primary_series_on_price_scale(pane_index, target)?
+            .series_id;
+        let series = self.series.iter().find(|series| series.id == anchor)?;
+        let render_end = self.series_render_end(series.id, i64::MAX);
+        if !series.visible || self.indicator_binding_id(series.id).is_some() || index > render_end {
+            return None;
+        }
+        let plot = self.data.plot(series.id);
+        let row = plot.search(index, MismatchDirection::None)?;
+        if plot.is_whitespace_row(row) {
+            return None;
+        }
+        let base_value = self.series_base_value(series.id, from)?;
         let bar_spacing = self.time_scale.bar_spacing();
         let mut extent: Option<(f64, f64)> = None;
         let mut include = |y: f64, pad: f64| {
@@ -241,91 +257,69 @@ impl ChartEngine {
                 }));
             }
         };
-        for series in &self.series {
-            let render_end = self.series_render_end(series.id, i64::MAX);
-            if !series.visible
-                || series.removed
-                || series.pane_index != pane_index
-                || series_scale_target(series) != target
-                || self.indicator_binding_id(series.id).is_some()
-                || index > render_end
-            {
-                continue;
+        let y_of = |price: f64| {
+            if price.is_finite() {
+                scale.price_to_coordinate(price, base_value)
+            } else {
+                f64::NAN
             }
-            let plot = self.data.plot(series.id);
-            let Some(row) = plot.search(index, MismatchDirection::None) else {
-                continue;
-            };
-            if plot.is_whitespace_row(row) {
-                continue;
+        };
+        match series.kind {
+            SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint => {
+                let [high, low] = self
+                    .heikin_ashi_row(series.id, row)
+                    .map(|values| [values[1], values[2]])
+                    .unwrap_or_else(|| {
+                        [
+                            plot.value_at(row, PlotValueIndex::High),
+                            plot.value_at(row, PlotValueIndex::Low),
+                        ]
+                    });
+                include(y_of(high), 0.0);
+                include(y_of(low), 0.0);
             }
-            let Some(base_value) = self.series_base_value(series.id, from) else {
-                continue;
-            };
-            let y_of = |price: f64| {
-                if price.is_finite() {
-                    scale.price_to_coordinate(price, base_value)
-                } else {
-                    f64::NAN
-                }
-            };
-            match series.kind {
-                SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint => {
-                    let [high, low] = self
-                        .heikin_ashi_row(series.id, row)
-                        .map(|values| [values[1], values[2]])
-                        .unwrap_or_else(|| {
-                            [
-                                plot.value_at(row, PlotValueIndex::High),
-                                plot.value_at(row, PlotValueIndex::Low),
-                            ]
-                        });
-                    include(y_of(high), 0.0);
-                    include(y_of(low), 0.0);
-                }
-                SeriesKind::Histogram => {
-                    include(y_of(plot.value_at(row, PlotValueIndex::Close)), 0.0);
-                }
-                SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline => {
-                    // Baseline quadrants may override the width; clear the widest stroke.
-                    let width = [series.top_line_width, series.bottom_line_width]
-                        .into_iter()
-                        .flatten()
-                        .fold(series.line_width.unwrap_or(LINE_WIDTH), f64::max);
-                    let pad = width / 2.0;
-                    let y = y_of(plot.value_at(row, PlotValueIndex::Close));
-                    include(y, pad);
-                    for step in [-1_isize, 1] {
-                        let Some(neighbor) = row.checked_add_signed(step) else {
-                            continue;
-                        };
-                        let Some(neighbor_index) = plot.index_at(neighbor) else {
-                            continue;
-                        };
-                        if neighbor_index > render_end || plot.is_whitespace_row(neighbor) {
-                            continue;
-                        }
-                        let neighbor_y = y_of(plot.value_at(neighbor, PlotValueIndex::Close));
-                        let gap = (neighbor_index - index).abs() as f64 * bar_spacing;
-                        match series.line_type {
-                            // A stepped line runs flat at its own value, then turns at the next
-                            // bar: the previous bar's riser stands exactly on this bar's x.
-                            LineType::WithSteps => {
-                                if step < 0 {
-                                    include(neighbor_y, pad);
-                                }
+            SeriesKind::Histogram => {
+                include(y_of(plot.value_at(row, PlotValueIndex::Close)), 0.0);
+            }
+            SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline => {
+                // Baseline quadrants may override the width; clear the widest stroke.
+                let width = [series.top_line_width, series.bottom_line_width]
+                    .into_iter()
+                    .flatten()
+                    .fold(series.line_width.unwrap_or(LINE_WIDTH), f64::max);
+                let pad = width / 2.0;
+                let y = y_of(plot.value_at(row, PlotValueIndex::Close));
+                include(y, pad);
+                for step in [-1_isize, 1] {
+                    let Some(neighbor) = row.checked_add_signed(step) else {
+                        continue;
+                    };
+                    let Some(neighbor_index) = plot.index_at(neighbor) else {
+                        continue;
+                    };
+                    if neighbor_index > render_end || plot.is_whitespace_row(neighbor) {
+                        continue;
+                    }
+                    let neighbor_y = y_of(plot.value_at(neighbor, PlotValueIndex::Close));
+                    let gap = (neighbor_index - index).abs() as f64 * bar_spacing;
+                    match series.line_type {
+                        // A stepped line runs flat at its own value, then turns at the next
+                        // bar: the previous bar's riser stands exactly on this bar's x.
+                        LineType::WithSteps => {
+                            if step < 0 {
+                                include(neighbor_y, pad);
                             }
-                            LineType::Simple | LineType::Curved => {
-                                if gap > 0.0 {
-                                    let t = (half_width / gap).min(1.0);
-                                    include(y + (neighbor_y - y) * t, pad);
-                                }
+                        }
+                        LineType::Simple | LineType::Curved => {
+                            if gap > 0.0 {
+                                let t = (half_width / gap).min(1.0);
+                                include(y + (neighbor_y - y) * t, pad);
                             }
                         }
                     }
                 }
-                SeriesKind::Custom | SeriesKind::Feature => {}
             }
+            SeriesKind::Custom | SeriesKind::Feature => {}
         }
         extent
     }

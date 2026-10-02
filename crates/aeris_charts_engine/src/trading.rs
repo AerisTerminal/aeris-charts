@@ -3362,6 +3362,56 @@ mod tests {
     }
 
     #[test]
+    fn execution_arrows_anchor_to_the_primary_bar_not_overlays_on_its_scale() {
+        // Bar 1 paints high 103 / low 99. A host overlay on the same scale (an EMA ribbon output
+        // or a compare line) runs far above and below it; the arrows must still hug the candle.
+        let executions = vec![
+            fill("buy", OrderSide::Buy, 20, 100.0, 1.0),
+            fill("sell", OrderSide::Sell, 20, 102.5, 1.0),
+        ];
+        let expected = chart_with_fills(executions.clone())
+            .trading_execution_layout(0)
+            .marks;
+        let mut chart = chart_with_market();
+        for closes in [[110.0, 111.0, 112.0], [90.0, 89.0, 88.0]] {
+            let overlay = chart.add_series(crate::SeriesKind::Line);
+            chart
+                .set_series_data(
+                    overlay,
+                    &[10.0, 20.0, 30.0],
+                    &closes,
+                    &closes,
+                    &closes,
+                    &closes,
+                )
+                .unwrap();
+        }
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                executions,
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        chart.build_frame();
+        let marks = chart.trading_execution_layout(0).marks;
+        assert_eq!(marks.len(), expected.len());
+        for (mark, expected) in marks.iter().zip(&expected) {
+            assert_eq!(mark.side, expected.side);
+            // The overlays widen the autoscaled range, so compare against the candle itself.
+            match mark.side {
+                OrderSide::Buy => {
+                    let gap = mark.y - mark.height / 2.0 - price_y(&chart, 99.0);
+                    assert!(gap > 0.0 && gap < mark.size, "buy gap {gap}");
+                }
+                OrderSide::Sell => {
+                    let gap = price_y(&chart, 103.0) - (mark.y + mark.height / 2.0);
+                    assert!(gap > 0.0 && gap < mark.size, "sell gap {gap}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn executions_land_on_the_bar_that_contains_their_time() {
         // Bars open at 10, 20, 30. A fill at 29 belongs to the bar opened at 20, never the next.
         let chart = chart_with_fills(vec![fill("f", OrderSide::Buy, 29, 100.0, 1.0)]);
