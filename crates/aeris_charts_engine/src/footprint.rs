@@ -1504,6 +1504,7 @@ impl ChartEngine {
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?
             .set_replay_clock_micros(clock_micros)?;
         if stats.previous_clock_micros != stats.clock_micros {
+            self.invalidate_profile_drawings_using_stream(stream_id);
             self.refresh_trade_dependents(stream_id)?;
             self.refresh_footprint_series_from_stream(stream_id, None)?;
         }
@@ -1584,15 +1585,17 @@ impl ChartEngine {
         if !self.trade_streams.contains_key(&stream_id) {
             return Err(FootprintError::UnknownTradeStream(stream_id));
         }
-        if self.series.iter().any(|series| {
-            series
-                .footprint
-                .as_ref()
-                .is_some_and(|state| state.trade_stream_id == stream_id && !series.removed)
-        }) || self
-            .trade_bar_dependents
-            .get(&stream_id)
-            .is_some_and(|dependents| !dependents.is_empty())
+        if self.profile_drawings_use_stream(stream_id)
+            || self.series.iter().any(|series| {
+                series
+                    .footprint
+                    .as_ref()
+                    .is_some_and(|state| state.trade_stream_id == stream_id && !series.removed)
+            })
+            || self
+                .trade_bar_dependents
+                .get(&stream_id)
+                .is_some_and(|dependents| !dependents.is_empty())
             || self
                 .trade_dependents
                 .get(&stream_id)
@@ -2119,6 +2122,7 @@ impl ChartEngine {
             .clone();
         next.set_trades(trades)?;
         self.trade_streams.insert(stream_id, next);
+        self.invalidate_profile_drawings_using_stream(stream_id);
         self.refresh_trade_dependents(stream_id)?;
         self.refresh_footprint_series_from_stream(stream_id, None)
     }
@@ -2190,6 +2194,7 @@ impl ChartEngine {
             if !batch_changes_visible_state {
                 return Ok(FootprintUpdateKind::Historical);
             }
+            self.invalidate_profile_drawings_using_stream(stream_id);
             self.refresh_trade_dependents(stream_id)?;
             self.refresh_footprint_series_from_stream(stream_id, None)?;
             return Ok(FootprintUpdateKind::Historical);
@@ -2207,6 +2212,7 @@ impl ChartEngine {
         if !batch_changes_visible_state {
             return Ok(result);
         }
+        self.invalidate_profile_drawings_using_stream(stream_id);
         let from = previous_bar_count.saturating_sub(1);
         self.refresh_trade_dependents_from(stream_id, Some(from))?;
         self.refresh_footprint_series_from_stream(stream_id, Some(from))?;

@@ -40,7 +40,10 @@ import type {
   price_scale_info, price_scale_options, ring_source_layout,
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
-  replay_clock_stats, replay_seek_stats, synthetic_bar_options, trade_stream_stats,
+  replay_clock_stats, replay_seek_stats, resample_boundary, resample_options, resampled_bar, synthetic_bar_options, trade_stream_stats,
+  profile_source, profile_request, profile_snapshot, naked_profile_level, tpo_request, tpo_snapshot, tpo_presentation_options,
+  periodic_profile_presentation_request, periodic_profile_presentation_options,
+  anchored_vwap_point, profile_drawing_options, profile_drawing_snapshot,
   time_and_sales_options, time_and_sales_row, time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_execution, trading_hit,
   chart_sync_event, crosshair_sync_position,
   trading_intent, trading_intent_handler, trading_position, trading_preview, trading_snapshot,
@@ -5015,6 +5018,126 @@ export class chart_impl implements chart_api {
     // gets real bounds on this frame instead of waiting for the next incidental repaint.
     this.repaint();
     return series;
+  }
+
+  configure_resampled_series(
+    source: series_api,
+    target: series_api,
+    options: resample_options,
+    volume_source?: series_api | null,
+    volume_target?: series_api | null,
+  ): void {
+    const all = [source, target, volume_source, volume_target].filter((series): series is series_api => series != null);
+    if (all.some((series) => this.series_by_id.get(series.id) !== series)) {
+      throw new AerisChartsError("invalid_handle", "resampling requires live series from this chart");
+    }
+    if (!this.wasm.configure_resampled_series_json(
+      source.id,
+      volume_source?.id ?? -1,
+      target.id,
+      volume_target?.id ?? -1,
+      JSON.stringify(options),
+    )) {
+      throw new AerisChartsError("invalid_options", "invalid resampling sources, targets, or UTC boundaries");
+    }
+    this.repaint();
+  }
+
+  resampled_bars(target: series_api): readonly resampled_bar[] | null {
+    if (this.series_by_id.get(target.id) !== target) {
+      throw new AerisChartsError("invalid_handle", "resampling target must be a live series from this chart");
+    }
+    return JSON.parse(this.wasm.resampled_bars_json(target.id)) as resampled_bar[] | null;
+  }
+
+  volume_profile_snapshot(request: profile_request): profile_snapshot | null {
+    return JSON.parse(this.wasm.volume_profile_snapshot_json(JSON.stringify(request))) as profile_snapshot | null;
+  }
+
+  periodic_volume_profiles(
+    source: profile_source,
+    boundaries: readonly resample_boundary[],
+    tick_size: number,
+    row_count: number,
+    value_area_percent: number,
+  ): readonly profile_snapshot[] | null {
+    return JSON.parse(this.wasm.periodic_volume_profiles_json(
+      JSON.stringify(source), JSON.stringify(boundaries), tick_size, row_count, value_area_percent,
+    )) as profile_snapshot[] | null;
+  }
+
+  periodic_naked_profile_levels(
+    source: profile_source,
+    boundaries: readonly resample_boundary[],
+    tick_size: number,
+    row_count: number,
+    value_area_percent: number,
+  ): readonly naked_profile_level[] | null {
+    return JSON.parse(this.wasm.periodic_naked_profile_levels_json(
+      JSON.stringify(source), JSON.stringify(boundaries), tick_size, row_count, value_area_percent,
+    )) as naked_profile_level[] | null;
+  }
+
+  tpo_profiles(request: tpo_request): readonly tpo_snapshot[] | null {
+    return JSON.parse(this.wasm.tpo_profiles_json(JSON.stringify(request))) as tpo_snapshot[] | null;
+  }
+
+  add_tpo_presentation(request: tpo_request, options: Partial<tpo_presentation_options> = {}): number {
+    if (!this.series_by_id.has(request.priceSeries)) {
+      throw new AerisChartsError("invalid_handle", "TPO presentation requires a live source series from this chart");
+    }
+    const id = this.wasm.add_tpo_presentation(JSON.stringify(request), JSON.stringify(options));
+    if (id === 0) throw new AerisChartsError("invalid_options", "invalid TPO boundaries, options, or presentation limit");
+    this.repaint();
+    return id;
+  }
+
+  remove_tpo_presentation(id: number): boolean {
+    const removed = this.wasm.remove_native_primitive(id);
+    if (removed) this.repaint();
+    return removed;
+  }
+
+  add_periodic_profile_presentation(
+    anchor: series_api,
+    request: periodic_profile_presentation_request,
+    options: Partial<periodic_profile_presentation_options> = {},
+  ): number {
+    if (this.series_by_id.get(anchor.id) !== anchor) {
+      throw new AerisChartsError("invalid_handle", "periodic profile requires a live anchor series from this chart");
+    }
+    const id = this.wasm.add_periodic_profile_presentation(anchor.id, JSON.stringify(request), JSON.stringify(options));
+    if (id === 0) throw new AerisChartsError("invalid_options", "invalid periodic profile source, boundaries, options, or presentation limit");
+    this.repaint();
+    return id;
+  }
+
+  remove_periodic_profile_presentation(id: number): boolean {
+    const removed = this.wasm.remove_native_primitive(id);
+    if (removed) this.repaint();
+    return removed;
+  }
+
+  anchored_vwap(
+    source: profile_source,
+    start_timestamp_micros: number,
+    end_timestamp_micros: number,
+    band_multiplier: number,
+  ): readonly anchored_vwap_point[] | null {
+    return JSON.parse(this.wasm.anchored_vwap_json(
+      JSON.stringify(source), start_timestamp_micros, end_timestamp_micros, band_multiplier,
+    )) as anchored_vwap_point[] | null;
+  }
+
+  configure_profile_drawing(drawing: drawing_api, options: profile_drawing_options): void {
+    if (!this.wasm.configure_profile_drawing_json(drawing.id, JSON.stringify(options))) {
+      throw new AerisChartsError("invalid_options", "invalid profile drawing or source");
+    }
+    this.repaint();
+  }
+
+  profile_drawing_snapshot(drawing: drawing_api): profile_drawing_snapshot | null {
+    return JSON.parse(this.wasm.profile_drawing_snapshot_json(drawing.id)) as profile_drawing_snapshot | null;
   }
 
   add_sma(source: series_api, period: number, options?: Partial<series_options>): series_api {

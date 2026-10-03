@@ -771,12 +771,12 @@ struct RotatedTextSprite {
     /// Sprite viewport size, including the ink margin on every side.
     width: f32,
     height: f32,
-    /// The SVG `<text>` origin (left edge, baseline) inside the sprite.
+    /// The SVG `<text>` anchor (left edge, baseline) inside the sprite.
     text_x: f32,
     text_y: f32,
 }
 
-/// The sprite reuses the plain-text paint offset, so at zero degrees its glyph origin is the
+/// The sprite reuses the plain-text paint offset, so at zero degrees its glyph anchor is the
 /// one [`paint_text`] uses for the same run and metrics.
 fn rotated_text_sprite(
     run: &TextRun,

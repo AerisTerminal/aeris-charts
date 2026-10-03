@@ -43,8 +43,8 @@
     },
     {
       "path": "offscreen.d.ts",
-      "bytes": 7390,
-      "sha256": "7b4a4d3a031bd9abe18bfac83fe9bcb1cdb19bd2c482f53b4337dcfb38c6db1f"
+      "bytes": 7597,
+      "sha256": "98a75718bc186231708804b53888ca4ff257090675a1a819daa0262f24f6700a"
     },
     {
       "path": "primitive_features.d.ts",
@@ -68,13 +68,13 @@
     },
     {
       "path": "theme.d.ts",
-      "bytes": 2000,
-      "sha256": "84c8abe9759b4d949ad18f47e6f17985d0ee2fa594ca45cf7a213fb2d927668f"
+      "bytes": 2013,
+      "sha256": "35d72d5143b6fd209ffa070ed80705169f03066618fd9ad018719d8358880ae6"
     },
     {
       "path": "types.d.ts",
-      "bytes": 157369,
-      "sha256": "e65b1ff038fb3bd222420f5714a548b7a7941c9429f004c6007f72b5946ce3b1"
+      "bytes": 163555,
+      "sha256": "812024ad697d9ed8060972e03a69e99b5d96f5613d7c86d9340a371076804567"
     }
   ]
 }

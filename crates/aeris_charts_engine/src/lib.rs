@@ -190,9 +190,13 @@ pub use persistence::{
 };
 pub use profiles::{
     AnchoredVwapPoint, DevelopingValueArea, NakedProfileLevel, NakedProfileLevelKind,
+    PeriodicProfilePresentationOptions, PeriodicProfilePresentationRequest, ProfileDisplayMode,
     ProfileDrawingOptions, ProfileDrawingSnapshot, ProfileError, ProfileRequest,
-    ProfileRowSnapshot, ProfileSnapshot, ProfileSource, TpoRequest, TpoRowSnapshot, TpoSnapshot,
-    MAX_PROFILE_DEVELOPING_POINTS, MAX_PROFILE_PERIODS, MAX_PROFILE_ROWS, MAX_TPO_PERIODS,
+    ProfileRowSnapshot, ProfileSnapshot, ProfileSource, TpoCellMode, TpoPresentationOptions,
+    TpoRequest, TpoRowSnapshot, TpoSnapshot, MAX_PERIODIC_PROFILE_PRESENTATIONS,
+    MAX_PROFILE_DEVELOPING_POINTS, MAX_PROFILE_PERIODS, MAX_PROFILE_ROWS,
+    MAX_PROFILE_TOTAL_DEVELOPING_POINTS, MAX_PROFILE_TOTAL_ROWS, MAX_TPO_PERIODS,
+    MAX_TPO_PRESENTATIONS, MAX_TPO_TOTAL_CELLS, MAX_TPO_TOTAL_ROWS,
 };
 pub use resampling::{
     ResampleBoundary, ResampleError, ResampleOptions, ResampledBar, MAX_RESAMPLED_SERIES,
@@ -2717,6 +2721,7 @@ impl ChartEngine {
             let rid = *rid;
             self.synthetic_series.remove(&rid);
             self.drop_volume_profiles_using(rid);
+            self.drop_periodic_profiles_using(rid);
             if let Some(entry) = self.series.iter_mut().find(|s| s.id == rid) {
                 entry.removed = true;
                 entry.visible = false;

@@ -853,7 +853,7 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
     ) {
-        let Ok(snapshot) = self.profile_drawing_snapshot(drawing.id) else {
+        let Ok(snapshot) = self.profile_drawing_snapshot_for_frame(drawing.id) else {
             return;
         };
         match snapshot {

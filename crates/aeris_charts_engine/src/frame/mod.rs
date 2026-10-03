@@ -1138,6 +1138,7 @@ impl ChartEngine {
 
     pub(crate) fn invalidate_frame_series(&mut self, id: SeriesId) {
         self.frame_invalidation.series(id);
+        self.invalidate_profile_drawings_using_series(id);
     }
 
     /// A presentation change that only restyles this series' own primitives.

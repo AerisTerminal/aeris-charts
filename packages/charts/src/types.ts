@@ -1954,6 +1954,9 @@ export type drawing_kind =
   | "path"
   | "long_position"
   | "short_position"
+  | "fixed_range_volume_profile"
+  | "anchored_volume_profile"
+  | "anchored_vwap"
   | "price_range"
   | "date_range"
   | "date_price_range";
@@ -1969,6 +1972,9 @@ export const DRAWING_KIND_TO_U8: Record<drawing_kind, number> = {
   path: 7,
   long_position: 8,
   short_position: 9,
+  fixed_range_volume_profile: 10,
+  anchored_volume_profile: 11,
+  anchored_vwap: 12,
   price_range: 13,
   date_range: 14,
   date_price_range: 15,
@@ -2257,6 +2263,148 @@ export type drawing_tool_change_handler = (tool: drawing_kind | null) => void;
 // ---------------------------------------------------------------------------------------------
 // Handles
 // ---------------------------------------------------------------------------------------------
+
+/** Host-defined UTC interval. All boundaries are start-inclusive and end-exclusive. */
+export interface resample_boundary {
+  startTime: number;
+  endTime: number;
+  sessionId: number;
+}
+
+/** Buckets restart at each host-supplied boundary; the engine does not infer a timezone. */
+export interface resample_options {
+  intervalSeconds: number;
+  boundaries: readonly resample_boundary[];
+}
+
+export interface resampled_bar {
+  timestamp: number;
+  sessionId: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  sourceRows: number;
+}
+
+/** Tape profiles are tick-accurate; candle profiles distribute OHLCV approximately. */
+export type profile_source =
+  | { kind: "tape"; stream_id: number }
+  | { kind: "candles"; price_series: number; volume_series: number };
+
+export interface profile_request {
+  source: profile_source;
+  startTimestampMicros: number;
+  endTimestampMicros: number;
+  tickSize: number;
+  rowCount: number;
+  valueAreaPercent: number;
+}
+
+export interface profile_row_snapshot {
+  low: number;
+  high: number;
+  bidVolume: number;
+  askVolume: number;
+  unknownVolume: number;
+  totalVolume: number;
+  delta: number;
+}
+
+export interface profile_snapshot {
+  startTimestampMicros: number;
+  endTimestampMicros: number;
+  sessionId: number;
+  tickSize: number;
+  rows: readonly profile_row_snapshot[];
+  totalVolume: number;
+  poc: number | null;
+  valueAreaLow: number | null;
+  valueAreaHigh: number | null;
+  developing: readonly { timestampMicros: number; poc: number; valueAreaLow: number; valueAreaHigh: number }[];
+  candleApproximation: boolean;
+}
+
+export interface naked_profile_level {
+  sessionId: number;
+  price: number;
+  kind: "poc" | "value_area_low" | "value_area_high";
+  startTimestampMicros: number;
+  touchedTimestampMicros: number | null;
+}
+
+export interface tpo_request {
+  priceSeries: number;
+  boundaries: readonly resample_boundary[];
+  periodSeconds: number;
+  tickSize: number;
+  valueAreaPercent: number;
+  initialBalancePeriods: number;
+}
+
+export interface tpo_snapshot {
+  sessionId: number;
+  startTimestampMicros: number;
+  endTimestampMicros: number;
+  rows: readonly { price: number; periods: readonly number[]; singlePrint: boolean }[];
+  poc: number | null;
+  valueAreaLow: number | null;
+  valueAreaHigh: number | null;
+  initialBalanceLow: number | null;
+  initialBalanceHigh: number | null;
+}
+
+export interface tpo_presentation_options {
+  mode: "letters" | "blocks";
+  color: string;
+  valueAreaColor: string;
+  singlePrintColor: string;
+  pocColor: string;
+  initialBalanceColor: string;
+}
+
+export interface periodic_profile_presentation_request {
+  source: profile_source;
+  boundaries: readonly resample_boundary[];
+  tickSize: number;
+  rowCount: number;
+  valueAreaPercent: number;
+}
+
+export interface periodic_profile_presentation_options {
+  mode: "bid_ask" | "delta" | "total";
+  widthPercent: number;
+  bidColor: string;
+  askColor: string;
+  unknownColor: string;
+  pocColor: string;
+  valueAreaColor: string;
+  /** Extend POC and value-area levels to the first later tape tick or candle-range touch. */
+  extendNakedLevels: boolean;
+  /** Trace sampled developing POC and value-area levels for tape or candle periods. */
+  showDeveloping: boolean;
+}
+
+export interface anchored_vwap_point {
+  timestampMicros: number;
+  vwap: number;
+  upperBand: number;
+  lowerBand: number;
+}
+
+export interface profile_drawing_options {
+  source: profile_source;
+  tickSize: number;
+  rowCount: number;
+  valueAreaPercent: number;
+  bandMultiplier: number;
+  widthPercent: number;
+}
+
+export type profile_drawing_snapshot =
+  | { kind: "volume"; data: profile_snapshot }
+  | { kind: "vwap"; data: readonly anchored_vwap_point[] };
 
 /** A single data series on the chart. */
 export interface series_api {
@@ -3045,6 +3193,23 @@ export interface chart_api {
   add_cvd_series(stream_id: number, pane?: number, reset?: "session" | "continuous" | "anchored", anchor_timestamp_micros?: number): series_api;
   add_delta_series(stream_id: number, pane?: number): series_api;
   add_trade_bubbles(series: series_api | number, stream_id: number, options?: { minimum_volume?: number; max_markers?: number; aggregation_window_micros?: number }): void;
+  /** Derive OHLCV into a host-created target for higher-timeframe overlays and study inputs. */
+  configure_resampled_series(source: series_api, target: series_api, options: resample_options, volume_source?: series_api | null, volume_target?: series_api | null): void;
+  /** Read the engine's current aggregate rows for a derived target. */
+  resampled_bars(target: series_api): readonly resampled_bar[] | null;
+  volume_profile_snapshot(request: profile_request): profile_snapshot | null;
+  periodic_volume_profiles(source: profile_source, boundaries: readonly resample_boundary[], tick_size: number, row_count: number, value_area_percent: number): readonly profile_snapshot[] | null;
+  periodic_naked_profile_levels(source: profile_source, boundaries: readonly resample_boundary[], tick_size: number, row_count: number, value_area_percent: number): readonly naked_profile_level[] | null;
+  tpo_profiles(request: tpo_request): readonly tpo_snapshot[] | null;
+  /** Add engine-rendered TPO letters or blocks on the source series' pane. */
+  add_tpo_presentation(request: tpo_request, options?: Partial<tpo_presentation_options>): number;
+  remove_tpo_presentation(id: number): boolean;
+  /** Render host-boundary volume profiles on an existing price series' pane. */
+  add_periodic_profile_presentation(anchor: series_api, request: periodic_profile_presentation_request, options?: Partial<periodic_profile_presentation_options>): number;
+  remove_periodic_profile_presentation(id: number): boolean;
+  anchored_vwap(source: profile_source, start_timestamp_micros: number, end_timestamp_micros: number, band_multiplier: number): readonly anchored_vwap_point[] | null;
+  configure_profile_drawing(drawing: drawing_api, options: profile_drawing_options): void;
+  profile_drawing_snapshot(drawing: drawing_api): profile_drawing_snapshot | null;
   add_series(kind: "footprint", options?: Partial<any_series_options> & Partial<footprint_series_options>): footprint_series_api;
   add_series(kind: general_series_kind, options: general_series_options): general_series_api;
   add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;

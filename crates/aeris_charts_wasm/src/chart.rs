@@ -2597,6 +2597,212 @@ impl AerisChart {
         self.inner.borrow_mut().add_vwap(source_id, volume_source)
     }
 
+    /// Bind a host-created target to engine-owned, UTC boundary-driven OHLCV aggregation.
+    pub fn configure_resampled_series_json(
+        &mut self,
+        source_id: u32,
+        volume_source_id: i32,
+        target_id: u32,
+        volume_target_id: i32,
+        options_json: &str,
+    ) -> bool {
+        let Ok(options) =
+            serde_json::from_str::<aeris_charts_engine::ResampleOptions>(options_json)
+        else {
+            return false;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .configure_resampled_series(
+                source_id,
+                (volume_source_id >= 0).then_some(volume_source_id as u32),
+                target_id,
+                (volume_target_id >= 0).then_some(volume_target_id as u32),
+                options,
+            )
+            .is_ok()
+    }
+
+    pub fn resampled_bars_json(&self, target_id: u32) -> String {
+        let inner = self.inner.borrow();
+        serde_json::to_string(&inner.engine.resampled_bars(target_id))
+            .unwrap_or_else(|_| "null".into())
+    }
+
+    /// Query one exact tape or explicitly approximate candle price-by-volume profile.
+    pub fn volume_profile_snapshot_json(&self, request_json: &str) -> String {
+        let Ok(request) = serde_json::from_str::<aeris_charts_engine::ProfileRequest>(request_json)
+        else {
+            return "null".into();
+        };
+        let inner = self.inner.borrow();
+        serde_json::to_string(&inner.engine.volume_profile_snapshot(&request).ok())
+            .unwrap_or_else(|_| "null".into())
+    }
+
+    /// Query profiles for ordered, disjoint host UTC periods.
+    pub fn periodic_volume_profiles_json(
+        &self,
+        source_json: &str,
+        boundaries_json: &str,
+        tick_size: f64,
+        row_count: usize,
+        value_area_percent: f64,
+    ) -> String {
+        let (Ok(source), Ok(boundaries)) = (
+            serde_json::from_str::<aeris_charts_engine::ProfileSource>(source_json),
+            serde_json::from_str::<Vec<aeris_charts_engine::ResampleBoundary>>(boundaries_json),
+        ) else {
+            return "null".into();
+        };
+        let inner = self.inner.borrow();
+        serde_json::to_string(
+            &inner
+                .engine
+                .periodic_volume_profiles(
+                    source,
+                    &boundaries,
+                    tick_size,
+                    row_count,
+                    value_area_percent,
+                )
+                .ok(),
+        )
+        .unwrap_or_else(|_| "null".into())
+    }
+
+    pub fn periodic_naked_profile_levels_json(
+        &self,
+        source_json: &str,
+        boundaries_json: &str,
+        tick_size: f64,
+        row_count: usize,
+        value_area_percent: f64,
+    ) -> String {
+        let (Ok(source), Ok(boundaries)) = (
+            serde_json::from_str::<aeris_charts_engine::ProfileSource>(source_json),
+            serde_json::from_str::<Vec<aeris_charts_engine::ResampleBoundary>>(boundaries_json),
+        ) else {
+            return "null".into();
+        };
+        let inner = self.inner.borrow();
+        serde_json::to_string(
+            &inner
+                .engine
+                .periodic_naked_profile_levels(
+                    source,
+                    &boundaries,
+                    tick_size,
+                    row_count,
+                    value_area_percent,
+                )
+                .ok(),
+        )
+        .unwrap_or_else(|_| "null".into())
+    }
+
+    pub fn tpo_profiles_json(&self, request_json: &str) -> String {
+        let Ok(request) = serde_json::from_str::<aeris_charts_engine::TpoRequest>(request_json)
+        else {
+            return "null".into();
+        };
+        let inner = self.inner.borrow();
+        serde_json::to_string(&inner.engine.tpo_profiles(&request).ok())
+            .unwrap_or_else(|_| "null".into())
+    }
+
+    pub fn add_tpo_presentation(&mut self, request_json: &str, options_json: &str) -> u32 {
+        let (Ok(request), Ok(options)) = (
+            serde_json::from_str::<aeris_charts_engine::TpoRequest>(request_json),
+            serde_json::from_str::<aeris_charts_engine::TpoPresentationOptions>(options_json),
+        ) else {
+            return 0;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .add_tpo_presentation(request, options)
+            .unwrap_or(0)
+    }
+
+    pub fn add_periodic_profile_presentation(
+        &mut self,
+        anchor_series_id: u32,
+        request_json: &str,
+        options_json: &str,
+    ) -> u32 {
+        let (Ok(request), Ok(options)) = (
+            serde_json::from_str::<aeris_charts_engine::PeriodicProfilePresentationRequest>(
+                request_json,
+            ),
+            serde_json::from_str::<aeris_charts_engine::PeriodicProfilePresentationOptions>(
+                options_json,
+            ),
+        ) else {
+            return 0;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .add_periodic_profile_presentation(anchor_series_id, request, options)
+            .unwrap_or(0)
+    }
+
+    pub fn anchored_vwap_json(
+        &self,
+        source_json: &str,
+        start_timestamp_micros: f64,
+        end_timestamp_micros: f64,
+        band_multiplier: f64,
+    ) -> String {
+        if !start_timestamp_micros.is_finite()
+            || !end_timestamp_micros.is_finite()
+            || start_timestamp_micros.fract() != 0.0
+            || end_timestamp_micros.fract() != 0.0
+            || start_timestamp_micros.abs() > 9_007_199_254_740_991.0
+            || end_timestamp_micros.abs() > 9_007_199_254_740_991.0
+        {
+            return "null".into();
+        }
+        let Ok(source) = serde_json::from_str::<aeris_charts_engine::ProfileSource>(source_json)
+        else {
+            return "null".into();
+        };
+        let inner = self.inner.borrow();
+        serde_json::to_string(
+            &inner
+                .engine
+                .anchored_vwap(
+                    source,
+                    start_timestamp_micros as i64,
+                    end_timestamp_micros as i64,
+                    band_multiplier,
+                )
+                .ok(),
+        )
+        .unwrap_or_else(|_| "null".into())
+    }
+
+    pub fn configure_profile_drawing_json(&mut self, drawing_id: u32, options_json: &str) -> bool {
+        let Ok(options) =
+            serde_json::from_str::<aeris_charts_engine::ProfileDrawingOptions>(options_json)
+        else {
+            return false;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .configure_profile_drawing(drawing_id, options)
+            .is_ok()
+    }
+
+    pub fn profile_drawing_snapshot_json(&self, drawing_id: u32) -> String {
+        let inner = self.inner.borrow();
+        serde_json::to_string(&inner.engine.profile_drawing_snapshot(drawing_id).ok())
+            .unwrap_or_else(|_| "null".into())
+    }
+
     /// Add on-balance volume in its own oscillator pane (`volume_source` is required).
     pub fn add_obv(&mut self, source_id: u32, volume_source: i32) -> u32 {
         self.inner.borrow_mut().add_obv(source_id, volume_source)

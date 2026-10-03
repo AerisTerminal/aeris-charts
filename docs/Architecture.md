@@ -302,6 +302,44 @@ The headless owner of chart behavior and mutable chart state. It owns series, pa
 
 Volume-profile indicators bind an OHLC price series to a separate scalar volume series by exact timestamp. The engine owns at most 16 distribution handles, their options and bounded bin caches in native primitive state. Before frame construction (or an explicit snapshot read), it refreshes only profiles whose source generations, visible source-row interval, bin parameters or minimum price move changed. Removing either dependency removes the handle. Shared frame geometry stacks bullish and bearish volume within each row, anchors every row flush to the source pane's right edge, uses stronger row colors for the value area, and draws only the solid POC marker without extending autoscale; every executor consumes those same ordered primitives. These price distributions have no synthetic time-series output and are runtime-only, outside V1 scalar-indicator workspace persistence. Hosts recreate them after restoring data.
 
+The B7 profile query path reads either the canonical classified tape or OHLCV candles through the
+engine. A tape profile retains bid, ask, unknown and delta volume by tick; a candle profile marks
+its approximation. Periodic profiles and TPO consume ordered, disjoint UTC boundaries supplied by
+the host. Adjacent periodic boundaries with the same session identity form one composite profile;
+gaps contribute no rows or developing points. Naked tape levels stop at the first later trade on
+the same tick; candle levels stop when a later OHLC range contains the exact price.
+
+The browser package exposes these engine queries through WASM and installs bounded periodic
+profile presentations on a price series. The engine computes each host-defined period from
+canonical candles or tape, retains the source binding in native primitive state, and lowers
+bid/ask, delta or total bars with POC and value-area markers into that series' shared frame layer.
+Presentations can extend POC and value-area levels from the period end to the first later touch.
+The shared query resolves all requested levels in one ordered source sweep. Candle and tape
+corrections invalidate the bound series layer, and removing a candle dependency releases its
+presentation handles. Presentation handles reserve at most 32,768 profile rows in total, using the
+full 2,048-row tape ceiling for each tape period even when the current tape has fewer levels. Optional
+tape and candle developing paths sample at most 2,048 POC/value-area points across a presentation
+and lower them as shared polylines. The indicators crate accumulates candle OHLCV on the period's
+final fixed price grid; this keeps historical levels comparable as the candle range grows, and
+remains an OHLCV approximation. Period queries retain detailed developing history within their own
+aggregate limit; ordinary frame construction omits that history when the paths are hidden.
+
+Fixed-range profile, anchored profile and anchored VWAP drawing kinds bind a validated source and
+lower their geometry into the common ordered frame; the browser drawing-kind map uses the same
+wire IDs as the engine tool catalog.
+Consecutive TPO boundaries with the same host session identity merge into one profile with
+continuous period indices; distinct identities split profiles, and gaps between supplied
+segments add no synthetic periods. Initial balance counts periods from the first segment.
+The TPO presentation is a bounded native primitive attached to its OHLC source series. Its
+letter and block modes, value-area and single-print colors, POC and initial-balance lines are
+lowered into the shared ordered frame, so every executor paints the same cells. Query output is
+bounded across the whole request as well as per profile; the frame switches to compact blocks
+when individual cells exceed the detailed presentation budget.
+Price and volume corrections invalidate only drawings bound to that series; tape updates and
+replay seeks invalidate drawings bound to that stream even when no footprint series is attached.
+A stream remains in use while a profile drawing refers to it, so removal cannot leave a live
+drawing with a missing tape.
+
 Each pane owns one unified price-scale collection: reserved `left`, `right`, and overlay (`""`)
 scales plus at most sixteen host-created named scales. Named IDs are case-sensitive and pane-local;
 each visible side scale retains its own options, range, formatter source, autoscale, inversion,
@@ -1016,6 +1054,13 @@ indicator bindings are also the visibility, removal, and chrome ownership unit. 
 shows, hides, or removes every output in a binding, and the retained chart-wide indicator chrome
 policy applies name labels, value labels, and price lines to current and later outputs. Hosts choose
 that policy and render controls; they do not walk output series or predict output counts.
+OHLCV resampling is an engine-owned dependency from a host-fed candlestick/bar series to a
+host-created derived series. The host supplies disjoint UTC boundaries and an interval in seconds;
+the engine restarts buckets at each boundary, excludes rows outside them, and refreshes the derived
+bars and their indicator dependents after source corrections. Browser hosts configure the same
+binding through WASM and may read its current aggregate rows. A separate histogram can supply
+volume and receive derived volume, but the engine rejects a binding that would overwrite its own
+volume input. Higher-timeframe candles and studies use ordinary series and indicator frame paths.
 The engine gives each newly created dedicated indicator pane the same 0.3 stretch, including
 financial oscillators, external studies, CVD, and delta. A study placed into an explicitly selected
 existing pane keeps that pane's user-selected height; every backend renders the shared layout.

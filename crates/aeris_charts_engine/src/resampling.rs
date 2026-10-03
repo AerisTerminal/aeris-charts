@@ -32,7 +32,8 @@ pub struct ResampleOptions {
     pub boundaries: Vec<ResampleBoundary>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResampledBar {
     pub timestamp: i64,
     pub session_id: u64,
@@ -141,6 +142,7 @@ impl ChartEngine {
             .collect::<HashSet<_>>();
         if source == target
             || volume_source == Some(target)
+            || volume_source.is_some_and(|id| volume_target == Some(id))
             || owned.contains(&source)
             || volume_source.is_some_and(|id| owned.contains(&id))
             || self.resampled_series.values().any(|binding| {
@@ -276,18 +278,19 @@ fn resample_rows(
     for boundary in &options.boundaries {
         row = row.max(times.partition_point(|&time| time < boundary.start_time));
         while row < times.len() && times[row] < boundary.end_time {
-            let bucket = (times[row] - boundary.start_time) / interval;
-            let timestamp = boundary
-                .start_time
-                .saturating_add(bucket.saturating_mul(interval));
+            let bucket =
+                (i128::from(times[row]) - i128::from(boundary.start_time)) / i128::from(interval);
+            // The bucket start lies between boundary.start_time and the current row, both i64.
+            let timestamp =
+                (i128::from(boundary.start_time) + bucket * i128::from(interval)) as i64;
             let end = boundary.end_time.min(timestamp.saturating_add(interval));
             let first = row;
             while row < times.len() && times[row] < end {
                 row += 1;
             }
             let volume_sum = volume.map_or(0.0, |(volume_times, volume_columns)| {
-                let start = volume_times.partition_point(|&time| time < times[first]);
-                let finish = volume_times.partition_point(|&time| time <= times[row - 1]);
+                let start = volume_times.partition_point(|&time| time < timestamp);
+                let finish = volume_times.partition_point(|&time| time < end);
                 volume_columns[3][start..finish].iter().copied().sum()
             });
             output.push(ResampledBar {
@@ -314,6 +317,94 @@ fn resample_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SeriesKind;
+
+    #[test]
+    fn derived_volume_cannot_overwrite_its_source() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let source = chart.add_series(SeriesKind::Candlestick);
+        let volume_source = chart.add_series(SeriesKind::Histogram);
+        let target = chart.add_series(SeriesKind::Candlestick);
+        chart
+            .set_series_data(source, &[10.0], &[1.0], &[2.0], &[0.5], &[1.5])
+            .unwrap();
+        chart
+            .set_series_data(volume_source, &[10.0], &[7.0], &[7.0], &[7.0], &[7.0])
+            .unwrap();
+        let result = chart.configure_resampled_series(
+            source,
+            Some(volume_source),
+            target,
+            Some(volume_source),
+            ResampleOptions {
+                interval_seconds: 60,
+                boundaries: vec![ResampleBoundary {
+                    start_time: 0,
+                    end_time: 60,
+                    session_id: 1,
+                }],
+            },
+        );
+        assert_eq!(result, Err(ResampleError::DependencyCycle));
+        assert!(chart.resampled_bars(target).is_none());
+        assert_eq!(chart.data.series_data(volume_source).unwrap().1[3], &[7.0]);
+    }
+
+    #[test]
+    fn source_correction_rebuilds_derived_bars_and_study() {
+        let build = |last_close: f64| {
+            let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+            let source = chart.add_series(SeriesKind::Candlestick);
+            let target = chart.add_series(SeriesKind::Candlestick);
+            chart
+                .configure_resampled_series(
+                    source,
+                    None,
+                    target,
+                    None,
+                    ResampleOptions {
+                        interval_seconds: 120,
+                        boundaries: vec![ResampleBoundary {
+                            start_time: 0,
+                            end_time: 360,
+                            session_id: 8,
+                        }],
+                    },
+                )
+                .unwrap();
+            let study = chart.add_rsi(target, 2).unwrap();
+            chart
+                .set_series_data(
+                    source,
+                    &[0.0, 60.0, 120.0, 180.0, 240.0, 300.0],
+                    &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                    &[
+                        2.0,
+                        3.0,
+                        4.0,
+                        5.0,
+                        6.0,
+                        if last_close > 7.0 { 8.0 } else { 7.0 },
+                    ],
+                    &[0.5, 1.5, 2.5, 3.5, 4.5, 5.5],
+                    &[1.5, 2.5, 3.5, 4.5, 5.5, last_close],
+                )
+                .unwrap();
+            (chart, source, target, study)
+        };
+        let (mut corrected, source, target, study) = build(6.5);
+        assert!(corrected.update_series_bar(source, 300.0, [6.0, 8.0, 5.5, 7.5]));
+        let (reference, _, reference_target, reference_study) = build(7.5);
+        assert_eq!(corrected.resampled_bars(target).unwrap()[2].close, 7.5);
+        assert_eq!(
+            corrected.resampled_bars(target).unwrap(),
+            reference.resampled_bars(reference_target).unwrap()
+        );
+        assert_eq!(
+            corrected.data.series_data(study),
+            reference.data.series_data(reference_study)
+        );
+    }
 
     #[test]
     fn boundaries_restart_buckets_and_exclude_out_of_session_rows() {
@@ -366,5 +457,28 @@ mod tests {
             (bars[2].timestamp, bars[2].session_id, bars[2].volume),
             (1_000, 8, 18.0)
         );
+    }
+
+    #[test]
+    fn volume_uses_full_bucket_instead_of_last_price_timestamp() {
+        let times = [0, 60];
+        let prices = [1.0, 2.0];
+        let volume_times = [0, 30, 90, 120];
+        let volume = [2.0, 3.0, 5.0, 11.0];
+        let bars = resample_rows(
+            &times,
+            [&prices; 4],
+            Some((&volume_times, [&volume; 4])),
+            &ResampleOptions {
+                interval_seconds: 120,
+                boundaries: vec![ResampleBoundary {
+                    start_time: 0,
+                    end_time: 120,
+                    session_id: 1,
+                }],
+            },
+        );
+        assert_eq!(bars.len(), 1);
+        assert_eq!(bars[0].volume, 10.0);
     }
 }
