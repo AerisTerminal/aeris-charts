@@ -3999,35 +3999,6 @@ export class chart_impl implements chart_api {
     return activated;
   }
 
-  /** Standard gesture forwarding for the engine-owned delta-tooltip interaction model. */
-  native_delta_tooltip_mouse_down(x: number, shift: boolean): boolean {
-    return this.wasm.native_delta_tooltip_mouse_down(x, shift);
-  }
-
-  native_delta_tooltip_mouse_move(x: number): void {
-    if (this.wasm.native_delta_tooltip_mouse_move(x)) this.notify_delta_tooltip_ranges();
-  }
-
-  native_delta_tooltip_mouse_up(): void {
-    if (this.wasm.native_delta_tooltip_mouse_up()) this.notify_delta_tooltip_ranges();
-  }
-
-  native_delta_tooltip_touch_move(xs: Float64Array): boolean {
-    const changed = this.wasm.native_delta_tooltip_touch_move(xs);
-    if (changed) this.notify_delta_tooltip_ranges();
-    return this.wasm.native_delta_tooltip_active();
-  }
-
-  native_delta_tooltip_touch_active(): boolean {
-    return this.wasm.native_delta_tooltip_active();
-  }
-
-  native_delta_tooltip_leave(): boolean {
-    const changed = this.wasm.native_delta_tooltip_leave();
-    if (changed) this.notify_delta_tooltip_ranges();
-    return changed;
-  }
-
   add_delta_tooltip_range_listener(listener: () => void): () => void {
     this.delta_tooltip_range_listeners.add(listener);
     return () => this.delta_tooltip_range_listeners.delete(listener);
@@ -5493,28 +5464,18 @@ export class chart_impl implements chart_api {
   }
 
   /**
-   * Refresh the hover hit-test state (Phase C-d) for a crosshair at pane CSS px (x, y): runs
-   * the engine's series hit test plus the primitives' `hit_test`, stashes the result for
-   * `build_params`, and updates the engine's hovered series for `hoveredSeriesOnTop` (the
-   * caller repaints, so the z-bump lands on the next frame). Called by the gesture
-   * recognizer on every crosshair move.
+   * Read the engine-arbitrated hover (Phase C-d) after pointer input and stash it for
+   * `build_params`. The engine already updated hover promotion, the hover ring, and the cursor;
+   * the gesture recognizer repaints only when the engine reports a pending frame.
    */
-  update_hover(x: number, y: number): void {
-    const previous_object = this.hover?.object_id ?? null;
-    this.hover = JSON.parse(this.wasm.hover_at(x, y)) as chart_impl["hover"];
-    // The hover ring (text drawings' dimmed focus border) changes with the hovered object:
-    // repaint exactly on transitions, even when the crosshair itself is hidden.
-    if ((this.hover?.object_id ?? null) !== previous_object) this.repaint();
+  sync_hover(): void {
+    this.hover = JSON.parse(this.wasm.controller_hover_json()) as chart_impl["hover"];
   }
 
-  /** Clear the hover state (cursor left the chart) and release the z-bump; caller repaints. */
+  /** Clear the hover state (cursor left the chart) and release the z-bump. */
   clear_hover(): void {
-    const had_object = this.hover?.object_id != null;
     this.hover = null;
     this.wasm.clear_hover();
-    // A visible hover ring (drawing under the cursor) must paint out even if the caller
-    // skips its own repaint.
-    if (had_object) this.repaint();
   }
 
   /** The cursor a primitive's `hit_test` reports for the current hover, or `null`. */
@@ -6263,15 +6224,23 @@ export class chart_impl implements chart_api {
     }
   }
 
-  nudge_selected_drawing(dx: number, dy: number, anchor: number | null): boolean {
-    const changed = this.wasm.nudge_selected_drawing(dx, dy, anchor ?? -1);
-    if (changed) this.repaint();
-    return changed;
+  /**
+   * Forward a key pressed on an accessibility focus target (`price-axis:<pane>`, `time-axis`,
+   * `separator:<pane>`, `drawing:<id>`) to the engine input controller. Returns whether it was
+   * consumed.
+   */
+  input_target_key(target: string, event: KeyboardEvent): boolean {
+    const modifiers = (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0)
+      | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0);
+    if (!this.wasm.input_target_key_down(target, event.key, modifiers)) return false;
+    this.consume_input_events();
+    if (this.wasm.frame_pending()) this.repaint();
+    return true;
   }
 
-  select_drawing_for_accessibility(id: number): void {
-    this.wasm.set_selected_drawing(id);
-    this.repaint();
+  /** The open keyboard drawing edit: the drawing and its focused anchor (`null` moves it all). */
+  drawing_edit_session(): { id: number; anchor: number | null } | null {
+    return JSON.parse(this.wasm.drawing_edit_session_json()) as { id: number; anchor: number | null } | null;
   }
 
   /** DPR-only display transitions do not reliably resize CSS bounds on every WebKit host. */
@@ -6383,7 +6352,8 @@ export class chart_impl implements chart_api {
       | { kind: "text_editor_opened"; id: number }
       | { kind: "remove_series"; id: number }
       | { kind: "crosshair_left" }
-      | { kind: "context_menu"; x: number; y: number };
+      | { kind: "context_menu"; x: number; y: number }
+      | { kind: "delta_tooltip_changed" };
     const events = JSON.parse(this.wasm.take_input_events_json()) as controller_event[];
     for (const event of events) {
       switch (event.kind) {
@@ -6409,6 +6379,9 @@ export class chart_impl implements chart_api {
           break;
         case "context_menu":
           this.emit_chart_context(event.x, event.y);
+          break;
+        case "delta_tooltip_changed":
+          this.notify_delta_tooltip_ranges();
           break;
       }
     }

@@ -216,6 +216,17 @@ function expect_white_ink_centered(png, box, tolerance = 1) {
   expect(Math.abs(white_ink_center(png, box) - box_center)).toBeLessThanOrEqual(tolerance);
 }
 
+// The painted rows of a solid label box: the contiguous run of `color` in column `x` that
+// contains row `y`. Probe a column without text or rounded corners.
+function painted_row(png, x, y, color) {
+  let top = y;
+  let bottom = y;
+  while (top > 0 && near(px(png, x, top - 1), color)) top -= 1;
+  while (bottom + 1 < png.height && near(px(png, x, bottom + 1), color)) bottom += 1;
+  expect(near(px(png, x, y), color), `label box must cover ${x},${y}`).toBe(true);
+  return { top, bottom: bottom + 1 };
+}
+
 function color_bands(png, color) {
   const rows = [];
   for (let y = 0; y < png.height; y += 1) {
@@ -278,9 +289,11 @@ test("last-value cluster paints chip, price, and countdown rows; the chip matche
   expect(near(chip_pixel, CHIP), `chip pixel ${chip_pixel}`).toBe(true);
   expect(near(price_pixel, LABEL), `price pixel ${price_pixel}`).toBe(true);
   expect(dist(chip_pixel, price_pixel)).toBeLessThanOrEqual(12); // matching colors by default
-  // The mixed-case title's ink bounds sit 1.5 px below the 15 px row center in Chromium's
-  // current font rasterizer; the shared frame still anchors the text at the row midpoint.
-  expect_white_ink_centered(on, { ...chip, bottom: chip.top + ROW }, 1.5);
+  // Center the title against its painted row, not the anchor-derived probe window: the probe
+  // rounds the anchor independently of the label box and can start a row below the chip.
+  const chip_row = { ...chip, right: chip.right + 1, ...painted_row(on, chip.right, Math.round(anchor.y), CHIP) };
+  expect([chip_row.top, chip_row.bottom], "the title chip shares the price row").toEqual([box.top, box.top + ROW]);
+  expect_white_ink_centered(on, chip_row);
   expect_white_ink_centered(on, { ...box, bottom: box.top + ROW });
   // The countdown row sits below the top row, in the main label color, spanning the full width.
   expect(near(px(on, box.left + 3, box.bottom - 3), LABEL)).toBe(true);
@@ -395,10 +408,16 @@ test("crosshair price and time glyphs stay centered in their label boxes", async
   // The compact time box includes border + 3px tick space above the text body. Its glyph is
   // therefore deliberately below the full box center rather than incorrectly centered in it
   // (1px border + 3px tick + 3px pad above vs 3px pad below the 11px body centers ink 1.5px low).
-  const time_box_center = (time_label.top + time_label.bottom - 1) / 2;
-  const time_ink_offset = white_ink_center(shot, time_label) - time_box_center;
-  expect(time_ink_offset).toBeGreaterThanOrEqual(1.5);
-  expect(time_ink_offset).toBeLessThanOrEqual(4);
+  // Measure digit-only ink so the result does not depend on the hovered date: the trailing
+  // HH:MM run has no descenders, unlike month names such as "Sep". The digit-only price text
+  // in the same font is the reference, which cancels the font's cap-versus-em asymmetry.
+  const box_center = (box) => (box.top + box.bottom - 1) / 2;
+  const time_digits = { ...time_label, left: time_label.right - Math.round((time_label.right - time_label.left) * 0.3) };
+  const price_digit_offset = white_ink_center(shot, price_text_label) - box_center(price_label);
+  const time_digit_offset = white_ink_center(shot, time_digits) - box_center(time_label);
+  const time_body_shift = time_digit_offset - price_digit_offset;
+  expect(time_body_shift).toBeGreaterThanOrEqual(1.5);
+  expect(time_body_shift).toBeLessThanOrEqual(4);
   await context.close();
 });
 

@@ -61,8 +61,9 @@ pub use alerts::{
     AlertPriceScale, AlertSnapshot, MAX_ALERT_LINES,
 };
 pub use chart_input::{
-    ChartContextMenu, ChartCursor, ChartInputEvent, ChartKey, ChartRegion, InteractionOptions,
-    PointerInput, PANE_SEPARATOR_HIT, TRADING_TOOLTIP_DWELL_MS,
+    ChartContextMenu, ChartCursor, ChartFocusTarget, ChartHover, ChartInputEvent, ChartKey,
+    ChartRegion, HostPrimitiveHit, HostPrimitiveLayer, InteractionOptions, PointerInput,
+    CLICK_SLOP_MANHATTAN, PANE_SEPARATOR_HIT, TRADING_TOOLTIP_DWELL_MS,
 };
 pub use depth::{
     DepthBook, DepthBucket, DepthError, DepthEventCluster, DepthEventKind, DepthEventLayerOptions,
@@ -1264,6 +1265,22 @@ impl SeriesStore {
 
     fn changed(&mut self) {
         self.revision = self.revision.wrapping_add(1).max(1);
+    }
+
+    /// Mutable lookup that does not advance the revision. A revision change invalidates the whole
+    /// retained scene, so this is only for presentation state whose caller issues its own narrower
+    /// frame invalidation.
+    pub(crate) fn presentation_mut(
+        &mut self,
+        mut matches: impl FnMut(&SeriesEntry) -> bool,
+    ) -> Option<&mut SeriesEntry> {
+        self.entries.iter_mut().find(|series| matches(series))
+    }
+
+    /// Every entry for presentation state, without advancing the revision; the same contract as
+    /// [`Self::presentation_mut`].
+    pub(crate) fn presentation_iter_mut(&mut self) -> std::slice::IterMut<'_, SeriesEntry> {
+        self.entries.iter_mut()
     }
 }
 

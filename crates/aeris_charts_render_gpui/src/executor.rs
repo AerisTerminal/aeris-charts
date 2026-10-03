@@ -14,7 +14,7 @@
 //! forces every primitive inside it to share one order, which would flatten the chart's z-order.
 
 use aeris_charts_render::draw_list::{positive_finite_extent, LineStyle, Prim};
-use aeris_charts_render::line::normalized_round_rect_radii;
+use aeris_charts_render::line::{normalized_round_rect_radii, round_rect_border};
 
 use crate::geometry::{
     area_fill_mesh, area_fringe_gradient, band_fill_mesh, dash_spans, dashed_polyline_meshes,
@@ -280,26 +280,12 @@ fn lower_prim(
             }
             // Both GPU executors share the same inner fill and border-ring geometry.
             if *border_width > 0.0 {
-                let inset = border_width.min(*w / 2.0).min(*h / 2.0);
-                if inset * 2.0 < *w && inset * 2.0 < *h {
-                    let inner_radii = radii.map(|r| (r - inset).max(0.0));
-                    let inner = round_rect_polygon(
-                        x + inset,
-                        y + inset,
-                        w - inset * 2.0,
-                        h - inset * 2.0,
-                        inner_radii,
-                    );
-                    let range = fill_polygon(&mut plan.vertices, &inner);
+                let geometry = round_rect_border(*x, *y, *w, *h, radii, *border_width);
+                if !geometry.inner.is_empty() {
+                    let range = fill_polygon(&mut plan.vertices, &geometry.inner);
                     push_mesh(plan, metrics, range, Paint::Solid(*fill));
                 }
-                let range = round_rect_ring_mesh(
-                    scratch,
-                    &mut plan.vertices,
-                    [*x, *y, *w, *h],
-                    radii,
-                    *border_width,
-                );
+                let range = round_rect_ring_mesh(&mut plan.vertices, &geometry);
                 push_mesh(plan, metrics, range, Paint::Solid(*border_color));
             } else {
                 let outer = round_rect_polygon(*x, *y, *w, *h, radii);
@@ -964,19 +950,83 @@ mod tests {
             prims.len() + 1,
             "area gradient core and fringe are separate paths"
         );
+        // Signed distance to a closed polygon: negative inside, positive outside.
+        let signed_distance = |polygon: &[[f32; 2]], p: [f32; 2]| {
+            let mut inside = false;
+            let mut distance = f32::INFINITY;
+            for index in 0..polygon.len() {
+                let a = polygon[index];
+                let b = polygon[(index + 1) % polygon.len()];
+                if (a[1] > p[1]) != (b[1] > p[1])
+                    && p[0] < a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0])
+                {
+                    inside = !inside;
+                }
+                let d = [b[0] - a[0], b[1] - a[1]];
+                let length2 = d[0] * d[0] + d[1] * d[1];
+                let t = if length2 > 0.0 {
+                    (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / length2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                distance = distance.min((p[0] - a[0] - d[0] * t).hypot(p[1] - a[1] - d[1] * t));
+            }
+            if inside {
+                -distance
+            } else {
+                distance
+            }
+        };
+        // GPUI's path shader: `alpha = saturate(0.5 - (s² - t))` for a unit distance gradient.
+        let coverage = |st: [f32; 2]| (0.5 - (st[0] * st[0] - st[1])).clamp(0.0, 1.0);
+        let area = [
+            [10.0, 10.0],
+            [30.0, 14.0],
+            [50.0, 8.0],
+            [50.0, 40.0],
+            [10.0, 40.0],
+        ];
+        let band = [
+            [10.0, 10.0],
+            [30.0, 14.0],
+            [50.0, 8.0],
+            [50.0, 36.0],
+            [30.0, 32.0],
+            [10.0, 35.0],
+        ];
+        let triangle = [[70.0, 10.0], [90.0, 15.0], [80.0, 40.0]];
+        let round_rect = round_rect_polygon(100.0, 10.0, 30.0, 25.0, [5.0; 4]);
         let core = meshes[0];
-        assert!(plan.vertices[core.0 as usize..(core.0 + core.1) as usize]
-            .iter()
-            .all(|v| v.st == crate::scene::SOLID_ST));
-        for (name, (first, count)) in ["AreaFill", "BandFill", "Triangle", "RoundRect"]
-            .into_iter()
-            .zip(meshes.into_iter().skip(1))
-        {
+        for v in &plan.vertices[core.0 as usize..(core.0 + core.1) as usize] {
+            assert_eq!(v.st, crate::scene::SOLID_ST, "area core vertex {v:?}");
+            assert!(signed_distance(&area, [v.x, v.y]) <= 1e-3);
+        }
+        for (name, nominal, (first, count)) in [
+            ("AreaFill", &area[..], meshes[1]),
+            ("BandFill", &band[..], meshes[2]),
+            ("Triangle", &triangle[..], meshes[3]),
+            ("RoundRect", &round_rect[..], meshes[4]),
+        ] {
             let vertices = &plan.vertices[first as usize..(first + count) as usize];
-            assert!(
-                vertices.iter().any(|v| v.st != crate::scene::SOLID_ST),
-                "{name} has no edge coverage ramp"
-            );
+            let mut outer = 0;
+            for v in vertices {
+                let distance = signed_distance(nominal, [v.x, v.y]);
+                let c = coverage(v.st);
+                if c == 1.0 {
+                    // Interior: full coverage, never outside the nominal shape.
+                    assert!(distance <= 1e-3, "{name}: solid {v:?} outside");
+                } else if c == 0.5 {
+                    // Nominal edge: the fringe starts at half coverage on the boundary.
+                    assert!(distance.abs() <= 1e-3, "{name}: edge {v:?} off");
+                } else if c == 0.0 {
+                    // Fringe rim: zero coverage, one device pixel outside the boundary.
+                    outer += 1;
+                    assert!(distance >= 0.99, "{name}: rim {v:?} at {distance}");
+                } else {
+                    panic!("{name}: unexpected vertex coverage {c} at {v:?}");
+                }
+            }
+            assert!(outer > 0, "{name} has no zero-coverage fringe rim");
         }
     }
 

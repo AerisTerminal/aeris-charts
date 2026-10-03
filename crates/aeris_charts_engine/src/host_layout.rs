@@ -4,8 +4,9 @@
 //! shrink-on-full policy, even-pixel axis snapping, pane geometry, and time-scale width.
 
 use crate::{
-    AxisFrame, ChartEngine, ChartFrame, FramePaneSegments, PriceScaleSide, PriceScaleTarget,
+    AxisFrame, ChartEngine, ChartFrame, FramePaneSegments, Pane, PriceScaleSide, PriceScaleTarget,
 };
+use aeris_charts_core::scale::time_scale_core::TimeScaleCore;
 use aeris_charts_render::draw_list::Prim;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -335,65 +336,98 @@ impl ChartEngine {
         F: Fn(&str, bool) -> f64 + Copy,
         G: Fn(&str, bool) -> f64 + Copy,
     {
-        let live_size = (self.css_width, self.css_height, self.dpr);
-        let live_time_scale = self.time_scale.clone();
-        let live_panes = self.panes.clone();
-        let live_layout = (
-            self.pane_w,
-            self.pane_h,
-            self.pane_left,
-            self.left_axis_w,
-            self.axis_w,
-            self.left_builtin_axis_w,
-            self.right_builtin_axis_w,
-        );
-        let live_general_axes: Vec<f64> = self
-            .general_axes
-            .iter()
-            .map(|axis| axis.layout_thickness)
-            .collect();
-        let resized = (request.width, request.height) != (live_size.0, live_size.1);
-        self.css_width = request.width;
-        self.css_height = request.height;
-        self.dpr = request.dpr;
-        self.invalidate_frame_all();
+        let resized = (request.width, request.height) != (self.css_width, self.css_height);
+        // Restores on every exit, including a panicking host measure callback, so a caught
+        // export failure never leaves the live chart at the export viewport.
+        let live = LiveViewRestore::capture(self);
+        let chart = &mut *live.engine;
+        chart.css_width = request.width;
+        chart.css_height = request.height;
+        chart.dpr = request.dpr;
+        chart.invalidate_frame_all();
         if resized {
-            self.recompute_layout_with_measure(true, measure, countdown_measure);
+            chart.recompute_layout_with_measure(true, measure, countdown_measure);
         }
-        let frame = self.build_frame();
+        let frame = chart.build_frame();
         let segments = (0..frame.panes.len())
-            .map(|pane| self.frame_pane_segments(pane).unwrap_or_default())
+            .map(|pane| chart.frame_pane_segments(pane).unwrap_or_default())
             .collect();
-        let axis_frame = self.build_axis_frame_impl(
-            self.axis_label_width_cap(),
+        let axis_frame = chart.build_axis_frame_impl(
+            chart.axis_label_width_cap(),
             measure,
             countdown_measure,
             request.include_crosshair,
         );
         let mut axis_primitives = Vec::new();
-        self.build_axis_primitives_into(&axis_frame, &mut axis_primitives);
-
-        (self.css_width, self.css_height, self.dpr) = live_size;
-        self.time_scale = live_time_scale;
-        self.panes = live_panes;
-        (
-            self.pane_w,
-            self.pane_h,
-            self.pane_left,
-            self.left_axis_w,
-            self.axis_w,
-            self.left_builtin_axis_w,
-            self.right_builtin_axis_w,
-        ) = live_layout;
-        for (axis, thickness) in self.general_axes.iter_mut().zip(live_general_axes) {
-            axis.layout_thickness = thickness;
-        }
-        self.invalidate_frame_all();
+        chart.build_axis_primitives_into(&axis_frame, &mut axis_primitives);
+        drop(live);
         ExportFrame {
             frame,
             segments,
             axis_primitives,
         }
+    }
+}
+
+/// The live viewport, view, and layout state an export capture overwrites. Dropping the guard
+/// writes it back and invalidates the retained frame so the live host rebuilds.
+struct LiveViewRestore<'a> {
+    engine: &'a mut ChartEngine,
+    size: (f64, f64, f64),
+    time_scale: TimeScaleCore,
+    panes: Vec<Pane>,
+    layout: [f64; 7],
+    general_axis_thickness: Vec<f64>,
+}
+
+impl<'a> LiveViewRestore<'a> {
+    fn capture(engine: &'a mut ChartEngine) -> Self {
+        Self {
+            size: (engine.css_width, engine.css_height, engine.dpr),
+            time_scale: engine.time_scale.clone(),
+            panes: engine.panes.clone(),
+            layout: [
+                engine.pane_w,
+                engine.pane_h,
+                engine.pane_left,
+                engine.left_axis_w,
+                engine.axis_w,
+                engine.left_builtin_axis_w,
+                engine.right_builtin_axis_w,
+            ],
+            general_axis_thickness: engine
+                .general_axes
+                .iter()
+                .map(|axis| axis.layout_thickness)
+                .collect(),
+            engine,
+        }
+    }
+}
+
+impl Drop for LiveViewRestore<'_> {
+    fn drop(&mut self) {
+        let engine = &mut *self.engine;
+        (engine.css_width, engine.css_height, engine.dpr) = self.size;
+        std::mem::swap(&mut engine.time_scale, &mut self.time_scale);
+        std::mem::swap(&mut engine.panes, &mut self.panes);
+        [
+            engine.pane_w,
+            engine.pane_h,
+            engine.pane_left,
+            engine.left_axis_w,
+            engine.axis_w,
+            engine.left_builtin_axis_w,
+            engine.right_builtin_axis_w,
+        ] = self.layout;
+        for (axis, thickness) in engine
+            .general_axes
+            .iter_mut()
+            .zip(&self.general_axis_thickness)
+        {
+            axis.layout_thickness = *thickness;
+        }
+        engine.invalidate_frame_all();
     }
 }
 
@@ -544,6 +578,64 @@ mod tests {
             "the live host must rebuild instead of reusing export layers"
         );
         assert_eq!((frame.width, frame.pixel_ratio), (live.0, 1.0));
+    }
+
+    #[test]
+    fn export_capture_restores_the_live_view_when_measurement_panics() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0],
+                &[101.0, 102.0],
+                &[102.0, 103.0],
+                &[100.0, 101.0],
+                &[101.0, 102.0],
+            )
+            .unwrap();
+        chart.fit_content();
+        chart.recompute_layout_with_measure(
+            true,
+            |text, _| text.len() as f64 * 7.0,
+            |text, _| text.len() as f64 * 6.0,
+        );
+        let live = (
+            chart.css_width,
+            chart.css_height,
+            chart.dpr,
+            chart.pane_w,
+            chart.pane_h,
+            chart.axis_w,
+            chart.time_scale.width(),
+            chart.panes.len(),
+        );
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            chart.capture_export_frame(
+                super::ExportFrameRequest {
+                    width: 400.0,
+                    height: 300.0,
+                    dpr: 2.0,
+                    include_crosshair: false,
+                },
+                |_, _| -> f64 { panic!("host measurement failed") },
+                |text, _| text.len() as f64 * 6.0,
+            )
+        }));
+        assert!(outcome.is_err(), "the measure callback must have run");
+        assert_eq!(
+            (
+                chart.css_width,
+                chart.css_height,
+                chart.dpr,
+                chart.pane_w,
+                chart.pane_h,
+                chart.axis_w,
+                chart.time_scale.width(),
+                chart.panes.len(),
+            ),
+            live
+        );
     }
 
     #[test]

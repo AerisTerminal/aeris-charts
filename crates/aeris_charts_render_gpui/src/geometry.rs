@@ -14,7 +14,7 @@ use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, LineType};
 pub(crate) use aeris_charts_render::line::round_rect_polygon;
 use aeris_charts_render::line::{
-    build_area_fill, expand_line_into, round_rect_ring, stroke_aa, AreaMesh, LineParams, LinePoint,
+    build_area_fill, expand_line_into, stroke_aa, AreaMesh, LineParams, LinePoint, RoundRectBorder,
     STROKE_AA_SOLID,
 };
 
@@ -222,37 +222,17 @@ fn push_polygon_fringe(pool: &mut Vec<MeshVertex>, polygon: &[[f32; 2]]) {
     }
 }
 
-/// Keep the shared inside-ring triangles intact and fade both exposed boundaries. The inner
-/// contour is recovered from those exact paired triangles, so its fringe follows the same corner
-/// chords even when the inset radius would choose fewer steps on its own.
+/// Keep the shared inside-ring triangles intact and fade both exposed boundaries. The fringes
+/// follow the shared outer and inner contours, which are the ring's own edge vertices.
 pub(crate) fn round_rect_ring_mesh(
-    scratch: &mut Scratch,
     pool: &mut Vec<MeshVertex>,
-    rect: [f32; 4],
-    radii: [f32; 4],
-    border_width: f32,
+    geometry: &RoundRectBorder,
 ) -> (u32, u32) {
-    let [x, y, w, h] = rect;
-    let ring = round_rect_ring(x, y, w, h, radii, border_width);
     let first = pool.len() as u32;
-    push_vertices(pool, ring.iter().copied());
-    let inset = border_width.min(w / 2.0).min(h / 2.0);
-    if inset * 2.0 >= w || inset * 2.0 >= h {
-        let outer = round_rect_polygon(x, y, w, h, radii);
-        push_polygon_fringe(pool, &outer);
-    } else {
-        scratch.verts.clear();
-        scratch.contour.clear();
-        for (index, edge) in ring.as_chunks::<6>().0.iter().enumerate() {
-            if index == 0 {
-                scratch.verts.push(edge[0]);
-                scratch.contour.push(edge[5]);
-            }
-            scratch.verts.push(edge[1]);
-            scratch.contour.push(edge[2]);
-        }
-        push_polygon_fringe(pool, &scratch.verts);
-        push_polygon_fringe(pool, &scratch.contour);
+    push_vertices(pool, geometry.ring.iter().copied());
+    push_polygon_fringe(pool, &geometry.outer);
+    if !geometry.inner.is_empty() {
+        push_polygon_fringe(pool, &geometry.inner);
     }
     (first, pool.len() as u32 - first)
 }
@@ -309,6 +289,7 @@ impl Scratch {
             + self.band_lower.capacity() * std::mem::size_of::<LinePoint>()
             + self.area.vertices.capacity()
                 * std::mem::size_of::<aeris_charts_render::line::LineVertex>()
+            + self.area.crossings.capacity() * std::mem::size_of::<usize>()
             + self.verts.capacity() * std::mem::size_of::<[f32; 2]>()
             + self.contour.capacity() * std::mem::size_of::<[f32; 2]>()
             + self.ranges.capacity() * std::mem::size_of::<(u32, u32)>()
@@ -433,6 +414,7 @@ pub(crate) fn area_fill_mesh(
         return ((pool.len() as u32, 0), Paint::VGradient { top, bottom });
     }
     area.vertices.clear();
+    area.crossings.clear();
     build_area_fill(
         window,
         base_y as f64,
@@ -445,7 +427,10 @@ pub(crate) fn area_fill_mesh(
     let paint = area_gradient(pool, core, top, bottom);
     // Each base crossing splits the fill into two simple lobes. Trace their exteriors
     // independently: a fringe around a self-intersecting bow-tie would paint the empty wedge.
+    // The shared tessellator reports which segments cross, so lobe splits never depend on
+    // comparing vertex coordinates.
     let segments = area.vertices.as_chunks::<6>().0;
+    let mut crossings = area.crossings.iter().map(|&offset| offset / 6).peekable();
     if let Some(first_segment) = segments.first() {
         contour.clear();
         contour.push([first_segment[0].x, first_segment[0].y]);
@@ -462,10 +447,10 @@ pub(crate) fn area_fill_mesh(
                     push_polygon_fringe(pool, contour);
                 }
             };
-        for segment in segments {
+        for (index, segment) in segments.iter().enumerate() {
             let next = [segment[1].x, segment[1].y];
             contour.push(next);
-            if next[1] == base_y && segment[4].y != base_y {
+            if crossings.next_if_eq(&index).is_some() {
                 finish_lobe(contour, start_x, pool);
                 contour.clear();
                 contour.push(next);
@@ -579,8 +564,9 @@ pub(crate) fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     )
 }
 
-/// Tessellate a filled disc into `pool` (24 segments, matching `build_disc`). The one-pixel
-/// coverage transition straddles the nominal radius and keeps `s` constant for GPUI on Windows.
+/// Tessellate a filled disc into `pool` with the shared `circle_segments` density for its outer
+/// rim. The one-pixel coverage transition straddles the nominal radius and keeps `s` constant for
+/// GPUI on Windows.
 pub(crate) fn disc_mesh(pool: &mut Vec<MeshVertex>, cx: f32, cy: f32, radius: f32) -> (u32, u32) {
     let first = pool.len() as u32;
     let core = (radius - STROKE_AA_HALF_PX).max(0.0);
@@ -874,6 +860,49 @@ mod tests {
         }
         assert!(!covered(&area, core.0, area.len() as u32, 7.0, 3.5));
         assert!(!covered(&band, first, band_count, 7.0, 3.5));
+    }
+
+    #[test]
+    fn crossed_area_fringes_each_lobe_separately() {
+        let mut pool = Vec::new();
+        // A base that is not exactly representable, crossed twice.
+        let base = 0.1f32 + 0.2;
+        let (core, _) = area_fill_mesh(
+            &mut Scratch::default(),
+            &mut pool,
+            &[[0.0, -9.7], [10.0, 10.3], [20.0, -9.7]],
+            0,
+            3,
+            base,
+            LineType::Simple,
+            Color::rgb(1, 2, 3),
+            Color::rgb(1, 2, 3),
+        );
+        let fringe = (core.0 + core.1, pool.len() as u32 - core.0 - core.1);
+        // Three triangular lobes, each traced alone: three edges of two triangles each.
+        assert_eq!(fringe.1, 3 * 3 * 6, "one fringe per lobe");
+        let probes = [
+            // Just outside an exposed edge of each lobe.
+            ([-0.3, -4.0], true),
+            ([2.5, base + 0.3], true),
+            ([7.5, 5.6], true),
+            ([10.0, base - 0.3], true),
+            ([12.5, 5.6], true),
+            ([17.5, base + 0.3], true),
+            ([20.3, -4.0], true),
+            // The fringe fades outward, never across a lobe's own interior.
+            ([10.0, 5.0], false),
+            // The empty wedges between the lobes stay empty.
+            ([5.0, 4.0], false),
+            ([15.0, 4.0], false),
+        ];
+        for (point, expected) in probes {
+            assert_eq!(
+                covered(&pool, fringe.0, fringe.1, point[0], point[1]),
+                expected,
+                "fringe at {point:?}"
+            );
+        }
     }
 
     #[test]

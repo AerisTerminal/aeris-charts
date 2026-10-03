@@ -1023,7 +1023,10 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
     await test_info.attach("webgpu.png", { body: PNG.sync.write(gpu.png), contentType: "image/png" });
     await test_info.attach("diff.png", { body: PNG.sync.write(visual), contentType: "image/png" });
   }
-  // Windows SwiftShader measurement: 49 rotated-glyph pixels above the 128-step classifier.
+  // Windows SwiftShader measurement: 49 rotated-glyph pixels above the 128-step classifier,
+  // 39 inside the "trend" label and 10 inside the hovered "+ Add text" prompt. The prompt's
+  // pixels lie on its glyph rows (|local y| <= 2 px) with deltas of 135-148 at its 0x99 alpha,
+  // the same rotate-before versus rotate-after raster residual as the label, not paint order.
   expect(rotated_glyph_diff, "rotated glyph raster residual stays bounded").toBeLessThanOrEqual(64);
   expect(ordering_diff, "drawing geometry/paint order must match (only AA coverage steps may differ)").toBe(0);
 });

@@ -57,12 +57,12 @@ use aeris_charts_core::scale::price_scale_core::PriceScaleMode;
 use aeris_charts_engine::{
     crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AccountId, AlertId,
     AlertLine, AlertSnapshot, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign,
-    AxisTextMidpoint, BrushRange, BrushStyle, ChartEngine, DrawingKind, DrawingModifiers,
-    DrawingPoint, ExecutionId, FeatureSeriesKind, InputDevice, InputModifiers, InstrumentMetadata,
-    Marker, OrderId, PaneId, PositionId, PriceFormatterFn, PriceScaleId, PriceScaleSide,
-    PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind, TickMarkFormatterFn,
-    TimeFormatterFn, TradingExecution, TradingPosition, TradingSnapshot, TradingStyleOptions,
-    WorkingOrder,
+    AxisTextMidpoint, BrushRange, BrushStyle, ChartEngine, DrawingId, DrawingKind,
+    DrawingModifiers, DrawingPoint, ExecutionId, FeatureSeriesKind, InputDevice, InputModifiers,
+    InstrumentMetadata, Marker, OrderId, PaneId, PositionId, PriceFormatterFn, PriceScaleId,
+    PriceScaleSide, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
+    TickMarkFormatterFn, TimeFormatterFn, TradingExecution, TradingPosition, TradingSnapshot,
+    TradingStyleOptions, WorkingOrder,
 };
 use aeris_charts_render::canvas2d::{
     execute as execute_canvas2d, Canvas2d, Viewport as CanvasViewport,
@@ -315,6 +315,9 @@ fn chart_key_from_dom(
     Some(match key {
         "ArrowLeft" => ChartKey::ArrowLeft,
         "ArrowRight" => ChartKey::ArrowRight,
+        "ArrowUp" => ChartKey::ArrowUp,
+        "ArrowDown" => ChartKey::ArrowDown,
+        "Tab" => ChartKey::Tab,
         "PageUp" => ChartKey::PageUp,
         "PageDown" => ChartKey::PageDown,
         "+" | "=" => ChartKey::ZoomIn,
@@ -2185,32 +2188,8 @@ impl AerisChart {
             .clear_delta_tooltip(primitive_id)
     }
 
-    /// Forward normalized host mouse samples to every engine-owned delta tooltip.
-    pub fn native_delta_tooltip_mouse_down(&mut self, x: f64, shift: bool) -> bool {
-        self.inner
-            .borrow_mut()
-            .engine
-            .delta_tooltip_mouse_down_with_shift(x, shift)
-    }
-
-    pub fn native_delta_tooltip_mouse_move(&mut self, x: f64) -> bool {
-        self.inner.borrow_mut().engine.delta_tooltip_mouse_move(x)
-    }
-
-    pub fn native_delta_tooltip_mouse_up(&mut self) -> bool {
-        self.inner.borrow_mut().engine.delta_tooltip_mouse_up()
-    }
-
-    pub fn native_delta_tooltip_touch_move(&mut self, xs: &[f64]) -> bool {
-        self.inner.borrow_mut().engine.delta_tooltip_touch_move(xs)
-    }
-
     pub fn native_delta_tooltip_active(&self) -> bool {
         self.inner.borrow().engine.has_delta_tooltip()
-    }
-
-    pub fn native_delta_tooltip_leave(&mut self) -> bool {
-        self.inner.borrow_mut().engine.delta_tooltip_leave()
     }
 
     /// Attach the two-point series primitive with endpoint labels. This is not the interactive
@@ -4482,29 +4461,6 @@ impl AerisChart {
         self.inner.borrow_mut().resize(css_width, css_height, dpr);
     }
 
-    pub fn zoom(&mut self, x_css: f64, scale: f64) {
-        self.inner.borrow_mut().zoom(x_css, scale);
-    }
-    pub fn zoom_focused(&mut self, x_css: f64, scale: f64) {
-        self.inner.borrow_mut().zoom_focused(x_css, scale);
-    }
-    /// Ordinary wheel zoom: the engine resolves the anchor (Ctrl/Cmd zooms around the pointer,
-    /// otherwise the time scale's right-edge pin policy applies).
-    pub fn wheel_zoom_time(&mut self, x_css: f64, scale: f64, control: bool, meta: bool) {
-        self.inner
-            .borrow_mut()
-            .wheel_zoom_time(x_css, scale, control, meta);
-    }
-    pub fn scroll_start(&mut self, x_css: f64) {
-        self.inner.borrow_mut().scroll_start(x_css);
-    }
-    pub fn scroll_move(&mut self, x_css: f64) {
-        self.inner.borrow_mut().scroll_move(x_css);
-    }
-    pub fn scroll_end(&mut self) {
-        self.inner.borrow_mut().scroll_end();
-    }
-
     /// One platform pointer listener call. All press ownership and chart mutation live in the
     /// engine controller; the packed flags carry device, modifiers, and host options in three
     /// disjoint bytes/words without allocating an input object at the WASM boundary.
@@ -4678,6 +4634,51 @@ impl AerisChart {
             .input_key_down(chart_key, modifiers, repeat, timestamp_ms)
     }
 
+    /// Route a key from a focused accessibility target through the engine's target bindings.
+    /// `target` is `price-axis:<pane>`, `time-axis`, `separator:<pane>`, or `drawing:<id>`.
+    pub fn input_target_key_down(&mut self, target: &str, key: &str, modifier_bits: u8) -> bool {
+        use aeris_charts_engine::ChartFocusTarget;
+        let (kind, index) = target.split_once(':').unwrap_or((target, ""));
+        let index = index.parse::<usize>().ok();
+        let target = match (kind, index) {
+            ("price-axis", Some(pane)) => ChartFocusTarget::PriceAxis {
+                pane,
+                target: aeris_charts_engine::PriceScaleTarget::Right,
+            },
+            ("time-axis", _) => ChartFocusTarget::TimeAxis,
+            ("separator", Some(pane)) => ChartFocusTarget::Separator(pane),
+            ("drawing", Some(id)) => ChartFocusTarget::Drawing(id as DrawingId),
+            _ => return false,
+        };
+        let modifiers = input_modifiers_from_u8(modifier_bits);
+        let Some(chart_key) = chart_key_from_dom(key, modifiers) else {
+            return false;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .input_target_key_down(target, chart_key, modifiers)
+    }
+
+    /// The open keyboard drawing edit as JSON `{"id":number,"anchor":number|null}` or `null`.
+    pub fn drawing_edit_session_json(&self) -> String {
+        match self.inner.borrow().engine.drawing_edit_session() {
+            Some((id, anchor)) => serde_json::json!({"id": id, "anchor": anchor}).to_string(),
+            None => "null".to_string(),
+        }
+    }
+
+    /// Whether input or any mutation left the prepared frame stale; hosts render after input
+    /// only while this holds.
+    pub fn frame_pending(&self) -> bool {
+        self.inner.borrow().engine.frame_pending()
+    }
+
+    /// The engine drag threshold that DOM page-scroll arbitration must wait for.
+    pub fn click_slop_manhattan(&self) -> f64 {
+        aeris_charts_engine::CLICK_SLOP_MANHATTAN
+    }
+
     pub fn input_key_up(&mut self, key: &str, modifier_bits: u8) -> bool {
         let mut inner = self.inner.borrow_mut();
         inner
@@ -4711,22 +4712,6 @@ impl AerisChart {
         self.inner.borrow_mut().engine.input_tick(timestamp_ms)
     }
 
-    /// Pinch around its fixed starting centroid in pane coordinates.
-    pub fn input_pinch(
-        &mut self,
-        x: f64,
-        y: f64,
-        scale_delta: f64,
-        timestamp_ms: f64,
-        enabled: bool,
-    ) -> bool {
-        let mut inner = self.inner.borrow_mut();
-        let mut options = inner.engine.interaction_options();
-        options.pinch_zoom = enabled;
-        inner.engine.set_interaction_options(options);
-        inner.engine.input_pinch(x, y, scale_delta, timestamp_ms)
-    }
-
     pub fn input_cancel_motion(&mut self) {
         self.inner.borrow_mut().engine.input_cancel_motion();
     }
@@ -4754,6 +4739,9 @@ impl AerisChart {
                     serde_json::json!({"kind":"remove_series","id":id})
                 }
                 ChartInputEvent::CrosshairLeft => serde_json::json!({"kind":"crosshair_left"}),
+                ChartInputEvent::DeltaTooltipChanged => {
+                    serde_json::json!({"kind":"delta_tooltip_changed"})
+                }
                 ChartInputEvent::ContextMenu(menu) => {
                     let region = match menu.region {
                         ChartRegion::Pane => "pane",
@@ -4774,77 +4762,10 @@ impl AerisChart {
         serde_json::to_string(&values).expect("input events are JSON values")
     }
 
-    /// reference pinch zoom increment: the scale-ratio delta ×5.
-    pub fn pinch_zoom_scale(&self, scale_delta: f64) -> f64 {
-        self.inner.borrow().pinch_zoom_scale(scale_delta)
-    }
-
-    /// Open a kinetic sampling session alongside the drag (`enabled = false` = no coast).
-    pub fn kinetic_begin_sampling(&mut self, enabled: bool, position: f64, now_ms: f64) {
-        self.inner
-            .borrow_mut()
-            .kinetic_begin_sampling(enabled, position, now_ms);
-    }
-    pub fn kinetic_add_sample(&mut self, position: f64, now_ms: f64) {
-        self.inner.borrow_mut().kinetic_add_sample(position, now_ms);
-    }
-    /// The drag was released: whether a momentum coast engaged (drive `kinetic_position`
-    /// per frame instead of ending the scroll session).
-    pub fn kinetic_release(&mut self, position: f64, now_ms: f64) -> bool {
-        self.inner.borrow_mut().kinetic_release(position, now_ms)
-    }
-    /// The coast's logical rightOffset at `now_ms` (NaN when no coast is running).
-    pub fn kinetic_position(&self, now_ms: f64) -> f64 {
-        self.inner.borrow().kinetic_position(now_ms)
-    }
-    pub fn kinetic_finished(&self, now_ms: f64) -> bool {
-        self.inner.borrow().kinetic_finished(now_ms)
-    }
-    pub fn kinetic_stop(&mut self) {
-        self.inner.borrow_mut().kinetic_stop();
-    }
-
-    /// Start or retune one held keyboard-pan direction in logical bars.
-    pub fn start_keyboard_scroll(&mut self, delta_bars: f64, now_ms: f64) {
-        self.inner
-            .borrow_mut()
-            .start_keyboard_scroll(delta_bars, now_ms);
-    }
-    /// Apply one keyboard-pan tick; NaN when no held kinetic session is active.
-    pub fn keyboard_scroll_tick(&mut self, now_ms: f64) -> f64 {
-        self.inner.borrow_mut().keyboard_scroll_tick(now_ms)
-    }
     pub fn cancel_keyboard_scroll(&mut self) {
         self.inner.borrow_mut().cancel_keyboard_scroll();
     }
 
-    /// Axis drag-to-scale (reference pressedMouseMove on the axis widgets).
-    pub fn time_axis_start_scale(&mut self, x_css: f64) {
-        self.inner.borrow_mut().time_axis_start_scale(x_css);
-    }
-    pub fn time_axis_scale_to(&mut self, x_css: f64) {
-        self.inner.borrow_mut().time_axis_scale_to(x_css);
-    }
-    pub fn time_axis_end_scale(&mut self) {
-        self.inner.borrow_mut().time_axis_end_scale();
-    }
-    /// Whether a price-axis drag can scale this scale (false in percentage/indexed modes).
-    pub fn price_axis_scalable(&self, pane: usize, target: u32) -> bool {
-        self.inner.borrow().price_axis_scalable(pane, target)
-    }
-    pub fn price_axis_start_scale(&mut self, pane: usize, target: u32, y_css: f64) {
-        self.inner
-            .borrow_mut()
-            .price_axis_start_scale(pane, target, y_css);
-    }
-    pub fn price_axis_scale_to(&mut self, pane: usize, target: u32, y_css: f64) {
-        self.inner
-            .borrow_mut()
-            .price_axis_scale_to(pane, target, y_css);
-    }
-    pub fn price_axis_end_scale(&mut self, pane: usize, target: u32) {
-        self.inner.borrow_mut().price_axis_end_scale(pane, target);
-    }
     /// industry-standard bid/ask quotes: push the current values for a series (NaN clears that
     /// side). Lines and chips render while the series' `bid_ask_visible` option holds. Call
     /// `render()` after.
@@ -4865,31 +4786,6 @@ impl AerisChart {
             scale,
         );
     }
-    /// Vertical price pan (reference `startScrollPrice`/`scrollPriceTo`).
-    pub fn price_axis_start_scroll(&mut self, pane: usize, target: u32, y_css: f64) {
-        self.inner
-            .borrow_mut()
-            .price_axis_start_scroll(pane, target, y_css);
-    }
-    pub fn price_axis_scroll_to(&mut self, pane: usize, target: u32, y_css: f64) {
-        self.inner
-            .borrow_mut()
-            .price_axis_scroll_to(pane, target, y_css);
-    }
-    pub fn price_axis_end_scroll(&mut self, pane: usize, target: u32) {
-        self.inner.borrow_mut().price_axis_end_scroll(pane, target);
-    }
-    /// Resolve the intended series scale and begin its drag session when already manual.
-    pub fn begin_price_pan_at(&mut self, pane: usize, x_css: f64, y_css: f64) -> Option<u32> {
-        self.inner
-            .borrow_mut()
-            .begin_price_pan_at(pane, x_css, y_css)
-    }
-    /// Resolve the intended pane price scale without opening or mutating its drag session.
-    pub fn price_pan_target_at(&self, pane: usize, x_css: f64, y_css: f64) -> Option<u32> {
-        self.inner.borrow().price_pan_target_at(pane, x_css, y_css)
-    }
-
     /// Eased scroll-to-position (the engine owns the cubic ease-out and applies each tick).
     pub fn start_scroll_animation(&mut self, target: f64, duration_ms: f64, now_ms: f64) {
         self.inner
@@ -4953,12 +4849,13 @@ impl AerisChart {
     /// lets go on the next `render()` and active drawings return to stable order. The text
     /// drawings' hover ring releases too.
     pub fn clear_hover(&mut self) {
-        let mut inner = self.inner.borrow_mut();
-        inner.engine.set_hovered_series(None);
-        inner.engine.set_hovered_text(None);
-        inner.engine.set_hovered_drawing(None);
-        inner.engine.clear_general_hover();
-        inner.engine.set_host_primitive_cursor(false);
+        self.inner.borrow_mut().engine.clear_hover();
+    }
+    /// The input controller's hover after the last pointer input, in `hover_at` JSON. Plugin
+    /// primitives under the controller's hover point are arbitrated in; everything else was
+    /// already resolved by the input call.
+    pub fn controller_hover_json(&mut self) -> String {
+        self.inner.borrow_mut().controller_hover_json()
     }
     /// industry-standard click-to-select: the host's click pipeline sets the series under the
     /// click (`None` on empty pane space); the engine snapshots sparse canonical anchor identities
@@ -5234,13 +5131,6 @@ impl AerisChart {
     }
     pub fn drawing_drag_active(&self) -> bool {
         self.inner.borrow().drawing_drag_active()
-    }
-    pub fn nudge_selected_drawing(&mut self, dx_css: f64, dy_css: f64, anchor: i32) -> bool {
-        self.inner.borrow_mut().engine.nudge_selected_drawing(
-            dx_css,
-            dy_css,
-            usize::try_from(anchor).ok(),
-        )
     }
     /// Undo one committed drawing mutation in this chart's bounded semantic history.
     pub fn undo_drawing(&mut self) -> bool {

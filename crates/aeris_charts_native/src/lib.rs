@@ -74,19 +74,21 @@ impl FontCache {
             families.push(resolved);
         }
         families.push(fontdb::Family::SansSerif);
+        families.extend(SANS_SERIF_FALLBACKS.map(fontdb::Family::Name));
+        let style = if italic {
+            fontdb::Style::Italic
+        } else {
+            fontdb::Style::Normal
+        };
         let id = self
             .database
             .query(&fontdb::Query {
                 families: &families,
                 weight: fontdb::Weight(weight),
-                style: if italic {
-                    fontdb::Style::Italic
-                } else {
-                    fontdb::Style::Normal
-                },
+                style,
                 ..fontdb::Query::default()
             })
-            .or_else(|| self.database.faces().next().map(|face| face.id))?;
+            .or_else(|| stable_fallback_face(&self.database, weight, style))?;
         let font = self
             .database
             .with_face_data(id, |data, index| {
@@ -102,6 +104,53 @@ impl FontCache {
             .push((family.to_string(), weight, italic, font.clone()));
         Some(font)
     }
+}
+
+/// Common sans-serif families tried after the generic `sans-serif` alias, which fontdb maps to a
+/// single name ("Arial") that many Linux and minimal hosts do not install.
+const SANS_SERIF_FALLBACKS: [&str; 9] = [
+    "Arial",
+    "Helvetica",
+    "Liberation Sans",
+    "DejaVu Sans",
+    "Noto Sans",
+    "Segoe UI",
+    "Roboto",
+    "Ubuntu",
+    "Cantarell",
+];
+
+/// Last-resort face when no requested or known sans-serif family is installed. The choice is
+/// ordered by face properties and names, never by OS enumeration order, so the same installed
+/// set renders the same pixels on every run and machine.
+fn stable_fallback_face(
+    database: &fontdb::Database,
+    weight: u16,
+    style: fontdb::Style,
+) -> Option<fontdb::ID> {
+    database
+        .faces()
+        .min_by(|a, b| {
+            let rank = |face: &fontdb::FaceInfo| {
+                (
+                    face.monospaced,
+                    face.style != style,
+                    face.weight.0.abs_diff(weight),
+                )
+            };
+            let family = |face: &fontdb::FaceInfo| {
+                face.families
+                    .first()
+                    .map(|(name, _)| name.to_ascii_lowercase())
+                    .unwrap_or_default()
+            };
+            rank(a)
+                .cmp(&rank(b))
+                .then_with(|| family(a).cmp(&family(b)))
+                .then_with(|| a.post_script_name.cmp(&b.post_script_name))
+                .then_with(|| a.index.cmp(&b.index))
+        })
+        .map(|face| face.id)
 }
 
 static FONTS: LazyLock<Mutex<FontCache>> = LazyLock::new(|| Mutex::new(FontCache::new()));
@@ -1048,6 +1097,99 @@ mod tests {
     use aeris_charts_render::draw_list::{Gradient, IRect};
     use std::sync::Arc;
 
+    /// The face text assertions run against. A host with no installed or registered font
+    /// cannot paint native text at all, so those tests report the skip instead of panicking.
+    fn test_face(family: &str) -> Option<FontArc> {
+        let face = font_for(family, 400, false);
+        if face.is_none() {
+            eprintln!("skipping native text assertions: no installed or registered font face");
+        }
+        face
+    }
+
+    /// Paints the chart the way a live native host does: one prepared financial frame with
+    /// native axis measurement at `dpr`, then the panes beneath the axis/top layer.
+    fn render_live_host(chart: &mut ChartEngine, dpr: f64) -> TinySkiaCanvas {
+        install_native_text_measure(chart);
+        let family = chart.options.get().layout.font_family.clone();
+        let axis_size = chart.axis_font_size();
+        let countdown_size = chart.countdown_font_size();
+        let (width, height) = (chart.css_width, chart.css_height);
+        let mut frame = aeris_charts_engine::ChartFrame::default();
+        let mut axis = Vec::new();
+        chart.prepare_financial_frame_with_measure(
+            aeris_charts_engine::FinancialFrameRequest {
+                width,
+                height,
+                dpr,
+                force_layout: false,
+                allow_axis_shrink: false,
+                force_frame: false,
+                force_axis: false,
+                layout_only: false,
+                fit_content: false,
+                frame: &mut frame,
+                axis_frame: None,
+                axis_primitives: Some(&mut axis),
+            },
+            |text, bold| axis_text_width(text, bold, axis_size, &family),
+            |text, bold| axis_text_width(text, bold, countdown_size, &family),
+        );
+        let background = Color::parse_css(&chart.options.get().layout.background.color).unwrap();
+        // `frame.width` is the plot width; the surface spans the whole chart including axes.
+        let width = (width * dpr).round().max(1.0) as u32;
+        let height = (height * dpr).round().max(1.0) as u32;
+        let mut canvas = TinySkiaCanvas::new(width, height, background);
+        let viewport = Viewport {
+            width: width as f32,
+            height: height as f32,
+        };
+        for pane in &frame.panes {
+            canvas.save();
+            let [x, y, w, h] = pane.scissor;
+            canvas.clip_rect(x as f32, y as f32, w as f32, h as f32);
+            execute(&pane.under, &pane.points, &mut canvas, viewport);
+            execute(&pane.main, &pane.points, &mut canvas, viewport);
+            execute(&pane.top_prims, &pane.points, &mut canvas, viewport);
+            canvas.restore();
+        }
+        execute(&axis, &[], &mut canvas, viewport);
+        canvas
+    }
+
+    #[test]
+    fn font_fallback_ignores_os_enumeration_order() {
+        let mut forward = fontdb::Database::new();
+        forward.load_system_fonts();
+        let Some(chosen) = stable_fallback_face(&forward, 400, fontdb::Style::Normal) else {
+            eprintln!("skipping font fallback order test: no installed font face");
+            return;
+        };
+        let mut paths: Vec<std::path::PathBuf> = forward
+            .faces()
+            .filter_map(|face| match &face.source {
+                fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => {
+                    Some(path.clone())
+                }
+                fontdb::Source::Binary(_) => None,
+            })
+            .collect();
+        paths.dedup();
+        let mut reversed = fontdb::Database::new();
+        for path in paths.iter().rev() {
+            reversed
+                .load_font_file(path)
+                .expect("an installed font file reloads");
+        }
+        let name = |database: &fontdb::Database, id| {
+            database
+                .face(id)
+                .map(|face| (face.post_script_name.clone(), face.index))
+        };
+        let reversed_choice = stable_fallback_face(&reversed, 400, fontdb::Style::Normal).unwrap();
+        assert_eq!(name(&reversed, reversed_choice), name(&forward, chosen));
+    }
+
     #[test]
     fn fills_a_rect_at_expected_pixels() {
         let bg = Color::rgb(0xff, 0xff, 0xff);
@@ -1560,43 +1702,71 @@ mod tests {
                 Some(r#"{"text":"WWWW","text_size":22,"text_h_align":"left","text_v_align":"middle"}"#),
             )
             .unwrap();
+        let Some(face) = test_face(&chart.options.get().layout.font_family) else {
+            return;
+        };
         render_engine(&mut chart);
         let (x, y, angle) = chart.drawing_text_transform(id).unwrap();
-        let face = font_for(&chart.options.get().layout.font_family, 400, false).unwrap();
         let scaled = face.as_scaled(PxScale::from(22.0));
         let painted_advance = text_advance(&scaled, "WWWW") as f64;
         assert!(
             painted_advance > 60.0,
             "fixture must exceed the fallback width"
         );
+        let hit = |along: f64| {
+            chart.drawing_text_hit_at(x + angle.cos() * along, y + angle.sin() * along) == Some(id)
+        };
         let along = painted_advance - 2.0;
-        assert_eq!(
-            chart.drawing_text_hit_at(x + angle.cos() * along, y + angle.sin() * along),
-            Some(id),
+        assert!(
+            hit(along),
             "label hit box must reach its painted glyph advance {painted_advance}"
+        );
+        // The engine pads the label box by 4 px on each side of the measured run.
+        const PAD: f64 = 4.0;
+        let samples: Vec<f64> = (-160..=(painted_advance as i32 + 40) * 8)
+            .map(|step| f64::from(step) / 8.0)
+            .filter(|&along| hit(along))
+            .collect();
+        let (first, last) = (samples[0], *samples.last().unwrap());
+        let box_width = last - first - 2.0 * PAD;
+        assert!(
+            (box_width - painted_advance).abs() <= 1.0,
+            "label box spans {box_width} px but the run paints {painted_advance} px"
+        );
+        assert!(
+            (first + PAD).abs() <= 1.0,
+            "left-aligned label box must start at the anchor, not {}",
+            first + PAD
         );
     }
 
     #[test]
     fn image_export_renders_custom_background_at_requested_scale() {
-        let mut chart = ChartEngine::new(120.0, 80.0, 1.0);
-        chart
-            .options
-            .apply_str(r##"{"layout":{"background":{"type":"solid","color":"#2468ac"}}}"##)
-            .unwrap();
-        chart
-            .set_series_data(
-                0,
-                &[1.0, 2.0, 3.0],
-                &[10.0, 11.0, 12.0],
-                &[11.0, 12.0, 13.0],
-                &[9.0, 10.0, 11.0],
-                &[10.5, 11.5, 12.5],
-            )
-            .unwrap();
-        chart.time_scale.set_width(120.0);
-        chart.fit_content();
-        let original = render_engine(&mut chart).pixmap().data().to_vec();
+        if test_face("sans-serif").is_none() {
+            return;
+        }
+        let new_chart = || {
+            let mut chart = ChartEngine::new(120.0, 80.0, 1.0);
+            chart
+                .options
+                .apply_str(r##"{"layout":{"background":{"type":"solid","color":"#2468ac"}}}"##)
+                .unwrap();
+            chart
+                .set_series_data(
+                    0,
+                    &[1.0, 2.0, 3.0],
+                    &[10.0, 11.0, 12.0],
+                    &[11.0, 12.0, 13.0],
+                    &[9.0, 10.0, 11.0],
+                    &[10.5, 11.5, 12.5],
+                )
+                .unwrap();
+            chart.time_scale.set_width(120.0);
+            chart.fit_content();
+            chart
+        };
+        let mut chart = new_chart();
+        let original = render_live_host(&mut chart, 1.0).pixmap().data().to_vec();
         let image = render_engine_rgba(
             &mut chart,
             ImageExportOptions {
@@ -1607,7 +1777,7 @@ mod tests {
         .unwrap();
         assert_eq!((image.width, image.height), (240, 160));
         assert_eq!(&image.pixels[..4], &[0x24, 0x68, 0xac, 0xff]);
-        let after = render_engine(&mut chart).pixmap().data().to_vec();
+        let after = render_live_host(&mut chart, 1.0).pixmap().data().to_vec();
         assert_eq!(after, original, "export must restore the live chart view");
         let resized = render_engine_rgba(
             &mut chart,
@@ -1620,7 +1790,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!((resized.width, resized.height), (320, 200));
-        let restored = render_engine(&mut chart).pixmap().data().to_vec();
+        let restored = render_live_host(&mut chart, 1.0).pixmap().data().to_vec();
         assert_eq!(
             restored
                 .iter()
@@ -1632,24 +1802,34 @@ mod tests {
             restored.iter().zip(&original).position(|(a, b)| a != b)
         );
 
-        let mut direct = ChartEngine::new(120.0, 80.0, 2.0);
-        direct
-            .options
-            .apply_str(r##"{"layout":{"background":{"type":"solid","color":"#2468ac"}}}"##)
-            .unwrap();
-        direct
-            .set_series_data(
-                0,
-                &[1.0, 2.0, 3.0],
-                &[10.0, 11.0, 12.0],
-                &[11.0, 12.0, 13.0],
-                &[9.0, 10.0, 11.0],
-                &[10.5, 11.5, 12.5],
-            )
-            .unwrap();
-        direct.time_scale.set_width(120.0);
-        direct.fit_content();
-        assert_eq!(image.pixels, render_engine(&mut direct).pixmap().data());
+        // The export must equal what a live host shows after moving the same chart to a 2x
+        // display, axis text included.
+        let mut direct = new_chart();
+        render_live_host(&mut direct, 1.0);
+        let live_2x = render_live_host(&mut direct, 2.0);
+        let axis_left = ((direct.pane_left + direct.pane_w) * 2.0).round() as u32;
+        assert!(axis_left < 240, "the layout reserves a right price axis");
+        let background = [0x24, 0x68, 0xac, 0xff];
+        let axis_ink = (axis_left..240)
+            .flat_map(|x| (0..160).map(move |y| (x, y)))
+            .filter(|&(x, y)| live_2x.pixel_rgba(x, y) != background)
+            .count();
+        assert!(
+            axis_ink > 40,
+            "2x price-axis text must paint ink, got {axis_ink}"
+        );
+        let live_2x = live_2x.pixmap().data();
+        assert_eq!(
+            image
+                .pixels
+                .iter()
+                .zip(live_2x)
+                .filter(|(a, b)| a != b)
+                .count(),
+            0,
+            "2x export must match the live 2x frame; first mismatch at byte {:?}",
+            image.pixels.iter().zip(live_2x).position(|(a, b)| a != b)
+        );
     }
 
     #[test]
@@ -1798,12 +1978,12 @@ mod tests {
 
     #[test]
     fn native_glyphs_keep_negative_and_fractional_x_coverage_columns() {
-        let face = font_for("sans-serif", 400, false).unwrap();
-        let scale = PxScale::from(20.0);
-        let scaled = face.as_scaled(scale);
-        let baseline = 24.0 + (scaled.ascent() + scaled.descent()) / 2.0;
-        for x in [-0.5_f32, 10.25] {
-            let mut canvas = TinySkiaCanvas::new(40, 48, Color::rgba(0, 0, 0, 0));
+        if test_face("sans-serif").is_none() {
+            return;
+        }
+        // Per-column ink of "W" painted at `x` on an 80 px canvas.
+        let column_ink = |x: f32| -> Vec<u32> {
+            let mut canvas = TinySkiaCanvas::new(80, 48, Color::rgba(0, 0, 0, 0));
             canvas.fill_text(
                 "W",
                 x,
@@ -1812,25 +1992,40 @@ mod tests {
                 Color::rgb(255, 255, 255),
                 TextAlign::Left,
             );
-            let glyph = scaled
-                .glyph_id('W')
-                .with_scale_and_position(scale, ab_glyph::point(x, baseline));
-            let outlined = face.outline_glyph(glyph).unwrap();
-            let bounds = outlined.px_bounds();
-            let mut expected = std::collections::BTreeSet::new();
-            outlined.draw(|gx, gy, coverage| {
-                let column = bounds.min.x as i32 + gx as i32;
-                let row = bounds.min.y as i32 + gy as i32;
-                if coverage > 0.0 && (0..40).contains(&column) && (0..48).contains(&row) {
-                    expected.insert(column);
-                }
-            });
-            let actual: std::collections::BTreeSet<_> = (0..40)
-                .filter(|&column| (0..48).any(|row| canvas.pixel_rgba(column, row)[3] > 0))
-                .map(|column| column as i32)
-                .collect();
-            assert_eq!(actual, expected, "glyph coverage columns at x={x}");
-        }
+            (0..80)
+                .map(|column| {
+                    (0..48)
+                        .map(|row| u32::from(canvas.pixel_rgba(column, row)[3]))
+                        .sum()
+                })
+                .collect()
+        };
+        // A whole-pixel shift keeps the subpixel phase, so the run at 30.5 is an independent
+        // reference for the run at -0.5: every column moves left by exactly 31 and the columns
+        // that fall off the left edge are the only ones lost.
+        let reference = column_ink(30.5);
+        let negative = column_ink(-0.5);
+        assert!(reference[..30].iter().all(|&ink| ink == 0));
+        let expected: Vec<u32> = (0..80)
+            .map(|column| reference.get(column + 31).copied().unwrap_or(0))
+            .collect();
+        assert!(expected[0] > 0, "the fixture glyph must straddle x = 0");
+        assert_eq!(negative, expected, "negative-x glyph coverage columns");
+
+        // Fractional placement moves the coverage centroid by the fraction, not a whole pixel.
+        let centroid = |ink: &[u32]| {
+            let total: f64 = ink.iter().map(|&v| f64::from(v)).sum();
+            ink.iter()
+                .enumerate()
+                .map(|(column, &v)| (column as f64 + 0.5) * f64::from(v))
+                .sum::<f64>()
+                / total
+        };
+        let shift = centroid(&column_ink(10.75)) - centroid(&column_ink(10.25));
+        assert!(
+            (shift - 0.5).abs() <= 0.1,
+            "a 0.5 px fractional move shifted ink by {shift} px"
+        );
     }
 
     #[test]

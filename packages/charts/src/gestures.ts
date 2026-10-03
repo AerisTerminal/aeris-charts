@@ -1,7 +1,6 @@
 /** Browser event translation for the engine-owned chart input controller. */
 import type { chart_impl } from "./impl.js";
 
-const SLOP_MANHATTAN = 5; // DOM page-scroll arbitration waits for the engine drag threshold.
 const MODIFIER_KEYS = new Set(["Control", "Meta", "Shift", "Alt"]);
 
 /** One pointer ABI shared by DOM and worker hosts: device | modifiers | options. */
@@ -17,11 +16,12 @@ export function install_gestures(chart: chart_impl): () => void {
   const overlay = chart.overlay_el();
   const wasm = chart.wasm;
   // Captures are platform resources. Gesture membership and routing stay in the engine.
-  const captures = new Map<number, { device: InputDeviceCode; point: point }>();
+  const captures = new Map<number, InputDeviceCode>();
   const controller_crosshair = new Float64Array(2);
-  const one_touch_x = new Float64Array(1);
-  const two_touch_xs = new Float64Array(2);
+  // DOM page-scroll arbitration waits for the engine's own drag threshold.
+  const slop_manhattan = wasm.click_slop_manhattan();
   let controller_crosshair_visible = false;
+  let applied_cursor: string | null = null;
   let touch_direction: "pending" | "chart" | "page" = "pending";
   let touch_origin = { x: 0, y: 0 };
   let input_wake_timer: ReturnType<typeof setTimeout> | null = null;
@@ -90,7 +90,7 @@ export function install_gestures(chart: chart_impl): () => void {
     const x = controller_crosshair[0]!;
     const y = controller_crosshair[1]!;
     if (Number.isFinite(x) && Number.isFinite(y)) {
-      chart.update_hover(x, y);
+      chart.sync_hover();
       chart.emit_crosshair(x, y);
       controller_crosshair_visible = true;
     } else if (controller_crosshair_visible) {
@@ -98,12 +98,16 @@ export function install_gestures(chart: chart_impl): () => void {
       chart.emit_crosshair_left();
       controller_crosshair_visible = false;
     }
-    const cursor = wasm.controller_input_cursor();
-    overlay.style.cursor = cursor === HOST_PRIMITIVE_CURSOR
+    const cursor_code = wasm.controller_input_cursor();
+    const cursor = cursor_code === HOST_PRIMITIVE_CURSOR
       ? (chart.hover_cursor() ?? "crosshair")
-      : (cursor_names[cursor] ?? "crosshair");
+      : (cursor_names[cursor_code] ?? "crosshair");
+    if (cursor !== applied_cursor) {
+      overlay.style.cursor = cursor;
+      applied_cursor = cursor;
+    }
     chart.consume_input_events(complete_press);
-    chart.repaint();
+    if (wasm.frame_pending()) chart.repaint();
     schedule_input_wake();
     if (wasm.input_animating()) ensure_input_frames();
   };
@@ -118,13 +122,12 @@ export function install_gestures(chart: chart_impl): () => void {
     captures.clear();
     touch_direction = "pending";
     chart.set_interacting(false);
-    chart.native_delta_tooltip_mouse_up();
     clear_input_wake();
     sync_controller_pointer();
   };
   const has_touch_capture = (): boolean => {
-    for (const capture of captures.values()) {
-      if (capture.device === InputDeviceCode.Touch) return true;
+    for (const device of captures.values()) {
+      if (device === InputDeviceCode.Touch) return true;
     }
     return false;
   };
@@ -135,7 +138,7 @@ export function install_gestures(chart: chart_impl): () => void {
     stop_scroll_anim();
     try { overlay.setPointerCapture(event.pointerId); } catch { /* synthetic pointer */ }
     const position = local_xy(event);
-    captures.set(event.pointerId, { device: device_code(event.pointerType), point: position });
+    captures.set(event.pointerId, device_code(event.pointerType));
     chart.set_interacting(true);
     wasm.controller_pointer_down(event.pointerId, position.x, position.y,
       event.timeStamp || performance.now(), event.detail || 1,
@@ -146,8 +149,6 @@ export function install_gestures(chart: chart_impl): () => void {
   const on_move = (event: PointerEvent) => {
     if (event.pointerType === "touch" || (event.buttons !== 0 && (event.buttons & 1) === 0)) return;
     const position = local_xy(event);
-    const capture = captures.get(event.pointerId);
-    if (capture !== undefined) capture.point = position;
     wasm.controller_pointer_move(event.pointerId, position.x, position.y,
       event.timeStamp || performance.now(), (event.buttons & 1) !== 0,
       flags(device_code(event.pointerType), event));
@@ -195,7 +196,7 @@ export function install_gestures(chart: chart_impl): () => void {
       if (captures.size >= 2) break;
       const position = local_xy(touch);
       try { overlay.setPointerCapture(touch.identifier); } catch { /* Touch Events own capture */ }
-      captures.set(touch.identifier, { device: InputDeviceCode.Touch, point: position });
+      captures.set(touch.identifier, InputDeviceCode.Touch);
       wasm.controller_pointer_down(touch.identifier, position.x, position.y,
         event.timeStamp || performance.now(), 1, packed);
     }
@@ -211,7 +212,7 @@ export function install_gestures(chart: chart_impl): () => void {
       const primary = event.touches[0]!;
       const dx = Math.abs(primary.clientX - touch_origin.x);
       const dy = Math.abs(primary.clientY - touch_origin.y);
-      if (dx + dy < SLOP_MANHATTAN) return;
+      if (dx + dy < slop_manhattan) return;
       if (!wasm.controller_touch_page_scroll_candidate(primary.identifier)) {
         touch_direction = "chart";
       } else {
@@ -232,21 +233,11 @@ export function install_gestures(chart: chart_impl): () => void {
     if (event.cancelable) event.preventDefault();
     const packed = touch_flags(event);
     for (const touch of Array.from(event.changedTouches)) {
-      const capture = captures.get(touch.identifier);
-      if (capture?.device !== InputDeviceCode.Touch) continue;
+      if (captures.get(touch.identifier) !== InputDeviceCode.Touch) continue;
       const position = local_xy(touch);
-      capture.point = position;
       wasm.controller_pointer_move(touch.identifier, position.x, position.y,
         event.timeStamp || performance.now(), true, packed);
     }
-    // The Delta Tooltip accepts a two-finger comparison range through its existing host bridge.
-    const xs = captures.size > 1 ? two_touch_xs : one_touch_x;
-    let count = 0;
-    for (const capture of captures.values()) {
-      if (capture.device !== InputDeviceCode.Touch || count >= xs.length) continue;
-      xs[count++] = capture.point.x;
-    }
-    if (count > 0) chart.native_delta_tooltip_touch_move(xs);
     sync_controller_pointer();
   };
   const on_touch_end = (event: TouchEvent) => {
@@ -257,7 +248,7 @@ export function install_gestures(chart: chart_impl): () => void {
     if (event.cancelable) event.preventDefault();
     const packed = touch_flags(event);
     for (const touch of Array.from(event.changedTouches)) {
-      if (captures.get(touch.identifier)?.device !== InputDeviceCode.Touch) continue;
+      if (captures.get(touch.identifier) !== InputDeviceCode.Touch) continue;
       const position = local_xy(touch);
       wasm.controller_pointer_up(touch.identifier, position.x, position.y,
         event.timeStamp || performance.now(), packed);

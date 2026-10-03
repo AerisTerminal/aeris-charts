@@ -748,17 +748,61 @@ fn rotated_text_sprite_bounds(
     }
 }
 
-fn rotated_text_vertical_layout(
-    anchor_y: f32,
+/// The `ShapedLine::paint` offset that puts a run's baseline on the shared Canvas2D contract,
+/// in logical px. Painting with `line_height = ascent - descent` places the baseline at exactly
+/// `offset.y + ascent` (see [`paint_text`]).
+fn text_paint_offset(
+    run: &TextRun,
+    transform: Transform,
+    width: f32,
     ascent: f32,
     descent: f32,
-    font_size: f32,
-) -> (f32, f32) {
-    let height = (ascent - descent).max(font_size);
-    (
-        text::middle_baseline(anchor_y, ascent, descent) - ascent,
-        height,
-    )
+) -> gpui::Point<Pixels> {
+    let anchor_x: f32 = transform.x(run.x).into();
+    let anchor_y: f32 = transform.y(run.y).into();
+    let left = text::aligned_left(anchor_x, width, run.align);
+    let baseline = text::middle_baseline(anchor_y, ascent, descent);
+    point(px(left), px(baseline - ascent))
+}
+
+/// Unrotated layout of a rotated run's SVG sprite, in logical px.
+struct RotatedTextSprite {
+    bounds: Bounds<Pixels>,
+    /// Sprite viewport size, including the ink margin on every side.
+    width: f32,
+    height: f32,
+    /// The SVG `<text>` origin (left edge, baseline) inside the sprite.
+    text_x: f32,
+    text_y: f32,
+}
+
+/// The sprite reuses the plain-text paint offset, so at zero degrees its glyph origin is the
+/// one [`paint_text`] uses for the same run and metrics.
+fn rotated_text_sprite(
+    run: &TextRun,
+    transform: Transform,
+    width: f32,
+    ascent: f32,
+    descent: f32,
+) -> RotatedTextSprite {
+    let width = width.max(1.0);
+    let offset = text_paint_offset(run, transform, width, ascent, descent);
+    let height = (ascent - descent).max(f32::from(transform.len(run.size)));
+    // Use a whole device-pixel margin so GPUI's bounds snapping does not shift the glyphs.
+    let pad = run.size.ceil().max(1.0) * transform.inv_scale;
+    RotatedTextSprite {
+        bounds: rotated_text_sprite_bounds(
+            f32::from(offset.x),
+            f32::from(offset.y),
+            width,
+            height,
+            pad,
+        ),
+        width: width + 2.0 * pad,
+        height: height + 2.0 * pad,
+        text_x: pad,
+        text_y: pad + ascent,
+    }
 }
 
 /// GPUI's shaped-line painter has no affine-transform parameter. Rotated runs therefore use
@@ -811,18 +855,22 @@ fn paint_rotated_text(
         descent: cached.descent * logical_to_device,
     });
 
-    let width = f32::from(cached.line.width).max(1.0);
     let font_size_value = f32::from(font_size);
     let anchor_x = f32::from(transform.x(run.x));
     let anchor_y = f32::from(transform.y(run.y));
-    let left = text::aligned_left(anchor_x, width, run.align);
-    let (top, height) =
-        rotated_text_vertical_layout(anchor_y, cached.ascent, cached.descent, font_size_value);
-    // Use a whole device-pixel margin so GPUI's bounds snapping does not shift the glyphs.
-    let pad = run.size.ceil().max(1.0) * transform.inv_scale;
-    let bounds = rotated_text_sprite_bounds(left, top, width, height, pad);
-    let sprite_width = width + 2.0 * pad;
-    let sprite_height = height + 2.0 * pad;
+    let RotatedTextSprite {
+        bounds,
+        width: sprite_width,
+        height: sprite_height,
+        text_x,
+        text_y,
+    } = rotated_text_sprite(
+        run,
+        transform,
+        f32::from(cached.line.width),
+        cached.ascent,
+        cached.descent,
+    );
     // SVG resolves the requested CSS family independently of GPUI's font resolver. A missing
     // family can therefore fall back to a different face; the shared baseline still uses GPUI's
     // measured metrics, but glyph shapes/advances are only guaranteed when both resolve that face.
@@ -830,8 +878,7 @@ fn paint_rotated_text(
     let value = escape_svg_text(&run.text);
     let style = if run.italic { "italic" } else { "normal" };
     let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{sprite_width}" height="{sprite_height}" viewBox="0 0 {sprite_width} {sprite_height}"><text x="{pad}" y="{baseline}" font-family="{family}" font-size="{font_size_value}" font-weight="{weight}" font-style="{style}" fill="white">{value}</text></svg>"#,
-        baseline = pad + cached.ascent,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{sprite_width}" height="{sprite_height}" viewBox="0 0 {sprite_width} {sprite_height}"><text x="{text_x}" y="{text_y}" font-family="{family}" font-size="{font_size_value}" font-weight="{weight}" font-style="{style}" fill="white">{value}</text></svg>"#,
         weight = run.weight,
     );
     let scale_factor = 1.0 / transform.inv_scale;
@@ -1056,13 +1103,14 @@ fn paint_text(
     text_cache.measure_with(TextKey::for_run(run), || measured);
 
     // Placement in logical px, from the cached GPUI metrics.
-    let width: f32 = cached.line.width.into();
-    let anchor_x: f32 = transform.x(run.x).into();
-    let anchor_y: f32 = transform.y(run.y).into();
-    let left = text::aligned_left(anchor_x, width, run.align);
-    let baseline = text::middle_baseline(anchor_y, cached.ascent, cached.descent);
+    let offset = text_paint_offset(
+        run,
+        transform,
+        cached.line.width.into(),
+        cached.ascent,
+        cached.descent,
+    );
     let line_height = px(cached.ascent - cached.descent);
-    let offset = point(px(left), px(baseline - cached.ascent));
 
     if cached
         .line
@@ -1081,11 +1129,42 @@ mod tests {
     use aeris_charts_render::draw_list::TextAlign;
 
     #[test]
-    fn zero_degree_rotated_text_uses_the_unrotated_baseline() {
-        let (top, _) = rotated_text_vertical_layout(100.0, 10.0, -3.0, 12.0);
-        let rotated_baseline = top + 10.0;
-        let normal_baseline = text::middle_baseline(100.0, 10.0, -3.0);
-        assert_eq!(rotated_baseline, normal_baseline);
+    fn zero_degree_rotated_text_paints_its_glyph_origin_where_plain_text_does() {
+        // Logical-px GPUI metrics for one shaped run at a fractional window scale.
+        let (width, ascent, descent) = (47.6f32, 11.2f32, -2.9f32);
+        for scale in [1.0f32, 1.5, 2.0] {
+            let transform = Transform::new(AerisViewport::new(12.0, 34.0, 800.0, 600.0), scale);
+            for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+                let mut text_run = run("Inter");
+                text_run.x = 101.3;
+                text_run.y = 57.8;
+                text_run.size = 13.0;
+                text_run.text = "Trend 42".into();
+                text_run.align = align;
+                // `paint_text` puts the baseline at `offset.y + ascent`.
+                let offset = text_paint_offset(&text_run, transform, width, ascent, descent);
+                let (plain_left, plain_baseline) =
+                    (f32::from(offset.x), f32::from(offset.y) + ascent);
+                let sprite = rotated_text_sprite(&text_run, transform, width, ascent, descent);
+                let glyph_left = f32::from(sprite.bounds.origin.x) + sprite.text_x;
+                let glyph_baseline = f32::from(sprite.bounds.origin.y) + sprite.text_y;
+                // GPUI snaps both paint origins to device pixels; the computed placements must
+                // agree well inside that rounding.
+                let tolerance = 1e-3 / scale;
+                assert!(
+                    (glyph_left - plain_left).abs() < tolerance,
+                    "scale {scale} {align:?}: left {glyph_left} vs {plain_left}"
+                );
+                assert!(
+                    (glyph_baseline - plain_baseline).abs() < tolerance,
+                    "scale {scale} {align:?}: baseline {glyph_baseline} vs {plain_baseline}"
+                );
+                // The sprite keeps a whole-device-pixel ink margin on every side.
+                let pad_device = sprite.text_x * scale;
+                assert!((pad_device - pad_device.round()).abs() < 1e-4 && pad_device >= 1.0);
+                assert!(sprite.width > width && sprite.height > ascent - descent);
+            }
+        }
     }
 
     #[test]

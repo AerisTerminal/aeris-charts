@@ -242,14 +242,19 @@ pub fn chart_key(key: &str) -> Option<ChartKey> {
 
 /// The one GPUI cursor for each engine cursor.
 ///
-/// GPUI's Windows backend draws `OpenHand`/`ClosedHand` as the arrow, so vertically dragged
-/// trading lines use the native vertical-resize cursor there instead of looking inert.
+/// GPUI has no four-way move cursor, so [`ChartCursor::Move`] (CSS `move` in browsers) maps to
+/// the open hand, the closest grab affordance GPUI offers.
+///
+/// GPUI's Windows backend draws `OpenHand`/`ClosedHand` as the arrow, so on Windows movable
+/// drawings use the pointing hand and vertically dragged trading lines use the native
+/// vertical-resize cursor instead of looking inert.
 pub fn cursor_style(cursor: ChartCursor) -> CursorStyle {
     match cursor {
         ChartCursor::Crosshair => CursorStyle::Crosshair,
         ChartCursor::Default => CursorStyle::Arrow,
         ChartCursor::Pointer => CursorStyle::PointingHand,
         ChartCursor::Text => CursorStyle::IBeam,
+        ChartCursor::Move if cfg!(target_os = "windows") => CursorStyle::PointingHand,
         ChartCursor::Move => CursorStyle::OpenHand,
         ChartCursor::Grabbing => CursorStyle::ClosedHand,
         ChartCursor::VerticalGrab if cfg!(target_os = "windows") => CursorStyle::ResizeUpDown,
@@ -362,6 +367,16 @@ pub fn text_edit_key(engine: &mut ChartEngine, event: &KeyDownEvent) {
 mod wheel_tests {
     use super::*;
     use gpui::px;
+
+    #[test]
+    fn movable_drawings_never_show_an_inert_arrow() {
+        let expected = if cfg!(target_os = "windows") {
+            CursorStyle::PointingHand
+        } else {
+            CursorStyle::OpenHand
+        };
+        assert_eq!(cursor_style(ChartCursor::Move), expected);
+    }
 
     #[test]
     fn native_motion_policy_tracks_host_setting() {
@@ -500,9 +515,12 @@ mod wheel_tests {
     #[test]
     fn gpui_shift_and_horizontal_wheels_match_browser_pan_direction() {
         let adapter = GpuiChartInput::default();
-        for delta in [
-            ScrollDelta::Lines(point(1.0, 0.0)),
-            ScrollDelta::Pixels(point(px(32.0), px(0.0))),
+        // A GPUI rightward swipe reports positive x; the browser reports the same gesture as
+        // negative deltaX. Expected values are the browser's normalized notches, written out so
+        // the test cannot share a sign error with the adapter.
+        for (delta, browser_notches) in [
+            (ScrollDelta::Lines(point(1.0, 0.0)), -1.0 / 3.0),
+            (ScrollDelta::Pixels(point(px(32.0), px(0.0))), -0.32),
         ] {
             let mut actual = ChartEngine::new(400.0, 200.0, 1.0);
             let mut expected = ChartEngine::new(400.0, 200.0, 1.0);
@@ -529,21 +547,17 @@ mod wheel_tests {
                 },
                 ..ScrollWheelEvent::default()
             };
+            let start = actual.time_scale.right_offset();
             assert!(adapter.scroll_wheel(&mut actual, &event));
+            assert_ne!(actual.time_scale.right_offset(), start);
             let delta_mode = match delta {
                 ScrollDelta::Lines(_) => WheelDeltaMode::Line,
                 ScrollDelta::Pixels(_) => WheelDeltaMode::Pixel,
             };
-            let delta_x = match delta {
-                ScrollDelta::Lines(_) => {
-                    WheelSample::normalize_delta(-25.0 / 24.0, delta_mode, 1.0)
-                }
-                ScrollDelta::Pixels(_) => WheelSample::normalize_delta(-32.0, delta_mode, 1.0),
-            };
             assert!(expected.input_wheel(WheelSample {
                 x: 200.0,
                 y: 100.0,
-                delta_x,
+                delta_x: browser_notches,
                 delta_mode,
                 modifiers: InputModifiers {
                     shift: true,

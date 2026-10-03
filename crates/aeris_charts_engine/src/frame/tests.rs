@@ -8911,6 +8911,55 @@ fn area_brush_is_transient_presentation_on_the_builtin_area_series() {
 }
 
 #[test]
+fn area_brush_changes_rebuild_only_the_brushed_series() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.convert_series_kind(0, SeriesKind::Area);
+    let times: Vec<f64> = (0..40).map(f64::from).collect();
+    let values: Vec<f64> = (0..40).map(|i| 100.0 + f64::from(i % 7)).collect();
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.build_frame();
+    chart.build_frame();
+    assert_eq!(
+        chart.frame_build_stats(),
+        FrameBuildStats::default(),
+        "settled fixture"
+    );
+    let defaults = chart.area_brush_defaults(0).unwrap();
+    let series_only = FrameBuildStats {
+        series_rebuilds: 1,
+        ..FrameBuildStats::default()
+    };
+    for to in [12.0, 20.0, 28.0] {
+        assert!(chart.set_area_brush_state(
+            0,
+            defaults.outside,
+            vec![crate::BrushRange {
+                from: 4.0,
+                to,
+                style: defaults.positive,
+            }],
+        ));
+        let incremental = chart.build_frame();
+        assert_eq!(
+            chart.frame_build_stats(),
+            series_only,
+            "a brush drag step must not relayout or rebuild unrelated layers"
+        );
+        chart.invalidate_frame_all();
+        let full = chart.build_frame();
+        assert_eq!(incremental.panes[0].main, full.panes[0].main);
+        assert_eq!(incremental.panes[0].under, full.panes[0].under);
+    }
+    assert!(chart.clear_area_brush_state(0));
+    chart.build_frame();
+    assert_eq!(chart.frame_build_stats(), series_only);
+}
+
+#[test]
 fn last_value_label_background_honors_the_per_point_color() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 3);
     // The final bar carries a custom body color: the last-value label (and the built-in

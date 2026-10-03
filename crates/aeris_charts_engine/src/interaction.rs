@@ -295,6 +295,19 @@ impl GestureResolver {
         self.find(id).is_some()
     }
 
+    /// Current x of up to two retained touch pointers and how many were found.
+    pub(crate) fn touch_xs(&self) -> ([f64; 2], usize) {
+        let mut xs = [0.0; 2];
+        let mut count = 0;
+        for pointer in self.pointers.iter().flatten() {
+            if pointer.current.device == InputDevice::Touch && count < xs.len() {
+                xs[count] = pointer.current.x;
+                count += 1;
+            }
+        }
+        (xs, count)
+    }
+
     pub fn pointer_down(&mut self, sample: PointerSample) -> GestureUpdate {
         if !sample.x.is_finite()
             || !sample.y.is_finite()
@@ -402,7 +415,9 @@ impl GestureResolver {
         }
         if self.state == GestureState::PendingSinglePointer {
             let start = self.pointers[index].expect("located pointer").start;
-            if (sample.x - start.x).abs() + (sample.y - start.y).abs() < 5.0 {
+            if (sample.x - start.x).abs() + (sample.y - start.y).abs()
+                < crate::chart_input::CLICK_SLOP_MANHATTAN
+            {
                 return self.update(GestureUpdateKind::None, sample, previous.x, previous.y, 0.0);
             }
             self.state = match sample.target {

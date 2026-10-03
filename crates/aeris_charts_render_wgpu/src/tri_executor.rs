@@ -13,7 +13,7 @@
 use aeris_charts_render::draw_list::{positive_finite_extent, LineStyle, LineType, Prim};
 use aeris_charts_render::line::{
     band_segment_triangles, build_area_fill, build_disc, circle_segments, dash_split, expand_band,
-    expand_line, normalized_round_rect_radii, round_rect_polygon, round_rect_ring, stroke_aa,
+    expand_line, normalized_round_rect_radii, round_rect_border, round_rect_polygon, stroke_aa,
     AreaMesh, LineParams, LinePoint, LineVertex,
 };
 
@@ -155,18 +155,8 @@ fn round_rect_to_tris(
     }
     let radii = normalized_round_rect_radii(w, h, radii);
     if border_width > 0.0 {
-        let inset = border_width.min(w / 2.0).min(h / 2.0);
-        if inset * 2.0 < w && inset * 2.0 < h {
-            let inner_radii = radii.map(|r| (r - inset).max(0.0));
-            let inner = round_rect_polygon(
-                x + inset,
-                y + inset,
-                w - inset * 2.0,
-                h - inset * 2.0,
-                inner_radii,
-            );
-            fill_polygon(&inner, fill, out);
-        }
+        let geometry = round_rect_border(x, y, w, h, radii, border_width);
+        fill_polygon(&geometry.inner, fill, out);
         let rgba = [
             border.r() as f32 / 255.0,
             border.g() as f32 / 255.0,
@@ -174,7 +164,8 @@ fn round_rect_to_tris(
             border.a() as f32 / 255.0,
         ];
         out.extend(
-            round_rect_ring(x, y, w, h, radii, border_width)
+            geometry
+                .ring
                 .into_iter()
                 .map(|pos| TriVertex { pos, color: rgba }),
         );

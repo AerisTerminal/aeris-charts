@@ -14,7 +14,8 @@
 use super::*;
 
 /// Manhattan distance before a press becomes a drag (reference CancelClickManhattanDistance).
-const CLICK_SLOP_MANHATTAN: f64 = 5.0;
+/// Hosts that arbitrate page scrolling before the engine sees a gesture wait for this distance.
+pub const CLICK_SLOP_MANHATTAN: f64 = 5.0;
 const DOUBLE_CLICK_WINDOW_MS: f64 = 500.0;
 /// A stationary pane touch enters crosshair inspection after this host-clock interval.
 pub const TOUCH_LONG_PRESS_MS: f64 = 240.0;
@@ -29,6 +30,11 @@ const MAX_PENDING_INPUT_EVENTS: usize = 32;
 const KEYBOARD_ZOOM_STEP: f64 = 0.5;
 /// Share of the plot width one PageUp/PageDown scrolls.
 const KEYBOARD_PAGE_FRACTION: f64 = 0.8;
+/// Half-span multipliers for one focused price-axis zoom step (5% in, 5% out).
+const PRICE_AXIS_KEY_ZOOM_IN: f64 = 0.475;
+const PRICE_AXIS_KEY_ZOOM_OUT: f64 = 0.525;
+/// CSS px one focused separator key moves the divider.
+const SEPARATOR_KEY_STEP: f64 = 10.0;
 
 /// Host-configurable interaction switches (the reference `handleScroll`/`handleScale` family).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -163,6 +169,12 @@ pub struct PointerInput {
 pub enum ChartKey {
     ArrowLeft,
     ArrowRight,
+    /// Bound only on focused targets ([`ChartEngine::input_target_key_down`]).
+    ArrowUp,
+    /// Bound only on focused targets ([`ChartEngine::input_target_key_down`]).
+    ArrowDown,
+    /// Cycles drawing anchors during a focused drawing edit; never consumed chart-wide.
+    Tab,
     PageUp,
     PageDown,
     ZoomIn,
@@ -188,6 +200,55 @@ pub enum ChartRegion {
     TimeAxis,
     /// The divider below pane `index`.
     Separator(usize),
+}
+
+/// A keyboard focus target inside the chart. Accessibility hosts expose these as focusable
+/// proxies; the bindings for each live in [`ChartEngine::input_target_key_down`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChartFocusTarget {
+    PriceAxis {
+        pane: usize,
+        target: PriceScaleTarget,
+    },
+    TimeAxis,
+    /// The divider below pane `index`.
+    Separator(usize),
+    Drawing(DrawingId),
+}
+
+/// Paint layer of a host primitive hit, lowest first (reference `zOrder`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HostPrimitiveLayer {
+    Bottom,
+    Normal,
+    Top,
+}
+
+/// The best host-owned primitive hit at a hover point. Hosts gather it from their primitive
+/// objects; the engine arbitrates it against drawings and series.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostPrimitiveHit {
+    /// The owning series of a series primitive; `None` for a pane primitive.
+    pub series: Option<SeriesId>,
+    pub layer: HostPrimitiveLayer,
+    /// The primitive supplied its own platform cursor.
+    pub cursor: bool,
+}
+
+/// The single winner of hover arbitration at the controller's hover point.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum ChartHover {
+    #[default]
+    None,
+    HostPrimitive(HostPrimitiveHit),
+    Drawing {
+        id: DrawingId,
+        /// Engine hit-test cursor name of the hovered part.
+        cursor: &'static str,
+    },
+    Series(SeriesId),
+    /// A general-series item; read it through [`ChartEngine::general_hovered_hit`].
+    General,
 }
 
 /// A secondary click resolved by the engine. Menus, clipboard, and order UI stay host-owned.
@@ -223,6 +284,8 @@ pub enum ChartInputEvent {
     /// Delete was pressed on a selected series the engine does not own (a host-installed series or
     /// an external study). The host decides how its own objects are removed.
     RemoveSeries(SeriesId),
+    /// Delta-tooltip comparison state changed; the host notifies its range subscribers.
+    DeltaTooltipChanged,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -295,6 +358,14 @@ struct KeyboardPan {
     delta: f64,
 }
 
+/// A keyboard drawing edit: every nudge applies live, and the whole edit commits as one undo entry
+/// or cancels back to `before`.
+#[derive(Clone, Debug)]
+struct DrawingEditSession {
+    before: Drawing,
+    anchor: Option<usize>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TouchTracking {
     anchor: (f64, f64),
@@ -323,6 +394,8 @@ pub(crate) struct InputController {
     tooltip_deadline_ms: Option<f64>,
     touch_longpress_deadline_ms: Option<f64>,
     touch_tracking: Option<TouchTracking>,
+    hover: ChartHover,
+    drawing_edit: Option<DrawingEditSession>,
     events: VecDeque<ChartInputEvent>,
     /// Input changed chart state since the last prepared frame.
     frame_dirty: bool,
@@ -366,13 +439,15 @@ impl ChartEngine {
         self.input.cursor
     }
 
-    /// Record whether the winning host primitive supplied a platform cursor. The controller
-    /// keeps priority over captured drags, chart tools, and built-in interactive objects.
-    pub fn set_host_primitive_cursor(&mut self, present: bool) {
-        if self.input.host_primitive_cursor != present {
-            self.input.host_primitive_cursor = present;
-            self.refresh_input_cursor();
-        }
+    /// Release every hover promotion without moving the crosshair.
+    pub fn clear_hover(&mut self) {
+        self.input.host_primitive_cursor = false;
+        self.input.hover = ChartHover::None;
+        self.set_hovered_series(None);
+        self.set_hovered_text(None);
+        self.set_hovered_drawing(None);
+        self.clear_general_hover();
+        self.refresh_input_cursor();
     }
 
     /// Whether a held pane touch may yield to the browser page's scroll direction. Other chart
@@ -386,6 +461,48 @@ impl ChartEngine {
     /// Drain host requests produced by input since the last drain.
     pub fn take_input_events(&mut self) -> Vec<ChartInputEvent> {
         self.input.events.drain(..).collect()
+    }
+
+    /// Whether the next prepared frame would rebuild: input, layout, axis, or any layer changed
+    /// since the last prepared frame. Hosts render after input only while this holds.
+    pub fn frame_pending(&self) -> bool {
+        self.input.frame_dirty
+            || self.input.layout_dirty
+            || self.input.pending_capture.is_some()
+            || self.frame_invalidated_since_prepare()
+            || self.frame_requires_layout()
+            || self.frame_requires_axis()
+    }
+
+    /// The current hover winner at the controller's hover point.
+    pub fn input_hover(&self) -> ChartHover {
+        self.input.hover
+    }
+
+    /// Re-run hover arbitration at `(x, y)` with the host's best primitive hit there. Hosts with
+    /// their own primitive objects call this after input when a primitive hit exists; the engine
+    /// already resolved every built-in candidate for the same point.
+    pub fn resolve_pointer_hover(
+        &mut self,
+        x: f64,
+        y: f64,
+        primitive: Option<HostPrimitiveHit>,
+    ) -> ChartHover {
+        let hover = self.arbitrate_hover(x, y, primitive);
+        self.input.hover = hover;
+        self.input.host_primitive_cursor =
+            matches!(hover, ChartHover::HostPrimitive(hit) if hit.cursor);
+        self.refresh_input_cursor();
+        hover
+    }
+
+    /// The open keyboard drawing edit: the drawing and its focused anchor (`None` moves the whole
+    /// drawing).
+    pub fn drawing_edit_session(&self) -> Option<(DrawingId, Option<usize>)> {
+        self.input
+            .drawing_edit
+            .as_ref()
+            .map(|session| (session.before.id, session.anchor))
     }
 
     /// Whether an input-owned animation (kinetic coast, held keyboard pan, animated scroll) needs
@@ -592,6 +709,7 @@ impl ChartEngine {
         self.input.frame_dirty = true;
         self.end_press_without_commit();
         self.stop_input_motion();
+        self.commit_drawing_edit_session();
 
         let text_press_selected = self.selected_drawing();
         let press = |mode, double_candidate| Press {
@@ -664,6 +782,7 @@ impl ChartEngine {
                 self.input.pointer = Some((update.x, update.y));
                 self.input_pinch(update.x, update.y, update.scale_delta, input.timestamp_ms);
             }
+            self.update_touch_delta_tooltip();
             return;
         }
         if self.input.press.is_some_and(|press| press.id != input.id) {
@@ -672,7 +791,15 @@ impl ChartEngine {
         let (x, y) = (input.x, input.y);
         self.input.pointer = Some((x, y));
         self.input.modifiers = input.modifiers;
-        self.input.frame_dirty = true;
+        // Plain hover changes only state whose setters invalidate the frame themselves, so an
+        // identical hover sample leaves the prepared frame valid. Gestures and armed tools may
+        // mutate geometry through paths without that bookkeeping and always rebuild.
+        if self.input.press.is_some()
+            || self.measure_active()
+            || self.active_drawing_tool().is_some()
+        {
+            self.input.frame_dirty = true;
+        }
         // Motion with the button already up means the release happened where the host could not
         // see it. Like lost pointer capture, that abandons the gesture; the move is then a hover.
         if !primary_pressed && self.input.press.is_some() {
@@ -686,8 +813,10 @@ impl ChartEngine {
             .input
             .resolver
             .pointer_move(Self::mouse_sample(input, target));
-        if self.delta_tooltip_mouse_move(x) {
-            self.sync_brushable_areas();
+        if input.device == InputDevice::Touch {
+            self.update_touch_delta_tooltip();
+        } else if self.delta_tooltip_mouse_move(x) {
+            self.note_delta_tooltip_changed();
         }
         self.apply_input_magnet();
         let modifiers = drawing_modifiers(input.modifiers);
@@ -858,7 +987,7 @@ impl ChartEngine {
         self.input.modifiers = input.modifiers;
         self.input.frame_dirty = true;
         if self.delta_tooltip_mouse_up() {
-            self.sync_brushable_areas();
+            self.note_delta_tooltip_changed();
         }
         self.input
             .resolver
@@ -900,13 +1029,38 @@ impl ChartEngine {
         let moved = press.moved
             || (x - press.start.0).abs() + (y - press.start.1).abs() >= CLICK_SLOP_MANHATTAN;
         if press.double_candidate && !moved {
+            // The second press opened a gesture session like any press; it closes here without
+            // the release action, which the double-click replaces.
             match press.mode {
                 PressMode::DrawingDrag => self.drawing_drag_end(),
                 PressMode::TimeAxis => self.time_axis_end_scale(),
                 PressMode::PriceAxis { pane, target } => {
                     self.price_axis_end_scale(pane, target);
                 }
-                _ => {}
+                PressMode::Measure => {
+                    self.measure_pointer_up(x, y, drawing_modifiers(input.modifiers));
+                }
+                PressMode::Trading { dragging: true } => {
+                    self.cancel_trading_drag();
+                }
+                PressMode::Pane { price_pan, panning } => {
+                    if let Some((pane, target)) = price_pan {
+                        self.price_axis_end_scroll(pane, target);
+                    }
+                    if panning {
+                        self.kinetic_stop();
+                        self.time_scale_end_scroll();
+                    }
+                }
+                PressMode::DrawingCreation { capture: true, .. } => self.cancel_drawing_creation(),
+                PressMode::DrawingCreation { capture: false, .. }
+                | PressMode::Trading { dragging: false }
+                | PressMode::Alert
+                | PressMode::Separator { .. }
+                | PressMode::TouchTracking
+                | PressMode::DeltaTooltip
+                | PressMode::TextEditor
+                | PressMode::Inert => {}
             }
             self.input.last_click = None;
             self.input_double_click(self.region_at(x, y), input, press.text_press_selected);
@@ -1018,7 +1172,9 @@ impl ChartEngine {
         }
         self.input.pointer = None;
         self.input.tooltip_deadline_ms = None;
-        self.delta_tooltip_leave();
+        if self.delta_tooltip_leave() {
+            self.note_delta_tooltip_changed();
+        }
         self.set_separator_hover(None);
         self.set_crosshair_ohlc_magnet(false);
         self.clear_trading_hover();
@@ -1176,7 +1332,13 @@ impl ChartEngine {
         } else {
             1.0
         };
+        if key == ChartKey::Escape {
+            self.cancel_drawing_edit_session();
+        } else {
+            self.commit_drawing_edit_session();
+        }
         let handled = match key {
+            ChartKey::ArrowUp | ChartKey::ArrowDown | ChartKey::Tab => false,
             ChartKey::ArrowLeft | ChartKey::ArrowRight => {
                 let delta = if key == ChartKey::ArrowLeft {
                     -step
@@ -1261,6 +1423,107 @@ impl ChartEngine {
         self.stop_input_motion();
     }
 
+    /// A key press while a chart focus target has keyboard focus. Returns whether it was consumed.
+    ///
+    /// - Price axis: Home restores autoscale; ArrowUp/ArrowDown zoom the range 5% around its
+    ///   center.
+    /// - Time axis: Home resets the time scale; ArrowLeft/ArrowRight scroll one bar.
+    /// - Separator: Home splits the two adjacent panes evenly; ArrowUp/ArrowDown move the divider
+    ///   10 px.
+    /// - Drawing: the target is selected. Enter opens or commits an edit; while editing, arrows
+    ///   nudge 1 px (10 px with Shift), Tab/Shift+Tab cycle the anchor, and Escape restores the
+    ///   start. A committed edit is one undo entry. Delete/Backspace remove the drawing.
+    pub fn input_target_key_down(
+        &mut self,
+        target: ChartFocusTarget,
+        key: ChartKey,
+        modifiers: InputModifiers,
+    ) -> bool {
+        if !matches!(target, ChartFocusTarget::Drawing(_)) {
+            self.commit_drawing_edit_session();
+        }
+        let handled = match target {
+            ChartFocusTarget::PriceAxis { pane, target } => match key {
+                ChartKey::Home => {
+                    let known = self.price_scale_auto_scale_for(pane, target).is_some();
+                    if known {
+                        self.set_price_scale_auto_scale_for(pane, target, true);
+                    }
+                    known
+                }
+                ChartKey::ArrowUp | ChartKey::ArrowDown => {
+                    match self.price_scale_visible_range_for(pane, target) {
+                        Some((from, to)) => {
+                            let center = (from + to) / 2.0;
+                            let half = (to - from)
+                                * if key == ChartKey::ArrowUp {
+                                    PRICE_AXIS_KEY_ZOOM_IN
+                                } else {
+                                    PRICE_AXIS_KEY_ZOOM_OUT
+                                };
+                            self.set_price_scale_visible_range_for(
+                                pane,
+                                target,
+                                center - half,
+                                center + half,
+                            );
+                            true
+                        }
+                        None => false,
+                    }
+                }
+                _ => false,
+            },
+            ChartFocusTarget::TimeAxis => match key {
+                ChartKey::Home => {
+                    self.reset_time_scale();
+                    true
+                }
+                ChartKey::ArrowLeft | ChartKey::ArrowRight => {
+                    let delta = if key == ChartKey::ArrowLeft {
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                    self.scroll_to_position(self.scroll_position() + delta);
+                    true
+                }
+                _ => false,
+            },
+            ChartFocusTarget::Separator(index) if index + 1 < self.panes.len() => {
+                let handled = match key {
+                    ChartKey::Home => {
+                        let share = (self.panes[index].stretch_factor
+                            + self.panes[index + 1].stretch_factor)
+                            / 2.0;
+                        self.panes[index].stretch_factor = share;
+                        self.panes[index + 1].stretch_factor = share;
+                        true
+                    }
+                    ChartKey::ArrowUp => {
+                        self.drag_pane_separator(index, -SEPARATOR_KEY_STEP);
+                        true
+                    }
+                    ChartKey::ArrowDown => {
+                        self.drag_pane_separator(index, SEPARATOR_KEY_STEP);
+                        true
+                    }
+                    _ => false,
+                };
+                self.input.layout_dirty |= handled;
+                handled
+            }
+            ChartFocusTarget::Separator(_) => false,
+            ChartFocusTarget::Drawing(id) => self.drawing_target_key(id, key, modifiers),
+        };
+        if handled {
+            self.stop_input_motion();
+            self.input.frame_dirty = true;
+            self.refresh_input_cursor();
+        }
+        handled
+    }
+
     // --- internals ---
 
     fn mouse_sample(input: PointerInput, target: InputTarget) -> PointerSample {
@@ -1283,6 +1546,123 @@ impl ChartEngine {
             self.input.events.pop_front();
         }
         self.input.events.push_back(event);
+    }
+
+    /// Hover motion can change the comparison on every sample; one pending notice is enough.
+    fn note_delta_tooltip_changed(&mut self) {
+        self.sync_brushable_areas();
+        if !self
+            .input
+            .events
+            .contains(&ChartInputEvent::DeltaTooltipChanged)
+        {
+            self.push_input_event(ChartInputEvent::DeltaTooltipChanged);
+        }
+    }
+
+    /// Touch comparisons follow the first two retained touches: one finger previews a point, two
+    /// commit a range.
+    fn update_touch_delta_tooltip(&mut self) {
+        let (xs, count) = self.input.resolver.touch_xs();
+        if count > 0 && self.delta_tooltip_touch_move(&xs[..count]) {
+            self.note_delta_tooltip_changed();
+        }
+    }
+
+    fn drawing_target_key(
+        &mut self,
+        id: DrawingId,
+        key: ChartKey,
+        modifiers: InputModifiers,
+    ) -> bool {
+        let Some(drawing) = self.drawing(id).cloned() else {
+            self.input.drawing_edit = None;
+            return false;
+        };
+        if self
+            .input
+            .drawing_edit
+            .as_ref()
+            .is_some_and(|session| session.before.id != id)
+        {
+            self.commit_drawing_edit_session();
+        }
+        if self.selected_drawing() != Some(id) {
+            self.set_selected_drawing(Some(id));
+        }
+        let editing = self.input.drawing_edit.is_some();
+        match key {
+            ChartKey::Enter if editing => {
+                self.commit_drawing_edit_session();
+                true
+            }
+            ChartKey::Enter => {
+                self.input.drawing_edit = Some(DrawingEditSession {
+                    before: drawing,
+                    anchor: None,
+                });
+                true
+            }
+            ChartKey::Escape if editing => {
+                self.cancel_drawing_edit_session();
+                true
+            }
+            ChartKey::Delete | ChartKey::Backspace => {
+                self.commit_drawing_edit_session();
+                self.input.last_click = None;
+                self.remove_drawing(id)
+            }
+            ChartKey::Tab if editing => {
+                let count = drawing.points.len();
+                let Some(session) = self.input.drawing_edit.as_mut().filter(|_| count > 0) else {
+                    return false;
+                };
+                session.anchor = Some(match session.anchor {
+                    _ if modifiers.shift && session.anchor.is_none_or(|anchor| anchor == 0) => {
+                        count - 1
+                    }
+                    Some(anchor) if modifiers.shift => anchor - 1,
+                    Some(anchor) => (anchor + 1) % count,
+                    None => 0,
+                });
+                true
+            }
+            ChartKey::ArrowLeft
+            | ChartKey::ArrowRight
+            | ChartKey::ArrowUp
+            | ChartKey::ArrowDown
+                if editing =>
+            {
+                let step = if modifiers.shift { 10.0 } else { 1.0 };
+                let (dx, dy) = match key {
+                    ChartKey::ArrowLeft => (-step, 0.0),
+                    ChartKey::ArrowRight => (step, 0.0),
+                    ChartKey::ArrowUp => (0.0, -step),
+                    _ => (0.0, step),
+                };
+                let anchor = self
+                    .input
+                    .drawing_edit
+                    .as_ref()
+                    .and_then(|session| session.anchor);
+                self.nudge_selected_drawing_with_history(dx, dy, anchor, false)
+            }
+            _ => false,
+        }
+    }
+
+    /// Record an open keyboard drawing edit as one undo entry.
+    fn commit_drawing_edit_session(&mut self) {
+        if let Some(session) = self.input.drawing_edit.take() {
+            self.record_drawing_edit(session.before);
+        }
+    }
+
+    /// Discard an open keyboard drawing edit, restoring its start.
+    fn cancel_drawing_edit_session(&mut self) {
+        if let Some(session) = self.input.drawing_edit.take() {
+            self.restore_drawing_points(session.before);
+        }
     }
 
     /// A committed placement. Tools that request typing open the engine session directly.
@@ -1352,7 +1732,7 @@ impl ChartEngine {
         }
         self.clear_trading_pressed();
         if self.delta_tooltip_mouse_up() {
-            self.sync_brushable_areas();
+            self.note_delta_tooltip_changed();
         }
     }
 
@@ -1649,12 +2029,93 @@ impl ChartEngine {
     }
 
     fn clear_pointer_hover(&mut self) {
-        self.input.host_primitive_cursor = false;
         self.clear_crosshair_at();
+        self.clear_hover();
+    }
+
+    /// Hover arbitration, topmost owner first (reference `hitTestPane`): a `Top` host primitive,
+    /// a drawing, then series in paint order where a series' own non-bottom primitive blocks it
+    /// and every series below; then a `Normal` pane primitive, a general-series item, and finally
+    /// a `Bottom` or pane primitive that survives only without a series hit.
+    fn arbitrate_hover(
+        &mut self,
+        x: f64,
+        y: f64,
+        primitive: Option<HostPrimitiveHit>,
+    ) -> ChartHover {
+        let Some(pane) = self.pane_at_y(y) else {
+            self.set_hovered_series(None);
+            self.set_hovered_text(None);
+            self.set_hovered_drawing(None);
+            self.clear_general_hover();
+            return ChartHover::None;
+        };
+        let general = self.update_general_hover(pane, x, y).is_some();
+        if let Some(hit) = primitive.filter(|hit| hit.layer == HostPrimitiveLayer::Top) {
+            self.clear_general_hover();
+            self.set_hovered_series(hit.series);
+            self.set_hovered_text(None);
+            self.set_hovered_drawing(None);
+            return ChartHover::HostPrimitive(hit);
+        }
+        if let Some((id, cursor)) = self.update_drawing_hover(x, y) {
+            self.clear_general_hover();
+            self.set_hovered_series(None);
+            return ChartHover::Drawing { id, cursor };
+        }
+        let mut best: Option<SeriesHit> = None;
+        for index in (0..self.series_order.len()).rev() {
+            let id = self.series_order[index];
+            if let Some(hit) = primitive
+                .filter(|hit| hit.series == Some(id) && hit.layer != HostPrimitiveLayer::Bottom)
+            {
+                self.clear_general_hover();
+                return match best {
+                    Some(best) => {
+                        self.set_hovered_series(Some(best.series));
+                        ChartHover::Series(best.series)
+                    }
+                    None => {
+                        self.set_hovered_series(hit.series);
+                        ChartHover::HostPrimitive(hit)
+                    }
+                };
+            }
+            if self
+                .series_entry(id)
+                .is_none_or(|series| series.pane_index != pane)
+            {
+                continue;
+            }
+            let Some(candidate) = self.hit_test_one_series(id, x, y) else {
+                continue;
+            };
+            if best.is_none_or(|current| candidate.is_better_than(&current)) {
+                best = Some(candidate);
+            }
+        }
+        if let Some(hit) = best {
+            self.clear_general_hover();
+            self.set_hovered_series(Some(hit.series));
+            return ChartHover::Series(hit.series);
+        }
+        if let Some(hit) =
+            primitive.filter(|hit| hit.layer == HostPrimitiveLayer::Normal && hit.series.is_none())
+        {
+            self.clear_general_hover();
+            self.set_hovered_series(None);
+            return ChartHover::HostPrimitive(hit);
+        }
+        if general {
+            self.set_hovered_series(None);
+            return ChartHover::General;
+        }
+        if let Some(hit) = primitive {
+            self.set_hovered_series(hit.series);
+            return ChartHover::HostPrimitive(hit);
+        }
         self.set_hovered_series(None);
-        self.set_hovered_text(None);
-        self.set_hovered_drawing(None);
-        self.clear_general_hover();
+        ChartHover::None
     }
 
     /// Crosshair and hover promotion for a pointer position. Over axis strips or a separator the
@@ -1676,17 +2137,10 @@ impl ChartEngine {
         let x = x.clamp(0.0, self.pane_w.max(0.0));
         let y = y.clamp(0.0, self.pane_h.max(0.0));
         self.set_crosshair_at(x, y);
-        // A drawing hit wins over series hits so overlaps stay selectable.
-        if self.update_drawing_hover(x, y).is_some() {
-            self.clear_general_hover();
-            self.set_hovered_series(None);
-        } else {
-            let hovered = self.hit_test_series(x, y);
-            self.set_hovered_series(hovered);
-            if let Some(pane) = self.pane_at_y(y) {
-                self.update_general_hover(pane, x, y);
-            }
-        }
+        // Host primitives are re-arbitrated by hosts that own them through
+        // `resolve_pointer_hover`; the built-in candidates resolve here.
+        self.input.host_primitive_cursor = false;
+        self.input.hover = self.arbitrate_hover(x, y, None);
         // Only a changed trading hover restarts the dwell; holding still lets it elapse.
         if !captured && self.set_trading_hover(x, y) {
             let on_close = self
@@ -1858,7 +2312,15 @@ mod tests {
         let (x, y) = empty_pane_point(&chart);
         chart.input_pointer_move(at(x, y), false);
         assert_eq!(chart.input_cursor(), ChartCursor::Crosshair);
-        chart.set_host_primitive_cursor(true);
+        let primitive = HostPrimitiveHit {
+            series: None,
+            layer: HostPrimitiveLayer::Normal,
+            cursor: true,
+        };
+        assert_eq!(
+            chart.resolve_pointer_hover(x, y, Some(primitive)),
+            ChartHover::HostPrimitive(primitive)
+        );
         assert_eq!(chart.input_cursor(), ChartCursor::HostPrimitive);
         chart.input_pointer_down(at(x, y), 1);
         chart.input_pointer_move(at(x + 30.0, y), true);
@@ -2183,8 +2645,337 @@ mod tests {
         assert!(chart.input_key_down(ChartKey::ZoomOut, none, false, 0.0));
         assert!(chart.bar_spacing() < zoomed);
         chart.set_bar_spacing(20.0);
+        chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 80.0, 120.0);
+        assert_eq!(
+            chart.price_scale_auto_scale_for(0, PriceScaleTarget::Right),
+            Some(false)
+        );
         assert!(chart.input_key_down(ChartKey::Home, none, false, 0.0));
         assert_eq!(chart.bar_spacing(), 6.0);
+        assert_eq!(
+            chart.price_scale_auto_scale_for(0, PriceScaleTarget::Right),
+            Some(true),
+            "Home resets the price scales as well as the time scale"
+        );
+        for key in [ChartKey::ArrowUp, ChartKey::ArrowDown, ChartKey::Tab] {
+            assert!(
+                !chart.input_key_down(key, none, false, 0.0),
+                "{key:?} is bound only on focused targets"
+            );
+        }
+    }
+
+    #[test]
+    fn escape_cancels_every_transient_interaction_and_reports_the_crosshair_leaving() {
+        let mut chart = chart();
+        let none = InputModifiers::default();
+        chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None);
+        click(&mut chart, 120.0, 120.0);
+        click(&mut chart, 300.0, 220.0);
+        let id = chart.drawings()[0].id;
+        chart.set_selected_drawing(Some(id));
+        let (x, y) = series_point(&chart);
+        chart.input_pointer_move(at(x, y), false);
+        assert_eq!(chart.hovered_series(), Some(0));
+        assert!(chart.crosshair.is_some());
+        chart.set_drawing_tool(Some(DrawingKind::Rectangle), None, None);
+        chart.take_input_events();
+
+        assert!(chart.input_key_down(ChartKey::Escape, none, false, 0.0));
+        assert_eq!(chart.active_drawing_tool(), None);
+        assert_eq!(chart.selected_drawing(), None);
+        assert_eq!(chart.hovered_series(), None);
+        assert_eq!(chart.input_hover(), ChartHover::None);
+        assert_eq!(chart.crosshair, None);
+        assert!(chart.trading_preview().is_none());
+        assert_eq!(
+            chart.take_input_events(),
+            vec![ChartInputEvent::CrosshairLeft]
+        );
+        assert!(chart.drawing(id).is_some(), "Escape never deletes");
+    }
+
+    #[test]
+    fn a_double_click_on_a_trading_order_closes_the_drag_its_second_press_opened() {
+        let mut chart = ChartEngine::new(400.0, 240.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[10.0, 20.0, 30.0],
+                &[99.0, 100.0, 101.0],
+                &[102.0, 103.0, 104.0],
+                &[98.0, 99.0, 100.0],
+                &[101.0, 102.0, 103.0],
+            )
+            .unwrap();
+        chart.time_scale.set_width(400.0);
+        let snapshot: TradingSnapshot = serde_json::from_str(
+            r#"{"instrument":{"tick_size":0.25},
+                "positions":[{"id":"position-1","pane_index":0,"price_scale":"right",
+                    "side":"long","average_price":101.0,"quantity":12.0}],
+                "orders":[{"id":"tp-1","pane_index":0,"price_scale":"right","side":"sell",
+                    "kind":"limit","role":"take_profit","status":"working","price":103.0,
+                    "quantity":12.0,"filled_quantity":0.0,"position_id":"position-1",
+                    "revision":1}]}"#,
+        )
+        .unwrap();
+        chart.set_trading_snapshot(snapshot).unwrap();
+        chart.build_frame();
+        let x = chart.trading_marker_start() + 20.0;
+        let y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 103.0)
+            .unwrap();
+        // The platform reports the second press of a double-click directly.
+        chart.input_pointer_down(at(x, y), 2);
+        assert_eq!(
+            chart.input.press.map(|press| press.mode),
+            Some(PressMode::Trading { dragging: true })
+        );
+        chart.input_pointer_up(at(x, y));
+        assert!(chart.input.press.is_none());
+        assert!(
+            chart.trading_preview().is_none(),
+            "the order drag must not outlive the double-click"
+        );
+        assert!(chart.take_trading_intents().is_empty());
+        chart.input_pointer_move(at(x, y), false);
+        assert_ne!(chart.input_cursor(), ChartCursor::VerticalGrabbing);
+        assert!(chart.trading_drag_start_at(x, y), "a fresh drag can start");
+    }
+
+    #[test]
+    fn a_double_click_closes_measure_and_pan_sessions() {
+        let mut chart = chart();
+        let (x, y) = empty_pane_point(&chart);
+        chart.input_pointer_down(shifted(x, y), 1);
+        chart.input_pointer_up(shifted(x, y));
+        assert!(chart.measure_active());
+        chart.input_pointer_down(shifted(x, y), 2);
+        chart.input_pointer_up(shifted(x, y));
+        assert!(chart.input.press.is_none());
+
+        let start = chart.scroll_position();
+        chart.input_pointer_down(at(x, y), 1);
+        chart.input_pointer_up(at(x, y));
+        chart.input_pointer_down(at(x, y), 2);
+        chart.input_pointer_up(at(x, y));
+        drag(&mut chart, (x, y), (x + 40.0, y));
+        assert_ne!(
+            chart.scroll_position(),
+            start,
+            "the next pan starts from a closed session"
+        );
+    }
+
+    fn area_chart_with_delta_tooltip() -> (ChartEngine, NativePrimitiveId) {
+        let mut chart = chart();
+        chart.series[0].kind = SeriesKind::Area;
+        let primitive = chart
+            .add_delta_tooltip(0, DeltaTooltipOptions::default())
+            .unwrap();
+        (chart, primitive)
+    }
+
+    #[test]
+    fn two_touches_commit_a_delta_tooltip_range_inside_the_controller() {
+        let (mut chart, primitive) = area_chart_with_delta_tooltip();
+        let (_, y) = empty_pane_point(&chart);
+        let touch = |id, x, timestamp_ms| PointerInput {
+            id,
+            device: InputDevice::Touch,
+            x,
+            y,
+            timestamp_ms,
+            ..PointerInput::default()
+        };
+        let x10 = chart.time_scale.index_to_coordinate(10);
+        let x40 = chart.time_scale.index_to_coordinate(40);
+        chart.input_pointer_down(touch(1, x10, 10.0), 1);
+        chart.input_pointer_down(touch(2, x40, 20.0), 1);
+        assert_eq!(chart.delta_tooltip_active_range(primitive), None);
+        chart.take_input_events();
+        chart.input_pointer_move(touch(2, x40, 30.0), true);
+        assert!(
+            chart.delta_tooltip_active_range(primitive).is_some(),
+            "two touches commit a comparison without a host bridge"
+        );
+        assert_eq!(
+            chart.take_input_events(),
+            vec![ChartInputEvent::DeltaTooltipChanged]
+        );
+        chart.input_pointer_up(touch(2, x40, 40.0));
+        chart.input_pointer_up(touch(1, x10, 50.0));
+        assert!(chart.delta_tooltip_active_range(primitive).is_some());
+    }
+
+    #[test]
+    fn mouse_delta_tooltip_changes_queue_one_notice_per_drain() {
+        let (mut chart, primitive) = area_chart_with_delta_tooltip();
+        let (_, y) = empty_pane_point(&chart);
+        let x10 = chart.time_scale.index_to_coordinate(10);
+        let x40 = chart.time_scale.index_to_coordinate(40);
+        chart.input_pointer_down(at(x10, y), 1);
+        chart.input_pointer_move(at(x10 + 20.0, y), true);
+        chart.input_pointer_move(at(x40, y), true);
+        chart.input_pointer_up(at(x40, y));
+        assert!(chart.delta_tooltip_active_range(primitive).is_some());
+        let events = chart.take_input_events();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == ChartInputEvent::DeltaTooltipChanged)
+                .count(),
+            1,
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn hover_arbitration_ranks_host_primitives_against_drawings_and_series() {
+        let mut chart = chart();
+        let (x, y) = series_point(&chart);
+        chart.input_pointer_move(at(x, y), false);
+        assert_eq!(chart.input_hover(), ChartHover::Series(0));
+        let hit = |series, layer| HostPrimitiveHit {
+            series,
+            layer,
+            cursor: false,
+        };
+        let top = hit(None, HostPrimitiveLayer::Top);
+        assert_eq!(
+            chart.resolve_pointer_hover(x, y, Some(top)),
+            ChartHover::HostPrimitive(top)
+        );
+        assert_eq!(chart.hovered_series(), None);
+        let own = hit(Some(0), HostPrimitiveLayer::Normal);
+        assert_eq!(
+            chart.resolve_pointer_hover(x, y, Some(own)),
+            ChartHover::HostPrimitive(own),
+            "a series' normal primitive blocks its own built-in hit"
+        );
+        assert_eq!(chart.hovered_series(), Some(0));
+        let bottom = hit(None, HostPrimitiveLayer::Bottom);
+        assert_eq!(
+            chart.resolve_pointer_hover(x, y, Some(bottom)),
+            ChartHover::Series(0),
+            "a bottom primitive survives only without a series hit"
+        );
+        let (ex, ey) = empty_pane_point(&chart);
+        chart.input_pointer_move(at(ex, ey), false);
+        assert_eq!(chart.input_hover(), ChartHover::None);
+        assert_eq!(
+            chart.resolve_pointer_hover(ex, ey, Some(bottom)),
+            ChartHover::HostPrimitive(bottom)
+        );
+        chart.clear_hover();
+        assert_eq!(chart.input_hover(), ChartHover::None);
+    }
+
+    #[test]
+    fn focused_axis_and_separator_targets_own_their_key_bindings() {
+        let mut chart = chart();
+        chart.add_pane(true).unwrap();
+        relayout(&mut chart);
+        let none = InputModifiers::default();
+        let price = ChartFocusTarget::PriceAxis {
+            pane: 0,
+            target: PriceScaleTarget::Right,
+        };
+        chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 90.0, 110.0);
+        assert!(chart.input_target_key_down(price, ChartKey::ArrowUp, none));
+        let (from, to) = chart
+            .price_scale_visible_range_for(0, PriceScaleTarget::Right)
+            .unwrap();
+        assert!((to - from - 19.0).abs() < 1e-9, "{from}..{to}");
+        assert!(((from + to) / 2.0 - 100.0).abs() < 1e-9);
+        assert!(chart.input_target_key_down(price, ChartKey::ArrowDown, none));
+        let (from, to) = chart
+            .price_scale_visible_range_for(0, PriceScaleTarget::Right)
+            .unwrap();
+        assert!((to - from - 19.0 * 1.05).abs() < 1e-9);
+        assert!(chart.input_target_key_down(price, ChartKey::Home, none));
+        assert_eq!(
+            chart.price_scale_auto_scale_for(0, PriceScaleTarget::Right),
+            Some(true)
+        );
+        assert!(!chart.input_target_key_down(price, ChartKey::PageUp, none));
+
+        let start = chart.scroll_position();
+        assert!(chart.input_target_key_down(ChartFocusTarget::TimeAxis, ChartKey::ArrowLeft, none));
+        assert_eq!(chart.scroll_position(), start - 1.0);
+        assert!(!chart.input_animating(), "a focused step is discrete");
+        chart.set_bar_spacing(20.0);
+        assert!(chart.input_target_key_down(ChartFocusTarget::TimeAxis, ChartKey::Home, none));
+        assert_eq!(chart.bar_spacing(), 6.0);
+
+        let separator = ChartFocusTarget::Separator(0);
+        let height = chart.panes[0].height;
+        assert!(chart.input_target_key_down(separator, ChartKey::ArrowUp, none));
+        assert_eq!(chart.input.take_frame_invalidation(), (true, true));
+        relayout(&mut chart);
+        assert!((chart.panes[0].height - (height - 10.0)).abs() < 1.0);
+        assert!(chart.input_target_key_down(separator, ChartKey::Home, none));
+        relayout(&mut chart);
+        assert!((chart.panes[0].height - chart.panes[1].height).abs() < 1.0);
+        assert!(!chart.input_target_key_down(ChartFocusTarget::Separator(1), ChartKey::Home, none));
+    }
+
+    #[test]
+    fn focused_drawing_edits_commit_atomically_or_cancel_to_their_start() {
+        let mut chart = chart();
+        let none = InputModifiers::default();
+        chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None);
+        click(&mut chart, 120.0, 120.0);
+        click(&mut chart, 300.0, 220.0);
+        let id = chart.drawings()[0].id;
+        let target = ChartFocusTarget::Drawing(id);
+        let original = chart.drawing(id).unwrap().points.clone();
+
+        assert!(
+            !chart.input_target_key_down(target, ChartKey::ArrowRight, none),
+            "arrows nudge only inside an edit"
+        );
+        assert_eq!(
+            chart.selected_drawing(),
+            Some(id),
+            "focus selects the drawing"
+        );
+        assert!(chart.input_target_key_down(target, ChartKey::Enter, none));
+        assert_eq!(chart.drawing_edit_session(), Some((id, None)));
+        assert!(chart.input_target_key_down(target, ChartKey::ArrowRight, none));
+        assert!(chart.input_target_key_down(target, ChartKey::ArrowDown, none));
+        assert_ne!(chart.drawing(id).unwrap().points, original);
+        assert!(chart.input_target_key_down(target, ChartKey::Escape, none));
+        assert_eq!(chart.drawing_edit_session(), None);
+        assert_eq!(chart.drawing(id).unwrap().points, original);
+
+        assert!(chart.input_target_key_down(target, ChartKey::Enter, none));
+        assert!(chart.input_target_key_down(target, ChartKey::Tab, none));
+        assert_eq!(chart.drawing_edit_session(), Some((id, Some(0))));
+        let shift = InputModifiers {
+            shift: true,
+            ..InputModifiers::default()
+        };
+        assert!(chart.input_target_key_down(target, ChartKey::Tab, shift));
+        assert_eq!(chart.drawing_edit_session(), Some((id, Some(1))));
+        assert!(chart.input_target_key_down(target, ChartKey::Tab, none));
+        assert!(chart.input_target_key_down(target, ChartKey::ArrowRight, shift));
+        assert!(chart.input_target_key_down(target, ChartKey::ArrowRight, shift));
+        let edited = chart.drawing(id).unwrap().points.clone();
+        assert_eq!(edited[1], original[1], "only the focused anchor moves");
+        assert_ne!(edited[0], original[0]);
+        assert!(chart.input_target_key_down(target, ChartKey::Enter, none));
+        assert_eq!(chart.drawing_edit_session(), None);
+        assert!(chart.undo_drawing());
+        assert_eq!(
+            chart.drawing(id).unwrap().points,
+            original,
+            "one undo reverts the whole committed edit"
+        );
+
+        assert!(chart.input_target_key_down(target, ChartKey::Delete, none));
+        assert!(chart.drawing(id).is_none());
+        assert!(!chart.input_target_key_down(target, ChartKey::Enter, none));
     }
 
     #[test]
@@ -2589,7 +3380,15 @@ mod tests {
 
         let (x, y) = series_point(&chart);
         chart.input_pointer_move(at(x, y), false);
+        assert!(chart.frame_pending());
         assert!(prepare(&mut chart), "pointer hover rebuilds");
+        assert!(!chart.frame_pending());
+        assert!(!prepare(&mut chart));
+        chart.input_pointer_move(at(x, y), false);
+        assert!(
+            !chart.frame_pending(),
+            "an identical hover sample changes nothing"
+        );
         assert!(!prepare(&mut chart));
 
         chart.set_hovered_series(None);

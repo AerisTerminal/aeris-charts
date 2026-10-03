@@ -1019,7 +1019,7 @@ impl ChartEngine {
             .collect();
         let mut handled = false;
         let mut changed = false;
-        for series in &mut self.series {
+        for series in self.series.presentation_iter_mut() {
             for primitive in &mut series.native_primitives {
                 let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &mut primitive.kind else {
                     continue;
@@ -1071,7 +1071,7 @@ impl ChartEngine {
             })
             .collect();
         let mut changed = false;
-        for series in &mut self.series {
+        for series in self.series.presentation_iter_mut() {
             for primitive in &mut series.native_primitives {
                 let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &mut primitive.kind else {
                     continue;
@@ -1105,7 +1105,7 @@ impl ChartEngine {
     /// committed range intact.
     pub fn delta_tooltip_mouse_up(&mut self) -> bool {
         let mut changed = false;
-        for series in &mut self.series {
+        for series in self.series.presentation_iter_mut() {
             for primitive in &mut series.native_primitives {
                 let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &mut primitive.kind else {
                     continue;
@@ -1163,7 +1163,7 @@ impl ChartEngine {
             })
             .collect();
         let mut changed = false;
-        for series in &mut self.series {
+        for series in self.series.presentation_iter_mut() {
             for primitive in &mut series.native_primitives {
                 let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &mut primitive.kind else {
                     continue;
@@ -1394,7 +1394,7 @@ impl ChartEngine {
 
     fn clear_delta_tooltip_previews(&mut self, end_mouse: bool) -> bool {
         let mut changed = false;
-        for series in &mut self.series {
+        for series in self.series.presentation_iter_mut() {
             for primitive in &mut series.native_primitives {
                 let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &mut primitive.kind else {
                     continue;

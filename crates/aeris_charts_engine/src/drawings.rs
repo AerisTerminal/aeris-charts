@@ -4034,6 +4034,18 @@ impl ChartEngine {
         dy_css: f64,
         anchor: Option<usize>,
     ) -> bool {
+        self.nudge_selected_drawing_with_history(dx_css, dy_css, anchor, true)
+    }
+
+    /// [`Self::nudge_selected_drawing`]; without `record`, the step joins an open keyboard edit
+    /// that commits through [`Self::record_drawing_edit`].
+    pub(crate) fn nudge_selected_drawing_with_history(
+        &mut self,
+        dx_css: f64,
+        dy_css: f64,
+        anchor: Option<usize>,
+        record: bool,
+    ) -> bool {
         if !dx_css.is_finite() || !dy_css.is_finite() || (dx_css == 0.0 && dy_css == 0.0) {
             return false;
         }
@@ -4062,8 +4074,37 @@ impl ChartEngine {
             start_px,
         });
         self.drawing_drag_to(dx_css, dy_css, DrawingModifiers::default());
-        self.drawing_drag_end();
+        if record {
+            self.drawing_drag_end();
+        } else if let Some(drag) = self.drawing_drag.take() {
+            self.update_drawing_runtime(drag.id);
+            self.invalidate_frame_overlay();
+        }
         true
+    }
+
+    /// Record the change from `before` to the drawing's current state as one undo entry.
+    pub(crate) fn record_drawing_edit(&mut self, before: Drawing) {
+        let Some(after) = self.drawing(before.id).cloned() else {
+            return;
+        };
+        if before != after {
+            self.drawing_anchor_times.remove(&before.id);
+            self.record_drawing_command(DrawingCommand::Update {
+                before,
+                after: Box::new(after),
+            });
+        }
+    }
+
+    /// Restore a drawing's anchors from `before` without recording history.
+    pub(crate) fn restore_drawing_points(&mut self, before: Drawing) {
+        let id = before.id;
+        if let Some(drawing) = self.drawings.iter_mut().find(|drawing| drawing.id == id) {
+            drawing.points = before.points;
+            self.update_drawing_runtime(id);
+            self.invalidate_frame_drawings();
+        }
     }
 
     // --- drawing-tool controller --------------------------------------------------------------

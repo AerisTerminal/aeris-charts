@@ -6,6 +6,7 @@
 //! exactly. Nearest sampling: labels are drawn 1:1 at integer bitmap positions, matching
 //! Canvas2D `fillText` crispness. Raster images use the same instance layout with a dedicated
 //! linear-sampling fragment entry point; their atlas bytes are premultiplied on insertion.
+//! Rotated labels reconstruct bilinearly in their own shader from premultiplied texel loads.
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -92,6 +93,7 @@ fn fs_image(in: VsOut) -> @location(0) vec4<f32> {
 // always carry a white tint, so this dedicated pipeline interprets location 2 as
 // [pivot_x, pivot_y, cos(angle), sin(angle)] and supplies white to the fragment stage. Keeping
 // ordinary text on SHADER preserves its approved byte-for-byte raster and buffer contract.
+// Filtering happens in the shader from `textureLoad`, so this pipeline binds no sampler.
 const ROTATED_SHADER: &str = r#"
 struct Globals {
     viewport: vec2<f32>,
@@ -100,7 +102,6 @@ struct Globals {
 
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
-@group(1) @binding(1) var atlas_samp: sampler;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -179,7 +180,7 @@ impl TexQuadRenderer {
             atlas_view,
             sample_count,
             SHADER,
-            wgpu::FilterMode::Nearest,
+            Some(wgpu::FilterMode::Nearest),
             "fs_main",
         )
     }
@@ -196,7 +197,7 @@ impl TexQuadRenderer {
             atlas_view,
             sample_count,
             ROTATED_SHADER,
-            wgpu::FilterMode::Linear,
+            None,
             "fs_main",
         )
     }
@@ -214,7 +215,7 @@ impl TexQuadRenderer {
             atlas_view,
             sample_count,
             SHADER,
-            wgpu::FilterMode::Linear,
+            Some(wgpu::FilterMode::Linear),
             "fs_image",
         )
     }
@@ -225,7 +226,7 @@ impl TexQuadRenderer {
         atlas_view: &wgpu::TextureView,
         sample_count: u32,
         shader_source: &'static str,
-        filter: wgpu::FilterMode,
+        filter: Option<wgpu::FilterMode>,
         fragment_entry: &'static str,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -263,51 +264,65 @@ impl TexQuadRenderer {
             }],
         });
 
+        let texture_entry = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let sampler_entry = wgpu::BindGroupLayoutEntry {
+            binding: 1,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        };
+        let layout_entries = [texture_entry, sampler_entry];
         let atlas_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("tex_quad_atlas_bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+            entries: if filter.is_some() {
+                &layout_entries
+            } else {
+                &layout_entries[..1]
+            },
+        });
+
+        // Axis-aligned text samples nearest so it stays pixel-exact at 1:1; raster images
+        // sample linearly. The rotated-text shader reconstructs bilinearly from `textureLoad`
+        // after premultiplying each texel, so it binds no sampler at all.
+        let sampler = filter.map(|filter| {
+            device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("atlas_sampler"),
+                mag_filter: filter,
+                min_filter: filter,
+                ..Default::default()
+            })
+        });
+        let texture_binding = wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(atlas_view),
+        };
+        let atlas_bg = match &sampler {
+            Some(sampler) => device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("tex_quad_atlas_bg"),
+                layout: &atlas_bgl,
+                entries: &[
+                    texture_binding,
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("atlas_sampler"),
-            // Axis-aligned text stays pixel-exact at 1:1. Rotated atlas quads need linear
-            // reconstruction or each source texel becomes a visibly jagged stair step.
-            mag_filter: filter,
-            min_filter: filter,
-            ..Default::default()
-        });
-
-        let atlas_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("tex_quad_atlas_bg"),
-            layout: &atlas_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(atlas_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
+                ],
+            }),
+            None => device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("tex_quad_atlas_bg"),
+                layout: &atlas_bgl,
+                entries: &[texture_binding],
+            }),
+        };
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("tex_quad_layout"),

@@ -502,31 +502,45 @@ pub fn stroke_aa(points: &[LinePoint], width: f32, mut tri: impl FnMut([StrokeAa
     let solid = STROKE_AA_SOLID;
     let mut prev_dir: Option<[f32; 2]> = None;
     let mut prev_b = [0.0f32; 2];
-    let mut segments = points
-        .windows(2)
-        .filter_map(|pair| {
-            let a = [pair[0].x as f32, pair[0].y as f32];
-            let b = [pair[1].x as f32, pair[1].y as f32];
-            let dx = b[0] - a[0];
-            let dy = b[1] - a[1];
-            let len = (dx * dx + dy * dy).sqrt();
-            if len < 1e-6 {
-                return None;
-            }
-            Some((a, b, [dx / len, dy / len]))
+    let mut segments = points.windows(2).filter_map(|pair| {
+        let a = [pair[0].x as f32, pair[0].y as f32];
+        let b = [pair[1].x as f32, pair[1].y as f32];
+        let dx = b[0] - a[0];
+        let dy = b[1] - a[1];
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < 1e-6 {
+            return None;
+        }
+        Some(StrokeSegment {
+            a,
+            b,
+            dir: [dx / len, dy / len],
+            len,
         })
-        .peekable();
-    while let Some((a, b, dir)) = segments.next() {
+    });
+    // A four-segment window decides each joint's clipping without allocating: a joint's
+    // validity depends on both neighbors and on how far their other ends are clipped.
+    let mut before: Option<StrokeSegment> = None;
+    let mut current = segments.next();
+    let mut next = segments.next();
+    let mut after = segments.next();
+    let mut start_clipped = false;
+    while let Some(segment) = current {
+        let StrokeSegment { a, b, dir, .. } = segment;
+        let end_clipped = next
+            .is_some_and(|next| stroke_aa_joint_clips(before, segment, next, after, outer_half));
         let n = [-dir[1], dir[0]];
         if prev_dir.is_none() {
             stroke_aa_cap(&mut emit, a, [-dir[0], -dir[1]], n, half);
         }
         // The bisectors partition the inner side of a turn between neighboring segments.
         // Without them, a translucent stroke blends the same pixel more than once.
-        let start = prev_dir.map(|prev| (a, [prev[0] + dir[0], prev[1] + dir[1]]));
-        let end = segments
-            .peek()
-            .map(|(_, _, next)| (b, [-dir[0] - next[0], -dir[1] - next[1]]));
+        let start = prev_dir
+            .filter(|_| start_clipped)
+            .map(|prev| (a, [prev[0] + dir[0], prev[1] + dir[1]]));
+        let end = next
+            .filter(|_| end_clipped)
+            .map(|next| (b, [-dir[0] - next.dir[0], -dir[1] - next.dir[1]]));
         let mut segment_emit = |a, da, b, db, c, dc| {
             stroke_aa_clip(
                 [
@@ -587,10 +601,64 @@ pub fn stroke_aa(points: &[LinePoint], width: f32, mut tri: impl FnMut([StrokeAa
         }
         prev_dir = Some(dir);
         prev_b = b;
+        start_clipped = end_clipped;
+        before = current;
+        current = next;
+        next = after;
+        after = segments.next();
     }
     if let Some(dir) = prev_dir {
         stroke_aa_cap(&mut emit, prev_b, dir, [-dir[1], dir[0]], half);
     }
+}
+
+#[derive(Clone, Copy)]
+struct StrokeSegment {
+    a: [f32; 2],
+    b: [f32; 2],
+    dir: [f32; 2],
+    len: f32,
+}
+
+/// Whether the bisector at the joint between `incoming` and `outgoing` may clip both segments.
+///
+/// Each segment hands the other the inner geometry on its far side of the bisector. That trade
+/// only covers the stroke when each neighbor extends past the region it must cover — at most
+/// `radius·sin φ / min(1, 1 + cos φ)` back from the joint — without overlapping the region its
+/// other end already gives away. Sharp turns between short segments (dense zig-zags, wide
+/// strokes) fail that test and keep both segments unclipped: overlapping coverage there blends a
+/// translucent stroke twice, which is far less visible than the hole clipping would cut.
+fn stroke_aa_joint_clips(
+    before: Option<StrokeSegment>,
+    incoming: StrokeSegment,
+    outgoing: StrokeSegment,
+    after: Option<StrokeSegment>,
+    radius: f32,
+) -> bool {
+    let turn = |u: [f32; 2], w: [f32; 2]| {
+        (
+            (u[0] * w[0] + u[1] * w[1]).clamp(-1.0, 1.0),
+            (u[0] * w[1] - u[1] * w[0]).abs(),
+        )
+    };
+    let reach = |sin: f32, denominator: f32| {
+        if denominator <= 1e-6 {
+            f32::INFINITY
+        } else {
+            radius * sin / denominator
+        }
+    };
+    let (cos, sin) = turn(incoming.dir, outgoing.dir);
+    let neighbor_reach = reach(sin, (1.0 + cos).min(1.0));
+    // A far joint's bisector removes at most `radius·tan(φ/2)` of its own segment. Assuming the
+    // far joints clip keeps each decision local to a four-segment window.
+    let own_reach = |u: [f32; 2], w: [f32; 2]| {
+        let (cos, sin) = turn(u, w);
+        reach(sin, 1.0 + cos)
+    };
+    let incoming_start = before.map_or(0.0, |before| own_reach(before.dir, incoming.dir));
+    let outgoing_end = after.map_or(0.0, |after| own_reach(outgoing.dir, after.dir));
+    incoming.len >= neighbor_reach + incoming_start && outgoing.len >= neighbor_reach + outgoing_end
 }
 
 /// Clips a segment triangle to its neighboring joint bisectors without allocating. The round
@@ -776,6 +844,11 @@ pub struct AreaMesh {
     /// Each vertex carries its media-y so the backend can look up the gradient; color is the
     /// resolved top/bottom mix computed here for simplicity (single draw, no gradient uniform).
     pub vertices: Vec<LineVertex>,
+    /// Vertex offsets of the six-vertex segments whose line crosses the base, ascending. Such a
+    /// segment is `[a, crossing, a_base, crossing, b, b_base]`: one simple lobe ends at
+    /// `crossing` and the next begins there, so contour tracers split lobes from this list
+    /// instead of comparing coordinates.
+    pub crossings: Vec<usize>,
 }
 
 /// Builds an area fill under `points` down to `base_y` (media px), vertically gradient-shaded
@@ -840,6 +913,7 @@ pub fn build_area_fill(
         if (a[1] - base) * (b[1] - base) < 0.0 {
             let t = (base - a[1]) / (b[1] - a[1]);
             let crossing = vert(a[0] + (b[0] - a[0]) * t, base);
+            out.crossings.push(out.vertices.len());
             out.vertices.extend([
                 vert(a[0], a[1]),
                 crossing,
@@ -991,8 +1065,6 @@ pub fn build_baseline(
     }
 }
 
-/// Tessellates a filled disc (triangle fan) at `center` with `radius`, all in bitmap px.
-/// Used for the crosshair marker on line and area series.
 /// Closed polygon outline of a rounded rectangle (CSS proportional radius scaling), shared by
 /// the WebGPU and GPUI executors so both tessellate
 /// `Prim::RoundRect` identically. Corner arcs scale their chord count with the device radius.
@@ -1030,30 +1102,49 @@ pub fn normalized_round_rect_radii(w: f32, h: f32, radii: [f32; 4]) -> [f32; 4] 
     radii.map(|r| r * factor)
 }
 
-/// Triangle list for an inside rounded-rectangle border. The paired outer and inner contours
-/// share each corner's angular steps, so the strip covers only the ring and never paints behind
-/// a translucent or transparent inner fill.
-pub fn round_rect_ring(
+/// Geometry of a rounded rectangle with an inside border, shared by the WebGPU and GPUI
+/// executors so the fill and the border tessellate identically on both.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RoundRectBorder {
+    /// Closed outer contour (the last vertex repeats the first).
+    pub outer: Vec<[f32; 2]>,
+    /// Closed contour bounding the inner fill; empty when the border covers the whole rect.
+    /// The ring's inner edge is built from exactly these vertices, so a fill fanned over them
+    /// meets the ring without a crescent gap or an overlap at rounded corners.
+    pub inner: Vec<[f32; 2]>,
+    /// Triangle list covering only the border, never the inner fill area.
+    pub ring: Vec<[f32; 2]>,
+}
+
+/// Inside rounded-rectangle border plus its inner fill contour. The paired outer and inner
+/// contours share each corner's angular steps (chosen from the outer radius), so the ring strip
+/// never paints behind a translucent or transparent inner fill.
+pub fn round_rect_border(
     x: f32,
     y: f32,
     w: f32,
     h: f32,
     radii: [f32; 4],
     border_width: f32,
-) -> Vec<[f32; 2]> {
+) -> RoundRectBorder {
     use std::f32::consts::PI;
     if w <= 0.0 || h <= 0.0 || border_width <= 0.0 {
-        return Vec::new();
+        return RoundRectBorder::default();
     }
     let inset = border_width.min(w / 2.0).min(h / 2.0);
     let [lt, rt, rb, lb] = normalized_round_rect_radii(w, h, radii);
     if inset * 2.0 >= w || inset * 2.0 >= h {
-        let polygon = round_rect_polygon(x, y, w, h, radii);
+        let outer = round_rect_polygon(x, y, w, h, radii);
         let center = [x + w / 2.0, y + h / 2.0];
-        return polygon
+        let ring = outer
             .windows(2)
             .flat_map(|edge| [center, edge[0], edge[1]])
             .collect();
+        return RoundRectBorder {
+            outer,
+            inner: Vec::new(),
+            ring,
+        };
     }
     let (ix, iy, iw, ih) = (x + inset, y + inset, w - 2.0 * inset, h - 2.0 * inset);
     let [ilt, irt, irb, ilb] = [lt, rt, rb, lb].map(|radius| (radius - inset).max(0.0));
@@ -1122,13 +1213,14 @@ pub fn round_rect_ring(
         PI,
         3.0 * PI / 2.0,
     );
-    let mut triangles = Vec::with_capacity((contours.len() - 1) * 6);
+    let mut ring = Vec::with_capacity((contours.len() - 1) * 6);
     for edge in contours.windows(2) {
         let (outer0, inner0) = edge[0];
         let (outer1, inner1) = edge[1];
-        triangles.extend([outer0, outer1, inner1, outer0, inner1, inner0]);
+        ring.extend([outer0, outer1, inner1, outer0, inner1, inner0]);
     }
-    triangles
+    let (outer, inner) = contours.into_iter().unzip();
+    RoundRectBorder { outer, inner, ring }
 }
 
 /// Quarter-arc chords scale with the device radius so pill ends stay round: the chord error is
@@ -1156,6 +1248,8 @@ pub fn circle_segments(radius: f32) -> usize {
     (std::f64::consts::PI / angle).ceil().clamp(24.0, 256.0) as usize
 }
 
+/// Tessellates a filled disc (triangle fan) at `center` with `radius`, all in bitmap px.
+/// Used for the crosshair marker on line and area series.
 pub fn build_disc(center: [f32; 2], radius: f32, color: Color, out: &mut Vec<LineVertex>) {
     let segments = circle_segments(radius);
     let rgba = color_to_rgba(color);
@@ -1195,6 +1289,11 @@ mod tests {
         let points = [LinePoint { x: 0.0, y: 0.0 }, LinePoint { x: 10.0, y: 10.0 }];
         let mut mesh = AreaMesh::default();
         build_area_fill(&points, 5.0, BLUE, BLUE, &params(1.0, 1.0), &mut mesh);
+        assert_eq!(
+            mesh.crossings,
+            vec![0],
+            "the only segment splits at the base"
+        );
         let coverage = |p: [f32; 2]| {
             mesh.vertices
                 .as_chunks::<3>()
@@ -1248,6 +1347,251 @@ mod tests {
                     .filter_map(|triangle| coverage_at(std::slice::from_ref(triangle), sample))
                     .sum::<f32>();
                 assert!(total <= 1.01, "overlapping coverage {total} at {sample:?}");
+            }
+        }
+    }
+
+    /// Sum of interpolated coverage of every triangle containing `p`.
+    fn total_coverage(tris: &[[StrokeAaVertex; 3]], p: [f32; 2]) -> f32 {
+        tris.iter()
+            .filter_map(|triangle| coverage_at(std::slice::from_ref(triangle), p))
+            .sum()
+    }
+
+    /// Whether `p` lies at least `inset` inside the ideal stroke: the union of every segment's
+    /// butt-ended rectangle and a disc at each interior vertex.
+    fn inside_ideal_stroke(points: &[[f32; 2]], half: f32, inset: f32, p: [f32; 2]) -> bool {
+        let r = half - inset;
+        let last = points.len() - 2;
+        let in_segment = points.windows(2).enumerate().any(|(index, pair)| {
+            let (a, b) = (pair[0], pair[1]);
+            let d = [b[0] - a[0], b[1] - a[1]];
+            let len = d[0].hypot(d[1]);
+            if len < 1e-6 {
+                return false;
+            }
+            let rel = [p[0] - a[0], p[1] - a[1]];
+            let along = (rel[0] * d[0] + rel[1] * d[1]) / len;
+            let across = (rel[0] * d[1] - rel[1] * d[0]).abs() / len;
+            // The butt ends meet a half-coverage cap exactly at the endpoint.
+            let lo = if index == 0 { inset } else { 0.0 };
+            let hi = if index == last { len - inset } else { len };
+            along > lo && along < hi && across < r
+        });
+        // Join arcs are chords at `join_segments` density, so only their inscribed core counts.
+        let disc = (half - STROKE_AA_HALF_PX)
+            * (std::f32::consts::PI / join_segments(half) as f32).cos()
+            - (inset - STROKE_AA_HALF_PX);
+        in_segment
+            || points[1..points.len() - 1]
+                .iter()
+                .any(|v| (p[0] - v[0]).hypot(p[1] - v[1]) < disc)
+    }
+
+    fn sharp_stroke_cases() -> Vec<(Vec<[f32; 2]>, f32)> {
+        let zigzag = |dx: f32, dy: f32, count: usize| -> Vec<[f32; 2]> {
+            (0..count)
+                .map(|i| {
+                    [
+                        20.0 + i as f32 * dx,
+                        20.0 + if i % 2 == 0 { 0.0 } else { dy },
+                    ]
+                })
+                .collect()
+        };
+        let mut cases = vec![
+            (zigzag(1.0, 10.0, 12), 8.0),
+            (zigzag(10.0, 1.0, 12), 8.0),
+            (zigzag(2.0, 10.0, 12), 8.0),
+            (zigzag(1.0, 10.0, 12), 16.0),
+            (zigzag(3.0, 4.0, 12), 12.0),
+            // Hairpins whose middle segment is far shorter than the stroke width.
+            (
+                vec![[10.0, 20.0], [60.0, 20.0], [60.0, 22.0], [10.0, 22.0]],
+                8.0,
+            ),
+            (
+                vec![[10.0, 20.0], [60.0, 20.0], [61.0, 23.0], [10.0, 25.0]],
+                10.0,
+            ),
+            (
+                vec![
+                    [10.0, 20.0],
+                    [60.0, 20.0],
+                    [58.0, 21.0],
+                    [61.0, 22.0],
+                    [10.0, 30.0],
+                ],
+                8.0,
+            ),
+        ];
+        // Deterministic irregular sharp scribbles with short and long neighbors.
+        let mut seed = 0x2545_f491_u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed % 10_000) as f32 / 10_000.0
+        };
+        for _ in 0..12 {
+            let mut points = vec![[40.0f32, 40.0]];
+            let mut heading = next() * std::f32::consts::TAU;
+            for _ in 0..8 {
+                let length = 1.0 + next() * 14.0;
+                heading += std::f32::consts::PI
+                    * (0.55 + next() * 0.4)
+                    * if next() < 0.5 { 1.0 } else { -1.0 };
+                let last = *points.last().unwrap();
+                points.push([
+                    last[0] + heading.cos() * length,
+                    last[1] + heading.sin() * length,
+                ]);
+            }
+            cases.push((points, 6.0 + next() * 10.0));
+        }
+        cases
+    }
+
+    #[test]
+    fn sharp_strokes_with_short_neighbors_cover_the_whole_core() {
+        let mut failures = Vec::new();
+        for (points, width) in sharp_stroke_cases() {
+            let line: Vec<LinePoint> = points
+                .iter()
+                .map(|p| LinePoint {
+                    x: p[0] as f64,
+                    y: p[1] as f64,
+                })
+                .collect();
+            let mut tris = Vec::new();
+            stroke_aa(&line, width, |triangle| tris.push(triangle));
+            let (min, max) = points.iter().fold(
+                ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]),
+                |(lo, hi), p| {
+                    (
+                        [lo[0].min(p[0]), lo[1].min(p[1])],
+                        [hi[0].max(p[0]), hi[1].max(p[1])],
+                    )
+                },
+            );
+            let pad = width;
+            let mut holes = 0;
+            let mut first_hole = None;
+            let mut y = min[1] - pad + 0.231;
+            while y < max[1] + pad {
+                let mut x = min[0] - pad + 0.137;
+                while x < max[0] + pad {
+                    let p = [x, y];
+                    if inside_ideal_stroke(&points, width / 2.0, 0.55, p) {
+                        let total = total_coverage(&tris, p);
+                        if total < 0.99 {
+                            holes += 1;
+                            first_hole.get_or_insert((p, total));
+                        }
+                    }
+                    x += 0.25;
+                }
+                y += 0.25;
+            }
+            if holes > 0 {
+                failures.push(format!(
+                    "width {width} {points:?}: {holes} uncovered core samples, first {first_hole:?}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn rounded_border_ring_and_inner_fill_cover_each_sample_exactly_once() {
+        // The executors fan the inner fill around its centroid.
+        let fan = |contour: &[[f32; 2]]| -> Vec<[[f32; 2]; 3]> {
+            let n = contour.len() as f32;
+            let center = [
+                contour.iter().map(|p| p[0]).sum::<f32>() / n,
+                contour.iter().map(|p| p[1]).sum::<f32>() / n,
+            ];
+            let mut tris: Vec<_> = contour
+                .windows(2)
+                .map(|edge| [center, edge[0], edge[1]])
+                .collect();
+            tris.push([center, contour[contour.len() - 1], contour[0]]);
+            tris
+        };
+        let inside_polygon = |polygon: &[[f32; 2]], p: [f32; 2]| {
+            let mut inside = false;
+            for edge in polygon.windows(2) {
+                let (a, b) = (edge[0], edge[1]);
+                if (a[1] > p[1]) != (b[1] > p[1])
+                    && p[0] < a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0])
+                {
+                    inside = !inside;
+                }
+            }
+            inside
+        };
+        for (rect, radii, border) in [
+            (
+                [10.0f32, 10.0, 40.0, 30.0],
+                [8.0f32, 3.0, 0.0, 12.0],
+                2.0f32,
+            ),
+            ([10.0, 10.0, 60.0, 20.0], [20.0; 4], 3.0),
+            ([10.0, 10.0, 30.0, 30.0], [1.0, 6.0, 1.0, 6.0], 3.0),
+            ([5.0, 5.0, 80.0, 50.0], [24.0, 24.0, 4.0, 4.0], 1.5),
+        ] {
+            let [x, y, w, h] = rect;
+            let geometry = round_rect_border(x, y, w, h, radii, border);
+            assert!(!geometry.inner.is_empty());
+            let mut tris = fan(&geometry.inner);
+            tris.extend(geometry.ring.as_chunks::<3>().0.iter().copied());
+            let mut sy = y - 1.0 + 0.0137;
+            while sy < y + h + 1.0 {
+                let mut sx = x - 1.0 + 0.0291;
+                while sx < x + w + 1.0 {
+                    let p = [sx, sy];
+                    let count = tris
+                        .iter()
+                        .filter(|t| triangle_covers(t[0], t[1], t[2], p))
+                        .count();
+                    let expected = usize::from(inside_polygon(&geometry.outer, p));
+                    assert_eq!(
+                        count, expected,
+                        "rect {rect:?} radii {radii:?} border {border}: sample {p:?}"
+                    );
+                    sx += 0.173;
+                }
+                sy += 0.181;
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_turns_with_long_neighbors_cover_each_sample_once() {
+        for turn_degrees in [30.0f32, 90.0, 135.0, 160.0] {
+            for side in [1.0f32, -1.0] {
+                let heading = f64::from(side * turn_degrees.to_radians());
+                let points = [
+                    LinePoint { x: 0.0, y: 60.0 },
+                    LinePoint { x: 60.0, y: 60.0 },
+                    LinePoint {
+                        x: 60.0 + 60.0 * heading.cos(),
+                        y: 60.0 + 60.0 * heading.sin(),
+                    },
+                ];
+                let mut tris = Vec::new();
+                stroke_aa(&points, 8.0, |triangle| tris.push(triangle));
+                for ix in 0..120 {
+                    for iy in 0..120 {
+                        // Offsets keep samples off the shared spokes and diagonals.
+                        let sample = [30.013 + ix as f32 * 0.3719, 30.029 + iy as f32 * 0.4127];
+                        let total = total_coverage(&tris, sample);
+                        assert!(
+                            total <= 1.01,
+                            "turn {turn_degrees} side {side}: coverage {total} at {sample:?}"
+                        );
+                    }
+                }
             }
         }
     }

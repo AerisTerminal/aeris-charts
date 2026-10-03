@@ -488,7 +488,7 @@ export class offscreen_chart {
         break;
     }
     this.consume_input_events();
-    this.render();
+    if (this.wasm.frame_pending()) this.render();
     this.schedule_input_tick();
   }
 
