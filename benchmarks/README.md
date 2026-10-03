@@ -146,7 +146,25 @@ compiled engine code, so the WASM and package-container ceilings take the same ~
 
 The largest reducible share measured in the unstripped module is serde JSON (de)serialization
 monomorphization (about a fifth of pre-optimization code), led by the internally tagged `IndicatorKind`
-enum. Future growth is blocked at the v4 ceilings.
+enum. That reset blocked subsequent growth at the v4 ceilings.
+
+Budget policy v5 resets the package ceilings after subsequent chart interaction, rendering, and backend
+parity work. The v4 ceilings had already failed on `c26286d` before the backend audit; the GitHub
+smoke run measured 1,742,628 tarball, 5,592,413 unpacked, 4,787,461 WASM raw, and 1,076,283 WASM
+Brotli bytes. The audit commit `d74c9d1` measured 1,781,356, 5,714,896, 4,918,412, and 1,094,509
+bytes respectively in the same CI workflow. Thus the audit added 2.2% tarball, 2.2% unpacked,
+2.7% WASM raw, and 1.7% WASM Brotli bytes to an existing overage. The minified JavaScript
+shrunk from 375,848 to 366,220 bytes and remains under the original JavaScript ceilings.
+The v5 maxima give the measured package artifacts about 7% headroom and keep size growth blocking:
+
+| Current metric | Observed bytes | Blocking maximum |
+| --- | ---: | ---: |
+| npm tarball | 1,781,356 | 1,910,000 |
+| npm unpacked | 5,714,896 | 6,100,000 |
+| JavaScript raw | 366,220 | 620,000 |
+| JavaScript Brotli | 63,272 | 95,000 |
+| WASM raw | 4,918,412 | 5,260,000 |
+| WASM Brotli | 1,094,509 | 1,170,000 |
 
 Phase 2 adds release-blocking maxima for `general-dashboard-100k`: p50 startup through the first following rAF
 must stay at or below 2,000 ms, and first-frame WebGPU vertex uploads must stay at or below 96 MiB. These are
