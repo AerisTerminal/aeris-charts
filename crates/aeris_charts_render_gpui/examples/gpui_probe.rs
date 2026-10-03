@@ -122,10 +122,16 @@ impl DemoTheme {
         let border = theme_border(self);
         let text = theme_text(self);
         let crosshair = self.crosshair();
+        let label = crosshair_label_background();
         format!(
-            r#"{{"layout":{{"background":{{"type":"solid","color":"{surface}"}},"textColor":"{text}","panes":{{"separatorColor":"{border}"}}}},"leftPriceScale":{{"borderColor":"{border}"}},"rightPriceScale":{{"borderColor":"{border}"}},"timeScale":{{"borderColor":"{border}"}},"grid":{{"vertLines":{{"color":"{border}"}},"horzLines":{{"color":"{border}"}}}},"crosshair":{{"vertLine":{{"color":"{crosshair}","labelBackgroundColor":"{crosshair}"}},"horzLine":{{"color":"{crosshair}","labelBackgroundColor":"{crosshair}"}}}}}}"#
+            r#"{{"layout":{{"background":{{"type":"solid","color":"{surface}"}},"textColor":"{text}","panes":{{"separatorColor":"{border}"}}}},"leftPriceScale":{{"borderColor":"{border}"}},"rightPriceScale":{{"borderColor":"{border}"}},"timeScale":{{"borderColor":"{border}"}},"grid":{{"vertLines":{{"color":"{border}"}},"horzLines":{{"color":"{border}"}}}},"crosshair":{{"vertLine":{{"color":"{crosshair}","labelBackgroundColor":"{label}"}},"horzLine":{{"color":"{crosshair}","labelBackgroundColor":"{label}"}}}}}}"#
         )
     }
+}
+
+/// The probe's crosshair label surface, in both themes.
+fn crosshair_label_background() -> &'static str {
+    aeris_charts_core::style::DARK_BORDER_CSS
 }
 
 fn apply_package_theme(engine: &mut ChartEngine, theme: DemoTheme) {
@@ -2232,10 +2238,10 @@ impl InteractiveDemo {
             }),
             DemoAction::CrosshairLabelBackground => self.update_root(cx, |p| {
                 let current = &p.engine.options.get().crosshair.vert_line.label_background_color;
-                let color = if current == aeris_charts_core::style::DEFAULT_CROSSHAIR_CSS {
+                let color = if current == crosshair_label_background() {
                     "#2962ff"
                 } else {
-                    aeris_charts_core::style::DEFAULT_CROSSHAIR_CSS
+                    crosshair_label_background()
                 };
                 p.engine.options.apply_str(&format!(r#"{{"crosshair":{{"vertLine":{{"labelBackgroundColor":"{color}"}},"horzLine":{{"labelBackgroundColor":"{color}"}}}}}}"#)).unwrap();
             }),
@@ -3680,7 +3686,7 @@ mod tests {
         assert_eq!(options.crosshair.vert_line.color, theme.crosshair());
         assert_eq!(
             options.crosshair.horz_line.label_background_color,
-            theme.crosshair()
+            crosshair_label_background()
         );
     }
 

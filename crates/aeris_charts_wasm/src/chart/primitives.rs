@@ -28,17 +28,14 @@ use super::*;
 use crate::prim_decode::decode_commands;
 use aeris_charts_core::model::plot_list::PlotValueIndex;
 use aeris_charts_core::scale::price_scale_core::PriceScaleCore;
-use aeris_charts_core::style::{DEFAULT_AXIS_TEXT_RGB, DEFAULT_CROSSHAIR_RGB};
+use aeris_charts_core::style::{DARK_BORDER_RGB, DEFAULT_AXIS_TEXT_RGB};
 use aeris_charts_engine::{ChartHover, HostPrimitiveHit, HostPrimitiveLayer};
 use aeris_charts_render::draw_list::TextAlign;
 
 /// Fallback background for a primitive axis label with no color given — the reference crosshair
 /// label default (frame/mod.rs `PRIMITIVE_LABEL_BG`).
-const PRIMITIVE_LABEL_BG: Color = Color::rgb(
-    DEFAULT_CROSSHAIR_RGB.0,
-    DEFAULT_CROSSHAIR_RGB.1,
-    DEFAULT_CROSSHAIR_RGB.2,
-);
+const PRIMITIVE_LABEL_BG: Color =
+    Color::rgb(DARK_BORDER_RGB.0, DARK_BORDER_RGB.1, DARK_BORDER_RGB.2);
 
 /// Parse the canvas-normalized subset every frame executor can represent. Unsupported font
 /// variants are rejected instead of painting one font in the browser and another in native.

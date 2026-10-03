@@ -1344,7 +1344,7 @@ test("Ctrl magnets the crosshair to the hovered bar's OHLC", async ({ page }) =>
   await page.evaluate(() => window.__chart.set_drawing_tool("trend_line"));
   // The crosshair's horizontal line is the default crosshair color — find the pane row with
   // the most of it (the dashed line covers the pane width).
-  const CROSS = [51, 51, 51]; // crosshair line pinned to the dark border token #333333
+  const CROSS = [74, 74, 74]; // crosshair line token #4a4a4a
   const crosshair_row = async () => {
     const png = await capture(page);
     const pane_bottom = Math.round((fixture.css_height - fixture.time_axis_height) * PR);
