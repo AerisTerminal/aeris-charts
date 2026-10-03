@@ -4867,6 +4867,23 @@ impl AerisChart {
             .set_selected_series(id.map(|id| id as SeriesId));
     }
 
+    /// The selected volume-profile indicator id, or 0 when none is selected.
+    pub fn selected_volume_profile_indicator(&self) -> u32 {
+        self.inner
+            .borrow()
+            .engine
+            .selected_volume_profile_indicator()
+            .unwrap_or(0)
+    }
+
+    /// Select a volume-profile indicator (0 clears). Returns `false` for an unknown id.
+    pub fn set_selected_volume_profile_indicator(&mut self, id: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_selected_volume_profile_indicator((id != 0).then_some(id))
+    }
+
     /// Deterministic browser-test hook for the transient canonical selection-anchor timestamps.
     #[doc(hidden)]
     pub fn selection_anchor_identities_json(&self) -> String {

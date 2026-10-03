@@ -1853,6 +1853,10 @@ pub struct ChartEngine {
     /// The series the host last clicked plus the canonical source timestamps sampled on the
     /// unselected -> selected transition. Coordinate changes only reproject this snapshot.
     selection: Option<SelectionAnchorSnapshot>,
+    /// Engine volume-profile indicators are series primitives rather than output series, so their
+    /// hover and selection live beside the series selection and exclude it.
+    hovered_volume_profile: Option<NativePrimitiveId>,
+    selected_volume_profile: Option<NativePrimitiveId>,
     /// Series-primitive autoscale contributions for the current frame build (Phase C-b).
     /// Hosts clear and re-record them per frame, before any layout/autoscale pass runs;
     /// `autoscale_for_frame` unions them into the owning scales.
@@ -2062,6 +2066,8 @@ impl ChartEngine {
             series_order_explicit: false,
             hovered_series: None,
             selection: None,
+            hovered_volume_profile: None,
+            selected_volume_profile: None,
             primitive_autoscale: Vec::new(),
             drawings: Vec::new(),
             drawing_runtime: RefCell::new(DrawingRuntime::default()),

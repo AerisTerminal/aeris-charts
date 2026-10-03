@@ -319,6 +319,9 @@ impl ChartInner {
                 None,
             ),
             ChartHover::Series(id) => (Some(id), None, None, None),
+            ChartHover::VolumeProfile(id) => {
+                (None, Some(format!("volume_profile:{id}")), None, None)
+            }
             ChartHover::General => (None, None, None, self.engine.general_hovered_hit()),
         };
         serde_json::json!({

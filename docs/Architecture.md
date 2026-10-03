@@ -393,6 +393,12 @@ decides whether a primitive cursor wins against active presses, chart tools, and
 the browser applies the callback's CSS cursor only when the controller selects it, writes the
 cursor only when it changes, and repaints after input only while `frame_pending()` reports a
 stale prepared frame, so identical hover samples do no frame work.
+Volume-profile indicators are native series primitives rather than output series, so the
+controller hit-tests their painted rows itself (after drawings, before series). Hovering a row
+shows the pointer cursor and reports `volume_profile:{id}` as the hover object; a click selects the
+profile (clearing series, drawing, and general selection) and paints selection anchors on its
+first and last rows, point of control, and value-area bounds. Escape deselects it and Delete
+removes it, exactly like an indicator series.
 Keyboard focus targets exposed by the browser accessibility layer (price axis, time axis, pane
 separator, drawing) route through `input_target_key_down` with a `ChartFocusTarget`. The engine
 owns their bindings: price-axis Home/ArrowUp/ArrowDown, time-axis Home/ArrowLeft/ArrowRight,

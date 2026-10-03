@@ -5204,6 +5204,14 @@ export class chart_impl implements chart_api {
         if (result === null) throw new AerisChartsError("stale_handle", "volume-profile indicator has been removed");
         return result;
       },
+      selected: () => !removed && this.wasm.selected_volume_profile_indicator() === id,
+      select: (selected = true) => {
+        read_options();
+        const current = this.wasm.selected_volume_profile_indicator() === id;
+        if (selected === current) return;
+        this.wasm.set_selected_volume_profile_indicator(selected ? id : 0);
+        this.repaint();
+      },
       remove: () => {
         if (removed) return;
         if (this.wasm.remove_native_primitive(id)) this.repaint();

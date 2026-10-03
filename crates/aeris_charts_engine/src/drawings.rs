@@ -3217,6 +3217,9 @@ impl ChartEngine {
         self.invalidate_frame_overlay();
         self.selected_drawing = id.filter(|&sid| self.drawings.iter().any(|d| d.id == sid));
         self.selected_drawings = self.selected_drawing.into_iter().collect();
+        if self.selected_drawing.is_some() {
+            self.clear_volume_profile_selection();
+        }
     }
 
     pub fn selected_drawing(&self) -> Option<DrawingId> {

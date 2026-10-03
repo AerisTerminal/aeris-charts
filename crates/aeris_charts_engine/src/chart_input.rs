@@ -247,6 +247,8 @@ pub enum ChartHover {
         cursor: &'static str,
     },
     Series(SeriesId),
+    /// An engine volume-profile indicator (a series primitive, not an output series).
+    VolumeProfile(NativePrimitiveId),
     /// A general-series item; read it through [`ChartEngine::general_hovered_hit`].
     General,
 }
@@ -444,6 +446,7 @@ impl ChartEngine {
         self.input.host_primitive_cursor = false;
         self.input.hover = ChartHover::None;
         self.set_hovered_series(None);
+        self.set_hovered_volume_profile(None);
         self.set_hovered_text(None);
         self.set_hovered_drawing(None);
         self.clear_general_hover();
@@ -1389,6 +1392,7 @@ impl ChartEngine {
                 self.discard_trading_interaction();
                 self.cancel_drawing_tool();
                 self.set_selected_drawing(None);
+                self.clear_volume_profile_selection();
                 self.clear_brushable_ranges();
                 self.clear_pointer_hover();
                 self.push_input_event(ChartInputEvent::CrosshairLeft);
@@ -1900,6 +1904,14 @@ impl ChartEngine {
         if let Some(id) = trend_text_hit {
             self.set_selected_drawing(Some(id));
         }
+        if let Some(id) = (!drawing_hit)
+            .then(|| self.volume_profile_indicator_at(x, y))
+            .flatten()
+        {
+            self.set_selected_volume_profile_indicator(Some(id));
+            return;
+        }
+        self.clear_volume_profile_selection();
         let general_hit = !drawing_hit
             && self
                 .pane_at_y(y)
@@ -2015,6 +2027,10 @@ impl ChartEngine {
             self.input.last_click = None;
             return true;
         }
+        if let Some(id) = self.selected_volume_profile_indicator() {
+            self.clear_volume_profile_selection();
+            return self.remove_native_primitive(id);
+        }
         let Some(series) = self.selected_series() else {
             return false;
         };
@@ -2043,6 +2059,7 @@ impl ChartEngine {
         y: f64,
         primitive: Option<HostPrimitiveHit>,
     ) -> ChartHover {
+        self.set_hovered_volume_profile(None);
         let Some(pane) = self.pane_at_y(y) else {
             self.set_hovered_series(None);
             self.set_hovered_text(None);
@@ -2062,6 +2079,13 @@ impl ChartEngine {
             self.clear_general_hover();
             self.set_hovered_series(None);
             return ChartHover::Drawing { id, cursor };
+        }
+        // Profile bars paint over their source series, so they win against series below them.
+        if let Some(id) = self.volume_profile_indicator_at(x, y) {
+            self.clear_general_hover();
+            self.set_hovered_series(None);
+            self.set_hovered_volume_profile(Some(id));
+            return ChartHover::VolumeProfile(id);
         }
         let mut best: Option<SeriesHit> = None;
         for index in (0..self.series_order.len()).rev() {
@@ -2221,7 +2245,7 @@ impl ChartEngine {
         if let Some((_, name)) = self.drawing_hover_at(x, y) {
             return ChartCursor::from_hit_name(name);
         }
-        if self.hovered_series().is_some() {
+        if self.hovered_series().is_some() || self.hovered_volume_profile_indicator().is_some() {
             return ChartCursor::Pointer;
         }
         ChartCursor::Crosshair
@@ -2304,6 +2328,120 @@ mod tests {
         let y = chart.series_price_to_coordinate(0, 101.0).unwrap();
         assert_eq!(chart.hit_test_series(x, y), Some(0));
         (x, y)
+    }
+
+    fn volume_profile_chart() -> (ChartEngine, SeriesId, crate::NativePrimitiveId) {
+        let mut chart = chart();
+        let volume = chart.add_series(SeriesKind::Histogram);
+        let times: Vec<f64> = (0..BARS).map(|i| 1_000.0 + i as f64 * 60.0).collect();
+        let values: Vec<f64> = (0..BARS).map(|i| 10.0 + (i % 5) as f64 * 20.0).collect();
+        chart
+            .set_series_data(volume, &times, &values, &values, &values, &values)
+            .unwrap();
+        chart.series_entry_mut(volume).unwrap().visible = false;
+        let id = chart
+            .add_volume_profile_indicator(
+                0,
+                volume,
+                crate::VolumeProfileIndicatorOptions::default(),
+            )
+            .unwrap();
+        chart.build_frame();
+        (chart, volume, id)
+    }
+
+    /// A point inside the profile's POC bar, clear of the crosshair action chip at the pane's
+    /// right edge.
+    fn volume_profile_point(chart: &mut ChartEngine, id: crate::NativePrimitiveId) -> (f64, f64) {
+        let profile = chart
+            .volume_profile_indicator_snapshot(id)
+            .unwrap()
+            .profile
+            .clone();
+        let poc = &profile.rows[profile.poc_index.unwrap()];
+        let y = chart
+            .series_price_to_coordinate(0, (poc.low + poc.high) / 2.0)
+            .unwrap();
+        (chart.pane_w - 60.0, y)
+    }
+
+    fn overlay_anchor_discs(chart: &mut ChartEngine) -> usize {
+        use aeris_charts_core::style::DEFAULT_PRIMARY_RGB;
+        use aeris_charts_render::{color::Color, draw_list::Prim};
+        let border = Color::rgb(
+            DEFAULT_PRIMARY_RGB.0,
+            DEFAULT_PRIMARY_RGB.1,
+            DEFAULT_PRIMARY_RGB.2,
+        );
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::Circle { fill, .. } if *fill == border))
+            .count()
+    }
+
+    #[test]
+    fn volume_profile_indicator_hovers_selects_and_deletes_like_other_indicators() {
+        let (mut chart, _, id) = volume_profile_chart();
+        let (x, y) = volume_profile_point(&mut chart, id);
+        assert_eq!(chart.volume_profile_indicator_at(x, y), Some(id));
+
+        chart.input_pointer_move(at(x, y), false);
+        assert_eq!(chart.input_hover(), ChartHover::VolumeProfile(id));
+        assert_eq!(chart.input_cursor(), ChartCursor::Pointer);
+        assert_eq!(overlay_anchor_discs(&mut chart), 0);
+
+        click(&mut chart, x, y);
+        assert_eq!(chart.selected_volume_profile_indicator(), Some(id));
+        assert_eq!(
+            chart.selected_series(),
+            None,
+            "the profile, not its candles, is selected"
+        );
+        assert!(
+            overlay_anchor_discs(&mut chart) >= 3,
+            "a selected profile paints selection anchors"
+        );
+
+        // Selecting the source series moves the selection off the profile.
+        let (sx, sy) = series_point(&chart);
+        click(&mut chart, sx, sy);
+        assert_eq!(chart.selected_series(), Some(0));
+        assert_eq!(chart.selected_volume_profile_indicator(), None);
+
+        click(&mut chart, x, y);
+        assert!(chart.input_key_down(ChartKey::Escape, InputModifiers::default(), false, 0.0));
+        assert_eq!(chart.selected_volume_profile_indicator(), None);
+        assert_eq!(overlay_anchor_discs(&mut chart), 0);
+
+        click(&mut chart, x, y);
+        assert!(chart.input_key_down(ChartKey::Delete, InputModifiers::default(), false, 0.0));
+        assert!(chart.volume_profile_indicator_options(id).is_none());
+        assert_eq!(chart.selected_volume_profile_indicator(), None);
+        assert!(
+            chart
+                .take_input_events()
+                .iter()
+                .all(|event| !matches!(event, ChartInputEvent::RemoveSeries(_))),
+            "the engine owns the profile, so Delete never asks the host to remove its candles"
+        );
+        chart.input_pointer_move(at(x, y), false);
+        assert_ne!(chart.input_hover(), ChartHover::VolumeProfile(id));
+    }
+
+    #[test]
+    fn hidden_volume_profile_indicator_is_not_hittable() {
+        let (mut chart, _, id) = volume_profile_chart();
+        let (x, y) = volume_profile_point(&mut chart, id);
+        let options = chart.volume_profile_indicator_options(id).unwrap().clone();
+        assert!(chart.set_volume_profile_indicator_options(
+            id,
+            crate::VolumeProfileIndicatorOptions {
+                visible: false,
+                ..options
+            }
+        ));
+        assert_eq!(chart.volume_profile_indicator_at(x, y), None);
     }
 
     #[test]

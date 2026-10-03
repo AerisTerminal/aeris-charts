@@ -2943,6 +2943,10 @@ export interface volume_profile_indicator_api {
   options(): volume_profile_indicator_options;
   apply_options(options: Partial<volume_profile_indicator_options>): void;
   snapshot(): volume_profile_indicator_snapshot;
+  /** Whether the profile is the chart's selection (click-to-select, cleared by Escape). */
+  selected(): boolean;
+  /** Select the profile, or clear it with `false`; selecting clears other chart selections. */
+  select(selected?: boolean): void;
   remove(): void;
 }
 
