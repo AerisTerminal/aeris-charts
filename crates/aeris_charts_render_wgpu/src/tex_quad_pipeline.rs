@@ -4,7 +4,8 @@
 //! `fillText` for non-white text. The shader folds the straight-alpha texel into premultiplied
 //! form and multiplies by the instance tint (white for text), reproducing the browser's blend
 //! exactly. Nearest sampling: labels are drawn 1:1 at integer bitmap positions, matching
-//! Canvas2D `fillText` crispness.
+//! Canvas2D `fillText` crispness. Raster images use the same instance layout with a dedicated
+//! linear-sampling fragment entry point; their atlas bytes are premultiplied on insertion.
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -38,6 +39,7 @@ struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) uv_bounds: vec4<f32>,
 };
 
 @vertex
@@ -61,6 +63,7 @@ fn vs_main(
     out.pos = vec4<f32>(ndc, 0.0, 1.0);
     out.uv = mix(uv.xy, uv.zw, c);
     out.color = color;
+    out.uv_bounds = uv;
     return out;
 }
 
@@ -71,6 +74,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let t = textureSample(atlas_tex, atlas_samp, in.uv);
     let a = t.a * in.color.a;
     return vec4<f32>(t.rgb * in.color.rgb * a, a);
+}
+
+@fragment
+fn fs_image(in: VsOut) -> @location(0) vec4<f32> {
+    // Clamp to this image's edge texel, not the shared atlas edge. Linear reconstruction must
+    // never read an adjacent image or the empty shelf area.
+    let half_texel = vec2<f32>(0.5) / vec2<f32>(textureDimensions(atlas_tex));
+    let uv = clamp(in.uv, in.uv_bounds.xy + half_texel, in.uv_bounds.zw - half_texel);
+    let t = textureSample(atlas_tex, atlas_samp, uv);
+    let a = t.a * in.color.a;
+    return vec4<f32>(t.rgb * in.color.rgb * in.color.a, a);
 }
 "#;
 
@@ -91,6 +105,7 @@ struct Globals {
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) uv_bounds: vec4<f32>,
 };
 
 @vertex
@@ -118,13 +133,29 @@ fn vs_main(
     var out: VsOut;
     out.pos = vec4<f32>(ndc, 0.0, 1.0);
     out.uv = mix(uv.xy, uv.zw, c);
+    out.uv_bounds = uv;
     return out;
+}
+
+fn premultiply(t: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(t.rgb * t.a, t.a);
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let t = textureSample(atlas_tex, atlas_samp, in.uv);
-    return vec4<f32>(t.rgb * t.a, t.a);
+    // Browser rasters are straight-alpha. Premultiply each source texel *before* bilinear
+    // reconstruction; multiplying after filtering darkens every partially covered edge.
+    let size = vec2<f32>(textureDimensions(atlas_tex));
+    let pixel = in.uv * size - vec2<f32>(0.5);
+    let base = vec2<i32>(floor(pixel));
+    let fraction = fract(pixel);
+    let lo = vec2<i32>(in.uv_bounds.xy * size);
+    let hi = vec2<i32>(in.uv_bounds.zw * size) - vec2<i32>(1);
+    let p00 = premultiply(textureLoad(atlas_tex, clamp(base, lo, hi), 0));
+    let p10 = premultiply(textureLoad(atlas_tex, clamp(base + vec2<i32>(1, 0), lo, hi), 0));
+    let p01 = premultiply(textureLoad(atlas_tex, clamp(base + vec2<i32>(0, 1), lo, hi), 0));
+    let p11 = premultiply(textureLoad(atlas_tex, clamp(base + vec2<i32>(1, 1), lo, hi), 0));
+    return mix(mix(p00, p10, fraction.x), mix(p01, p11, fraction.x), fraction.y);
 }
 "#;
 
@@ -149,6 +180,7 @@ impl TexQuadRenderer {
             sample_count,
             SHADER,
             wgpu::FilterMode::Nearest,
+            "fs_main",
         )
     }
 
@@ -165,6 +197,25 @@ impl TexQuadRenderer {
             sample_count,
             ROTATED_SHADER,
             wgpu::FilterMode::Linear,
+            "fs_main",
+        )
+    }
+
+    /// Raster images use the frame contract's bilinear filter. Ordinary text stays nearest.
+    pub fn new_image(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        atlas_view: &wgpu::TextureView,
+        sample_count: u32,
+    ) -> Self {
+        Self::new_with_shader(
+            device,
+            format,
+            atlas_view,
+            sample_count,
+            SHADER,
+            wgpu::FilterMode::Linear,
+            "fs_image",
         )
     }
 
@@ -175,6 +226,7 @@ impl TexQuadRenderer {
         sample_count: u32,
         shader_source: &'static str,
         filter: wgpu::FilterMode,
+        fragment_entry: &'static str,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tex_quad_shader"),
@@ -300,7 +352,7 @@ impl TexQuadRenderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(fragment_entry),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,

@@ -997,6 +997,11 @@ fn chart_time_zone_rebuilds_tick_weights_and_formats_live_clock() {
     assert_eq!(chart.time_zone_id(), DEFAULT_TIME_ZONE);
     assert!(chart.set_time_zone("America/New_York").unwrap());
     assert_eq!(chart.time_zone_id(), "America/New_York");
+    chart.set_date_format("yyyy-MM-dd");
+    assert_eq!(
+        chart.format_crosshair_ts(1_767_229_200),
+        "2025-12-31   20:00"
+    );
     let marks = chart.time_marks(1.0);
     assert!(marks.iter().any(|&(index, weight)| {
         index == 1 && weight == aeris_charts_core::scale::time_tick_marks::TickMarkWeight::Day as u8
@@ -5642,6 +5647,25 @@ fn crosshair_time_label(chart: &mut ChartEngine, time: f64) -> Option<String> {
 }
 
 #[test]
+fn shared_time_formatter_matches_the_zoned_axis_label() {
+    let ts = 1_767_229_200.0; // 2026-01-01 01:00 UTC, previous day in New York.
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(0, &[ts], &[10.0], &[10.0], &[10.0], &[10.0])
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.set_date_format("yyyy-MM-dd");
+    chart.set_time_zone("America/New_York").unwrap();
+    let formatted = chart.format_crosshair_ts(ts as i64);
+    assert_eq!(formatted, "2025-12-31   20:00");
+    assert_eq!(
+        crosshair_time_label(&mut chart, ts).as_deref(),
+        Some(formatted.as_str())
+    );
+}
+
+#[test]
 fn date_format_drives_the_crosshair_time_label() {
     // 2018-06-25T14:30:45Z
     let ts = 1_529_937_045.0;
@@ -7661,7 +7685,7 @@ fn pane_separators_span_the_full_chart_width_at_rest_and_on_hover() {
     let separator_y = (axis.separators[0] * chart.dpr).round() as i32;
 
     let mut prims = Vec::new();
-    chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
+    chart.build_axis_primitives_into(&axis, &mut prims);
     let resting = prims
         .iter()
         .filter_map(|p| match p {
@@ -7685,7 +7709,7 @@ fn pane_separators_span_the_full_chart_width_at_rest_and_on_hover() {
         |text, _bold| text.len() as f64 * 6.0,
         |text, _bold| text.len() as f64 * 5.0,
     );
-    chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
+    chart.build_axis_primitives_into(&axis, &mut prims);
     let hover = prims
         .iter()
         .find_map(|p| match p {
@@ -7718,7 +7742,7 @@ fn axis_borders_are_one_css_px_and_pane_separators_two() {
             |text, _bold| text.len() as f64 * 5.0,
         );
         let mut prims = Vec::new();
-        chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
+        chart.build_axis_primitives_into(&axis, &mut prims);
 
         let expected = aeris_charts_core::style::border_width_device_px(dpr) as i32;
         let right_x = ((chart.pane_left + chart.pane_w) * dpr).round() as i32;
@@ -7790,7 +7814,7 @@ fn pane_separators_have_identical_device_thickness_at_fractional_dpr() {
     );
     assert_eq!(axis.separators.len(), 2);
     let mut prims = Vec::new();
-    chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
+    chart.build_axis_primitives_into(&axis, &mut prims);
     let expected_height = (crate::PANE_SEPARATOR * chart.dpr).round() as i32;
     let heights = axis
         .separators

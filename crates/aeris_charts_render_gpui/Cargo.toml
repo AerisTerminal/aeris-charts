@@ -45,9 +45,15 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1057c2cf
     "x11",
 ] }
 aeris_charts_native = { path = "../aeris_charts_native" }
+aeris_charts_render_wgpu = { path = "../aeris_charts_render_wgpu" }
 serde_json = "1"
 sha2 = "0.11"
 tiny-skia = "0.12"
+
+# GPUI's compositor selection is compiled in `gpui` itself. Enabling X11/Wayland only on
+# `gpui_platform` leaves `gpui::guess_compositor()` headless under Xvfb even with DISPLAY set.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1057c2cf3d5b4aefd04755e1387c7826a4d7fba6", version = "=0.2.2", default-features = false, features = ["wayland", "x11"] }
 
 [lints]
 workspace = true

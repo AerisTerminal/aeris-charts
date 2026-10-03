@@ -161,7 +161,6 @@ impl ChartInner {
         }
         self.destroy_all_custom_series();
         self.rings.clear();
-        self.primitive_texts.clear();
     }
 
     /// Adds a series and returns its id. `kind`: 0 candles, 1 bars, 2 line, 3 area, 4 histogram.
@@ -2163,8 +2162,21 @@ impl ChartInner {
         let font_family = layout.font_family;
         let axis_size = self.engine.axis_font_size();
         let countdown_size = self.engine.countdown_font_size();
-        self.engine.recompute_layout_with_measure(
-            allow_axis_shrink,
+        self.engine.prepare_financial_frame_with_measure(
+            aeris_charts_engine::FinancialFrameRequest {
+                width: self.css_width,
+                height: self.css_height,
+                dpr,
+                force_layout: true,
+                allow_axis_shrink,
+                force_frame: false,
+                force_axis: false,
+                layout_only: true,
+                fit_content: false,
+                frame: &mut self.frame,
+                axis_frame: None,
+                axis_primitives: None,
+            },
             |text, bold| measure_text_ctx(&axis_ctx, dpr, &font_family, axis_size, bold, text),
             |text, bold| measure_text_ctx(&axis_ctx, dpr, &font_family, countdown_size, bold, text),
         );
@@ -2202,23 +2214,13 @@ impl ChartInner {
         self.time_scale_end_scroll();
     }
 
-    // --- engine-owned interaction models (kinetic, axis drag-to-scale, price pan, eased
-    // scroll): the TS recognizer forwards normalized samples and schedules frames; every
-    // formula lives in the engine so the headless harness runs the same code. ---
+    // --- Gesture bridge methods used by browser pointer, touch, and keyboard routing. The
+    // browser schedules frames; gesture math remains engine-owned. ---
 
-    /// reference wheel zoom increment: `sign(deltaY) * min(1, |deltaY|)`.
-    pub fn wheel_zoom_scale(&self, delta_y: f64) -> f64 {
-        aeris_charts_engine::wheel_zoom_scale(delta_y)
-    }
     /// reference pinch zoom increment: the scale-ratio delta ×5.
     pub fn pinch_zoom_scale(&self, scale_delta: f64) -> f64 {
         aeris_charts_engine::pinch_zoom_scale(scale_delta)
     }
-    /// reference wheel scroll: `deltaX * -80` px ("made-up coefficient").
-    pub fn wheel_scroll_delta(&self, delta_x: f64) -> f64 {
-        delta_x * aeris_charts_engine::WHEEL_SCROLL_PX_PER_DELTA
-    }
-
     /// Open a kinetic sampling session alongside the drag, seeded with logical rightOffset.
     pub fn kinetic_begin_sampling(&mut self, enabled: bool, position: f64, now_ms: f64) {
         self.engine

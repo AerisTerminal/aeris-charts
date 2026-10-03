@@ -86,7 +86,7 @@ pub use drawing_contract::{
     MAX_DRAWING_LEVELS, MAX_DRAWING_NAME_BYTES, MAX_DRAWING_OBJECTS, MAX_DRAWING_TEMPLATES,
     MAX_DRAWING_TEMPLATE_BYTES,
 };
-pub use drawing_text_edit::DrawingTextEditKey;
+pub use drawing_text_edit::{DrawingTextEditKey, DrawingTextEditLayout};
 pub use drawings::{
     Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId, DrawingKind,
     DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats, TextCapCenterFn,
@@ -154,7 +154,9 @@ pub use general_series::{
     MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
-pub use host_layout::{FinancialFramePreparation, FinancialFrameRequest};
+pub use host_layout::{
+    ExportFrame, ExportFrameRequest, FinancialFramePreparation, FinancialFrameRequest,
+};
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use indicators::{
     IndicatorBindingInfo, IndicatorChromeOptions, IndicatorInputSource, IndicatorKind,
@@ -823,6 +825,53 @@ pub struct AreaBrushDefaults {
     pub negative: BrushStyle,
 }
 
+/// Explicit host color and width overrides for one brush state.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BrushStyleOverride {
+    pub line_color: Option<Color>,
+    pub top_color: Option<Color>,
+    pub bottom_color: Option<Color>,
+    pub line_width: Option<f64>,
+}
+
+impl BrushStyleOverride {
+    fn apply(self, mut style: BrushStyle) -> BrushStyle {
+        if let Some(color) = self.line_color {
+            style.line_color = color;
+        }
+        if let Some(color) = self.top_color {
+            style.top_color = color;
+        }
+        if let Some(color) = self.bottom_color {
+            style.bottom_color = color;
+        }
+        if let Some(width) = self
+            .line_width
+            .filter(|width| width.is_finite() && *width > 0.0)
+        {
+            style.line_width = width;
+        }
+        style
+    }
+}
+
+/// Optional presentation overrides retained with an engine-owned brushable Area.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AreaBrushOverrides {
+    pub outside: BrushStyleOverride,
+    pub positive: BrushStyleOverride,
+    pub negative: BrushStyleOverride,
+}
+
+impl AreaBrushOverrides {
+    fn apply(self, mut defaults: AreaBrushDefaults) -> AreaBrushDefaults {
+        defaults.outside = self.outside.apply(defaults.outside);
+        defaults.positive = self.positive.apply(defaults.positive);
+        defaults.negative = self.negative.apply(defaults.negative);
+        defaults
+    }
+}
+
 /// One logical half-open range styled by the brushable-area interaction.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BrushRange {
@@ -1270,6 +1319,7 @@ pub const PANE_SEPARATOR: f64 = 2.0;
 /// scales nowhere until re-assigned to a live pane.
 pub(crate) const PANELESS: usize = usize::MAX;
 
+#[derive(Clone)]
 pub struct Pane {
     /// Chart-local identity that survives index changes and is never reused. Zero is reserved for
     /// standalone/default panes that are not owned by a [`ChartEngine`].
@@ -1400,6 +1450,7 @@ impl Pane {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct NamedPriceScale {
     pub id: PriceScaleId,
     pub public_id: String,

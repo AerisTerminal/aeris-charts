@@ -87,12 +87,14 @@ test("custom series paints identically on both backends with the plugin active",
   // Shared axis text uses identical geometry and bounded backend-specific AA at fractional DPR.
   const backend_diff = count_different(gpu_active, canvas_active);
   const backend_max_delta = max_channel_delta(gpu_active, canvas_active);
-  if (backend_diff > 5_000 || backend_max_delta > 64) {
+  console.log(`custom-series full-frame residual: ${backend_diff} px, max delta ${backend_max_delta}`);
+  if (backend_diff > 2_700 || backend_max_delta > 48) {
     await test_info.attach("webgpu.png", { body: PNG.sync.write(gpu_active), contentType: "image/png" });
     await test_info.attach("canvas2d.png", { body: PNG.sync.write(canvas_active), contentType: "image/png" });
   }
-  expect(backend_diff, "full-frame differences must stay confined to bounded AA edges").toBeLessThanOrEqual(5_000);
-  expect(backend_max_delta).toBeLessThanOrEqual(64);
+  // Windows SwiftShader measurement: 2,387 pixels, max delta 40.
+  expect(backend_diff, "full-frame differences must stay confined to bounded AA edges").toBeLessThanOrEqual(2_700);
+  expect(backend_max_delta).toBeLessThanOrEqual(48);
 });
 
 // (b) Autoscale: the custom series' `price_value_builder` values drive its price scale through

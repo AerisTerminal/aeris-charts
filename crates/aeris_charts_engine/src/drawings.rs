@@ -843,8 +843,8 @@ pub type TextMeasureFn = Box<dyn Fn(&str, f64, &str, u16, bool) -> f64>;
 
 /// Host vertical glyph metric for `{italic} {weight} {size}px {family}`: the offset, in the same px
 /// units as `size`, that moves a `Prim::Text` anchor (Canvas `textBaseline: "middle"`, the em-box
-/// center) so the ink of capitals and figures is centered on the intended line instead. Browser
-/// hosts derive it from `measureText` ink bounds and native hosts from the font's cap height.
+/// center) so cap-height ink is centered on the intended line instead. Browser hosts derive it
+/// from `measureText` font bounds and cap ink; native hosts use the font's cap height.
 /// Without one the engine uses no correction (deterministic for native tests).
 pub type TextCapCenterFn = Box<dyn Fn(f64, &str, u16, bool) -> f64>;
 
@@ -2430,6 +2430,12 @@ impl ChartEngine {
         self.invalidate_frame_trading();
     }
 
+    /// Whether a host has installed a glyph-width measurer. Native renderers use this to avoid
+    /// invalidating drawing geometry on every screenshot after their first measurement install.
+    pub fn has_text_measure(&self) -> bool {
+        self.text_measure_fn.is_some()
+    }
+
     /// Cap-and-figure ink correction for a middle-anchored run (see [`TextCapCenterFn`]).
     pub(crate) fn text_cap_center(
         &self,
@@ -2449,6 +2455,7 @@ impl ChartEngine {
     /// control text inside its box (see [`TextCapCenterFn`]).
     pub fn set_text_cap_center(&mut self, f: Option<TextCapCenterFn>) {
         self.text_cap_center_fn = f;
+        self.invalidate_axis_frame();
         self.invalidate_frame_trading();
     }
 

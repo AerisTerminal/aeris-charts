@@ -668,19 +668,6 @@ function tooltip_row_text(row: HTMLDivElement, value: HTMLSpanElement, text: str
   row.hidden = text.length === 0;
 }
 
-const tooltip_time_formatter = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-  timeZoneName: "short",
-});
-
-function tooltip_timestamp(timestamp: number): string {
-  if (timestamp === 0) return "";
-  return tooltip_time_formatter.format(new Date(timestamp * 1_000));
-}
-
 /** Structured OHLC market-data tooltip; source lookup and its vertical guide are engine-owned. */
 export function create_tooltip(chart: chart_api, options: tooltip_options = {}): tooltip_handle {
   let current: Required<Omit<tooltip_options, "series" | "volume_series" | "format" | "line_color">>
@@ -780,7 +767,7 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
       return;
     }
     tooltip_text(title, current.title);
-    tooltip_text(timestamp, tooltip_timestamp(snapshot.time));
+    tooltip_text(timestamp, snapshot.time === 0 ? "" : chart.format_time_label(snapshot.time));
     tooltip_row_text(close.row, close.value, Number.isFinite(snapshot.close) ? format_price(event, snapshot.close) : "");
     tooltip_row_text(open.row, open.value, Number.isFinite(snapshot.open) ? format_price(event, snapshot.open) : "");
     tooltip_row_text(high.row, high.value, Number.isFinite(snapshot.high) ? format_price(event, snapshot.high) : "");

@@ -5,9 +5,8 @@
 //! fails here until the golden is deliberately regenerated (`cargo run -p aeris_charts_native --example
 //! scene -- crates/aeris_charts_native/tests/goldens/scene.png`).
 //!
-//! The golden is currently our own deterministic render of geometry (no text). When a
-//! headless-Chromium comparison pipeline exists, independently captured public-library output can
-//! be evaluated as additional goldens with the same diff.
+//! The golden includes the full primitive scene. System font selection varies by OS, so the text
+//! run is checked for actual ink separately and its small region is masked in the exact PNG diff.
 
 use aeris_charts_native::{
     diff_pixmaps,
@@ -15,18 +14,107 @@ use aeris_charts_native::{
     load_png, render_engine, render_prims,
     scene::demo_scene,
 };
+use aeris_charts_render::draw_list::{LineStyle, LineType, Prim};
 
 const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens/scene.png");
+
+#[test]
+fn golden_scene_exercises_every_non_rect_contract_family() {
+    let scene = demo_scene();
+    for (name, found) in [
+        (
+            "Text",
+            scene.prims.iter().any(|p| matches!(p, Prim::Text { .. })),
+        ),
+        (
+            "RoundRect",
+            scene
+                .prims
+                .iter()
+                .any(|p| matches!(p, Prim::RoundRect { border_width, .. } if *border_width > 0.0)),
+        ),
+        (
+            "BandFill",
+            scene
+                .prims
+                .iter()
+                .any(|p| matches!(p, Prim::BandFill { .. })),
+        ),
+        (
+            "Triangle",
+            scene
+                .prims
+                .iter()
+                .any(|p| matches!(p, Prim::Triangle { .. })),
+        ),
+        (
+            "Image",
+            scene.prims.iter().any(|p| matches!(p, Prim::Image { .. })),
+        ),
+        (
+            "Dashed Polyline",
+            scene.prims.iter().any(|p| {
+                matches!(
+                    p,
+                    Prim::Polyline {
+                        style: LineStyle::Dashed,
+                        ..
+                    }
+                )
+            }),
+        ),
+        (
+            "Dotted stepped Polyline",
+            scene.prims.iter().any(|p| {
+                matches!(
+                    p,
+                    Prim::Polyline {
+                        style: LineStyle::Dotted,
+                        line_type: LineType::WithSteps,
+                        ..
+                    }
+                )
+            }),
+        ),
+    ] {
+        assert!(found, "golden scene lacks {name}");
+    }
+}
 
 #[test]
 fn scene_matches_golden() {
     let s = demo_scene();
     let canvas = render_prims(s.width, s.height, s.background, &s.prims, &s.points);
-    let golden = load_png(GOLDEN).expect("committed golden PNG should load");
+    let mut golden = load_png(GOLDEN).expect("committed golden PNG should load");
+    let mut rendered = canvas.pixmap().clone();
+
+    let without_text: Vec<_> = s
+        .prims
+        .iter()
+        .filter(|prim| !matches!(prim, Prim::Text { .. }))
+        .cloned()
+        .collect();
+    let plain = render_prims(s.width, s.height, s.background, &without_text, &s.points);
+    let width = s.width as usize;
+    let mut ink_pixels = 0;
+    for y in 255..300usize {
+        for x in 0..100usize {
+            let index = (y * width + x) * 4;
+            if canvas.pixmap().data()[index..index + 4] != plain.pixmap().data()[index..index + 4] {
+                ink_pixels += 1;
+            }
+            rendered.data_mut()[index..index + 4].fill(0);
+            golden.data_mut()[index..index + 4].fill(0);
+        }
+    }
+    assert!(
+        ink_pixels > 20,
+        "native text run painted only {ink_pixels} pixels"
+    );
 
     // Same machine + deterministic CPU rasterizer => exact. Allow a hair of per-channel tolerance
     // and a tiny differing-pixel budget so a tiny-skia patch bump doesn't spuriously fail CI.
-    let stats = diff_pixmaps(canvas.pixmap(), &golden, 2).expect("golden and render are same size");
+    let stats = diff_pixmaps(&rendered, &golden, 2).expect("golden and render are same size");
     assert!(
         stats.fraction() < 0.001,
         "render drifted from golden: {} / {} px differ (max channel delta {}). \

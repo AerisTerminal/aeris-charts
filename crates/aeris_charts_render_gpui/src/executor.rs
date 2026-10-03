@@ -13,12 +13,13 @@
 //! unobservable. The adapter therefore must *not* wrap the chart in `Window::paint_layer`: a layer
 //! forces every primitive inside it to share one order, which would flatten the chart's z-order.
 
-use aeris_charts_render::draw_list::{LineStyle, Prim};
+use aeris_charts_render::draw_list::{positive_finite_extent, LineStyle, Prim};
+use aeris_charts_render::line::normalized_round_rect_radii;
 
 use crate::geometry::{
-    area_fill_mesh, band_fill_mesh, dash_spans, dashed_polyline_meshes, disc_mesh, fill_polygon,
-    irect, line_span_start, polyline_mesh, rect_frame_edges, ring_mesh, round_rect_polygon,
-    Scratch,
+    area_fill_mesh, area_fringe_gradient, band_fill_mesh, dash_spans, dashed_polyline_meshes,
+    disc_mesh, fill_polygon, irect, line_span_start, polyline_mesh, rect_frame_edges, ring_mesh,
+    round_rect_polygon, round_rect_ring_mesh, Scratch,
 };
 use crate::metrics::GpuiFrameMetrics;
 use crate::scene::{DeviceRect, Paint, SceneOp, ScenePlan, TextRun};
@@ -140,6 +141,9 @@ fn lower_prim(
             line_type,
             color,
         } => {
+            if !positive_finite_extent(*width) {
+                return;
+            }
             // A solid style tessellates the whole run; a dashed one is split into solid runs
             // first, exactly as `aeris_charts_engine::frame::series_geometry::push_line_stroke` does for
             // the series it owns. Doing it here too means a dashed `Polyline` arriving from a host
@@ -193,7 +197,15 @@ fn lower_prim(
                 gradient.top,
                 gradient.bottom,
             );
+            let fringe = (
+                range.0 + range.1,
+                plan.vertices.len() as u32 - range.0 - range.1,
+            );
             push_mesh(plan, metrics, range, paint);
+            if fringe.1 > 0 {
+                let fringe_paint = area_fringe_gradient(&plan.vertices, range, fringe, paint);
+                push_mesh(plan, metrics, fringe, fringe_paint);
+            }
         }
 
         Prim::BandFill {
@@ -223,19 +235,20 @@ fn lower_prim(
             stroke_width,
             stroke,
         } => {
-            if *radius > 0.0 {
-                let range = disc_mesh(&mut plan.vertices, *cx, *cy, *radius);
-                push_mesh(plan, metrics, range, Paint::Solid(*fill));
+            if !positive_finite_extent(*radius) {
+                return;
             }
+            let range = disc_mesh(&mut plan.vertices, *cx, *cy, *radius);
+            push_mesh(plan, metrics, range, Paint::Solid(*fill));
             // Stroke after fill, matching Canvas2D, native, and the WebGPU annulus tessellation.
-            if *stroke_width > 0.0 {
+            if positive_finite_extent(*stroke_width) {
                 let range = ring_mesh(&mut plan.vertices, *cx, *cy, *radius, *stroke_width);
                 push_mesh(plan, metrics, range, Paint::Solid(*stroke));
             }
         }
 
         Prim::Triangle { a, b, c, color } => {
-            let range = crate::geometry::push_vertices(&mut plan.vertices, [*a, *b, *c]);
+            let range = fill_polygon(&mut plan.vertices, &[*a, *b, *c]);
             push_mesh(plan, metrics, range, Paint::Solid(*color));
         }
 
@@ -252,11 +265,12 @@ fn lower_prim(
             if *w <= 0.0 || *h <= 0.0 {
                 return;
             }
+            let radii = normalized_round_rect_radii(*w, *h, *radii);
             if options.native_round_rects {
                 plan.ops.push(SceneOp::Quad {
                     rect: DeviceRect::new(*x, *y, *w, *h),
                     fill: Paint::Solid(*fill),
-                    corner_radii: *radii,
+                    corner_radii: radii,
                     border_width: *border_width,
                     border_color: *border_color,
                 });
@@ -264,24 +278,31 @@ fn lower_prim(
                 metrics.ops += 1;
                 return;
             }
-            // Aeris-generated strips: the wgpu executor's exact construction — the border as the
-            // outer polygon, the fill as an inset polygon on top.
-            let outer = round_rect_polygon(*x, *y, *w, *h, *radii);
+            // Both GPU executors share the same inner fill and border-ring geometry.
             if *border_width > 0.0 {
-                let range = fill_polygon(&mut plan.vertices, &outer);
-                push_mesh(plan, metrics, range, Paint::Solid(*border_color));
                 let inset = border_width.min(*w / 2.0).min(*h / 2.0);
-                let inner_radii = radii.map(|r| (r - inset).max(0.0));
-                let inner = round_rect_polygon(
-                    x + inset,
-                    y + inset,
-                    w - inset * 2.0,
-                    h - inset * 2.0,
-                    inner_radii,
+                if inset * 2.0 < *w && inset * 2.0 < *h {
+                    let inner_radii = radii.map(|r| (r - inset).max(0.0));
+                    let inner = round_rect_polygon(
+                        x + inset,
+                        y + inset,
+                        w - inset * 2.0,
+                        h - inset * 2.0,
+                        inner_radii,
+                    );
+                    let range = fill_polygon(&mut plan.vertices, &inner);
+                    push_mesh(plan, metrics, range, Paint::Solid(*fill));
+                }
+                let range = round_rect_ring_mesh(
+                    scratch,
+                    &mut plan.vertices,
+                    [*x, *y, *w, *h],
+                    radii,
+                    *border_width,
                 );
-                let range = fill_polygon(&mut plan.vertices, &inner);
-                push_mesh(plan, metrics, range, Paint::Solid(*fill));
+                push_mesh(plan, metrics, range, Paint::Solid(*border_color));
             } else {
+                let outer = round_rect_polygon(*x, *y, *w, *h, radii);
                 let range = fill_polygon(&mut plan.vertices, &outer);
                 push_mesh(plan, metrics, range, Paint::Solid(*fill));
             }
@@ -370,6 +391,9 @@ fn lower_prim(
             rect,
             opacity,
         } => {
+            let Some(rect) = aeris_charts_render::draw_list::snap_image_rect(*rect) else {
+                return;
+            };
             let rect = DeviceRect::new(rect[0], rect[1], rect[2], rect[3]);
             if rect.is_empty()
                 || image.width == 0
@@ -768,6 +792,39 @@ mod tests {
     }
 
     #[test]
+    fn degenerate_circles_and_polyline_widths_emit_no_scene_ops() {
+        for radius in [-3.0, 0.0, f32::NAN, f32::INFINITY] {
+            let (plan, _) = run(
+                &[Prim::Circle {
+                    cx: 5.0,
+                    cy: 6.0,
+                    radius,
+                    fill: C,
+                    stroke_width: 2.0,
+                    stroke: C,
+                }],
+                &[],
+            );
+            assert!(plan.ops.is_empty(), "radius {radius}");
+        }
+        let points = [[0.0, 0.0], [10.0, 10.0]];
+        for width in [-2.0, 0.0, f32::NAN, f32::INFINITY] {
+            let (plan, _) = run(
+                &[Prim::Polyline {
+                    first_point: 0,
+                    point_count: 2,
+                    width,
+                    style: LineStyle::Solid,
+                    line_type: LineType::Simple,
+                    color: C,
+                }],
+                &points,
+            );
+            assert!(plan.ops.is_empty(), "width {width}");
+        }
+    }
+
+    #[test]
     fn round_rect_defaults_to_base_tessellation_not_a_native_quad() {
         let prim = Prim::RoundRect {
             x: 1.0,
@@ -782,7 +839,7 @@ mod tests {
         let prims = [prim];
         let (plan, metrics) = run(&prims, &[]);
         assert_eq!(metrics.quads, 0);
-        assert_eq!(metrics.paths, 2, "border polygon then inset fill polygon");
+        assert_eq!(metrics.paths, 2, "inset fill polygon then border ring");
         assert!(plan.ops.iter().all(|op| matches!(op, SceneOp::Mesh { .. })));
 
         let mut native_plan = ScenePlan::default();
@@ -809,6 +866,164 @@ mod tests {
         };
         assert_eq!(*corner_radii, [2.0; 4]);
         assert_eq!(*border_width, 1.0);
+    }
+
+    #[test]
+    fn transparent_round_rect_fill_leaves_the_border_interior_empty() {
+        let border = Color::rgb(255, 0, 0);
+        let prim = Prim::RoundRect {
+            x: 10.0,
+            y: 10.0,
+            w: 20.0,
+            h: 20.0,
+            radii: [0.0; 4],
+            fill: Color::rgba(0, 0, 0, 0),
+            border_width: 2.0,
+            border_color: border,
+        };
+        let (plan, _) = run(&[prim], &[]);
+        let (first, count) = plan
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                SceneOp::Mesh {
+                    first_vertex,
+                    vertex_count,
+                    fill: Paint::Solid(color),
+                } if *color == border => Some((*first_vertex as usize, *vertex_count as usize)),
+                _ => None,
+            })
+            .expect("border mesh");
+        for triangle in plan.vertices[first..first + count].as_chunks::<3>().0 {
+            let x = triangle.iter().map(|vertex| vertex.x).sum::<f32>() / 3.0;
+            let y = triangle.iter().map(|vertex| vertex.y).sum::<f32>() / 3.0;
+            assert!(
+                x <= 12.0 || x >= 28.0 || y <= 12.0 || y >= 28.0,
+                "border triangle covers the transparent inner rect at ({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn filled_mesh_boundaries_encode_coverage_without_msaa() {
+        let points = [
+            [10.0, 10.0],
+            [30.0, 14.0],
+            [50.0, 8.0],
+            [10.0, 35.0],
+            [30.0, 32.0],
+            [50.0, 36.0],
+        ];
+        let prims = [
+            Prim::AreaFill {
+                first_point: 0,
+                point_count: 3,
+                base_y: 40.0,
+                line_type: LineType::Simple,
+                gradient: Gradient { top: C, bottom: C },
+            },
+            Prim::BandFill {
+                upper_first: 0,
+                lower_first: 3,
+                point_count: 3,
+                line_type: LineType::Simple,
+                fill: C,
+            },
+            Prim::Triangle {
+                a: [70.0, 10.0],
+                b: [90.0, 15.0],
+                c: [80.0, 40.0],
+                color: C,
+            },
+            Prim::RoundRect {
+                x: 100.0,
+                y: 10.0,
+                w: 30.0,
+                h: 25.0,
+                radii: [5.0; 4],
+                fill: C,
+                border_width: 0.0,
+                border_color: C,
+            },
+        ];
+        let (plan, _) = run(&prims, &points);
+        let meshes: Vec<_> = plan
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                SceneOp::Mesh {
+                    first_vertex,
+                    vertex_count,
+                    ..
+                } => Some((*first_vertex, *vertex_count)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            meshes.len(),
+            prims.len() + 1,
+            "area gradient core and fringe are separate paths"
+        );
+        let core = meshes[0];
+        assert!(plan.vertices[core.0 as usize..(core.0 + core.1) as usize]
+            .iter()
+            .all(|v| v.st == crate::scene::SOLID_ST));
+        for (name, (first, count)) in ["AreaFill", "BandFill", "Triangle", "RoundRect"]
+            .into_iter()
+            .zip(meshes.into_iter().skip(1))
+        {
+            let vertices = &plan.vertices[first as usize..(first + count) as usize];
+            assert!(
+                vertices.iter().any(|v| v.st != crate::scene::SOLID_ST),
+                "{name} has no edge coverage ramp"
+            );
+        }
+    }
+
+    #[test]
+    fn bordered_round_rect_edges_encode_coverage_without_msaa() {
+        let border = Color::rgb(255, 0, 0);
+        let prim = Prim::RoundRect {
+            x: 10.0,
+            y: 10.0,
+            w: 30.0,
+            h: 25.0,
+            radii: [5.0; 4],
+            fill: C,
+            border_width: 2.0,
+            border_color: border,
+        };
+        let (plan, _) = run(&[prim], &[]);
+        let (first, count) = plan
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                SceneOp::Mesh {
+                    first_vertex,
+                    vertex_count,
+                    fill: Paint::Solid(color),
+                } if *color == border => Some((*first_vertex as usize, *vertex_count as usize)),
+                _ => None,
+            })
+            .expect("border mesh");
+        let vertices = &plan.vertices[first..first + count];
+        assert!(
+            vertices.iter().any(|v| {
+                v.st != crate::scene::SOLID_ST
+                    && (v.x < 10.0 || v.x > 40.0 || v.y < 10.0 || v.y > 35.0)
+            }),
+            "outer edge needs a coverage fringe"
+        );
+        assert!(
+            vertices.iter().any(|v| {
+                v.st != crate::scene::SOLID_ST
+                    && v.x > 12.0
+                    && v.x < 38.0
+                    && v.y > 12.0
+                    && v.y < 33.0
+            }),
+            "inner edge needs a coverage fringe"
+        );
     }
 
     #[test]

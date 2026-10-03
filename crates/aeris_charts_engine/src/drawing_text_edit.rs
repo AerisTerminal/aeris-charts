@@ -30,6 +30,22 @@ pub enum DrawingTextEditKey {
     End,
 }
 
+/// The browser's transparent editing surface follows this engine-owned text run and caret.
+/// Coordinates are CSS-logical media pixels in the chart overlay's space.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrawingTextEditLayout<'a> {
+    pub anchor_x: f64,
+    pub anchor_y: f64,
+    pub angle: f64,
+    pub font_size: f64,
+    pub font_family: &'a str,
+    pub font_weight: u16,
+    pub font_italic: bool,
+    pub left_edge: f64,
+    pub advance: f64,
+    pub caret_x: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DrawingTextEditSession {
     pub(crate) id: DrawingId,
@@ -115,6 +131,67 @@ impl ChartEngine {
         self.drawing_text_edit
             .as_ref()
             .map(|session| (session.id, session.text.as_str(), session.caret))
+    }
+
+    /// Resolve the open editor from the same placement and text measurements as the frame.
+    pub fn drawing_text_edit_layout(&self) -> Option<DrawingTextEditLayout<'_>> {
+        let session = self.drawing_text_edit.as_ref()?;
+        let drawing = self.drawing(session.id)?;
+        let px = self.drawing_px(drawing)?;
+        let pane = self.panes.get(drawing.pane_index)?;
+        let layout = &self.options.get().layout;
+        let font_size = drawing.resolved_text_size(layout.font_size);
+        let (anchor_x, anchor_y, align, angle) = Self::drawing_text_placement(
+            drawing,
+            &px,
+            self.pane_w,
+            pane.top,
+            pane.height,
+            font_size,
+            crate::drawings::TEXT_PAD,
+        );
+        let measure = |text: &str| {
+            self.measure_text_run(
+                text,
+                font_size,
+                &layout.font_family,
+                drawing.text_weight.unwrap_or(400),
+                drawing.text_italic,
+            )
+        };
+        let advance = if session.text.is_empty() {
+            font_size
+        } else {
+            measure(&session.text)
+        };
+        let start = match align {
+            crate::drawings::DrawingTextHAlign::Left => 0.0,
+            crate::drawings::DrawingTextHAlign::Center => -advance / 2.0,
+            crate::drawings::DrawingTextHAlign::Right => -advance,
+        };
+        let prefix: String = session.text.chars().take(session.caret).collect();
+        Some(DrawingTextEditLayout {
+            anchor_x,
+            anchor_y,
+            angle,
+            font_size,
+            font_family: &layout.font_family,
+            font_weight: drawing.text_weight.unwrap_or(400),
+            font_italic: drawing.text_italic,
+            left_edge: anchor_x + start,
+            advance,
+            caret_x: anchor_x + start + measure(&prefix).ceil(),
+        })
+    }
+
+    /// A host with a native text input surface paints its own caret over the shared label.
+    pub fn set_drawing_text_edit_paint_caret(&mut self, paint_caret: bool) {
+        if let Some(session) = self.drawing_text_edit.as_mut() {
+            if session.paint_caret != paint_caret {
+                session.paint_caret = paint_caret;
+                self.invalidate_frame_drawings();
+            }
+        }
     }
 
     /// The selected `char` range, if any.
@@ -407,6 +484,46 @@ mod tests {
 
     fn text(chart: &ChartEngine, id: DrawingId) -> Option<String> {
         chart.drawing(id).map(|drawing| drawing.text.clone())
+    }
+
+    #[test]
+    fn editor_layout_uses_the_frame_anchor_font_and_caret_metrics() {
+        let (mut chart, id) = chart_with(DrawingKind::TrendLine, "Parity");
+        chart.build_frame();
+        for align in ["left", "center", "right"] {
+            assert!(chart.drawing_apply_options(
+                id,
+                &serde_json::json!({
+                    "text_h_align": align,
+                    "text_size": 19,
+                    "text_weight": 700,
+                    "text_italic": true,
+                })
+                .to_string(),
+            ));
+            assert!(chart.begin_drawing_text_edit(id, false));
+            let geometry = chart.drawing_text_edit_layout().expect("live layout");
+            let (x, y, angle) = chart.drawing_text_transform(id).expect("text transform");
+            assert_eq!(
+                (geometry.anchor_x, geometry.anchor_y, geometry.angle),
+                (x, y, angle)
+            );
+            assert_eq!(geometry.font_size, 19.0);
+            assert_eq!(geometry.font_weight, 700);
+            assert!(geometry.font_italic);
+            assert_eq!(geometry.font_family, chart.options.get().layout.font_family);
+            let expected_left = match align {
+                "left" => x,
+                "center" => x - geometry.advance / 2.0,
+                _ => x - geometry.advance,
+            };
+            assert!((geometry.left_edge - expected_left).abs() < 1e-9);
+            assert_eq!(
+                geometry.caret_x,
+                geometry.left_edge + geometry.advance.ceil()
+            );
+            assert!(chart.cancel_drawing_text_edit());
+        }
     }
 
     #[test]

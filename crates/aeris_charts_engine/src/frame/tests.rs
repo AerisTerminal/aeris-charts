@@ -18,6 +18,60 @@ const LIVE_TEXT: Color = Color::rgb(0xff, 0xff, 0xff);
 const LIVE_COUNTDOWN: Color = Color::rgba(0xff, 0xff, 0xff, 0xb3);
 
 #[test]
+fn axis_text_uses_the_run_font_for_the_shared_cap_center_metric() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let expected_family = chart.options.get().layout.font_family.clone();
+    chart.set_text_cap_center(Some(Box::new(move |size, family, weight, italic| {
+        assert_eq!(family, expected_family);
+        assert!(!italic);
+        size / 10.0 + if weight == 700 { 2.0 } else { 0.0 }
+    })));
+    let mut frame = AxisFrame::default();
+    for (text, scale, bold, midpoint) in [
+        ("price", 11.0 / 12.0, false, AxisTextMidpoint::Label),
+        ("countdown", 10.0 / 12.0, true, AxisTextMidpoint::Label),
+        ("time", 11.0 / 12.0, false, AxisTextMidpoint::StableTime),
+    ] {
+        frame.labels.push(AxisLabel {
+            text: text.into(),
+            x: 20.0,
+            y: 30.0,
+            color: Color::rgb(0, 0, 0),
+            align: AxisTextAlign::Center,
+            midpoint,
+            font_scale: scale,
+            bold,
+            background: None,
+            background_corners: AxisLabelCorners::NONE,
+            measure_extra: 0.0,
+            attach_group: None,
+            border: None,
+        });
+    }
+    let mut primitives = Vec::new();
+    chart.build_axis_primitives_into(&frame, &mut primitives);
+    let offsets: Vec<_> = primitives
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Text { text, y, size, .. }
+                if matches!(text.as_str(), "price" | "countdown" | "time") =>
+            {
+                Some((text.as_str(), *y, *size))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        offsets,
+        [
+            ("price", 31.1, 11.0),
+            ("countdown", 33.0, 10.0),
+            ("time", 31.1, 11.0)
+        ]
+    );
+}
+
+#[test]
 fn explicit_general_axes_reserve_layout_and_emit_shared_axis_frame() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     let pane = chart
@@ -67,7 +121,7 @@ fn explicit_general_axes_reserve_layout_and_emit_shared_axis_frame() {
         "both general axes emit shared chrome"
     );
     let mut primitives = Vec::new();
-    chart.build_axis_primitives_into(&frame, &mut primitives, |_| 0.0);
+    chart.build_axis_primitives_into(&frame, &mut primitives);
     assert!(primitives
         .iter()
         .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "Jan")));
@@ -8468,7 +8522,7 @@ fn canonical_style_reaches_the_backend_neutral_frame() {
         |text, _bold| text.len() as f64 * 6.0,
     );
     let mut axis_prims = Vec::new();
-    chart.build_axis_primitives_into(&axis_frame, &mut axis_prims, |_| 0.0);
+    chart.build_axis_primitives_into(&axis_frame, &mut axis_prims);
     let border = Color::rgb(
         aeris_charts_core::style::DEFAULT_BORDER_RGB.0,
         aeris_charts_core::style::DEFAULT_BORDER_RGB.1,
@@ -8518,7 +8572,7 @@ fn malformed_grid_and_axis_css_fall_back_to_canonical_style() {
         |text, _bold| text.len() as f64 * 6.0,
     );
     let mut axis_prims = Vec::new();
-    chart.build_axis_primitives_into(&axis_frame, &mut axis_prims, |_| 0.0);
+    chart.build_axis_primitives_into(&axis_frame, &mut axis_prims);
     assert!(axis_prims
         .iter()
         .any(|prim| matches!(prim, Prim::Text { color, .. } if *color == axis_text)));
@@ -9191,7 +9245,7 @@ fn axis_primitives_keep_normal_and_round_tick_weights_distinct() {
     axis.labels = vec![normal, rounded];
 
     let mut primitives = Vec::new();
-    chart.build_axis_primitives_into(&axis, &mut primitives, |_| 0.0);
+    chart.build_axis_primitives_into(&axis, &mut primitives);
     assert!(primitives
         .iter()
         .any(|prim| matches!(prim, Prim::Text { text, weight: 400, .. } if text == "normal")));
@@ -9768,7 +9822,7 @@ fn boxed_labels_begin_beyond_the_axis_border_at_every_dpr() {
             |text, _bold| text.len() as f64 * 6.0,
         );
         let mut primitives = Vec::new();
-        chart.build_axis_primitives_into(&axis, &mut primitives, |_| 0.0);
+        chart.build_axis_primitives_into(&axis, &mut primitives);
 
         let border_w = aeris_charts_core::style::border_width_device_px(dpr) as i32;
         let price_border = ((chart.pane_left + chart.pane_w) * dpr).round() as i32;

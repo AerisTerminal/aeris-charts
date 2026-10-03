@@ -98,6 +98,31 @@ pub struct RasterImage {
     pub pixels: Arc<[u8]>,
 }
 
+/// Snap each image destination edge to a device pixel, rounding exact half pixels toward zero.
+/// GPUI applies this rule to polychrome sprites; all other executors use it before drawing.
+pub fn snap_image_rect([x, y, width, height]: [f32; 4]) -> Option<[f32; 4]> {
+    let right = x + width;
+    let bottom = y + height;
+    if width <= 0.0 || height <= 0.0 || ![x, y, right, bottom].iter().all(|value| value.is_finite())
+    {
+        return None;
+    }
+    let round = |value: f32| (value.abs() - 0.5).ceil().copysign(value);
+    let (left, top, right, bottom) = (round(x), round(y), round(right), round(bottom));
+    (right > left && bottom > top).then_some([left, top, right - left, bottom - top])
+}
+
+/// Convert straight RGBA8 to premultiplied RGBA8 before bilinear filtering.
+pub fn premultiply_rgba8(pixels: &mut [u8]) {
+    debug_assert_eq!(pixels.len() % 4, 0);
+    for rgba in pixels.as_chunks_mut::<4>().0 {
+        let alpha = u16::from(rgba[3]);
+        for channel in &mut rgba[..3] {
+            *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+        }
+    }
+}
+
 impl PartialEq for RasterImage {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key && self.width == other.width && self.height == other.height
@@ -131,7 +156,8 @@ pub enum Prim {
         style: LineStyle,
         color: Color,
     },
-    /// Anti-aliased polyline over `points[range]`, round joins / butt caps.
+    /// Anti-aliased polyline over `points[range]`, round joins / butt caps. A non-finite or
+    /// non-positive width emits nothing on every executor.
     Polyline {
         first_point: u32,
         point_count: u32,
@@ -171,6 +197,8 @@ pub enum Prim {
         border_width: f32,
         border_color: Color,
     },
+    /// Filled disc with an optional centered stroke. A non-finite or non-positive radius emits
+    /// nothing, including its stroke, on every executor.
     Circle {
         cx: f32,
         cy: f32,
@@ -221,13 +249,46 @@ pub enum Prim {
         italic: bool,
         angle: f32,
     },
-    /// Straight-alpha RGBA8 image scaled into `rect` in bitmap pixels. Resource decoding belongs
-    /// to the host boundary; placement and rendering remain part of the shared frame contract.
+    /// Straight-alpha RGBA8 image scaled into `rect` in bitmap pixels. Executors snap each
+    /// destination edge to a device pixel with [`snap_image_rect`] and sample with bilinear
+    /// filtering. Opacity multiplies source alpha before source-over blending. Resource decoding
+    /// belongs to the host boundary; placement and rendering remain in the shared frame.
     Image {
         image: RasterImage,
         rect: [f32; 4],
         opacity: f32,
     },
+}
+
+/// Geometry admission rule shared by Canvas2D, WebGPU, GPUI, and native CPU execution.
+#[inline]
+pub fn positive_finite_extent(value: f32) -> bool {
+    value.is_finite() && value > 0.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{premultiply_rgba8, snap_image_rect};
+
+    #[test]
+    fn image_rect_rounds_each_edge_with_gpui_half_toward_zero_rule() {
+        assert_eq!(
+            snap_image_rect([10.25, 20.75, 9.5, 9.5]),
+            Some([10.0, 21.0, 10.0, 9.0])
+        );
+        assert_eq!(
+            snap_image_rect([-0.5, -1.5, 20.0, 20.0]),
+            Some([-0.0, -1.0, 19.0, 19.0])
+        );
+        assert_eq!(snap_image_rect([0.0, 0.0, 0.4, 20.0]), None);
+    }
+
+    #[test]
+    fn image_premultiplication_preserves_opaque_and_scales_translucent_channels() {
+        let mut pixels = [255, 128, 0, 128, 20, 40, 60, 255];
+        premultiply_rgba8(&mut pixels);
+        assert_eq!(pixels, [128, 64, 0, 128, 20, 40, 60, 255]);
+    }
 }
 
 /// One pane's frame output: `main` is redrawn on Light/Full invalidation; `top`

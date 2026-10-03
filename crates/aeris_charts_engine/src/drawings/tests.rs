@@ -2183,7 +2183,7 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
         .iter()
         .all(|band| band.color == Color::rgba(200, 50, 100, 96)));
     let mut axis_primitives = Vec::new();
-    chart.build_axis_primitives_into(&committed_axis, &mut axis_primitives, |_| 0.0);
+    chart.build_axis_primitives_into(&committed_axis, &mut axis_primitives);
     assert!(axis_primitives.iter().any(|primitive| {
         matches!(primitive, Prim::Rect { color, .. }
             if *color == Color::rgba(200, 50, 100, 96))

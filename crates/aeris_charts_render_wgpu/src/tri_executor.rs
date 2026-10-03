@@ -10,10 +10,11 @@
 //! The shared point pool holds **device-space** points (the builders already baked the DPR in), so
 //! tessellation runs with identity pixel ratios — byte-identical to the old direct-to-tri path.
 
-use aeris_charts_render::draw_list::{LineType, Prim};
+use aeris_charts_render::draw_list::{positive_finite_extent, LineStyle, LineType, Prim};
 use aeris_charts_render::line::{
-    build_area_fill, build_disc, expand_band, expand_line, round_rect_polygon, stroke_aa, AreaMesh,
-    LineParams, LinePoint, LineVertex,
+    band_segment_triangles, build_area_fill, build_disc, circle_segments, dash_split, expand_band,
+    expand_line, normalized_round_rect_radii, round_rect_polygon, round_rect_ring, stroke_aa,
+    AreaMesh, LineParams, LinePoint, LineVertex,
 };
 
 use crate::tri_pipeline::TriVertex;
@@ -109,12 +110,12 @@ fn stroke_circle(
     color: aeris_charts_render::color::Color,
     out: &mut Vec<TriVertex>,
 ) {
-    const SEGMENTS: usize = 24;
     if radius <= 0.0 || width <= 0.0 {
         return;
     }
     let outer = radius + width * 0.5;
     let inner = (radius - width * 0.5).max(0.0);
+    let segments = circle_segments(outer);
     let rgba = [
         color.r() as f32 / 255.0,
         color.g() as f32 / 255.0,
@@ -128,9 +129,9 @@ fn stroke_circle(
         ],
         color: rgba,
     };
-    for index in 0..SEGMENTS {
-        let a0 = index as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        let a1 = (index + 1) as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+    for index in 0..segments {
+        let a0 = index as f32 / segments as f32 * std::f32::consts::TAU;
+        let a1 = (index + 1) as f32 / segments as f32 * std::f32::consts::TAU;
         let (outer0, outer1) = (vertex(outer, a0), vertex(outer, a1));
         let (inner0, inner1) = (vertex(inner, a0), vertex(inner, a1));
         out.extend([outer0, inner0, inner1, outer0, inner1, outer1]);
@@ -152,20 +153,33 @@ fn round_rect_to_tris(
     if w <= 0.0 || h <= 0.0 {
         return;
     }
-    let outer = round_rect_polygon(x, y, w, h, radii);
+    let radii = normalized_round_rect_radii(w, h, radii);
     if border_width > 0.0 {
-        fill_polygon(&outer, border, out);
         let inset = border_width.min(w / 2.0).min(h / 2.0);
-        let inner_radii = radii.map(|r| (r - inset).max(0.0));
-        let inner = round_rect_polygon(
-            x + inset,
-            y + inset,
-            w - inset * 2.0,
-            h - inset * 2.0,
-            inner_radii,
+        if inset * 2.0 < w && inset * 2.0 < h {
+            let inner_radii = radii.map(|r| (r - inset).max(0.0));
+            let inner = round_rect_polygon(
+                x + inset,
+                y + inset,
+                w - inset * 2.0,
+                h - inset * 2.0,
+                inner_radii,
+            );
+            fill_polygon(&inner, fill, out);
+        }
+        let rgba = [
+            border.r() as f32 / 255.0,
+            border.g() as f32 / 255.0,
+            border.b() as f32 / 255.0,
+            border.a() as f32 / 255.0,
+        ];
+        out.extend(
+            round_rect_ring(x, y, w, h, radii, border_width)
+                .into_iter()
+                .map(|pos| TriVertex { pos, color: rgba }),
         );
-        fill_polygon(&inner, fill, out);
     } else {
+        let outer = round_rect_polygon(x, y, w, h, radii);
         fill_polygon(&outer, fill, out);
     }
 }
@@ -242,20 +256,17 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
                 fill.b() as f32 / 255.0,
                 fill.a() as f32 / 255.0,
             ];
-            // Two triangles per segment quad (upper_i, lower_i, lower_i+1, upper_i+1).
-            let v = |p: &aeris_charts_render::line::LinePoint| TriVertex {
-                pos: [p.x as f32, p.y as f32],
-                color: col,
-            };
             for i in 0..n - 1 {
-                out.extend([
-                    v(&upper[i]),
-                    v(&lower[i]),
-                    v(&lower[i + 1]),
-                    v(&upper[i]),
-                    v(&lower[i + 1]),
-                    v(&upper[i + 1]),
-                ]);
+                let point = |p: &aeris_charts_render::line::LinePoint| [p.x as f32, p.y as f32];
+                out.extend(
+                    band_segment_triangles(
+                        point(&upper[i]),
+                        point(&upper[i + 1]),
+                        point(&lower[i]),
+                        point(&lower[i + 1]),
+                    )
+                    .map(|pos| TriVertex { pos, color: col }),
+                );
             }
         }
         Prim::Polyline {
@@ -263,9 +274,12 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
             point_count,
             width,
             line_type,
+            style,
             color,
-            ..
         } => {
+            if !positive_finite_extent(*width) {
+                return;
+            }
             // Shared anti-aliased stroker (the one GPUI uses): per-vertex coverage gives edges a
             // continuous ramp on top of MSAA instead of four coverage levels.
             let pts = expand_line(&pool_slice(points, *first_point, *point_count), *line_type);
@@ -275,12 +289,26 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
                 color.b() as f32 / 255.0,
                 color.a() as f32 / 255.0,
             ];
-            stroke_aa(&pts, *width, |triangle| {
-                out.extend(triangle.map(|vertex| TriVertex {
-                    pos: vertex.position,
-                    color: [rgba[0], rgba[1], rgba[2], rgba[3] * vertex.coverage()],
-                }));
-            });
+            let mut emit_stroke = |run: &[LinePoint]| {
+                stroke_aa(run, *width, |triangle| {
+                    out.extend(triangle.map(|vertex| TriVertex {
+                        pos: vertex.position,
+                        color: [rgba[0], rgba[1], rgba[2], rgba[3] * vertex.coverage()],
+                    }));
+                })
+            };
+            if *style == LineStyle::Solid {
+                emit_stroke(&pts);
+            } else {
+                let pattern: Vec<f64> = style
+                    .dash_pattern(*width)
+                    .into_iter()
+                    .map(f64::from)
+                    .collect();
+                for run in dash_split(&pts, &pattern) {
+                    emit_stroke(&run);
+                }
+            }
         }
         Prim::Circle {
             cx,
@@ -290,10 +318,15 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
             stroke_width,
             stroke,
         } => {
+            if !positive_finite_extent(*radius) {
+                return;
+            }
             let mut disc = Vec::new();
             build_disc([*cx, *cy], *radius, *f, &mut disc);
             out.extend(disc.iter().map(tri));
-            stroke_circle([*cx, *cy], *radius, *stroke_width, *stroke, out);
+            if positive_finite_extent(*stroke_width) {
+                stroke_circle([*cx, *cy], *radius, *stroke_width, *stroke, out);
+            }
         }
         Prim::Triangle { a, b, c, color } => {
             let col = [
@@ -368,6 +401,94 @@ mod tests {
     use super::*;
     use aeris_charts_render::color::Color;
     use aeris_charts_render::draw_list::Gradient;
+
+    #[test]
+    fn crossed_band_has_exact_nonoverlapping_lobes() {
+        let points = [[0.0, 0.0], [10.0, 10.0], [0.0, 5.0], [10.0, 5.0]];
+        let mut vertices = Vec::new();
+        geom_prim_to_tris(
+            &Prim::BandFill {
+                upper_first: 0,
+                lower_first: 2,
+                point_count: 2,
+                line_type: LineType::Simple,
+                fill: Color::rgb(1, 2, 3),
+            },
+            &points,
+            &mut vertices,
+        );
+        let coverage = |p: [f32; 2]| {
+            vertices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .filter(|tri| {
+                    let side = |a: [f32; 2], b: [f32; 2]| {
+                        (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+                    };
+                    let [a, b, c] = tri.map(|v| v.pos);
+                    let values = [side(a, b), side(b, c), side(c, a)];
+                    values.iter().all(|v| *v > 1e-5) || values.iter().all(|v| *v < -1e-5)
+                })
+                .count()
+        };
+        for (point, expected) in [
+            ([3.0, 4.0], 1),
+            ([3.0, 6.0], 0),
+            ([7.0, 6.0], 1),
+            ([7.0, 4.0], 0),
+        ] {
+            assert_eq!(coverage(point), expected, "at {point:?}");
+        }
+        for ix in 1..40 {
+            for iy in 1..40 {
+                let point = [ix as f32 * 0.25, iy as f32 * 0.25];
+                if (point[1] - point[0]).abs() < 1e-4 || (point[1] - 5.0).abs() < 1e-4 {
+                    continue;
+                }
+                let expected =
+                    usize::from(point[1] > point[0].min(5.0) && point[1] < point[0].max(5.0));
+                assert_eq!(coverage(point), expected, "at {point:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn degenerate_circles_and_polyline_widths_emit_no_triangles() {
+        let points = [[0.0, 0.0], [10.0, 10.0]];
+        for radius in [-3.0, 0.0, f32::NAN, f32::INFINITY] {
+            let mut vertices = Vec::new();
+            geom_prim_to_tris(
+                &Prim::Circle {
+                    cx: 5.0,
+                    cy: 6.0,
+                    radius,
+                    fill: Color::rgb(1, 2, 3),
+                    stroke_width: 2.0,
+                    stroke: Color::rgb(4, 5, 6),
+                },
+                &[],
+                &mut vertices,
+            );
+            assert!(vertices.is_empty(), "radius {radius}");
+        }
+        for width in [-2.0, 0.0, f32::NAN, f32::INFINITY] {
+            let mut vertices = Vec::new();
+            geom_prim_to_tris(
+                &Prim::Polyline {
+                    first_point: 0,
+                    point_count: 2,
+                    width,
+                    style: LineStyle::Solid,
+                    line_type: LineType::Simple,
+                    color: Color::rgb(1, 2, 3),
+                },
+                &points,
+                &mut vertices,
+            );
+            assert!(vertices.is_empty(), "width {width}");
+        }
+    }
 
     #[test]
     fn polyline_tessellates_to_stroke_only() {

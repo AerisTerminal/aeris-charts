@@ -2193,6 +2193,22 @@ class series_impl implements series_api {
     this.assert_live();
     return this.chart.wasm.add_native_delta_tooltip(this.id, options_json);
   }
+  native_set_brushable_area(options_json: string): boolean {
+    this.assert_live();
+    const accepted = this.chart.wasm.set_native_brushable_area(this.id, options_json);
+    if (accepted) this.chart.repaint();
+    return accepted;
+  }
+  native_brushable_area_range_json(): string {
+    this.assert_live();
+    return this.chart.wasm.native_brushable_area_range_json(this.id);
+  }
+  native_clear_brushable_area(): boolean {
+    this.assert_live();
+    const accepted = this.chart.wasm.clear_native_brushable_area(this.id);
+    if (accepted) this.chart.repaint();
+    return accepted;
+  }
   native_set_area_brush_state(state_json: string): boolean {
     this.assert_live();
     const changed = this.chart.wasm.set_series_area_brush_state(this.id, state_json);
@@ -2328,6 +2344,28 @@ function native_series(series: series_api): series_impl {
 /** Package-internal controller for transient brush styling on a built-in Area series. */
 export function set_native_area_brush_state(series: series_api, state_json: string): boolean {
   return native_series(series).native_set_area_brush_state(state_json);
+}
+
+/** Package-internal attachment for the engine-owned brushable Area composition. */
+export function attach_native_brushable_area(series: series_api, options_json: string): {
+  active_range_json(): string;
+  clear(): boolean;
+  detach(): void;
+} {
+  const owner = native_series(series);
+  if (!owner.native_set_brushable_area(options_json)) {
+    throw new AerisChartsError("invalid_data", "engine rejected brushable Area options");
+  }
+  let attached = true;
+  return {
+    active_range_json: () => owner.native_brushable_area_range_json(),
+    clear: () => owner.native_clear_brushable_area(),
+    detach() {
+      if (!attached) return;
+      attached = false;
+      owner.native_set_brushable_area("null");
+    },
+  };
 }
 
 function native_handle(series: series_impl, id: number): native_primitive_handle {
@@ -3435,6 +3473,7 @@ export interface resolved_gestures {
   pan_vert_touch: boolean;
   wheel_scroll: boolean;
   wheel_zoom: boolean;
+  price_axis_wheel_zoom: boolean;
   pinch_zoom: boolean;
   axis_dblclick_reset_time: boolean;
   axis_dblclick_reset_price: boolean;
@@ -3686,6 +3725,7 @@ export class chart_impl implements chart_api {
     pan_vert_touch: true,
     wheel_scroll: true,
     wheel_zoom: true,
+    price_axis_wheel_zoom: false,
     pinch_zoom: true,
     axis_dblclick_reset_time: true,
     axis_dblclick_reset_price: true,
@@ -3752,7 +3792,6 @@ export class chart_impl implements chart_api {
   private text_editor: HTMLElement | null = null;
   private text_editor_id = 0;
   /** Snapshot of the drawing's text when the editor opened — restored on Escape. */
-  private text_editor_original = "";
   /**
    * The drawing selection snapshotted at pointer-DOWN, before the engine's drag grab selects
    * the hit (gestures.ts calls `note_drawing_press`). `emit_click` reads it for the public reference's
@@ -3865,6 +3904,11 @@ export class chart_impl implements chart_api {
 
   activate_alert_create_at(x: number, y: number): boolean {
     const activated = this.wasm.activate_alert_create_at(x, y);
+    this.dispatch_alert_create_requests();
+    return activated;
+  }
+
+  private dispatch_alert_create_requests(): void {
     const requests = JSON.parse(this.wasm.take_alert_create_requests_json()) as engine_alert_create_request[];
     for (const request of requests) {
       const action: crosshair_action_request = {
@@ -3875,7 +3919,6 @@ export class chart_impl implements chart_api {
       };
       for (const handler of this.crosshair_action_handlers) handler(action);
     }
-    return activated;
   }
 
   trading_hit_at(x: number, y: number): trading_hit | null {
@@ -5582,6 +5625,20 @@ export class chart_impl implements chart_api {
     for (const h of this.click_subs) h(params);
   }
 
+  /** The controller has already applied selection and editing for this pane click. */
+  emit_controller_click(x: number, y: number): void {
+    this.announce(x, y);
+    if (this.click_subs.size === 0) return;
+    const params = this.build_params(x, y);
+    for (const handler of this.click_subs) handler(params);
+  }
+
+  /** Open only the DOM input surface for the engine's active text-edit session. */
+  open_controller_text_editor(id: number): void {
+    const drawing = this.selected_drawing();
+    if (drawing?.id === id) this.open_inline_editor(drawing, true);
+  }
+
   /** Let an explicitly hit Aeris drawing consume the second click without a pane click event. */
   activate_drawing_double_click(x: number, y: number): void {
     const selected = this.selected_drawing();
@@ -5917,7 +5974,7 @@ export class chart_impl implements chart_api {
     return this.wasm.drawing_tool_sequence_active();
   }
 
-  private drawing_created(created_id: number): boolean {
+  private drawing_created(created_id: number, controller_owned = false): boolean {
     if (created_id <= 0) return false;
     const info = (JSON.parse(this.wasm.drawings_json()) as drawing_info[]).find((drawing) => drawing.id === created_id);
     if (info === undefined) return false;
@@ -5926,7 +5983,9 @@ export class chart_impl implements chart_api {
     // One-shot disarming happened inside the engine controller; mirror that public state change.
     this.tool_listener?.(null);
     for (const handler of this.tool_change_subs) handler(null);
-    if (this.wasm.drawing_requests_text_edit(created_id)) this.open_text_editor(created);
+    if (this.wasm.drawing_requests_text_edit(created_id)) {
+      this.open_inline_editor(created, controller_owned);
+    }
     return true;
   }
 
@@ -6010,24 +6069,30 @@ export class chart_impl implements chart_api {
     this.open_inline_editor(drawing);
   }
 
-  private open_inline_editor(drawing: drawing_api): void {
+  private open_inline_editor(drawing: drawing_api, controller_owned = false): void {
     this.close_text_editor(true);
-    let transform = this.wasm.drawing_text_transform(drawing.id);
-    if (transform.length !== 3) return;
+    if (controller_owned) this.wasm.set_drawing_text_edit_paint_caret(false);
+    else if (!this.wasm.begin_drawing_text_edit(drawing.id, false)) return;
+    type edit_layout = {
+      anchor_x: number; anchor_y: number; angle: number; font_size: number;
+      font_family: string; font_weight: number; font_italic: boolean;
+      left_edge: number; advance: number; caret_x: number;
+    };
+    const read_layout = (): edit_layout | null =>
+      JSON.parse(this.wasm.drawing_text_edit_layout_json()) as edit_layout | null;
+    const initial_layout = read_layout();
+    if (initial_layout === null) {
+      this.wasm.cancel_drawing_text_edit();
+      return;
+    }
     const options = drawing.options();
     const layout = (this.options() as {
       layout?: {
-        fontSize?: number;
-        fontFamily?: string;
         textColor?: string;
-        mutedTextColor?: string;
-        background?: { color?: string };
       };
     }).layout ?? {};
-    const font_size = options.text_size ?? (drawing.kind() === "text" ? 14 : (layout.fontSize ?? 12));
-    const font_family = layout.fontFamily ?? "sans-serif";
-    const style_prefix = options.text_italic ? "italic " : "";
-    const font = `${style_prefix}${options.text_weight ?? 400} ${font_size}px ${font_family}`;
+    const font_size = initial_layout.font_size;
+    const font = `${initial_layout.font_italic ? "italic " : ""}${initial_layout.font_weight} ${font_size}px ${initial_layout.font_family}`;
     // Same color the engine paints with: explicit drawing override, then a trend label's line,
     // otherwise the chart foreground used by standalone text. Never infer a different trend-label
     // default in the host.
@@ -6092,73 +6157,21 @@ export class chart_impl implements chart_api {
     selection_style.textContent =
       "#aeris_charts-text-input::selection{background:transparent!important;color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:none!important}";
 
-    const dpr = window.devicePixelRatio || 1;
-    const measure_ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
-    let baseline_drop = 0;
-    if (measure_ctx !== null) {
-      const device_font = `${style_prefix}${options.text_weight ?? 400} ${font_size * dpr}px ${font_family}`;
-      const side = Math.ceil(font_size * dpr) + 16;
-      const probe_canvas = measure_ctx.canvas;
-      probe_canvas.width = side;
-      probe_canvas.height = side;
-      measure_ctx.font = device_font;
-      measure_ctx.textBaseline = "middle";
-      measure_ctx.fillStyle = "#fff";
-      measure_ctx.fillText("H", 8, side / 2);
-      const pixels = measure_ctx.getImageData(0, 0, side, side).data;
-      let bottom_row = -1;
-      let bottom_alpha = 0;
-      for (let row = side - 1; row >= 0; row -= 1) {
-        let row_alpha = 0;
-        for (let col = 0; col < side; col += 1) {
-          const alpha = pixels[(row * side + col) * 4 + 3]!;
-          if (alpha > row_alpha) row_alpha = alpha;
-        }
-        if (row_alpha >= 24) {
-          bottom_row = row;
-          bottom_alpha = row_alpha;
-          break;
-        }
-      }
-      if (bottom_row >= 0) {
-        baseline_drop = (bottom_row + Math.min(bottom_alpha / 255, 1) - side / 2) / dpr;
-      }
-      probe_canvas.width = 0;
-      probe_canvas.height = 0;
-    }
-    let baseline_in_editor = 0;
-    const position_caret = () => {
-      const text = editor.textContent ?? "";
-      let offset = text.length;
-      const selection = window.getSelection();
-      if (selection?.anchorNode && editor.contains(selection.anchorNode)) {
-        const prefix = document.createRange();
-        prefix.selectNodeContents(editor);
-        prefix.setEnd(selection.anchorNode, selection.anchorOffset);
-        offset = prefix.toString().length;
-      }
-      const before_caret = text.slice(0, offset);
-      const x = measure_ctx === null ? 0 : measure_ctx.measureText(before_caret).width;
-      caret.style.left = `${Math.ceil(x)}px`;
-    };
     const position_editor = () => {
-      const anchor_x = transform[0]!;
-      const anchor_y = transform[1]!;
-      const text = editor.textContent ?? "";
-      let left_edge = anchor_x - (editor.offsetWidth || 0) / 2;
-      if (measure_ctx !== null) {
-        measure_ctx.font = font;
-        const advance = text === "" ? font_size : measure_ctx.measureText(text).width;
-        if (options.text_h_align === "left") left_edge = anchor_x;
-        else if (options.text_h_align === "right") left_edge = anchor_x - advance;
-        else left_edge = anchor_x - advance / 2;
-      }
-      const baseline = anchor_y + baseline_drop;
-      wrap.style.left = `${left_edge}px`;
-      wrap.style.top = `${baseline - baseline_in_editor}px`;
-      wrap.style.transformOrigin = `${anchor_x - left_edge}px ${anchor_y - (baseline - baseline_in_editor)}px`;
-      wrap.style.transform = `rotate(${transform[2]!}rad)`;
-      position_caret();
+      const current = read_layout();
+      if (current === null) return false;
+      const size = current.font_size;
+      editor.style.font = `${current.font_italic ? "italic " : ""}${current.font_weight} ${size}px ${current.font_family}`;
+      editor.style.lineHeight = `${size * 1.2}px`;
+      editor.style.minWidth = `${size}px`;
+      editor.style.width = `${Math.ceil(current.advance) + 1}px`;
+      caret.style.height = `${size * 1.2}px`;
+      caret.style.left = `${current.caret_x - current.left_edge}px`;
+      wrap.style.left = `${current.left_edge}px`;
+      wrap.style.top = `${current.anchor_y - size * 0.6}px`;
+      wrap.style.transformOrigin = `${current.anchor_x - current.left_edge}px ${size * 0.6}px`;
+      wrap.style.transform = `rotate(${current.angle}rad)`;
+      return true;
     };
     // The engine session owns the live label and its lifecycle; the DOM surface only supplies
     // IME/clipboard-aware input, so it mirrors its value and caret on every change.
@@ -6177,19 +6190,18 @@ export class chart_impl implements chart_api {
       this.wasm.set_drawing_text_edit(text, caret_offset(text));
       this.repaint();
     };
-    const set_width = () => {
-      const text = editor.textContent ?? "";
-      if (measure_ctx !== null) {
-        measure_ctx.font = font;
-        const w = text === "" ? font_size : measure_ctx.measureText(text).width;
-        editor.style.width = `${Math.ceil(w) + 1}px`;
-      }
-      position_editor();
+    const sync_editor = () => {
       push_live_text();
+      position_editor();
     };
-    editor.addEventListener("input", set_width);
-    editor.addEventListener("keyup", position_caret);
-    editor.addEventListener("pointerup", position_caret);
+    const sync_caret = () => {
+      const text = editor.textContent ?? "";
+      this.wasm.set_drawing_text_edit(text, caret_offset(text));
+      position_editor();
+    };
+    editor.addEventListener("input", sync_editor);
+    editor.addEventListener("keyup", sync_caret);
+    editor.addEventListener("pointerup", sync_caret);
     editor.addEventListener("keydown", (e) => {
       e.stopPropagation();
       if (e.key === "Enter") {
@@ -6206,46 +6218,17 @@ export class chart_impl implements chart_api {
     wrap.appendChild(caret);
     wrap.appendChild(selection_style);
     this.container.appendChild(wrap);
-    const probe = document.createElement("span");
-    probe.style.display = "inline-block";
-    probe.style.width = "0";
-    probe.style.height = "0";
-    editor.appendChild(probe);
-    baseline_in_editor = probe.getBoundingClientRect().top - editor.getBoundingClientRect().top;
-    probe.remove();
 
     this.text_editor = editor;
     this.text_editor_id = drawing.id;
-    this.text_editor_original = options.text ?? "";
-    // Width without a live push yet (avoids a redundant apply of the same text).
-    if (measure_ctx !== null) {
-      measure_ctx.font = font;
-      const w =
-        this.text_editor_original === ""
-          ? font_size
-          : measure_ctx.measureText(this.text_editor_original).width;
-      editor.style.width = `${Math.ceil(w) + 1}px`;
-    }
     position_editor();
 
     this.text_editor_reposition = () => {
       if (this.text_editor === null) return;
-      const fresh = this.wasm.drawing_text_transform(drawing.id);
-      if (fresh.length !== 3) {
+      if (!position_editor()) {
         this.close_text_editor(false);
-        return;
       }
-      transform = fresh;
-      position_editor();
     };
-    // Marks typing mode for hosts; the engine keeps painting the label and the focus border
-    // underneath this borderless caret overlay (no outline handoff).
-    if (!this.wasm.begin_drawing_text_edit(drawing.id, false)) {
-      this.text_editor = null;
-      this.text_editor_reposition = null;
-      wrap.remove();
-      return;
-    }
     this.repaint();
     editor.focus();
     const selection = window.getSelection();
@@ -6256,7 +6239,7 @@ export class chart_impl implements chart_api {
       selection.removeAllRanges();
       selection.addRange(range);
     }
-    position_caret();
+    sync_caret();
   }
 
   /**
@@ -6276,7 +6259,6 @@ export class chart_impl implements chart_api {
     this.wasm.set_drawing_text_edit(text, Array.from(text).length);
     if (commit) this.wasm.commit_drawing_text_edit();
     else this.wasm.cancel_drawing_text_edit();
-    this.text_editor_original = "";
     this.repaint();
     this.overlay_el().focus();
   }
@@ -6285,7 +6267,7 @@ export class chart_impl implements chart_api {
     // handle_scroll / handle_scale / kinetic_scroll / tracking_mode (gestures), the pane-resize
     // toggle, and localization (JS callbacks) are package-level; intercept and strip them so only
     // engine-owned, JSON-serializable options reach the wasm store.
-    const { theme, handle_scroll, handle_scale, kinetic_scroll, wheel_behavior, tracking_mode, localization, accessibility, ...rest } =
+    const { theme, handle_scroll, handle_scale, kinetic_scroll, wheel_behavior, price_axis_wheel_zoom, tracking_mode, localization, accessibility, ...rest } =
       options as deep_partial<chart_options> & {
         theme?: theme_name;
         handle_scroll?: boolean | handle_scroll_options;
@@ -6320,6 +6302,7 @@ export class chart_impl implements chart_api {
       this.apply_gesture_options(handle_scroll, handle_scale, kinetic_scroll, tracking_mode);
     }
     if (wheel_behavior !== undefined) this.gestures_cfg.wheel_behavior = wheel_behavior;
+    if (price_axis_wheel_zoom !== undefined) this.gestures_cfg.price_axis_wheel_zoom = price_axis_wheel_zoom;
     this.sync_touch_action();
     if (localization !== undefined) this.apply_localization(localization);
     if (accessibility !== undefined) {
@@ -6394,6 +6377,10 @@ export class chart_impl implements chart_api {
     return this.container;
   }
 
+  format_time_label(value: time): string {
+    return this.wasm.format_time_label(time_to_utc_seconds(value));
+  }
+
   /** Install the host price/time formatters (reference `localization`). Callbacks cross into wasm. */
   apply_localization(loc: localization_options): void {
     if (loc.price_formatter !== undefined) this.wasm.set_price_formatter(loc.price_formatter);
@@ -6458,6 +6445,54 @@ export class chart_impl implements chart_api {
   /** Current resolved gesture toggles (read by the gesture recognizer). */
   gesture_config(): resolved_gestures {
     return this.gestures_cfg;
+  }
+
+  has_chart_context_subscribers(): boolean {
+    return this.chart_context_subs.size > 0;
+  }
+
+  /** Perform platform effects requested by the bounded engine input controller. */
+  consume_input_events(complete_press = false): void {
+    type controller_event =
+      | { kind: "drawing_created"; id: number }
+      | { kind: "click"; x: number; y: number }
+      | { kind: "double_click"; x: number; y: number }
+      | { kind: "text_editor_opened"; id: number }
+      | { kind: "remove_series"; id: number }
+      | { kind: "crosshair_left" }
+      | { kind: "context_menu"; x: number; y: number };
+    const events = JSON.parse(this.wasm.take_input_events_json()) as controller_event[];
+    for (const event of events) {
+      switch (event.kind) {
+        case "drawing_created":
+          this.drawing_created(event.id, true);
+          break;
+        case "click":
+          this.emit_controller_click(event.x, event.y);
+          break;
+        case "double_click":
+          this.emit_dbl_click(event.x, event.y);
+          break;
+        case "text_editor_opened":
+          this.open_controller_text_editor(event.id);
+          break;
+        case "remove_series": {
+          const series = this.series_by_id.get(event.id) ?? this.general_series_by_id.get(event.id);
+          if (series) this.remove_series(series);
+          break;
+        }
+        case "crosshair_left":
+          this.emit_crosshair_left();
+          break;
+        case "context_menu":
+          this.emit_chart_context(event.x, event.y);
+          break;
+      }
+    }
+    if (complete_press) {
+      this.trading_handle.dispatch_pending_intents();
+      this.dispatch_alert_create_requests();
+    }
   }
 
   options(): unknown {
@@ -6903,7 +6938,10 @@ export class chart_impl implements chart_api {
     this.accessibility_handle?.detach();
     this.accessibility_handle = null;
     wasm.dispose();
-    wasm.free();
+    // Device-loss notifications can dispose a chart while a WASM frame callback still holds a
+    // borrowed wrapper. The heavy resources are released above; free the wrapper after that
+    // callback unwinds so wasm-bindgen never consumes a borrowed Rust value.
+    queueMicrotask(() => wasm.free());
     this.wasm_instance = null;
     this.gpu_pane.remove();
     this.fallback_pane.remove();

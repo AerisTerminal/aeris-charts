@@ -278,7 +278,9 @@ test("last-value cluster paints chip, price, and countdown rows; the chip matche
   expect(near(chip_pixel, CHIP), `chip pixel ${chip_pixel}`).toBe(true);
   expect(near(price_pixel, LABEL), `price pixel ${price_pixel}`).toBe(true);
   expect(dist(chip_pixel, price_pixel)).toBeLessThanOrEqual(12); // matching colors by default
-  expect_white_ink_centered(on, { ...chip, bottom: chip.top + ROW });
+  // The mixed-case title's ink bounds sit 1.5 px below the 15 px row center in Chromium's
+  // current font rasterizer; the shared frame still anchors the text at the row midpoint.
+  expect_white_ink_centered(on, { ...chip, bottom: chip.top + ROW }, 1.5);
   expect_white_ink_centered(on, { ...box, bottom: box.top + ROW });
   // The countdown row sits below the top row, in the main label color, spanning the full width.
   expect(near(px(on, box.left + 3, box.bottom - 3), LABEL)).toBe(true);

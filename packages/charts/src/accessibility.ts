@@ -835,12 +835,7 @@ class PaneAccessibility {
 
   private format_time(value: time): string {
     if (this.controller.options.time_formatter !== undefined) return this.controller.options.time_formatter(value);
-    const formatter = this.controller.localization().time_formatter;
-    const seconds = time_to_utc_seconds(value);
-    if (formatter !== undefined) return formatter(seconds);
-    return new Date(seconds * 1000).toLocaleDateString(this.controller.locale(), {
-      year: "numeric", month: "short", day: "numeric", timeZone: "UTC",
-    });
+    return this.controller.chart.format_time_label(value);
   }
 
   private describe_values(point: series_data, series = this.active_series()): string {

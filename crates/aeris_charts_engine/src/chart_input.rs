@@ -15,6 +15,9 @@ use super::*;
 
 /// Manhattan distance before a press becomes a drag (reference CancelClickManhattanDistance).
 const CLICK_SLOP_MANHATTAN: f64 = 5.0;
+const DOUBLE_CLICK_WINDOW_MS: f64 = 500.0;
+/// A stationary pane touch enters crosshair inspection after this host-clock interval.
+pub const TOUCH_LONG_PRESS_MS: f64 = 240.0;
 /// CSS px hit tolerance around a pane boundary.
 pub const PANE_SEPARATOR_HIT: f64 = 4.0;
 /// Hover dwell before a trading control reveals its action tooltip. The engine owns no clock, so
@@ -32,8 +35,11 @@ const KEYBOARD_PAGE_FRACTION: f64 = 0.8;
 pub struct InteractionOptions {
     /// Primary drag on empty pane space pans the time scale (and a manual price scale).
     pub pan: bool,
+    /// One-finger touch drag pans after the host's page-scroll arbitration.
+    pub touch_pan: bool,
     pub wheel_scroll: bool,
     pub wheel_zoom: bool,
+    pub pinch_zoom: bool,
     pub wheel_behavior: WheelBehavior,
     /// The wheel over a price axis zooms that scale in `Auto` mode too, not only in `Zoom` mode.
     pub price_axis_wheel_zoom: bool,
@@ -43,6 +49,12 @@ pub struct InteractionOptions {
     pub axis_scale_time: bool,
     /// A released mouse pan coasts with the engine's kinetic model.
     pub kinetic_mouse: bool,
+    /// A released touch pan coasts with the same bounded engine kinetic model.
+    pub kinetic_touch: bool,
+    /// Release the touch crosshair on the same touch end instead of the next stationary tap.
+    pub touch_tracking_exit_on_end: bool,
+    /// Suppress kinetic coasting and held-key animation when the host requests reduced motion.
+    pub reduced_motion: bool,
     pub panes_resize: bool,
 }
 
@@ -50,8 +62,10 @@ impl Default for InteractionOptions {
     fn default() -> Self {
         Self {
             pan: true,
+            touch_pan: true,
             wheel_scroll: true,
             wheel_zoom: true,
+            pinch_zoom: true,
             wheel_behavior: WheelBehavior::Auto,
             price_axis_wheel_zoom: false,
             axis_double_click_reset_time: true,
@@ -59,12 +73,34 @@ impl Default for InteractionOptions {
             axis_scale_price: true,
             axis_scale_time: true,
             kinetic_mouse: false,
+            kinetic_touch: true,
+            touch_tracking_exit_on_end: false,
+            reduced_motion: false,
             panes_resize: true,
         }
     }
 }
 
+impl InteractionOptions {
+    fn pan_for(self, device: InputDevice) -> bool {
+        if device == InputDevice::Touch {
+            self.touch_pan
+        } else {
+            self.pan
+        }
+    }
+
+    fn kinetic_for(self, device: InputDevice) -> bool {
+        if device == InputDevice::Touch {
+            self.kinetic_touch
+        } else {
+            self.kinetic_mouse
+        }
+    }
+}
+
 /// Semantic pointer feedback. Each host maps it to one platform cursor in one place.
+#[repr(u8)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ChartCursor {
     #[default]
@@ -89,6 +125,8 @@ pub enum ChartCursor {
     ResizeNesw,
     /// Pane separator (`row-resize`).
     ResizeRow,
+    /// A host primitive supplied a platform cursor; the engine chose its priority.
+    HostPrimitive,
 }
 
 impl ChartCursor {
@@ -111,6 +149,8 @@ impl ChartCursor {
 /// the chart's top), the same space every engine query uses.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PointerInput {
+    pub id: u32,
+    pub device: InputDevice,
     pub x: f64,
     pub y: f64,
     pub modifiers: InputModifiers,
@@ -133,6 +173,8 @@ pub enum ChartKey {
     Backspace,
     Delete,
     Escape,
+    Undo,
+    Redo,
 }
 
 /// The chart region under a pane-space point.
@@ -162,6 +204,20 @@ pub struct ChartContextMenu {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ChartInputEvent {
     ContextMenu(ChartContextMenu),
+    /// Notify pane click subscribers after the engine has applied the click.
+    Click {
+        x: f64,
+        y: f64,
+    },
+    /// Notify pane double-click subscribers after the engine has applied the action.
+    DoubleClick {
+        x: f64,
+        y: f64,
+    },
+    /// Open the platform text-entry surface for an engine-owned editing session.
+    TextEditorOpened(DrawingId),
+    /// The host must notify crosshair subscribers that a keyboard cancel cleared hover.
+    CrosshairLeft,
     /// A drawing tool committed a drawing. One-shot tools are already disarmed.
     DrawingCreated(DrawingId),
     /// Delete was pressed on a selected series the engine does not own (a host-installed series or
@@ -195,6 +251,7 @@ enum PressMode {
         committed_on_press: bool,
     },
     DrawingDrag,
+    TouchTracking,
     DeltaTooltip,
     /// A press inside the label being edited; the typing session keeps it.
     TextEditor,
@@ -213,14 +270,18 @@ impl PressMode {
             Self::Measure | Self::DrawingCreation { .. } | Self::DrawingDrag | Self::TextEditor => {
                 InputTarget::Drawing
             }
-            Self::Pane { .. } | Self::DeltaTooltip | Self::Inert => InputTarget::Pane,
+            Self::Pane { .. } | Self::TouchTracking | Self::DeltaTooltip | Self::Inert => {
+                InputTarget::Pane
+            }
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Press {
+    id: u32,
     mode: PressMode,
+    double_candidate: bool,
     start: (f64, f64),
     moved: bool,
     /// The drawing selected when the press began: a selected text drawing opens its editor on
@@ -234,21 +295,34 @@ struct KeyboardPan {
     delta: f64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TouchTracking {
+    anchor: (f64, f64),
+    base_anchor: (f64, f64),
+    start: (f64, f64),
+    active_id: Option<u32>,
+    exit_on_release: bool,
+}
+
 /// Runtime-only input state. Never persisted; [`ChartEngine::input_cancel`] resets gestures.
 #[derive(Default)]
 pub(crate) struct InputController {
     options: InteractionOptions,
     resolver: GestureResolver,
     press: Option<Press>,
+    last_click: Option<(f64, f64, f64)>,
     pointer: Option<(f64, f64)>,
     modifiers: InputModifiers,
     cursor: ChartCursor,
+    host_primitive_cursor: bool,
     kinetic_active: bool,
     keyboard_pan: Option<KeyboardPan>,
     /// Newest captured freehand sample since the last frame. Native platforms may deliver motion
     /// at device cadence (Wayland: per HID report); the stroke samples display cadence instead.
     pending_capture: Option<(f64, f64, DrawingModifiers)>,
     tooltip_deadline_ms: Option<f64>,
+    touch_longpress_deadline_ms: Option<f64>,
+    touch_tracking: Option<TouchTracking>,
     events: VecDeque<ChartInputEvent>,
     /// Input changed chart state since the last prepared frame.
     frame_dirty: bool,
@@ -281,12 +355,32 @@ impl ChartEngine {
     }
 
     pub fn set_interaction_options(&mut self, options: InteractionOptions) {
+        if options.reduced_motion && !self.input.options.reduced_motion {
+            self.stop_input_motion();
+        }
         self.input.options = options;
     }
 
     /// The cursor the platform should present for the current pointer state.
     pub fn input_cursor(&self) -> ChartCursor {
         self.input.cursor
+    }
+
+    /// Record whether the winning host primitive supplied a platform cursor. The controller
+    /// keeps priority over captured drags, chart tools, and built-in interactive objects.
+    pub fn set_host_primitive_cursor(&mut self, present: bool) {
+        if self.input.host_primitive_cursor != present {
+            self.input.host_primitive_cursor = present;
+            self.refresh_input_cursor();
+        }
+    }
+
+    /// Whether a held pane touch may yield to the browser page's scroll direction. Other chart
+    /// targets and an active tracking gesture retain the touch regardless of page policy.
+    pub fn input_touch_page_scroll_candidate(&self, id: u32) -> bool {
+        self.input
+            .press
+            .is_some_and(|press| press.id == id && matches!(press.mode, PressMode::Pane { .. }))
     }
 
     /// Drain host requests produced by input since the last drain.
@@ -302,7 +396,14 @@ impl ChartEngine {
 
     /// Earliest host-clock time at which [`Self::input_tick`] has deferred work, if any.
     pub fn input_wake_deadline_ms(&self) -> Option<f64> {
-        self.input.tooltip_deadline_ms
+        match (
+            self.input.tooltip_deadline_ms,
+            self.input.touch_longpress_deadline_ms,
+        ) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        }
     }
 
     /// Advance time-driven input state: animations and the trading-tooltip dwell. Hosts call this
@@ -335,10 +436,44 @@ impl ChartEngine {
             self.input.tooltip_deadline_ms = None;
             changed |= self.arm_trading_tooltip();
         }
+        if self
+            .input
+            .touch_longpress_deadline_ms
+            .is_some_and(|deadline| now_ms >= deadline)
+        {
+            self.input.touch_longpress_deadline_ms = None;
+            changed |= self.arm_touch_tracking();
+        }
         if changed {
             self.input.frame_dirty = true;
         }
         changed
+    }
+
+    fn arm_touch_tracking(&mut self) -> bool {
+        let Some(press) = self.input.press.as_mut() else {
+            return false;
+        };
+        if !matches!(press.mode, PressMode::Pane { panning: false, .. }) || press.moved {
+            return false;
+        }
+        let update = self.input.resolver.long_press(press.id);
+        if update.kind != GestureUpdateKind::LongPress {
+            return false;
+        }
+        let anchor = press.start;
+        press.mode = PressMode::TouchTracking;
+        press.moved = true;
+        self.input.last_click = None;
+        self.input.touch_tracking = Some(TouchTracking {
+            anchor,
+            base_anchor: anchor,
+            start: anchor,
+            active_id: Some(press.id),
+            exit_on_release: false,
+        });
+        self.refresh_pointer_hover(anchor.0, anchor.1, 0.0);
+        true
     }
 
     /// Forward the newest coalesced captured-drawing sample. Hosts that receive raw device-rate
@@ -356,7 +491,11 @@ impl ChartEngine {
 
     /// Resolve the chart region under a pane-space point.
     pub fn region_at(&self, x: f64, y: f64) -> ChartRegion {
-        if let Some(index) = self.pane_separator_at(y, PANE_SEPARATOR_HIT) {
+        self.region_at_with_profile(x, y, HitProfile::PRECISION)
+    }
+
+    fn region_at_with_profile(&self, x: f64, y: f64, profile: HitProfile) -> ChartRegion {
+        if let Some(index) = self.pane_separator_at(y, profile.separator_tolerance) {
             return ChartRegion::Separator(index);
         }
         let pane = self.pane_index_at_y(y);
@@ -384,7 +523,69 @@ impl ChartEngine {
 
     /// Primary-button press. `click_count` is the platform's multi-click count.
     pub fn input_pointer_down(&mut self, input: PointerInput, click_count: u32) {
+        // A pinch has exactly two members. After its primary leaves, ignore new touches until
+        // the remaining member lifts too; it cannot silently become a fresh press.
+        if input.device == InputDevice::Touch
+            && self.input.press.is_none()
+            && self.input.resolver.active_pointer_count() > 0
+        {
+            return;
+        }
+        if input.device == InputDevice::Touch
+            && self.input.press.is_some_and(|press| press.id != input.id)
+        {
+            let update = self
+                .input
+                .resolver
+                .pointer_down(Self::mouse_sample(input, InputTarget::Pane));
+            if update.kind == GestureUpdateKind::PinchStarted {
+                self.abandon_press_state();
+                self.input.touch_longpress_deadline_ms = None;
+                self.input.last_click = None;
+                self.input.pointer = Some((update.x, update.y));
+                self.input.frame_dirty = true;
+                self.clear_pointer_hover();
+                self.refresh_input_cursor();
+            }
+            return;
+        }
+        if self.input.press.is_some_and(|press| press.id != input.id) {
+            return;
+        }
         let (x, y) = (input.x, input.y);
+        if input.device == InputDevice::Touch {
+            if let Some(mut tracking) = self
+                .input
+                .touch_tracking
+                .filter(|state| state.active_id.is_none())
+            {
+                self.stop_input_motion();
+                self.input
+                    .resolver
+                    .pointer_down(Self::mouse_sample(input, InputTarget::Pane));
+                self.input.resolver.long_press(input.id);
+                tracking.base_anchor = tracking.anchor;
+                tracking.start = (x, y);
+                tracking.active_id = Some(input.id);
+                tracking.exit_on_release = true;
+                self.input.touch_tracking = Some(tracking);
+                self.input.press = Some(Press {
+                    id: input.id,
+                    mode: PressMode::TouchTracking,
+                    double_candidate: false,
+                    start: (x, y),
+                    moved: true,
+                    text_press_selected: None,
+                });
+                self.input.pointer = Some((x, y));
+                self.input.last_click = None;
+                self.input.frame_dirty = true;
+                self.refresh_input_cursor();
+                return;
+            }
+        } else {
+            self.input.touch_tracking = None;
+        }
         self.input.pointer = Some((x, y));
         self.input.modifiers = input.modifiers;
         self.input.tooltip_deadline_ms = None;
@@ -393,8 +594,10 @@ impl ChartEngine {
         self.stop_input_motion();
 
         let text_press_selected = self.selected_drawing();
-        let press = |mode| Press {
+        let press = |mode, double_candidate| Press {
+            id: input.id,
             mode,
+            double_candidate,
             start: (x, y),
             moved: false,
             text_press_selected,
@@ -402,7 +605,7 @@ impl ChartEngine {
         if self.drawing_text_edit().is_some() {
             if self.point_on_edited_text(x, y) {
                 self.drawing_text_edit_caret_at(x, y);
-                self.input.press = Some(press(PressMode::TextEditor));
+                self.input.press = Some(press(PressMode::TextEditor, false));
                 self.refresh_input_cursor();
                 return;
             }
@@ -410,19 +613,33 @@ impl ChartEngine {
         }
         self.apply_input_magnet();
 
-        let region = self.region_at(x, y);
+        let region = self.region_at_with_profile(x, y, HitProfile::for_device(input.device));
         let sequence_or_idle =
             self.active_drawing_tool().is_none() || self.drawing_tool_sequence_active();
-        let mode = if click_count >= 2 && sequence_or_idle {
-            self.input_double_click(region, input, text_press_selected);
-            PressMode::Inert
-        } else {
-            self.begin_press(region, input)
-        };
+        let repeated = self
+            .input
+            .last_click
+            .is_some_and(|(last_x, last_y, last_ms)| {
+                input.timestamp_ms > 0.0
+                    && last_ms > 0.0
+                    && (0.0..=DOUBLE_CLICK_WINDOW_MS).contains(&(input.timestamp_ms - last_ms))
+                    && (x - last_x).abs() + (y - last_y).abs() < CLICK_SLOP_MANHATTAN
+            });
+        if click_count >= 2 || repeated {
+            self.input.last_click = None;
+        }
+        let mode = self.begin_press(region, input);
         self.input
             .resolver
             .pointer_down(Self::mouse_sample(input, mode.target()));
-        self.input.press = Some(press(mode));
+        self.input.press = Some(press(
+            mode,
+            (click_count >= 2 || repeated) && sequence_or_idle,
+        ));
+        self.input.touch_longpress_deadline_ms = (input.device == InputDevice::Touch
+            && matches!(mode, PressMode::Pane { .. })
+            && input.timestamp_ms.is_finite())
+        .then_some(input.timestamp_ms + TOUCH_LONG_PRESS_MS);
         if matches!(mode, PressMode::Separator { .. }) {
             self.clear_pointer_hover();
         } else {
@@ -433,6 +650,25 @@ impl ChartEngine {
 
     /// Pointer motion. `primary_pressed` reports whether the primary button is held.
     pub fn input_pointer_move(&mut self, input: PointerInput, primary_pressed: bool) {
+        if input.device == InputDevice::Touch
+            && self.input.resolver.state() == GestureState::Pinching
+        {
+            if !self.input.resolver.contains_pointer(input.id) {
+                return;
+            }
+            let update = self
+                .input
+                .resolver
+                .pointer_move(Self::mouse_sample(input, InputTarget::Pane));
+            if update.kind == GestureUpdateKind::PinchMoved {
+                self.input.pointer = Some((update.x, update.y));
+                self.input_pinch(update.x, update.y, update.scale_delta, input.timestamp_ms);
+            }
+            return;
+        }
+        if self.input.press.is_some_and(|press| press.id != input.id) {
+            return;
+        }
         let (x, y) = (input.x, input.y);
         self.input.pointer = Some((x, y));
         self.input.modifiers = input.modifiers;
@@ -458,6 +694,35 @@ impl ChartEngine {
         if let Some(press) = self.input.press.as_mut() {
             press.moved |=
                 (x - press.start.0).abs() + (y - press.start.1).abs() >= CLICK_SLOP_MANHATTAN;
+            if input.device == InputDevice::Touch && press.moved {
+                self.input.touch_longpress_deadline_ms = None;
+            }
+        }
+        if matches!(
+            self.input.press.map(|press| press.mode),
+            Some(PressMode::TouchTracking)
+        ) {
+            if let Some(mut tracking) = self
+                .input
+                .touch_tracking
+                .filter(|state| state.active_id == Some(input.id))
+            {
+                if (x, y) != tracking.start {
+                    tracking.exit_on_release = false;
+                }
+                tracking.anchor = (
+                    (tracking.base_anchor.0 + x - tracking.start.0).clamp(0.0, self.pane_w),
+                    (tracking.base_anchor.1 + y - tracking.start.1).clamp(0.0, self.pane_h),
+                );
+                self.input.touch_tracking = Some(tracking);
+                self.refresh_pointer_hover(
+                    tracking.anchor.0,
+                    tracking.anchor.1,
+                    input.timestamp_ms,
+                );
+                self.refresh_input_cursor();
+            }
+            return;
         }
         // A live measure follows with or without a held button: press-drag-release and
         // click-move-click both measure.
@@ -539,7 +804,56 @@ impl ChartEngine {
 
     /// Primary-button release.
     pub fn input_pointer_up(&mut self, input: PointerInput) {
+        if input.device == InputDevice::Touch
+            && self.input.resolver.state() == GestureState::Pinching
+        {
+            if !self.input.resolver.contains_pointer(input.id) {
+                return;
+            }
+            let update = self
+                .input
+                .resolver
+                .pointer_up(Self::mouse_sample(input, InputTarget::Pane));
+            self.input.frame_dirty = true;
+            if update.kind == GestureUpdateKind::RebasedSinglePointer {
+                let rebased = PointerInput {
+                    id: update.pointer_id,
+                    x: update.x,
+                    y: update.y,
+                    ..input
+                };
+                let price_pan = self.pane_index_at_y(update.y);
+                let price_pan = self
+                    .price_pan_target_at(price_pan, update.x, update.y)
+                    .map(|target| (price_pan, target));
+                self.input.press = Some(Press {
+                    id: update.pointer_id,
+                    mode: PressMode::Pane {
+                        price_pan,
+                        panning: false,
+                    },
+                    double_candidate: false,
+                    start: (update.x, update.y),
+                    moved: true,
+                    text_press_selected: None,
+                });
+                self.input.pointer = Some((rebased.x, rebased.y));
+                self.refresh_pointer_hover(rebased.x, rebased.y, input.timestamp_ms);
+                self.refresh_input_cursor();
+            } else {
+                self.input.pointer = None;
+                self.clear_pointer_hover();
+                self.refresh_input_cursor();
+            }
+            return;
+        }
+        if self.input.press.is_some_and(|press| press.id != input.id) {
+            return;
+        }
         let (x, y) = (input.x, input.y);
+        if input.device == InputDevice::Touch {
+            self.input.touch_longpress_deadline_ms = None;
+        }
         self.input.pointer = Some((x, y));
         self.input.modifiers = input.modifiers;
         self.input.frame_dirty = true;
@@ -551,15 +865,72 @@ impl ChartEngine {
             .pointer_up(Self::mouse_sample(input, InputTarget::Pane));
         self.clear_trading_pressed();
         let Some(press) = self.input.press.take() else {
-            self.refresh_pointer_hover(x, y, input.timestamp_ms);
+            if input.device == InputDevice::Touch && self.input.touch_tracking.is_none() {
+                self.input.pointer = None;
+                self.clear_pointer_hover();
+            } else {
+                self.refresh_pointer_hover(x, y, input.timestamp_ms);
+            }
             self.refresh_input_cursor();
             return;
         };
+        if press.mode == PressMode::TouchTracking {
+            if let Some(mut tracking) = self
+                .input
+                .touch_tracking
+                .filter(|state| state.active_id == Some(input.id))
+            {
+                self.input.pointer = None;
+                if self.input.options.touch_tracking_exit_on_end || tracking.exit_on_release {
+                    self.input.touch_tracking = None;
+                    self.clear_pointer_hover();
+                } else {
+                    tracking.active_id = None;
+                    self.input.touch_tracking = Some(tracking);
+                    self.refresh_pointer_hover(
+                        tracking.anchor.0,
+                        tracking.anchor.1,
+                        input.timestamp_ms,
+                    );
+                }
+                self.refresh_input_cursor();
+            }
+            return;
+        }
         let moved = press.moved
             || (x - press.start.0).abs() + (y - press.start.1).abs() >= CLICK_SLOP_MANHATTAN;
+        if press.double_candidate && !moved {
+            match press.mode {
+                PressMode::DrawingDrag => self.drawing_drag_end(),
+                PressMode::TimeAxis => self.time_axis_end_scale(),
+                PressMode::PriceAxis { pane, target } => {
+                    self.price_axis_end_scale(pane, target);
+                }
+                _ => {}
+            }
+            self.input.last_click = None;
+            self.input_double_click(self.region_at(x, y), input, press.text_press_selected);
+            self.apply_input_magnet();
+            if input.device == InputDevice::Touch {
+                self.input.pointer = None;
+                self.clear_pointer_hover();
+            } else {
+                self.refresh_pointer_hover(x, y, input.timestamp_ms);
+            }
+            self.refresh_input_cursor();
+            return;
+        }
+        self.input.last_click = (!moved
+            && input.timestamp_ms > 0.0
+            && input.timestamp_ms.is_finite())
+        .then_some((x, y, input.timestamp_ms));
         let modifiers = drawing_modifiers(input.modifiers);
+        let mut created_on_release = false;
         match press.mode {
-            PressMode::TextEditor | PressMode::Separator { .. } | PressMode::Inert => {}
+            PressMode::TextEditor
+            | PressMode::Separator { .. }
+            | PressMode::Inert
+            | PressMode::TouchTracking => {}
             PressMode::DeltaTooltip => {}
             PressMode::TimeAxis => self.time_axis_end_scale(),
             PressMode::PriceAxis { pane, target } => self.price_axis_end_scale(pane, target),
@@ -574,9 +945,11 @@ impl ChartEngine {
                     self.flush_coalesced_input();
                 }
                 let update = self.drawing_tool_pointer_up(x, y, modifiers);
+                created_on_release = committed_on_press || update.created.is_some();
                 self.note_drawing_created(update.created);
                 if !capture && !moved && !committed_on_press && update.created.is_none() {
                     let update = self.drawing_tool_activate(x, y, modifiers);
+                    created_on_release |= update.created.is_some();
                     self.note_drawing_created(update.created);
                 }
             }
@@ -584,7 +957,16 @@ impl ChartEngine {
                 if dragging {
                     self.trading_drag_end();
                 }
-                if !moved {
+                if !moved
+                    && self
+                        .trading_hit_at(press.start.0, press.start.1)
+                        .zip(self.trading_hit_at(x, y))
+                        .is_some_and(|(start, end)| {
+                            start.object == end.object
+                                && start.kind == end.kind
+                                && start.annotation_id == end.annotation_id
+                        })
+                {
                     self.trading_activate_at(x, y);
                 }
             }
@@ -597,6 +979,7 @@ impl ChartEngine {
                 self.drawing_drag_end();
                 if !moved {
                     self.input_primary_click(x, y, press.text_press_selected);
+                    self.push_input_event(ChartInputEvent::Click { x, y });
                 }
             }
             PressMode::Pane { price_pan, panning } => {
@@ -604,22 +987,33 @@ impl ChartEngine {
                     self.price_axis_end_scroll(pane, target);
                 }
                 if panning {
-                    self.end_pan(input.timestamp_ms);
+                    self.end_pan(input.timestamp_ms, input.device);
                 }
                 if !moved {
                     self.input_primary_click(x, y, press.text_press_selected);
+                    self.push_input_event(ChartInputEvent::Click { x, y });
                 }
             }
         }
         self.apply_input_magnet();
         self.refresh_pointer_hover(x, y, input.timestamp_ms);
+        if input.device == InputDevice::Touch {
+            self.input.pointer = None;
+            self.clear_pointer_hover();
+        }
+        if created_on_release {
+            // The new drawing appeared under a stationary pointer. Promote it after the next
+            // motion, so committing an empty label does not show its hover-only placeholder.
+            self.set_hovered_drawing(None);
+            self.set_hovered_text(None);
+        }
         self.refresh_input_cursor();
     }
 
     /// The pointer left the chart without a held button. Captured gestures are unaffected; a live
     /// measure stays on screen.
     pub fn input_pointer_leave(&mut self) {
-        if self.input.press.is_some() {
+        if self.input.press.is_some() || self.input.touch_tracking.is_some() {
             return;
         }
         self.input.pointer = None;
@@ -637,6 +1031,8 @@ impl ChartEngine {
     /// modal occluding the chart, resize, or disposal.
     pub fn input_cancel(&mut self) {
         self.abandon_press();
+        self.input.touch_longpress_deadline_ms = None;
+        self.input.touch_tracking = None;
         self.stop_input_motion();
         self.input.tooltip_deadline_ms = None;
         self.cancel_measure();
@@ -647,6 +1043,16 @@ impl ChartEngine {
         self.input.pointer = None;
         self.input.cursor = ChartCursor::Crosshair;
         self.input.frame_dirty = true;
+    }
+
+    /// Cancel one captured pointer without disturbing a different active pointer.
+    pub fn input_cancel_pointer(&mut self, id: u32) {
+        if self.input.press.is_some_and(|press| press.id == id)
+            || (self.input.resolver.state() == GestureState::Pinching
+                && self.input.resolver.contains_pointer(id))
+        {
+            self.input_cancel();
+        }
     }
 
     /// Modifier keys changed without pointer movement: refresh the drawing magnet live.
@@ -699,6 +1105,8 @@ impl ChartEngine {
             return false;
         }
         self.stop_input_motion();
+        self.input.pointer = Some((sample.x, sample.y));
+        self.input.modifiers = sample.modifiers;
         if zoom {
             let scale = wheel_zoom_scale(sample.delta_y);
             let pane = self.pane_index_at_y(sample.y);
@@ -740,7 +1148,7 @@ impl ChartEngine {
     /// Pinching is direct manipulation, so it always zooms around the pinch point regardless of the
     /// wheel's right-edge policy. Returns whether the chart consumed it.
     pub fn input_pinch(&mut self, x: f64, y: f64, scale_delta: f64, timestamp_ms: f64) -> bool {
-        if !self.input.options.wheel_zoom || !scale_delta.is_finite() || scale_delta == 0.0 {
+        if !self.input.options.pinch_zoom || !scale_delta.is_finite() || scale_delta == 0.0 {
             return false;
         }
         self.stop_input_motion();
@@ -821,8 +1229,11 @@ impl ChartEngine {
                 self.set_selected_drawing(None);
                 self.clear_brushable_ranges();
                 self.clear_pointer_hover();
+                self.push_input_event(ChartInputEvent::CrosshairLeft);
                 true
             }
+            ChartKey::Undo => self.undo_drawing(),
+            ChartKey::Redo => self.redo_drawing(),
         };
         if handled {
             if !matches!(key, ChartKey::ArrowLeft | ChartKey::ArrowRight) {
@@ -845,12 +1256,17 @@ impl ChartEngine {
         true
     }
 
+    /// Cancel held-key and gesture motion when a host loses focus or supersedes an old adapter.
+    pub fn input_cancel_motion(&mut self) {
+        self.stop_input_motion();
+    }
+
     // --- internals ---
 
     fn mouse_sample(input: PointerInput, target: InputTarget) -> PointerSample {
         PointerSample {
-            id: 1,
-            device: InputDevice::Mouse,
+            id: input.id,
+            device: input.device,
             target,
             modifiers: input.modifiers,
             x: input.x,
@@ -908,6 +1324,10 @@ impl ChartEngine {
     /// previews are discarded, scale sessions end, and a delta-tooltip gesture settles.
     fn abandon_press(&mut self) {
         self.input.resolver.cancel();
+        self.abandon_press_state();
+    }
+
+    fn abandon_press_state(&mut self) {
         self.input.pending_capture = None;
         if let Some(press) = self.input.press.take() {
             match press.mode {
@@ -1035,7 +1455,7 @@ impl ChartEngine {
         let price_pan = self
             .input
             .options
-            .pan
+            .pan_for(input.device)
             .then(|| {
                 let pane = self.pane_index_at_y(y);
                 self.price_pan_target_at(pane, x, y)
@@ -1086,6 +1506,7 @@ impl ChartEngine {
                 } else {
                     self.clear_brushable_ranges();
                 }
+                self.push_input_event(ChartInputEvent::DoubleClick { x, y });
             }
             _ => {}
         }
@@ -1128,6 +1549,7 @@ impl ChartEngine {
         };
         if open_editor {
             self.begin_drawing_text_edit(id, true);
+            self.push_input_event(ChartInputEvent::TextEditorOpened(id));
         }
     }
 
@@ -1141,10 +1563,13 @@ impl ChartEngine {
         let (x, y) = (input.x, input.y);
         match update {
             // Pane panning opens on the threshold sample; movement begins on the next sample.
-            GestureUpdateKind::DragStarted if !panning && self.input.options.pan => {
+            GestureUpdateKind::DragStarted
+                if !panning && self.input.options.pan_for(input.device) =>
+            {
                 self.time_scale_start_scroll(x);
                 self.kinetic_begin_sampling(
-                    self.input.options.kinetic_mouse,
+                    self.input.options.kinetic_for(input.device)
+                        && !self.input.options.reduced_motion,
                     self.scroll_position(),
                     input.timestamp_ms,
                 );
@@ -1173,8 +1598,9 @@ impl ChartEngine {
     }
 
     /// End a pan: coast when the flick qualifies, otherwise close the scroll session.
-    fn end_pan(&mut self, now_ms: f64) {
-        let coasting = self.input.options.kinetic_mouse
+    fn end_pan(&mut self, now_ms: f64, device: InputDevice) {
+        let coasting = self.input.options.kinetic_for(device)
+            && !self.input.options.reduced_motion
             && self.kinetic_release(self.scroll_position(), now_ms);
         if coasting {
             self.input.kinetic_active = true;
@@ -1187,6 +1613,12 @@ impl ChartEngine {
     fn begin_keyboard_pan(&mut self, key: ChartKey, delta: f64, repeat: bool, now_ms: f64) {
         self.stop_kinetic_coast();
         self.cancel_scroll_animation();
+        if self.input.options.reduced_motion {
+            self.input.keyboard_pan = None;
+            self.cancel_keyboard_scroll();
+            self.scroll_to_position(self.scroll_position() + delta);
+            return;
+        }
         // The engine owns the repeat cadence, so an unchanged OS repeat must not reset velocity;
         // only a new direction or modifier speed retunes the live session.
         let current = self.input.keyboard_pan;
@@ -1200,6 +1632,7 @@ impl ChartEngine {
     /// selected series is host-owned and is requested through [`ChartInputEvent::RemoveSeries`].
     fn delete_selection(&mut self) -> bool {
         if self.remove_selected_drawing() {
+            self.input.last_click = None;
             return true;
         }
         let Some(series) = self.selected_series() else {
@@ -1216,6 +1649,7 @@ impl ChartEngine {
     }
 
     fn clear_pointer_hover(&mut self) {
+        self.input.host_primitive_cursor = false;
         self.clear_crosshair_at();
         self.set_hovered_series(None);
         self.set_hovered_text(None);
@@ -1286,6 +1720,7 @@ impl ChartEngine {
                 PressMode::TextEditor => return ChartCursor::Text,
                 PressMode::Measure
                 | PressMode::DrawingCreation { .. }
+                | PressMode::TouchTracking
                 | PressMode::DeltaTooltip => {
                     return ChartCursor::Crosshair;
                 }
@@ -1325,6 +1760,9 @@ impl ChartEngine {
         }
         if self.alert_create_hit_at(x, y) {
             return ChartCursor::Pointer;
+        }
+        if self.input.host_primitive_cursor {
+            return ChartCursor::HostPrimitive;
         }
         if let Some((_, name)) = self.drawing_hover_at(x, y) {
             return ChartCursor::from_hit_name(name);
@@ -1415,6 +1853,21 @@ mod tests {
     }
 
     #[test]
+    fn host_primitive_cursor_obeys_engine_press_priority_and_clears_on_cancel() {
+        let mut chart = chart();
+        let (x, y) = empty_pane_point(&chart);
+        chart.input_pointer_move(at(x, y), false);
+        assert_eq!(chart.input_cursor(), ChartCursor::Crosshair);
+        chart.set_host_primitive_cursor(true);
+        assert_eq!(chart.input_cursor(), ChartCursor::HostPrimitive);
+        chart.input_pointer_down(at(x, y), 1);
+        chart.input_pointer_move(at(x + 30.0, y), true);
+        assert_eq!(chart.input_cursor(), ChartCursor::Grabbing);
+        chart.input_cancel();
+        assert_eq!(chart.input_cursor(), ChartCursor::Crosshair);
+    }
+
+    #[test]
     fn pane_drag_pans_only_past_the_shared_threshold_and_a_click_selects() {
         let mut chart = chart();
         let (x, y) = empty_pane_point(&chart);
@@ -1442,6 +1895,60 @@ mod tests {
         let (ex, ey) = empty_pane_point(&chart);
         click(&mut chart, ex, ey);
         assert_eq!(chart.selected_series(), None);
+    }
+
+    #[test]
+    fn repeated_platform_pointer_presses_resolve_double_click_without_dom_click_policy() {
+        let mut chart = chart();
+        let (x, y) = empty_pane_point(&chart);
+        let sample = |timestamp_ms| PointerInput {
+            timestamp_ms,
+            ..at(x, y)
+        };
+        chart.input_pointer_down(sample(100.0), 1);
+        chart.input_pointer_up(sample(101.0));
+        assert_eq!(
+            chart.take_input_events(),
+            vec![ChartInputEvent::Click { x, y }]
+        );
+        chart.input_pointer_down(sample(200.0), 1);
+        chart.input_pointer_up(sample(201.0));
+        assert_eq!(
+            chart.take_input_events(),
+            vec![ChartInputEvent::DoubleClick { x, y }]
+        );
+    }
+
+    #[test]
+    fn a_second_press_at_the_same_anchor_can_drag_on_every_host() {
+        let mut chart = chart();
+        chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None);
+        click(&mut chart, 120.0, 120.0);
+        click(&mut chart, 300.0, 220.0);
+        let id = chart.drawings()[0].id;
+        let sample = |x, y, timestamp_ms| PointerInput {
+            timestamp_ms,
+            ..at(x, y)
+        };
+        chart.input_pointer_down(sample(120.0, 120.0, 100.0), 1);
+        chart.input_pointer_up(sample(120.0, 120.0, 101.0));
+        let before = chart.drawing(id).unwrap().points.clone();
+        chart.input_pointer_down(sample(120.0, 120.0, 200.0), 2);
+        chart.input_pointer_move(sample(150.0, 90.0, 210.0), true);
+        chart.input_pointer_up(sample(150.0, 90.0, 220.0));
+        assert_ne!(chart.drawing(id).unwrap().points, before);
+    }
+
+    #[test]
+    fn completing_a_drawing_waits_for_pointer_motion_before_hover_promotion() {
+        let mut chart = chart();
+        chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None);
+        click(&mut chart, 120.0, 120.0);
+        click(&mut chart, 300.0, 220.0);
+        let id = chart.drawings()[0].id;
+        assert_ne!(chart.hovered_drawing(), Some(id));
+        chart.input_pointer_move(at(300.0, 220.0), false);
+        assert_eq!(chart.hovered_drawing(), Some(id));
     }
 
     #[test]
@@ -1483,6 +1990,47 @@ mod tests {
             chart.price_scale_auto_scale_for(0, PriceScaleTarget::Right),
             Some(true)
         );
+    }
+
+    #[test]
+    fn separator_reversal_uses_the_original_grab_point_after_clamping() {
+        let mut chart = chart();
+        chart.add_pane(true).unwrap();
+        relayout(&mut chart);
+        let start = chart.panes[1].top;
+        chart.input_pointer_down(at(200.0, start), 1);
+        chart.input_pointer_move(at(200.0, start + 300.0), true);
+        relayout(&mut chart);
+        let clamped = chart.panes[1].top;
+        chart.input_pointer_move(at(200.0, start + 100.0), true);
+        relayout(&mut chart);
+        assert!(clamped > start + 100.0);
+        assert!((chart.panes[1].top - (start + 100.0)).abs() < 1e-6);
+        chart.input_pointer_up(at(200.0, start + 100.0));
+    }
+
+    #[test]
+    fn touch_separator_hit_uses_the_shared_hit_profile() {
+        let mut chart = chart();
+        chart.add_pane(true).unwrap();
+        relayout(&mut chart);
+        let separator = chart.panes[1].top;
+        let touch = PointerInput {
+            device: InputDevice::Touch,
+            x: 200.0,
+            y: separator + 10.0,
+            ..PointerInput::default()
+        };
+        assert_eq!(chart.region_at(touch.x, touch.y), ChartRegion::Pane);
+        chart.input_pointer_down(touch, 1);
+        assert!(matches!(
+            chart.input.press,
+            Some(Press {
+                mode: PressMode::Separator { .. },
+                ..
+            })
+        ));
+        chart.input_cancel();
     }
 
     #[test]
@@ -1563,6 +2111,48 @@ mod tests {
     }
 
     #[test]
+    fn a_foreign_pointer_cannot_move_release_or_cancel_the_captured_press() {
+        let mut chart = chart();
+        let start = chart.scroll_position();
+        chart.input_pointer_down(
+            PointerInput {
+                id: 7,
+                ..at(200.0, 200.0)
+            },
+            1,
+        );
+        chart.input_pointer_move(
+            PointerInput {
+                id: 9,
+                ..at(230.0, 200.0)
+            },
+            false,
+        );
+        chart.input_pointer_up(PointerInput {
+            id: 9,
+            ..at(230.0, 200.0)
+        });
+        chart.input_cancel_pointer(9);
+        chart.input_pointer_move(
+            PointerInput {
+                id: 7,
+                ..at(220.0, 200.0)
+            },
+            true,
+        );
+        chart.input_pointer_move(
+            PointerInput {
+                id: 7,
+                ..at(250.0, 200.0)
+            },
+            true,
+        );
+        assert_ne!(chart.scroll_position(), start);
+        chart.input_cancel_pointer(7);
+        assert_ne!(chart.input_cursor(), ChartCursor::Grabbing);
+    }
+
+    #[test]
     fn keyboard_bindings_navigate_and_escape_disarms() {
         let mut chart = chart();
         let none = InputModifiers::default();
@@ -1573,6 +2163,9 @@ mod tests {
         let start = chart.scroll_position();
         assert!(chart.input_key_down(ChartKey::PageUp, none, false, 0.0));
         assert!(chart.scroll_position() < start);
+        let older = chart.scroll_position();
+        assert!(chart.input_key_down(ChartKey::PageDown, none, false, 0.0));
+        assert!(chart.scroll_position() > older);
         assert!(chart.input_key_down(ChartKey::End, none, false, 0.0));
         assert!(chart.is_at_latest());
 
@@ -1586,6 +2179,70 @@ mod tests {
         let spacing = chart.bar_spacing();
         assert!(chart.input_key_down(ChartKey::ZoomIn, none, false, 0.0));
         assert!(chart.bar_spacing() > spacing);
+        let zoomed = chart.bar_spacing();
+        assert!(chart.input_key_down(ChartKey::ZoomOut, none, false, 0.0));
+        assert!(chart.bar_spacing() < zoomed);
+        chart.set_bar_spacing(20.0);
+        assert!(chart.input_key_down(ChartKey::Home, none, false, 0.0));
+        assert_eq!(chart.bar_spacing(), 6.0);
+    }
+
+    #[test]
+    fn keyboard_sequence_backspace_and_enter_share_drawing_creation() {
+        let mut chart = chart();
+        let none = InputModifiers::default();
+        assert!(chart.set_drawing_tool(Some(DrawingKind::Path), None, None));
+        chart.drawing_tool_activate(120.0, 120.0, DrawingModifiers::default());
+        chart.drawing_tool_activate(200.0, 160.0, DrawingModifiers::default());
+        assert!(chart.drawing_create_active());
+        assert!(chart.input_key_down(ChartKey::Backspace, none, false, 0.0));
+        assert!(chart.drawing_create_active());
+        chart.drawing_tool_activate(240.0, 200.0, DrawingModifiers::default());
+        assert!(chart.input_key_down(ChartKey::Enter, none, false, 0.0));
+        let [ChartInputEvent::DrawingCreated(id)] = chart.take_input_events()[..] else {
+            panic!("Enter must report the committed path");
+        };
+        assert!(chart.drawing(id).is_some());
+    }
+
+    #[test]
+    fn keyboard_delete_requests_host_owned_series_removal() {
+        let mut chart = chart();
+        chart.set_selected_series(Some(0));
+        assert!(chart.input_key_down(ChartKey::Delete, InputModifiers::default(), false, 0.0));
+        assert_eq!(
+            chart.take_input_events(),
+            vec![ChartInputEvent::RemoveSeries(0)]
+        );
+    }
+
+    #[test]
+    fn keyboard_undo_and_redo_share_the_drawing_history() {
+        let mut chart = chart();
+        let none = InputModifiers::default();
+        assert!(chart.set_drawing_tool(Some(DrawingKind::Rectangle), None, None));
+        click(&mut chart, 120.0, 120.0);
+        click(&mut chart, 300.0, 220.0);
+        let id = chart.drawings()[0].id;
+        assert!(chart.input_key_down(ChartKey::Undo, none, false, 0.0));
+        assert!(chart.drawing(id).is_none());
+        assert!(chart.input_key_down(ChartKey::Redo, none, false, 0.0));
+        assert!(chart.drawing(id).is_some());
+    }
+
+    #[test]
+    fn reduced_motion_uses_discrete_arrow_steps_without_animation() {
+        let mut chart = chart();
+        let mut options = chart.interaction_options();
+        options.reduced_motion = true;
+        chart.set_interaction_options(options);
+        let start = chart.scroll_position();
+        assert!(chart.input_key_down(ChartKey::ArrowRight, InputModifiers::default(), false, 0.0));
+        assert_eq!(chart.scroll_position(), start + 1.0);
+        assert!(!chart.input_animating());
+        assert!(chart.input_key_down(ChartKey::ArrowRight, InputModifiers::default(), true, 25.0));
+        assert_eq!(chart.scroll_position(), start + 2.0);
+        assert!(!chart.input_animating());
     }
 
     #[test]
@@ -1630,6 +2287,125 @@ mod tests {
             ..InteractionOptions::default()
         });
         assert!(!chart.input_wheel(wheel(300.0, 100.0, 1.0)));
+        let spacing = chart.bar_spacing();
+        assert!(chart.input_pinch(300.0, 100.0, 0.1, 0.0));
+        assert_ne!(chart.bar_spacing(), spacing);
+        chart.set_interaction_options(InteractionOptions {
+            wheel_zoom: false,
+            pinch_zoom: false,
+            ..InteractionOptions::default()
+        });
+        assert!(!chart.input_pinch(300.0, 100.0, 0.1, 0.0));
+    }
+
+    #[test]
+    fn consumed_wheel_promotes_its_position_to_the_input_cursor() {
+        let mut chart = chart();
+        chart.input_pointer_move(at(300.0, 100.0), false);
+        let axis_x = chart.pane_w + 10.0;
+        assert!(chart.input_wheel(WheelSample {
+            x: axis_x,
+            y: 100.0,
+            delta_y: 1.0,
+            ..WheelSample::default()
+        }));
+        assert_eq!(chart.input_cursor(), ChartCursor::ResizeVertical);
+    }
+
+    #[test]
+    fn touch_pinch_keeps_membership_and_rebases_the_primary_finger() {
+        let mut chart = chart();
+        let (x, y) = empty_pane_point(&chart);
+        let touch = |id, x, timestamp_ms| PointerInput {
+            id,
+            device: InputDevice::Touch,
+            x,
+            y,
+            timestamp_ms,
+            ..PointerInput::default()
+        };
+        let spacing = chart.bar_spacing();
+        chart.input_pointer_down(touch(1, x, 10.0), 1);
+        chart.input_pointer_down(touch(2, x + 60.0, 20.0), 1);
+        chart.input_pointer_down(touch(3, x + 120.0, 25.0), 1);
+        chart.input_cancel_pointer(3);
+        chart.input_pointer_move(touch(2, x + 90.0, 30.0), true);
+        assert!(
+            chart.bar_spacing() > spacing,
+            "two touch members zoom together"
+        );
+        chart.input_pointer_up(touch(2, x + 90.0, 40.0));
+        let position = chart.scroll_position();
+        chart.input_pointer_move(touch(1, x + 20.0, 50.0), true);
+        chart.input_pointer_move(touch(1, x + 40.0, 60.0), true);
+        assert_ne!(
+            chart.scroll_position(),
+            position,
+            "primary touch continues as a pan"
+        );
+        chart.input_pointer_up(touch(1, x + 40.0, 70.0));
+        assert!(
+            chart.take_input_events().is_empty(),
+            "pinch release is never a click"
+        );
+    }
+
+    #[test]
+    fn touch_long_press_tracks_crosshair_and_exits_on_the_next_tap() {
+        let mut chart = chart();
+        let (x, y) = empty_pane_point(&chart);
+        let touch = |id, x, timestamp_ms| PointerInput {
+            id,
+            device: InputDevice::Touch,
+            x,
+            y,
+            timestamp_ms,
+            ..PointerInput::default()
+        };
+        chart.input_pointer_down(touch(1, x, 100.0), 1);
+        assert!(chart.input_touch_page_scroll_candidate(1));
+        assert_eq!(chart.input_wake_deadline_ms(), Some(340.0));
+        assert!(!chart.input_tick(339.0));
+        assert!(chart.input_tick(340.0));
+        assert!(!chart.input_touch_page_scroll_candidate(1));
+        let scroll = chart.scroll_position();
+        chart.input_pointer_move(touch(1, x + 20.0, 350.0), true);
+        assert_eq!(chart.scroll_position(), scroll);
+        assert_eq!(chart.crosshair, Some((x + 20.0, y)));
+        chart.input_pointer_up(touch(1, x + 20.0, 360.0));
+        assert_eq!(chart.crosshair, Some((x + 20.0, y)));
+        assert!(chart.take_input_events().is_empty());
+        chart.input_pointer_down(touch(2, x + 30.0, 400.0), 1);
+        chart.input_pointer_up(touch(2, x + 30.0, 410.0));
+        assert_eq!(chart.crosshair, None);
+        assert!(chart.take_input_events().is_empty());
+    }
+
+    #[test]
+    fn touch_tracking_exit_on_end_and_drag_cancellation_use_engine_policy() {
+        let mut chart = chart();
+        let (x, y) = empty_pane_point(&chart);
+        chart.set_interaction_options(InteractionOptions {
+            touch_tracking_exit_on_end: true,
+            ..chart.interaction_options()
+        });
+        let touch = |x, timestamp_ms| PointerInput {
+            id: 7,
+            device: InputDevice::Touch,
+            x,
+            y,
+            timestamp_ms,
+            ..PointerInput::default()
+        };
+        chart.input_pointer_down(touch(x, 100.0), 1);
+        chart.input_pointer_move(touch(x + 8.0, 120.0), true);
+        assert_eq!(chart.input_wake_deadline_ms(), None);
+        assert!(!chart.input_tick(340.0));
+        chart.input_pointer_up(touch(x + 8.0, 350.0));
+        chart.input_pointer_down(touch(x, 400.0), 1);
+        assert!(chart.input_tick(640.0));
+        chart.input_pointer_up(touch(x, 650.0));
+        assert_eq!(chart.crosshair, None);
     }
 
     #[test]
@@ -1677,6 +2453,7 @@ mod tests {
 
         chart.set_interaction_options(InteractionOptions {
             wheel_zoom: false,
+            pinch_zoom: false,
             ..InteractionOptions::default()
         });
         assert!(!chart.input_pinch(cursor, 100.0, 0.1, 0.0));
@@ -1722,11 +2499,62 @@ mod tests {
         assert_eq!(chart.scroll_position(), start, "the brush owns the drag");
         assert!(chart.series_entry(0).unwrap().area_brush.is_some());
 
+        chart.input_pointer_down(at(x, y), 2);
+        chart.input_pointer_up(at(x, y));
+        assert!(chart.series_entry(0).unwrap().area_brush.is_none());
+
+        chart.input_pointer_down(shifted(x, y), 1);
+        chart.input_pointer_move(shifted(x + 80.0, y), true);
+        chart.input_pointer_up(shifted(x + 80.0, y));
+        assert!(chart.series_entry(0).unwrap().area_brush.is_some());
+
         let none = InputModifiers::default();
         assert!(chart.input_key_down(ChartKey::Escape, none, false, 0.0));
         assert!(chart.series_entry(0).unwrap().area_brush.is_none());
         assert!(chart.set_brushable_area(0, None));
         assert!(!chart.is_brushable_area(0));
+    }
+
+    #[test]
+    fn brushable_area_applies_explicit_styles_inside_engine() {
+        let mut chart = chart();
+        chart.series[0].kind = SeriesKind::Area;
+        let red = Color::rgba(210, 30, 40, 255);
+        let blue = Color::rgba(20, 60, 220, 255);
+        let green = Color::rgba(20, 180, 70, 255);
+        assert!(chart.set_brushable_area_with_styles(
+            0,
+            Some(DeltaTooltipOptions::default()),
+            AreaBrushOverrides {
+                outside: BrushStyleOverride {
+                    line_color: Some(red),
+                    line_width: Some(3.5),
+                    ..Default::default()
+                },
+                positive: BrushStyleOverride {
+                    line_color: Some(blue),
+                    top_color: Some(green),
+                    ..Default::default()
+                },
+                negative: BrushStyleOverride {
+                    line_color: Some(green),
+                    ..Default::default()
+                },
+            },
+        ));
+        let (x, y) = empty_pane_point(&chart);
+        chart.input_pointer_down(shifted(x, y), 1);
+        chart.input_pointer_move(shifted(x + 80.0, y), true);
+        chart.input_pointer_up(shifted(x + 80.0, y));
+        let brush = chart.series_entry(0).unwrap().area_brush.as_ref().unwrap();
+        assert_eq!(brush.outside.line_color, red);
+        assert_eq!(brush.outside.line_width, 3.5);
+        if chart.brushable_area_range(0).unwrap().positive {
+            assert_eq!(brush.ranges[0].style.line_color, blue);
+            assert_eq!(brush.ranges[0].style.top_color, green);
+        } else {
+            assert_eq!(brush.ranges[0].style.line_color, green);
+        }
     }
 
     #[test]
@@ -1742,9 +2570,14 @@ mod tests {
                         height: 500.0,
                         dpr: 1.0,
                         force_layout: false,
+                        allow_axis_shrink: false,
+                        force_frame: false,
+                        force_axis: false,
+                        layout_only: false,
                         fit_content: false,
                         frame: &mut frame,
-                        axis_primitives: &mut axis,
+                        axis_frame: None,
+                        axis_primitives: Some(&mut axis),
                     },
                     |_, _| 48.0,
                     |_, _| 48.0,
@@ -1767,7 +2600,7 @@ mod tests {
     #[test]
     fn interaction_defaults_match_the_browser_host() {
         let options = InteractionOptions::default();
-        assert!(options.pan && options.wheel_scroll && options.wheel_zoom);
+        assert!(options.pan && options.wheel_scroll && options.wheel_zoom && options.pinch_zoom);
         assert_eq!(options.wheel_behavior, WheelBehavior::Auto);
         assert!(options.axis_double_click_reset_time && options.axis_double_click_reset_price);
         assert!(options.axis_scale_price && options.axis_scale_time && options.panes_resize);

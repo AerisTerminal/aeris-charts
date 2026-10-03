@@ -62,10 +62,27 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+          sudo apt-get install -y libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev xvfb xauth x11-apps imagemagick libegl1 libegl-mesa0 libgl1-mesa-dri
       - uses: Swatinem/rust-cache@v2
       - name: Test native GPUI backend
         run: cargo test -p aeris_charts_render_gpui --features gpui-backend --all-targets --locked
+      - name: Assert official GPUI pixel parity against tiny-skia
+        if: runner.os == 'Windows'
+        run: cargo run -p aeris_charts_render_gpui --features gpui-backend --example pixel_parity --locked
+      - name: Assert 1x GPUI pixel parity against tiny-skia
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "$RUNNER_TEMP/aeris-xdg"
+          chmod 700 "$RUNNER_TEMP/aeris-xdg"
+          # Xvfb has no DRI3; use Mesa's software EGL path so presented pixels are capturable.
+          XDG_RUNTIME_DIR="$RUNNER_TEMP/aeris-xdg" LIBGL_ALWAYS_SOFTWARE=1 VK_ICD_FILENAMES=/no-vulkan-icd \
+            xvfb-run -a cargo run -p aeris_charts_render_gpui --features gpui-backend --example pixel_parity --locked
+      - uses: actions/upload-artifact@v4
+        if: failure() && (runner.os == 'Windows' || runner.os == 'Linux')
+        with:
+          name: gpui-pixel-parity
+          path: target/pixel_parity/
+          retention-days: 7
 
   package:
     name: TypeScript package (lint, typecheck, build)
@@ -137,11 +154,16 @@ jobs:
         run: npx playwright test
         env:
           AERIS_CHARTS_PORTABLE_BROWSER: "1"
-      - name: Run machine-sensitive pixel/GPU/performance evidence
+      - name: Run machine-sensitive reference/GPU/performance evidence
         id: machine-evidence
         continue-on-error: true
         working-directory: examples/web_demo
-        run: npx playwright test tests/backend-parity.spec.mjs tests/engine-bench.spec.mjs tests/frame-stats.spec.mjs tests/gpui-webgpu-matrix.spec.mjs tests/perf-gate.spec.mjs --project=chromium
+        run: |
+          npx playwright test tests/backend-parity.spec.mjs --project=chromium --grep @machine
+          $referenceEvidenceExit = $LASTEXITCODE
+          npx playwright test tests/engine-bench.spec.mjs tests/frame-stats.spec.mjs tests/gpui-webgpu-matrix.spec.mjs tests/perf-gate.spec.mjs --project=chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          exit $referenceEvidenceExit
       - name: Run machine-sensitive retention-memory evidence
         id: machine-retention-evidence
         continue-on-error: true

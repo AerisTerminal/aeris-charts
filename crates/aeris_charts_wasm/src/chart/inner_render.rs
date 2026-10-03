@@ -31,7 +31,6 @@ impl ChartInner {
     }
 
     fn render_inner(&mut self) -> Result<(), JsValue> {
-        self.engine.begin_frame_build();
         // Series primitives (plugin platform Phase C-b): pull this frame's autoscale
         // contributions from the plugin hooks before any layout/autoscale pass runs, so the
         // axis-width negotiation, axis frame, and pane frame all see the merged ranges.
@@ -57,52 +56,40 @@ impl ChartInner {
             .unwrap_or_else(|| js_sys::Date::now() / 1000.0);
         self.engine.set_now_seconds(now);
 
-        // ---- layout (price axis width negotiated against the price labels) ----
-        if self.engine.frame_requires_layout() {
-            self.recompute_layout(false);
-        }
-
-        // Settle layout, autoscale, and retained pane layers before building axis labels so the
-        // axis consumes the same finalized scale ranges as the canonical pane frame.
-        self.engine.build_frame_into_accumulating(&mut self.frame);
-        self.telemetry.set_rebuilds(self.engine.frame_build_stats());
-
-        // Build the retained axis labels only when an axis input changed.
-        // Sizes resolve in the engine (`axis_font_size`/`countdown_font_size` from
-        // `layout.fontSize`/`fontFamily`): they drive the tick-density estimate, host text
-        // measurement (with matching weight), and glyph drawing so all three agree. The label
-        // width cap is reference `timeScale.tickMarkMaxCharacterLength` (default 8).
+        // The engine settles layout, autoscale, pane layers, and base axis labels together.
+        // Plugin labels enter after this call and before axis primitive lowering.
         let layout = self.opts().layout;
         let font_family = layout.font_family;
         let axis_size = self.engine.axis_font_size();
         let countdown_size = self.engine.countdown_font_size();
-        let pixels_per_character = (axis_size + 4.0) * 5.0 / 8.0;
-        let max_label_width =
-            pixels_per_character * f64::from(self.engine.tick_mark_max_character_length);
         let axis_ctx = &self.axis_ctx;
         let dpr = self.dpr;
-        if self.engine.frame_requires_axis() {
-            let next_axis_frame = self.engine.build_axis_frame(
-                max_label_width,
-                |text, bold| measure_text_ctx(axis_ctx, dpr, &font_family, axis_size, bold, text),
-                |text, bold| {
-                    measure_text_ctx(axis_ctx, dpr, &font_family, countdown_size, bold, text)
-                },
-            );
-            if next_axis_frame != self.axis_frame {
-                self.axis_frame = next_axis_frame;
-            }
-            // Axis lowering also consumes option colors that are not stored in `AxisFrame`.
-            // Rebuild its primitives whenever the engine invalidates the axis, even when label
-            // geometry itself compares equal (for example a separator-only theme change).
+        let prepared = self.engine.prepare_financial_frame_with_measure(
+            aeris_charts_engine::FinancialFrameRequest {
+                width: self.css_width,
+                height: self.css_height,
+                dpr,
+                force_layout: false,
+                allow_axis_shrink: false,
+                force_frame: plugin_active,
+                force_axis: self.axis_dirty,
+                layout_only: false,
+                fit_content: false,
+                frame: &mut self.frame,
+                axis_frame: Some(&mut self.axis_frame),
+                axis_primitives: None,
+            },
+            |text, bold| measure_text_ctx(axis_ctx, dpr, &font_family, axis_size, bold, text),
+            |text, bold| measure_text_ctx(axis_ctx, dpr, &font_family, countdown_size, bold, text),
+        );
+        self.telemetry.set_rebuilds(self.engine.frame_build_stats());
+        if prepared.axis_rebuilt {
+            // Colors and chrome options may change without label geometry changing.
             self.axis_dirty = true;
         }
 
-        // Pane primitives (plugin platform Phase C-a): plugin renderers record Prim commands
-        // into the pane layers and boxed labels into the axis frame, after the engine frame is
-        // settled and before either backend consumes it. The Phase 3.5 overlay-text store is
-        // cleared first so a detached primitive leaves no stale glyphs behind.
-        self.primitive_texts.clear();
+        // Pane primitives record their geometry and text in the ordered pane layers after the
+        // engine frame is settled and before either backend consumes it.
         self.run_pane_primitives();
         // Series primitives (Phase C-b): same pass, bound to each owning series' scale.
         self.run_series_primitives();
@@ -191,6 +178,7 @@ impl ChartInner {
                 image_atlas.protect_retained_frame_slots();
             }
             let queue = &shared.queue;
+            let mut text_failed = false;
             if plugin_active {
                 for (pane, pane_frame) in engine_frame.panes.iter().enumerate() {
                     let group = &mut self.gpu_groups[pane];
@@ -198,9 +186,15 @@ impl ChartInner {
                     group.scissor = Some(pane_frame.scissor);
                     group.clear();
                     let mut resolve_text = |prim: &Prim| {
-                        text_runs
+                        let instance = text_runs
                             .as_mut()
-                            .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
+                            .and_then(|runs| runs.resolve(&mut atlas, queue, prim));
+                        if instance.is_none()
+                            && matches!(prim, Prim::Text { text, .. } | Prim::RotatedText { text, .. } if !text.trim().is_empty())
+                        {
+                            text_failed = true;
+                        }
+                        instance
                     };
                     let mut resolve_image =
                         |prim: &Prim| super::image_runs::resolve(&mut image_atlas, queue, prim);
@@ -244,9 +238,15 @@ impl ChartInner {
                     group.scissor = scissor;
                     group.rebuild(key, source_revision);
                     let mut resolve_text = |prim: &Prim| {
-                        text_runs
+                        let instance = text_runs
                             .as_mut()
-                            .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
+                            .and_then(|runs| runs.resolve(&mut atlas, queue, prim));
+                        if instance.is_none()
+                            && matches!(prim, Prim::Text { text, .. } | Prim::RotatedText { text, .. } if !text.trim().is_empty())
+                        {
+                            text_failed = true;
+                        }
+                        instance
                     };
                     let mut resolve_image =
                         |prim: &Prim| super::image_runs::resolve(&mut image_atlas, queue, prim);
@@ -382,9 +382,15 @@ impl ChartInner {
                 axis_group.scissor = None;
                 axis_group.rebuild(u64::MAX, self.axis_revision);
                 let mut resolve_text = |prim: &Prim| {
-                    text_runs
+                    let instance = text_runs
                         .as_mut()
-                        .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
+                        .and_then(|runs| runs.resolve(&mut atlas, queue, prim));
+                    if instance.is_none()
+                        && matches!(prim, Prim::Text { text, .. } | Prim::RotatedText { text, .. } if !text.trim().is_empty())
+                    {
+                        text_failed = true;
+                    }
+                    instance
                 };
                 let mut resolve_image =
                     |prim: &Prim| super::image_runs::resolve(&mut image_atlas, queue, prim);
@@ -396,7 +402,14 @@ impl ChartInner {
                     &mut resolve_image,
                 );
             }
-            let atlas_valid = atlas.frame_valid() && image_atlas.frame_valid();
+            let atlas_valid = atlas.frame_valid() && image_atlas.frame_valid() && !text_failed;
+            if text_failed {
+                // A failed text run cannot leave a retained group that silently omits the run
+                // next frame. Rebuild after the host corrects or removes the offending text.
+                for group in &mut self.gpu_groups {
+                    group.key = 0;
+                }
+            }
             drop(atlas);
             drop(image_atlas);
             if !atlas_valid {
@@ -441,10 +454,10 @@ impl ChartInner {
                             .texture
                             .create_view(&wgpu::TextureViewDescriptor::default());
                         let bg_clear = wgpu::Color {
-                            r: bg.r() as f64 / 255.0,
-                            g: bg.g() as f64 / 255.0,
-                            b: bg.b() as f64 / 255.0,
-                            a: 1.0,
+                            r: f64::from(bg.r()) * f64::from(bg.a()) / (255.0 * 255.0),
+                            g: f64::from(bg.g()) * f64::from(bg.a()) / (255.0 * 255.0),
+                            b: f64::from(bg.b()) * f64::from(bg.a()) / (255.0 * 255.0),
+                            a: f64::from(bg.a()) / 255.0,
                         };
                         let resources_before = gfx.frame_resources.stats();
                         let draw_calls = render_frame(
@@ -494,7 +507,9 @@ impl ChartInner {
         );
 
         match pane_outcome {
-            PaneRenderOutcome::Presented => {}
+            PaneRenderOutcome::Presented => {
+                set_backend_visibility(self.gpu_pane.as_ref(), self.fallback_pane.as_ref(), true);
+            }
             PaneRenderOutcome::Timeout => {
                 // Keep the last complete frame. The next animation/input repaint retries.
                 // This is exactly `frame_stats().dropped_frames`: encoded but never presented.
@@ -505,10 +520,12 @@ impl ChartInner {
                 self.activate_canvas2d("surface_acquisition_failed", &reason);
                 self.render_canvas2d()?;
             }
-            PaneRenderOutcome::Canvas2d => self.render_canvas2d()?,
+            PaneRenderOutcome::Canvas2d => {
+                self.render_canvas2d()?;
+                set_backend_visibility(self.gpu_pane.as_ref(), self.fallback_pane.as_ref(), false);
+            }
         }
 
-        self.paint_primitive_text_overlay()?;
         self.telemetry.count_presented();
         Ok(())
     }
@@ -522,92 +539,10 @@ impl ChartInner {
         if !self.axis_dirty {
             return;
         }
-        let axis_ctx = &self.axis_ctx;
-        let layout = self.opts().layout.clone();
-        let dpr = self.dpr;
-        // `measure_text_ctx` leaves the measurement canvas in bitmap-font space. Axis primitive
-        // placement is expressed in logical pixels until the engine performs the single DPR
-        // conversion, so normalize the browser's bitmap ink metrics before returning them.
-        axis_ctx.set_font(&format!(
-            "{}px {}",
-            layout.font_size * dpr,
-            layout.font_family
-        ));
-        axis_ctx.set_text_baseline("middle");
         self.engine
-            .build_axis_primitives_into(&self.axis_frame, &mut self.axis_prims, |text| {
-                axis_ctx
-                    .measure_text(text)
-                    .ok()
-                    .map(|metrics| {
-                        crate::text_cache::logical_midpoint_correction(
-                            metrics.actual_bounding_box_ascent(),
-                            metrics.actual_bounding_box_descent(),
-                            dpr,
-                        )
-                    })
-                    .unwrap_or(0.0)
-            });
+            .build_axis_primitives_into(&self.axis_frame, &mut self.axis_prims);
         self.axis_revision = self.axis_revision.wrapping_add(1).max(1);
         self.axis_dirty = false;
-    }
-
-    // ---- Legacy Canvas2D plugin-text escape hatch ----
-
-    fn paint_primitive_text_overlay(&mut self) -> Result<(), JsValue> {
-        if self.primitive_texts.is_empty() {
-            if self.overlay_had_plugin_text {
-                self.axis_ctx
-                    .clear_rect(0.0, 0.0, self.bitmap_w as f64, self.bitmap_h as f64);
-                self.overlay_had_plugin_text = false;
-                self.telemetry.add_canvas2d_ops(1);
-            }
-            return Ok(());
-        }
-        self.axis_ctx
-            .clear_rect(0.0, 0.0, self.bitmap_w as f64, self.bitmap_h as f64);
-        let ops = 1 + self.draw_primitive_overlay_texts(self.dpr)?;
-        self.overlay_had_plugin_text = true;
-        self.telemetry.add_canvas2d_ops(ops);
-        Ok(())
-    }
-
-    /// Paint the primitives' `text_views` overlay draws (plugin platform Phase 3.5) in media
-    /// coordinates (context scaled by DPR) like the axis labels. Each draw carries its own
-    /// fully-resolved font, color, and canvas alignment keywords; colors pass through verbatim
-    /// so alpha is preserved (same rule as the watermark).
-    fn draw_primitive_overlay_texts(&self, dpr: f64) -> Result<u32, JsValue> {
-        if self.primitive_texts.is_empty() {
-            return Ok(0);
-        }
-        let ctx = &self.axis_ctx;
-        ctx.save();
-        if let Err(error) = ctx.scale(dpr, dpr) {
-            ctx.restore();
-            return Err(error);
-        }
-        let mut ops = 0;
-        let mut draw_result = Ok(0);
-        for text in &self.primitive_texts {
-            ctx.save();
-            ctx.begin_path();
-            ctx.rect(text.clip[0], text.clip[1], text.clip[2], text.clip[3]);
-            ctx.clip();
-            ctx.set_font(&text.font);
-            ctx.set_fill_style_str(&text.color);
-            ctx.set_text_align(&text.align);
-            ctx.set_text_baseline(&text.baseline);
-            let result = ctx.fill_text(&text.text, text.x, text.y).map(|_| ());
-            ctx.restore();
-            if let Err(error) = result {
-                draw_result = Err(error);
-                break;
-            }
-            ops += 1;
-            draw_result = Ok(ops);
-        }
-        ctx.restore();
-        draw_result
     }
 
     /// Permanently switch this chart instance to its already-initialized Canvas2D pane.
