@@ -512,6 +512,9 @@ test("reported plugin scenarios use full data and official line compositions", a
 });
 
 test("brushable area compares chronological delta in either primary-drag direction", async ({ page }) => {
+  // Three full pointer drags can exceed the shared runner's 60-second test ceiling
+  // even after both descending assertions have passed.
+  test.setTimeout(process.env.CI ? 120_000 : 30_000);
   await open_demo(page);
   await page.locator('#series_grid [data-series-id="brushable-area"]').click();
   const targets = await page.evaluate(() => {
