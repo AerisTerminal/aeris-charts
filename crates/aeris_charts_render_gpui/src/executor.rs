@@ -147,7 +147,7 @@ fn lower_prim(
             // A solid style tessellates the whole run; a dashed one is split into solid runs
             // first, exactly as `aeris_charts_engine::frame::series_geometry::push_line_stroke` does for
             // the series it owns. Doing it here too means a dashed `Polyline` arriving from a host
-            // plugin still dashes (the wgpu tri executor silently ignores `style`).
+            // plugin still dashes, matching the wgpu tri executor's identical split.
             let pattern = style.dash_pattern(*width);
             if pattern.is_empty() {
                 let range = polyline_mesh(

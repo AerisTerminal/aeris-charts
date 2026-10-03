@@ -44,18 +44,42 @@ fn color_to_rgba(c: Color) -> [f32; 4] {
     ]
 }
 
+/// Upper bound on dash-walk steps for one polyline (each step closes one pattern element or
+/// reaches a vertex).
+pub const MAX_DASH_STEPS: usize = 1 << 16;
+
 /// Split a polyline into the solid sub-segments a dash pattern produces (port of the Canvas2D
 /// `setLineDash` walk: the pattern starts "on" at the first point and alternates on/off along
 /// the path, in the same units as `points`). Each returned run is a maximal "on" sub-polyline of
-/// two or more points; gap crossings close the current run. The frame builders emit each run as
-/// a solid stroke, so the WebGPU tessellator (which has no dash concept) and the Canvas2D path
-/// produce identical dash geometry by construction. `points` are expected already expanded
-/// ([`expand_line`]) so dashes follow the rendered path for stepped/curved lines.
+/// two or more points; gap crossings close the current run. Frame builders and both GPU
+/// executors stroke each run solid, so dash geometry matches the Canvas2D path by construction.
+/// `points` are expected already expanded ([`expand_line`]) so dashes follow the rendered path
+/// for stepped/curved lines.
+///
+/// Work is bounded by [`MAX_DASH_STEPS`]: a pattern too fine for the path length (including
+/// elements too small to advance in `f64`) strokes the whole path solid, which is what a
+/// sub-pixel dash converges to visually. A path with a non-finite length strokes nothing.
 pub fn dash_split(points: &[LinePoint], pattern: &[f64]) -> Vec<Vec<LinePoint>> {
     let mut runs: Vec<Vec<LinePoint>> = Vec::new();
-    if points.len() < 2 || pattern.is_empty() || pattern.iter().any(|&len| len <= 0.0) {
+    if points.len() < 2
+        || pattern.is_empty()
+        || pattern.iter().any(|&len| !len.is_finite() || len <= 0.0)
+    {
         return runs;
     }
+    let total_len: f64 = points
+        .windows(2)
+        .map(|pair| (pair[1].x - pair[0].x).hypot(pair[1].y - pair[0].y))
+        .sum();
+    if !total_len.is_finite() {
+        return runs;
+    }
+    let period: f64 = pattern.iter().sum();
+    let solid = || vec![points.to_vec()];
+    if total_len / period * pattern.len() as f64 > MAX_DASH_STEPS as f64 {
+        return solid();
+    }
+    let mut steps = 0usize;
     let interp = |a: LinePoint, b: LinePoint, t: f64| LinePoint {
         x: a.x + (b.x - a.x) * t,
         y: a.y + (b.y - a.y) * t,
@@ -73,6 +97,10 @@ pub fn dash_split(points: &[LinePoint], pattern: &[f64]) -> Vec<Vec<LinePoint>> 
         }
         let mut t0 = 0.0f64;
         while t0 < seg_len - 1e-9 {
+            steps += 1;
+            if steps > MAX_DASH_STEPS + points.len() + pattern.len() {
+                return solid();
+            }
             let step = element_left.min(seg_len - t0);
             let t1 = t0 + step;
             if on {
@@ -1679,6 +1707,51 @@ mod tests {
         assert!(dash_split(&pts, &[]).is_empty());
         assert!(dash_split(&pts, &[2.0, 0.0]).is_empty());
         assert!(dash_split(&pts[..1], &[2.0, 2.0]).is_empty());
+        assert!(dash_split(&pts, &[f64::NAN, 2.0]).is_empty());
+        assert!(dash_split(&pts, &[f64::INFINITY, 2.0]).is_empty());
+    }
+
+    #[test]
+    fn dash_split_work_is_bounded_for_hostile_patterns_and_lengths() {
+        let solid = |pts: &[LinePoint], pattern: &[f64]| {
+            let runs = dash_split(pts, pattern);
+            assert_eq!(
+                runs.len(),
+                1,
+                "pattern {pattern:?} must fall back to one solid run"
+            );
+            assert_eq!(runs[0].len(), pts.len());
+        };
+        let short = [LinePoint { x: 0.0, y: 0.0 }, LinePoint { x: 100.0, y: 0.0 }];
+        // A plugin polyline width of 1e-12 yields this dot pattern.
+        solid(&short, &[1e-12, 4e-12]);
+        let huge = [LinePoint { x: 0.0, y: 0.0 }, LinePoint { x: 1e30, y: 0.0 }];
+        solid(&huge, &[1.0, 4.0]);
+        // One element too small to advance f64 at this offset must not stall the walk.
+        let long = [LinePoint { x: 0.0, y: 0.0 }, LinePoint { x: 1e7, y: 0.0 }];
+        assert!(dash_split(&long, &[1e6, 1e-12]).len() <= MAX_DASH_STEPS);
+        let infinite = [
+            LinePoint { x: 0.0, y: 0.0 },
+            LinePoint {
+                x: f64::INFINITY,
+                y: 0.0,
+            },
+        ];
+        assert!(dash_split(&infinite, &[1.0, 4.0]).is_empty());
+        let nan = [
+            LinePoint { x: 0.0, y: 0.0 },
+            LinePoint {
+                x: f64::NAN,
+                y: 0.0,
+            },
+        ];
+        assert!(dash_split(&nan, &[1.0, 4.0]).is_empty());
+        // The ceiling is generous for real charts: a 4k-wide dotted line still dashes.
+        let wide = [
+            LinePoint { x: 0.0, y: 0.0 },
+            LinePoint { x: 8192.0, y: 0.0 },
+        ];
+        assert_eq!(dash_split(&wide, &[1.0, 1.0]).len(), 4096);
     }
 
     #[test]

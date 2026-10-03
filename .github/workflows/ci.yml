@@ -68,9 +68,11 @@ jobs:
         run: cargo test -p aeris_charts_render_gpui --features gpui-backend --all-targets --locked
       - name: Assert official GPUI pixel parity against tiny-skia
         if: runner.os == 'Windows'
+        timeout-minutes: 20
         run: cargo run -p aeris_charts_render_gpui --features gpui-backend --example pixel_parity --locked
       - name: Assert 1x GPUI pixel parity against tiny-skia
         if: runner.os == 'Linux'
+        timeout-minutes: 20
         run: |
           mkdir -p "$RUNNER_TEMP/aeris-xdg"
           chmod 700 "$RUNNER_TEMP/aeris-xdg"

@@ -3766,6 +3766,7 @@ export class chart_impl implements chart_api {
   private last_ts_height: number;
   private auto_size: boolean;
   private dpr_query: MediaQueryList | null = null;
+  private reduced_motion_query: MediaQueryList | null = null;
   private readonly dpr_change_handler = (): void => {
     if (this.removed || !this.auto_size) return;
     const bounds = this.container.getBoundingClientRect();
@@ -3792,13 +3793,6 @@ export class chart_impl implements chart_api {
   private text_editor: HTMLElement | null = null;
   private text_editor_id = 0;
   /** Snapshot of the drawing's text when the editor opened — restored on Escape. */
-  /**
-   * The drawing selection snapshotted at pointer-DOWN, before the engine's drag grab selects
-   * the hit (gestures.ts calls `note_drawing_press`). `emit_click` reads it for the public reference's
-   * two-step text editing: a click opens typing mode only when the text drawing was already
-   * selected when the press began; the first click just selects (focus border).
-   */
-  private text_press_selected: number | null = null;
   /**
    * Re-anchor the open editor after any repaint-driving change (wheel zoom/scroll, pinch,
    * resize, data update): it re-queries the anchor's coordinates from the settled engine
@@ -3894,10 +3888,6 @@ export class chart_impl implements chart_api {
     this.accessibility_handle = handle;
   }
 
-  trading_hover_at(x: number, y: number): boolean {
-    return this.wasm.trading_hover_at(x, y);
-  }
-
   alert_create_hit_at(x: number, y: number): boolean {
     return this.wasm.alert_create_hit_at(x, y);
   }
@@ -3932,10 +3922,6 @@ export class chart_impl implements chart_api {
   trading_cursor_at(x: number, y: number): string | null {
     const cursor = this.wasm.trading_cursor_at(x, y);
     return cursor === 2 ? "grab" : cursor === 1 ? "pointer" : null;
-  }
-
-  arm_trading_tooltip(): boolean {
-    return this.wasm.arm_trading_tooltip();
   }
 
   clear_trading_hover(): boolean {
@@ -5559,50 +5545,6 @@ export class chart_impl implements chart_api {
     };
     for (const h of this.crosshair_subs) h(params);
   }
-  /**
-   * Snapshot the drawing selection at pointer-down (gestures.ts, before the engine's drag
-   * grab selects the hit). Drives the two-step text-editing rule in `emit_click`.
-   */
-  note_drawing_press(): void {
-    this.text_press_selected = this.wasm.selected_drawing() ?? null;
-  }
-
-  /** Apply the chart-owned selection/editing work shared by click and drawing-owned double-click. */
-  private apply_primary_click(x: number, y: number): void {
-    // industry-standard click-to-select: select the series under the click (the frame build
-    // paints anchor points on it) and clear the selection on empty pane space. The hover
-    // hit-test refreshes at the click point first, so a click without a preceding move still
-    // arbitrates correctly.
-    this.update_hover(x, y);
-    // industry-standard click-to-select, drawings first: a drawing hit selects it and clears
-    // the series selection; a miss clears the drawing selection and falls through to the
-    // series under the click (or clears that on empty pane space).
-    const trend_text_hit = Number(this.wasm.drawing_text_hit_at(x, y));
-    const drawing_hit = trend_text_hit > 0 || this.wasm.select_drawing_at(x, y);
-    if (trend_text_hit > 0) this.wasm.set_selected_drawing(trend_text_hit);
-    const general_hit = !drawing_hit && this.hover?.general_hit != null;
-    if (general_hit) this.wasm.select_general_hovered();
-    else this.wasm.clear_general_selection();
-    this.wasm.set_selected_series(
-      drawing_hit || general_hit ? undefined : (this.hover?.series_id ?? undefined),
-    );
-    // Text drawings: empty labels open typing mode on the first click (there is no ink to
-    // "focus" otherwise). Non-empty labels follow the public reference's two-step model — first click
-    // selects (focus border), a click opens typing mode only when already selected at press.
-    if (drawing_hit) {
-      const selected = this.selected_drawing();
-      if (selected !== null && selected.kind() === "trend_line" && selected.id === trend_text_hit) {
-        this.open_trend_label_editor(selected);
-      } else if (selected !== null && selected.kind() === "text") {
-        const empty = !(selected.options().text ?? "").trim();
-        if (empty || this.text_press_selected === selected.id) {
-          this.open_text_editor(selected);
-        }
-      }
-    }
-    this.repaint();
-  }
-
   remove_general_series_handle(series: general_series_impl): void {
     const live = this.general_series_by_id.get(series.id);
     if (live !== series) return;
@@ -5614,19 +5556,10 @@ export class chart_impl implements chart_api {
     this.repaint();
   }
 
-  /** Emit a click event (called by the gesture recognizer). */
-  emit_click(x: number, y: number): void {
-    // A click/tap is a discrete, intentional action, so it is a good moment to announce the point
-    // to assistive tech (unlike mouse hover, which would flood the live region).
-    this.announce(x, y);
-    this.apply_primary_click(x, y);
-    if (this.click_subs.size === 0) return;
-    const params = this.build_params(x, y);
-    for (const h of this.click_subs) h(params);
-  }
-
   /** The controller has already applied selection and editing for this pane click. */
   emit_controller_click(x: number, y: number): void {
+    // A click/tap is a discrete, intentional action, so it is a good moment to announce the point
+    // to assistive tech (unlike mouse hover, which would flood the live region).
     this.announce(x, y);
     if (this.click_subs.size === 0) return;
     const params = this.build_params(x, y);
@@ -5637,14 +5570,6 @@ export class chart_impl implements chart_api {
   open_controller_text_editor(id: number): void {
     const drawing = this.selected_drawing();
     if (drawing?.id === id) this.open_inline_editor(drawing, true);
-  }
-
-  /** Let an explicitly hit Aeris drawing consume the second click without a pane click event. */
-  activate_drawing_double_click(x: number, y: number): void {
-    const selected = this.selected_drawing();
-    if (selected === null || selected.id !== this.text_press_selected) return;
-    if (selected.kind() !== "text" && selected.kind() !== "trend_line") return;
-    this.apply_primary_click(x, y);
   }
 
   /** Emit engine-resolved context without running primary-click selection or activation paths. */
@@ -6065,10 +5990,6 @@ export class chart_impl implements chart_api {
     this.open_inline_editor(drawing);
   }
 
-  private open_trend_label_editor(drawing: drawing_api): void {
-    this.open_inline_editor(drawing);
-  }
-
   private open_inline_editor(drawing: drawing_api, controller_owned = false): void {
     this.close_text_editor(true);
     if (controller_owned) this.wasm.set_drawing_text_edit_paint_caret(false);
@@ -6437,9 +6358,11 @@ export class chart_impl implements chart_api {
   }
 
   /** Whether the user has requested reduced motion (gates kinetic scroll). */
+  /** Read on every pointer move, so the live `MediaQueryList` is created once and reused. */
   prefers_reduced_motion(): boolean {
-    return this.container.ownerDocument.defaultView?.matchMedia?.("(prefers-reduced-motion: reduce)")
-      .matches === true;
+    this.reduced_motion_query ??= this.container.ownerDocument.defaultView
+      ?.matchMedia?.("(prefers-reduced-motion: reduce)") ?? null;
+    return this.reduced_motion_query?.matches === true;
   }
 
   /** Current resolved gesture toggles (read by the gesture recognizer). */

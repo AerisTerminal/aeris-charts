@@ -7,9 +7,9 @@ use aeris_charts_core::TimePointIndex;
 /// Emit a polyline stroke. A solid style emits a single `Polyline` prim (the backends expand
 /// `line_type` themselves, as before). Any dashed style is expanded with `line_type` and split
 /// into solid dash sub-segments here in the frame builder — reference `setLineDash` semantics on the
-/// device-px path (draw-line.ts `getDashPattern`) — because the WebGPU tessellator has no dash
-/// concept; generating the gap geometry once keeps both backends pixel-identical by
-/// construction.
+/// device-px path (draw-line.ts `getDashPattern`). The GPU executors split dashed `Polyline`
+/// prims with the same `dash_split`; pre-splitting engine-owned strokes here also keeps
+/// Canvas2D on identical solid runs instead of the platform `setLineDash`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn push_line_stroke(
     out: &mut Vec<Prim>,

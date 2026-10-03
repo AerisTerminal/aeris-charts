@@ -117,6 +117,8 @@ export interface offscreen_pointer_event {
   alt_key?: boolean;
   pointer_type?: "mouse" | "touch" | "pen";
   timestamp_ms?: number;
+  /** The relaying page's `prefers-reduced-motion`; the worker keeps the last reported value. */
+  reduced_motion?: boolean;
   pressure?: number;
   tilt_x?: number;
   tilt_y?: number;
@@ -135,7 +137,9 @@ export interface offscreen_wheel_event {
   /** Ctrl (or `meta_key`, macOS Cmd) zooms around the pointer instead of pinning the right edge. */
   ctrl_key?: boolean;
   shift_key?: boolean;
+  alt_key?: boolean;
   meta_key?: boolean;
+  timestamp_ms?: number;
 }
 
 export interface offscreen_key_event {
@@ -167,6 +171,7 @@ export class offscreen_chart {
   private height: number;
   private dpr: number;
   private last_backend: "webgpu" | "canvas2d";
+  private reduced_motion = false;
   private readonly backend_loss_handler: EventListener;
 
   constructor(
@@ -457,8 +462,9 @@ export class offscreen_chart {
     const modifiers = (event.shift_key ? 1 : 0) | (event.ctrl_key ? 2 : 0)
       | (event.alt_key ? 4 : 0) | (event.meta_key ? 8 : 0);
     const timestamp = event.timestamp_ms ?? performance.now();
+    if (event.reduced_motion !== undefined) this.reduced_motion = event.reduced_motion;
     // Default worker policy matches the controller's mouse and touch interaction defaults.
-    const options = 0b111_1100_1111;
+    const options = 0b111_1100_1111 | (this.reduced_motion ? 32 : 0);
     const flags = controller_pointer_flags(device, modifiers, options);
     switch (event.type) {
       case "down":
@@ -491,7 +497,7 @@ export class offscreen_chart {
     this.assert_live();
     const behavior = this.wheel_behavior === "pan" ? 1 : this.wheel_behavior === "zoom" ? 2 : 0;
     const modifiers = (event.shift_key ? 1 : 0) | (event.ctrl_key ? 2 : 0)
-      | (event.meta_key ? 8 : 0);
+      | (event.alt_key ? 4 : 0) | (event.meta_key ? 8 : 0);
     if (this.wasm.input_wheel(
       event.x - this.wasm.pane_left(),
       event.y,
@@ -504,7 +510,7 @@ export class offscreen_chart {
       true,
       true,
       this.price_axis_wheel_zoom,
-      performance.now(),
+      event.timestamp_ms ?? performance.now(),
     )) this.render();
   }
 
@@ -513,11 +519,12 @@ export class offscreen_chart {
     this.assert_live();
     const modifiers = (event.shift_key ? 1 : 0) | (event.ctrl_key ? 2 : 0)
       | (event.alt_key ? 4 : 0) | (event.meta_key ? 8 : 0);
+    if (event.reduced_motion !== undefined) this.reduced_motion = event.reduced_motion;
     const handled = event.type === "up"
       ? this.wasm.input_key_up(event.key, modifiers)
       : this.wasm.input_key_down(event.key, modifiers, event.repeat ?? false,
         event.timestamp_ms ?? performance.now(),
-        event.type === "down" ? event.reduced_motion ?? false : true, true);
+        event.type === "down" ? this.reduced_motion : true, true);
     if (handled) this.consume_input_events();
     if (handled) this.render();
     if (this.wasm.input_animating()) this.schedule_input_tick();

@@ -2,8 +2,9 @@
 //!
 //! Implements [`Canvas2d`] on top of [`tiny_skia`] — a pure-Rust CPU rasterizer —
 //! so the same `Prim` draw-list IR the WebGPU backend renders can also be rasterized to a
-//! [`tiny_skia::Pixmap`] and saved as a PNG. Geometry is independent of installed fonts.
-//! Text uses the host system UI sans-serif face. The scene golden masks its text region for the
+//! [`tiny_skia::Pixmap`] and saved as a PNG. Text resolves the requested family stack, weight,
+//! and style against installed system fonts, and the engine measures labels with the same faces,
+//! so axis widths follow the fonts available on the machine. The scene golden masks its text region for the
 //! exact bitmap comparison and separately verifies that the requested run painted ink.
 
 pub mod engine_scene;
