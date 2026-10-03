@@ -2636,9 +2636,10 @@ impl ChartEngine {
     /// continues from the last point's interval grid instead of freezing at zero until data
     /// resumes. The interval is the median of the last up-to-10
     /// inter-bar deltas of the series' own bar times (fallback: the last delta). `None` (the row
-    /// hides) with fewer than two bars or no installed host clock (`now_override`).
+    /// hides) with fewer than two bars, no installed host clock (`now_override`), or while the
+    /// market is not trading (`set_bar_countdown_active(false)`).
     fn series_countdown_remaining_at(&self, id: SeriesId, now: f64) -> Option<f64> {
-        if self.sequence_points().is_some() {
+        if !self.bar_countdown_active || self.sequence_points().is_some() {
             return None;
         }
         let plot = self.data.plot(id);
