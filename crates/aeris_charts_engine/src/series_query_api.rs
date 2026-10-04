@@ -277,10 +277,10 @@ impl ChartEngine {
             .get("min_move")
             .or_else(|| patch.get("minMove"))
             .and_then(serde_json::Value::as_f64)
+            && min_move.is_finite()
+            && min_move > 0.0
         {
-            if min_move.is_finite() && min_move > 0.0 {
-                s.price_format.min_move = min_move;
-            }
+            s.price_format.min_move = min_move;
         }
         s.price_format.kind = kind;
         if kind != PriceFormatKind::Custom {
@@ -766,10 +766,10 @@ impl ChartEngine {
         if let Some(s) = self.format_with_price_format(&series.price_format, value) {
             return s;
         }
-        if let Some(f) = &self.price_formatter_fn {
-            if let Some(s) = f(value) {
-                return s;
-            }
+        if let Some(f) = &self.price_formatter_fn
+            && let Some(s) = f(value)
+        {
+            return s;
         }
         self.price_formatter.format(value)
     }

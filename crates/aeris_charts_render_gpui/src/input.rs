@@ -13,9 +13,9 @@ use aeris_charts_engine::{
     WheelDeltaMode, WheelSample,
 };
 use gpui::{
-    point, App, Bounds, ClipboardItem, CursorStyle, KeyDownEvent, KeyUpEvent, Modifiers,
+    App, Bounds, ClipboardItem, CursorStyle, KeyDownEvent, KeyUpEvent, Modifiers,
     ModifiersChangedEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PinchEvent, Pixels, Point,
-    ScrollDelta, ScrollWheelEvent, Window,
+    ScrollDelta, ScrollWheelEvent, Window, point,
 };
 
 use crate::backend::{text_cap_centerer, text_measurer};

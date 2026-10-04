@@ -11,7 +11,7 @@
 
 use std::sync::LazyLock;
 
-use crate::scale::time_tick_marks::{civil_from_timestamp, TickMarkWeight};
+use crate::scale::time_tick_marks::{TickMarkWeight, civil_from_timestamp};
 use crate::time_zone::{ChartTimeZone, LocalTimeParts};
 
 const MONTHS_SHORT: [&str; 12] = [

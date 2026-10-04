@@ -1557,11 +1557,7 @@ impl ChartEngine {
                     .heikin_ashi_row(series_id, last)
                     .map(|values| values[0])
                     .unwrap_or_else(|| plot.value_at(last, PlotValueIndex::Open));
-                if close >= open {
-                    UP
-                } else {
-                    DOWN
-                }
+                if close >= open { UP } else { DOWN }
             }
         }
         .solid();

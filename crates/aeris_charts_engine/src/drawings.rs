@@ -28,12 +28,12 @@ mod geometry;
 mod tools;
 
 pub(crate) use geometry::{
-    resolve_drawing_geometry, DrawingBodyGeometry, DrawingGeometryOptions, FibonacciGeometry,
-    MeasureAxes, MeasureGeometry, PositionGeometry, PositionZone,
+    DrawingBodyGeometry, DrawingGeometryOptions, FibonacciGeometry, MeasureAxes, MeasureGeometry,
+    PositionGeometry, PositionZone, resolve_drawing_geometry,
 };
 pub(crate) use tools::{
-    DrawingHandleMode, DrawingLogicalExtent, DrawingMovementAxis, DrawingPlacement,
-    DrawingPriceExtent, DrawingStraightenMode, DRAWING_TOOL_SPECS,
+    DRAWING_TOOL_SPECS, DrawingHandleMode, DrawingLogicalExtent, DrawingMovementAxis,
+    DrawingPlacement, DrawingPriceExtent, DrawingStraightenMode,
 };
 
 /// Chart-unique drawing id (never reused within a chart; 0 is the "no drawing" sentinel).
@@ -2028,44 +2028,41 @@ impl Drawing {
         {
             return false;
         }
-        if let Some(name) = patch.name.as_ref() {
-            if name.len() > crate::MAX_DRAWING_NAME_BYTES {
-                return false;
-            }
+        if let Some(name) = patch.name.as_ref()
+            && name.len() > crate::MAX_DRAWING_NAME_BYTES
+        {
+            return false;
         }
-        if let Some(group_id) = patch.group_id.as_ref() {
-            if group_id.len() > crate::MAX_DRAWING_GROUP_BYTES {
-                return false;
-            }
+        if let Some(group_id) = patch.group_id.as_ref()
+            && group_id.len() > crate::MAX_DRAWING_GROUP_BYTES
+        {
+            return false;
         }
-        if let Some(intervals) = patch.interval_visibility.as_ref() {
-            if !intervals.validate() {
-                return false;
-            }
+        if let Some(intervals) = patch.interval_visibility.as_ref()
+            && !intervals.validate()
+        {
+            return false;
         }
-        if let Some(labels) = patch.labels.as_ref() {
-            if labels.len() > crate::MAX_DRAWING_LABELS
-                || !labels.iter().all(|label| label.validate())
-            {
-                return false;
-            }
+        if let Some(labels) = patch.labels.as_ref()
+            && (labels.len() > crate::MAX_DRAWING_LABELS
+                || !labels.iter().all(|label| label.validate()))
+        {
+            return false;
         }
-        if let Some(levels) = patch.levels.as_ref() {
-            if levels.len() > crate::MAX_DRAWING_LEVELS
-                || !levels.iter().all(|level| level.validate())
-            {
-                return false;
-            }
+        if let Some(levels) = patch.levels.as_ref()
+            && (levels.len() > crate::MAX_DRAWING_LEVELS
+                || !levels.iter().all(|level| level.validate()))
+        {
+            return false;
         }
         for (family, fan) in [(&patch.gann_fans, true), (&patch.gann_arcs, false)] {
-            if let Some(levels) = family {
-                if !matches!(
+            if let Some(levels) = family
+                && (!matches!(
                     self.kind,
                     DrawingKind::GannSquare | DrawingKind::GannSquareFixed
-                ) || !valid_gann_family(levels, fan)
-                {
-                    return false;
-                }
+                ) || !valid_gann_family(levels, fan))
+            {
+                return false;
             }
         }
         if (patch.level_reverse.is_some()
@@ -2083,10 +2080,10 @@ impl Drawing {
         {
             return false;
         }
-        if let Some(degree) = patch.wave_degree.as_deref() {
-            if !self.kind.is_elliott() || !DrawingKind::valid_wave_degree(degree) {
-                return false;
-            }
+        if let Some(degree) = patch.wave_degree.as_deref()
+            && (!self.kind.is_elliott() || !DrawingKind::valid_wave_degree(degree))
+        {
+            return false;
         }
         if (patch.screen_x.is_some() || patch.screen_y.is_some())
             && (self.kind != DrawingKind::AnchoredText
@@ -2224,15 +2221,16 @@ impl Drawing {
         {
             self.price_scale = scale;
         }
-        if let Some(css) = patch.color {
-            if Color::parse_css(&css).is_some() {
-                self.color = css;
-            }
+        if let Some(css) = patch.color
+            && Color::parse_css(&css).is_some()
+        {
+            self.color = css;
         }
-        if let Some(width) = patch.width {
-            if width.is_finite() && width > 0.0 {
-                self.width = width;
-            }
+        if let Some(width) = patch.width
+            && width.is_finite()
+            && width > 0.0
+        {
+            self.width = width;
         }
         if let Some(style) = patch.style.as_ref().and_then(parse_drawing_style) {
             self.style = style;
@@ -2267,10 +2265,11 @@ impl Drawing {
         if let Some(css) = patch.text_color {
             update_css_slot(&mut self.text_color, css);
         }
-        if let Some(size) = patch.text_size {
-            if size.is_finite() && size > 0.0 {
-                self.text_size = Some(size);
-            }
+        if let Some(size) = patch.text_size
+            && size.is_finite()
+            && size > 0.0
+        {
+            self.text_size = Some(size);
         }
         // Explicit weight wins; the legacy `text_bold` shorthand maps onto it (true → 700,
         // false → normal).
@@ -2304,10 +2303,11 @@ impl Drawing {
         if let Some(css) = patch.box_border_color {
             update_css_slot(&mut self.box_border_color, css);
         }
-        if let Some(width) = patch.box_border_width {
-            if width.is_finite() && width > 0.0 {
-                self.box_border_width = width;
-            }
+        if let Some(width) = patch.box_border_width
+            && width.is_finite()
+            && width > 0.0
+        {
+            self.box_border_width = width;
         }
         if let Some(value) = patch.position_account_size {
             self.position_account_size = value;
@@ -2826,11 +2826,7 @@ impl ChartEngine {
             return price;
         };
         let snapped = (price / tick).round() * tick;
-        if snapped.is_finite() {
-            snapped
-        } else {
-            price
-        }
+        if snapped.is_finite() { snapped } else { price }
     }
 
     /// Grid-snapped tools place anchors on the crosshair's time slot under `x` (unless the magnet
@@ -3142,15 +3138,11 @@ impl ChartEngine {
 
     pub(crate) fn drawing_render_px(&self, drawing: &Drawing) -> Option<Vec<(f64, f64)>> {
         let mut px = self.drawing_px(drawing)?;
-        if drawing.kind == DrawingKind::RegressionTrend {
-            if let Some(derived) = self.regression_points(drawing) {
-                for point in derived {
-                    px.push(self.drawing_to_px_for(
-                        drawing.pane_index,
-                        drawing.price_scale,
-                        point,
-                    )?);
-                }
+        if drawing.kind == DrawingKind::RegressionTrend
+            && let Some(derived) = self.regression_points(drawing)
+        {
+            for point in derived {
+                px.push(self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point)?);
             }
         }
         Some(px)
@@ -3420,15 +3412,15 @@ impl ChartEngine {
                     )?);
                 }
             }
-            if drawing.kind == DrawingKind::RegressionTrend {
-                if let Some(derived) = self.regression_points(drawing) {
-                    for point in derived {
-                        entry.media_px.push(self.drawing_to_px_for(
-                            drawing.pane_index,
-                            drawing.price_scale,
-                            point,
-                        )?);
-                    }
+            if drawing.kind == DrawingKind::RegressionTrend
+                && let Some(derived) = self.regression_points(drawing)
+            {
+                for point in derived {
+                    entry.media_px.push(self.drawing_to_px_for(
+                        drawing.pane_index,
+                        drawing.price_scale,
+                        point,
+                    )?);
                 }
             }
             entry.geometry_key = key;
@@ -3882,15 +3874,12 @@ impl ChartEngine {
         }
         let id = self.take_drawing_id()?;
         let mut drawing = Drawing::new(id, kind, pane_index, points);
-        if kind == DrawingKind::AnchoredText {
-            if let (Some(pane), Some(&point)) = (self.panes.get(pane_index), drawing.points.first())
-            {
-                if let Some((x, y)) = self.drawing_to_px_for(pane_index, drawing.price_scale, point)
-                {
-                    drawing.screen_x = (x / self.pane_w.max(1.0)).clamp(0.0, 1.0);
-                    drawing.screen_y = ((y - pane.top) / pane.height.max(1.0)).clamp(0.0, 1.0);
-                }
-            }
+        if kind == DrawingKind::AnchoredText
+            && let (Some(pane), Some(&point)) = (self.panes.get(pane_index), drawing.points.first())
+            && let Some((x, y)) = self.drawing_to_px_for(pane_index, drawing.price_scale, point)
+        {
+            drawing.screen_x = (x / self.pane_w.max(1.0)).clamp(0.0, 1.0);
+            drawing.screen_y = ((y - pane.top) / pane.height.max(1.0)).clamp(0.0, 1.0);
         }
         if let Some(json) = options_json {
             let patch = serde_json::from_str::<DrawingPatch>(json).ok()?;
@@ -4810,75 +4799,72 @@ impl ChartEngine {
         // The brush shows handles at its two ENDS only; the rectangle shows its eight
         // Eight conventional anchors (four corners + four edge midpoints); the rest show one per
         // defining anchor.
-        if let Some(selected) = self.selected_drawing {
-            if let Some(drawing) = self.drawing(selected) {
-                if drawing.pane_index == pane
-                    && drawing.visible
-                    && drawing.interval_visibility.allows(self.drawing_interval)
-                {
-                    if let Some(px) = self.drawing_px(drawing) {
-                        match drawing.kind.spec().handles {
-                            DrawingHandleMode::None => {}
-                            DrawingHandleMode::Endpoints if !px.is_empty() => {
-                                let last = px.len() - 1;
-                                for index in [0, last] {
-                                    let (ax, ay) = px[index];
-                                    if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
-                                        return Some(DrawingHit {
-                                            id: selected,
-                                            part: DrawingDragPart::Anchor(index),
-                                            cursor: "pointer",
-                                        });
-                                    }
-                                }
-                            }
-                            DrawingHandleMode::RectangleBounds if px.len() == 2 => {
-                                let anchors = Self::rectangle_anchors(&px);
-                                for (index, &(ax, ay)) in anchors.iter().enumerate() {
-                                    if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
-                                        return Some(DrawingHit {
-                                            id: selected,
-                                            part: DrawingDragPart::Anchor(index),
-                                            cursor: Self::rectangle_anchor_cursor(index),
-                                        });
-                                    }
-                                }
-                            }
-                            DrawingHandleMode::Position if px.len() == 3 => {
-                                let entry = px[0];
-                                let target = px[1];
-                                let stop = px[2];
-                                let handles = [
-                                    (entry.0, target.1, "ns-resize"),
-                                    (entry.0, entry.1, "move"),
-                                    (target.0, entry.1, "ew-resize"),
-                                    (entry.0, stop.1, "ns-resize"),
-                                ];
-                                for (index, &(ax, ay, cursor)) in handles.iter().enumerate() {
-                                    if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
-                                        return Some(DrawingHit {
-                                            id: selected,
-                                            part: DrawingDragPart::Anchor(index),
-                                            cursor,
-                                        });
-                                    }
-                                }
-                            }
-                            DrawingHandleMode::Anchors | DrawingHandleMode::Endpoints => {
-                                for (index, &(ax, ay)) in px.iter().enumerate() {
-                                    if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
-                                        return Some(DrawingHit {
-                                            id: selected,
-                                            part: DrawingDragPart::Anchor(index),
-                                            cursor: "pointer",
-                                        });
-                                    }
-                                }
-                            }
-                            DrawingHandleMode::RectangleBounds | DrawingHandleMode::Position => {}
+        if let Some(selected) = self.selected_drawing
+            && let Some(drawing) = self.drawing(selected)
+            && drawing.pane_index == pane
+            && drawing.visible
+            && drawing.interval_visibility.allows(self.drawing_interval)
+            && let Some(px) = self.drawing_px(drawing)
+        {
+            match drawing.kind.spec().handles {
+                DrawingHandleMode::None => {}
+                DrawingHandleMode::Endpoints if !px.is_empty() => {
+                    let last = px.len() - 1;
+                    for index in [0, last] {
+                        let (ax, ay) = px[index];
+                        if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
+                            return Some(DrawingHit {
+                                id: selected,
+                                part: DrawingDragPart::Anchor(index),
+                                cursor: "pointer",
+                            });
                         }
                     }
                 }
+                DrawingHandleMode::RectangleBounds if px.len() == 2 => {
+                    let anchors = Self::rectangle_anchors(&px);
+                    for (index, &(ax, ay)) in anchors.iter().enumerate() {
+                        if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
+                            return Some(DrawingHit {
+                                id: selected,
+                                part: DrawingDragPart::Anchor(index),
+                                cursor: Self::rectangle_anchor_cursor(index),
+                            });
+                        }
+                    }
+                }
+                DrawingHandleMode::Position if px.len() == 3 => {
+                    let entry = px[0];
+                    let target = px[1];
+                    let stop = px[2];
+                    let handles = [
+                        (entry.0, target.1, "ns-resize"),
+                        (entry.0, entry.1, "move"),
+                        (target.0, entry.1, "ew-resize"),
+                        (entry.0, stop.1, "ns-resize"),
+                    ];
+                    for (index, &(ax, ay, cursor)) in handles.iter().enumerate() {
+                        if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
+                            return Some(DrawingHit {
+                                id: selected,
+                                part: DrawingDragPart::Anchor(index),
+                                cursor,
+                            });
+                        }
+                    }
+                }
+                DrawingHandleMode::Anchors | DrawingHandleMode::Endpoints => {
+                    for (index, &(ax, ay)) in px.iter().enumerate() {
+                        if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
+                            return Some(DrawingHit {
+                                id: selected,
+                                part: DrawingDragPart::Anchor(index),
+                                cursor: "pointer",
+                            });
+                        }
+                    }
+                }
+                DrawingHandleMode::RectangleBounds | DrawingHandleMode::Position => {}
             }
         }
         if !indexed {
@@ -5778,21 +5764,18 @@ impl ChartEngine {
         self.invalidate_frame_overlay();
         if let Some(drag) = self.drawing_drag.take() {
             let id = drag.id;
-            if matches!(drag.part, DrawingDragPart::Anchor(0 | 1)) {
-                if let Some(drawing) = self
+            if matches!(drag.part, DrawingDragPart::Anchor(0 | 1))
+                && let Some(drawing) = self
                     .drawing(id)
                     .cloned()
                     .filter(|drawing| drawing.kind == DrawingKind::BarsPattern)
-                {
-                    if let Some(bars) = self.capture_bars_pattern(&drawing) {
-                        if let Some(current) = self.drawings.iter_mut().find(|item| item.id == id) {
-                            current.bars_pattern = bars;
-                        }
-                    } else if let Some(current) =
-                        self.drawings.iter_mut().find(|item| item.id == id)
-                    {
-                        current.points = drag.history_points.clone();
+            {
+                if let Some(bars) = self.capture_bars_pattern(&drawing) {
+                    if let Some(current) = self.drawings.iter_mut().find(|item| item.id == id) {
+                        current.bars_pattern = bars;
                     }
+                } else if let Some(current) = self.drawings.iter_mut().find(|item| item.id == id) {
+                    current.points = drag.history_points.clone();
                 }
             }
             self.update_drawing_runtime(id);
@@ -6204,7 +6187,7 @@ impl ChartEngine {
                 return DrawingCreationUpdate {
                     consumed: true,
                     ..DrawingCreationUpdate::default()
-                }
+                };
             }
         }
         if self.drawing_controller.pending.is_none() && !self.begin_pending_from_armed() {
@@ -6586,13 +6569,11 @@ impl ChartEngine {
         if modifiers.magnet {
             point = self.magnet_snap_point_at(pane, price_scale, x, y, point);
         }
-        if modifiers.straighten {
-            if let Some(fixed) = fixed {
-                if let Some(snapped) = self.straighten_point(pane, price_scale, kind, fixed, point)
-                {
-                    point = snapped;
-                }
-            }
+        if modifiers.straighten
+            && let Some(fixed) = fixed
+            && let Some(snapped) = self.straighten_point(pane, price_scale, kind, fixed, point)
+        {
+            point = snapped;
         }
         point = self.grid_snap_point(kind, pane, price_scale, x, point, modifiers.magnet);
         let preset_points = if matches!(
@@ -6647,17 +6628,14 @@ impl ChartEngine {
         };
         let mut drawing = pending.drawing;
         drawing.id = id;
-        if drawing.kind == DrawingKind::AnchoredText {
-            if let (Some(pane), Some(&point)) =
+        if drawing.kind == DrawingKind::AnchoredText
+            && let (Some(pane), Some(&point)) =
                 (self.panes.get(drawing.pane_index), drawing.points.first())
-            {
-                if let Some((x, y)) =
-                    self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point)
-                {
-                    drawing.screen_x = (x / self.pane_w.max(1.0)).clamp(0.0, 1.0);
-                    drawing.screen_y = ((y - pane.top) / pane.height.max(1.0)).clamp(0.0, 1.0);
-                }
-            }
+            && let Some((x, y)) =
+                self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point)
+        {
+            drawing.screen_x = (x / self.pane_w.max(1.0)).clamp(0.0, 1.0);
+            drawing.screen_y = ((y - pane.top) / pane.height.max(1.0)).clamp(0.0, 1.0);
         }
         if drawing.kind == DrawingKind::BarsPattern {
             let Some(bars) = self.capture_bars_pattern(&drawing) else {
@@ -6751,16 +6729,13 @@ impl ChartEngine {
         if modifiers.magnet {
             point = self.magnet_snap_point_at(pane, price_scale, x, y, point);
         }
-        if modifiers.straighten {
-            if let Some(pending) = &self.drawing_controller.pending {
-                if let Some(&fixed) = pending.drawing.points.last() {
-                    if let Some(snapped) =
-                        self.straighten_point(pane, price_scale, pending.drawing.kind, fixed, point)
-                    {
-                        point = snapped;
-                    }
-                }
-            }
+        if modifiers.straighten
+            && let Some(pending) = &self.drawing_controller.pending
+            && let Some(&fixed) = pending.drawing.points.last()
+            && let Some(snapped) =
+                self.straighten_point(pane, price_scale, pending.drawing.kind, fixed, point)
+        {
+            point = snapped;
         }
         if let Some(kind) = self
             .drawing_controller

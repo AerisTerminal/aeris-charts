@@ -32,7 +32,7 @@ use aeris_charts_engine::{
     PointerSample, ProfileSource, ResampleBoundary, SeriesKind, TradeStudyOptions,
 };
 use aeris_charts_render::draw_list::Prim;
-use aeris_charts_render_wgpu::{prims_to_group, DrawGroup, TexQuadInstance};
+use aeris_charts_render_wgpu::{DrawGroup, TexQuadInstance, prims_to_group};
 
 /// Parallel `(times, open, high, low, close)` columns.
 type OhlcColumns = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);

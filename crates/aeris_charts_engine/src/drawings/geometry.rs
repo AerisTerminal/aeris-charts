@@ -6,7 +6,7 @@
 
 use aeris_charts_render::draw_list::LineType;
 
-use super::{path_arrow_points, DrawingKind, TextBox};
+use super::{DrawingKind, TextBox, path_arrow_points};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DrawingBodyGeometry<'a> {

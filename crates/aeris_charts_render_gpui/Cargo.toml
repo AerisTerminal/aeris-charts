@@ -32,7 +32,7 @@ aeris_charts_render = { path = "../aeris_charts_render" }
 # only resolves under a comctl32 v6 activation context. That context comes from the application
 # manifest this feature embeds. Without it the executable fails to load at all
 # (STATUS_ENTRYPOINT_NOT_FOUND, 0xC0000139) before `main` runs.
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1057c2cf3d5b4aefd04755e1387c7826a4d7fba6", version = "=0.2.2", optional = true, default-features = false, features = [
+gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", version = "=0.2.2", optional = true, default-features = false, features = [
     "windows-manifest",
 ] }
 image = { version = "0.25", optional = true, default-features = false }
@@ -40,7 +40,7 @@ smallvec = { version = "1", optional = true }
 
 # The pixel-parity harness diffs GPUI's real output against Aeris's existing native rasterizer.
 [dev-dependencies]
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1057c2cf3d5b4aefd04755e1387c7826a4d7fba6", default-features = false, features = [
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = [
     "wayland",
     "x11",
 ] }
@@ -53,7 +53,7 @@ tiny-skia = "0.12"
 # GPUI's compositor selection is compiled in `gpui` itself. Enabling X11/Wayland only on
 # `gpui_platform` leaves `gpui::guess_compositor()` headless under Xvfb even with DISPLAY set.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1057c2cf3d5b4aefd04755e1387c7826a4d7fba6", version = "=0.2.2", default-features = false, features = ["wayland", "x11"] }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", version = "=0.2.2", default-features = false, features = ["wayland", "x11"] }
 
 [lints]
 workspace = true

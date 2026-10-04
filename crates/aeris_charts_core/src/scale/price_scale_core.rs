@@ -1,10 +1,10 @@
 //! Price scale coordinate math and interactions. Port of `src/model/price-scale.ts`
 //! (data-source management and formatter selection live at a higher layer).
 
-use crate::model::price_range::PriceRange;
-use crate::scale::log_formula::{self, LogFormula, DEF_LOG_FORMULA};
-use crate::scale::price_tick_span_calculator::composite_tick_span;
 use crate::Coordinate;
+use crate::model::price_range::PriceRange;
+use crate::scale::log_formula::{self, DEF_LOG_FORMULA, LogFormula};
+use crate::scale::price_tick_span_calculator::composite_tick_span;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PriceScaleMode {
@@ -976,7 +976,7 @@ mod tests {
         s.set_auto_scale(false);
         s.start_scale(150.0); // start point (inverted): 50
         s.scale_to(100.0); // x' = 100
-                           // coeff = (50 + 199*0.2) / (100 + 199*0.2) = 89.8 / 139.8
+        // coeff = (50 + 199*0.2) / (100 + 199*0.2) = 89.8 / 139.8
         let coeff: f64 = 89.8 / 139.8;
         let r = s.price_range().unwrap();
         let expected_half = 50.0 * coeff;

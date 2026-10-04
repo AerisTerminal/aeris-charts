@@ -33,7 +33,7 @@ mod native_primitives;
 mod synthetic_bars;
 mod volume_profile;
 pub use volume_profile::{
-    VolumeProfileIndicatorOptions, VolumeProfileIndicatorSnapshot, MAX_VOLUME_PROFILE_INDICATORS,
+    MAX_VOLUME_PROFILE_INDICATORS, VolumeProfileIndicatorOptions, VolumeProfileIndicatorSnapshot,
 };
 mod ordering;
 mod persistence;
@@ -67,38 +67,38 @@ pub use big_trades::{
     MAX_BIG_TRADES_INDICATORS,
 };
 pub use chart_input::{
-    ChartContextMenu, ChartCursor, ChartFocusTarget, ChartHover, ChartInputEvent, ChartKey,
-    ChartRegion, HostPrimitiveHit, HostPrimitiveLayer, InteractionOptions, PointerInput,
-    CLICK_SLOP_MANHATTAN, PANE_SEPARATOR_HIT, TRADING_TOOLTIP_DWELL_MS,
+    CLICK_SLOP_MANHATTAN, ChartContextMenu, ChartCursor, ChartFocusTarget, ChartHover,
+    ChartInputEvent, ChartKey, ChartRegion, HostPrimitiveHit, HostPrimitiveLayer,
+    InteractionOptions, PANE_SEPARATOR_HIT, PointerInput, TRADING_TOOLTIP_DWELL_MS,
 };
 pub use depth::{
     DepthBook, DepthBucket, DepthError, DepthEventCluster, DepthEventKind, DepthEventLayerOptions,
     DepthHeatmapOptions, DepthLadderRow, DepthLevel, DepthMicrostructureEvent, DepthOptions,
     DepthReplayStats, DepthResyncRequest, DepthSide, DepthSnapshot, DepthStudySnapshot,
     DepthUpdate, MAX_DEPTH_BATCH_UPDATES, MAX_DEPTH_EVENT_LABEL_BYTES, MAX_DEPTH_EVENT_LAYERS,
-    MAX_DEPTH_EVENT_MARKERS, MAX_DEPTH_HEATMAPS, MAX_DEPTH_HEATMAP_ROWS, MAX_DEPTH_HISTORY_BUCKETS,
+    MAX_DEPTH_EVENT_MARKERS, MAX_DEPTH_HEATMAP_ROWS, MAX_DEPTH_HEATMAPS, MAX_DEPTH_HISTORY_BUCKETS,
     MAX_DEPTH_HISTORY_CELLS, MAX_DEPTH_LEVELS_PER_SIDE, MAX_DEPTH_REPLAY_UPDATES,
-    MAX_DEPTH_STREAMS, MAX_DEPTH_STREAM_KEY_BYTES,
+    MAX_DEPTH_STREAM_KEY_BYTES, MAX_DEPTH_STREAMS,
 };
 pub use domains::{
     CategoryScaleType, ContinuousScaleType, HorizontalDomain, MAX_GENERAL_HORIZONTAL_DOMAINS,
 };
 pub use drawing_contract::drawing_property_schema;
 pub use drawing_contract::{
-    DrawingClipboardItem, DrawingClipboardPayload, DrawingCommonSnapshot, DrawingInterval,
-    DrawingIntervalUnit, DrawingIntervalVisibility, DrawingKindOptions, DrawingLabelMetric,
-    DrawingLabelOptions, DrawingLabelPosition, DrawingLevel, DrawingLineCap, DrawingMagnetMode,
-    DrawingPropertyDescriptor, DrawingPropertySchema, DrawingPropertyType, DrawingSyncPayload,
-    DrawingTemplate, DRAWING_CONTRACT_REVISION, MAX_DRAWING_GROUP_BYTES, MAX_DRAWING_LABELS,
-    MAX_DRAWING_LEVELS, MAX_DRAWING_NAME_BYTES, MAX_DRAWING_OBJECTS, MAX_DRAWING_TEMPLATES,
-    MAX_DRAWING_TEMPLATE_BYTES,
+    DRAWING_CONTRACT_REVISION, DrawingClipboardItem, DrawingClipboardPayload,
+    DrawingCommonSnapshot, DrawingInterval, DrawingIntervalUnit, DrawingIntervalVisibility,
+    DrawingKindOptions, DrawingLabelMetric, DrawingLabelOptions, DrawingLabelPosition,
+    DrawingLevel, DrawingLineCap, DrawingMagnetMode, DrawingPropertyDescriptor,
+    DrawingPropertySchema, DrawingPropertyType, DrawingSyncPayload, DrawingTemplate,
+    MAX_DRAWING_GROUP_BYTES, MAX_DRAWING_LABELS, MAX_DRAWING_LEVELS, MAX_DRAWING_NAME_BYTES,
+    MAX_DRAWING_OBJECTS, MAX_DRAWING_TEMPLATE_BYTES, MAX_DRAWING_TEMPLATES,
 };
 pub use drawing_text_edit::{DrawingTextEditKey, DrawingTextEditLayout};
 pub use drawings::{
-    Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId, DrawingKind,
-    DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats, TextCapCenterFn,
-    TextMeasureFn, DRAWING_DEFAULT_COLOR, MAX_DRAWING_ICONS, MAX_DRAWING_ICON_NAME_BYTES,
-    MAX_DRAWING_ICON_SIZE,
+    DRAWING_DEFAULT_COLOR, Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId,
+    DrawingKind, DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats,
+    MAX_DRAWING_ICON_NAME_BYTES, MAX_DRAWING_ICON_SIZE, MAX_DRAWING_ICONS, TextCapCenterFn,
+    TextMeasureFn,
 };
 pub(crate) use drawings::{
     DrawingAnchorTime, DrawingController, DrawingDrag, DrawingHistory, DrawingIconRegistry,
@@ -120,14 +120,14 @@ pub use financial_legend::{
     FinancialLegendValue, HostLegendSeries,
 };
 pub use footprint::{
-    auto_footprint_ticks_per_row, AggressorSide, BarSequence, BarSequenceMapping, BarSequencePoint,
-    CumulativeDeltaReset, FootprintAggregationOptions, FootprintAggregator, FootprintBar,
-    FootprintBarAggregation, FootprintCellMode, FootprintError, FootprintImbalanceOptions,
-    FootprintLevel, FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind,
-    FootprintVisualOptions, FootprintWorkStats, OrderFlowPresentation,
-    OrderFlowPresentationOptions, ReplayClockStats, ReplaySeekStats, TimeAndSalesOptions,
-    TimeAndSalesRow, TradeStreamStats, TradeStudyKind, TradeStudyOptions, MAX_TIME_AND_SALES_ROWS,
-    MAX_TRADE_STREAMS, MAX_TRADE_STREAM_KEY_BYTES,
+    AggressorSide, BarSequence, BarSequenceMapping, BarSequencePoint, CumulativeDeltaReset,
+    FootprintAggregationOptions, FootprintAggregator, FootprintBar, FootprintBarAggregation,
+    FootprintCellMode, FootprintError, FootprintImbalanceOptions, FootprintLevel,
+    FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind, FootprintVisualOptions,
+    FootprintWorkStats, MAX_TIME_AND_SALES_ROWS, MAX_TRADE_STREAM_KEY_BYTES, MAX_TRADE_STREAMS,
+    OrderFlowPresentation, OrderFlowPresentationOptions, ReplayClockStats, ReplaySeekStats,
+    TimeAndSalesOptions, TimeAndSalesRow, TradeStreamStats, TradeStudyKind, TradeStudyOptions,
+    auto_footprint_ticks_per_row,
 };
 pub use frame::{
     AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,
@@ -137,120 +137,120 @@ pub use frame::{
 pub use general_axes::{
     AxisDimension, AxisPosition, GeneralAxis, GeneralAxisDomain, GeneralAxisOptions,
     GeneralAxisTick, GeneralScaleType, MAX_GENERAL_AXES, MAX_GENERAL_AXIS_CATEGORIES,
-    MAX_GENERAL_AXIS_CATEGORY_BYTES, MAX_GENERAL_AXIS_ID_BYTES, MAX_GENERAL_AXIS_TICKS,
-    MAX_GENERAL_AXIS_TICK_BYTES, MAX_GENERAL_AXIS_TITLE_BYTES, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    MAX_GENERAL_AXIS_CATEGORY_BYTES, MAX_GENERAL_AXIS_ID_BYTES, MAX_GENERAL_AXIS_TICK_BYTES,
+    MAX_GENERAL_AXIS_TICKS, MAX_GENERAL_AXIS_TITLE_BYTES, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 #[doc(hidden)]
 pub use general_data::{
     GeneralDataset, GeneralDatasetId, GeneralRowId, GeneralRowIdentity, GeneralXKind,
-    GeneralXyInput, MAX_GENERAL_DATASETS, MAX_GENERAL_DATASET_CATEGORIES,
-    MAX_GENERAL_DATASET_CATEGORY_BYTES, MAX_GENERAL_DATASET_ROWS, MAX_GENERAL_ROW_ID_BYTES,
+    GeneralXyInput, MAX_GENERAL_DATASET_CATEGORIES, MAX_GENERAL_DATASET_CATEGORY_BYTES,
+    MAX_GENERAL_DATASET_ROWS, MAX_GENERAL_DATASETS, MAX_GENERAL_ROW_ID_BYTES,
     MAX_GENERAL_ROW_ID_BYTES_TOTAL,
 };
 #[doc(hidden)]
 pub use general_series::{
-    GeneralAccessibilityItem, GeneralAccessibilitySnapshot, GeneralBrushRange,
-    GeneralBrushSnapshot, GeneralHitMode, GeneralInterpolation, GeneralLegendItem,
-    GeneralLegendSnapshot, GeneralLineStyle, GeneralPointSymbol, GeneralReference,
-    GeneralReferenceId, GeneralReferenceOptions, GeneralReferenceValue, GeneralSeries,
-    GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
+    DEFAULT_GENERAL_FILL_OPACITY, GeneralAccessibilityItem, GeneralAccessibilitySnapshot,
+    GeneralBrushRange, GeneralBrushSnapshot, GeneralHitMode, GeneralInterpolation,
+    GeneralLegendItem, GeneralLegendSnapshot, GeneralLineStyle, GeneralPointSymbol,
+    GeneralReference, GeneralReferenceId, GeneralReferenceOptions, GeneralReferenceValue,
+    GeneralSeries, GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
     GeneralSharedTooltipSnapshot, GeneralStackMode, GeneralTooltipSnapshot,
-    DEFAULT_GENERAL_FILL_OPACITY, MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_BRUSH_ITEMS,
-    MAX_GENERAL_POINT_RADIUS, MAX_GENERAL_REFERENCES, MAX_GENERAL_SERIES,
-    MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_GROUP_ID_BYTES,
-    MAX_GENERAL_SERIES_STACK_ID_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES,
-    MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
+    MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_BRUSH_ITEMS, MAX_GENERAL_POINT_RADIUS,
+    MAX_GENERAL_REFERENCES, MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES,
+    MAX_GENERAL_SERIES_GROUP_ID_BYTES, MAX_GENERAL_SERIES_STACK_ID_BYTES,
+    MAX_GENERAL_SERIES_TITLE_BYTES, MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub use host_layout::{
     ExportFrame, ExportFrameRequest, FinancialFramePreparation, FinancialFrameRequest,
 };
-pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use indicators::{
+    EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS, INDICATOR_SCHEMA_REVISION,
     IndicatorBindingInfo, IndicatorChromeOptions, IndicatorInputSource, IndicatorKind,
     IndicatorOutputDescriptor, IndicatorOutputStyle, IndicatorParameterDescriptor,
-    IndicatorParameterType, IndicatorSchema, EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS,
-    INDICATOR_SCHEMA_REVISION,
+    IndicatorParameterType, IndicatorSchema,
 };
+pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use interaction::{
-    pinch_zoom_scale, wheel_zoom_scale, CancelReason, ChartContext, GestureResolver, GestureState,
-    GestureUpdate, GestureUpdateKind, HitProfile, InputDevice, InputEvent, InputModifiers,
-    InputTarget, PointerSample, ScrollAnimation, WheelBehavior, WheelDeltaMode, WheelIntent,
-    WheelSample, KINETIC_DUMPING, KINETIC_MAX_SPEED, KINETIC_MIN_MOVE, KINETIC_MIN_SPEED,
-    MAX_ACTIVE_POINTERS, PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
+    CancelReason, ChartContext, GestureResolver, GestureState, GestureUpdate, GestureUpdateKind,
+    HitProfile, InputDevice, InputEvent, InputModifiers, InputTarget, KINETIC_DUMPING,
+    KINETIC_MAX_SPEED, KINETIC_MIN_MOVE, KINETIC_MIN_SPEED, MAX_ACTIVE_POINTERS,
+    PINCH_ZOOM_INTENSITY, PointerSample, ScrollAnimation, WHEEL_SCROLL_PX_PER_DELTA, WheelBehavior,
+    WheelDeltaMode, WheelIntent, WheelSample, pinch_zoom_scale, wheel_zoom_scale,
 };
 pub use native_primitives::{
     AccessibilityFocusOptions, AnchoredTextHorizontalAlign, AnchoredTextOptions,
     AnchoredTextVerticalAlign, BandsIndicatorOptions, DeltaTooltipActiveRange, DeltaTooltipOptions,
-    DeltaTooltipPoint, ImageWatermarkOptions, NativePrimitiveId, OverlayPriceScaleOptions,
-    OverlayPriceScaleSide, SessionHighlightingData, SessionHighlightingOptions, TextWatermarkLine,
-    TextWatermarkOptions, TooltipOptions, TooltipSnapshot, TrendLineOptions, VerticalLineOptions,
-    VolumeProfileData, VolumeProfileOptions, VolumeProfilePoint, MAX_RASTER_IMAGE_DIMENSION,
+    DeltaTooltipPoint, ImageWatermarkOptions, MAX_RASTER_IMAGE_DIMENSION, NativePrimitiveId,
+    OverlayPriceScaleOptions, OverlayPriceScaleSide, SessionHighlightingData,
+    SessionHighlightingOptions, TextWatermarkLine, TextWatermarkOptions, TooltipOptions,
+    TooltipSnapshot, TrendLineOptions, VerticalLineOptions, VolumeProfileData,
+    VolumeProfileOptions, VolumeProfilePoint,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use persistence::PersistenceRestoreProfile;
 pub use persistence::{
-    PersistenceRestoreResult, ValidatedStateV1, PERSISTENCE_MAX_DOCUMENT_BYTES,
-    PERSISTENCE_MAX_DRAWINGS, PERSISTENCE_MAX_INDICATORS, PERSISTENCE_MAX_PANES,
-    PERSISTENCE_MAX_POINTS_PER_DRAWING, PERSISTENCE_MAX_TOTAL_POINTS, PERSISTENCE_SCHEMA_VERSION,
-    PERSISTENCE_SCHEMA_VERSION_GENERAL, PERSISTENCE_SCHEMA_VERSION_STUDIES,
+    PERSISTENCE_MAX_DOCUMENT_BYTES, PERSISTENCE_MAX_DRAWINGS, PERSISTENCE_MAX_INDICATORS,
+    PERSISTENCE_MAX_PANES, PERSISTENCE_MAX_POINTS_PER_DRAWING, PERSISTENCE_MAX_TOTAL_POINTS,
+    PERSISTENCE_SCHEMA_VERSION, PERSISTENCE_SCHEMA_VERSION_GENERAL,
+    PERSISTENCE_SCHEMA_VERSION_STUDIES, PersistenceRestoreResult, ValidatedStateV1,
 };
 pub use profiles::{
-    AnchoredVwapPoint, DevelopingValueArea, NakedProfileLevel, NakedProfileLevelKind,
-    PeriodicProfilePresentationOptions, PeriodicProfilePresentationRequest, ProfileDisplayMode,
-    ProfileDrawingOptions, ProfileDrawingSnapshot, ProfileError, ProfileRequest,
-    ProfileRowSnapshot, ProfileSnapshot, ProfileSource, TpoCellMode, TpoPresentationOptions,
-    TpoRequest, TpoRowSnapshot, TpoSnapshot, MAX_PERIODIC_PROFILE_PRESENTATIONS,
+    AnchoredVwapPoint, DevelopingValueArea, MAX_PERIODIC_PROFILE_PRESENTATIONS,
     MAX_PROFILE_DEVELOPING_POINTS, MAX_PROFILE_PERIODS, MAX_PROFILE_ROWS,
     MAX_PROFILE_TOTAL_DEVELOPING_POINTS, MAX_PROFILE_TOTAL_ROWS, MAX_TPO_PERIODS,
-    MAX_TPO_PRESENTATIONS, MAX_TPO_TOTAL_CELLS, MAX_TPO_TOTAL_ROWS,
+    MAX_TPO_PRESENTATIONS, MAX_TPO_TOTAL_CELLS, MAX_TPO_TOTAL_ROWS, NakedProfileLevel,
+    NakedProfileLevelKind, PeriodicProfilePresentationOptions, PeriodicProfilePresentationRequest,
+    ProfileDisplayMode, ProfileDrawingOptions, ProfileDrawingSnapshot, ProfileError,
+    ProfileRequest, ProfileRowSnapshot, ProfileSnapshot, ProfileSource, TpoCellMode,
+    TpoPresentationOptions, TpoRequest, TpoRowSnapshot, TpoSnapshot,
 };
 pub use resampling::{
-    ResampleBoundary, ResampleError, ResampleOptions, ResampledBar, MAX_RESAMPLED_SERIES,
-    MAX_RESAMPLE_BOUNDARIES,
+    MAX_RESAMPLE_BOUNDARIES, MAX_RESAMPLED_SERIES, ResampleBoundary, ResampleError,
+    ResampleOptions, ResampledBar,
 };
 pub use synthetic_bars::{
-    SyntheticBar, SyntheticBarAggregator, SyntheticBarError, SyntheticBarOptions,
-    SyntheticSourceBar, MAX_SYNTHETIC_BARS, MAX_SYNTHETIC_SOURCE_BARS,
+    MAX_SYNTHETIC_BARS, MAX_SYNTHETIC_SOURCE_BARS, SyntheticBar, SyntheticBarAggregator,
+    SyntheticBarError, SyntheticBarOptions, SyntheticSourceBar,
 };
 pub use trading::{
     AccountId, ExecutionId, ExecutionKind, ExecutionMarkerShape, HostEventHit, HostEventMarker,
-    HostOverlaySnapshot, HostTimeWindow, InstrumentMetadata, OrderId, OrderKind, OrderRole,
-    OrderSide, OrderStatus, PositionId, PositionSide, TradingAnnotation,
+    HostOverlaySnapshot, HostTimeWindow, InstrumentMetadata, MAX_HOST_EVENTS, MAX_HOST_WINDOWS,
+    MAX_TRADING_ANNOTATIONS, MAX_TRADING_OBJECTS, MAX_TRADING_ROUND_TRIPS, OrderId, OrderKind,
+    OrderRole, OrderSide, OrderStatus, PositionId, PositionSide, TradingAnnotation,
     TradingAnnotationPlacement, TradingAnnotationTone, TradingCursor, TradingExecution,
     TradingGroupId, TradingHit, TradingHitKind, TradingIntent, TradingIntentAction,
     TradingObjectId, TradingPosition, TradingPreview, TradingPreviewSource, TradingPriceScale,
     TradingRoundTrip, TradingRoundTripOutcome, TradingSnapshot, TradingStyle, TradingStyleOptions,
-    WorkingOrder, MAX_HOST_EVENTS, MAX_HOST_WINDOWS, MAX_TRADING_ANNOTATIONS, MAX_TRADING_OBJECTS,
-    MAX_TRADING_ROUND_TRIPS,
+    WorkingOrder,
 };
 pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout};
 
+use aeris_charts_core::TimePointIndex;
 use aeris_charts_core::format::price_formatter::PriceFormatter;
-use aeris_charts_core::format::time_formatter::{MonthNames, DEFAULT_DATE_FORMAT};
+use aeris_charts_core::format::time_formatter::{DEFAULT_DATE_FORMAT, MonthNames};
 use aeris_charts_core::model::data_layer::{
     DataLayer, DataLayerMemoryUsage, MergedTimeMapping, PointColorChannel, SeriesId, SeriesIdError,
 };
 use aeris_charts_core::model::data_validation::{
-    sanitize_ohlc, sanitize_ohlc_styled, sanitize_point, validate_timestamp, ValidationError,
-    ValidationReport,
+    ValidationError, ValidationReport, sanitize_ohlc, sanitize_ohlc_styled, sanitize_point,
+    validate_timestamp,
 };
 use aeris_charts_core::model::magnet::CrosshairMode;
 use aeris_charts_core::model::plot_list::{MismatchDirection, PlotValueIndex};
 use aeris_charts_core::model::price_range::PriceRange;
 use aeris_charts_core::model::range::{LogicalRange, StrictRange};
 pub use aeris_charts_core::options::ChartTheme;
-use aeris_charts_core::options::{chart_theme_patch, ChartOptionsStore};
+use aeris_charts_core::options::{ChartOptionsStore, chart_theme_patch};
 pub use aeris_charts_core::scale::price_scale_core::PriceScaleMode;
 use aeris_charts_core::scale::price_scale_core::{
     PriceScaleCore, PriceScaleCoreOptions, PriceScaleMargins,
 };
 use aeris_charts_core::scale::time_scale_core::{TimeScaleCore, TimeScaleOptions};
 use aeris_charts_core::scale::time_tick_marks::{
-    fill_weights_for_points_in_time_zone, weight_by_time_in_time_zone, TimeTickMarks,
+    TimeTickMarks, fill_weights_for_points_in_time_zone, weight_by_time_in_time_zone,
 };
 pub use aeris_charts_core::time_zone::{ChartTimeZone, DEFAULT_TIME_ZONE, TRADINGVIEW_TIME_ZONES};
-use aeris_charts_core::TimePointIndex;
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{LineStyle, LineType};
 
@@ -1641,10 +1641,10 @@ impl Pane {
         for (order, candidate) in old_targets.into_iter().enumerate() {
             self.set_scale_order(candidate, order);
         }
-        if let PriceScaleTarget::Named(id) = target {
-            if let Some(entry) = self.named_scale_mut(id) {
-                entry.side = side;
-            }
+        if let PriceScaleTarget::Named(id) = target
+            && let Some(entry) = self.named_scale_mut(id)
+        {
+            entry.side = side;
         }
         let mut targets = self.ordered_side_targets(side);
         targets.retain(|candidate| *candidate != target);
@@ -2716,10 +2716,10 @@ impl ChartEngine {
                 if !tombstones.contains(&binding.target) {
                     tombstones.push(binding.target);
                 }
-                if let Some(volume_target) = binding.volume_target {
-                    if !tombstones.contains(&volume_target) {
-                        tombstones.push(volume_target);
-                    }
+                if let Some(volume_target) = binding.volume_target
+                    && !tombstones.contains(&volume_target)
+                {
+                    tombstones.push(volume_target);
                 }
             }
         }
@@ -5160,13 +5160,13 @@ impl ChartEngine {
             let need_shift_visible_range_on_new_bar = is_last_series_bar_visible
                 && (!replaced_existing_whitespace || allow_shift_when_replacing_whitespace)
                 && self.time_scale.options().shift_visible_range_on_new_bar;
-            if is_series_points_added_to_right && !need_shift_visible_range_on_new_bar {
-                if let Some(new_base_index) = new_base_index {
-                    let compensation_shift = new_base_index - current_base_index;
-                    self.time_scale.set_right_offset(
-                        self.time_scale.right_offset() - compensation_shift as f64,
-                    );
-                }
+            if is_series_points_added_to_right
+                && !need_shift_visible_range_on_new_bar
+                && let Some(new_base_index) = new_base_index
+            {
+                let compensation_shift = new_base_index - current_base_index;
+                self.time_scale
+                    .set_right_offset(self.time_scale.right_offset() - compensation_shift as f64);
             }
         }
 

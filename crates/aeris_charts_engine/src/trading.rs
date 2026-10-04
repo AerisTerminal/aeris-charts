@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ChartEngine, ChartError, DrawingId, DrawingKind, DrawingPriceScale, ErrorCode, HitProfile,
-    PriceScaleTarget, PANELESS,
+    PANELESS, PriceScaleTarget,
 };
 use aeris_charts_core::style::{
     DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB, MARKET_WARNING_RGB,
@@ -1619,10 +1619,10 @@ impl ChartEngine {
         };
         // Moving a protection order asserts its bracket, so the connector chrome comes up with the
         // change rather than waiting on the host — the same moment the line itself moves.
-        if preview.role != OrderRole::Working {
-            if let Some(group) = self.trading_group_key_for_preview(&preview) {
-                self.trading_state.group_visual = TradingGroupVisualState::Active(group);
-            }
+        if preview.role != OrderRole::Working
+            && let Some(group) = self.trading_group_key_for_preview(&preview)
+        {
+            self.trading_state.group_visual = TradingGroupVisualState::Active(group);
         }
         self.trading_state.interaction =
             TradingInteractionState::PendingHostAck { sequence, rollback };
@@ -2768,7 +2768,7 @@ impl ChartEngine {
         }
         let source_exists = match &self.trading_state.interaction {
             TradingInteractionState::Idle | TradingInteractionState::PendingHostAck { .. } => {
-                return
+                return;
             }
             TradingInteractionState::Hovering { hit } => self.trading_hit_source_exists(hit),
             TradingInteractionState::DraggingOrder { preview, .. } => {
@@ -3125,9 +3125,11 @@ mod tests {
                 .count()
                 >= 3
         );
-        assert!(trading
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::Circle { .. })));
+        assert!(
+            trading
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Circle { .. }))
+        );
         assert!(!trading.iter().any(
             |primitive| matches!(primitive, Prim::Text { text, .. } if text == "B" || text == "S")
         ));
@@ -3141,10 +3143,11 @@ mod tests {
             ("99.00", chart.trading_style().stop_loss),
             ("103.00", chart.trading_style().take_profit),
         ] {
-            assert!(axis
-                .labels
-                .iter()
-                .any(|label| label.text == price && label.border == Some((1.0, color))));
+            assert!(
+                axis.labels
+                    .iter()
+                    .any(|label| label.text == price && label.border == Some((1.0, color)))
+            );
         }
         let mut axis_primitives = Vec::new();
         chart.build_axis_primitives_into(&axis, &mut axis_primitives);
@@ -3696,13 +3699,15 @@ mod tests {
         let y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 103.0)
             .unwrap();
-        assert!(chart
-            .trading_hit_at_with_profile(
-                chart.trading_marker_start() + 20.0,
-                y + 15.0,
-                HitProfile::PRECISION,
-            )
-            .is_none());
+        assert!(
+            chart
+                .trading_hit_at_with_profile(
+                    chart.trading_marker_start() + 20.0,
+                    y + 15.0,
+                    HitProfile::PRECISION,
+                )
+                .is_none()
+        );
         assert_eq!(
             chart
                 .trading_hit_at_with_profile(
@@ -3891,12 +3896,14 @@ mod tests {
     fn semantic_trading_style_updates_transactionally() {
         let mut chart = chart_with_market();
         let before = chart.trading_style();
-        assert!(chart
-            .apply_trading_style(TradingStyleOptions {
-                position: Some("not-a-color".to_string()),
-                ..TradingStyleOptions::default()
-            })
-            .is_err());
+        assert!(
+            chart
+                .apply_trading_style(TradingStyleOptions {
+                    position: Some("not-a-color".to_string()),
+                    ..TradingStyleOptions::default()
+                })
+                .is_err()
+        );
         assert_eq!(chart.trading_style(), before);
         chart
             .apply_trading_style(TradingStyleOptions {
@@ -4107,9 +4114,11 @@ mod tests {
         let dragging = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
         let trading = &dragging.panes[0].main[segments.drawings_end..segments.trading_end];
-        assert!(trading
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "TP")));
+        assert!(
+            trading
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "TP"))
+        );
         assert!(trading.iter().all(|primitive| !matches!(
             primitive,
             Prim::Text { text, .. } if matches!(text.as_str(), "Confirm" | "Discard")
@@ -4417,13 +4426,13 @@ mod tests {
             let mut regions = Vec::new();
             chart.build_trading_frame_for_test(0, vpr, vpr, &mut regions, &mut out);
             for primitive in &out {
-                if let Prim::RoundRect { border_width, .. } = primitive {
-                    if *border_width > 0.0 {
-                        assert_eq!(
-                            *border_width, hairline,
-                            "outline is not a hairline at dpr {vpr}"
-                        );
-                    }
+                if let Prim::RoundRect { border_width, .. } = primitive
+                    && *border_width > 0.0
+                {
+                    assert_eq!(
+                        *border_width, hairline,
+                        "outline is not a hairline at dpr {vpr}"
+                    );
                 }
             }
         }
@@ -4809,14 +4818,18 @@ mod tests {
             4
         );
         for expected in ["Buy Limit", "+24.00 USD", "-24.00 USD"] {
-            assert!(trading
-                .iter()
-                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)));
+            assert!(
+                trading.iter().any(
+                    |primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)
+                )
+            );
         }
         for expected in ["TP", "SL"] {
-            assert!(trading
-                .iter()
-                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)));
+            assert!(
+                trading.iter().any(
+                    |primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)
+                )
+            );
         }
         assert!(trading
             .iter()
@@ -4968,13 +4981,17 @@ mod tests {
         let frame = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
         let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
-        assert!(!trading
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::VLine { x, .. } if *x == connector_x)));
-        for expected in ["+24.00", "-36.00"] {
-            assert!(trading
+        assert!(
+            !trading
                 .iter()
-                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)));
+                .any(|primitive| matches!(primitive, Prim::VLine { x, .. } if *x == connector_x))
+        );
+        for expected in ["+24.00", "-36.00"] {
+            assert!(
+                trading.iter().any(
+                    |primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)
+                )
+            );
         }
     }
 
@@ -5032,9 +5049,11 @@ mod tests {
         assert!(trading.iter().any(
             |primitive| matches!(primitive, Prim::Text { text, .. } if text == "Close position")
         ));
-        assert!(trading
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "-12")));
+        assert!(
+            trading
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "-12"))
+        );
         let hovered_bounds = trading
             .iter()
             .find_map(|primitive| match primitive {
@@ -5115,9 +5134,11 @@ mod tests {
         assert_eq!(intent.kind, Some(OrderKind::Limit));
         chart.resolve_trading_intent(intent.sequence, true);
 
-        assert!(!(0..=(chart.pane_w * 2.0) as usize).any(|step| chart
-            .trading_hit_at(step as f64 / 2.0, line_y)
-            .is_some_and(|hit| hit.kind == TradingHitKind::StopLossButton)));
+        assert!(!(0..=(chart.pane_w * 2.0) as usize).any(|step| {
+            chart
+                .trading_hit_at(step as f64 / 2.0, line_y)
+                .is_some_and(|hit| hit.kind == TradingHitKind::StopLossButton)
+        }));
 
         // With both protections attached, the position line has nothing left to create.
         let mut target = order("position-target", OrderRole::TakeProfit, 103.0);
@@ -5148,9 +5169,11 @@ mod tests {
                 ..
             })
         ));
-        assert!(chart
-            .trading_hit_at_with_profile(cancel_x, cancel_y + 18.0, HitProfile::PRECISION)
-            .is_none());
+        assert!(
+            chart
+                .trading_hit_at_with_profile(cancel_x, cancel_y + 18.0, HitProfile::PRECISION)
+                .is_none()
+        );
         assert!(matches!(
             chart.trading_hit_at_with_profile(cancel_x, cancel_y + 18.0, HitProfile::TOUCH),
             Some(TradingHit {
@@ -5237,9 +5260,11 @@ mod tests {
         )));
 
         for expected in ["TP", "SL"] {
-            assert!(trading
-                .iter()
-                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)));
+            assert!(
+                trading.iter().any(
+                    |primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)
+                )
+            );
         }
         // The close icon is stroked geometry — never a font glyph the host's `font_family`
         // might not carry.
@@ -5250,9 +5275,11 @@ mod tests {
         // The close icon is two anti-aliased strokes in the marker's semantic color. Separate
         // triangles and cap discs rendered unevenly across executors.
         let line_color = chart.trading_position_color(PositionSide::Long);
-        assert!(!trading
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::Triangle { .. } | Prim::Circle { .. })));
+        assert!(
+            !trading
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Triangle { .. } | Prim::Circle { .. }))
+        );
         let frame = chart.build_frame();
         let icon_strokes = trading
             .iter()
@@ -5417,13 +5444,17 @@ mod tests {
         let y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
             .unwrap();
-        assert!(chart
-            .trading_hit_at(chart.trading_marker_start() + 10.0, y)
-            .is_some());
+        assert!(
+            chart
+                .trading_hit_at(chart.trading_marker_start() + 10.0, y)
+                .is_some()
+        );
         chart.set_trading_visible_account(Some(AccountId::new("account-b").unwrap()));
-        assert!(chart
-            .trading_hit_at(chart.trading_marker_start() + 10.0, y)
-            .is_none());
+        assert!(
+            chart
+                .trading_hit_at(chart.trading_marker_start() + 10.0, y)
+                .is_none()
+        );
         assert_eq!(chart.trading_snapshot().positions.len(), 2);
     }
 
@@ -5591,9 +5622,11 @@ mod tests {
                 ..
             }
         )));
-        assert!(chart
-            .host_event_hit_at(chart.time_scale.index_to_coordinate(2), 20.0)
-            .is_some());
+        assert!(
+            chart
+                .host_event_hit_at(chart.time_scale.index_to_coordinate(2), 20.0)
+                .is_some()
+        );
         assert!(!chart.export_state_json().unwrap().contains("release"));
 
         chart.set_replay_clock_micros(Some(20_000_000)).unwrap();
@@ -5622,9 +5655,11 @@ mod tests {
             0,
             "future release markers stay hidden behind the replay clock"
         );
-        assert!(chart
-            .host_event_hit_at(chart.time_scale.index_to_coordinate(2), 20.0)
-            .is_none());
+        assert!(
+            chart
+                .host_event_hit_at(chart.time_scale.index_to_coordinate(2), 20.0)
+                .is_none()
+        );
         assert_eq!(
             chart
                 .host_event_hit_at(chart.time_scale.index_to_coordinate(0), 20.0)

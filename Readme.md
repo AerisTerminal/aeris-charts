@@ -249,7 +249,7 @@ version policy.
 
 ## Development
 
-Prerequisites: stable Rust, the `wasm32-unknown-unknown` target, `wasm-pack`, and Node.js 18 or newer.
+Prerequisites: rustup (it installs the Rust toolchain pinned in `rust-toolchain.toml`, including the `wasm32-unknown-unknown` target), `wasm-pack`, and Node.js 18 or newer.
 
 ```sh
 cargo test --workspace

@@ -1824,10 +1824,12 @@ mod tests {
             let (expanded_upper, expanded_lower) = expand_band(&upper, &lower, line_type);
             assert_eq!(expanded_upper.len(), expanded_lower.len());
             assert!(expanded_upper.len() > upper.len());
-            assert!(expanded_upper
-                .iter()
-                .zip(&expanded_lower)
-                .all(|(upper, lower)| (upper.x - lower.x).abs() < f64::EPSILON));
+            assert!(
+                expanded_upper
+                    .iter()
+                    .zip(&expanded_lower)
+                    .all(|(upper, lower)| (upper.x - lower.x).abs() < f64::EPSILON)
+            );
             assert_eq!(expanded_upper.first().unwrap().x, 0.0);
             assert_eq!(expanded_upper.last().unwrap().x, 20.0);
         }
@@ -1986,7 +1988,7 @@ mod tests {
         let mut v = Vec::new();
         build_disc([10.0, 20.0], 4.0, BLUE, &mut v);
         assert_eq!(v.len(), 24 * 3); // 24 fan triangles
-                                     // every triangle's first vertex is the center
+        // every triangle's first vertex is the center
         for tri in v.chunks(3) {
             assert_eq!([tri[0].x, tri[0].y], [10.0, 20.0]);
         }

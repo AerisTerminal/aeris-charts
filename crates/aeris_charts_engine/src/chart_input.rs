@@ -885,12 +885,10 @@ impl ChartEngine {
                 index,
                 grab_offset_y,
             }) => {
-                if dragging {
-                    if let Some(pane_below) = self.panes.get(index + 1) {
-                        let delta = y - grab_offset_y - pane_below.top;
-                        self.drag_pane_separator(index, delta);
-                        self.input.layout_dirty = true;
-                    }
+                if dragging && let Some(pane_below) = self.panes.get(index + 1) {
+                    let delta = y - grab_offset_y - pane_below.top;
+                    self.drag_pane_separator(index, delta);
+                    self.input.layout_dirty = true;
                 }
                 // The separator is chrome: the crosshair hides during the resize drag.
                 self.clear_pointer_hover();
@@ -3397,7 +3395,10 @@ mod tests {
         let axis_x = chart.pane_w + 10.0;
         chart.input_context_menu(axis_x, 100.0);
         let events = chart.take_input_events();
-        let [ChartInputEvent::ContextMenu(pane), ChartInputEvent::ContextMenu(axis)] = events[..]
+        let [
+            ChartInputEvent::ContextMenu(pane),
+            ChartInputEvent::ContextMenu(axis),
+        ] = events[..]
         else {
             panic!("two context menus: {events:?}");
         };
@@ -3629,10 +3630,12 @@ mod tests {
 
         assert!(chart.set_drawing_tool(Some(DrawingKind::Callout), None, None));
         click(&mut chart, 300.0, 200.0);
-        assert!(!chart
-            .take_input_events()
-            .iter()
-            .any(|event| matches!(event, ChartInputEvent::DrawingCreated(_))));
+        assert!(
+            !chart
+                .take_input_events()
+                .iter()
+                .any(|event| matches!(event, ChartInputEvent::DrawingCreated(_)))
+        );
         click(&mut chart, 380.0, 170.0);
         let events = chart.take_input_events();
         let [ChartInputEvent::DrawingCreated(callout)] = events[..] else {

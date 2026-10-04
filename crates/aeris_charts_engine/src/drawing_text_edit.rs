@@ -7,8 +7,8 @@
 //! and mirror it through [`ChartEngine::set_drawing_text_edit`]; native hosts ask the engine to
 //! paint the caret in the canonical frame.
 
-use crate::drawings::{DrawingId, DrawingKind};
 use crate::ChartEngine;
+use crate::drawings::{DrawingId, DrawingKind};
 
 /// Largest label the drawing contract accepts, in UTF-8 bytes.
 const MAX_DRAWING_TEXT_BYTES: usize = 256;
@@ -186,11 +186,11 @@ impl ChartEngine {
 
     /// A host with a native text input surface paints its own caret over the shared label.
     pub fn set_drawing_text_edit_paint_caret(&mut self, paint_caret: bool) {
-        if let Some(session) = self.drawing_text_edit.as_mut() {
-            if session.paint_caret != paint_caret {
-                session.paint_caret = paint_caret;
-                self.invalidate_frame_drawings();
-            }
+        if let Some(session) = self.drawing_text_edit.as_mut()
+            && session.paint_caret != paint_caret
+        {
+            session.paint_caret = paint_caret;
+            self.invalidate_frame_drawings();
         }
     }
 
@@ -491,16 +491,18 @@ mod tests {
         let (mut chart, id) = chart_with(DrawingKind::TrendLine, "Parity");
         chart.build_frame();
         for align in ["left", "center", "right"] {
-            assert!(chart.drawing_apply_options(
-                id,
-                &serde_json::json!({
-                    "text_h_align": align,
-                    "text_size": 19,
-                    "text_weight": 700,
-                    "text_italic": true,
-                })
-                .to_string(),
-            ));
+            assert!(
+                chart.drawing_apply_options(
+                    id,
+                    &serde_json::json!({
+                        "text_h_align": align,
+                        "text_size": 19,
+                        "text_weight": 700,
+                        "text_italic": true,
+                    })
+                    .to_string(),
+                )
+            );
             assert!(chart.begin_drawing_text_edit(id, false));
             let geometry = chart.drawing_text_edit_layout().expect("live layout");
             let (x, y, angle) = chart.drawing_text_transform(id).expect("text transform");

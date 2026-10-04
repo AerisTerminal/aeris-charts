@@ -447,10 +447,10 @@ fn validate_indicator_style(style: &IndicatorOutputStyle) -> Result<(), &'static
         ("area top color", style.area_top_color.as_deref()),
         ("area bottom color", style.area_bottom_color.as_deref()),
     ] {
-        if let Some(color) = color {
-            if color.len() > MAX_COLOR_BYTES || Color::parse_css(color).is_none() {
-                return Err(field);
-            }
+        if let Some(color) = color
+            && (color.len() > MAX_COLOR_BYTES || Color::parse_css(color).is_none())
+        {
+            return Err(field);
         }
     }
     Ok(())
@@ -3760,12 +3760,16 @@ mod tests {
                 DrawingKind::ShortPosition,
             ]
         );
-        assert!(chart.drawings[..3]
-            .iter()
-            .all(|drawing| drawing.pane_index == 0));
-        assert!(chart.drawings[3..]
-            .iter()
-            .all(|drawing| drawing.pane_index == 1));
+        assert!(
+            chart.drawings[..3]
+                .iter()
+                .all(|drawing| drawing.pane_index == 0)
+        );
+        assert!(
+            chart.drawings[3..]
+                .iter()
+                .all(|drawing| drawing.pane_index == 1)
+        );
         assert_eq!(chart.panes[0].persistent_id(), Some(3));
         assert_eq!(chart.panes[1].persistent_id(), Some(9));
     }

@@ -18,15 +18,15 @@ jobs:
     name: Namespace guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: node packages/charts/scripts/namespace_guard.mjs
 
   rust:
     name: Rust (fmt, clippy, tests)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
@@ -56,8 +56,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.0
       - name: Install Linux GPUI dependencies
         if: runner.os == 'Linux'
         run: |
@@ -79,7 +79,7 @@ jobs:
           # Xvfb has no DRI3; use Mesa's software EGL path so presented pixels are capturable.
           XDG_RUNTIME_DIR="$RUNNER_TEMP/aeris-xdg" LIBGL_ALWAYS_SOFTWARE=1 VK_ICD_FILENAMES=/no-vulkan-icd \
             xvfb-run -a cargo run -p aeris_charts_render_gpui --features gpui-backend --example pixel_parity --locked
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure() && (runner.os == 'Windows' || runner.os == 'Linux')
         with:
           name: gpui-pixel-parity
@@ -90,14 +90,14 @@ jobs:
     name: TypeScript package (lint, typecheck, build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Install package deps
@@ -128,14 +128,14 @@ jobs:
     name: Browser runtime & parity (Playwright)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked
       - name: Install package deps
@@ -171,7 +171,7 @@ jobs:
         continue-on-error: true
         working-directory: examples/web_demo
         run: npx playwright test tests/retention.spec.mjs --project=chromium --grep @machine
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure() || steps.machine-evidence.outcome == 'failure' || steps.machine-retention-evidence.outcome == 'failure'
         with:
           name: playwright-report

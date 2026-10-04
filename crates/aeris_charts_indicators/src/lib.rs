@@ -1134,11 +1134,7 @@ pub fn mfi(
             }
         }
         *slot = Some(if negative == 0.0 {
-            if positive == 0.0 {
-                50.0
-            } else {
-                100.0
-            }
+            if positive == 0.0 { 50.0 } else { 100.0 }
         } else {
             100.0 - 100.0 / (1.0 + positive / negative)
         });
@@ -1256,22 +1252,24 @@ impl<T: Copy + Default> RecursiveHistory<T> {
 
     fn begin(&mut self, n: usize, from: usize) -> (usize, T) {
         let from = from.min(n);
-        if n == self.len && from + 1 == n {
-            if let Some(state) = self.before_tail {
-                if self
-                    .checkpoints
-                    .last()
-                    .is_some_and(|checkpoint| checkpoint.row >= from)
-                {
-                    Arc::make_mut(&mut self.checkpoints).retain(|checkpoint| checkpoint.row < from);
-                }
-                return (from, state);
+        if n == self.len
+            && from + 1 == n
+            && let Some(state) = self.before_tail
+        {
+            if self
+                .checkpoints
+                .last()
+                .is_some_and(|checkpoint| checkpoint.row >= from)
+            {
+                Arc::make_mut(&mut self.checkpoints).retain(|checkpoint| checkpoint.row < from);
             }
+            return (from, state);
         }
-        if n >= self.len && from == self.len {
-            if let Some(state) = self.tail {
-                return (from, state);
-            }
+        if n >= self.len
+            && from == self.len
+            && let Some(state) = self.tail
+        {
+            return (from, state);
         }
         let checkpoint = self
             .checkpoints
@@ -4762,9 +4760,11 @@ mod tests {
         let lows = closes.iter().map(|value| value - 1.0).collect::<Vec<_>>();
         let values = supertrend(&highs, &lows, &closes, 2, 3.0);
         assert!(values[1].is_none());
-        assert!(values[2..]
-            .iter()
-            .all(|value| value.is_some_and(f64::is_finite)));
+        assert!(
+            values[2..]
+                .iter()
+                .all(|value| value.is_some_and(f64::is_finite))
+        );
     }
 
     #[test]

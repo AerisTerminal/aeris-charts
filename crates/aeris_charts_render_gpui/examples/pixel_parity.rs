@@ -28,8 +28,8 @@ use std::sync::mpsc::{self, Receiver};
 use aeris_charts_render_gpui::fixtures::{self, Fixture};
 use aeris_charts_render_gpui::{AerisViewport, GpuiChartRenderer};
 use gpui::{
-    canvas, div, prelude::*, px, size, App, Bounds, Context, Entity, Render, Window, WindowBounds,
-    WindowOptions,
+    App, Bounds, Context, Entity, Render, Window, WindowBounds, WindowOptions, canvas, div,
+    prelude::*, px, size,
 };
 use gpui_platform::application;
 use sha2::{Digest, Sha256};

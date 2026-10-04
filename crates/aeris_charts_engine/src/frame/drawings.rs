@@ -14,13 +14,13 @@ use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign
 use std::fmt::Write;
 
 use super::{POSITION_ENTRY, PRIMARY};
-use crate::drawings::{
-    resolve_drawing_geometry, Drawing, DrawingBodyGeometry, DrawingGeometryOptions,
-    DrawingHandleMode, DrawingId, DrawingKind, DrawingPoint, DrawingTextHAlign, MeasureAxes,
-    MeasureGeometry, PositionGeometry, PositionZone, MEASURE_LABEL_GAP, TEXT_CHROME_PAD, TEXT_PAD,
-    TREND_TEXT_PLACEHOLDER,
-};
 use crate::ChartEngine;
+use crate::drawings::{
+    Drawing, DrawingBodyGeometry, DrawingGeometryOptions, DrawingHandleMode, DrawingId,
+    DrawingKind, DrawingPoint, DrawingTextHAlign, MEASURE_LABEL_GAP, MeasureAxes, MeasureGeometry,
+    PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD, TREND_TEXT_PLACEHOLDER,
+    resolve_drawing_geometry,
+};
 use aeris_charts_core::model::plot_list::PlotValueIndex;
 
 /// industry-standard drawing anchor handle: a theme-derived disc with the primary-token border
@@ -171,8 +171,10 @@ mod trend_label_tests {
                     let (from_x, from_y) = (x - start.0, y - start.1);
                     assert!((from_x * ux + from_y * uy - expected_distance).abs() < 1e-9);
                     assert!((from_x * uy - from_y * ux - expected_normal).abs() < 1e-9);
-                    assert!((-std::f64::consts::FRAC_PI_2..=std::f64::consts::FRAC_PI_2)
-                        .contains(&angle));
+                    assert!(
+                        (-std::f64::consts::FRAC_PI_2..=std::f64::consts::FRAC_PI_2)
+                            .contains(&angle)
+                    );
                 }
             }
         }
@@ -246,13 +248,13 @@ impl ChartEngine {
             }
             write!(label, "{:.1}%", value * 100.0).expect("formatting a String cannot fail");
         }
-        if drawing.level_show_prices {
-            if let Some(price) = price.filter(|price| price.is_finite()) {
-                if !label.is_empty() {
-                    label.push_str(" · ");
-                }
-                label.push_str(&self.price_formatter.format(price));
+        if drawing.level_show_prices
+            && let Some(price) = price.filter(|price| price.is_finite())
+        {
+            if !label.is_empty() {
+                label.push_str(" · ");
             }
+            label.push_str(&self.price_formatter.format(price));
         }
         (!label.is_empty()).then_some(label)
     }
@@ -434,92 +436,81 @@ impl ChartEngine {
         *preview_start = (out.len(), points.len());
         // Live brush stroke: the decimated points so far paint as the same smooth curve the
         // commit will store, so what the user sees while dragging is what they get.
-        if let Some(capture) = self.brush_capture() {
-            if capture.pane_index == pane_index && capture.points.len() >= 2 {
-                let px: Option<Vec<(f64, f64)>> = capture
-                    .points
-                    .iter()
-                    .map(|&point| self.drawing_to_px(pane_index, point))
-                    .collect();
-                if let Some(px) = px {
-                    let px: Vec<(f64, f64)> =
-                        px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
-                    self.build_drawing_prims(&capture.options, &px, pane_w_px, vpr, out, points);
-                }
+        if let Some(capture) = self.brush_capture()
+            && capture.pane_index == pane_index
+            && capture.points.len() >= 2
+        {
+            let px: Option<Vec<(f64, f64)>> = capture
+                .points
+                .iter()
+                .map(|&point| self.drawing_to_px(pane_index, point))
+                .collect();
+            if let Some(px) = px {
+                let px: Vec<(f64, f64)> = px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
+                self.build_drawing_prims(&capture.options, &px, pane_w_px, vpr, out, points);
             }
         }
         // Interactive creation: committed anchors plus the preview point render as a tentative
         // drawing, with handles on the committed anchors (the reference rectangle-drawing-tool's
         // PreviewRectangle — same geometry, shown while placing).
-        if let Some(pending) = self.pending_drawing() {
-            if pending.drawing.pane_index == pane_index {
-                let mut anchors = pending.drawing.points.clone();
-                let is_sequence = pending.drawing.kind.spec().placement.is_sequence();
-                if let Some(preview) = pending.preview {
-                    if is_sequence || anchors.len() < pending.drawing.kind.anchor_count() {
-                        anchors.push(preview);
+        if let Some(pending) = self.pending_drawing()
+            && pending.drawing.pane_index == pane_index
+        {
+            let mut anchors = pending.drawing.points.clone();
+            let is_sequence = pending.drawing.kind.spec().placement.is_sequence();
+            if let Some(preview) = pending.preview
+                && (is_sequence || anchors.len() < pending.drawing.kind.anchor_count())
+            {
+                anchors.push(preview);
+            }
+            let ready = if is_sequence {
+                anchors.len() >= pending.drawing.kind.anchor_count()
+            } else {
+                anchors.len() == pending.drawing.kind.anchor_count()
+            };
+            if ready {
+                let mut preview_drawing = pending.drawing.clone();
+                preview_drawing.points = anchors.clone();
+                let px = self.drawing_render_px(&preview_drawing);
+                if let Some(px) = px {
+                    let px: Vec<(f64, f64)> =
+                        px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
+                    // Semantic statistics (measure direction, labels) read the full
+                    // placed-plus-preview anchor set, exactly as the commit will store it.
+                    if preview_drawing.kind.spec().handles == DrawingHandleMode::RectangleBounds
+                        && let Some(fill) = preview_drawing.preview_fill_color.clone()
+                    {
+                        preview_drawing.fill_color = Some(fill);
+                    }
+                    self.build_drawing_prims(&preview_drawing, &px, pane_w_px, vpr, out, points);
+                    if pending.drawing.kind.spec().handles == DrawingHandleMode::RectangleBounds {
+                        // the public reference shows all eight anchors while the rectangle is being
+                        // drawn (committed corner + live preview corner), not only after
+                        // the commit.
+                        build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
+                    } else {
+                        let committed = pending.drawing.points.len();
+                        build_anchor_handles(&px[..committed], vpr, self.anchor_fill(), out);
                     }
                 }
-                let ready = if is_sequence {
-                    anchors.len() >= pending.drawing.kind.anchor_count()
-                } else {
-                    anchors.len() == pending.drawing.kind.anchor_count()
-                };
-                if ready {
-                    let mut preview_drawing = pending.drawing.clone();
-                    preview_drawing.points = anchors.clone();
-                    let px = self.drawing_render_px(&preview_drawing);
-                    if let Some(px) = px {
-                        let px: Vec<(f64, f64)> =
-                            px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
-                        // Semantic statistics (measure direction, labels) read the full
-                        // placed-plus-preview anchor set, exactly as the commit will store it.
-                        if preview_drawing.kind.spec().handles == DrawingHandleMode::RectangleBounds
-                        {
-                            if let Some(fill) = preview_drawing.preview_fill_color.clone() {
-                                preview_drawing.fill_color = Some(fill);
-                            }
-                        }
-                        self.build_drawing_prims(
-                            &preview_drawing,
-                            &px,
-                            pane_w_px,
-                            vpr,
-                            out,
-                            points,
-                        );
-                        if pending.drawing.kind.spec().handles == DrawingHandleMode::RectangleBounds
-                        {
-                            // the public reference shows all eight anchors while the rectangle is being
-                            // drawn (committed corner + live preview corner), not only after
-                            // the commit.
-                            build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
-                        } else {
-                            let committed = pending.drawing.points.len();
-                            build_anchor_handles(&px[..committed], vpr, self.anchor_fill(), out);
-                        }
-                    }
-                } else if anchors.len() == 1 {
-                    // A one-anchor kind awaiting its click, or a two-anchor kind before the
-                    // preview resolves: show the placed anchor as a handle alone.
-                    if let Some((x, y)) =
-                        self.drawing_to_px_for(pane_index, pending.drawing.price_scale, anchors[0])
-                    {
-                        build_anchor_handles(&[(x * hpr, y * vpr)], vpr, self.anchor_fill(), out);
-                    }
+            } else if anchors.len() == 1 {
+                // A one-anchor kind awaiting its click, or a two-anchor kind before the
+                // preview resolves: show the placed anchor as a handle alone.
+                if let Some((x, y)) =
+                    self.drawing_to_px_for(pane_index, pending.drawing.price_scale, anchors[0])
+                {
+                    build_anchor_handles(&[(x * hpr, y * vpr)], vpr, self.anchor_fill(), out);
                 }
             }
         }
         // The transient Shift-click measure paints the date-and-price range geometry without
         // handles; it is never a committed drawing.
-        if let Some(session) = self.measure_session() {
-            if session.drawing.pane_index == pane_index {
-                if let Some(px) = self.drawing_px(&session.drawing) {
-                    let px: Vec<(f64, f64)> =
-                        px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
-                    self.build_drawing_prims(&session.drawing, &px, pane_w_px, vpr, out, points);
-                }
-            }
+        if let Some(session) = self.measure_session()
+            && session.drawing.pane_index == pane_index
+            && let Some(px) = self.drawing_px(&session.drawing)
+        {
+            let px: Vec<(f64, f64)> = px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
+            self.build_drawing_prims(&session.drawing, &px, pane_w_px, vpr, out, points);
         }
     }
 
@@ -861,44 +852,45 @@ impl ChartEngine {
                     let ((x0, y0), (x1, y1)) =
                         self.drawing_fibonacci_level_segment(drawing, fib, level.value, vpr);
                     let level_color = Color::parse_css(&level.color).unwrap_or(color);
-                    if drawing.fill_enabled && level.fill_between {
-                        if let Some((prior_a, prior_b)) = previous {
-                            let fill = level
-                                .fill_color
-                                .as_deref()
-                                .and_then(Color::parse_css)
-                                .unwrap_or(Color::rgba(
-                                    level_color.r(),
-                                    level_color.g(),
-                                    level_color.b(),
-                                    35,
-                                ));
-                            if (y0 - y1).abs() <= f64::EPSILON {
-                                out.push(Prim::Rect {
-                                    rect: IRect {
-                                        x: x0.min(x1).round() as i32,
-                                        y: y0.min(prior_a.1).round() as i32,
-                                        w: (x1 - x0).abs().round().max(1.0) as i32,
-                                        h: (y0 - prior_a.1).abs().round().max(1.0) as i32,
-                                    },
-                                    color: fill,
-                                });
-                            } else {
-                                let upper_first = points.len() as u32;
-                                points.extend([
-                                    [prior_a.0 as f32, prior_a.1 as f32],
-                                    [prior_b.0 as f32, prior_b.1 as f32],
-                                ]);
-                                let lower_first = points.len() as u32;
-                                points.extend([[x0 as f32, y0 as f32], [x1 as f32, y1 as f32]]);
-                                out.push(Prim::BandFill {
-                                    upper_first,
-                                    lower_first,
-                                    point_count: 2,
-                                    line_type: LineType::Simple,
-                                    fill,
-                                });
-                            }
+                    if drawing.fill_enabled
+                        && level.fill_between
+                        && let Some((prior_a, prior_b)) = previous
+                    {
+                        let fill = level
+                            .fill_color
+                            .as_deref()
+                            .and_then(Color::parse_css)
+                            .unwrap_or(Color::rgba(
+                                level_color.r(),
+                                level_color.g(),
+                                level_color.b(),
+                                35,
+                            ));
+                        if (y0 - y1).abs() <= f64::EPSILON {
+                            out.push(Prim::Rect {
+                                rect: IRect {
+                                    x: x0.min(x1).round() as i32,
+                                    y: y0.min(prior_a.1).round() as i32,
+                                    w: (x1 - x0).abs().round().max(1.0) as i32,
+                                    h: (y0 - prior_a.1).abs().round().max(1.0) as i32,
+                                },
+                                color: fill,
+                            });
+                        } else {
+                            let upper_first = points.len() as u32;
+                            points.extend([
+                                [prior_a.0 as f32, prior_a.1 as f32],
+                                [prior_b.0 as f32, prior_b.1 as f32],
+                            ]);
+                            let lower_first = points.len() as u32;
+                            points.extend([[x0 as f32, y0 as f32], [x1 as f32, y1 as f32]]);
+                            out.push(Prim::BandFill {
+                                upper_first,
+                                lower_first,
+                                point_count: 2,
+                                line_type: LineType::Simple,
+                                fill,
+                            });
                         }
                     }
                     previous = Some(((x0, y0), (x1, y1)));
@@ -967,33 +959,33 @@ impl ChartEngine {
                         continue;
                     }
                     let x = time.x(drawing.level_value(level.value));
-                    if drawing.fill_enabled && level.fill_between {
-                        if let Some(prior_x) = previous_x {
-                            let left = x.min(prior_x).max(0.0);
-                            let right = x.max(prior_x).min(f64::from(pane_w_px));
-                            if right > left {
-                                let level_color = Color::parse_css(&level.color).unwrap_or(color);
-                                let fill = level
-                                    .fill_color
-                                    .as_deref()
-                                    .and_then(Color::parse_css)
-                                    .unwrap_or(Color::rgba(
-                                        level_color.r(),
-                                        level_color.g(),
-                                        level_color.b(),
-                                        35,
-                                    ));
-                                out.push(Prim::Rect {
-                                    rect: IRect {
-                                        x: left.round() as i32,
-                                        y: time.pane_top.round().max(0.0) as i32,
-                                        w: (right - left).round().max(1.0) as i32,
-                                        h: (time.pane_bottom - time.pane_top).round().max(1.0)
-                                            as i32,
-                                    },
-                                    color: fill,
-                                });
-                            }
+                    if drawing.fill_enabled
+                        && level.fill_between
+                        && let Some(prior_x) = previous_x
+                    {
+                        let left = x.min(prior_x).max(0.0);
+                        let right = x.max(prior_x).min(f64::from(pane_w_px));
+                        if right > left {
+                            let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                            let fill = level
+                                .fill_color
+                                .as_deref()
+                                .and_then(Color::parse_css)
+                                .unwrap_or(Color::rgba(
+                                    level_color.r(),
+                                    level_color.g(),
+                                    level_color.b(),
+                                    35,
+                                ));
+                            out.push(Prim::Rect {
+                                rect: IRect {
+                                    x: left.round() as i32,
+                                    y: time.pane_top.round().max(0.0) as i32,
+                                    w: (right - left).round().max(1.0) as i32,
+                                    h: (time.pane_bottom - time.pane_top).round().max(1.0) as i32,
+                                },
+                                color: fill,
+                            });
                         }
                     }
                     previous_x = Some(x);
@@ -1020,26 +1012,26 @@ impl ChartEngine {
                         style,
                         color: level_color,
                     });
-                    if level.label_visible {
-                        if let Some(text) = self.drawing_level_label(drawing, level.value, None) {
-                            out.push(Prim::Text {
-                                x: (x + if drawing.level_label_align == "left" {
-                                    4.0 * vpr
-                                } else if drawing.level_label_align == "right" {
-                                    -4.0 * vpr
-                                } else {
-                                    0.0
-                                }) as f32,
-                                y: (time.pane_top + 14.0 * vpr) as f32,
-                                text,
-                                color: level_color,
-                                size: (self.options.get().layout.font_size * vpr) as f32,
-                                family: self.options.get().layout.font_family.clone(),
-                                align: Self::drawing_level_align(drawing),
-                                weight: drawing.text_weight.unwrap_or(400),
-                                italic: drawing.text_italic,
-                            });
-                        }
+                    if level.label_visible
+                        && let Some(text) = self.drawing_level_label(drawing, level.value, None)
+                    {
+                        out.push(Prim::Text {
+                            x: (x + if drawing.level_label_align == "left" {
+                                4.0 * vpr
+                            } else if drawing.level_label_align == "right" {
+                                -4.0 * vpr
+                            } else {
+                                0.0
+                            }) as f32,
+                            y: (time.pane_top + 14.0 * vpr) as f32,
+                            text,
+                            color: level_color,
+                            size: (self.options.get().layout.font_size * vpr) as f32,
+                            family: self.options.get().layout.font_family.clone(),
+                            align: Self::drawing_level_align(drawing),
+                            weight: drawing.text_weight.unwrap_or(400),
+                            italic: drawing.text_italic,
+                        });
                     }
                 }
             }
@@ -1057,40 +1049,40 @@ impl ChartEngine {
                         continue;
                     }
                     let level_color = Color::parse_css(&level.color).unwrap_or(color);
-                    if drawing.fill_enabled && level.fill_between {
-                        if let Some(prior_value) = previous {
-                            let fill = level
-                                .fill_color
-                                .as_deref()
-                                .and_then(Color::parse_css)
-                                .unwrap_or(Color::rgba(
-                                    level_color.r(),
-                                    level_color.g(),
-                                    level_color.b(),
-                                    35,
-                                ));
-                            let upper_first = points.len() as u32;
-                            for step in 0..=segments {
-                                let (x, y) =
-                                    arcs.point(prior_value, step as f64 / f64::from(segments));
-                                points.push([x as f32, y as f32]);
-                            }
-                            let lower_first = points.len() as u32;
-                            for step in 0..=segments {
-                                let (x, y) = arcs.point(
-                                    drawing.level_value(level.value),
-                                    step as f64 / f64::from(segments),
-                                );
-                                points.push([x as f32, y as f32]);
-                            }
-                            out.push(Prim::BandFill {
-                                upper_first,
-                                lower_first,
-                                point_count: segments + 1,
-                                line_type: LineType::Simple,
-                                fill,
-                            });
+                    if drawing.fill_enabled
+                        && level.fill_between
+                        && let Some(prior_value) = previous
+                    {
+                        let fill = level
+                            .fill_color
+                            .as_deref()
+                            .and_then(Color::parse_css)
+                            .unwrap_or(Color::rgba(
+                                level_color.r(),
+                                level_color.g(),
+                                level_color.b(),
+                                35,
+                            ));
+                        let upper_first = points.len() as u32;
+                        for step in 0..=segments {
+                            let (x, y) = arcs.point(prior_value, step as f64 / f64::from(segments));
+                            points.push([x as f32, y as f32]);
                         }
+                        let lower_first = points.len() as u32;
+                        for step in 0..=segments {
+                            let (x, y) = arcs.point(
+                                drawing.level_value(level.value),
+                                step as f64 / f64::from(segments),
+                            );
+                            points.push([x as f32, y as f32]);
+                        }
+                        out.push(Prim::BandFill {
+                            upper_first,
+                            lower_first,
+                            point_count: segments + 1,
+                            line_type: LineType::Simple,
+                            fill,
+                        });
                     }
                     previous = Some(drawing.level_value(level.value));
                 }
@@ -1147,37 +1139,38 @@ impl ChartEngine {
                         continue;
                     }
                     let segment = fork.segment(drawing.level_value(level.value));
-                    if drawing.fill_enabled && level.fill_between {
-                        if let Some((prior_a, prior_b)) = previous {
-                            let level_color = Color::parse_css(&level.color).unwrap_or(color);
-                            let fill = level
-                                .fill_color
-                                .as_deref()
-                                .and_then(Color::parse_css)
-                                .unwrap_or(Color::rgba(
-                                    level_color.r(),
-                                    level_color.g(),
-                                    level_color.b(),
-                                    35,
-                                ));
-                            let upper_first = points.len() as u32;
-                            points.extend([
-                                [prior_a.0 as f32, prior_a.1 as f32],
-                                [prior_b.0 as f32, prior_b.1 as f32],
-                            ]);
-                            let lower_first = points.len() as u32;
-                            points.extend([
-                                [segment.0 .0 as f32, segment.0 .1 as f32],
-                                [segment.1 .0 as f32, segment.1 .1 as f32],
-                            ]);
-                            out.push(Prim::BandFill {
-                                upper_first,
-                                lower_first,
-                                point_count: 2,
-                                line_type: LineType::Simple,
-                                fill,
-                            });
-                        }
+                    if drawing.fill_enabled
+                        && level.fill_between
+                        && let Some((prior_a, prior_b)) = previous
+                    {
+                        let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                        let fill = level
+                            .fill_color
+                            .as_deref()
+                            .and_then(Color::parse_css)
+                            .unwrap_or(Color::rgba(
+                                level_color.r(),
+                                level_color.g(),
+                                level_color.b(),
+                                35,
+                            ));
+                        let upper_first = points.len() as u32;
+                        points.extend([
+                            [prior_a.0 as f32, prior_a.1 as f32],
+                            [prior_b.0 as f32, prior_b.1 as f32],
+                        ]);
+                        let lower_first = points.len() as u32;
+                        points.extend([
+                            [segment.0.0 as f32, segment.0.1 as f32],
+                            [segment.1.0 as f32, segment.1.1 as f32],
+                        ]);
+                        out.push(Prim::BandFill {
+                            upper_first,
+                            lower_first,
+                            point_count: 2,
+                            line_type: LineType::Simple,
+                            fill,
+                        });
                     }
                     previous = Some(segment);
                 }
@@ -1229,19 +1222,19 @@ impl ChartEngine {
                     .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 24));
                 let mut previous_x: Option<f64> = None;
                 cycles.for_each_visible_line(|index, x| {
-                    if drawing.fill_enabled && index % 2 != 0 {
-                        if let Some(prior_x) = previous_x {
-                            out.push(Prim::Rect {
-                                rect: IRect {
-                                    x: prior_x.min(x).round() as i32,
-                                    y: cycles.pane_top.round().max(0.0) as i32,
-                                    w: (x - prior_x).abs().round().max(1.0) as i32,
-                                    h: (cycles.pane_bottom - cycles.pane_top).round().max(1.0)
-                                        as i32,
-                                },
-                                color: fill,
-                            });
-                        }
+                    if drawing.fill_enabled
+                        && index % 2 != 0
+                        && let Some(prior_x) = previous_x
+                    {
+                        out.push(Prim::Rect {
+                            rect: IRect {
+                                x: prior_x.min(x).round() as i32,
+                                y: cycles.pane_top.round().max(0.0) as i32,
+                                w: (x - prior_x).abs().round().max(1.0) as i32,
+                                h: (cycles.pane_bottom - cycles.pane_top).round().max(1.0) as i32,
+                            },
+                            color: fill,
+                        });
                     }
                     previous_x = Some(x);
                 });
@@ -1389,71 +1382,71 @@ impl ChartEngine {
                     let mut prior_grid: Option<f64> = None;
                     for level in drawing.levels.iter().filter(|level| level.visible) {
                         let value = drawing.level_value(level.value);
-                        if level.fill_between {
-                            if let Some(previous) = prior_grid {
-                                let x0 = grid.start.0 + (grid.end.0 - grid.start.0) * previous;
-                                let x1 = grid.start.0 + (grid.end.0 - grid.start.0) * value;
-                                let y0 = grid.start.1 + (grid.end.1 - grid.start.1) * previous;
-                                let y1 = grid.start.1 + (grid.end.1 - grid.start.1) * value;
-                                let fill = Self::drawing_level_fill(level, color);
-                                out.push(Prim::Rect {
-                                    rect: IRect {
-                                        x: x0.min(x1).round() as i32,
-                                        y: y0.min(y1).round() as i32,
-                                        w: (x1 - x0).abs().round().max(1.0) as i32,
-                                        h: (y1 - y0).abs().round().max(1.0) as i32,
-                                    },
-                                    color: fill,
-                                });
-                            }
+                        if level.fill_between
+                            && let Some(previous) = prior_grid
+                        {
+                            let x0 = grid.start.0 + (grid.end.0 - grid.start.0) * previous;
+                            let x1 = grid.start.0 + (grid.end.0 - grid.start.0) * value;
+                            let y0 = grid.start.1 + (grid.end.1 - grid.start.1) * previous;
+                            let y1 = grid.start.1 + (grid.end.1 - grid.start.1) * value;
+                            let fill = Self::drawing_level_fill(level, color);
+                            out.push(Prim::Rect {
+                                rect: IRect {
+                                    x: x0.min(x1).round() as i32,
+                                    y: y0.min(y1).round() as i32,
+                                    w: (x1 - x0).abs().round().max(1.0) as i32,
+                                    h: (y1 - y0).abs().round().max(1.0) as i32,
+                                },
+                                color: fill,
+                            });
                         }
                         prior_grid = Some(value);
                     }
                     let mut prior_fan: Option<(f64, f64)> = None;
                     for level in drawing.gann_fans.iter().filter(|level| level.visible) {
                         let (origin, end) = grid.fan_segment(level.value, drawing.level_reverse);
-                        if level.fill_between {
-                            if let Some(previous) = prior_fan {
-                                out.push(Prim::Triangle {
-                                    a: [origin.0 as f32, origin.1 as f32],
-                                    b: [previous.0 as f32, previous.1 as f32],
-                                    c: [end.0 as f32, end.1 as f32],
-                                    color: Self::drawing_level_fill(level, color),
-                                });
-                            }
+                        if level.fill_between
+                            && let Some(previous) = prior_fan
+                        {
+                            out.push(Prim::Triangle {
+                                a: [origin.0 as f32, origin.1 as f32],
+                                b: [previous.0 as f32, previous.1 as f32],
+                                c: [end.0 as f32, end.1 as f32],
+                                color: Self::drawing_level_fill(level, color),
+                            });
                         }
                         prior_fan = Some(end);
                     }
                     let mut prior_arc: Option<f64> = None;
                     for level in drawing.gann_arcs.iter().filter(|level| level.visible) {
-                        if level.fill_between {
-                            if let Some(previous) = prior_arc {
-                                let upper_first = points.len() as u32;
-                                for step in 0..=32 {
-                                    let p = grid.arc_point(
-                                        previous,
-                                        f64::from(step) / 32.0,
-                                        drawing.level_reverse,
-                                    );
-                                    points.push([p.0 as f32, p.1 as f32]);
-                                }
-                                let lower_first = points.len() as u32;
-                                for step in 0..=32 {
-                                    let p = grid.arc_point(
-                                        level.value,
-                                        f64::from(step) / 32.0,
-                                        drawing.level_reverse,
-                                    );
-                                    points.push([p.0 as f32, p.1 as f32]);
-                                }
-                                out.push(Prim::BandFill {
-                                    upper_first,
-                                    lower_first,
-                                    point_count: 33,
-                                    line_type: LineType::Simple,
-                                    fill: Self::drawing_level_fill(level, color),
-                                });
+                        if level.fill_between
+                            && let Some(previous) = prior_arc
+                        {
+                            let upper_first = points.len() as u32;
+                            for step in 0..=32 {
+                                let p = grid.arc_point(
+                                    previous,
+                                    f64::from(step) / 32.0,
+                                    drawing.level_reverse,
+                                );
+                                points.push([p.0 as f32, p.1 as f32]);
                             }
+                            let lower_first = points.len() as u32;
+                            for step in 0..=32 {
+                                let p = grid.arc_point(
+                                    level.value,
+                                    f64::from(step) / 32.0,
+                                    drawing.level_reverse,
+                                );
+                                points.push([p.0 as f32, p.1 as f32]);
+                            }
+                            out.push(Prim::BandFill {
+                                upper_first,
+                                lower_first,
+                                point_count: 33,
+                                line_type: LineType::Simple,
+                                fill: Self::drawing_level_fill(level, color),
+                            });
                         }
                         prior_arc = Some(level.value);
                     }
@@ -1871,25 +1864,25 @@ impl ChartEngine {
                     line_type,
                     color,
                 });
-                if let (Some(first), Some(last)) = (line_points.first(), line_points.last()) {
-                    if line_points.len() >= 2 {
-                        push_drawing_cap(
-                            drawing.stroke_start,
-                            *first,
-                            line_points[1],
-                            drawing.width * vpr,
-                            color,
-                            out,
-                        );
-                        push_drawing_cap(
-                            drawing.stroke_end,
-                            *last,
-                            line_points[line_points.len() - 2],
-                            drawing.width * vpr,
-                            color,
-                            out,
-                        );
-                    }
+                if let (Some(first), Some(last)) = (line_points.first(), line_points.last())
+                    && line_points.len() >= 2
+                {
+                    push_drawing_cap(
+                        drawing.stroke_start,
+                        *first,
+                        line_points[1],
+                        drawing.width * vpr,
+                        color,
+                        out,
+                    );
+                    push_drawing_cap(
+                        drawing.stroke_end,
+                        *last,
+                        line_points[line_points.len() - 2],
+                        drawing.width * vpr,
+                        color,
+                        out,
+                    );
                 }
                 if let Some(terminal) = terminal {
                     let first_point = points.len() as u32;
@@ -1933,31 +1926,31 @@ impl ChartEngine {
                 }
             }
         }
-        if drawing.kind == DrawingKind::Forecast {
-            if let (Some(entry), Some(target)) = (drawing.points.first(), px.get(1)) {
-                let change = drawing.points[1].price - entry.price;
-                let percent = if entry.price.abs() > f64::EPSILON {
-                    change / entry.price.abs() * 100.0
-                } else {
-                    0.0
-                };
-                let result = match self.forecast_result(drawing) {
-                    Some(true) => "target reached",
-                    Some(false) => "expired",
-                    None => "pending",
-                };
-                out.push(Prim::Text {
-                    x: target.0 as f32,
-                    y: (target.1 - 10.0 * vpr) as f32,
-                    text: format!("{:+.1}% · {}", percent, result),
-                    color,
-                    size: (self.options.get().layout.font_size * vpr) as f32,
-                    family: self.options.get().layout.font_family.clone(),
-                    align: TextAlign::Center,
-                    weight: drawing.text_weight.unwrap_or(400),
-                    italic: drawing.text_italic,
-                });
-            }
+        if drawing.kind == DrawingKind::Forecast
+            && let (Some(entry), Some(target)) = (drawing.points.first(), px.get(1))
+        {
+            let change = drawing.points[1].price - entry.price;
+            let percent = if entry.price.abs() > f64::EPSILON {
+                change / entry.price.abs() * 100.0
+            } else {
+                0.0
+            };
+            let result = match self.forecast_result(drawing) {
+                Some(true) => "target reached",
+                Some(false) => "expired",
+                None => "pending",
+            };
+            out.push(Prim::Text {
+                x: target.0 as f32,
+                y: (target.1 - 10.0 * vpr) as f32,
+                text: format!("{:+.1}% · {}", percent, result),
+                color,
+                size: (self.options.get().layout.font_size * vpr) as f32,
+                family: self.options.get().layout.font_family.clone(),
+                align: TextAlign::Center,
+                weight: drawing.text_weight.unwrap_or(400),
+                italic: drawing.text_italic,
+            });
         }
     }
 

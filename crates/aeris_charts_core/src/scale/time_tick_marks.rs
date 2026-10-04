@@ -8,8 +8,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::time_zone::ChartTimeZone;
 use crate::TimePointIndex;
+use crate::time_zone::ChartTimeZone;
 
 /// Exact values from the reference's `TickMarkWeight` (`horz-scale-behavior-time/types.ts`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -456,9 +456,11 @@ mod tests {
 
         // tight space: only high-weight marks survive
         let tight = tm.build(4.0, 80.0).to_vec(); // max_indexes_per_mark = 20
-        assert!(tight
-            .iter()
-            .all(|m| m.weight == TickMarkWeight::Month as u8));
+        assert!(
+            tight
+                .iter()
+                .all(|m| m.weight == TickMarkWeight::Month as u8)
+        );
         // and they respect the 20-index spacing (every other month mark dropped)
         assert!(tight.windows(2).all(|w| w[1].index - w[0].index >= 20));
     }

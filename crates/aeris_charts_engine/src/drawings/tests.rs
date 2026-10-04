@@ -375,13 +375,15 @@ fn active_drawing_state_and_pixel_baselines_rebase_with_the_union() {
     assert_eq!(capture.points[1].logical, 2.25);
     assert_eq!(capture.options.points[0].logical, 1.5);
     assert!(capture.last_px.0.is_finite() && capture.last_px.1.is_finite());
-    assert!(chart
-        .drawing_drag
-        .as_ref()
-        .unwrap()
-        .start_px
-        .iter()
-        .all(|(x, y)| x.is_finite() && y.is_finite()));
+    assert!(
+        chart
+            .drawing_drag
+            .as_ref()
+            .unwrap()
+            .start_px
+            .iter()
+            .all(|(x, y)| x.is_finite() && y.is_finite())
+    );
 }
 
 #[test]
@@ -506,9 +508,11 @@ fn touch_profile_expands_anchor_hits_without_changing_precision_hits() {
     let point = chart.drawing(id).unwrap().points[0];
     let x = x_at(&chart, point.logical) + 15.0;
     let y = y_at(&chart, point.price) + 15.0;
-    assert!(chart
-        .hit_test_drawing_with_profile(x, y, HitProfile::PRECISION)
-        .is_none());
+    assert!(
+        chart
+            .hit_test_drawing_with_profile(x, y, HitProfile::PRECISION)
+            .is_none()
+    );
     let touch = chart
         .hit_test_drawing_with_profile(x, y, HitProfile::TOUCH)
         .expect("44px touch anchor target");
@@ -574,72 +578,82 @@ fn delete_undo_restores_prior_drawing_order() {
 fn add_drawing_validates_inputs() {
     let mut chart = settled_chart();
     // Wrong anchor counts are rejected.
-    assert!(chart
-        .add_drawing(
-            DrawingKind::TrendLine,
-            0,
-            vec![DrawingPoint {
-                logical: 1.0,
-                price: 11.0
-            }],
-            None,
-        )
-        .is_none());
-    assert!(chart
-        .add_drawing(
-            DrawingKind::HorizontalLine,
-            0,
-            vec![
-                DrawingPoint {
+    assert!(
+        chart
+            .add_drawing(
+                DrawingKind::TrendLine,
+                0,
+                vec![DrawingPoint {
                     logical: 1.0,
                     price: 11.0
-                },
-                DrawingPoint {
-                    logical: 2.0,
-                    price: 12.0
-                },
-            ],
-            None,
-        )
-        .is_none());
+                }],
+                None,
+            )
+            .is_none()
+    );
+    assert!(
+        chart
+            .add_drawing(
+                DrawingKind::HorizontalLine,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 1.0,
+                        price: 11.0
+                    },
+                    DrawingPoint {
+                        logical: 2.0,
+                        price: 12.0
+                    },
+                ],
+                None,
+            )
+            .is_none()
+    );
     // A stale pane index is rejected.
-    assert!(chart
-        .add_drawing(
-            DrawingKind::Text,
-            7,
-            vec![DrawingPoint {
-                logical: 1.0,
-                price: 11.0
-            }],
-            None,
-        )
-        .is_none());
-    // Non-finite anchors are rejected.
-    assert!(chart
-        .add_drawing(
-            DrawingKind::Text,
-            0,
-            vec![DrawingPoint {
-                logical: f64::NAN,
-                price: 11.0
-            }],
-            None,
-        )
-        .is_none());
-    assert!(chart
-        .add_drawing(
-            DrawingKind::Path,
-            0,
-            vec![
-                DrawingPoint {
+    assert!(
+        chart
+            .add_drawing(
+                DrawingKind::Text,
+                7,
+                vec![DrawingPoint {
                     logical: 1.0,
-                    price: 11.0,
-                };
-                MAX_DRAWING_POINTS + 1
-            ],
-            None,
-        )
-        .is_none());
+                    price: 11.0
+                }],
+                None,
+            )
+            .is_none()
+    );
+    // Non-finite anchors are rejected.
+    assert!(
+        chart
+            .add_drawing(
+                DrawingKind::Text,
+                0,
+                vec![DrawingPoint {
+                    logical: f64::NAN,
+                    price: 11.0
+                }],
+                None,
+            )
+            .is_none()
+    );
+    assert!(
+        chart
+            .add_drawing(
+                DrawingKind::Path,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 1.0,
+                        price: 11.0,
+                    };
+                    MAX_DRAWING_POINTS + 1
+                ],
+                None,
+            )
+            .is_none()
+    );
     assert_eq!(chart.drawings().len(), 0);
 }
 
@@ -680,11 +694,13 @@ fn b2_typed_schema_state_visibility_and_locked_contract() {
     let schema: serde_json::Value =
         serde_json::from_str(&chart.drawing_property_schema_json(id).unwrap()).unwrap();
     assert_eq!(schema["revision"], crate::DRAWING_CONTRACT_REVISION);
-    assert!(schema["properties"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|property| property["name"] == "locked"));
+    assert!(
+        schema["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|property| property["name"] == "locked")
+    );
     let kind_options: serde_json::Value =
         serde_json::from_str(&chart.drawing_kind_options_json(id).unwrap()).unwrap();
     assert_eq!(kind_options["kind"], "generic");
@@ -828,9 +844,11 @@ fn horizontal_line_and_ray_hits() {
         .unwrap()[0]
         .0;
     assert!(offscreen_px > chart.pane_w);
-    assert!(chart
-        .hit_test_drawing(chart.pane_w - 1.0, y_at(&chart, 13.0))
-        .is_none());
+    assert!(
+        chart
+            .hit_test_drawing(chart.pane_w - 1.0, y_at(&chart, 13.0))
+            .is_none()
+    );
 }
 
 #[test]
@@ -1076,9 +1094,11 @@ fn rectangle_body_hits_the_frame_band_not_the_middle() {
     let (bottom, top) = (y_at(&chart, 10.0), y_at(&chart, 12.0));
     // the public reference: the fill is not a drag surface while UNSELECTED — the middle misses (the
     // chart pans there); once selected (a border click), the middle moves the drawing.
-    assert!(chart
-        .hit_test_drawing((left + right) / 2.0, (top + bottom) / 2.0)
-        .is_none());
+    assert!(
+        chart
+            .hit_test_drawing((left + right) / 2.0, (top + bottom) / 2.0)
+            .is_none()
+    );
     chart.set_selected_drawing(Some(id));
     let mid = chart.hit_test_drawing((left + right) / 2.0, (top + bottom) / 2.0);
     assert_eq!(
@@ -1557,7 +1577,10 @@ fn position_horizontal_drag_follows_crosshair_steps_in_both_directions() {
                             DrawingDragPart::Anchor(2) if index == 1 => cursor as f64,
                             _ => before.logical,
                         };
-                        assert!((after.logical - expected).abs() < 1e-9, "{kind:?} {part:?}, spacing {spacing}, movement {fraction}: {after:?}, cursor {cursor}");
+                        assert!(
+                            (after.logical - expected).abs() < 1e-9,
+                            "{kind:?} {part:?}, spacing {spacing}, movement {fraction}: {after:?}, cursor {cursor}"
+                        );
                         assert!((after.price - before.price).abs() < 1e-9);
                     }
                 }
@@ -1597,9 +1620,11 @@ fn position_creation_and_drag_use_instrument_and_crosshair_ticks() {
         let initial = chart.drawing(id).unwrap().points.clone();
         assert_eq!(initial[0].logical, 4.0);
         assert!(initial.iter().all(|point| point.logical.fract() == 0.0));
-        assert!(initial
-            .iter()
-            .all(|point| (point.price / 0.25 - (point.price / 0.25).round()).abs() < 1e-9));
+        assert!(
+            initial
+                .iter()
+                .all(|point| (point.price / 0.25 - (point.price / 0.25).round()).abs() < 1e-9)
+        );
         let risk = (initial[0].price - initial[2].price).abs();
         let reward = (initial[1].price - initial[0].price).abs();
         assert!(risk > 0.0 && (reward / risk - 2.0).abs() < 1e-9);
@@ -1633,7 +1658,7 @@ fn body_drag_moves_all_points_by_the_same_delta() {
     let (mx, my) = ((x1 + x2) / 2.0, (y1 + y2) / 2.0);
     assert!(chart.drawing_drag_start_at(mx, my));
     assert_eq!(chart.selected_drawing(), Some(id)); // grabbing selects
-                                                    // Move two bars right and one price unit up (up = negative y).
+    // Move two bars right and one price unit up (up = negative y).
     let y_unit = y_at(&chart, 11.0) - y_at(&chart, 12.0);
     let dx = x_at(&chart, 4.0) - x_at(&chart, 2.0);
     chart.drawing_drag_to(mx + dx, my - y_unit, DrawingModifiers::default());
@@ -2003,10 +2028,12 @@ fn path_uses_straight_segments_and_every_vertex_is_editable() {
             .count(),
         2
     );
-    assert!(!frame.panes[0]
-        .main
-        .iter()
-        .any(|primitive| matches!(primitive, Prim::Triangle { .. })));
+    assert!(
+        !frame.panes[0]
+            .main
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::Triangle { .. }))
+    );
     let path_px = chart.drawing_px(chart.drawing(id).unwrap()).unwrap();
     let arrow = path_arrow_points(&path_px, chart.drawing(id).unwrap().width, 1.0).unwrap();
     let wing_midpoint = (
@@ -2068,13 +2095,15 @@ fn path_uses_straight_segments_and_every_vertex_is_editable() {
         DrawingModifiers::default(),
     );
     chart.drawing_drag_end();
-    assert!(chart
-        .drawing(id)
-        .unwrap()
-        .points
-        .iter()
-        .zip(updated)
-        .all(|(after, before)| after.logical != before.logical));
+    assert!(
+        chart
+            .drawing(id)
+            .unwrap()
+            .points
+            .iter()
+            .zip(updated)
+            .all(|(after, before)| after.logical != before.logical)
+    );
 }
 
 #[test]
@@ -2133,10 +2162,12 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
     assert_eq!(preview_axis.bands.len(), 2);
     assert!(preview_axis.bands.iter().any(|band| band.y < chart.pane_h
         && band.color == Color::rgba(primary.r(), primary.g(), primary.b(), 64)));
-    assert!(preview_axis
-        .bands
-        .iter()
-        .any(|band| band.y >= chart.pane_h && band.color == Color::rgba(200, 50, 100, 32)));
+    assert!(
+        preview_axis
+            .bands
+            .iter()
+            .any(|band| band.y >= chart.pane_h && band.color == Color::rgba(200, 50, 100, 32))
+    );
     assert_eq!(
         preview_axis
             .labels
@@ -2180,24 +2211,30 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
         |text, _bold| text.len() as f64 * 6.0,
     );
     assert_eq!(committed_axis.bands.len(), 2);
-    assert!(committed_axis
-        .bands
-        .iter()
-        .all(|band| band.color == Color::rgba(200, 50, 100, 96)));
+    assert!(
+        committed_axis
+            .bands
+            .iter()
+            .all(|band| band.color == Color::rgba(200, 50, 100, 96))
+    );
     let mut axis_primitives = Vec::new();
     chart.build_axis_primitives_into(&committed_axis, &mut axis_primitives);
     assert!(axis_primitives.iter().any(|primitive| {
         matches!(primitive, Prim::Rect { color, .. }
             if *color == Color::rgba(200, 50, 100, 96))
     }));
-    assert!(committed_axis
-        .labels
-        .iter()
-        .any(|label| label.text == "10.25"));
-    assert!(committed_axis
-        .labels
-        .iter()
-        .any(|label| label.text == "12.25"));
+    assert!(
+        committed_axis
+            .labels
+            .iter()
+            .any(|label| label.text == "10.25")
+    );
+    assert!(
+        committed_axis
+            .labels
+            .iter()
+            .any(|label| label.text == "12.25")
+    );
 
     let applied = chart
         .series_apply_price_format_json(0, r#"{"type":"price","precision":4,"min_move":0.0001}"#);
@@ -2207,14 +2244,18 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
         |text, _bold| text.len() as f64 * 7.0,
         |text, _bold| text.len() as f64 * 6.0,
     );
-    assert!(reformatted_axis
-        .labels
-        .iter()
-        .any(|label| label.text == "10.2500"));
-    assert!(reformatted_axis
-        .labels
-        .iter()
-        .any(|label| label.text == "12.2500"));
+    assert!(
+        reformatted_axis
+            .labels
+            .iter()
+            .any(|label| label.text == "10.2500")
+    );
+    assert!(
+        reformatted_axis
+            .labels
+            .iter()
+            .any(|label| label.text == "12.2500")
+    );
     assert_eq!(
         committed_axis
             .labels
@@ -2292,17 +2333,21 @@ fn selected_rectangle_owns_live_price_scale_territory_by_default() {
             .count()
             >= 2
     );
-    assert!(selected
-        .labels
-        .iter()
-        .filter(|label| {
-            label.background.is_some() && matches!(label.text.as_str(), "10.25" | "12.25")
-        })
-        .all(|label| label.background.unwrap().4 == primary));
-    assert!(!selected
-        .labels
-        .iter()
-        .any(|label| { label.background.is_some() && label.text.contains('/') }));
+    assert!(
+        selected
+            .labels
+            .iter()
+            .filter(|label| {
+                label.background.is_some() && matches!(label.text.as_str(), "10.25" | "12.25")
+            })
+            .all(|label| label.background.unwrap().4 == primary)
+    );
+    assert!(
+        !selected
+            .labels
+            .iter()
+            .any(|label| { label.background.is_some() && label.text.contains('/') })
+    );
     let original_price_band = selected
         .bands
         .iter()
@@ -3062,17 +3107,19 @@ fn add_brush(chart: &mut ChartEngine) -> DrawingId {
 #[test]
 fn brush_validates_a_minimum_of_two_points() {
     let mut chart = settled_chart();
-    assert!(chart
-        .add_drawing(
-            DrawingKind::Brush,
-            0,
-            vec![DrawingPoint {
-                logical: 1.0,
-                price: 11.0
-            }],
-            None,
-        )
-        .is_none());
+    assert!(
+        chart
+            .add_drawing(
+                DrawingKind::Brush,
+                0,
+                vec![DrawingPoint {
+                    logical: 1.0,
+                    price: 11.0
+                }],
+                None,
+            )
+            .is_none()
+    );
     assert!(add_brush(&mut chart) > 0);
     assert_eq!(chart.drawings().len(), 1);
 }
@@ -3090,9 +3137,11 @@ fn brush_body_hit_follows_the_stroke_and_misses_off_path() {
         assert_eq!(hit.part, DrawingDragPart::Body);
     }
     // Just off a vertex along the stroke still hits; a clear miss off the path does not.
-    assert!(chart
-        .hit_test_drawing(x_at(&chart, 2.0) + 2.0, y_at(&chart, 10.0))
-        .is_some());
+    assert!(
+        chart
+            .hit_test_drawing(x_at(&chart, 2.0) + 2.0, y_at(&chart, 10.0))
+            .is_some()
+    );
     // The straight CHORD midpoint between (2,10) and (4,12) is a MISS beyond tolerance: the
     // smooth curve bends away from the jagged chord — the geometric proof the stroke is drawn
     // (and hit-tested) as a curve, not as jagged segments.
@@ -3102,9 +3151,11 @@ fn brush_body_hit_follows_the_stroke_and_misses_off_path() {
             .is_none(),
         "the smooth curve deviates from the chord midpoint"
     );
-    assert!(chart
-        .hit_test_drawing(x_at(&chart, 3.0), y_at(&chart, 8.0))
-        .is_none());
+    assert!(
+        chart
+            .hit_test_drawing(x_at(&chart, 3.0), y_at(&chart, 8.0))
+            .is_none()
+    );
 }
 
 #[test]
@@ -3489,9 +3540,11 @@ fn text_tool_container_draws_a_crisp_box_behind_the_run() {
     // Clearing both removes the box (candle rects are unaffected, of course).
     assert!(chart.drawing_apply_options(id, r##"{"box_color":"","box_border_color":""}"##));
     let (_, boxes) = text_prims(&mut chart);
-    assert!(boxes
-        .iter()
-        .all(|(fill, _)| *fill != Color::rgba(0xff, 0, 0, 0x80)));
+    assert!(
+        boxes
+            .iter()
+            .all(|(fill, _)| *fill != Color::rgba(0xff, 0, 0, 0x80))
+    );
 }
 
 #[test]
@@ -3974,17 +4027,19 @@ fn selection_crosshair_and_one_drawing_drag_keep_unrelated_geometry_retained() {
 fn drawing_ids_never_wrap_into_a_live_or_sentinel_identity() {
     let mut chart = settled_chart();
     chart.next_drawing_id = DrawingId::MAX;
-    assert!(chart
-        .add_drawing(
-            DrawingKind::VerticalLine,
-            0,
-            vec![DrawingPoint {
-                logical: 1.0,
-                price: 10.0,
-            }],
-            None,
-        )
-        .is_none());
+    assert!(
+        chart
+            .add_drawing(
+                DrawingKind::VerticalLine,
+                0,
+                vec![DrawingPoint {
+                    logical: 1.0,
+                    price: 10.0,
+                }],
+                None,
+            )
+            .is_none()
+    );
     assert!(chart.drawings().is_empty());
     assert_eq!(chart.next_drawing_id, DrawingId::MAX);
 }
@@ -4223,15 +4278,18 @@ fn line_catalog_has_stable_wire_ids_defaults_and_shared_frame_geometry() {
     }
     let frame = chart.build_frame();
     let main = &frame.panes[0].main;
-    assert!(main
-        .iter()
-        .any(|prim| matches!(prim, Prim::HLine { color, .. } if *color == primary())));
-    assert!(main
-        .iter()
-        .any(|prim| matches!(prim, Prim::VLine { color, .. } if *color == primary())));
-    assert!(main
-        .iter()
-        .any(|prim| matches!(prim, Prim::Text { text, .. } if text.ends_with('°'))));
+    assert!(
+        main.iter()
+            .any(|prim| matches!(prim, Prim::HLine { color, .. } if *color == primary()))
+    );
+    assert!(
+        main.iter()
+            .any(|prim| matches!(prim, Prim::VLine { color, .. } if *color == primary()))
+    );
+    assert!(
+        main.iter()
+            .any(|prim| matches!(prim, Prim::Text { text, .. } if text.ends_with('°')))
+    );
 }
 
 #[test]
@@ -4441,13 +4499,15 @@ fn geometric_shape_catalog_emits_frame_primitives_and_property_defaults() {
         }
         let schema: serde_json::Value =
             serde_json::from_str(&chart.drawing_property_schema_json(id).unwrap()).unwrap();
-        assert!(schema["properties"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|property| {
-                property["name"] == "fill_enabled" && property["default"] == filled
-            }));
+        assert!(
+            schema["properties"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|property| {
+                    property["name"] == "fill_enabled" && property["default"] == filled
+                })
+        );
         assert!(chart.remove_drawing(id));
     }
 }
@@ -4634,17 +4694,21 @@ fn icon_stamp_uses_named_rgba_asset_and_survives_state_round_trip() {
         logical: 4.0,
         price: 11.0,
     }];
-    assert!(chart
-        .add_drawing(
-            DrawingKind::IconStamp,
-            0,
-            anchor.clone(),
-            Some(r#"{"icon_size":200}"#)
-        )
-        .is_none());
-    assert!(chart
-        .add_drawing(DrawingKind::IconStamp, 0, anchor.clone(), Some("{"))
-        .is_none());
+    assert!(
+        chart
+            .add_drawing(
+                DrawingKind::IconStamp,
+                0,
+                anchor.clone(),
+                Some(r#"{"icon_size":200}"#)
+            )
+            .is_none()
+    );
+    assert!(
+        chart
+            .add_drawing(DrawingKind::IconStamp, 0, anchor.clone(), Some("{"))
+            .is_none()
+    );
     let pixels: Arc<[u8]> = vec![255_u8; 4 * 2 * 2].into();
     assert!(!chart.set_drawing_icon("bad", 3, 2, pixels.clone()));
     assert!(chart.set_drawing_icon("mark", 2, 2, pixels.clone()));
@@ -4669,15 +4733,19 @@ fn icon_stamp_uses_named_rgba_asset_and_survives_state_round_trip() {
         restored.drawing(id).unwrap().icon_name.as_deref(),
         Some("mark")
     );
-    assert!(restored.build_frame().panes[0]
-        .main
-        .iter()
-        .any(|prim| matches!(prim, Prim::Rect { .. })));
+    assert!(
+        restored.build_frame().panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::Rect { .. }))
+    );
     assert!(chart.remove_drawing_icon("mark"));
-    assert!(!chart.build_frame().panes[0]
-        .main
-        .iter()
-        .any(|prim| matches!(prim, Prim::Image { .. })));
+    assert!(
+        !chart.build_frame().panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::Image { .. }))
+    );
 }
 
 #[test]
@@ -4788,10 +4856,12 @@ fn gann_square_fan_and_arc_styles_control_frame_hit_and_persistence() {
     assert!(restored.drawing(id).unwrap().gann_fans.is_empty());
     assert_eq!(restored.drawing(id).unwrap().gann_arcs[0].value, 0.5);
     assert!(chart.drawing_apply_options(id, r##"{"fill_enabled":true,"gann_arcs":[{"value":0.25,"color":"","visible":true,"style":"solid","fill_between":false,"label_visible":false},{"value":0.5,"color":"","visible":true,"style":"solid","fill_between":true,"fill_color":"#44556655","label_visible":false}]}"##));
-    assert!(chart.build_frame().panes[0]
-        .main
-        .iter()
-        .any(|prim| matches!(prim, Prim::BandFill { .. })));
+    assert!(
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::BandFill { .. }))
+    );
 }
 
 #[test]
@@ -4867,10 +4937,12 @@ fn bars_pattern_freezes_source_and_moves_ghost_copy() {
     assert_eq!(projected[3].logical, 6.0);
     assert_eq!(projected[3].price, 20.0);
     let frame = chart.build_frame();
-    assert!(frame.panes[0]
-        .main
-        .iter()
-        .any(|prim| matches!(prim, Prim::VLine { .. })));
+    assert!(
+        frame.panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::VLine { .. }))
+    );
 
     let mut moved = chart.drawing(id).unwrap().points.clone();
     moved[2] = DrawingPoint {
@@ -4881,10 +4953,12 @@ fn bars_pattern_freezes_source_and_moves_ghost_copy() {
     assert_eq!(chart.drawing(id).unwrap().bars_pattern, frozen);
     assert_eq!(frozen[0].project(chart.drawing(id).unwrap())[3].price, 30.0);
     assert!(chart.drawing_apply_options(id, r#"{"bars_pattern_mirror_x":true,"bars_pattern_mirror_y":true,"bars_pattern_mode":"line_close"}"#));
-    assert!(chart.build_frame().panes[0]
-        .main
-        .iter()
-        .any(|prim| matches!(prim, Prim::Polyline { .. })));
+    assert!(
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::Polyline { .. }))
+    );
     let state = chart.export_state_json().unwrap();
     let mut restored = settled_chart();
     restored.import_state_json(&state).unwrap();
@@ -4945,10 +5019,12 @@ fn regression_trend_tracks_source_closes_and_rebuilds_on_data_change() {
     assert!((derived[1].price - 8.0).abs() < 1e-10);
     assert_eq!(derived[0].price, derived[2].price);
     let frame = chart.build_frame();
-    assert!(frame.panes[0]
-        .main
-        .iter()
-        .any(|prim| matches!(prim, Prim::BandFill { point_count: 2, .. })));
+    assert!(
+        frame.panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::BandFill { point_count: 2, .. }))
+    );
     let center_start_y = |frame: &crate::ChartFrame| {
         let first = frame.panes[0]
             .main
@@ -4997,10 +5073,12 @@ fn regression_trend_tracks_source_closes_and_rebuilds_on_data_change() {
         .unwrap();
     let frame = chart.build_frame();
     assert_eq!(chart.frame_build_stats().drawing_rebuilds, 1);
-    assert!(frame.panes[0]
-        .main
-        .iter()
-        .any(|prim| matches!(prim, Prim::BandFill { point_count: 2, .. })));
+    assert!(
+        frame.panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::BandFill { point_count: 2, .. }))
+    );
     let after = chart.regression_points(chart.drawing(id).unwrap()).unwrap();
     assert_ne!(after[0].price, derived[0].price);
     assert!(after[2].price > after[0].price);
@@ -5045,13 +5123,15 @@ fn fibonacci_retracement_levels_render_hit_edit_and_persist() {
     assert_eq!(chart.drawing(id).unwrap().levels.len(), 7);
     let schema: serde_json::Value =
         serde_json::from_str(&chart.drawing_property_schema_json(id).unwrap()).unwrap();
-    assert!(schema["properties"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|property| {
-            property["name"] == "levels" && property["default"].as_array().unwrap().len() == 7
-        }));
+    assert!(
+        schema["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|property| {
+                property["name"] == "levels" && property["default"].as_array().unwrap().len() == 7
+            })
+    );
     let frame = chart.build_frame();
     assert_eq!(
         frame.panes[0]
@@ -5159,17 +5239,22 @@ fn fibonacci_time_levels_project_render_hit_and_persist() {
         assert_eq!(chart.drawing(id).unwrap().levels.len(), 9);
         let schema: serde_json::Value =
             serde_json::from_str(&chart.drawing_property_schema_json(id).unwrap()).unwrap();
-        assert!(schema["properties"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|property| {
-                property["name"] == "levels" && property["default"].as_array().unwrap().len() == 9
-            }));
+        assert!(
+            schema["properties"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|property| {
+                    property["name"] == "levels"
+                        && property["default"].as_array().unwrap().len() == 9
+                })
+        );
         let mut levels = chart.drawing(id).unwrap().levels.clone();
         levels[4].fill_between = true;
         levels[4].fill_color = Some("#11223344".to_string());
-        assert!(chart.drawing_apply_options(id, &serde_json::json!({"levels": levels}).to_string()));
+        assert!(
+            chart.drawing_apply_options(id, &serde_json::json!({"levels": levels}).to_string())
+        );
         let frame = chart.build_frame();
         assert!(frame.panes[0].main.iter().any(|prim| {
             matches!(prim, Prim::VLine { x, color, .. } if *x == x_at(&chart, target).round() as i32 && *color == primary())
@@ -5383,15 +5468,19 @@ fn pitchfork_family_renders_editable_levels_and_persists() {
         assert_eq!(chart.drawing(id).unwrap().levels.len(), level_count);
         let mut levels = chart.drawing(id).unwrap().levels.clone();
         levels[1].fill_between = true;
-        assert!(chart.drawing_apply_options(id, &serde_json::json!({"levels": levels}).to_string()));
+        assert!(
+            chart.drawing_apply_options(id, &serde_json::json!({"levels": levels}).to_string())
+        );
         let frame = chart.build_frame();
         assert!(frame.panes[0].main.iter().any(|prim| {
             matches!(prim, Prim::Polyline { point_count: 2, color, .. } if *color == primary())
         }));
-        assert!(frame.panes[0]
-            .main
-            .iter()
-            .any(|prim| { matches!(prim, Prim::BandFill { point_count: 2, .. }) }));
+        assert!(
+            frame.panes[0]
+                .main
+                .iter()
+                .any(|prim| { matches!(prim, Prim::BandFill { point_count: 2, .. }) })
+        );
         if kind == DrawingKind::Pitchfan {
             assert_eq!(
                 chart
@@ -5448,20 +5537,24 @@ fn pattern_and_elliott_paths_render_vertex_labels_hit_and_persist() {
         assert!(frame.panes[0].main.iter().any(|prim| {
             matches!(prim, Prim::Polyline { point_count, .. } if *point_count == count as u32)
         }));
-        assert!(frame.panes[0]
-            .main
-            .iter()
-            .any(|prim| { matches!(prim, Prim::Text { text, .. } if text == &expected_label) }));
+        assert!(
+            frame.panes[0]
+                .main
+                .iter()
+                .any(|prim| { matches!(prim, Prim::Text { text, .. } if text == &expected_label) })
+        );
         if kind == DrawingKind::ElliottImpulse {
             let schema: serde_json::Value =
                 serde_json::from_str(&chart.drawing_property_schema_json(id).unwrap()).unwrap();
-            assert!(schema["properties"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|property| {
-                    property["name"] == "wave_degree" && property["default"] == "minor"
-                }));
+            assert!(
+                schema["properties"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|property| {
+                        property["name"] == "wave_degree" && property["default"] == "minor"
+                    })
+            );
             assert!(!chart.drawing_apply_options(id, r#"{"wave_degree":"invalid"}"#));
             assert_eq!(chart.drawing(id).unwrap().wave_degree, "minor");
             assert!(chart.drawing_apply_options(id, r#"{"wave_degree":"primary"}"#));
@@ -5527,10 +5620,12 @@ fn cycle_tools_render_visible_repetitions_hit_and_persist() {
                 );
             }
             DrawingKind::CyclicLines | DrawingKind::TimeCycles => {
-                assert!(frame.panes[0]
-                    .main
-                    .iter()
-                    .any(|prim| matches!(prim, Prim::VLine { .. })));
+                assert!(
+                    frame.panes[0]
+                        .main
+                        .iter()
+                        .any(|prim| matches!(prim, Prim::VLine { .. }))
+                );
                 assert_eq!(
                     chart
                         .hit_test_drawing(x_at(&chart, 6.0), y_at(&chart, 12.0))
@@ -5538,10 +5633,12 @@ fn cycle_tools_render_visible_repetitions_hit_and_persist() {
                     Some(id)
                 );
                 if kind == DrawingKind::TimeCycles {
-                    assert!(frame.panes[0]
-                        .main
-                        .iter()
-                        .any(|prim| matches!(prim, Prim::Rect { .. })));
+                    assert!(
+                        frame.panes[0]
+                            .main
+                            .iter()
+                            .any(|prim| matches!(prim, Prim::Rect { .. }))
+                    );
                 }
             }
             _ => unreachable!(),
@@ -5578,10 +5675,11 @@ fn arrow_flags_and_signposts_render_hit_and_persist() {
         }
         let id = chart.add_drawing(kind, 0, anchors, None).unwrap();
         let frame = chart.build_frame();
-        assert!(frame.panes[0]
-            .main
-            .iter()
-            .any(|prim| { matches!(prim, Prim::Triangle { color, .. } if *color == primary()) }));
+        assert!(
+            frame.panes[0].main.iter().any(|prim| {
+                matches!(prim, Prim::Triangle { color, .. } if *color == primary())
+            })
+        );
         assert_eq!(
             chart
                 .hit_test_drawing(x_at(&chart, 2.0), y_at(&chart, 10.0))
@@ -5625,16 +5723,20 @@ fn text_annotations_render_editable_boxes_and_guides_from_shared_frame() {
             matches!(prim, Prim::Text { text, .. } | Prim::RotatedText { text, .. } if text == "Read this")
         }));
         if kind != DrawingKind::PriceNote {
-            assert!(frame.panes[0]
-                .main
-                .iter()
-                .any(|prim| matches!(prim, Prim::Rect { .. })));
+            assert!(
+                frame.panes[0]
+                    .main
+                    .iter()
+                    .any(|prim| matches!(prim, Prim::Rect { .. }))
+            );
         }
         if kind == DrawingKind::PriceNote {
-            assert!(frame.panes[0]
-                .main
-                .iter()
-                .any(|prim| matches!(prim, Prim::HLine { .. })));
+            assert!(
+                frame.panes[0]
+                    .main
+                    .iter()
+                    .any(|prim| matches!(prim, Prim::HLine { .. }))
+            );
         }
         let saved = chart.export_state_json().unwrap();
         let mut restored = settled_chart();
@@ -5660,23 +5762,29 @@ fn price_label_paints_and_hits_only_its_pane_edge_badge() {
         .unwrap();
     assert_eq!(DrawingKind::from_u8(75), Some(DrawingKind::PriceLabel));
     let frame = chart.build_frame();
-    assert!(frame.panes[0]
-        .main
-        .iter()
-        .any(|prim| matches!(prim, Prim::Text { text, .. } if text == "Entry")));
-    assert!(!frame.panes[0]
-        .main
-        .iter()
-        .any(|prim| matches!(prim, Prim::HLine { color, .. } if *color == primary())));
+    assert!(
+        frame.panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::Text { text, .. } if text == "Entry"))
+    );
+    assert!(
+        !frame.panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::HLine { color, .. } if *color == primary()))
+    );
     assert_eq!(
         chart
             .hit_test_drawing(chart.pane_w - 5.0, y_at(&chart, 11.0))
             .map(|hit| hit.id),
         Some(id)
     );
-    assert!(chart
-        .hit_test_drawing(chart.pane_w / 2.0, y_at(&chart, 11.0))
-        .is_none());
+    assert!(
+        chart
+            .hit_test_drawing(chart.pane_w / 2.0, y_at(&chart, 11.0))
+            .is_none()
+    );
     let saved = chart.export_state_json().unwrap();
     let mut restored = settled_chart();
     restored.import_state_json(&saved).unwrap();
@@ -5753,13 +5861,15 @@ fn anchored_text_stays_at_screen_position_and_drag_history_restores_it() {
     assert!(!chart.drawing_apply_options(id, r#"{"screen_x":1.1}"#));
     let schema: serde_json::Value =
         serde_json::from_str(&chart.drawing_property_schema_json(id).unwrap()).unwrap();
-    assert!(schema["properties"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|property| {
-            property["name"] == "screen_x" && property["min"] == 0.0 && property["max"] == 1.0
-        }));
+    assert!(
+        schema["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|property| {
+                property["name"] == "screen_x" && property["min"] == 0.0 && property["max"] == 1.0
+            })
+    );
     assert!(chart.drawing_apply_options(id, r#"{"screen_x":0.25,"screen_y":0.75}"#));
     let position = chart.drawing_px(chart.drawing(id).unwrap()).unwrap()[0];
     assert!((position.0 - chart.pane_w * 0.25).abs() < 1e-6);
@@ -5904,9 +6014,11 @@ fn measure_body_hits_inside_its_area_and_selection_exposes_both_anchors() {
     let inside = (x_at(&chart, 4.0) + spacing * 0.5, y_at(&chart, 11.5));
     let hit = chart.hit_test_drawing(inside.0, inside.1).unwrap();
     assert_eq!((hit.id, hit.part), (id, DrawingDragPart::Body));
-    assert!(chart
-        .hit_test_drawing(x_at(&chart, 8.0) + spacing * 0.5, y_at(&chart, 11.5))
-        .is_none());
+    assert!(
+        chart
+            .hit_test_drawing(x_at(&chart, 8.0) + spacing * 0.5, y_at(&chart, 11.5))
+            .is_none()
+    );
     chart.set_selected_drawing(Some(id));
     let end = chart
         .hit_test_drawing(x_at(&chart, 7.0), y_at(&chart, 12.5))
@@ -6007,10 +6119,12 @@ fn shift_measure_drag_freezes_on_release_and_the_next_press_dismisses_it() {
     // Transient: never a drawing, history entry, or persisted object.
     assert!(chart.drawings().is_empty());
     assert!(!chart.can_undo_drawing());
-    assert!(!chart
-        .export_state_json()
-        .unwrap()
-        .contains("date_price_range"));
+    assert!(
+        !chart
+            .export_state_json()
+            .unwrap()
+            .contains("date_price_range")
+    );
 
     assert!(chart.measure_pointer_down(end.0, end.1, false, none));
     assert!(!chart.measure_active());

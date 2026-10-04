@@ -10,11 +10,11 @@
 //! The shared point pool holds **device-space** points (the builders already baked the DPR in), so
 //! tessellation runs with identity pixel ratios — byte-identical to the old direct-to-tri path.
 
-use aeris_charts_render::draw_list::{positive_finite_extent, LineStyle, LineType, Prim};
+use aeris_charts_render::draw_list::{LineStyle, LineType, Prim, positive_finite_extent};
 use aeris_charts_render::line::{
-    band_segment_triangles, build_area_fill, build_disc, circle_segments, dash_split, expand_band,
-    expand_line, normalized_round_rect_radii, round_rect_border, round_rect_polygon, stroke_aa,
-    AreaMesh, LineParams, LinePoint, LineVertex,
+    AreaMesh, LineParams, LinePoint, LineVertex, band_segment_triangles, build_area_fill,
+    build_disc, circle_segments, dash_split, expand_band, expand_line, normalized_round_rect_radii,
+    round_rect_border, round_rect_polygon, stroke_aa,
 };
 
 use crate::tri_pipeline::TriVertex;
@@ -554,9 +554,11 @@ mod tests {
         let mut vertices = Vec::new();
         geom_prim_to_tris(&prim, &[], &mut vertices);
         assert_eq!(vertices.len(), 24 * 3 + 24 * 6);
-        assert!(vertices[24 * 3..]
-            .iter()
-            .all(|vertex| vertex.color == [1.0, 1.0, 1.0, 1.0]));
+        assert!(
+            vertices[24 * 3..]
+                .iter()
+                .all(|vertex| vertex.color == [1.0, 1.0, 1.0, 1.0])
+        );
     }
 
     #[test]

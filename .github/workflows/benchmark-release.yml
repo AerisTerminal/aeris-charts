@@ -6,7 +6,7 @@ on:
     tags: ["v*"]
 
 env:
-  RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-msvc
+  RUSTUP_TOOLCHAIN: 1.99.0-x86_64-pc-windows-msvc
   AERIS_CHARTS_BENCH_ENV_CLASS: official-benchmark-runner
   AERIS_CHARTS_BENCH_ENV_ID: official-win-gpu-01
 
@@ -14,15 +14,15 @@ jobs:
   release:
     runs-on: [self-hosted, benchmark, windows]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
-          toolchain: stable-x86_64-pc-windows-msvc
+          toolchain: 1.99.0-x86_64-pc-windows-msvc
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked --version 0.15.0
       - run: npm ci
@@ -41,7 +41,7 @@ jobs:
           $result = Get-ChildItem benchmarks/results/v*/*/*-release.json | Sort-Object LastWriteTime | Select-Object -Last 1
           node benchmarks/benchmark.mjs report $result.FullName
           node benchmarks/benchmark.mjs public $result.FullName
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: benchmark-release-${{ github.ref_name }}
           path: benchmarks/results/

@@ -4,8 +4,8 @@ use aeris_charts_render::draw_list::{Gradient, IRect, LineStyle, Prim, TextAlign
 
 use crate::general_axes::NumericAxisScale;
 use crate::{
-    AxisDimension, ChartEngine, GeneralAxisDomain, GeneralPointSymbol, GeneralReferenceOptions,
-    GeneralReferenceValue, GeneralScaleType, GeneralSeriesKind, DEFAULT_LINE_COLOR,
+    AxisDimension, ChartEngine, DEFAULT_LINE_COLOR, GeneralAxisDomain, GeneralPointSymbol,
+    GeneralReferenceOptions, GeneralReferenceValue, GeneralScaleType, GeneralSeriesKind,
 };
 
 use super::PRIMARY;

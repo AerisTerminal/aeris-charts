@@ -7,9 +7,9 @@
 
 use std::collections::HashMap;
 
+use crate::TimePointIndex;
 use crate::helpers::algorithms::{lower_bound, upper_bound};
 use crate::model::lod::{LodPyramid, LodPyramidView};
-use crate::TimePointIndex;
 
 /// `CHUNK_SIZE` in reference.
 const CHUNK_SIZE: i64 = 30;

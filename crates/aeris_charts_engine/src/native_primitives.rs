@@ -1092,10 +1092,10 @@ impl ChartEngine {
                     .flatten();
                 let mut points = Vec::with_capacity(2);
                 if let Some(current) = current {
-                    if state.mouse_drawing {
-                        if let Some(start) = state.mouse_start {
-                            points.push(start);
-                        }
+                    if state.mouse_drawing
+                        && let Some(start) = state.mouse_start
+                    {
+                        points.push(start);
                     }
                     points.push(current);
                 }
@@ -1695,9 +1695,11 @@ mod tests {
     #[test]
     fn delta_tooltip_rejects_candlesticks_and_accepts_non_candlestick_series() {
         let mut candles = chart();
-        assert!(candles
-            .add_delta_tooltip(0, DeltaTooltipOptions::default())
-            .is_none());
+        assert!(
+            candles
+                .add_delta_tooltip(0, DeltaTooltipOptions::default())
+                .is_none()
+        );
         assert!(candles.add_tooltip(0, TooltipOptions::default()).is_some());
 
         for kind in [
@@ -1832,10 +1834,11 @@ mod tests {
             primitive,
             Prim::Rect { color, .. } if *color == SessionHighlightingOptions::default().weekend_color
         )));
-        assert!(pane
-            .under
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::Rect { color, .. } if *color == highlight)));
+        assert!(
+            pane.under.iter().any(
+                |primitive| matches!(primitive, Prim::Rect { color, .. } if *color == highlight)
+            )
+        );
         assert!(pane.main.iter().any(|primitive| matches!(
             primitive,
             Prim::Rect { color, .. } if *color == profile_options.background_color
@@ -2039,10 +2042,12 @@ mod tests {
         assert_eq!(defaults.text_color, None);
         let id = chart.add_overlay_price_scale(0, defaults).unwrap();
         let frame = chart.build_frame();
-        assert!(!frame.panes[0]
-            .main
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::RoundRect { .. })));
+        assert!(
+            !frame.panes[0]
+                .main
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::RoundRect { .. }))
+        );
         let dark_text = Color::parse_css(aeris_charts_core::style::DARK_FOREGROUND_CSS).unwrap();
         let labels = frame.panes[0]
             .main
@@ -2108,14 +2113,18 @@ mod tests {
             .collect();
         assert!(chart.set_session_highlighting_data(primitive, highlights));
         let frame = chart.build_frame();
-        assert!(frame.panes[0]
-            .under
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::Rect { color, .. } if *color == first)));
-        assert!(frame.panes[0]
-            .under
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::Rect { color, .. } if *color == second)));
+        assert!(
+            frame.panes[0]
+                .under
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Rect { color, .. } if *color == first))
+        );
+        assert!(
+            frame.panes[0]
+                .under
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Rect { color, .. } if *color == second))
+        );
         assert!(!chart.set_session_highlighting_data(
             primitive,
             vec![SessionHighlightingData {
@@ -2498,24 +2507,28 @@ mod tests {
                 time: 4 * 86_400,
             })
         );
-        assert!(chart.build_frame().panes[0]
-            .under
-            .iter()
-            .any(|primitive| matches!(
-                primitive,
-                Prim::Rect { rect, color: actual }
-                    if *actual == color && rect.y == 30 && rect.h == 470
-            )));
+        assert!(
+            chart.build_frame().panes[0]
+                .under
+                .iter()
+                .any(|primitive| matches!(
+                    primitive,
+                    Prim::Rect { rect, color: actual }
+                        if *actual == color && rect.y == 30 && rect.h == 470
+                ))
+        );
         chart
             .apply_options(r##"{"layout":{"background":{"color":"#ffffff"}}}"##)
             .unwrap();
-        assert!(chart.build_frame().panes[0]
-            .under
-            .iter()
-            .any(|primitive| matches!(
-                primitive,
-                Prim::Rect { color: actual, .. } if *actual == color
-            )));
+        assert!(
+            chart.build_frame().panes[0]
+                .under
+                .iter()
+                .any(|primitive| matches!(
+                    primitive,
+                    Prim::Rect { color: actual, .. } if *actual == color
+                ))
+        );
         assert!(chart.set_tooltip_options(primitive, TooltipOptions::default()));
         chart.clear_crosshair_at();
         assert!(chart.tooltip_snapshot(primitive).is_none());
@@ -2630,29 +2643,37 @@ mod tests {
         let second_pane = chart.add_pane(true).unwrap();
         chart.set_series_pane(0, second_pane, 1.0);
         let moved = chart.build_frame();
-        assert!(moved.panes[0]
-            .under
-            .iter()
-            .all(|primitive| !matches!(primitive, Prim::Image { .. })));
-        assert!(moved.panes[second_pane]
-            .under
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::Image { .. })));
+        assert!(
+            moved.panes[0]
+                .under
+                .iter()
+                .all(|primitive| !matches!(primitive, Prim::Image { .. }))
+        );
+        assert!(
+            moved.panes[second_pane]
+                .under
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Image { .. }))
+        );
         assert!(chart.remove_native_primitive(id));
 
-        assert!(chart
-            .add_image_watermark(
-                0,
-                MAX_RASTER_IMAGE_DIMENSION + 1,
-                1,
-                Arc::<[u8]>::from(vec![0; 4]),
-                ImageWatermarkOptions::default(),
-            )
-            .is_none());
-        assert!(chart.build_frame().panes[0]
-            .under
-            .iter()
-            .all(|primitive| !matches!(primitive, Prim::Image { .. })));
+        assert!(
+            chart
+                .add_image_watermark(
+                    0,
+                    MAX_RASTER_IMAGE_DIMENSION + 1,
+                    1,
+                    Arc::<[u8]>::from(vec![0; 4]),
+                    ImageWatermarkOptions::default(),
+                )
+                .is_none()
+        );
+        assert!(
+            chart.build_frame().panes[0]
+                .under
+                .iter()
+                .all(|primitive| !matches!(primitive, Prim::Image { .. }))
+        );
     }
 
     #[test]
@@ -2790,14 +2811,16 @@ mod tests {
         assert!(frame.panes[0].main.iter().any(|primitive| {
             matches!(primitive, Prim::Polyline { width, point_count: 2, .. } if *width == 6.0)
         }));
-        assert!(frame.panes[0]
-            .main
-            .iter()
-            .any(|primitive| { matches!(primitive, Prim::Text { text, .. } if text == "50.0") }));
-        assert!(frame.panes[0]
-            .main
-            .iter()
-            .any(|primitive| { matches!(primitive, Prim::Text { text, .. } if text == "200.0") }));
+        assert!(
+            frame.panes[0].main.iter().any(|primitive| {
+                matches!(primitive, Prim::Text { text, .. } if text == "50.0")
+            })
+        );
+        assert!(
+            frame.panes[0].main.iter().any(|primitive| {
+                matches!(primitive, Prim::Text { text, .. } if text == "200.0")
+            })
+        );
         let range = chart.panes[0].price_scale.price_range().unwrap();
         assert!(range.min_value() <= 50.0);
         assert!(range.max_value() >= 200.0);
@@ -2808,11 +2831,7 @@ mod tests {
         let mut chart = chart();
         chart.set_text_measure(Some(Box::new(
             |text, _, _, _, _| {
-                if text == "Wide" {
-                    1_600.0
-                } else {
-                    0.0
-                }
+                if text == "Wide" { 1_600.0 } else { 0.0 }
             },
         )));
         let options = TextWatermarkOptions {
@@ -2858,9 +2877,11 @@ mod tests {
                 ..options
             },
         ));
-        assert!(chart.build_frame().panes[0]
-            .main
-            .iter()
-            .all(|primitive| !matches!(primitive, Prim::Text { text, .. } if text == "Wide")));
+        assert!(
+            chart.build_frame().panes[0]
+                .main
+                .iter()
+                .all(|primitive| !matches!(primitive, Prim::Text { text, .. } if text == "Wide"))
+        );
     }
 }

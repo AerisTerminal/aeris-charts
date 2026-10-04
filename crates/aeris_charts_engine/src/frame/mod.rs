@@ -3,21 +3,21 @@
 //! This is intentionally independent of WebGPU, Canvas2D, and DOM types. Hosts may convert the
 //! returned primitives into any raster backend, or inspect them in tests.
 
-use crate::drawings::DrawingKind;
 use crate::SeriesThresholdRegion;
+use crate::drawings::DrawingKind;
 use crate::{
-    ChartEngine, PriceFormatKind, PriceScaleSide, PriceScaleTarget, SeriesKind, SeriesPriceFormat,
-    PANE_SEPARATOR,
+    ChartEngine, PANE_SEPARATOR, PriceFormatKind, PriceScaleSide, PriceScaleTarget, SeriesKind,
+    SeriesPriceFormat,
 };
 use aeris_charts_core::format::percentage_formatter::PercentageFormatter;
 use aeris_charts_core::format::price_formatter::PriceFormatter;
 use aeris_charts_core::format::time_formatter::{
-    format_crosshair_time_with_time_zone, format_date_pattern_with_time_zone,
-    format_tick_label_with_time_zone, weight_to_tick_mark_type, TickMarkType,
+    TickMarkType, format_crosshair_time_with_time_zone, format_date_pattern_with_time_zone,
+    format_tick_label_with_time_zone, weight_to_tick_mark_type,
 };
 use aeris_charts_core::format::volume_formatter::VolumeFormatter;
 use aeris_charts_core::model::data_layer::{PointColorChannel, SeriesId};
-use aeris_charts_core::model::magnet::{magnet_snap_coordinate, CrosshairMode};
+use aeris_charts_core::model::magnet::{CrosshairMode, magnet_snap_coordinate};
 use aeris_charts_core::model::plot_list::{MismatchDirection, PlotListView, PlotValueIndex};
 use aeris_charts_core::model::price_range::PriceRange;
 use aeris_charts_core::scale::price_scale_core::{PriceScaleCore, PriceScaleMode};
@@ -26,14 +26,14 @@ use aeris_charts_core::style::{
     DEFAULT_CROSSHAIR_LINE_RGB, DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB,
     MARKET_VOLUME_ALPHA,
 };
-use aeris_charts_render::bars::{build_bars, BarItem, BarsParams};
-use aeris_charts_render::candles::{build_candles, CandleItem, CandlesParams};
+use aeris_charts_render::bars::{BarItem, BarsParams, build_bars};
+use aeris_charts_render::candles::{CandleItem, CandlesParams, build_candles};
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{
     Gradient, IRect, LineStyle, LineType, Prim, RasterImage, TextAlign,
 };
-use aeris_charts_render::histogram::{build_histogram, HistogramItem, HistogramParams};
-use aeris_charts_render::line::{dash_split, expand_line, LinePoint};
+use aeris_charts_render::histogram::{HistogramItem, HistogramParams, build_histogram};
+use aeris_charts_render::line::{LinePoint, dash_split, expand_line};
 
 const THRESHOLD_REGION_LINE_COLOR: Color = Color::rgb(0x78, 0x7B, 0x86);
 const THRESHOLD_REGION_FILL_COLOR: Color = Color::rgba(0x78, 0x7B, 0x86, 0x33);
@@ -882,13 +882,12 @@ impl ChartEngine {
         // body channel here) wins over the series-level resolution for every kind that reads
         // it (bar/candlestick/line/area/histogram); Baseline's barColor ignores data-item
         // colors (series-bar-colorer.ts Baseline arm).
-        if !matches!(series.kind, SeriesKind::Baseline) {
-            if let Some(c) = self
+        if !matches!(series.kind, SeriesKind::Baseline)
+            && let Some(c) = self
                 .data
                 .point_color(series.id, PointColorChannel::Body, row)
-            {
-                return Color(c);
-            }
+        {
+            return Color(c);
         }
         match series.kind {
             // A line_color still holding the default placeholder resolves to the kind default,
@@ -897,11 +896,7 @@ impl ChartEngine {
             SeriesKind::Area => series_stroke_color(series),
             SeriesKind::Histogram => {
                 let color = verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR);
-                if color != LINE {
-                    color
-                } else {
-                    HISTOGRAM
-                }
+                if color != LINE { color } else { HISTOGRAM }
             }
             // reference baseline colorer: top line color at/above the baseline, bottom below it.
             SeriesKind::Baseline => {
@@ -2040,15 +2035,17 @@ impl ChartEngine {
                 cache.top_layer.coordinate_revision,
                 self.frame_invalidation.coordinate
             );
-            debug_assert!(cache
-                .series_layers
-                .iter()
-                .filter(|layer| resolved.iter().any(|series| {
-                    series.id == layer.id && series.pane == Some(pi) && series.visible
-                }))
-                .all(|layer| {
-                    layer.layer.coordinate_revision == self.frame_invalidation.coordinate
-                }));
+            debug_assert!(
+                cache
+                    .series_layers
+                    .iter()
+                    .filter(|layer| resolved.iter().any(|series| {
+                        series.id == layer.id && series.pane == Some(pi) && series.visible
+                    }))
+                    .all(|layer| {
+                        layer.layer.coordinate_revision == self.frame_invalidation.coordinate
+                    })
+            );
             out.top = cache.top;
             out.height = cache.height;
             out.scissor = cache.scissor;
@@ -2074,13 +2071,13 @@ impl ChartEngine {
                     + cache.overlay.points.len();
                 point_count += cache.top_layer.points.len();
                 for rs in &resolved {
-                    if rs.pane == Some(pi) && rs.visible {
-                        if let Some(layer) =
+                    if rs.pane == Some(pi)
+                        && rs.visible
+                        && let Some(layer) =
                             cache.series_layers.iter().find(|layer| layer.id == rs.id)
-                        {
-                            main_prims += layer.layer.prims.len();
-                            point_count += layer.layer.points.len();
-                        }
+                    {
+                        main_prims += layer.layer.prims.len();
+                        point_count += layer.layer.points.len();
                     }
                 }
                 out.under
@@ -2721,25 +2718,19 @@ impl ChartEngine {
                 0.0
             };
             pane.refresh_internal_margins();
-            if main_auto {
-                if let Some(range) = main[i].take() {
-                    pane.price_scale
-                        .apply_autoscale_range(Some(range), scale_min_moves[i][0]);
-                }
+            if main_auto && let Some(range) = main[i].take() {
+                pane.price_scale
+                    .apply_autoscale_range(Some(range), scale_min_moves[i][0]);
             }
-            if left_auto {
-                if let Some(range) = left[i].take() {
-                    pane.left_scale
-                        .apply_autoscale_range(Some(range), scale_min_moves[i][1]);
-                }
+            if left_auto && let Some(range) = left[i].take() {
+                pane.left_scale
+                    .apply_autoscale_range(Some(range), scale_min_moves[i][1]);
             }
-            if overlay_auto {
-                if let Some(range) = overlay[i].take() {
-                    pane.overlay_scale.apply_autoscale_range(
-                        Some(range.merge(Some(&PriceRange::new(0.0, 0.0)))),
-                        scale_min_moves[i][2],
-                    );
-                }
+            if overlay_auto && let Some(range) = overlay[i].take() {
+                pane.overlay_scale.apply_autoscale_range(
+                    Some(range.merge(Some(&PriceRange::new(0.0, 0.0)))),
+                    scale_min_moves[i][2],
+                );
             }
             for autoscale in &mut named[i] {
                 let PriceScaleTarget::Named(id) = autoscale.target else {
@@ -2751,12 +2742,10 @@ impl ChartEngine {
                 let auto = entry.scale.is_auto_scale();
                 entry.marker_margin_above = if auto { autoscale.margins.0 } else { 0.0 };
                 entry.marker_margin_below = if auto { autoscale.margins.1 } else { 0.0 };
-                if auto {
-                    if let Some(range) = autoscale.range.take() {
-                        entry
-                            .scale
-                            .apply_autoscale_range(Some(range), autoscale.min_move);
-                    }
+                if auto && let Some(range) = autoscale.range.take() {
+                    entry
+                        .scale
+                        .apply_autoscale_range(Some(range), autoscale.min_move);
                 }
             }
             pane.refresh_internal_margins();
