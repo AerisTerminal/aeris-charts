@@ -5741,6 +5741,19 @@ export class chart_impl implements chart_api {
     return JSON.parse(value) as drawing_kind_options;
   }
 
+  register_drawing_icon(name: string, width: number, height: number, pixels: Uint8Array): void {
+    if (!this.wasm.set_drawing_icon(name, width, height, pixels)) {
+      throw new AerisChartsError("invalid_options", "drawing icon must be a named RGBA8 image of at most 96 by 96 pixels");
+    }
+    this.repaint();
+  }
+
+  remove_drawing_icon(name: string): boolean {
+    const removed = this.wasm.remove_drawing_icon(name);
+    if (removed) this.repaint();
+    return removed;
+  }
+
   drawing_object_tree(): unknown[] {
     return JSON.parse(this.wasm.drawing_object_tree_json()) as unknown[];
   }

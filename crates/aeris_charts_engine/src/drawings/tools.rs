@@ -93,6 +93,7 @@ pub(crate) enum DrawingLogicalExtent {
     Finite,
     Full,
     FromFirst,
+    Ray,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -356,7 +357,315 @@ const DATE_RANGE: DrawingToolSpec = measure_spec(DrawingKind::DateRange, 14, "da
 const DATE_PRICE_RANGE: DrawingToolSpec =
     measure_spec(DrawingKind::DatePriceRange, 15, "date_price_range");
 
-pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 16] = [
+const fn line_spec(kind: DrawingKind, wire_id: u8, name: &'static str) -> DrawingToolSpec {
+    DrawingToolSpec {
+        kind,
+        wire_id,
+        name,
+        ..TREND_LINE
+    }
+}
+
+const RAY: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Ray,
+    price_extent: DrawingPriceExtent::Full,
+    ..line_spec(DrawingKind::Ray, 16, "ray")
+};
+const EXTENDED_LINE: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Full,
+    ..line_spec(DrawingKind::ExtendedLine, 17, "extended_line")
+};
+const INFO_LINE: DrawingToolSpec = line_spec(DrawingKind::InfoLine, 18, "info_line");
+const TREND_ANGLE: DrawingToolSpec = line_spec(DrawingKind::TrendAngle, 19, "trend_angle");
+const CROSS_LINE: DrawingToolSpec = DrawingToolSpec {
+    kind: DrawingKind::CrossLine,
+    wire_id: 20,
+    name: "cross_line",
+    placement: DrawingPlacement::ClickAnchors { count: 1 },
+    straighten: DrawingStraightenMode::None,
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Full,
+    ..TREND_LINE
+};
+const ARROW_LINE: DrawingToolSpec = line_spec(DrawingKind::ArrowLine, 21, "arrow_line");
+
+const fn channel_spec(
+    kind: DrawingKind,
+    wire_id: u8,
+    name: &'static str,
+    anchors: u8,
+) -> DrawingToolSpec {
+    DrawingToolSpec {
+        kind,
+        wire_id,
+        name,
+        placement: DrawingPlacement::ClickAnchors { count: anchors },
+        straighten: DrawingStraightenMode::None,
+        price_extent: DrawingPriceExtent::Full,
+        default_width: 1.0,
+        ..TREND_LINE
+    }
+}
+
+const PARALLEL_CHANNEL: DrawingToolSpec =
+    channel_spec(DrawingKind::ParallelChannel, 22, "parallel_channel", 3);
+const REGRESSION_TREND: DrawingToolSpec = DrawingToolSpec {
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::RegressionTrend, 23, "regression_trend", 2)
+};
+const FLAT_TOP_CHANNEL: DrawingToolSpec =
+    channel_spec(DrawingKind::FlatTopChannel, 24, "flat_top_channel", 3);
+const FLAT_BOTTOM_CHANNEL: DrawingToolSpec =
+    channel_spec(DrawingKind::FlatBottomChannel, 25, "flat_bottom_channel", 3);
+const DISJOINT_CHANNEL: DrawingToolSpec =
+    channel_spec(DrawingKind::DisjointChannel, 26, "disjoint_channel", 4);
+const POLYLINE: DrawingToolSpec = DrawingToolSpec {
+    kind: DrawingKind::Polyline,
+    wire_id: 34,
+    name: "polyline",
+    ..PATH
+};
+const HIGHLIGHTER: DrawingToolSpec = DrawingToolSpec {
+    kind: DrawingKind::Highlighter,
+    wire_id: 35,
+    name: "highlighter",
+    default_width: 12.0,
+    ..BRUSH
+};
+
+const fn shape_spec(
+    kind: DrawingKind,
+    wire_id: u8,
+    name: &'static str,
+    count: u8,
+) -> DrawingToolSpec {
+    DrawingToolSpec {
+        kind,
+        wire_id,
+        name,
+        placement: DrawingPlacement::ClickAnchors { count },
+        straighten: DrawingStraightenMode::None,
+        default_width: 1.0,
+        ..TREND_LINE
+    }
+}
+
+const ROTATED_RECTANGLE: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::RotatedRectangle, 27, "rotated_rectangle", 3)
+};
+const ELLIPSE: DrawingToolSpec = shape_spec(DrawingKind::Ellipse, 28, "ellipse", 2);
+const CIRCLE: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::Circle, 29, "circle", 2)
+};
+const TRIANGLE: DrawingToolSpec = shape_spec(DrawingKind::Triangle, 30, "triangle", 3);
+const ARC: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::Arc, 31, "arc", 3)
+};
+const CURVE: DrawingToolSpec = shape_spec(DrawingKind::Curve, 32, "curve", 3);
+const DOUBLE_CURVE: DrawingToolSpec = shape_spec(DrawingKind::DoubleCurve, 33, "double_curve", 4);
+const FIBONACCI_RETRACEMENT: DrawingToolSpec = DrawingToolSpec {
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(
+        DrawingKind::FibonacciRetracement,
+        36,
+        "fibonacci_retracement",
+        2,
+    )
+};
+const FIBONACCI_EXTENSION: DrawingToolSpec = DrawingToolSpec {
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(
+        DrawingKind::FibonacciExtension,
+        37,
+        "fibonacci_extension",
+        3,
+    )
+};
+const FIBONACCI_CHANNEL: DrawingToolSpec = DrawingToolSpec {
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::FibonacciChannel, 38, "fibonacci_channel", 3)
+};
+const FIBONACCI_TIME_ZONES: DrawingToolSpec = DrawingToolSpec {
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(
+        DrawingKind::FibonacciTimeZones,
+        39,
+        "fibonacci_time_zones",
+        2,
+    )
+};
+const FIBONACCI_TREND_TIME: DrawingToolSpec = DrawingToolSpec {
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(
+        DrawingKind::FibonacciTrendTime,
+        40,
+        "fibonacci_trend_time",
+        3,
+    )
+};
+const FIBONACCI_SPEED_FAN: DrawingToolSpec = DrawingToolSpec {
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::FibonacciSpeedFan, 41, "fibonacci_speed_fan", 2)
+};
+const FIBONACCI_SPEED_ARCS: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(
+        DrawingKind::FibonacciSpeedArcs,
+        42,
+        "fibonacci_speed_arcs",
+        2,
+    )
+};
+const FIBONACCI_CIRCLES: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::FibonacciCircles, 43, "fibonacci_circles", 2)
+};
+const FIBONACCI_SPIRAL: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::FibonacciSpiral, 44, "fibonacci_spiral", 2)
+};
+const FIBONACCI_WEDGE: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::FibonacciWedge, 45, "fibonacci_wedge", 3)
+};
+const fn pitchfork_spec(kind: DrawingKind, wire_id: u8, name: &'static str) -> DrawingToolSpec {
+    DrawingToolSpec {
+        logical_extent: DrawingLogicalExtent::Full,
+        price_extent: DrawingPriceExtent::Full,
+        ..shape_spec(kind, wire_id, name, 3)
+    }
+}
+const ANDREWS_PITCHFORK: DrawingToolSpec =
+    pitchfork_spec(DrawingKind::AndrewsPitchfork, 46, "andrews_pitchfork");
+const SCHIFF_PITCHFORK: DrawingToolSpec =
+    pitchfork_spec(DrawingKind::SchiffPitchfork, 47, "schiff_pitchfork");
+const MODIFIED_SCHIFF_PITCHFORK: DrawingToolSpec = pitchfork_spec(
+    DrawingKind::ModifiedSchiffPitchfork,
+    48,
+    "modified_schiff_pitchfork",
+);
+const INSIDE_PITCHFORK: DrawingToolSpec =
+    pitchfork_spec(DrawingKind::InsidePitchfork, 49, "inside_pitchfork");
+const PITCHFAN: DrawingToolSpec = pitchfork_spec(DrawingKind::Pitchfan, 50, "pitchfan");
+const PATTERN_XABCD: DrawingToolSpec =
+    shape_spec(DrawingKind::PatternXabcd, 51, "pattern_xabcd", 5);
+const PATTERN_CYPHER: DrawingToolSpec =
+    shape_spec(DrawingKind::PatternCypher, 52, "pattern_cypher", 5);
+const PATTERN_ABCD: DrawingToolSpec = shape_spec(DrawingKind::PatternAbcd, 53, "pattern_abcd", 4);
+const PATTERN_HEAD_SHOULDERS: DrawingToolSpec = shape_spec(
+    DrawingKind::PatternHeadShoulders,
+    54,
+    "pattern_head_shoulders",
+    7,
+);
+const PATTERN_TRIANGLE: DrawingToolSpec =
+    shape_spec(DrawingKind::PatternTriangle, 55, "pattern_triangle", 5);
+const PATTERN_THREE_DRIVES: DrawingToolSpec = shape_spec(
+    DrawingKind::PatternThreeDrives,
+    56,
+    "pattern_three_drives",
+    6,
+);
+const ELLIOTT_IMPULSE: DrawingToolSpec =
+    shape_spec(DrawingKind::ElliottImpulse, 57, "elliott_impulse", 6);
+const ELLIOTT_CORRECTION: DrawingToolSpec =
+    shape_spec(DrawingKind::ElliottCorrection, 58, "elliott_correction", 4);
+const ELLIOTT_TRIANGLE: DrawingToolSpec =
+    shape_spec(DrawingKind::ElliottTriangle, 59, "elliott_triangle", 6);
+const ELLIOTT_DOUBLE_COMBINATION: DrawingToolSpec = shape_spec(
+    DrawingKind::ElliottDoubleCombination,
+    60,
+    "elliott_double_combination",
+    4,
+);
+const ELLIOTT_TRIPLE_COMBINATION: DrawingToolSpec = shape_spec(
+    DrawingKind::ElliottTripleCombination,
+    61,
+    "elliott_triple_combination",
+    6,
+);
+const CYCLIC_LINES: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::CyclicLines, 62, "cyclic_lines", 2)
+};
+const TIME_CYCLES: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Ray,
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::TimeCycles, 63, "time_cycles", 2)
+};
+const SINE_LINE: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Ray,
+    ..shape_spec(DrawingKind::SineLine, 64, "sine_line", 2)
+};
+const ARROW_MARKER_UP: DrawingToolSpec =
+    shape_spec(DrawingKind::ArrowMarkerUp, 65, "arrow_marker_up", 1);
+const ARROW_MARKER_DOWN: DrawingToolSpec =
+    shape_spec(DrawingKind::ArrowMarkerDown, 66, "arrow_marker_down", 1);
+const ARROW_MARKER_LEFT: DrawingToolSpec =
+    shape_spec(DrawingKind::ArrowMarkerLeft, 67, "arrow_marker_left", 1);
+const ARROW_MARKER_RIGHT: DrawingToolSpec =
+    shape_spec(DrawingKind::ArrowMarkerRight, 68, "arrow_marker_right", 1);
+const FLAG_MARK: DrawingToolSpec = shape_spec(DrawingKind::FlagMark, 69, "flag_mark", 1);
+const SIGNPOST: DrawingToolSpec = shape_spec(DrawingKind::Signpost, 70, "signpost", 2);
+const fn text_annotation_spec(
+    kind: DrawingKind,
+    wire_id: u8,
+    name: &'static str,
+    count: u8,
+) -> DrawingToolSpec {
+    DrawingToolSpec {
+        kind,
+        wire_id,
+        name,
+        placement: DrawingPlacement::ClickAnchors { count },
+        requests_text_editor: true,
+        ..TEXT
+    }
+}
+const NOTE: DrawingToolSpec = text_annotation_spec(DrawingKind::Note, 71, "note", 1);
+const COMMENT: DrawingToolSpec = text_annotation_spec(DrawingKind::Comment, 72, "comment", 1);
+const CALLOUT: DrawingToolSpec = text_annotation_spec(DrawingKind::Callout, 73, "callout", 2);
+const PRICE_NOTE: DrawingToolSpec = DrawingToolSpec {
+    price_extent: DrawingPriceExtent::Full,
+    ..text_annotation_spec(DrawingKind::PriceNote, 74, "price_note", 1)
+};
+const PRICE_LABEL: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Finite,
+    ..shape_spec(DrawingKind::PriceLabel, 75, "price_label", 1)
+};
+const ANCHORED_TEXT: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Full,
+    price_extent: DrawingPriceExtent::Full,
+    ..text_annotation_spec(DrawingKind::AnchoredText, 76, "anchored_text", 1)
+};
+const ICON_STAMP: DrawingToolSpec = shape_spec(DrawingKind::IconStamp, 77, "icon_stamp", 1);
+const GANN_BOX: DrawingToolSpec = shape_spec(DrawingKind::GannBox, 78, "gann_box", 2);
+const GANN_SQUARE: DrawingToolSpec = shape_spec(DrawingKind::GannSquare, 79, "gann_square", 2);
+const GANN_SQUARE_FIXED: DrawingToolSpec =
+    shape_spec(DrawingKind::GannSquareFixed, 80, "gann_square_fixed", 2);
+const GANN_FAN: DrawingToolSpec = DrawingToolSpec {
+    logical_extent: DrawingLogicalExtent::Ray,
+    price_extent: DrawingPriceExtent::Full,
+    ..shape_spec(DrawingKind::GannFan, 81, "gann_fan", 2)
+};
+const PROJECTION: DrawingToolSpec = shape_spec(DrawingKind::Projection, 82, "projection", 2);
+const FORECAST: DrawingToolSpec = shape_spec(DrawingKind::Forecast, 83, "forecast", 2);
+const BARS_PATTERN: DrawingToolSpec = shape_spec(DrawingKind::BarsPattern, 84, "bars_pattern", 3);
+
+pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 85] = [
     TREND_LINE,
     HORIZONTAL_LINE,
     HORIZONTAL_RAY,
@@ -373,6 +682,75 @@ pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 16] = [
     PRICE_RANGE,
     DATE_RANGE,
     DATE_PRICE_RANGE,
+    RAY,
+    EXTENDED_LINE,
+    INFO_LINE,
+    TREND_ANGLE,
+    CROSS_LINE,
+    ARROW_LINE,
+    PARALLEL_CHANNEL,
+    REGRESSION_TREND,
+    FLAT_TOP_CHANNEL,
+    FLAT_BOTTOM_CHANNEL,
+    DISJOINT_CHANNEL,
+    POLYLINE,
+    HIGHLIGHTER,
+    ROTATED_RECTANGLE,
+    ELLIPSE,
+    CIRCLE,
+    TRIANGLE,
+    ARC,
+    CURVE,
+    DOUBLE_CURVE,
+    FIBONACCI_RETRACEMENT,
+    FIBONACCI_EXTENSION,
+    FIBONACCI_CHANNEL,
+    FIBONACCI_TIME_ZONES,
+    FIBONACCI_TREND_TIME,
+    FIBONACCI_SPEED_FAN,
+    FIBONACCI_SPEED_ARCS,
+    FIBONACCI_CIRCLES,
+    FIBONACCI_SPIRAL,
+    FIBONACCI_WEDGE,
+    ANDREWS_PITCHFORK,
+    SCHIFF_PITCHFORK,
+    MODIFIED_SCHIFF_PITCHFORK,
+    INSIDE_PITCHFORK,
+    PITCHFAN,
+    PATTERN_XABCD,
+    PATTERN_CYPHER,
+    PATTERN_ABCD,
+    PATTERN_HEAD_SHOULDERS,
+    PATTERN_TRIANGLE,
+    PATTERN_THREE_DRIVES,
+    ELLIOTT_IMPULSE,
+    ELLIOTT_CORRECTION,
+    ELLIOTT_TRIANGLE,
+    ELLIOTT_DOUBLE_COMBINATION,
+    ELLIOTT_TRIPLE_COMBINATION,
+    CYCLIC_LINES,
+    TIME_CYCLES,
+    SINE_LINE,
+    ARROW_MARKER_UP,
+    ARROW_MARKER_DOWN,
+    ARROW_MARKER_LEFT,
+    ARROW_MARKER_RIGHT,
+    FLAG_MARK,
+    SIGNPOST,
+    NOTE,
+    COMMENT,
+    CALLOUT,
+    PRICE_NOTE,
+    PRICE_LABEL,
+    ANCHORED_TEXT,
+    ICON_STAMP,
+    GANN_BOX,
+    GANN_SQUARE,
+    GANN_SQUARE_FIXED,
+    GANN_FAN,
+    PROJECTION,
+    FORECAST,
+    BARS_PATTERN,
 ];
 
 impl DrawingKind {
@@ -402,6 +780,136 @@ impl DrawingKind {
             Self::PriceRange => &PRICE_RANGE,
             Self::DateRange => &DATE_RANGE,
             Self::DatePriceRange => &DATE_PRICE_RANGE,
+            Self::Ray => &RAY,
+            Self::ExtendedLine => &EXTENDED_LINE,
+            Self::InfoLine => &INFO_LINE,
+            Self::TrendAngle => &TREND_ANGLE,
+            Self::CrossLine => &CROSS_LINE,
+            Self::ArrowLine => &ARROW_LINE,
+            Self::ParallelChannel => &PARALLEL_CHANNEL,
+            Self::RegressionTrend => &REGRESSION_TREND,
+            Self::FlatTopChannel => &FLAT_TOP_CHANNEL,
+            Self::FlatBottomChannel => &FLAT_BOTTOM_CHANNEL,
+            Self::DisjointChannel => &DISJOINT_CHANNEL,
+            Self::Polyline => &POLYLINE,
+            Self::Highlighter => &HIGHLIGHTER,
+            Self::RotatedRectangle => &ROTATED_RECTANGLE,
+            Self::Ellipse => &ELLIPSE,
+            Self::Circle => &CIRCLE,
+            Self::Triangle => &TRIANGLE,
+            Self::Arc => &ARC,
+            Self::Curve => &CURVE,
+            Self::DoubleCurve => &DOUBLE_CURVE,
+            Self::FibonacciRetracement => &FIBONACCI_RETRACEMENT,
+            Self::FibonacciExtension => &FIBONACCI_EXTENSION,
+            Self::FibonacciChannel => &FIBONACCI_CHANNEL,
+            Self::FibonacciTimeZones => &FIBONACCI_TIME_ZONES,
+            Self::FibonacciTrendTime => &FIBONACCI_TREND_TIME,
+            Self::FibonacciSpeedFan => &FIBONACCI_SPEED_FAN,
+            Self::FibonacciSpeedArcs => &FIBONACCI_SPEED_ARCS,
+            Self::FibonacciCircles => &FIBONACCI_CIRCLES,
+            Self::FibonacciSpiral => &FIBONACCI_SPIRAL,
+            Self::FibonacciWedge => &FIBONACCI_WEDGE,
+            Self::AndrewsPitchfork => &ANDREWS_PITCHFORK,
+            Self::SchiffPitchfork => &SCHIFF_PITCHFORK,
+            Self::ModifiedSchiffPitchfork => &MODIFIED_SCHIFF_PITCHFORK,
+            Self::InsidePitchfork => &INSIDE_PITCHFORK,
+            Self::Pitchfan => &PITCHFAN,
+            Self::PatternXabcd => &PATTERN_XABCD,
+            Self::PatternCypher => &PATTERN_CYPHER,
+            Self::PatternAbcd => &PATTERN_ABCD,
+            Self::PatternHeadShoulders => &PATTERN_HEAD_SHOULDERS,
+            Self::PatternTriangle => &PATTERN_TRIANGLE,
+            Self::PatternThreeDrives => &PATTERN_THREE_DRIVES,
+            Self::ElliottImpulse => &ELLIOTT_IMPULSE,
+            Self::ElliottCorrection => &ELLIOTT_CORRECTION,
+            Self::ElliottTriangle => &ELLIOTT_TRIANGLE,
+            Self::ElliottDoubleCombination => &ELLIOTT_DOUBLE_COMBINATION,
+            Self::ElliottTripleCombination => &ELLIOTT_TRIPLE_COMBINATION,
+            Self::CyclicLines => &CYCLIC_LINES,
+            Self::TimeCycles => &TIME_CYCLES,
+            Self::SineLine => &SINE_LINE,
+            Self::ArrowMarkerUp => &ARROW_MARKER_UP,
+            Self::ArrowMarkerDown => &ARROW_MARKER_DOWN,
+            Self::ArrowMarkerLeft => &ARROW_MARKER_LEFT,
+            Self::ArrowMarkerRight => &ARROW_MARKER_RIGHT,
+            Self::FlagMark => &FLAG_MARK,
+            Self::Signpost => &SIGNPOST,
+            Self::Note => &NOTE,
+            Self::Comment => &COMMENT,
+            Self::Callout => &CALLOUT,
+            Self::PriceNote => &PRICE_NOTE,
+            Self::PriceLabel => &PRICE_LABEL,
+            Self::AnchoredText => &ANCHORED_TEXT,
+            Self::IconStamp => &ICON_STAMP,
+            Self::GannBox => &GANN_BOX,
+            Self::GannSquare => &GANN_SQUARE,
+            Self::GannSquareFixed => &GANN_SQUARE_FIXED,
+            Self::GannFan => &GANN_FAN,
+            Self::Projection => &PROJECTION,
+            Self::Forecast => &FORECAST,
+            Self::BarsPattern => &BARS_PATTERN,
         }
+    }
+
+    pub(crate) const fn vertex_labels(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::PatternXabcd | Self::PatternCypher => Some(&["X", "A", "B", "C", "D"]),
+            Self::PatternAbcd => Some(&["A", "B", "C", "D"]),
+            Self::PatternHeadShoulders => Some(&["N", "LS", "N", "H", "N", "RS", "N"]),
+            Self::PatternTriangle => Some(&["A", "B", "C", "D", "E"]),
+            Self::PatternThreeDrives => Some(&["0", "1", "A", "2", "B", "3"]),
+            Self::ElliottImpulse => Some(&["0", "1", "2", "3", "4", "5"]),
+            Self::ElliottCorrection => Some(&["0", "A", "B", "C"]),
+            Self::ElliottTriangle => Some(&["0", "A", "B", "C", "D", "E"]),
+            Self::ElliottDoubleCombination => Some(&["0", "W", "X", "Y"]),
+            Self::ElliottTripleCombination => Some(&["0", "W", "X", "Y", "X", "Z"]),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn is_elliott(self) -> bool {
+        matches!(
+            self,
+            Self::ElliottImpulse
+                | Self::ElliottCorrection
+                | Self::ElliottTriangle
+                | Self::ElliottDoubleCombination
+                | Self::ElliottTripleCombination
+        )
+    }
+
+    pub(crate) const fn is_marker(self) -> bool {
+        matches!(
+            self,
+            Self::ArrowMarkerUp
+                | Self::ArrowMarkerDown
+                | Self::ArrowMarkerLeft
+                | Self::ArrowMarkerRight
+                | Self::FlagMark
+                | Self::Signpost
+        )
+    }
+
+    pub(crate) const fn is_text_annotation(self) -> bool {
+        matches!(
+            self,
+            Self::Note | Self::Comment | Self::Callout | Self::PriceNote | Self::AnchoredText
+        )
+    }
+
+    pub(crate) fn valid_wave_degree(name: &str) -> bool {
+        matches!(
+            name,
+            "subminuette"
+                | "minuette"
+                | "minute"
+                | "minor"
+                | "intermediate"
+                | "primary"
+                | "cycle"
+                | "supercycle"
+                | "grand_supercycle"
+        )
     }
 }

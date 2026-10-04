@@ -222,6 +222,28 @@ struct DrawingStyleV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     position_risk_percent: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    regression_source_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    regression_deviations: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wave_degree: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screen_x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screen_y: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icon_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icon_size: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bars_pattern: Option<Vec<crate::drawings::BarsPatternBar>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bars_pattern_mirror_x: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bars_pattern_mirror_y: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bars_pattern_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     group_id: Option<String>,
@@ -251,6 +273,22 @@ struct DrawingStyleV1 {
     labels: Option<Vec<crate::DrawingLabelOptions>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     levels: Option<Vec<crate::DrawingLevel>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gann_fans: Option<Vec<crate::DrawingLevel>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gann_arcs: Option<Vec<crate::DrawingLevel>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level_reverse: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level_log_scale: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level_show_prices: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level_show_values: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level_show_percents: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level_label_align: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     price_scale_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -699,6 +737,35 @@ impl ChartEngine {
                             DrawingKind::LongPosition | DrawingKind::ShortPosition
                         )
                         .then_some(drawing.position_risk_percent),
+                        regression_source_id: (drawing.kind == DrawingKind::RegressionTrend)
+                            .then_some(drawing.regression_source_id)
+                            .flatten(),
+                        regression_deviations: (drawing.kind == DrawingKind::RegressionTrend)
+                            .then_some(drawing.regression_deviations),
+                        wave_degree: drawing
+                            .kind
+                            .is_elliott()
+                            .then(|| drawing.wave_degree.clone()),
+                        screen_x: (drawing.kind == DrawingKind::AnchoredText)
+                            .then_some(drawing.screen_x),
+                        screen_y: (drawing.kind == DrawingKind::AnchoredText)
+                            .then_some(drawing.screen_y),
+                        icon_name: (drawing.kind == DrawingKind::IconStamp)
+                            .then(|| drawing.icon_name.clone())
+                            .flatten(),
+                        icon_size: (drawing.kind == DrawingKind::IconStamp)
+                            .then_some(drawing.icon_size),
+                        bars_pattern: (drawing.kind == DrawingKind::BarsPattern)
+                            .then(|| drawing.bars_pattern.clone()),
+                        bars_pattern_mirror_x: (drawing.kind == DrawingKind::BarsPattern
+                            && drawing.bars_pattern_mirror_x)
+                            .then_some(true),
+                        bars_pattern_mirror_y: (drawing.kind == DrawingKind::BarsPattern
+                            && drawing.bars_pattern_mirror_y)
+                            .then_some(true),
+                        bars_pattern_mode: (drawing.kind == DrawingKind::BarsPattern
+                            && drawing.bars_pattern_mode != "bars")
+                            .then(|| drawing.bars_pattern_mode.clone()),
                         name: (!drawing.name.is_empty()).then(|| drawing.name.clone()),
                         group_id: drawing.group_id.clone(),
                         revision: (drawing.revision != 1).then_some(drawing.revision),
@@ -723,6 +790,37 @@ impl ChartEngine {
                             .then_some(drawing.magnet),
                         labels: (!drawing.labels.is_empty()).then_some(drawing.labels.clone()),
                         levels: (!drawing.levels.is_empty()).then_some(drawing.levels.clone()),
+                        gann_fans: matches!(
+                            drawing.kind,
+                            DrawingKind::GannSquare | DrawingKind::GannSquareFixed
+                        )
+                        .then(|| drawing.gann_fans.clone()),
+                        gann_arcs: matches!(
+                            drawing.kind,
+                            DrawingKind::GannSquare | DrawingKind::GannSquareFixed
+                        )
+                        .then(|| drawing.gann_arcs.clone()),
+                        level_reverse: drawing.kind.has_levels().then_some(drawing.level_reverse),
+                        level_log_scale: drawing
+                            .kind
+                            .has_levels()
+                            .then_some(drawing.level_log_scale),
+                        level_show_prices: drawing
+                            .kind
+                            .has_levels()
+                            .then_some(drawing.level_show_prices),
+                        level_show_values: drawing
+                            .kind
+                            .has_levels()
+                            .then_some(drawing.level_show_values),
+                        level_show_percents: drawing
+                            .kind
+                            .has_levels()
+                            .then_some(drawing.level_show_percents),
+                        level_label_align: drawing
+                            .kind
+                            .has_levels()
+                            .then(|| drawing.level_label_align.clone()),
                         price_scale_id: (drawing.price_scale != DrawingPriceScale::Right)
                             .then(|| drawing.price_scale.name().to_string()),
                         color: Some(drawing.color.clone()),
@@ -1335,6 +1433,118 @@ impl ChartEngine {
                 }
                 drawing.position_risk_percent = value;
             }
+            if let Some(source_id) = style.regression_source_id {
+                drawing.regression_source_id = Some(source_id);
+            }
+            if let Some(deviations) = style.regression_deviations {
+                if !deviations.is_finite() || !(0.0..=10.0).contains(&deviations) {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid regression deviations",
+                        item.id
+                    )));
+                }
+                drawing.regression_deviations = deviations;
+            }
+            if let Some(degree) = style.wave_degree {
+                if !drawing.kind.is_elliott() || !DrawingKind::valid_wave_degree(&degree) {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid wave degree",
+                        item.id
+                    )));
+                }
+                drawing.wave_degree = degree;
+            }
+            if let Some(value) = style.screen_x {
+                if drawing.kind != DrawingKind::AnchoredText
+                    || !value.is_finite()
+                    || !(0.0..=1.0).contains(&value)
+                {
+                    return Err(invalid(format!("drawing {} has invalid screen x", item.id)));
+                }
+                drawing.screen_x = value;
+            }
+            if let Some(value) = style.screen_y {
+                if drawing.kind != DrawingKind::AnchoredText
+                    || !value.is_finite()
+                    || !(0.0..=1.0).contains(&value)
+                {
+                    return Err(invalid(format!("drawing {} has invalid screen y", item.id)));
+                }
+                drawing.screen_y = value;
+            }
+            if let Some(name) = style.icon_name {
+                if drawing.kind != DrawingKind::IconStamp
+                    || name.is_empty()
+                    || name.len() > crate::drawings::MAX_DRAWING_ICON_NAME_BYTES
+                {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid icon name",
+                        item.id
+                    )));
+                }
+                drawing.icon_name = Some(name);
+            }
+            if let Some(size) = style.icon_size {
+                if drawing.kind != DrawingKind::IconStamp
+                    || !size.is_finite()
+                    || !(8.0..=96.0).contains(&size)
+                {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid icon size",
+                        item.id
+                    )));
+                }
+                drawing.icon_size = size;
+            }
+            if let Some(bars) = style.bars_pattern {
+                if drawing.kind != DrawingKind::BarsPattern
+                    || bars.is_empty()
+                    || bars.len() > crate::drawings::MAX_BARS_PATTERN_BARS
+                    || bars.iter().any(|bar| !bar.valid())
+                    || bars.windows(2).any(|pair| pair[0].offset >= pair[1].offset)
+                    || bars.last().is_some_and(|bar| {
+                        usize::from(bar.offset) >= crate::drawings::MAX_BARS_PATTERN_BARS
+                    })
+                {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid bars pattern",
+                        item.id
+                    )));
+                }
+                drawing.bars_pattern = bars;
+            }
+            if let Some(value) = style.bars_pattern_mirror_x {
+                if drawing.kind != DrawingKind::BarsPattern {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid bars pattern mirror",
+                        item.id
+                    )));
+                }
+                drawing.bars_pattern_mirror_x = value;
+            }
+            if let Some(value) = style.bars_pattern_mirror_y {
+                if drawing.kind != DrawingKind::BarsPattern {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid bars pattern mirror",
+                        item.id
+                    )));
+                }
+                drawing.bars_pattern_mirror_y = value;
+            }
+            if let Some(mode) = style.bars_pattern_mode {
+                if drawing.kind != DrawingKind::BarsPattern
+                    || !matches!(
+                        mode.as_str(),
+                        "bars" | "line_open" | "line_high" | "line_low" | "line_close"
+                    )
+                {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid bars pattern mode",
+                        item.id
+                    )));
+                }
+                drawing.bars_pattern_mode = mode;
+            }
             if let Some(profile) = style.profile {
                 if !profile.valid() {
                     return Err(invalid(format!(
@@ -1413,6 +1623,61 @@ impl ChartEngine {
                     return Err(invalid(format!("drawing {} has invalid levels", item.id)));
                 }
                 drawing.levels = levels;
+            }
+            for (family, destination, fan) in [
+                (style.gann_fans, &mut drawing.gann_fans, true),
+                (style.gann_arcs, &mut drawing.gann_arcs, false),
+            ] {
+                if let Some(levels) = family {
+                    if !matches!(
+                        drawing.kind,
+                        DrawingKind::GannSquare | DrawingKind::GannSquareFixed
+                    ) || !crate::drawings::valid_gann_family(&levels, fan)
+                    {
+                        return Err(invalid(format!(
+                            "drawing {} has invalid Gann levels",
+                            item.id
+                        )));
+                    }
+                    *destination = levels;
+                }
+            }
+            let has_level_options = style.level_reverse.is_some()
+                || style.level_log_scale.is_some()
+                || style.level_show_prices.is_some()
+                || style.level_show_values.is_some()
+                || style.level_show_percents.is_some()
+                || style.level_label_align.is_some();
+            if has_level_options
+                && (!drawing.kind.has_levels()
+                    || (style.level_log_scale == Some(true) && !drawing.kind.supports_log_levels())
+                    || style
+                        .level_label_align
+                        .as_deref()
+                        .is_some_and(|align| !matches!(align, "left" | "center" | "right")))
+            {
+                return Err(invalid(format!(
+                    "drawing {} has invalid level options",
+                    item.id
+                )));
+            }
+            if let Some(value) = style.level_reverse {
+                drawing.level_reverse = value;
+            }
+            if let Some(value) = style.level_log_scale {
+                drawing.level_log_scale = value;
+            }
+            if let Some(value) = style.level_show_prices {
+                drawing.level_show_prices = value;
+            }
+            if let Some(value) = style.level_show_values {
+                drawing.level_show_values = value;
+            }
+            if let Some(value) = style.level_show_percents {
+                drawing.level_show_percents = value;
+            }
+            if let Some(value) = style.level_label_align {
+                drawing.level_label_align = value;
             }
             if let Some(scale) = style.price_scale_id {
                 drawing.price_scale = DrawingPriceScale::from_name(&scale)
@@ -1511,6 +1776,12 @@ impl ChartEngine {
                 drawing.box_border_width = width;
             }
             max_drawing_id = max_drawing_id.max(item.id);
+            if drawing.kind == DrawingKind::BarsPattern && drawing.bars_pattern.is_empty() {
+                return Err(invalid(format!(
+                    "drawing {} has no bars pattern snapshot",
+                    item.id
+                )));
+            }
             drawings.push(drawing);
         }
         Ok(ValidatedStateV1 {

@@ -38,7 +38,7 @@ Updated 2026-10-04. Baseline source-confirmed 2026-09-24.
 | B5 | Non-time bars and replay: F1, OF14, CT3, CT4, PD2 | Tick/volume/range charts, session replay, trade review playback | **Complete** |
 | B6 | Depth: F3, OF15–OF18, PD8, PD9 | Liquidity heatmap, order-level markers, depth studies | **Complete** |
 | B7 | Profiles and resampling: F6, OF3–OF8, OF10, CT5 | Session/composite profiles, TPO, anchored VWAP, multi-timeframe studies | **Complete** |
-| B8 | Drawing catalog expansion | Full professional drawing toolset | Open |
+| B8 | Drawing catalog expansion | Full professional drawing toolset | **Complete** |
 | B9 | Breadth and extension: I2, I3, I4, OF13 | Remaining indicators, custom studies, auction markers | Open |
 
 Ordering: B1–B3 serve the platform's first phase and are independent of each other. B4 must land
@@ -441,27 +441,27 @@ the host, and multi-timeframe studies rebuild deterministically.
 ### B8 — Drawing catalog expansion
 
 **Scope:** every tool in the drawing catalog not yet delivered. **Depends on:** B2.
-**Status:** open.
+**Status:** complete.
 
 Every tool implements the F5 contract with schema, persistence, hit-testing and executor parity.
 
-- [ ] Lines: ray, extended line, info line, trend angle, cross line, arrow line.
-- [ ] Channels: parallel, regression trend, flat top/bottom, disjoint.
-- [ ] Fibonacci: retracement, trend-based extension, channel, time zones, trend-based time, speed
+- [x] Lines: ray, extended line, info line, trend angle, cross line, arrow line.
+- [x] Channels: parallel, regression trend, flat top/bottom, disjoint.
+- [x] Fibonacci: retracement, trend-based extension, channel, time zones, trend-based time, speed
       resistance fan and arcs, circles, spiral, wedge.
-- [ ] Pitchforks: Andrews, Schiff, modified Schiff, inside, pitchfan.
-- [ ] Projection and measuring: forecast, bars pattern, price range, date range, date and price
+- [x] Pitchforks: Andrews, Schiff, modified Schiff, inside, pitchfan.
+- [x] Projection and measuring: forecast, bars pattern, price range, date range, date and price
       range, projection.
-- [ ] Annotations: anchored text, note, price note, callout, comment, price label, signpost, flag,
+- [x] Annotations: anchored text, note, price note, callout, comment, price label, signpost, flag,
       arrow markers, bounded icon stamps.
-- [ ] Gann: box, square, square fixed, fan.
-- [ ] Patterns: XABCD, cypher, ABCD, head and shoulders, triangle, three drives.
-- [ ] Elliott waves: impulse, correction, triangle, double and triple combinations with degree
+- [x] Gann: box, square, square fixed, fan.
+- [x] Patterns: XABCD, cypher, ABCD, head and shoulders, triangle, three drives.
+- [x] Elliott waves: impulse, correction, triangle, double and triple combinations with degree
       labels.
-- [ ] Cycles: cyclic lines, time cycles, sine line.
-- [ ] Shapes: rotated rectangle, ellipse, circle, triangle, arc, curve, double curve, polyline,
+- [x] Cycles: cyclic lines, time cycles, sine line.
+- [x] Shapes: rotated rectangle, ellipse, circle, triangle, arc, curve, double curve, polyline,
       highlighter, with shared geometry on every executor.
-- [ ] Full gate green; batch committed and pushed.
+- [x] Full gate green; batch committed and pushed.
 
 **Exit:** every catalog tool is placeable, editable through its schema, persisted and identical on
 every executor.

@@ -1756,9 +1756,9 @@ impl ChartEngine {
         }
         self.hit_test_drawing(x, y).is_some_and(|hit| {
             hit.id == editing
-                && self
-                    .drawing(editing)
-                    .is_some_and(|drawing| drawing.kind == DrawingKind::Text)
+                && self.drawing(editing).is_some_and(|drawing| {
+                    drawing.kind == DrawingKind::Text || drawing.kind.is_text_annotation()
+                })
         })
     }
 
@@ -1883,6 +1883,7 @@ impl ChartEngine {
                         .and_then(|id| self.drawing(id))
                         .is_some_and(|drawing| {
                             matches!(drawing.kind, DrawingKind::Text | DrawingKind::TrendLine)
+                                || drawing.kind.is_text_annotation()
                         })
                 };
                 if editable {
@@ -1936,7 +1937,7 @@ impl ChartEngine {
         let open_editor = if drawing.kind == DrawingKind::TrendLine {
             trend_text_hit == Some(id)
         } else {
-            drawing.kind == DrawingKind::Text
+            (drawing.kind == DrawingKind::Text || drawing.kind.is_text_annotation())
                 && (drawing.text.trim().is_empty() || text_press_selected == Some(id))
         };
         if open_editor {
@@ -3607,5 +3608,49 @@ mod tests {
         chart.input_pointer_leave();
         assert_eq!(chart.input_cursor(), ChartCursor::Grabbing);
         chart.input_pointer_up(at(x + 40.0, y));
+    }
+
+    #[test]
+    fn text_annotation_creation_and_reedit_use_the_engine_controller() {
+        let mut chart = chart();
+        assert!(chart.set_drawing_tool(Some(DrawingKind::Note), None, None));
+        click(&mut chart, 250.0, 180.0);
+        let events = chart.take_input_events();
+        let [ChartInputEvent::DrawingCreated(id)] = events[..] else {
+            panic!("note creation must notify the host: {events:?}");
+        };
+        assert_eq!(chart.drawing_text_edit().map(|session| session.0), Some(id));
+        assert!(chart.set_drawing_text_edit("Remember", 8));
+        assert!(chart.commit_drawing_text_edit());
+        assert_eq!(chart.drawing(id).unwrap().text, "Remember");
+        click(&mut chart, 250.0, 180.0);
+        assert_eq!(chart.drawing_text_edit().map(|session| session.0), Some(id));
+        assert!(chart.cancel_drawing_text_edit());
+
+        assert!(chart.set_drawing_tool(Some(DrawingKind::Callout), None, None));
+        click(&mut chart, 300.0, 200.0);
+        assert!(!chart
+            .take_input_events()
+            .iter()
+            .any(|event| matches!(event, ChartInputEvent::DrawingCreated(_))));
+        click(&mut chart, 380.0, 170.0);
+        let events = chart.take_input_events();
+        let [ChartInputEvent::DrawingCreated(callout)] = events[..] else {
+            panic!("callout creation must notify the host: {events:?}");
+        };
+        assert_eq!(
+            chart.drawing_text_edit().map(|session| session.0),
+            Some(callout)
+        );
+        chart.commit_drawing_text_edit();
+        assert!(chart.set_drawing_tool(Some(DrawingKind::AnchoredText), None, None));
+        click(&mut chart, 210.0, 145.0);
+        let events = chart.take_input_events();
+        let [ChartInputEvent::DrawingCreated(anchored)] = events[..] else {
+            panic!("anchored text creation must notify the host: {events:?}");
+        };
+        let point = chart.drawing_px(chart.drawing(anchored).unwrap()).unwrap()[0];
+        assert!((point.0 - 210.0).abs() < 1e-4, "{point:?}");
+        assert!((point.1 - 145.0).abs() < 1e-4, "{point:?}");
     }
 }

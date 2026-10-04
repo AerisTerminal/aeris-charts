@@ -1328,6 +1328,13 @@ impl ChartEngine {
             self.frame_invalidation.all();
         } else if self.retained_frame.last_series_revision != series_revision {
             self.frame_invalidation.scene();
+            if self
+                .drawings
+                .iter()
+                .any(|drawing| drawing.kind == crate::DrawingKind::RegressionTrend)
+            {
+                self.frame_invalidation.drawings();
+            }
         } else if self.retained_frame.last_overlay_key != Some(overlay_key) {
             self.frame_invalidation.overlay();
         }

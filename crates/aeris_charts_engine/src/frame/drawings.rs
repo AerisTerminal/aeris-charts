@@ -11,6 +11,7 @@
 
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
+use std::fmt::Write;
 
 use super::{POSITION_ENTRY, PRIMARY};
 use crate::drawings::{
@@ -203,7 +204,70 @@ pub(super) struct PositionRunProgress {
 }
 
 impl ChartEngine {
+    fn drawing_level_style(style: &str) -> LineStyle {
+        match style {
+            "dotted" | "sparse_dotted" => LineStyle::Dotted,
+            "dashed" | "large_dashed" => LineStyle::Dashed,
+            _ => LineStyle::Solid,
+        }
+    }
+
+    fn drawing_level_fill(level: &crate::DrawingLevel, fallback: Color) -> Color {
+        let base = Color::parse_css(&level.color).unwrap_or(fallback);
+        level
+            .fill_color
+            .as_deref()
+            .and_then(Color::parse_css)
+            .unwrap_or(Color::rgba(base.r(), base.g(), base.b(), 35))
+    }
+
+    fn drawing_level_price_at(&self, drawing: &Drawing, y: f64, vpr: f64) -> Option<f64> {
+        let scale = self.drawing_scale_for(drawing.pane_index, drawing.price_scale)?;
+        let price = scale.coordinate_to_price(
+            y / vpr,
+            self.drawing_scale_base_for(drawing.pane_index, drawing.price_scale),
+        );
+        price.is_finite().then_some(price)
+    }
+
+    fn drawing_level_label(
+        &self,
+        drawing: &Drawing,
+        value: f64,
+        price: Option<f64>,
+    ) -> Option<String> {
+        let mut label = String::new();
+        if drawing.level_show_values {
+            write!(label, "{value}").expect("formatting a String cannot fail");
+        }
+        if drawing.level_show_percents {
+            if !label.is_empty() {
+                label.push_str(" · ");
+            }
+            write!(label, "{:.1}%", value * 100.0).expect("formatting a String cannot fail");
+        }
+        if drawing.level_show_prices {
+            if let Some(price) = price.filter(|price| price.is_finite()) {
+                if !label.is_empty() {
+                    label.push_str(" · ");
+                }
+                label.push_str(&self.price_formatter.format(price));
+            }
+        }
+        (!label.is_empty()).then_some(label)
+    }
+
+    fn drawing_level_align(drawing: &Drawing) -> TextAlign {
+        match drawing.level_label_align.as_str() {
+            "left" => TextAlign::Left,
+            "center" => TextAlign::Center,
+            _ => TextAlign::Right,
+        }
+    }
     fn drawing_frame_text<'a>(&self, drawing: &'a Drawing) -> Option<(&'a str, bool)> {
+        if drawing.kind == DrawingKind::PriceLabel {
+            return None;
+        }
         if !drawing.text.is_empty() {
             return Some((drawing.display_text(), false));
         }
@@ -255,7 +319,7 @@ impl ChartEngine {
             {
                 continue;
             }
-            let Some(px) = self.drawing_px(drawing) else {
+            let Some(px) = self.drawing_render_px(drawing) else {
                 continue;
             };
             let px = px
@@ -296,7 +360,16 @@ impl ChartEngine {
                 {
                     continue;
                 }
-                let Some(px) = self.drawing_px(drawing) else {
+                let px = if drawing.kind == DrawingKind::RegressionTrend {
+                    self.drawing_coordinate_key(drawing).and_then(|key| {
+                        let mut runtime = self.drawing_runtime.borrow_mut();
+                        self.drawing_px_cached(drawing, &mut runtime, key)
+                            .map(<[(f64, f64)]>::to_vec)
+                    })
+                } else {
+                    self.drawing_render_px(drawing)
+                };
+                let Some(px) = px else {
                     continue;
                 };
                 let px = px
@@ -393,19 +466,14 @@ impl ChartEngine {
                     anchors.len() == pending.drawing.kind.anchor_count()
                 };
                 if ready {
-                    let px: Option<Vec<(f64, f64)>> = anchors
-                        .iter()
-                        .map(|&point| {
-                            self.drawing_to_px_for(pane_index, pending.drawing.price_scale, point)
-                        })
-                        .collect();
+                    let mut preview_drawing = pending.drawing.clone();
+                    preview_drawing.points = anchors.clone();
+                    let px = self.drawing_render_px(&preview_drawing);
                     if let Some(px) = px {
                         let px: Vec<(f64, f64)> =
                             px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
-                        let mut preview_drawing = pending.drawing.clone();
                         // Semantic statistics (measure direction, labels) read the full
                         // placed-plus-preview anchor set, exactly as the commit will store it.
-                        preview_drawing.points = anchors.clone();
                         if preview_drawing.kind.spec().handles == DrawingHandleMode::RectangleBounds
                         {
                             if let Some(fill) = preview_drawing.preview_fill_color.clone() {
@@ -476,6 +544,7 @@ impl ChartEngine {
         let px = self.drawing_px_cached(drawing, &mut runtime, key)?;
         Some(
             px.iter()
+                .take(drawing.points.len())
                 .map(|&(x, y)| (x * hpr, y * vpr))
                 .collect::<Vec<_>>(),
         )
@@ -549,7 +618,7 @@ impl ChartEngine {
         let Some(drawing) = self.drawing(id) else {
             return;
         };
-        if drawing.kind != DrawingKind::Text {
+        if drawing.kind != DrawingKind::Text && !drawing.kind.is_text_annotation() {
             return;
         }
         let Some(px) = self.overlay_drawing_px(pane_index, id, hpr, vpr) else {
@@ -568,6 +637,10 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
     ) {
+        if drawing.kind == DrawingKind::BarsPattern && !drawing.bars_pattern.is_empty() {
+            self.build_bars_pattern_prims(drawing, pane_w_px, vpr, out, points);
+            return;
+        }
         if matches!(
             drawing.kind,
             DrawingKind::FixedRangeVolumeProfile
@@ -593,6 +666,7 @@ impl ChartEngine {
                 line_width: drawing.width,
                 device_scale: vpr,
                 extend_left: drawing.extend_left,
+                icon_size: drawing.icon_size,
                 extend_right: drawing.extend_right,
             },
         ) else {
@@ -682,6 +756,988 @@ impl ChartEngine {
                     y1: y1.round().max(0.0) as i32,
                     width: crisp_width,
                     style: drawing.style,
+                    color,
+                });
+            }
+            DrawingBodyGeometry::Cross {
+                x,
+                y,
+                pane_w,
+                pane_top,
+                pane_bottom,
+            } => {
+                out.push(Prim::HLine {
+                    y: y.round() as i32,
+                    x0: 0,
+                    x1: pane_w.round() as i32,
+                    width: crisp_width,
+                    style: drawing.style,
+                    color,
+                });
+                out.push(Prim::VLine {
+                    x: x.round() as i32,
+                    y0: pane_top.round().max(0.0) as i32,
+                    y1: pane_bottom.round().max(0.0) as i32,
+                    width: crisp_width,
+                    style: drawing.style,
+                    color,
+                });
+            }
+            DrawingBodyGeometry::Channel { first, second } => {
+                if drawing.fill_enabled {
+                    let fill = drawing
+                        .fill_color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
+                    if drawing.kind == DrawingKind::DisjointChannel {
+                        let a = [first[0].0 as f32, first[0].1 as f32];
+                        let b = [first[1].0 as f32, first[1].1 as f32];
+                        let c = [second[1].0 as f32, second[1].1 as f32];
+                        let d = [second[0].0 as f32, second[0].1 as f32];
+                        out.push(Prim::Triangle {
+                            a,
+                            b,
+                            c,
+                            color: fill,
+                        });
+                        out.push(Prim::Triangle {
+                            a,
+                            b: c,
+                            c: d,
+                            color: fill,
+                        });
+                    } else {
+                        let upper_first = points.len() as u32;
+                        points.extend(first.map(|(x, y)| [x as f32, y as f32]));
+                        let lower_first = points.len() as u32;
+                        points.extend(second.map(|(x, y)| [x as f32, y as f32]));
+                        out.push(Prim::BandFill {
+                            upper_first,
+                            lower_first,
+                            point_count: 2,
+                            line_type: LineType::Simple,
+                            fill,
+                        });
+                    }
+                }
+                push_segment(first[0], first[1], drawing, color, vpr, out, points);
+                push_segment(second[0], second[1], drawing, color, vpr, out, points);
+            }
+            DrawingBodyGeometry::Regression {
+                center,
+                upper,
+                lower,
+            } => {
+                if drawing.fill_enabled {
+                    let fill = drawing
+                        .fill_color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 35));
+                    let upper_first = points.len() as u32;
+                    points.extend(upper.map(|(x, y)| [x as f32, y as f32]));
+                    let lower_first = points.len() as u32;
+                    points.extend(lower.map(|(x, y)| [x as f32, y as f32]));
+                    out.push(Prim::BandFill {
+                        upper_first,
+                        lower_first,
+                        point_count: 2,
+                        line_type: LineType::Simple,
+                        fill,
+                    });
+                }
+                for segment in [lower, upper, center] {
+                    push_segment(segment[0], segment[1], drawing, color, vpr, out, points);
+                }
+            }
+            DrawingBodyGeometry::Fibonacci(fib) => {
+                let mut previous: Option<((f64, f64), (f64, f64))> = None;
+                for level in &drawing.levels {
+                    if !level.visible {
+                        previous = None;
+                        continue;
+                    }
+                    let ((x0, y0), (x1, y1)) =
+                        self.drawing_fibonacci_level_segment(drawing, fib, level.value, vpr);
+                    let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                    if drawing.fill_enabled && level.fill_between {
+                        if let Some((prior_a, prior_b)) = previous {
+                            let fill = level
+                                .fill_color
+                                .as_deref()
+                                .and_then(Color::parse_css)
+                                .unwrap_or(Color::rgba(
+                                    level_color.r(),
+                                    level_color.g(),
+                                    level_color.b(),
+                                    35,
+                                ));
+                            if (y0 - y1).abs() <= f64::EPSILON {
+                                out.push(Prim::Rect {
+                                    rect: IRect {
+                                        x: x0.min(x1).round() as i32,
+                                        y: y0.min(prior_a.1).round() as i32,
+                                        w: (x1 - x0).abs().round().max(1.0) as i32,
+                                        h: (y0 - prior_a.1).abs().round().max(1.0) as i32,
+                                    },
+                                    color: fill,
+                                });
+                            } else {
+                                let upper_first = points.len() as u32;
+                                points.extend([
+                                    [prior_a.0 as f32, prior_a.1 as f32],
+                                    [prior_b.0 as f32, prior_b.1 as f32],
+                                ]);
+                                let lower_first = points.len() as u32;
+                                points.extend([[x0 as f32, y0 as f32], [x1 as f32, y1 as f32]]);
+                                out.push(Prim::BandFill {
+                                    upper_first,
+                                    lower_first,
+                                    point_count: 2,
+                                    line_type: LineType::Simple,
+                                    fill,
+                                });
+                            }
+                        }
+                    }
+                    previous = Some(((x0, y0), (x1, y1)));
+                }
+                for level in &drawing.levels {
+                    if !level.visible {
+                        continue;
+                    }
+                    let ((x0, y0), (x1, y1)) =
+                        self.drawing_fibonacci_level_segment(drawing, fib, level.value, vpr);
+                    let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                    let style = match level.style.as_str() {
+                        "dotted" | "sparse_dotted" => LineStyle::Dotted,
+                        "dashed" | "large_dashed" => LineStyle::Dashed,
+                        _ => LineStyle::Solid,
+                    };
+                    if (y0 - y1).abs() <= f64::EPSILON {
+                        out.push(Prim::HLine {
+                            y: y0.round() as i32,
+                            x0: x0.min(x1).round() as i32,
+                            x1: x0.max(x1).round() as i32,
+                            width: crisp_width,
+                            style,
+                            color: level_color,
+                        });
+                    } else {
+                        let first_point = points.len() as u32;
+                        points.extend([[x0 as f32, y0 as f32], [x1 as f32, y1 as f32]]);
+                        out.push(Prim::Polyline {
+                            first_point,
+                            point_count: 2,
+                            width: (drawing.width * vpr) as f32,
+                            style,
+                            line_type: LineType::Simple,
+                            color: level_color,
+                        });
+                    }
+                    if level.label_visible {
+                        let price = self.drawing_level_price_at(drawing, y1, vpr);
+                        if let Some(text) = self.drawing_level_label(drawing, level.value, price) {
+                            let label_x = match drawing.level_label_align.as_str() {
+                                "left" => x0,
+                                "center" => (x0 + x1) / 2.0,
+                                _ => x1,
+                            };
+                            out.push(Prim::Text {
+                                x: label_x as f32,
+                                y: (y1 - 8.0 * vpr) as f32,
+                                text,
+                                color: level_color,
+                                size: (self.options.get().layout.font_size * vpr) as f32,
+                                family: self.options.get().layout.font_family.clone(),
+                                align: Self::drawing_level_align(drawing),
+                                weight: drawing.text_weight.unwrap_or(400),
+                                italic: drawing.text_italic,
+                            });
+                        }
+                    }
+                }
+            }
+            DrawingBodyGeometry::TimeLevels(time) => {
+                let mut previous_x = None;
+                for level in &drawing.levels {
+                    if !level.visible {
+                        previous_x = None;
+                        continue;
+                    }
+                    let x = time.x(drawing.level_value(level.value));
+                    if drawing.fill_enabled && level.fill_between {
+                        if let Some(prior_x) = previous_x {
+                            let left = x.min(prior_x).max(0.0);
+                            let right = x.max(prior_x).min(f64::from(pane_w_px));
+                            if right > left {
+                                let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                                let fill = level
+                                    .fill_color
+                                    .as_deref()
+                                    .and_then(Color::parse_css)
+                                    .unwrap_or(Color::rgba(
+                                        level_color.r(),
+                                        level_color.g(),
+                                        level_color.b(),
+                                        35,
+                                    ));
+                                out.push(Prim::Rect {
+                                    rect: IRect {
+                                        x: left.round() as i32,
+                                        y: time.pane_top.round().max(0.0) as i32,
+                                        w: (right - left).round().max(1.0) as i32,
+                                        h: (time.pane_bottom - time.pane_top).round().max(1.0)
+                                            as i32,
+                                    },
+                                    color: fill,
+                                });
+                            }
+                        }
+                    }
+                    previous_x = Some(x);
+                }
+                for level in &drawing.levels {
+                    if !level.visible {
+                        continue;
+                    }
+                    let x = time.x(drawing.level_value(level.value));
+                    if !(0.0..=f64::from(pane_w_px)).contains(&x) {
+                        continue;
+                    }
+                    let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                    let style = match level.style.as_str() {
+                        "dotted" | "sparse_dotted" => LineStyle::Dotted,
+                        "dashed" | "large_dashed" => LineStyle::Dashed,
+                        _ => LineStyle::Solid,
+                    };
+                    out.push(Prim::VLine {
+                        x: x.round() as i32,
+                        y0: time.pane_top.round().max(0.0) as i32,
+                        y1: time.pane_bottom.round().max(0.0) as i32,
+                        width: crisp_width,
+                        style,
+                        color: level_color,
+                    });
+                    if level.label_visible {
+                        if let Some(text) = self.drawing_level_label(drawing, level.value, None) {
+                            out.push(Prim::Text {
+                                x: (x + if drawing.level_label_align == "left" {
+                                    4.0 * vpr
+                                } else if drawing.level_label_align == "right" {
+                                    -4.0 * vpr
+                                } else {
+                                    0.0
+                                }) as f32,
+                                y: (time.pane_top + 14.0 * vpr) as f32,
+                                text,
+                                color: level_color,
+                                size: (self.options.get().layout.font_size * vpr) as f32,
+                                family: self.options.get().layout.font_family.clone(),
+                                align: Self::drawing_level_align(drawing),
+                                weight: drawing.text_weight.unwrap_or(400),
+                                italic: drawing.text_italic,
+                            });
+                        }
+                    }
+                }
+            }
+            DrawingBodyGeometry::FibonacciArcs(arcs) => {
+                if arcs.kind == DrawingKind::FibonacciWedge {
+                    for &side in &px[1..3] {
+                        push_segment(px[0], side, drawing, color, vpr, out, points);
+                    }
+                }
+                let segments = arcs.segments();
+                let mut previous = None;
+                for level in &drawing.levels {
+                    if !level.visible || drawing.level_value(level.value) <= 0.0 {
+                        previous = None;
+                        continue;
+                    }
+                    let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                    if drawing.fill_enabled && level.fill_between {
+                        if let Some(prior_value) = previous {
+                            let fill = level
+                                .fill_color
+                                .as_deref()
+                                .and_then(Color::parse_css)
+                                .unwrap_or(Color::rgba(
+                                    level_color.r(),
+                                    level_color.g(),
+                                    level_color.b(),
+                                    35,
+                                ));
+                            let upper_first = points.len() as u32;
+                            for step in 0..=segments {
+                                let (x, y) =
+                                    arcs.point(prior_value, step as f64 / f64::from(segments));
+                                points.push([x as f32, y as f32]);
+                            }
+                            let lower_first = points.len() as u32;
+                            for step in 0..=segments {
+                                let (x, y) = arcs.point(
+                                    drawing.level_value(level.value),
+                                    step as f64 / f64::from(segments),
+                                );
+                                points.push([x as f32, y as f32]);
+                            }
+                            out.push(Prim::BandFill {
+                                upper_first,
+                                lower_first,
+                                point_count: segments + 1,
+                                line_type: LineType::Simple,
+                                fill,
+                            });
+                        }
+                    }
+                    previous = Some(drawing.level_value(level.value));
+                }
+                for level in &drawing.levels {
+                    if !level.visible || drawing.level_value(level.value) <= 0.0 {
+                        continue;
+                    }
+                    let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                    let style = match level.style.as_str() {
+                        "dotted" | "sparse_dotted" => LineStyle::Dotted,
+                        "dashed" | "large_dashed" => LineStyle::Dashed,
+                        _ => LineStyle::Solid,
+                    };
+                    let first_point = points.len() as u32;
+                    for step in 0..=segments {
+                        let (x, y) = arcs.point(
+                            drawing.level_value(level.value),
+                            step as f64 / f64::from(segments),
+                        );
+                        points.push([x as f32, y as f32]);
+                    }
+                    out.push(Prim::Polyline {
+                        first_point,
+                        point_count: segments + 1,
+                        width: (drawing.width * vpr) as f32,
+                        style,
+                        line_type: LineType::Simple,
+                        color: level_color,
+                    });
+                    if level.label_visible {
+                        let (x, y) = arcs.point(drawing.level_value(level.value), 0.5);
+                        let price = self.drawing_level_price_at(drawing, y, vpr);
+                        if let Some(text) = self.drawing_level_label(drawing, level.value, price) {
+                            out.push(Prim::Text {
+                                x: x as f32,
+                                y: (y - 8.0 * vpr) as f32,
+                                text,
+                                color: level_color,
+                                size: (self.options.get().layout.font_size * vpr) as f32,
+                                family: self.options.get().layout.font_family.clone(),
+                                align: Self::drawing_level_align(drawing),
+                                weight: drawing.text_weight.unwrap_or(400),
+                                italic: drawing.text_italic,
+                            });
+                        }
+                    }
+                }
+            }
+            DrawingBodyGeometry::Pitchfork(fork) => {
+                let mut previous: Option<((f64, f64), (f64, f64))> = None;
+                for level in &drawing.levels {
+                    if !level.visible {
+                        previous = None;
+                        continue;
+                    }
+                    let segment = fork.segment(drawing.level_value(level.value));
+                    if drawing.fill_enabled && level.fill_between {
+                        if let Some((prior_a, prior_b)) = previous {
+                            let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                            let fill = level
+                                .fill_color
+                                .as_deref()
+                                .and_then(Color::parse_css)
+                                .unwrap_or(Color::rgba(
+                                    level_color.r(),
+                                    level_color.g(),
+                                    level_color.b(),
+                                    35,
+                                ));
+                            let upper_first = points.len() as u32;
+                            points.extend([
+                                [prior_a.0 as f32, prior_a.1 as f32],
+                                [prior_b.0 as f32, prior_b.1 as f32],
+                            ]);
+                            let lower_first = points.len() as u32;
+                            points.extend([
+                                [segment.0 .0 as f32, segment.0 .1 as f32],
+                                [segment.1 .0 as f32, segment.1 .1 as f32],
+                            ]);
+                            out.push(Prim::BandFill {
+                                upper_first,
+                                lower_first,
+                                point_count: 2,
+                                line_type: LineType::Simple,
+                                fill,
+                            });
+                        }
+                    }
+                    previous = Some(segment);
+                }
+                for level in &drawing.levels {
+                    if !level.visible {
+                        continue;
+                    }
+                    let (a, b) = fork.segment(drawing.level_value(level.value));
+                    let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                    let style = match level.style.as_str() {
+                        "dotted" | "sparse_dotted" => LineStyle::Dotted,
+                        "dashed" | "large_dashed" => LineStyle::Dashed,
+                        _ => LineStyle::Solid,
+                    };
+                    let first_point = points.len() as u32;
+                    points.extend([[a.0 as f32, a.1 as f32], [b.0 as f32, b.1 as f32]]);
+                    out.push(Prim::Polyline {
+                        first_point,
+                        point_count: 2,
+                        width: (drawing.width * vpr) as f32,
+                        style,
+                        line_type: LineType::Simple,
+                        color: level_color,
+                    });
+                    if level.label_visible {
+                        let anchor = fork.anchor(drawing.level_value(level.value));
+                        let price = self.drawing_level_price_at(drawing, anchor.1, vpr);
+                        if let Some(text) = self.drawing_level_label(drawing, level.value, price) {
+                            out.push(Prim::Text {
+                                x: anchor.0 as f32,
+                                y: (anchor.1 - 8.0 * vpr) as f32,
+                                text,
+                                color: level_color,
+                                size: (self.options.get().layout.font_size * vpr) as f32,
+                                family: self.options.get().layout.font_family.clone(),
+                                align: Self::drawing_level_align(drawing),
+                                weight: drawing.text_weight.unwrap_or(400),
+                                italic: drawing.text_italic,
+                            });
+                        }
+                    }
+                }
+            }
+            DrawingBodyGeometry::Cycles(cycles) => {
+                let fill = drawing
+                    .fill_color
+                    .as_deref()
+                    .and_then(Color::parse_css)
+                    .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 24));
+                let mut previous_x: Option<f64> = None;
+                cycles.for_each_visible_line(|index, x| {
+                    if drawing.fill_enabled && index % 2 != 0 {
+                        if let Some(prior_x) = previous_x {
+                            out.push(Prim::Rect {
+                                rect: IRect {
+                                    x: prior_x.min(x).round() as i32,
+                                    y: cycles.pane_top.round().max(0.0) as i32,
+                                    w: (x - prior_x).abs().round().max(1.0) as i32,
+                                    h: (cycles.pane_bottom - cycles.pane_top).round().max(1.0)
+                                        as i32,
+                                },
+                                color: fill,
+                            });
+                        }
+                    }
+                    previous_x = Some(x);
+                });
+                cycles.for_each_visible_line(|index, x| {
+                    out.push(Prim::VLine {
+                        x: x.round() as i32,
+                        y0: cycles.pane_top.round().max(0.0) as i32,
+                        y1: cycles.pane_bottom.round().max(0.0) as i32,
+                        width: crisp_width,
+                        style: drawing.style,
+                        color,
+                    });
+                    if drawing.kind == DrawingKind::TimeCycles {
+                        out.push(Prim::Text {
+                            x: (x + 4.0 * vpr) as f32,
+                            y: (cycles.pane_top + 14.0 * vpr) as f32,
+                            text: index.to_string(),
+                            color,
+                            size: (self.options.get().layout.font_size * vpr) as f32,
+                            family: self.options.get().layout.font_family.clone(),
+                            align: TextAlign::Left,
+                            weight: drawing.text_weight.unwrap_or(400),
+                            italic: drawing.text_italic,
+                        });
+                    }
+                });
+            }
+            DrawingBodyGeometry::Sine(sine) => {
+                if let Some((left, right)) = sine.visible_x() {
+                    let count = sine.sample_count();
+                    let first_point = points.len() as u32;
+                    for step in 0..=count {
+                        let x = left + (right - left) * f64::from(step) / f64::from(count);
+                        points.push([x as f32, sine.y(x) as f32]);
+                    }
+                    out.push(Prim::Polyline {
+                        first_point,
+                        point_count: count + 1,
+                        width: (drawing.width * vpr) as f32,
+                        style: drawing.style,
+                        line_type: LineType::Simple,
+                        color,
+                    });
+                }
+            }
+            DrawingBodyGeometry::Marker(marker) => {
+                if let Some((a, b)) = marker.stem() {
+                    push_segment(a, b, drawing, color, vpr, out, points);
+                }
+                let [a, b, c] = marker.triangle();
+                out.push(Prim::Triangle {
+                    a: [a.0 as f32, a.1 as f32],
+                    b: [b.0 as f32, b.1 as f32],
+                    c: [c.0 as f32, c.1 as f32],
+                    color,
+                });
+            }
+            DrawingBodyGeometry::PriceLabel { x, y } => {
+                let label = if drawing.text.is_empty() {
+                    self.price_formatter.format(drawing.points[0].price)
+                } else {
+                    drawing.text.clone()
+                };
+                let layout = &self.options.get().layout;
+                let size = drawing.resolved_text_size(layout.font_size) * vpr;
+                let width = self.measure_text_run(
+                    &label,
+                    size,
+                    &layout.font_family,
+                    drawing.text_weight.unwrap_or(400),
+                    drawing.text_italic,
+                );
+                let padding = 4.0 * vpr;
+                out.push(Prim::Rect {
+                    rect: IRect {
+                        x: (x - width - 2.0 * padding).round() as i32,
+                        y: (y - size * 0.6 - padding).round() as i32,
+                        w: (width + 2.0 * padding).round().max(1.0) as i32,
+                        h: (size * 1.2 + 2.0 * padding).round().max(1.0) as i32,
+                    },
+                    color,
+                });
+                out.push(Prim::Text {
+                    x: (x - padding) as f32,
+                    y: y as f32,
+                    text: label,
+                    color: drawing
+                        .text_color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(Color::rgb(255, 255, 255)),
+                    size: size as f32,
+                    family: layout.font_family.clone(),
+                    align: TextAlign::Right,
+                    weight: drawing.text_weight.unwrap_or(400),
+                    italic: drawing.text_italic,
+                });
+            }
+            DrawingBodyGeometry::IconStamp { center, size } => {
+                let rect = [
+                    (center.0 - size / 2.0) as f32,
+                    (center.1 - size / 2.0) as f32,
+                    size as f32,
+                    size as f32,
+                ];
+                if let Some(image) = drawing
+                    .icon_name
+                    .as_deref()
+                    .and_then(|name| self.drawing_icons.get(name))
+                {
+                    out.push(Prim::Image {
+                        image: image.clone(),
+                        rect,
+                        opacity: 1.0,
+                    });
+                } else {
+                    out.push(Prim::Rect {
+                        rect: IRect {
+                            x: rect[0].round() as i32,
+                            y: rect[1].round() as i32,
+                            w: size.round().max(1.0) as i32,
+                            h: size.round().max(1.0) as i32,
+                        },
+                        color,
+                    });
+                }
+            }
+            DrawingBodyGeometry::GannGrid(grid) => {
+                let box_bounds = grid.bounds();
+                if drawing.fill_enabled {
+                    let fill = drawing
+                        .fill_color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 24));
+                    out.push(Prim::Rect {
+                        rect: IRect {
+                            x: box_bounds.left.round() as i32,
+                            y: box_bounds.top.round() as i32,
+                            w: (box_bounds.right - box_bounds.left).round().max(1.0) as i32,
+                            h: (box_bounds.bottom - box_bounds.top).round().max(1.0) as i32,
+                        },
+                        color: fill,
+                    });
+                    let mut prior_grid: Option<f64> = None;
+                    for level in drawing.levels.iter().filter(|level| level.visible) {
+                        let value = drawing.level_value(level.value);
+                        if level.fill_between {
+                            if let Some(previous) = prior_grid {
+                                let x0 = grid.start.0 + (grid.end.0 - grid.start.0) * previous;
+                                let x1 = grid.start.0 + (grid.end.0 - grid.start.0) * value;
+                                let y0 = grid.start.1 + (grid.end.1 - grid.start.1) * previous;
+                                let y1 = grid.start.1 + (grid.end.1 - grid.start.1) * value;
+                                let fill = Self::drawing_level_fill(level, color);
+                                out.push(Prim::Rect {
+                                    rect: IRect {
+                                        x: x0.min(x1).round() as i32,
+                                        y: y0.min(y1).round() as i32,
+                                        w: (x1 - x0).abs().round().max(1.0) as i32,
+                                        h: (y1 - y0).abs().round().max(1.0) as i32,
+                                    },
+                                    color: fill,
+                                });
+                            }
+                        }
+                        prior_grid = Some(value);
+                    }
+                    let mut prior_fan: Option<(f64, f64)> = None;
+                    for level in drawing.gann_fans.iter().filter(|level| level.visible) {
+                        let (origin, end) = grid.fan_segment(level.value, drawing.level_reverse);
+                        if level.fill_between {
+                            if let Some(previous) = prior_fan {
+                                out.push(Prim::Triangle {
+                                    a: [origin.0 as f32, origin.1 as f32],
+                                    b: [previous.0 as f32, previous.1 as f32],
+                                    c: [end.0 as f32, end.1 as f32],
+                                    color: Self::drawing_level_fill(level, color),
+                                });
+                            }
+                        }
+                        prior_fan = Some(end);
+                    }
+                    let mut prior_arc: Option<f64> = None;
+                    for level in drawing.gann_arcs.iter().filter(|level| level.visible) {
+                        if level.fill_between {
+                            if let Some(previous) = prior_arc {
+                                let upper_first = points.len() as u32;
+                                for step in 0..=32 {
+                                    let p = grid.arc_point(
+                                        previous,
+                                        f64::from(step) / 32.0,
+                                        drawing.level_reverse,
+                                    );
+                                    points.push([p.0 as f32, p.1 as f32]);
+                                }
+                                let lower_first = points.len() as u32;
+                                for step in 0..=32 {
+                                    let p = grid.arc_point(
+                                        level.value,
+                                        f64::from(step) / 32.0,
+                                        drawing.level_reverse,
+                                    );
+                                    points.push([p.0 as f32, p.1 as f32]);
+                                }
+                                out.push(Prim::BandFill {
+                                    upper_first,
+                                    lower_first,
+                                    point_count: 33,
+                                    line_type: LineType::Simple,
+                                    fill: Self::drawing_level_fill(level, color),
+                                });
+                            }
+                        }
+                        prior_arc = Some(level.value);
+                    }
+                }
+                let corners = [
+                    (box_bounds.left, box_bounds.top),
+                    (box_bounds.right, box_bounds.top),
+                    (box_bounds.right, box_bounds.bottom),
+                    (box_bounds.left, box_bounds.bottom),
+                ];
+                for index in 0..4 {
+                    push_segment(
+                        corners[index],
+                        corners[(index + 1) % 4],
+                        drawing,
+                        color,
+                        vpr,
+                        out,
+                        points,
+                    );
+                }
+                for level in drawing.levels.iter().filter(|level| level.visible) {
+                    let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                    let style = match level.style.as_str() {
+                        "dotted" | "sparse_dotted" => LineStyle::Dotted,
+                        "dashed" | "large_dashed" => LineStyle::Dashed,
+                        _ => LineStyle::Solid,
+                    };
+                    for (a, b) in grid.level_lines(drawing.level_value(level.value)) {
+                        let first_point = points.len() as u32;
+                        points.extend([[a.0 as f32, a.1 as f32], [b.0 as f32, b.1 as f32]]);
+                        out.push(Prim::Polyline {
+                            first_point,
+                            point_count: 2,
+                            width: (drawing.width * vpr) as f32,
+                            style,
+                            line_type: LineType::Simple,
+                            color: level_color,
+                        });
+                    }
+                    if level.label_visible {
+                        let x = grid.start.0
+                            + (grid.end.0 - grid.start.0) * drawing.level_value(level.value);
+                        let y = grid.start.1
+                            + (grid.end.1 - grid.start.1) * drawing.level_value(level.value);
+                        let price = self
+                            .drawing_scale_for(drawing.pane_index, drawing.price_scale)
+                            .map(|scale| {
+                                scale.coordinate_to_price(
+                                    y / vpr,
+                                    self.drawing_scale_base_for(
+                                        drawing.pane_index,
+                                        drawing.price_scale,
+                                    ),
+                                )
+                            });
+                        if let Some(text) = self.drawing_level_label(drawing, level.value, price) {
+                            out.push(Prim::Text {
+                                x: x as f32,
+                                y: (y - 8.0 * vpr) as f32,
+                                text,
+                                color: level_color,
+                                size: (self.options.get().layout.font_size * vpr) as f32,
+                                family: self.options.get().layout.font_family.clone(),
+                                align: Self::drawing_level_align(drawing),
+                                weight: drawing.text_weight.unwrap_or(400),
+                                italic: drawing.text_italic,
+                            });
+                        }
+                    }
+                }
+                if grid.kind != DrawingKind::GannBox {
+                    for level in drawing.gann_fans.iter().filter(|level| level.visible) {
+                        let (a, b) = grid.fan_segment(level.value, drawing.level_reverse);
+                        let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                        let first_point = points.len() as u32;
+                        points.extend([[a.0 as f32, a.1 as f32], [b.0 as f32, b.1 as f32]]);
+                        out.push(Prim::Polyline {
+                            first_point,
+                            point_count: 2,
+                            width: (drawing.width * vpr) as f32,
+                            style: Self::drawing_level_style(&level.style),
+                            line_type: LineType::Simple,
+                            color: level_color,
+                        });
+                    }
+                    for level in drawing.gann_arcs.iter().filter(|level| level.visible) {
+                        let level_color = Color::parse_css(&level.color).unwrap_or(color);
+                        let first_point = points.len() as u32;
+                        for step in 0..=32 {
+                            let point = grid.arc_point(
+                                level.value,
+                                f64::from(step) / 32.0,
+                                drawing.level_reverse,
+                            );
+                            points.push([point.0 as f32, point.1 as f32]);
+                        }
+                        out.push(Prim::Polyline {
+                            first_point,
+                            point_count: 33,
+                            width: (drawing.width * vpr) as f32,
+                            style: Self::drawing_level_style(&level.style),
+                            line_type: LineType::Simple,
+                            color: level_color,
+                        });
+                    }
+                }
+            }
+            DrawingBodyGeometry::Quad { corners } => {
+                if drawing.fill_enabled {
+                    let fill = drawing
+                        .fill_color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
+                    let a = [corners[0].0 as f32, corners[0].1 as f32];
+                    let b = [corners[1].0 as f32, corners[1].1 as f32];
+                    let c = [corners[2].0 as f32, corners[2].1 as f32];
+                    let d = [corners[3].0 as f32, corners[3].1 as f32];
+                    out.push(Prim::Triangle {
+                        a,
+                        b,
+                        c,
+                        color: fill,
+                    });
+                    out.push(Prim::Triangle {
+                        a,
+                        b: c,
+                        c: d,
+                        color: fill,
+                    });
+                }
+                for index in 0..4 {
+                    push_segment(
+                        corners[index],
+                        corners[(index + 1) % 4],
+                        drawing,
+                        color,
+                        vpr,
+                        out,
+                        points,
+                    );
+                }
+            }
+            DrawingBodyGeometry::Ellipse { center, rx, ry } => {
+                if rx > 0.0 && ry > 0.0 {
+                    if drawing.fill_enabled {
+                        let fill = drawing
+                            .fill_color
+                            .as_deref()
+                            .and_then(Color::parse_css)
+                            .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
+                        let upper_first = points.len() as u32;
+                        for step in 0..=32 {
+                            let theta = std::f64::consts::PI * step as f64 / 32.0;
+                            points.push([
+                                (center.0 - rx * theta.cos()) as f32,
+                                (center.1 - ry * theta.sin()) as f32,
+                            ]);
+                        }
+                        let lower_first = points.len() as u32;
+                        for step in 0..=32 {
+                            let theta = std::f64::consts::PI * step as f64 / 32.0;
+                            points.push([
+                                (center.0 - rx * theta.cos()) as f32,
+                                (center.1 + ry * theta.sin()) as f32,
+                            ]);
+                        }
+                        out.push(Prim::BandFill {
+                            upper_first,
+                            lower_first,
+                            point_count: 33,
+                            line_type: LineType::Simple,
+                            fill,
+                        });
+                    }
+                    let first_point = points.len() as u32;
+                    for step in 0..=64 {
+                        let theta = std::f64::consts::TAU * step as f64 / 64.0;
+                        points.push([
+                            (center.0 + rx * theta.cos()) as f32,
+                            (center.1 + ry * theta.sin()) as f32,
+                        ]);
+                    }
+                    out.push(Prim::Polyline {
+                        first_point,
+                        point_count: 65,
+                        width: (drawing.width * vpr) as f32,
+                        style: drawing.style,
+                        line_type: LineType::Simple,
+                        color,
+                    });
+                }
+            }
+            DrawingBodyGeometry::Circle { center, radius } => {
+                let fill = if drawing.fill_enabled {
+                    drawing
+                        .fill_color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51))
+                } else {
+                    Color::rgba(0, 0, 0, 0)
+                };
+                if drawing.fill_enabled {
+                    out.push(Prim::Circle {
+                        cx: center.0 as f32,
+                        cy: center.1 as f32,
+                        radius: radius as f32,
+                        fill,
+                        stroke_width: 0.0,
+                        stroke: color,
+                    });
+                }
+                let first_point = points.len() as u32;
+                for step in 0..=64 {
+                    let theta = std::f64::consts::TAU * step as f64 / 64.0;
+                    points.push([
+                        (center.0 + radius * theta.cos()) as f32,
+                        (center.1 + radius * theta.sin()) as f32,
+                    ]);
+                }
+                out.push(Prim::Polyline {
+                    first_point,
+                    point_count: 65,
+                    width: (drawing.width * vpr) as f32,
+                    style: drawing.style,
+                    line_type: LineType::Simple,
+                    color,
+                });
+            }
+            DrawingBodyGeometry::Triangle { corners } => {
+                if drawing.fill_enabled {
+                    let fill = drawing
+                        .fill_color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
+                    out.push(Prim::Triangle {
+                        a: [corners[0].0 as f32, corners[0].1 as f32],
+                        b: [corners[1].0 as f32, corners[1].1 as f32],
+                        c: [corners[2].0 as f32, corners[2].1 as f32],
+                        color: fill,
+                    });
+                }
+                for index in 0..3 {
+                    push_segment(
+                        corners[index],
+                        corners[(index + 1) % 3],
+                        drawing,
+                        color,
+                        vpr,
+                        out,
+                        points,
+                    );
+                }
+            }
+            DrawingBodyGeometry::Arc(arc) => {
+                let first_point = points.len() as u32;
+                for step in 0..=64 {
+                    let (x, y) = arc.point(step as f64 / 64.0);
+                    points.push([x as f32, y as f32]);
+                }
+                out.push(Prim::Polyline {
+                    first_point,
+                    point_count: 65,
+                    width: (drawing.width * vpr) as f32,
+                    style: drawing.style,
+                    line_type: LineType::Simple,
+                    color,
+                });
+            }
+            DrawingBodyGeometry::Curve(curve) => {
+                let first_point = points.len() as u32;
+                for step in 0..=64 {
+                    let (x, y) = curve.point(step as f64 / 64.0);
+                    points.push([x as f32, y as f32]);
+                }
+                out.push(Prim::Polyline {
+                    first_point,
+                    point_count: 65,
+                    width: (drawing.width * vpr) as f32,
+                    style: drawing.style,
+                    line_type: LineType::Simple,
                     color,
                 });
             }
@@ -793,6 +1849,16 @@ impl ChartEngine {
                 line_type,
                 terminal,
             } => {
+                let color = if drawing.kind == DrawingKind::Highlighter {
+                    Color::rgba(
+                        color.r(),
+                        color.g(),
+                        color.b(),
+                        ((color.a() as u16 * 64) / 255) as u8,
+                    )
+                } else {
+                    color
+                };
                 let first_point = points.len() as u32;
                 for &(x, y) in line_points {
                     points.push([x as f32, y as f32]);
@@ -839,7 +1905,145 @@ impl ChartEngine {
                         color,
                     });
                 }
+                if let Some(labels) = drawing.kind.vertex_labels() {
+                    let label_color = drawing
+                        .text_color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(color);
+                    let size =
+                        drawing.resolved_text_size(self.options.get().layout.font_size) * vpr;
+                    for (&(x, y), label) in line_points.iter().zip(labels.iter()) {
+                        out.push(Prim::Text {
+                            x: x as f32,
+                            y: (y - 8.0 * vpr) as f32,
+                            text: if drawing.kind.is_elliott() {
+                                format!("{label} ({})", drawing.wave_degree)
+                            } else {
+                                (*label).to_string()
+                            },
+                            color: label_color,
+                            size: size as f32,
+                            family: self.options.get().layout.font_family.clone(),
+                            align: TextAlign::Center,
+                            weight: drawing.text_weight.unwrap_or(400),
+                            italic: drawing.text_italic,
+                        });
+                    }
+                }
             }
+        }
+        if drawing.kind == DrawingKind::Forecast {
+            if let (Some(entry), Some(target)) = (drawing.points.first(), px.get(1)) {
+                let change = drawing.points[1].price - entry.price;
+                let percent = if entry.price.abs() > f64::EPSILON {
+                    change / entry.price.abs() * 100.0
+                } else {
+                    0.0
+                };
+                let result = match self.forecast_result(drawing) {
+                    Some(true) => "target reached",
+                    Some(false) => "expired",
+                    None => "pending",
+                };
+                out.push(Prim::Text {
+                    x: target.0 as f32,
+                    y: (target.1 - 10.0 * vpr) as f32,
+                    text: format!("{:+.1}% · {}", percent, result),
+                    color,
+                    size: (self.options.get().layout.font_size * vpr) as f32,
+                    family: self.options.get().layout.font_family.clone(),
+                    align: TextAlign::Center,
+                    weight: drawing.text_weight.unwrap_or(400),
+                    italic: drawing.text_italic,
+                });
+            }
+        }
+    }
+
+    fn build_bars_pattern_prims(
+        &self,
+        drawing: &Drawing,
+        pane_w_px: i32,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+    ) {
+        let color = Color::parse_css(&drawing.color).unwrap_or(PRIMARY);
+        let ghost = Color::rgba(color.r(), color.g(), color.b(), 160);
+        let hpr = f64::from(pane_w_px) / self.pane_w.max(1.0);
+        let tick = (self.time_scale.bar_spacing() * hpr * 0.25)
+            .round()
+            .clamp(2.0, 6.0) as i32;
+        let mode = drawing.bars_pattern_mode.as_str();
+        let first_point = points.len() as u32;
+        let mut line_count = 0_u32;
+        for &bar in &drawing.bars_pattern {
+            let projected = bar.project(drawing);
+            let mut encoded = [(0.0, 0.0); 4];
+            let mut valid = true;
+            for (slot, point) in encoded.iter_mut().zip(projected) {
+                if let Some((x, y)) =
+                    self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point)
+                {
+                    *slot = (x * hpr, y * vpr);
+                } else {
+                    valid = false;
+                    break;
+                }
+            }
+            if !valid {
+                continue;
+            }
+            let x = encoded[0].0.round() as i32;
+            if mode == "bars" {
+                if x < -tick || x > pane_w_px + tick {
+                    continue;
+                }
+                out.push(Prim::VLine {
+                    x,
+                    y0: encoded[1].1.min(encoded[2].1).round() as i32,
+                    y1: encoded[1].1.max(encoded[2].1).round() as i32,
+                    width: (drawing.width * vpr).round().max(1.0) as i32,
+                    style: drawing.style,
+                    color: ghost,
+                });
+                out.push(Prim::HLine {
+                    y: encoded[0].1.round() as i32,
+                    x0: x - tick,
+                    x1: x,
+                    width: 1,
+                    style: drawing.style,
+                    color: ghost,
+                });
+                out.push(Prim::HLine {
+                    y: encoded[3].1.round() as i32,
+                    x0: x,
+                    x1: x + tick,
+                    width: 1,
+                    style: drawing.style,
+                    color: ghost,
+                });
+            } else {
+                let index = match mode {
+                    "line_open" => 0,
+                    "line_high" => 1,
+                    "line_low" => 2,
+                    _ => 3,
+                };
+                points.push([encoded[index].0 as f32, encoded[index].1 as f32]);
+                line_count += 1;
+            }
+        }
+        if line_count >= 2 {
+            out.push(Prim::Polyline {
+                first_point,
+                point_count: line_count,
+                width: (drawing.width * vpr) as f32,
+                style: drawing.style,
+                line_type: LineType::Simple,
+                color: ghost,
+            });
         }
     }
 
@@ -1182,7 +2386,7 @@ impl ChartEngine {
         let Some((text, placeholder)) = self.drawing_frame_text(drawing) else {
             return;
         };
-        let is_text_tool = drawing.kind == DrawingKind::Text;
+        let is_text_tool = drawing.kind == DrawingKind::Text || drawing.kind.is_text_annotation();
         let (size, x, y, align, angle) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
         let layout = &self.options.get().layout;
         let mut color = self.drawing_text_color(drawing);
@@ -1338,12 +2542,11 @@ impl ChartEngine {
                             )
                         })
                         .unwrap_or_default(),
-                    crate::DrawingLabelMetric::Angle => drawing
-                        .points
+                    crate::DrawingLabelMetric::Angle => px
                         .get(1)
                         .map(|value| {
-                            let dx = value.logical - drawing.points[0].logical;
-                            let dy = value.price - first;
+                            let dx = value.0 - px[0].0;
+                            let dy = px[0].1 - value.1;
                             format!("{:.1}°", dy.atan2(dx).to_degrees())
                         })
                         .unwrap_or_default(),
@@ -1792,6 +2995,7 @@ impl ChartEngine {
                     line_width: drawing.width,
                     device_scale: vpr,
                     extend_left: drawing.extend_left,
+                    icon_size: drawing.icon_size,
                     extend_right: drawing.extend_right,
                 },
             ) else {
@@ -2125,6 +3329,7 @@ impl ChartEngine {
                     line_width: drawing.width,
                     device_scale: vpr,
                     extend_left: drawing.extend_left,
+                    icon_size: drawing.icon_size,
                     extend_right: drawing.extend_right,
                 },
             ) else {

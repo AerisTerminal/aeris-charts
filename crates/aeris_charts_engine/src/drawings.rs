@@ -17,9 +17,10 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use aeris_charts_render::color::Color;
-use aeris_charts_render::draw_list::{LineStyle, LineType};
+use aeris_charts_render::draw_list::{LineStyle, LineType, RasterImage};
 
 use super::*;
 
@@ -27,8 +28,8 @@ mod geometry;
 mod tools;
 
 pub(crate) use geometry::{
-    resolve_drawing_geometry, DrawingBodyGeometry, DrawingGeometryOptions, MeasureAxes,
-    MeasureGeometry, PositionGeometry, PositionZone,
+    resolve_drawing_geometry, DrawingBodyGeometry, DrawingGeometryOptions, FibonacciGeometry,
+    MeasureAxes, MeasureGeometry, PositionGeometry, PositionZone,
 };
 pub(crate) use tools::{
     DrawingHandleMode, DrawingLogicalExtent, DrawingMovementAxis, DrawingPlacement,
@@ -39,6 +40,198 @@ pub(crate) use tools::{
 pub type DrawingId = u32;
 /// Hard cap shared by live drawing APIs and persistence so variable-point tools remain bounded.
 pub(crate) const MAX_DRAWING_POINTS: usize = 100_000;
+pub const MAX_DRAWING_ICONS: usize = 32;
+pub const MAX_DRAWING_ICON_SIZE: u32 = 96;
+pub const MAX_DRAWING_ICON_NAME_BYTES: usize = 64;
+pub const MAX_BARS_PATTERN_BARS: usize = 512;
+
+/// Frozen source bar stored with a bars-pattern drawing. Offsets preserve whitespace gaps.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BarsPatternBar {
+    pub offset: u16,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+}
+
+impl BarsPatternBar {
+    pub(crate) fn valid(self) -> bool {
+        [self.open, self.high, self.low, self.close]
+            .iter()
+            .all(|value| value.is_finite())
+            && self.high >= self.low
+            && self.high >= self.open.max(self.close)
+            && self.low <= self.open.min(self.close)
+    }
+
+    pub(crate) fn project(self, drawing: &Drawing) -> [DrawingPoint; 4] {
+        let first = drawing.bars_pattern.first().copied().unwrap_or(self);
+        let last = drawing.bars_pattern.last().copied().unwrap_or(self);
+        let base = if drawing.bars_pattern_mirror_x {
+            last.close
+        } else {
+            first.close
+        };
+        let logical_offset = if drawing.bars_pattern_mirror_x {
+            last.offset.saturating_sub(self.offset)
+        } else {
+            self.offset
+        };
+        let target = drawing.points[2];
+        let map_price = |price: f64| {
+            target.price
+                + (price - base)
+                    * if drawing.bars_pattern_mirror_y {
+                        -1.0
+                    } else {
+                        1.0
+                    }
+        };
+        let logical = target.logical + f64::from(logical_offset);
+        let open = if drawing.bars_pattern_mirror_x {
+            self.close
+        } else {
+            self.open
+        };
+        let close = if drawing.bars_pattern_mirror_x {
+            self.open
+        } else {
+            self.close
+        };
+        [open, self.high, self.low, close].map(|price| DrawingPoint {
+            logical,
+            price: map_price(price),
+        })
+    }
+}
+
+fn valid_bars_pattern(bars: &[BarsPatternBar]) -> bool {
+    !bars.is_empty()
+        && bars.len() <= MAX_BARS_PATTERN_BARS
+        && bars.iter().all(|bar| bar.valid())
+        && bars.windows(2).all(|pair| pair[0].offset < pair[1].offset)
+        && bars
+            .last()
+            .is_some_and(|bar| usize::from(bar.offset) < MAX_BARS_PATTERN_BARS)
+}
+
+pub(crate) struct DrawingIconRegistry {
+    images: HashMap<String, RasterImage>,
+    next_key: u64,
+}
+
+impl Default for DrawingIconRegistry {
+    fn default() -> Self {
+        Self {
+            images: HashMap::new(),
+            next_key: 1_u64 << 62,
+        }
+    }
+}
+
+impl DrawingIconRegistry {
+    pub(crate) fn get(&self, name: &str) -> Option<&RasterImage> {
+        self.images.get(name)
+    }
+
+    fn set(&mut self, name: &str, width: u32, height: u32, pixels: Arc<[u8]>) -> bool {
+        let expected = usize::try_from(width)
+            .ok()
+            .and_then(|value| value.checked_mul(height as usize))
+            .and_then(|value| value.checked_mul(4));
+        if name.is_empty()
+            || name.len() > MAX_DRAWING_ICON_NAME_BYTES
+            || width == 0
+            || height == 0
+            || width > MAX_DRAWING_ICON_SIZE
+            || height > MAX_DRAWING_ICON_SIZE
+            || expected != Some(pixels.len())
+            || (self.images.len() >= MAX_DRAWING_ICONS && !self.images.contains_key(name))
+        {
+            return false;
+        }
+        let Some(next_key) = self.next_key.checked_add(1) else {
+            return false;
+        };
+        self.images.insert(
+            name.to_string(),
+            RasterImage {
+                key: self.next_key,
+                width,
+                height,
+                pixels,
+            },
+        );
+        self.next_key = next_key;
+        true
+    }
+
+    fn remove(&mut self, name: &str) -> bool {
+        self.images.remove(name).is_some()
+    }
+}
+
+impl ChartEngine {
+    pub(crate) fn drawing_fibonacci_level_segment(
+        &self,
+        drawing: &Drawing,
+        fib: FibonacciGeometry,
+        value: f64,
+        vpr: f64,
+    ) -> ((f64, f64), (f64, f64)) {
+        let effective = drawing.level_value(value);
+        let mut segment = fib.segment(effective);
+        if !drawing.level_log_scale || !drawing.kind.supports_log_levels() {
+            return segment;
+        }
+        let Some(scale) = self.drawing_scale_for(drawing.pane_index, drawing.price_scale) else {
+            return segment;
+        };
+        let base = self.drawing_scale_base_for(drawing.pane_index, drawing.price_scale);
+        let zero = fib.segment(0.0);
+        let one = fib.segment(1.0);
+        for (index, point) in [&mut segment.0, &mut segment.1].into_iter().enumerate() {
+            let (start, end) = if index == 0 {
+                (zero.0, one.0)
+            } else {
+                (zero.1, one.1)
+            };
+            let p0 = scale.coordinate_to_price(start.1 / vpr, base);
+            let p1 = scale.coordinate_to_price(end.1 / vpr, base);
+            if p0 > 0.0 && p1 > 0.0 {
+                let price = p0 * (p1 / p0).powf(effective);
+                let y = scale.price_to_coordinate(price, base) * vpr;
+                if y.is_finite() {
+                    point.1 = y;
+                }
+            }
+        }
+        segment
+    }
+    /// Register an immutable RGBA8 image under a chart-local name. Replacements use fresh keys.
+    pub fn set_drawing_icon(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        pixels: Arc<[u8]>,
+    ) -> bool {
+        if !self.drawing_icons.set(name, width, height, pixels) {
+            return false;
+        }
+        self.invalidate_frame_drawings();
+        true
+    }
+
+    pub fn remove_drawing_icon(&mut self, name: &str) -> bool {
+        if !self.drawing_icons.remove(name) {
+            return false;
+        }
+        self.invalidate_frame_drawings();
+        true
+    }
+}
 
 /// Open terminal chevron for the multi-click Path, ordered wing-tip-wing. `px` and `scale` are in
 /// the caller's coordinate space, allowing hit testing to use media px and frame emission to use
@@ -89,6 +282,7 @@ pub struct DrawingWorkStats {
 enum LogicalBounds {
     Full,
     From(f64),
+    Ray { start: f64, towards_right: bool },
     Finite { min: f64, max: f64 },
 }
 
@@ -111,6 +305,86 @@ impl DrawingBounds {
             min_price = min_price.min(point.price);
             max_price = max_price.max(point.price);
         }
+        if drawing.kind == DrawingKind::BarsPattern {
+            for &bar in &drawing.bars_pattern {
+                for projected in bar.project(drawing) {
+                    min_logical = min_logical.min(projected.logical);
+                    max_logical = max_logical.max(projected.logical);
+                    min_price = min_price.min(projected.price);
+                    max_price = max_price.max(projected.price);
+                }
+            }
+        }
+        if matches!(
+            drawing.kind,
+            DrawingKind::FibonacciRetracement | DrawingKind::FibonacciExtension
+        ) && drawing.points.len() == drawing.kind.anchor_count()
+        {
+            let (start, end) = if drawing.kind == DrawingKind::FibonacciRetracement {
+                (drawing.points[0].price, drawing.points[1].price)
+            } else {
+                (
+                    drawing.points[2].price,
+                    drawing.points[2].price + drawing.points[1].price - drawing.points[0].price,
+                )
+            };
+            for level in drawing.levels.iter().filter(|level| level.visible) {
+                let value = drawing.level_value(level.value);
+                let price = if drawing.level_log_scale && start > 0.0 && end > 0.0 {
+                    start * (end / start).powf(value)
+                } else {
+                    start + (end - start) * value
+                };
+                if price.is_finite() {
+                    min_price = min_price.min(price);
+                    max_price = max_price.max(price);
+                }
+            }
+        }
+        if matches!(
+            drawing.kind,
+            DrawingKind::GannBox | DrawingKind::GannSquare | DrawingKind::GannSquareFixed
+        ) && drawing.points.len() == 2
+        {
+            for level in drawing.levels.iter().filter(|level| level.visible) {
+                let value = drawing.level_value(level.value);
+                let logical = drawing.points[0].logical
+                    + (drawing.points[1].logical - drawing.points[0].logical) * value;
+                let price = drawing.points[0].price
+                    + (drawing.points[1].price - drawing.points[0].price) * value;
+                if logical.is_finite() && price.is_finite() {
+                    min_logical = min_logical.min(logical);
+                    max_logical = max_logical.max(logical);
+                    min_price = min_price.min(price);
+                    max_price = max_price.max(price);
+                }
+            }
+        }
+        if drawing.kind == DrawingKind::FibonacciExtension && drawing.points.len() == 3 {
+            let projected =
+                drawing.points[2].logical + (drawing.points[1].logical - drawing.points[0].logical);
+            min_logical = min_logical.min(projected);
+            max_logical = max_logical.max(projected);
+        }
+        if matches!(
+            drawing.kind,
+            DrawingKind::FibonacciTimeZones | DrawingKind::FibonacciTrendTime
+        ) && drawing.points.len() == drawing.kind.anchor_count()
+        {
+            let origin = if drawing.kind == DrawingKind::FibonacciTimeZones {
+                drawing.points[0].logical
+            } else {
+                drawing.points[2].logical
+            };
+            let step = drawing.points[1].logical - drawing.points[0].logical;
+            for level in drawing.levels.iter().filter(|level| level.visible) {
+                let projected = origin + step * drawing.level_value(level.value);
+                if projected.is_finite() {
+                    min_logical = min_logical.min(projected);
+                    max_logical = max_logical.max(projected);
+                }
+            }
+        }
         let spec = drawing.kind.spec();
         if spec.bounds_padding_ratio > 0.0 {
             let logical_pad = (max_logical - min_logical).abs() * spec.bounds_padding_ratio;
@@ -120,9 +394,24 @@ impl DrawingBounds {
             min_price -= price_pad;
             max_price += price_pad;
         }
+        let line_extension = matches!(
+            drawing.kind,
+            DrawingKind::TrendLine
+                | DrawingKind::InfoLine
+                | DrawingKind::TrendAngle
+                | DrawingKind::ArrowLine
+                | DrawingKind::FibonacciRetracement
+                | DrawingKind::FibonacciExtension
+                | DrawingKind::FibonacciChannel
+        ) && (drawing.extend_left || drawing.extend_right);
         let logical = match spec.logical_extent {
             DrawingLogicalExtent::Full => LogicalBounds::Full,
             DrawingLogicalExtent::FromFirst => LogicalBounds::From(min_logical),
+            DrawingLogicalExtent::Ray => LogicalBounds::Ray {
+                start: drawing.points[0].logical,
+                towards_right: drawing.points[1].logical >= drawing.points[0].logical,
+            },
+            DrawingLogicalExtent::Finite if line_extension => LogicalBounds::Full,
             DrawingLogicalExtent::Finite => LogicalBounds::Finite {
                 min: min_logical,
                 max: max_logical,
@@ -130,6 +419,7 @@ impl DrawingBounds {
         };
         let (min_price, max_price) = match spec.price_extent {
             DrawingPriceExtent::Full => (None, None),
+            DrawingPriceExtent::Finite if line_extension => (None, None),
             DrawingPriceExtent::Finite => (Some(min_price), Some(max_price)),
         };
         Self {
@@ -379,9 +669,178 @@ pub enum DrawingKind {
     DateRange,
     /// Two-anchor combined price and time measurement (also the Shift-click quick measure).
     DatePriceRange,
+    /// Two-anchor line projected from its first anchor through the second.
+    Ray,
+    /// Two-anchor line projected to both pane edges.
+    ExtendedLine,
+    /// Two-anchor segment carrying price and time measurements.
+    InfoLine,
+    /// Two-anchor segment carrying its visual angle.
+    TrendAngle,
+    /// One-anchor horizontal and vertical reference lines.
+    CrossLine,
+    /// Two-anchor segment with an arrow at its end.
+    ArrowLine,
+    /// Three-anchor channel with a parallel second boundary.
+    ParallelChannel,
+    /// Three-anchor channel with a horizontal upper boundary.
+    FlatTopChannel,
+    /// Three-anchor channel with a horizontal lower boundary.
+    FlatBottomChannel,
+    /// Four-anchor channel whose two boundaries are independently placed.
+    DisjointChannel,
+    /// Least-squares trend channel over the selected source's closes.
+    RegressionTrend,
+    /// Multi-click straight polyline without a terminal arrow.
+    Polyline,
+    /// Broad translucent freehand mark.
+    Highlighter,
+    /// Rectangle defined by one edge and an orthogonal depth handle.
+    RotatedRectangle,
+    /// Ellipse fitted inside two opposite corners.
+    Ellipse,
+    /// Circle from center to perimeter.
+    Circle,
+    /// Three-anchor filled triangle.
+    Triangle,
+    /// Circular arc through three anchors.
+    Arc,
+    /// Three-anchor quadratic curve.
+    Curve,
+    /// Four-anchor cubic curve.
+    DoubleCurve,
+    /// Two-anchor Fibonacci price retracement with editable per-level styling.
+    FibonacciRetracement,
+    /// Three-anchor Fibonacci projection of a prior price and time swing.
+    FibonacciExtension,
+    /// Three-anchor sloped Fibonacci channel with editable parallel levels.
+    FibonacciChannel,
+    /// Vertical Fibonacci time zones projected from a two-anchor interval.
+    FibonacciTimeZones,
+    /// Vertical Fibonacci time projection from a third anchor.
+    FibonacciTrendTime,
+    /// Sloped speed resistance levels fanning from the first anchor.
+    FibonacciSpeedFan,
+    /// Concentric speed resistance arcs centered on the second anchor.
+    FibonacciSpeedArcs,
+    /// Full concentric Fibonacci circles centered on the second anchor.
+    FibonacciCircles,
+    /// Two-turn spiral scaled from the first anchor toward the second.
+    FibonacciSpiral,
+    /// Three-anchor wedge with rays interpolated between its two edges.
+    FibonacciWedge,
+    /// Andrews median line with parallel outer tines.
+    AndrewsPitchfork,
+    /// Pitchfork with the median origin shifted halfway in price.
+    SchiffPitchfork,
+    /// Pitchfork with the median origin shifted halfway in time and price.
+    ModifiedSchiffPitchfork,
+    /// Pitchfork with a median from the first two anchors' midpoint through the third.
+    InsidePitchfork,
+    /// Rays fanning from the first anchor through levels on the other two anchors.
+    Pitchfan,
+    /// Five-point harmonic XABCD path.
+    PatternXabcd,
+    /// Five-point cypher harmonic path.
+    PatternCypher,
+    /// Four-point AB=CD path.
+    PatternAbcd,
+    /// Left shoulder, head, right shoulder and neckline path.
+    PatternHeadShoulders,
+    /// Five-point converging triangle path.
+    PatternTriangle,
+    /// Three-drive reversal path.
+    PatternThreeDrives,
+    /// Elliott impulse path, origin through waves one to five.
+    ElliottImpulse,
+    /// Elliott correction path, origin through waves A to C.
+    ElliottCorrection,
+    /// Elliott triangle path, origin through waves A to E.
+    ElliottTriangle,
+    /// Elliott double combination path.
+    ElliottDoubleCombination,
+    /// Elliott triple combination path.
+    ElliottTripleCombination,
+    /// Repeated vertical lines at the interval between two anchors.
+    CyclicLines,
+    /// Forward time-cycle markers and alternating cycle bands.
+    TimeCycles,
+    /// Repeating sine wave with the second anchor as its first quarter-cycle peak.
+    SineLine,
+    /// Directional chart marker pointing up.
+    ArrowMarkerUp,
+    /// Directional chart marker pointing down.
+    ArrowMarkerDown,
+    /// Directional chart marker pointing left.
+    ArrowMarkerLeft,
+    /// Directional chart marker pointing right.
+    ArrowMarkerRight,
+    /// Flag marker at one chart anchor.
+    FlagMark,
+    /// Two-anchor signpost with a stem and marker head.
+    Signpost,
+    /// One-anchor boxed note.
+    Note,
+    /// One-anchor boxed comment.
+    Comment,
+    /// Two-anchor callout leader and editable text.
+    Callout,
+    /// Horizontal price guide with editable note.
+    PriceNote,
+    /// One-anchor price badge at the pane edge.
+    PriceLabel,
+    /// Text fixed to a normalized position in the pane viewport.
+    AnchoredText,
+    /// Host supplied bounded raster icon at one chart anchor.
+    IconStamp,
+    /// Price and time partition grid between two anchors.
+    GannBox,
+    /// Gann square with grid, fan and arc geometry.
+    GannSquare,
+    /// Gann square whose display box remains square in media pixels.
+    GannSquareFixed,
+    /// Nine proportionate Gann angle rays from a pivot.
+    GannFan,
+    /// Three-anchor future price sector: origin, time horizon, projected price.
+    Projection,
+    /// Trade target projection with a data-derived result after its time horizon.
+    Forecast,
+    /// Frozen, movable copy of a bounded source OHLC range.
+    BarsPattern,
 }
 
 impl DrawingKind {
+    pub(crate) const fn has_levels(self) -> bool {
+        matches!(
+            self,
+            Self::FibonacciRetracement
+                | Self::FibonacciExtension
+                | Self::FibonacciChannel
+                | Self::FibonacciTimeZones
+                | Self::FibonacciTrendTime
+                | Self::FibonacciSpeedFan
+                | Self::FibonacciSpeedArcs
+                | Self::FibonacciCircles
+                | Self::FibonacciSpiral
+                | Self::FibonacciWedge
+                | Self::AndrewsPitchfork
+                | Self::SchiffPitchfork
+                | Self::ModifiedSchiffPitchfork
+                | Self::InsidePitchfork
+                | Self::Pitchfan
+                | Self::GannBox
+                | Self::GannSquare
+                | Self::GannSquareFixed
+                | Self::GannFan
+        )
+    }
+
+    pub(crate) const fn supports_log_levels(self) -> bool {
+        matches!(
+            self,
+            Self::FibonacciRetracement | Self::FibonacciExtension | Self::FibonacciChannel
+        )
+    }
     pub fn from_u8(kind: u8) -> Option<Self> {
         DRAWING_TOOL_SPECS
             .iter()
@@ -555,6 +1014,31 @@ pub struct Drawing {
     pub magnet: crate::DrawingMagnetMode,
     pub labels: Vec<crate::DrawingLabelOptions>,
     pub levels: Vec<crate::DrawingLevel>,
+    /// Independently styled angle rays and quarter arcs on Gann squares.
+    pub gann_fans: Vec<crate::DrawingLevel>,
+    pub gann_arcs: Vec<crate::DrawingLevel>,
+    pub level_reverse: bool,
+    pub level_log_scale: bool,
+    pub level_show_prices: bool,
+    pub level_show_values: bool,
+    pub level_show_percents: bool,
+    /// `left`, `center`, or `right`.
+    pub level_label_align: String,
+    /// Elliott wave label degree; used only by the five Elliott tools.
+    pub wave_degree: String,
+    /// Normalized pane position of screen anchored text, independent of time and price scales.
+    pub screen_x: f64,
+    pub screen_y: f64,
+    /// Stable host asset key for an icon stamp; pixels are chart-local and never serialized.
+    pub icon_name: Option<String>,
+    /// Icon stamp destination size in CSS pixels.
+    pub icon_size: f64,
+    /// Source OHLC snapshot for a movable bars-pattern ghost copy.
+    pub bars_pattern: Vec<BarsPatternBar>,
+    pub bars_pattern_mirror_x: bool,
+    pub bars_pattern_mirror_y: bool,
+    /// `bars`, `line_open`, `line_high`, `line_low`, or `line_close`.
+    pub bars_pattern_mode: String,
     pub price_scale: DrawingPriceScale,
     /// Optional engine-data binding for volume-profile and anchored-VWAP drawings.
     pub profile: Option<crate::ProfileDrawingOptions>,
@@ -562,6 +1046,10 @@ pub struct Drawing {
     pub position_account_size: f64,
     /// Percentage of the hypothetical balance risked at the stop (0..=100).
     pub position_risk_percent: f64,
+    /// Optional explicit source for regression trend; `None` follows the pane's primary series.
+    pub regression_source_id: Option<u32>,
+    /// Number of residual standard deviations on each side of the regression center.
+    pub regression_deviations: f64,
     /// Line/border color CSS string (default [`DRAWING_DEFAULT_COLOR`]).
     pub color: String,
     /// Stroke width in CSS px (default 2; 1 for a rectangle's border).
@@ -622,6 +1110,30 @@ pub const TEXT_TOOL_DEFAULT_SIZE: f64 = 14.0;
 pub(crate) const TEXT_CHROME_PAD: f64 = TEXT_PAD + 2.0;
 pub(crate) const TREND_TEXT_PLACEHOLDER: &str = "+ Add text";
 
+fn default_gann_level(value: f64) -> crate::DrawingLevel {
+    crate::DrawingLevel {
+        value,
+        color: String::new(),
+        visible: true,
+        style: "solid".to_string(),
+        fill_between: false,
+        fill_color: None,
+        label_visible: false,
+    }
+}
+
+pub(crate) fn valid_gann_family(levels: &[crate::DrawingLevel], fan: bool) -> bool {
+    levels.len() <= crate::MAX_DRAWING_LEVELS
+        && levels.iter().all(|level| {
+            level.validate()
+                && if fan {
+                    (0.01..=100.0).contains(&level.value)
+                } else {
+                    (0.0..=1.0).contains(&level.value)
+                }
+        })
+}
+
 impl Drawing {
     pub(crate) fn new(
         id: DrawingId,
@@ -630,7 +1142,10 @@ impl Drawing {
         mut points: Vec<DrawingPoint>,
     ) -> Self {
         Self::normalize_position_points(kind, &mut points);
-        let (text_h_align, text_v_align) = if kind == DrawingKind::TrendLine {
+        let (text_h_align, text_v_align) = if matches!(
+            kind,
+            DrawingKind::TrendLine | DrawingKind::Callout | DrawingKind::PriceNote
+        ) {
             (DrawingTextHAlign::Right, DrawingTextVAlign::Top)
         } else {
             (DrawingTextHAlign::Center, DrawingTextVAlign::Middle)
@@ -647,18 +1162,213 @@ impl Drawing {
             locked: false,
             z_order: id as i32,
             interval_visibility: Default::default(),
-            stroke_start: Default::default(),
-            stroke_end: Default::default(),
+            stroke_start: if kind == DrawingKind::Callout {
+                crate::DrawingLineCap::Arrow
+            } else {
+                Default::default()
+            },
+            stroke_end: if kind == DrawingKind::ArrowLine {
+                crate::DrawingLineCap::Arrow
+            } else {
+                Default::default()
+            },
             extend_left: false,
             extend_right: false,
-            fill_enabled: kind == DrawingKind::Rectangle || kind.is_measure(),
+            fill_enabled: kind == DrawingKind::Rectangle
+                || kind.is_measure()
+                || matches!(
+                    kind,
+                    DrawingKind::ParallelChannel
+                        | DrawingKind::RegressionTrend
+                        | DrawingKind::FlatTopChannel
+                        | DrawingKind::FlatBottomChannel
+                        | DrawingKind::DisjointChannel
+                        | DrawingKind::RotatedRectangle
+                        | DrawingKind::Ellipse
+                        | DrawingKind::Circle
+                        | DrawingKind::Triangle
+                        | DrawingKind::FibonacciRetracement
+                        | DrawingKind::FibonacciExtension
+                        | DrawingKind::FibonacciChannel
+                        | DrawingKind::FibonacciTimeZones
+                        | DrawingKind::FibonacciTrendTime
+                        | DrawingKind::FibonacciSpeedFan
+                        | DrawingKind::FibonacciSpeedArcs
+                        | DrawingKind::FibonacciCircles
+                        | DrawingKind::FibonacciSpiral
+                        | DrawingKind::FibonacciWedge
+                        | DrawingKind::AndrewsPitchfork
+                        | DrawingKind::SchiffPitchfork
+                        | DrawingKind::ModifiedSchiffPitchfork
+                        | DrawingKind::InsidePitchfork
+                        | DrawingKind::Pitchfan
+                        | DrawingKind::TimeCycles
+                        | DrawingKind::GannBox
+                        | DrawingKind::GannSquare
+                        | DrawingKind::GannSquareFixed
+                        | DrawingKind::GannFan
+                        | DrawingKind::Projection
+                ),
             magnet: Default::default(),
-            labels: Vec::new(),
-            levels: Vec::new(),
+            labels: match kind {
+                DrawingKind::InfoLine => [
+                    crate::DrawingLabelMetric::PriceChange,
+                    crate::DrawingLabelMetric::PercentChange,
+                    crate::DrawingLabelMetric::BarCount,
+                    crate::DrawingLabelMetric::Angle,
+                ]
+                .into_iter()
+                .map(|metric| crate::DrawingLabelOptions {
+                    metric,
+                    visible: true,
+                    position: crate::DrawingLabelPosition::Above,
+                    text: None,
+                })
+                .collect(),
+                DrawingKind::TrendAngle => vec![crate::DrawingLabelOptions {
+                    metric: crate::DrawingLabelMetric::Angle,
+                    visible: true,
+                    position: crate::DrawingLabelPosition::Above,
+                    text: None,
+                }],
+                _ => Vec::new(),
+            },
+            levels: if matches!(
+                kind,
+                DrawingKind::FibonacciRetracement
+                    | DrawingKind::FibonacciExtension
+                    | DrawingKind::FibonacciChannel
+                    | DrawingKind::FibonacciTimeZones
+                    | DrawingKind::FibonacciTrendTime
+                    | DrawingKind::FibonacciSpeedFan
+                    | DrawingKind::FibonacciSpeedArcs
+                    | DrawingKind::FibonacciCircles
+                    | DrawingKind::FibonacciSpiral
+                    | DrawingKind::FibonacciWedge
+                    | DrawingKind::AndrewsPitchfork
+                    | DrawingKind::SchiffPitchfork
+                    | DrawingKind::ModifiedSchiffPitchfork
+                    | DrawingKind::InsidePitchfork
+                    | DrawingKind::Pitchfan
+                    | DrawingKind::GannBox
+                    | DrawingKind::GannSquare
+                    | DrawingKind::GannSquareFixed
+                    | DrawingKind::GannFan
+            ) {
+                let values: &[f64] = if matches!(
+                    kind,
+                    DrawingKind::FibonacciTimeZones | DrawingKind::FibonacciTrendTime
+                ) {
+                    &[0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0]
+                } else if kind == DrawingKind::FibonacciExtension {
+                    &[0.0, 0.618, 1.0, 1.618, 2.0, 2.618]
+                } else if kind == DrawingKind::GannFan {
+                    &[0.125, 0.25, 0.333333333333, 0.5, 1.0, 2.0, 3.0, 4.0, 8.0]
+                } else if matches!(
+                    kind,
+                    DrawingKind::GannBox | DrawingKind::GannSquare | DrawingKind::GannSquareFixed
+                ) {
+                    &[0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+                } else if matches!(
+                    kind,
+                    DrawingKind::AndrewsPitchfork
+                        | DrawingKind::SchiffPitchfork
+                        | DrawingKind::ModifiedSchiffPitchfork
+                        | DrawingKind::InsidePitchfork
+                ) {
+                    &[0.0, 0.5, 1.0]
+                } else if kind == DrawingKind::Pitchfan {
+                    &[0.0, 0.25, 0.5, 0.75, 1.0]
+                } else {
+                    &[0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+                };
+                values
+                    .iter()
+                    .map(|&value| crate::DrawingLevel {
+                        value,
+                        color: String::new(),
+                        visible: true,
+                        style: "solid".to_string(),
+                        fill_between: false,
+                        fill_color: None,
+                        label_visible: true,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            gann_fans: if matches!(kind, DrawingKind::GannSquare | DrawingKind::GannSquareFixed) {
+                [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
+                    .into_iter()
+                    .map(default_gann_level)
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            gann_arcs: if matches!(kind, DrawingKind::GannSquare | DrawingKind::GannSquareFixed) {
+                [0.25, 0.5, 0.75, 1.0]
+                    .into_iter()
+                    .map(default_gann_level)
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            wave_degree: "minor".to_string(),
+            level_reverse: false,
+            level_log_scale: false,
+            level_show_prices: matches!(
+                kind,
+                DrawingKind::FibonacciRetracement
+                    | DrawingKind::FibonacciExtension
+                    | DrawingKind::FibonacciChannel
+            ),
+            level_show_values: matches!(
+                kind,
+                DrawingKind::FibonacciTimeZones | DrawingKind::FibonacciTrendTime
+            ),
+            level_show_percents: !matches!(
+                kind,
+                DrawingKind::FibonacciTimeZones | DrawingKind::FibonacciTrendTime
+            ),
+            level_label_align: if matches!(
+                kind,
+                DrawingKind::FibonacciTimeZones | DrawingKind::FibonacciTrendTime
+            ) {
+                "left"
+            } else if matches!(
+                kind,
+                DrawingKind::FibonacciSpeedArcs
+                    | DrawingKind::FibonacciCircles
+                    | DrawingKind::FibonacciSpiral
+                    | DrawingKind::FibonacciWedge
+                    | DrawingKind::AndrewsPitchfork
+                    | DrawingKind::SchiffPitchfork
+                    | DrawingKind::ModifiedSchiffPitchfork
+                    | DrawingKind::InsidePitchfork
+                    | DrawingKind::Pitchfan
+                    | DrawingKind::GannBox
+                    | DrawingKind::GannSquare
+                    | DrawingKind::GannSquareFixed
+            ) {
+                "center"
+            } else {
+                "right"
+            }
+            .to_string(),
+            screen_x: 0.5,
+            screen_y: 0.5,
+            icon_name: None,
+            icon_size: 24.0,
+            bars_pattern: Vec::new(),
+            bars_pattern_mirror_x: false,
+            bars_pattern_mirror_y: false,
+            bars_pattern_mode: "bars".to_string(),
             price_scale: DrawingPriceScale::Right,
             profile: None,
             position_account_size: 1000.0,
             position_risk_percent: 25.0,
+            regression_source_id: None,
+            regression_deviations: 2.0,
             color: DRAWING_DEFAULT_COLOR.to_string(),
             width: kind.spec().default_width,
             style: LineStyle::Solid,
@@ -677,8 +1387,18 @@ impl Drawing {
             text_italic: false,
             text_h_align,
             text_v_align,
-            box_color: None,
-            box_border_color: None,
+            box_color: match kind {
+                DrawingKind::Note => Some("#facc1533".to_string()),
+                DrawingKind::Comment | DrawingKind::Callout => Some("#2962ff22".to_string()),
+                _ => None,
+            },
+            box_border_color: match kind {
+                DrawingKind::Note => Some("#eab308".to_string()),
+                DrawingKind::Comment | DrawingKind::Callout => {
+                    Some(DRAWING_DEFAULT_COLOR.to_string())
+                }
+                _ => None,
+            },
             box_border_width: aeris_charts_core::style::BORDER_WIDTH,
         }
     }
@@ -723,7 +1443,7 @@ impl Drawing {
     /// resolve through this so they never disagree.
     pub fn resolved_text_size(&self, layout_font_size: f64) -> f64 {
         self.text_size.unwrap_or(match self.kind {
-            DrawingKind::Text => TEXT_TOOL_DEFAULT_SIZE,
+            DrawingKind::Text | DrawingKind::AnchoredText => TEXT_TOOL_DEFAULT_SIZE,
             _ => layout_font_size,
         })
     }
@@ -767,10 +1487,31 @@ impl Drawing {
                 label_text_color: self.label_text_color.clone(),
                 snap_time_to_data: self.snap_time_to_data,
             },
-            DrawingKind::Text => crate::DrawingKindOptions::Text {
+            DrawingKind::Text
+            | DrawingKind::Note
+            | DrawingKind::Comment
+            | DrawingKind::Callout
+            | DrawingKind::PriceNote => crate::DrawingKindOptions::Text {
                 box_color: self.box_color.clone(),
                 box_border_color: self.box_border_color.clone(),
                 box_border_width: self.box_border_width,
+            },
+            DrawingKind::AnchoredText => crate::DrawingKindOptions::AnchoredText {
+                screen_x: self.screen_x,
+                screen_y: self.screen_y,
+                box_color: self.box_color.clone(),
+                box_border_color: self.box_border_color.clone(),
+                box_border_width: self.box_border_width,
+            },
+            DrawingKind::IconStamp => crate::DrawingKindOptions::IconStamp {
+                icon_name: self.icon_name.clone(),
+                icon_size: self.icon_size,
+            },
+            DrawingKind::BarsPattern => crate::DrawingKindOptions::BarsPattern {
+                mirror_x: self.bars_pattern_mirror_x,
+                mirror_y: self.bars_pattern_mirror_y,
+                mode: self.bars_pattern_mode.clone(),
+                bar_count: self.bars_pattern.len(),
             },
             DrawingKind::LongPosition | DrawingKind::ShortPosition => {
                 crate::DrawingKindOptions::Position {
@@ -779,6 +1520,34 @@ impl Drawing {
                     risk_percent: self.position_risk_percent,
                 }
             }
+            DrawingKind::RegressionTrend => crate::DrawingKindOptions::RegressionTrend {
+                source_id: self.regression_source_id,
+                deviations: self.regression_deviations,
+            },
+            kind if kind.is_elliott() => crate::DrawingKindOptions::Elliott {
+                wave_degree: self.wave_degree.clone(),
+            },
+            DrawingKind::GannSquare | DrawingKind::GannSquareFixed => {
+                crate::DrawingKindOptions::GannSquare {
+                    levels: self.levels.clone(),
+                    fans: self.gann_fans.clone(),
+                    arcs: self.gann_arcs.clone(),
+                    reverse: self.level_reverse,
+                    show_prices: self.level_show_prices,
+                    show_values: self.level_show_values,
+                    show_percents: self.level_show_percents,
+                    label_align: self.level_label_align.clone(),
+                }
+            }
+            kind if kind.has_levels() => crate::DrawingKindOptions::Levels {
+                levels: self.levels.clone(),
+                reverse: self.level_reverse,
+                log_scale: self.level_log_scale,
+                show_prices: self.level_show_prices,
+                show_values: self.level_show_values,
+                show_percents: self.level_show_percents,
+                label_align: self.level_label_align.clone(),
+            },
             _ => crate::DrawingKindOptions::Generic,
         }
     }
@@ -865,6 +1634,8 @@ pub(crate) struct DrawingDrag {
     pub(crate) start_px: Vec<(f64, f64)>,
     /// Original semantic snapshot retained for cancellation and the one committed history entry.
     pub(crate) history_points: Vec<DrawingPoint>,
+    pub(crate) history_screen_position: (f64, f64),
+    pub(crate) history_bars_pattern: Vec<BarsPatternBar>,
 }
 
 const DRAWING_HISTORY_LIMIT: usize = 100;
@@ -1049,6 +1820,20 @@ fn distance_to_segment(x: f64, y: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f6
     (x - (x1 + dx * clamped)).hypot(y - (y1 + dy * clamped))
 }
 
+fn point_in_polygon(point: (f64, f64), vertices: &[(f64, f64)]) -> bool {
+    let mut inside = false;
+    for index in 0..vertices.len() {
+        let a = vertices[index];
+        let b = vertices[(index + 1) % vertices.len()];
+        if (a.1 > point.1) != (b.1 > point.1)
+            && point.0 < (b.0 - a.0) * (point.1 - a.1) / (b.1 - a.1) + a.0
+        {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
 /// JSON patch accepted by [`ChartEngine::drawing_apply_options`] and carried by
 /// `add_drawing`/creation. Snake_case keys are canonical (matching the TS `drawing_options`);
 /// the reference camelCase forms are accepted as aliases. Every field is optional — absent keys
@@ -1078,6 +1863,36 @@ pub(crate) struct DrawingPatch {
     magnet: Option<crate::DrawingMagnetMode>,
     labels: Option<Vec<crate::DrawingLabelOptions>>,
     levels: Option<Vec<crate::DrawingLevel>>,
+    gann_fans: Option<Vec<crate::DrawingLevel>>,
+    gann_arcs: Option<Vec<crate::DrawingLevel>>,
+    #[serde(alias = "levelReverse")]
+    level_reverse: Option<bool>,
+    #[serde(alias = "levelLogScale")]
+    level_log_scale: Option<bool>,
+    #[serde(alias = "levelShowPrices")]
+    level_show_prices: Option<bool>,
+    #[serde(alias = "levelShowValues")]
+    level_show_values: Option<bool>,
+    #[serde(alias = "levelShowPercents")]
+    level_show_percents: Option<bool>,
+    #[serde(alias = "levelLabelAlign")]
+    level_label_align: Option<String>,
+    #[serde(alias = "waveDegree")]
+    wave_degree: Option<String>,
+    #[serde(alias = "screenX")]
+    screen_x: Option<f64>,
+    #[serde(alias = "screenY")]
+    screen_y: Option<f64>,
+    #[serde(alias = "iconName")]
+    icon_name: Option<String>,
+    #[serde(alias = "iconSize")]
+    icon_size: Option<f64>,
+    #[serde(alias = "barsPatternMirrorX")]
+    bars_pattern_mirror_x: Option<bool>,
+    #[serde(alias = "barsPatternMirrorY")]
+    bars_pattern_mirror_y: Option<bool>,
+    #[serde(alias = "barsPatternMode")]
+    bars_pattern_mode: Option<String>,
     #[serde(alias = "priceScaleId")]
     price_scale_id: Option<String>,
     color: Option<String>,
@@ -1136,6 +1951,23 @@ pub(crate) struct DrawingPatch {
     position_account_size: Option<f64>,
     #[serde(alias = "positionRiskPercent")]
     position_risk_percent: Option<f64>,
+    #[serde(
+        default,
+        alias = "regressionSourceId",
+        deserialize_with = "deserialize_regression_source_patch"
+    )]
+    regression_source_id: Option<Option<u32>>,
+    #[serde(alias = "regressionDeviations")]
+    regression_deviations: Option<f64>,
+}
+
+fn deserialize_regression_source_patch<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<u32>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <Option<u32> as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
 /// A patch's `style`: the TS string form (`solid`/`dotted`/`dashed`), or the reference numeric
@@ -1173,6 +2005,16 @@ fn update_css_slot(slot: &mut Option<String>, value: String) {
 }
 
 impl Drawing {
+    pub(crate) fn level_value(&self, value: f64) -> f64 {
+        if !self.level_reverse {
+            return value;
+        }
+        match self.kind {
+            DrawingKind::GannFan if value > 0.0 => 1.0 / value,
+            DrawingKind::FibonacciTimeZones | DrawingKind::FibonacciTrendTime => -value,
+            _ => 1.0 - value,
+        }
+    }
     fn apply_patch(&mut self, patch: DrawingPatch) -> bool {
         if patch
             .position_account_size
@@ -1180,6 +2022,9 @@ impl Drawing {
             || patch
                 .position_risk_percent
                 .is_some_and(|value| !value.is_finite() || !(0.0..=100.0).contains(&value))
+            || patch
+                .regression_deviations
+                .is_some_and(|value| !value.is_finite() || !(0.0..=10.0).contains(&value))
         {
             return false;
         }
@@ -1211,6 +2056,73 @@ impl Drawing {
             {
                 return false;
             }
+        }
+        for (family, fan) in [(&patch.gann_fans, true), (&patch.gann_arcs, false)] {
+            if let Some(levels) = family {
+                if !matches!(
+                    self.kind,
+                    DrawingKind::GannSquare | DrawingKind::GannSquareFixed
+                ) || !valid_gann_family(levels, fan)
+                {
+                    return false;
+                }
+            }
+        }
+        if (patch.level_reverse.is_some()
+            || patch.level_log_scale.is_some()
+            || patch.level_show_prices.is_some()
+            || patch.level_show_values.is_some()
+            || patch.level_show_percents.is_some()
+            || patch.level_label_align.is_some())
+            && (!self.kind.has_levels()
+                || (patch.level_log_scale == Some(true) && !self.kind.supports_log_levels())
+                || patch
+                    .level_label_align
+                    .as_deref()
+                    .is_some_and(|align| !matches!(align, "left" | "center" | "right")))
+        {
+            return false;
+        }
+        if let Some(degree) = patch.wave_degree.as_deref() {
+            if !self.kind.is_elliott() || !DrawingKind::valid_wave_degree(degree) {
+                return false;
+            }
+        }
+        if (patch.screen_x.is_some() || patch.screen_y.is_some())
+            && (self.kind != DrawingKind::AnchoredText
+                || patch
+                    .screen_x
+                    .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+                || patch
+                    .screen_y
+                    .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value)))
+        {
+            return false;
+        }
+        if (patch.icon_name.is_some() || patch.icon_size.is_some())
+            && (self.kind != DrawingKind::IconStamp
+                || patch
+                    .icon_name
+                    .as_ref()
+                    .is_some_and(|name| name.len() > MAX_DRAWING_ICON_NAME_BYTES)
+                || patch
+                    .icon_size
+                    .is_some_and(|size| !size.is_finite() || !(8.0..=96.0).contains(&size)))
+        {
+            return false;
+        }
+        if (patch.bars_pattern_mirror_x.is_some()
+            || patch.bars_pattern_mirror_y.is_some()
+            || patch.bars_pattern_mode.is_some())
+            && (self.kind != DrawingKind::BarsPattern
+                || patch.bars_pattern_mode.as_deref().is_some_and(|mode| {
+                    !matches!(
+                        mode,
+                        "bars" | "line_open" | "line_high" | "line_low" | "line_close"
+                    )
+                }))
+        {
+            return false;
         }
         if let Some(name) = patch.name {
             self.name = name;
@@ -1256,6 +2168,54 @@ impl Drawing {
         }
         if let Some(levels) = patch.levels {
             self.levels = levels;
+        }
+        if let Some(levels) = patch.gann_fans {
+            self.gann_fans = levels;
+        }
+        if let Some(levels) = patch.gann_arcs {
+            self.gann_arcs = levels;
+        }
+        if let Some(value) = patch.level_reverse {
+            self.level_reverse = value;
+        }
+        if let Some(value) = patch.level_log_scale {
+            self.level_log_scale = value;
+        }
+        if let Some(value) = patch.level_show_prices {
+            self.level_show_prices = value;
+        }
+        if let Some(value) = patch.level_show_values {
+            self.level_show_values = value;
+        }
+        if let Some(value) = patch.level_show_percents {
+            self.level_show_percents = value;
+        }
+        if let Some(value) = patch.level_label_align {
+            self.level_label_align = value;
+        }
+        if let Some(degree) = patch.wave_degree {
+            self.wave_degree = degree;
+        }
+        if let Some(value) = patch.screen_x {
+            self.screen_x = value;
+        }
+        if let Some(value) = patch.screen_y {
+            self.screen_y = value;
+        }
+        if let Some(name) = patch.icon_name {
+            self.icon_name = (!name.is_empty()).then_some(name);
+        }
+        if let Some(size) = patch.icon_size {
+            self.icon_size = size;
+        }
+        if let Some(value) = patch.bars_pattern_mirror_x {
+            self.bars_pattern_mirror_x = value;
+        }
+        if let Some(value) = patch.bars_pattern_mirror_y {
+            self.bars_pattern_mirror_y = value;
+        }
+        if let Some(mode) = patch.bars_pattern_mode {
+            self.bars_pattern_mode = mode;
         }
         if let Some(scale) = patch
             .price_scale_id
@@ -1355,6 +2315,12 @@ impl Drawing {
         if let Some(value) = patch.position_risk_percent {
             self.position_risk_percent = value;
         }
+        if let Some(source_id) = patch.regression_source_id {
+            self.regression_source_id = source_id;
+        }
+        if let Some(deviations) = patch.regression_deviations {
+            self.regression_deviations = deviations;
+        }
         if let Some(profile) = patch.profile {
             self.profile = Some(profile);
         }
@@ -1362,7 +2328,7 @@ impl Drawing {
     }
 
     fn options_json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut options = serde_json::json!({
             "name": self.name,
             "group_id": self.group_id.as_deref().unwrap_or(""),
             "revision": self.revision,
@@ -1404,7 +2370,43 @@ impl Drawing {
             "box_color": self.box_color.as_deref().unwrap_or(""),
             "box_border_color": self.box_border_color.as_deref().unwrap_or(""),
             "box_border_width": self.box_border_width,
-        })
+        });
+        if self.kind == DrawingKind::RegressionTrend {
+            options["regression_source_id"] = serde_json::json!(self.regression_source_id);
+            options["regression_deviations"] = serde_json::json!(self.regression_deviations);
+        }
+        if self.kind.has_levels() {
+            options["level_reverse"] = serde_json::json!(self.level_reverse);
+            options["level_log_scale"] = serde_json::json!(self.level_log_scale);
+            options["level_show_prices"] = serde_json::json!(self.level_show_prices);
+            options["level_show_values"] = serde_json::json!(self.level_show_values);
+            options["level_show_percents"] = serde_json::json!(self.level_show_percents);
+            options["level_label_align"] = serde_json::json!(self.level_label_align);
+        }
+        if matches!(
+            self.kind,
+            DrawingKind::GannSquare | DrawingKind::GannSquareFixed
+        ) {
+            options["gann_fans"] = serde_json::json!(self.gann_fans);
+            options["gann_arcs"] = serde_json::json!(self.gann_arcs);
+        }
+        if self.kind.is_elliott() {
+            options["wave_degree"] = serde_json::json!(self.wave_degree);
+        }
+        if self.kind == DrawingKind::AnchoredText {
+            options["screen_x"] = serde_json::json!(self.screen_x);
+            options["screen_y"] = serde_json::json!(self.screen_y);
+        }
+        if self.kind == DrawingKind::IconStamp {
+            options["icon_name"] = serde_json::json!(self.icon_name);
+            options["icon_size"] = serde_json::json!(self.icon_size);
+        }
+        if self.kind == DrawingKind::BarsPattern {
+            options["bars_pattern_mirror_x"] = serde_json::json!(self.bars_pattern_mirror_x);
+            options["bars_pattern_mirror_y"] = serde_json::json!(self.bars_pattern_mirror_y);
+            options["bars_pattern_mode"] = serde_json::json!(self.bars_pattern_mode);
+        }
+        options
     }
 }
 
@@ -1489,12 +2491,7 @@ impl ChartEngine {
         let drag_baseline = self.drawing_drag.as_ref().and_then(|drag| {
             let drawing = self.drawing(drag.id)?;
             let points = drawing.points.clone();
-            let px = points
-                .iter()
-                .map(|&point| {
-                    self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point)
-                })
-                .collect::<Option<Vec<_>>>()?;
+            let px = self.drawing_px(drawing)?;
             Some((points, px, drag.current_x, drag.current_y))
         });
         if let (Some(drag), Some((start_points, start_px, pointer_x, pointer_y))) =
@@ -1697,7 +2694,7 @@ impl ChartEngine {
         self.drawing_scale_for(pane_index, DrawingPriceScale::Right)
     }
 
-    fn drawing_scale_for(
+    pub(crate) fn drawing_scale_for(
         &self,
         pane_index: usize,
         target: DrawingPriceScale,
@@ -1930,11 +2927,233 @@ impl ChartEngine {
     /// The anchors of `drawing` in media px (`None` when any anchor fails to resolve), with the
     /// pending preview appended when `preview` holds (the interactive-creation geometry).
     pub(crate) fn drawing_px(&self, drawing: &Drawing) -> Option<Vec<(f64, f64)>> {
+        if drawing.kind == DrawingKind::AnchoredText {
+            let pane = self.panes.get(drawing.pane_index)?;
+            return Some(vec![(
+                drawing.screen_x * self.pane_w,
+                pane.top + drawing.screen_y * pane.height,
+            )]);
+        }
         drawing
             .points
             .iter()
             .map(|&point| self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point))
             .collect()
+    }
+
+    fn regression_source_id(&self, drawing: &Drawing) -> Option<u32> {
+        let target = match drawing.price_scale {
+            DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
+            DrawingPriceScale::Left => crate::PriceScaleTarget::Left,
+            DrawingPriceScale::Overlay => crate::PriceScaleTarget::Overlay,
+        };
+        drawing
+            .regression_source_id
+            .and_then(|id| {
+                self.series
+                    .iter()
+                    .any(|series| {
+                        series.id == id
+                            && !series.removed
+                            && series.pane_index == drawing.pane_index
+                            && series.price_scale_target == target
+                    })
+                    .then_some(id)
+            })
+            .or_else(|| {
+                if drawing.regression_source_id.is_some() {
+                    return None;
+                }
+                self.primary_series_on_price_scale(drawing.pane_index, target)
+                    .map(|source| source.series_id)
+            })
+    }
+
+    /// Forecast result from actual source highs/lows between entry and the declared horizon.
+    /// `None` remains pending while the horizon is in the future or source data is unavailable.
+    pub(crate) fn forecast_result(&self, drawing: &Drawing) -> Option<bool> {
+        if drawing.kind != DrawingKind::Forecast || drawing.points.len() != 2 {
+            return None;
+        }
+        let [entry, target] = drawing.points.as_slice() else {
+            return None;
+        };
+        if target.logical <= entry.logical {
+            return None;
+        }
+        let source = self.regression_source_id(drawing)?;
+        let (times, columns) = self.data.series_data(source)?;
+        let merged = self.data.merged_times();
+        let first = entry.logical.ceil().max(0.0) as usize;
+        let last = target
+            .logical
+            .floor()
+            .min((merged.len().saturating_sub(1)) as f64) as usize;
+        if first >= merged.len() || last < first {
+            return None;
+        }
+        let mut row = times.partition_point(|time| *time < merged[first]);
+        for &time in &merged[first..=last] {
+            while row < times.len() && times[row] < time {
+                row += 1;
+            }
+            if row < times.len() && times[row] == time {
+                let extremum = if target.price >= entry.price {
+                    columns[1][row]
+                } else {
+                    columns[2][row]
+                };
+                if extremum.is_finite()
+                    && if target.price >= entry.price {
+                        extremum >= target.price
+                    } else {
+                        extremum <= target.price
+                    }
+                {
+                    return Some(true);
+                }
+            }
+        }
+        (merged.len().saturating_sub(1) as f64 >= target.logical).then_some(false)
+    }
+
+    fn capture_bars_pattern(&self, drawing: &Drawing) -> Option<Vec<BarsPatternBar>> {
+        if drawing.kind != DrawingKind::BarsPattern || drawing.points.len() != 3 {
+            return None;
+        }
+        let source = self.regression_source_id(drawing)?;
+        let (times, columns) = self.data.series_data(source)?;
+        let merged = self.data.merged_times();
+        let first = drawing.points[0]
+            .logical
+            .min(drawing.points[1].logical)
+            .ceil()
+            .max(0.0) as usize;
+        let last = drawing.points[0]
+            .logical
+            .max(drawing.points[1].logical)
+            .floor() as usize;
+        if first >= merged.len()
+            || last >= merged.len()
+            || last < first
+            || last - first >= MAX_BARS_PATTERN_BARS
+        {
+            return None;
+        }
+        let mut row = times.partition_point(|time| *time < merged[first]);
+        let mut bars = Vec::with_capacity(last - first + 1);
+        for (offset, &time) in merged[first..=last].iter().enumerate() {
+            while row < times.len() && times[row] < time {
+                row += 1;
+            }
+            if row < times.len() && times[row] == time {
+                let bar = BarsPatternBar {
+                    offset: offset as u16,
+                    open: columns[0][row],
+                    high: columns[1][row],
+                    low: columns[2][row],
+                    close: columns[3][row],
+                };
+                if bar.valid() {
+                    bars.push(bar);
+                }
+            }
+        }
+        (!bars.is_empty()).then_some(bars)
+    }
+
+    /// Least-squares center and residual-deviation boundaries over source closes at the chart's
+    /// canonical merged slots. Sparse/whitespace rows do not contribute; the two defining
+    /// anchors select the logical window and remain editable independently of computed prices.
+    fn regression_points(&self, drawing: &Drawing) -> Option<[DrawingPoint; 6]> {
+        if drawing.kind != DrawingKind::RegressionTrend {
+            return None;
+        }
+        let [start, end] = drawing.points.as_slice() else {
+            return None;
+        };
+        let source = self.regression_source_id(drawing)?;
+        let (times, columns) = self.data.series_data(source)?;
+        let closes = columns[3];
+        let merged = self.data.merged_times();
+        let lo = start.logical.min(end.logical).ceil().max(0.0) as usize;
+        let hi = start.logical.max(end.logical).floor() as usize;
+        if lo >= merged.len() || hi <= lo {
+            return None;
+        }
+        let hi = hi.min(merged.len() - 1);
+        let mut row = times.partition_point(|time| *time < merged[lo]);
+        let mut count = 0.0;
+        let (mut sum_x, mut sum_y, mut sum_xx, mut sum_xy) = (0.0, 0.0, 0.0, 0.0);
+        for (offset, &time) in merged[lo..=hi].iter().enumerate() {
+            while row < times.len() && times[row] < time {
+                row += 1;
+            }
+            if row < times.len() && times[row] == time {
+                let value = closes[row];
+                if value.is_finite() {
+                    let x = offset as f64;
+                    count += 1.0;
+                    sum_x += x;
+                    sum_y += value;
+                    sum_xx += x * x;
+                    sum_xy += x * value;
+                }
+            }
+        }
+        if count < 2.0 {
+            return None;
+        }
+        let denominator = count * sum_xx - sum_x * sum_x;
+        if denominator <= f64::EPSILON {
+            return None;
+        }
+        let slope = (count * sum_xy - sum_x * sum_y) / denominator;
+        let intercept = (sum_y - slope * sum_x) / count;
+        let mut residual_sum = 0.0;
+        row = times.partition_point(|time| *time < merged[lo]);
+        for (offset, &time) in merged[lo..=hi].iter().enumerate() {
+            while row < times.len() && times[row] < time {
+                row += 1;
+            }
+            if row < times.len() && times[row] == time {
+                let value = closes[row];
+                if value.is_finite() {
+                    let residual = value - (intercept + slope * offset as f64);
+                    residual_sum += residual * residual;
+                }
+            }
+        }
+        let deviation = drawing.regression_deviations * (residual_sum / count).sqrt();
+        let center = |logical: f64| intercept + slope * (logical - lo as f64);
+        let make = |logical: f64, offset: f64| DrawingPoint {
+            logical,
+            price: center(logical) + offset,
+        };
+        Some([
+            make(start.logical, 0.0),
+            make(end.logical, 0.0),
+            make(start.logical, deviation),
+            make(end.logical, deviation),
+            make(start.logical, -deviation),
+            make(end.logical, -deviation),
+        ])
+    }
+
+    pub(crate) fn drawing_render_px(&self, drawing: &Drawing) -> Option<Vec<(f64, f64)>> {
+        let mut px = self.drawing_px(drawing)?;
+        if drawing.kind == DrawingKind::RegressionTrend {
+            if let Some(derived) = self.regression_points(drawing) {
+                for point in derived {
+                    px.push(self.drawing_to_px_for(
+                        drawing.pane_index,
+                        drawing.price_scale,
+                        point,
+                    )?);
+                }
+            }
+        }
+        Some(px)
     }
 
     pub(crate) fn drawing_coordinate_key(&self, drawing: &Drawing) -> Option<[u64; 12]> {
@@ -1956,7 +3175,18 @@ impl ChartEngine {
             pane.height.to_bits(),
             self.pane_w.to_bits(),
             scale.price_to_coordinate(midpoint, base).to_bits(),
-            self.dpr.to_bits(),
+            self.dpr.to_bits()
+                ^ if drawing.kind == DrawingKind::RegressionTrend {
+                    self.regression_source_id(drawing)
+                        .map(|source| {
+                            (u64::from(source) << 32)
+                                ^ self.data.series_generation(source).unwrap_or(0)
+                        })
+                        .unwrap_or(0)
+                        .rotate_left(17)
+                } else {
+                    0
+                },
             self.options.generation(),
         ])
     }
@@ -1979,7 +3209,7 @@ impl ChartEngine {
             return false;
         }
         let pane = &self.panes[drawing.pane_index];
-        let (left, right) = match entry.bounds.logical {
+        let (mut left, mut right) = match entry.bounds.logical {
             LogicalBounds::Full => (0.0, self.pane_w),
             LogicalBounds::From(logical) => {
                 let start_x = self.time_scale.logical_to_coordinate(logical);
@@ -1989,22 +3219,100 @@ impl ChartEngine {
                     (start_x, start_x)
                 }
             }
+            LogicalBounds::Ray {
+                start,
+                towards_right,
+            } => {
+                let start_x = self.time_scale.logical_to_coordinate(start);
+                if towards_right {
+                    (start_x, self.pane_w.max(start_x))
+                } else {
+                    (0.0_f64.min(start_x), start_x)
+                }
+            }
             LogicalBounds::Finite { min, max } => (
                 self.time_scale.logical_to_coordinate(min),
                 self.time_scale.logical_to_coordinate(max),
             ),
         };
-        let (top, bottom) = match (entry.bounds.min_price, entry.bounds.max_price) {
+        let (mut top, mut bottom) = match (entry.bounds.min_price, entry.bounds.max_price) {
             (Some(min), Some(max)) => (
                 scale.price_to_coordinate(max, base),
                 scale.price_to_coordinate(min, base),
             ),
             _ => (pane.top, pane.top + pane.height),
         };
+        if drawing.kind == DrawingKind::AnchoredText {
+            let x = drawing.screen_x * self.pane_w;
+            let y = pane.top + drawing.screen_y * pane.height;
+            left = x;
+            right = x;
+            top = y;
+            bottom = y;
+        } else if matches!(
+            drawing.kind,
+            DrawingKind::Circle
+                | DrawingKind::Arc
+                | DrawingKind::RotatedRectangle
+                | DrawingKind::FibonacciSpeedArcs
+                | DrawingKind::FibonacciCircles
+                | DrawingKind::FibonacciSpiral
+                | DrawingKind::FibonacciWedge
+        ) {
+            let mut px = [(0.0, 0.0); 4];
+            for (slot, &point) in px.iter_mut().zip(&drawing.points) {
+                let Some(converted) =
+                    self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point)
+                else {
+                    return false;
+                };
+                *slot = converted;
+            }
+            let Some(geometry) = resolve_drawing_geometry(
+                drawing.kind,
+                &px[..drawing.points.len().min(px.len())],
+                self.pane_w,
+                pane.top,
+                pane.height,
+                DrawingGeometryOptions::default(),
+            ) else {
+                return false;
+            };
+            if let DrawingBodyGeometry::FibonacciArcs(arcs) = geometry.body {
+                let radius = arcs.radius
+                    * drawing
+                        .levels
+                        .iter()
+                        .filter(|level| level.visible)
+                        .map(|level| drawing.level_value(level.value).max(0.0))
+                        .fold(0.0, f64::max);
+                left = arcs.center.0 - radius;
+                right = arcs.center.0 + radius;
+                top = arcs.center.1 - radius;
+                bottom = arcs.center.1 + radius;
+            } else {
+                left = geometry.text_box.left;
+                right = geometry.text_box.right;
+                top = geometry.text_box.top;
+                bottom = geometry.text_box.bottom;
+            }
+        }
         let mut extra_x = drawing.width / 2.0 + HitProfile::TOUCH.drawing_stroke_tolerance;
         let mut extra_y = extra_x;
         extra_x = extra_x.max(HitProfile::TOUCH.drawing_anchor_radius);
         extra_y = extra_y.max(HitProfile::TOUCH.drawing_anchor_radius);
+        if drawing.kind.is_marker() {
+            extra_x = extra_x.max(16.0);
+            extra_y = extra_y.max(16.0);
+        }
+        if drawing.kind == DrawingKind::IconStamp {
+            extra_x = extra_x.max(drawing.icon_size / 2.0);
+            extra_y = extra_y.max(drawing.icon_size / 2.0);
+        }
+        if drawing.kind == DrawingKind::Forecast {
+            extra_x = extra_x.max(160.0);
+            extra_y = extra_y.max(24.0);
+        }
         if let Some((width, size)) = text_metrics {
             extra_x = extra_x.max(width + TEXT_PAD * 2.0);
             extra_y = extra_y.max(size * 1.2 + TEXT_PAD * 2.0);
@@ -2031,6 +3339,18 @@ impl ChartEngine {
     ) -> bool {
         let mut extra_x = drawing.width / 2.0 + HitProfile::TOUCH.drawing_anchor_radius;
         let mut extra_y = extra_x;
+        if drawing.kind.is_marker() {
+            extra_x = extra_x.max(16.0);
+            extra_y = extra_y.max(16.0);
+        }
+        if drawing.kind == DrawingKind::IconStamp {
+            extra_x = extra_x.max(drawing.icon_size / 2.0);
+            extra_y = extra_y.max(drawing.icon_size / 2.0);
+        }
+        if drawing.kind == DrawingKind::Forecast {
+            extra_x = extra_x.max(160.0);
+            extra_y = extra_y.max(24.0);
+        }
         if let Some((width, size)) = text_metrics {
             extra_x = extra_x.max(width + TEXT_PAD * 2.0);
             extra_y = extra_y.max(size * 1.2 + TEXT_PAD * 2.0);
@@ -2042,6 +3362,16 @@ impl ChartEngine {
             // start sits beyond that edge, so keep it conservative.
             LogicalBounds::From(_) if !drawing.text.is_empty() => true,
             LogicalBounds::From(start) => start <= visible.1 + logical_pad,
+            LogicalBounds::Ray {
+                start,
+                towards_right,
+            } => {
+                if towards_right {
+                    start <= visible.1 + logical_pad
+                } else {
+                    start >= visible.0 - logical_pad
+                }
+            }
             LogicalBounds::Finite { min, max } => {
                 min <= visible.1 + logical_pad && max >= visible.0 - logical_pad
             }
@@ -2075,12 +3405,31 @@ impl ChartEngine {
         if rebuild {
             let entry = runtime.entries.get_mut(&drawing.id)?;
             entry.media_px.clear();
-            for &point in &drawing.points {
-                entry.media_px.push(self.drawing_to_px_for(
-                    drawing.pane_index,
-                    drawing.price_scale,
-                    point,
-                )?);
+            if drawing.kind == DrawingKind::AnchoredText {
+                let pane = self.panes.get(drawing.pane_index)?;
+                entry.media_px.push((
+                    drawing.screen_x * self.pane_w,
+                    pane.top + drawing.screen_y * pane.height,
+                ));
+            } else {
+                for &point in &drawing.points {
+                    entry.media_px.push(self.drawing_to_px_for(
+                        drawing.pane_index,
+                        drawing.price_scale,
+                        point,
+                    )?);
+                }
+            }
+            if drawing.kind == DrawingKind::RegressionTrend {
+                if let Some(derived) = self.regression_points(drawing) {
+                    for point in derived {
+                        entry.media_px.push(self.drawing_to_px_for(
+                            drawing.pane_index,
+                            drawing.price_scale,
+                            point,
+                        )?);
+                    }
+                }
             }
             entry.geometry_key = key;
             entry.geometry_valid = true;
@@ -2116,7 +3465,9 @@ impl ChartEngine {
             return Some((MEASURE_LABEL_REACH_X, size / 1.2));
         }
         if drawing.text.is_empty()
-            && !matches!(drawing.kind, DrawingKind::Text | DrawingKind::TrendLine)
+            && drawing.kind != DrawingKind::Text
+            && drawing.kind != DrawingKind::TrendLine
+            && !drawing.kind.is_text_annotation()
         {
             return None;
         }
@@ -2395,7 +3746,9 @@ impl ChartEngine {
     }
 
     fn measure_drawing_text_with_family(&self, drawing: &Drawing, size: f64, family: &str) -> f64 {
-        if drawing.kind == DrawingKind::Text && drawing.text.is_empty() {
+        if (drawing.kind == DrawingKind::Text || drawing.kind.is_text_annotation())
+            && drawing.text.is_empty()
+        {
             return size;
         }
         let text = drawing.display_text();
@@ -2529,10 +3882,24 @@ impl ChartEngine {
         }
         let id = self.take_drawing_id()?;
         let mut drawing = Drawing::new(id, kind, pane_index, points);
-        if let Some(json) = options_json {
-            if let Ok(patch) = serde_json::from_str::<DrawingPatch>(json) {
-                let _ = drawing.apply_patch(patch);
+        if kind == DrawingKind::AnchoredText {
+            if let (Some(pane), Some(&point)) = (self.panes.get(pane_index), drawing.points.first())
+            {
+                if let Some((x, y)) = self.drawing_to_px_for(pane_index, drawing.price_scale, point)
+                {
+                    drawing.screen_x = (x / self.pane_w.max(1.0)).clamp(0.0, 1.0);
+                    drawing.screen_y = ((y - pane.top) / pane.height.max(1.0)).clamp(0.0, 1.0);
+                }
             }
+        }
+        if let Some(json) = options_json {
+            let patch = serde_json::from_str::<DrawingPatch>(json).ok()?;
+            if !drawing.apply_patch(patch) {
+                return None;
+            }
+        }
+        if kind == DrawingKind::BarsPattern {
+            drawing.bars_pattern = self.capture_bars_pattern(&drawing)?;
         }
         self.drawings.push(drawing);
         self.insert_drawing_runtime(id);
@@ -2618,7 +3985,32 @@ impl ChartEngine {
         }
         Drawing::normalize_position_points(drawing.kind, &mut points);
         let before = drawing.clone();
+        let pattern_bars =
+            if drawing.kind == DrawingKind::BarsPattern && drawing.points[..2] != points[..2] {
+                let mut next = drawing.clone();
+                next.points = points.clone();
+                match self.capture_bars_pattern(&next) {
+                    Some(bars) => Some(bars),
+                    None => return false,
+                }
+            } else {
+                None
+            };
+        if drawing.kind == DrawingKind::AnchoredText {
+            let point = points[0];
+            let pane = &self.panes[drawing.pane_index];
+            if let Some((x, y)) =
+                self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point)
+            {
+                self.drawings[index].screen_x = (x / self.pane_w.max(1.0)).clamp(0.0, 1.0);
+                self.drawings[index].screen_y =
+                    ((y - pane.top) / pane.height.max(1.0)).clamp(0.0, 1.0);
+            }
+        }
         self.drawings[index].points = points;
+        if let Some(bars) = pattern_bars {
+            self.drawings[index].bars_pattern = bars;
+        }
         let after = self.drawings[index].clone();
         if before.points != after.points {
             self.drawing_anchor_times.remove(&id);
@@ -2735,6 +4127,8 @@ impl ChartEngine {
                 pane_index: drawing.pane_index,
                 points: drawing.points.clone(),
                 options: drawing.options_json(),
+                bars_pattern: (drawing.kind == DrawingKind::BarsPattern)
+                    .then(|| drawing.bars_pattern.clone()),
             })
             .collect::<Vec<_>>();
         let payload = crate::DrawingClipboardPayload {
@@ -2785,13 +4179,41 @@ impl ChartEngine {
             {
                 return None;
             }
-            let options = serde_json::to_string(&item.options).ok()?;
-            staged.push((item.kind, points, options));
+            if item.kind == DrawingKind::BarsPattern {
+                if !item.bars_pattern.as_deref().is_some_and(valid_bars_pattern) {
+                    return None;
+                }
+            } else if item.bars_pattern.is_some() {
+                return None;
+            }
+            let patch = serde_json::from_value::<DrawingPatch>(item.options).ok()?;
+            let mut drawing = Drawing::new(0, item.kind, pane_index, points);
+            if !drawing.apply_patch(patch) {
+                return None;
+            }
+            drawing.bars_pattern = item.bars_pattern.unwrap_or_default();
+            staged.push(drawing);
         }
         let mut ids = Vec::with_capacity(staged.len());
-        for (kind, points, options) in staged {
-            ids.push(self.add_drawing(kind, pane_index, points, Some(&options))?);
+        let final_id = self
+            .next_drawing_id
+            .checked_add(u32::try_from(staged.len()).ok()?)?;
+        for mut drawing in staged {
+            let id = self.take_drawing_id()?;
+            drawing.id = id;
+            drawing.z_order = id as i32;
+            self.drawings.push(drawing);
+            self.insert_drawing_runtime(id);
+            let index = self.drawings.len() - 1;
+            self.record_drawing_command(DrawingCommand::Create {
+                drawing: self.drawings[index].clone(),
+                index,
+            });
+            ids.push(id);
         }
+        debug_assert_eq!(self.next_drawing_id, final_id);
+        self.invalidate_frame_drawings();
+        self.bump_drawing_sync_revision();
         Some(ids)
     }
 
@@ -2979,6 +4401,8 @@ impl ChartEngine {
                 pane_index: drawing.pane_index,
                 points: drawing.points.clone(),
                 options: drawing.options_json(),
+                bars_pattern: (drawing.kind == DrawingKind::BarsPattern)
+                    .then(|| drawing.bars_pattern.clone()),
             })
             .collect();
         serde_json::to_string(&crate::DrawingSyncPayload {
@@ -3032,6 +4456,14 @@ impl ChartEngine {
                 return false;
             };
             if !drawing.apply_patch(patch) {
+                return false;
+            }
+            if item.kind == DrawingKind::BarsPattern {
+                let Some(bars) = item.bars_pattern.filter(|bars| valid_bars_pattern(bars)) else {
+                    return false;
+                };
+                drawing.bars_pattern = bars;
+            } else if item.bars_pattern.is_some() {
                 return false;
             }
             staged.push(drawing);
@@ -3237,7 +4669,8 @@ impl ChartEngine {
                     && !d.locked
                     && d.visible
                     && d.interval_visibility.allows(self.drawing_interval)
-                    && matches!(d.kind, DrawingKind::Text | DrawingKind::TrendLine)
+                    && (matches!(d.kind, DrawingKind::Text | DrawingKind::TrendLine)
+                        || d.kind.is_text_annotation())
             })
         });
         let changes_trend_placeholder =
@@ -3274,7 +4707,9 @@ impl ChartEngine {
     pub fn set_hovered_text(&mut self, id: Option<DrawingId>) {
         let valid = id.filter(|&hid| {
             self.drawings.iter().any(|d| {
-                d.id == hid && matches!(d.kind, DrawingKind::Text | DrawingKind::TrendLine)
+                d.id == hid
+                    && (matches!(d.kind, DrawingKind::Text | DrawingKind::TrendLine)
+                        || d.kind.is_text_annotation())
             })
         });
         if valid != self.hovered_text {
@@ -3454,7 +4889,7 @@ impl ChartEngine {
                 {
                     continue;
                 }
-                let Some(px) = self.drawing_px(drawing) else {
+                let Some(px) = self.drawing_render_px(drawing) else {
                     continue;
                 };
                 if self.drawing_body_hit(drawing, &px, x, y, profile) {
@@ -3515,6 +4950,67 @@ impl ChartEngine {
     ) -> bool {
         let hit_tolerance = profile.drawing_stroke_tolerance;
         let tolerance = drawing.width / 2.0 + hit_tolerance;
+        if drawing.kind == DrawingKind::BarsPattern && !drawing.bars_pattern.is_empty() {
+            let tick = (self.time_scale.bar_spacing() * 0.25).clamp(2.0, 6.0);
+            let mut previous = None;
+            for &bar in &drawing.bars_pattern {
+                let projected = bar.project(drawing);
+                let mut encoded = [(0.0, 0.0); 4];
+                let mut valid = true;
+                for (slot, point) in encoded.iter_mut().zip(projected) {
+                    if let Some(value) =
+                        self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point)
+                    {
+                        *slot = value;
+                    } else {
+                        valid = false;
+                        break;
+                    }
+                }
+                if !valid {
+                    continue;
+                }
+                if drawing.bars_pattern_mode == "bars" {
+                    let bar_x = encoded[0].0;
+                    if distance_to_segment(x, y, bar_x, encoded[1].1, bar_x, encoded[2].1)
+                        <= tolerance
+                        || distance_to_segment(
+                            x,
+                            y,
+                            bar_x - tick,
+                            encoded[0].1,
+                            bar_x,
+                            encoded[0].1,
+                        ) <= tolerance
+                        || distance_to_segment(
+                            x,
+                            y,
+                            bar_x,
+                            encoded[3].1,
+                            bar_x + tick,
+                            encoded[3].1,
+                        ) <= tolerance
+                    {
+                        return true;
+                    }
+                } else {
+                    let index = match drawing.bars_pattern_mode.as_str() {
+                        "line_open" => 0,
+                        "line_high" => 1,
+                        "line_low" => 2,
+                        _ => 3,
+                    };
+                    let current = encoded[index];
+                    if previous.is_some_and(|(ax, ay)| {
+                        distance_to_segment(x, y, ax, ay, current.0, current.1) <= tolerance
+                    }) {
+                        return true;
+                    }
+                    previous = Some(current);
+                }
+            }
+            return false;
+        }
         let Some(pane) = self.panes.get(drawing.pane_index) else {
             return false;
         };
@@ -3528,6 +5024,7 @@ impl ChartEngine {
                 line_width: drawing.width,
                 device_scale: 1.0,
                 extend_left: drawing.extend_left,
+                icon_size: drawing.icon_size,
                 extend_right: drawing.extend_right,
             },
         ) else {
@@ -3548,6 +5045,258 @@ impl ChartEngine {
                     && y >= y0.min(y1) - hit_tolerance
                     && y <= y0.max(y1) + hit_tolerance
             }
+            DrawingBodyGeometry::Cross {
+                x: line_x,
+                y: line_y,
+                pane_w,
+                pane_top,
+                pane_bottom,
+            } => {
+                ((y - line_y).abs() <= tolerance
+                    && x >= -hit_tolerance
+                    && x <= pane_w + hit_tolerance)
+                    || ((x - line_x).abs() <= tolerance
+                        && y >= pane_top - hit_tolerance
+                        && y <= pane_bottom + hit_tolerance)
+            }
+            DrawingBodyGeometry::Channel { first, second } => {
+                (drawing.fill_enabled
+                    && self.selected_drawing == Some(drawing.id)
+                    && point_in_polygon((x, y), &[first[0], first[1], second[1], second[0]]))
+                    || distance_to_segment(x, y, first[0].0, first[0].1, first[1].0, first[1].1)
+                        <= tolerance
+                    || distance_to_segment(x, y, second[0].0, second[0].1, second[1].0, second[1].1)
+                        <= tolerance
+            }
+            DrawingBodyGeometry::Regression {
+                center,
+                upper,
+                lower,
+            } => [center, upper, lower].into_iter().any(|segment| {
+                distance_to_segment(x, y, segment[0].0, segment[0].1, segment[1].0, segment[1].1)
+                    <= tolerance
+            }),
+            DrawingBodyGeometry::Fibonacci(fib) => drawing.levels.iter().any(|level| {
+                if !level.visible {
+                    return false;
+                }
+                let (a, b) = self.drawing_fibonacci_level_segment(drawing, fib, level.value, 1.0);
+                distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+            }),
+            DrawingBodyGeometry::TimeLevels(time) => {
+                y >= time.pane_top - hit_tolerance
+                    && y <= time.pane_bottom + hit_tolerance
+                    && drawing.levels.iter().any(|level| {
+                        level.visible
+                            && (x - time.x(drawing.level_value(level.value))).abs() <= tolerance
+                    })
+            }
+            DrawingBodyGeometry::FibonacciArcs(arcs) => {
+                (arcs.kind == DrawingKind::FibonacciWedge
+                    && px[1..3].iter().any(|side| {
+                        distance_to_segment(x, y, px[0].0, px[0].1, side.0, side.1) <= tolerance
+                    }))
+                    || drawing.levels.iter().any(|level| {
+                        level.visible
+                            && drawing.level_value(level.value) > 0.0
+                            && (0..arcs.segments()).any(|step| {
+                                let segments = f64::from(arcs.segments());
+                                let a = arcs.point(
+                                    drawing.level_value(level.value),
+                                    f64::from(step) / segments,
+                                );
+                                let b = arcs.point(
+                                    drawing.level_value(level.value),
+                                    f64::from(step + 1) / segments,
+                                );
+                                distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+                            })
+                    })
+            }
+            DrawingBodyGeometry::Pitchfork(fork) => drawing.levels.iter().any(|level| {
+                if !level.visible {
+                    return false;
+                }
+                let (a, b) = fork.segment(drawing.level_value(level.value));
+                distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+            }),
+            DrawingBodyGeometry::Cycles(cycles) => {
+                y >= cycles.pane_top - hit_tolerance && y <= cycles.pane_bottom + hit_tolerance && {
+                    let mut hit = false;
+                    cycles.for_each_visible_line(|_, line_x| {
+                        hit |= (x - line_x).abs() <= tolerance;
+                    });
+                    hit
+                }
+            }
+            DrawingBodyGeometry::Sine(sine) => {
+                let Some((left, right)) = sine.visible_x() else {
+                    return false;
+                };
+                if x < left - tolerance || x > right + tolerance {
+                    return false;
+                }
+                let count = sine.sample_count();
+                let center = (((x - left) / (right - left) * f64::from(count)).floor() as u32)
+                    .min(count - 1);
+                (center.saturating_sub(1)..=(center + 1).min(count - 1)).any(|step| {
+                    let ax = left + (right - left) * f64::from(step) / f64::from(count);
+                    let bx = left + (right - left) * f64::from(step + 1) / f64::from(count);
+                    distance_to_segment(x, y, ax, sine.y(ax), bx, sine.y(bx)) <= tolerance
+                })
+            }
+            DrawingBodyGeometry::Marker(marker) => {
+                let triangle = marker.triangle();
+                point_in_polygon((x, y), &triangle)
+                    || (0..3).any(|index| {
+                        let a = triangle[index];
+                        let b = triangle[(index + 1) % 3];
+                        distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+                    })
+                    || marker.stem().is_some_and(|(a, b)| {
+                        distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+                    })
+            }
+            DrawingBodyGeometry::PriceLabel {
+                x: label_x,
+                y: label_y,
+            } => {
+                let label = if drawing.text.is_empty() {
+                    self.price_formatter.format(drawing.points[0].price)
+                } else {
+                    drawing.text.clone()
+                };
+                let layout = &self.options.get().layout;
+                let size = drawing.resolved_text_size(layout.font_size);
+                let width = self.measure_text_run(
+                    &label,
+                    size,
+                    &layout.font_family,
+                    drawing.text_weight.unwrap_or(400),
+                    drawing.text_italic,
+                );
+                x >= label_x - width - 8.0 - hit_tolerance
+                    && x <= label_x + hit_tolerance
+                    && y >= label_y - size * 0.6 - 4.0 - hit_tolerance
+                    && y <= label_y + size * 0.6 + 4.0 + hit_tolerance
+            }
+            DrawingBodyGeometry::IconStamp { center, size } => {
+                (x - center.0).abs() <= size / 2.0 + hit_tolerance
+                    && (y - center.1).abs() <= size / 2.0 + hit_tolerance
+            }
+            DrawingBodyGeometry::GannGrid(grid) => {
+                let bounds = grid.bounds();
+                let corners = [
+                    (bounds.left, bounds.top),
+                    (bounds.right, bounds.top),
+                    (bounds.right, bounds.bottom),
+                    (bounds.left, bounds.bottom),
+                ];
+                (drawing.fill_enabled
+                    && self.selected_drawing == Some(drawing.id)
+                    && x >= bounds.left
+                    && x <= bounds.right
+                    && y >= bounds.top
+                    && y <= bounds.bottom)
+                    || (0..4).any(|index| {
+                        let a = corners[index];
+                        let b = corners[(index + 1) % 4];
+                        distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+                    })
+                    || drawing
+                        .levels
+                        .iter()
+                        .filter(|level| level.visible)
+                        .any(|level| {
+                            grid.level_lines(drawing.level_value(level.value))
+                                .iter()
+                                .any(|&(a, b)| {
+                                    distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+                                })
+                        })
+                    || drawing
+                        .gann_fans
+                        .iter()
+                        .filter(|level| level.visible)
+                        .any(|level| {
+                            let (a, b) = grid.fan_segment(level.value, drawing.level_reverse);
+                            distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+                        })
+                    || drawing
+                        .gann_arcs
+                        .iter()
+                        .filter(|level| level.visible)
+                        .any(|level| {
+                            (0..32).any(|step| {
+                                let a = grid.arc_point(
+                                    level.value,
+                                    f64::from(step) / 32.0,
+                                    drawing.level_reverse,
+                                );
+                                let b = grid.arc_point(
+                                    level.value,
+                                    f64::from(step + 1) / 32.0,
+                                    drawing.level_reverse,
+                                );
+                                distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+                            })
+                        })
+            }
+            DrawingBodyGeometry::Quad { corners } => {
+                (drawing.fill_enabled
+                    && self.selected_drawing == Some(drawing.id)
+                    && point_in_polygon((x, y), &corners))
+                    || (0..4).any(|index| {
+                        let a = corners[index];
+                        let b = corners[(index + 1) % 4];
+                        distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+                    })
+            }
+            DrawingBodyGeometry::Ellipse { center, rx, ry } => {
+                if rx <= 0.0 || ry <= 0.0 {
+                    false
+                } else if drawing.fill_enabled
+                    && self.selected_drawing == Some(drawing.id)
+                    && ((x - center.0) / rx).powi(2) + ((y - center.1) / ry).powi(2) <= 1.0
+                {
+                    true
+                } else {
+                    (0..64).any(|step| {
+                        let theta0 = std::f64::consts::TAU * step as f64 / 64.0;
+                        let theta1 = std::f64::consts::TAU * (step + 1) as f64 / 64.0;
+                        let a = (center.0 + rx * theta0.cos(), center.1 + ry * theta0.sin());
+                        let b = (center.0 + rx * theta1.cos(), center.1 + ry * theta1.sin());
+                        distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+                    })
+                }
+            }
+            DrawingBodyGeometry::Circle { center, radius } => {
+                let distance = (x - center.0).hypot(y - center.1);
+                (distance - radius).abs() <= tolerance
+                    || (drawing.fill_enabled
+                        && self.selected_drawing == Some(drawing.id)
+                        && distance <= radius)
+            }
+            DrawingBodyGeometry::Triangle { corners } => {
+                (drawing.fill_enabled
+                    && self.selected_drawing == Some(drawing.id)
+                    && point_in_polygon((x, y), &corners))
+                    || (0..3).any(|index| {
+                        let a = corners[index];
+                        let b = corners[(index + 1) % 3];
+                        distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+                    })
+            }
+            DrawingBodyGeometry::Arc(arc) => (0..64).any(|step| {
+                let a = arc.point(step as f64 / 64.0);
+                let b = arc.point((step + 1) as f64 / 64.0);
+                distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+            }),
+            DrawingBodyGeometry::Curve(curve) => (0..64).any(|step| {
+                let a = curve.point(step as f64 / 64.0);
+                let b = curve.point((step + 1) as f64 / 64.0);
+                distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+            }),
             DrawingBodyGeometry::Rectangle {
                 left,
                 right,
@@ -3617,6 +5366,9 @@ impl ChartEngine {
                 .is_some()
             }
             DrawingBodyGeometry::Empty => {
+                if drawing.kind != DrawingKind::Text && !drawing.kind.is_text_annotation() {
+                    return false;
+                }
                 // The click/hover target is the interaction-chrome box (the label run while
                 // non-empty, else a one-em caret box — empty text paints nothing on the chart)
                 // plus the editing chrome's border+padding, so the painted hover/focus border
@@ -3669,6 +5421,8 @@ impl ChartEngine {
             return false;
         }
         let start_points = drawing.points.clone();
+        let screen_position = (drawing.screen_x, drawing.screen_y);
+        let history_bars_pattern = drawing.bars_pattern.clone();
         let Some(start_px) = self.drawing_px(drawing) else {
             return false;
         };
@@ -3681,6 +5435,8 @@ impl ChartEngine {
             current_x: x,
             current_y: y,
             history_points: start_points.clone(),
+            history_screen_position: screen_position,
+            history_bars_pattern,
             start_points,
             start_px,
         });
@@ -3715,6 +5471,36 @@ impl ChartEngine {
             drawing.price_scale,
             drawing.snap_time_to_data,
         );
+        if kind == DrawingKind::AnchoredText {
+            let (dx, dy) = if modifiers.straighten && part == DrawingDragPart::Body {
+                if dx.abs() >= dy.abs() {
+                    (dx, 0.0)
+                } else {
+                    (0.0, dy)
+                }
+            } else {
+                (dx, dy)
+            };
+            let Some(&(start_px_x, start_px_y)) = start_px.first() else {
+                return;
+            };
+            let Some(pane_bounds) = self.panes.get(pane) else {
+                return;
+            };
+            let (pane_top, pane_height) = (pane_bounds.top, pane_bounds.height);
+            let new_x = (start_px_x + dx).clamp(0.0, self.pane_w);
+            let new_y = (start_px_y + dy).clamp(pane_top, pane_top + pane_height);
+            let market_point = self.drawing_from_px_for(pane, price_scale, new_x, new_y);
+            if let Some(drawing) = self.drawings.iter_mut().find(|drawing| drawing.id == id) {
+                drawing.screen_x = (new_x / self.pane_w.max(1.0)).clamp(0.0, 1.0);
+                drawing.screen_y = ((new_y - pane_top) / pane_height.max(1.0)).clamp(0.0, 1.0);
+                if let Some(point) = market_point {
+                    drawing.points[0] = point;
+                }
+            }
+            self.update_drawing_runtime(id);
+            return;
+        }
         let mut points = start_points;
         let convert = |index: usize, dx: f64, dy: f64| -> Option<DrawingPoint> {
             let (px, py) = start_px.get(index)?;
@@ -3992,10 +5778,30 @@ impl ChartEngine {
         self.invalidate_frame_overlay();
         if let Some(drag) = self.drawing_drag.take() {
             let id = drag.id;
+            if matches!(drag.part, DrawingDragPart::Anchor(0 | 1)) {
+                if let Some(drawing) = self
+                    .drawing(id)
+                    .cloned()
+                    .filter(|drawing| drawing.kind == DrawingKind::BarsPattern)
+                {
+                    if let Some(bars) = self.capture_bars_pattern(&drawing) {
+                        if let Some(current) = self.drawings.iter_mut().find(|item| item.id == id) {
+                            current.bars_pattern = bars;
+                        }
+                    } else if let Some(current) =
+                        self.drawings.iter_mut().find(|item| item.id == id)
+                    {
+                        current.points = drag.history_points.clone();
+                    }
+                }
+            }
             self.update_drawing_runtime(id);
             if let Some(after) = self.drawing(id).cloned() {
                 let mut before = after.clone();
                 before.points = drag.history_points;
+                before.screen_x = drag.history_screen_position.0;
+                before.screen_y = drag.history_screen_position.1;
+                before.bars_pattern = drag.history_bars_pattern;
                 if before != after {
                     self.drawing_anchor_times.remove(&id);
                     self.record_drawing_command(DrawingCommand::Update {
@@ -4020,6 +5826,9 @@ impl ChartEngine {
             .find(|drawing| drawing.id == drag.id)
         {
             drawing.points = drag.history_points;
+            drawing.screen_x = drag.history_screen_position.0;
+            drawing.screen_y = drag.history_screen_position.1;
+            drawing.bars_pattern = drag.history_bars_pattern;
             self.update_drawing_runtime(drag.id);
             self.invalidate_frame_drawings();
         }
@@ -4062,6 +5871,7 @@ impl ChartEngine {
             return false;
         }
         let start_points = drawing.points.clone();
+        let screen_position = (drawing.screen_x, drawing.screen_y);
         let Some(start_px) = self.drawing_px(drawing) else {
             return false;
         };
@@ -4073,6 +5883,8 @@ impl ChartEngine {
             current_x: 0.0,
             current_y: 0.0,
             history_points: start_points.clone(),
+            history_screen_position: screen_position,
+            history_bars_pattern: drawing.bars_pattern.clone(),
             start_points,
             start_px,
         });
@@ -4105,6 +5917,8 @@ impl ChartEngine {
         let id = before.id;
         if let Some(drawing) = self.drawings.iter_mut().find(|drawing| drawing.id == id) {
             drawing.points = before.points;
+            drawing.screen_x = before.screen_x;
+            drawing.screen_y = before.screen_y;
             self.update_drawing_runtime(id);
             self.invalidate_frame_drawings();
         }
@@ -4833,6 +6647,24 @@ impl ChartEngine {
         };
         let mut drawing = pending.drawing;
         drawing.id = id;
+        if drawing.kind == DrawingKind::AnchoredText {
+            if let (Some(pane), Some(&point)) =
+                (self.panes.get(drawing.pane_index), drawing.points.first())
+            {
+                if let Some((x, y)) =
+                    self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point)
+                {
+                    drawing.screen_x = (x / self.pane_w.max(1.0)).clamp(0.0, 1.0);
+                    drawing.screen_y = ((y - pane.top) / pane.height.max(1.0)).clamp(0.0, 1.0);
+                }
+            }
+        }
+        if drawing.kind == DrawingKind::BarsPattern {
+            let Some(bars) = self.capture_bars_pattern(&drawing) else {
+                return 0;
+            };
+            drawing.bars_pattern = bars;
+        }
         self.drawings.push(drawing);
         self.insert_drawing_runtime(id);
         self.selected_drawing = Some(id);

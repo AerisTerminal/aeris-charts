@@ -5138,6 +5138,14 @@ impl AerisChart {
     pub fn drawing_kind_options_json(&self, id: u32) -> String {
         self.inner.borrow().drawing_kind_options_json(id)
     }
+    pub fn set_drawing_icon(&mut self, name: &str, width: u32, height: u32, pixels: &[u8]) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_drawing_icon(name, width, height, pixels)
+    }
+    pub fn remove_drawing_icon(&mut self, name: &str) -> bool {
+        self.inner.borrow_mut().remove_drawing_icon(name)
+    }
     pub fn drawing_object_tree_json(&self) -> String {
         self.inner.borrow().drawing_object_tree_json()
     }

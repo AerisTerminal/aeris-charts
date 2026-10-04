@@ -1936,12 +1936,8 @@ export function is_footprint_series_kind(kind: series_kind): kind is "footprint"
 // ---------------------------------------------------------------------------------------------
 
 /**
- * The drawing-tool kinds. Each tool is an engine-owned drawing object with defining anchor
- * points: trend line (2), rectangle (2), Long Position / Short Position tools (3: entry, target,
- * stop), horizontal line/ray, vertical line, and text (1 each), a multi-click arrow-ended
- * straight-segment path (variable length, every vertex editable), the freehand brush (a
- * variable-length curve, anchor handles at the two ends), and the price range, date range, and
- * date-and-price range measuring tools (2: start, end; the measured sign follows start → end).
+ * Built-in drawing kinds. Each kind has an engine-owned placement rule, editable defining
+ * anchors, shared frame geometry, and a stable wire ID in DRAWING_KIND_TO_U8.
  */
 export type drawing_kind =
   | "trend_line"
@@ -1959,7 +1955,76 @@ export type drawing_kind =
   | "anchored_vwap"
   | "price_range"
   | "date_range"
-  | "date_price_range";
+  | "date_price_range"
+  | "ray"
+  | "extended_line"
+  | "info_line"
+  | "trend_angle"
+  | "cross_line"
+  | "arrow_line"
+  | "parallel_channel"
+  | "regression_trend"
+  | "flat_top_channel"
+  | "flat_bottom_channel"
+  | "disjoint_channel"
+  | "polyline"
+  | "highlighter"
+  | "rotated_rectangle"
+  | "ellipse"
+  | "circle"
+  | "triangle"
+  | "arc"
+  | "curve"
+  | "double_curve"
+  | "fibonacci_retracement"
+  | "fibonacci_extension"
+  | "fibonacci_channel"
+  | "fibonacci_time_zones"
+  | "fibonacci_trend_time"
+  | "fibonacci_speed_fan"
+  | "fibonacci_speed_arcs"
+  | "fibonacci_circles"
+  | "fibonacci_spiral"
+  | "fibonacci_wedge"
+  | "andrews_pitchfork"
+  | "schiff_pitchfork"
+  | "modified_schiff_pitchfork"
+  | "inside_pitchfork"
+  | "pitchfan"
+  | "pattern_xabcd"
+  | "pattern_cypher"
+  | "pattern_abcd"
+  | "pattern_head_shoulders"
+  | "pattern_triangle"
+  | "pattern_three_drives"
+  | "elliott_impulse"
+  | "elliott_correction"
+  | "elliott_triangle"
+  | "elliott_double_combination"
+  | "elliott_triple_combination"
+  | "cyclic_lines"
+  | "time_cycles"
+  | "sine_line"
+  | "arrow_marker_up"
+  | "arrow_marker_down"
+  | "arrow_marker_left"
+  | "arrow_marker_right"
+  | "flag_mark"
+  | "signpost"
+  | "note"
+  | "comment"
+  | "callout"
+  | "price_note"
+  | "price_label"
+  | "anchored_text"
+  | "icon_stamp"
+  | "gann_box"
+  | "gann_square"
+  | "gann_square_fixed"
+  | "gann_fan"
+  | "projection"
+  | "forecast"
+  | "bars_pattern";
 
 export const DRAWING_KIND_TO_U8: Record<drawing_kind, number> = {
   trend_line: 0,
@@ -1978,6 +2043,75 @@ export const DRAWING_KIND_TO_U8: Record<drawing_kind, number> = {
   price_range: 13,
   date_range: 14,
   date_price_range: 15,
+  ray: 16,
+  extended_line: 17,
+  info_line: 18,
+  trend_angle: 19,
+  cross_line: 20,
+  arrow_line: 21,
+  parallel_channel: 22,
+  regression_trend: 23,
+  flat_top_channel: 24,
+  flat_bottom_channel: 25,
+  disjoint_channel: 26,
+  polyline: 34,
+  highlighter: 35,
+  rotated_rectangle: 27,
+  ellipse: 28,
+  circle: 29,
+  triangle: 30,
+  arc: 31,
+  curve: 32,
+  double_curve: 33,
+  fibonacci_retracement: 36,
+  fibonacci_extension: 37,
+  fibonacci_channel: 38,
+  fibonacci_time_zones: 39,
+  fibonacci_trend_time: 40,
+  fibonacci_speed_fan: 41,
+  fibonacci_speed_arcs: 42,
+  fibonacci_circles: 43,
+  fibonacci_spiral: 44,
+  fibonacci_wedge: 45,
+  andrews_pitchfork: 46,
+  schiff_pitchfork: 47,
+  modified_schiff_pitchfork: 48,
+  inside_pitchfork: 49,
+  pitchfan: 50,
+  pattern_xabcd: 51,
+  pattern_cypher: 52,
+  pattern_abcd: 53,
+  pattern_head_shoulders: 54,
+  pattern_triangle: 55,
+  pattern_three_drives: 56,
+  elliott_impulse: 57,
+  elliott_correction: 58,
+  elliott_triangle: 59,
+  elliott_double_combination: 60,
+  elliott_triple_combination: 61,
+  cyclic_lines: 62,
+  time_cycles: 63,
+  sine_line: 64,
+  arrow_marker_up: 65,
+  arrow_marker_down: 66,
+  arrow_marker_left: 67,
+  arrow_marker_right: 68,
+  flag_mark: 69,
+  signpost: 70,
+  note: 71,
+  comment: 72,
+  callout: 73,
+  price_note: 74,
+  price_label: 75,
+  anchored_text: 76,
+  icon_stamp: 77,
+  gann_box: 78,
+  gann_square: 79,
+  gann_square_fixed: 80,
+  gann_fan: 81,
+  projection: 82,
+  forecast: 83,
+  bars_pattern: 84,
 };
 
 /**
@@ -2004,6 +2138,7 @@ export type drawing_label_metric = "price" | "price_change" | "percent_change" |
 export type drawing_label_position = "above" | "on" | "below" | "inside" | "outside";
 export interface drawing_label_options { metric: drawing_label_metric; visible: boolean; position: drawing_label_position; text?: string }
 export interface drawing_level { value: number; color: string; visible: boolean; style: string; fill_between: boolean; fill_color?: string; label_visible: boolean }
+export type drawing_wave_degree = "subminuette" | "minuette" | "minute" | "minor" | "intermediate" | "primary" | "cycle" | "supercycle" | "grand_supercycle";
 export type drawing_property_type = "boolean" | "number" | "integer" | "string" | "color" | "enum" | "points" | "levels" | "interval_set";
 export interface drawing_property_descriptor { name: string; property_type: drawing_property_type; default: unknown; min?: number; max?: number; enum_values: string[] }
 export interface drawing_property_schema { revision: number; kind: drawing_kind; properties: drawing_property_descriptor[] }
@@ -2011,7 +2146,14 @@ export interface drawing_template { name: string; kind: drawing_kind; options: P
 export type drawing_kind_options =
   | { kind: "rectangle"; fill_color?: string; preview_fill_color?: string; border_visible: boolean; show_labels: boolean; axis_bands_visible: boolean; label_color?: string; label_text_color?: string; snap_time_to_data: boolean }
   | { kind: "text"; box_color?: string; box_border_color?: string; box_border_width: number }
+  | { kind: "anchored_text"; screen_x: number; screen_y: number; box_color?: string; box_border_color?: string; box_border_width: number }
+  | { kind: "icon_stamp"; icon_name?: string; icon_size: number }
+  | { kind: "bars_pattern"; mirror_x: boolean; mirror_y: boolean; mode: "bars" | "line_open" | "line_high" | "line_low" | "line_close"; bar_count: number }
   | { kind: "position"; levels: drawing_level[]; account_size: number; risk_percent: number }
+  | { kind: "levels"; levels: drawing_level[]; reverse: boolean; log_scale: boolean; show_prices: boolean; show_values: boolean; show_percents: boolean; label_align: "left" | "center" | "right" }
+  | { kind: "gann_square"; levels: drawing_level[]; fans: drawing_level[]; arcs: drawing_level[]; reverse: boolean; show_prices: boolean; show_values: boolean; show_percents: boolean; label_align: "left" | "center" | "right" }
+  | { kind: "regression_trend"; source_id: number | null; deviations: number }
+  | { kind: "elliott"; wave_degree: drawing_wave_degree }
   | { kind: "generic" };
 
 /**
@@ -2026,6 +2168,10 @@ export interface drawing_options {
   position_account_size: number;
   /** Percentage of the hypothetical balance risked at the stop, 0–100 (default 25). */
   position_risk_percent: number;
+  /** Optional source series ID for Regression Trend; null follows the pane's primary series. */
+  regression_source_id: number | null;
+  /** Residual standard deviations on each side of the Regression Trend center, from 0 to 10. */
+  regression_deviations: number;
   name: string;
   group_id: string;
   revision: number;
@@ -2041,6 +2187,24 @@ export interface drawing_options {
   magnet: drawing_magnet_mode;
   labels: drawing_label_options[];
   levels: drawing_level[];
+  gann_fans: drawing_level[];
+  gann_arcs: drawing_level[];
+  level_reverse: boolean;
+  level_log_scale: boolean;
+  level_show_prices: boolean;
+  level_show_values: boolean;
+  level_show_percents: boolean;
+  level_label_align: "left" | "center" | "right";
+  /** Elliott wave degree used in the vertex labels (default `"minor"`). */
+  wave_degree: drawing_wave_degree;
+  /** Pane-relative screen position for anchored text, 0 to 1. */
+  screen_x: number;
+  screen_y: number;
+  icon_name?: string;
+  icon_size: number;
+  bars_pattern_mirror_x: boolean;
+  bars_pattern_mirror_y: boolean;
+  bars_pattern_mode: "bars" | "line_open" | "line_high" | "line_low" | "line_close";
   /** Price scale used for price-coordinate conversion (`overlay` is the pane's overlay scale). */
   price_scale_id: "left" | "right" | "overlay";
   /** Line/border color (default: the canonical primary token). */
@@ -2125,6 +2289,26 @@ export interface persisted_drawing_style_v1 {
   magnet?: drawing_magnet_mode;
   labels?: drawing_label_options[];
   levels?: drawing_level[];
+  /** Individually styled fan ratios on Gann square tools; each value is 0.01 to 100. */
+  gann_fans?: drawing_level[];
+  /** Individually styled quarter arcs on Gann square tools; each value is 0 to 1. */
+  gann_arcs?: drawing_level[];
+  level_reverse?: boolean;
+  level_log_scale?: boolean;
+  level_show_prices?: boolean;
+  level_show_values?: boolean;
+  level_show_percents?: boolean;
+  level_label_align?: "left" | "center" | "right";
+  wave_degree?: drawing_wave_degree;
+  screen_x?: number;
+  screen_y?: number;
+  icon_name?: string;
+  icon_size?: number;
+  /** Frozen OHLC sample for a bars-pattern ghost copy; at most 512 bars. */
+  bars_pattern?: Array<{ offset: number; open: number; high: number; low: number; close: number }>;
+  bars_pattern_mirror_x?: boolean;
+  bars_pattern_mirror_y?: boolean;
+  bars_pattern_mode?: "bars" | "line_open" | "line_high" | "line_low" | "line_close";
   price_scale_id?: "left" | "right" | "overlay";
   color?: string;
   width?: number;
@@ -3480,6 +3664,9 @@ export interface chart_api {
   /** Return the typed common property schema for a live drawing. */
   drawing_property_schema(drawing: drawing_api | number): drawing_property_schema;
   drawing_kind_options(drawing: drawing_api | number): drawing_kind_options;
+  /** Register a bounded chart-local RGBA8 stamp by name. Re-register to replace its pixels. */
+  register_drawing_icon(name: string, width: number, height: number, pixels: Uint8Array): void;
+  remove_drawing_icon(name: string): boolean;
   /** Return the object-tree snapshot as stable JSON-compatible records. */
   drawing_object_tree(): unknown[];
   /** Set host-supplied interval metadata used by interval visibility. */
@@ -3517,10 +3704,10 @@ export interface chart_api {
   can_redo_drawing(): boolean;
   /**
    * Arm an interactive drawing tool (industry-standard), or disarm with `null`. While armed,
-   * pane clicks place the tool's anchors through the engine's creation flow — one click for the
-   * single-anchor kinds, two for `trend_line`/`rectangle`, and repeated clicks for `path` until
-   * double-click or Enter — the mouse previews the pending anchor, Backspace removes the latest
-   * path vertex, and Escape cancels. `options` templates the drawing created this way. One-shot:
+   * pane clicks place the tool's anchors through the engine's creation flow. Multi-click paths
+   * finish on double-click or Enter; freehand tools capture a press-drag. The mouse previews the
+   * pending anchor, Backspace removes the latest path vertex, and Escape cancels. `options`
+   * templates the drawing created this way. One-shot:
    * the tool disarms after each commit (listen with {@link chart_api.set_drawing_tool_listener}
    * to sync a toolbar).
    */

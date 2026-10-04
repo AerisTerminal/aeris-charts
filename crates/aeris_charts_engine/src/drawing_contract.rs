@@ -191,6 +191,8 @@ pub struct DrawingClipboardItem {
     pub pane_index: usize,
     pub points: Vec<DrawingPoint>,
     pub options: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bars_pattern: Option<Vec<crate::drawings::BarsPatternBar>>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -270,10 +272,53 @@ pub enum DrawingKindOptions {
         box_border_color: Option<String>,
         box_border_width: f64,
     },
+    AnchoredText {
+        screen_x: f64,
+        screen_y: f64,
+        box_color: Option<String>,
+        box_border_color: Option<String>,
+        box_border_width: f64,
+    },
+    IconStamp {
+        icon_name: Option<String>,
+        icon_size: f64,
+    },
+    BarsPattern {
+        mirror_x: bool,
+        mirror_y: bool,
+        mode: String,
+        bar_count: usize,
+    },
     Position {
         levels: Vec<DrawingLevel>,
         account_size: f64,
         risk_percent: f64,
+    },
+    Levels {
+        levels: Vec<DrawingLevel>,
+        reverse: bool,
+        log_scale: bool,
+        show_prices: bool,
+        show_values: bool,
+        show_percents: bool,
+        label_align: String,
+    },
+    GannSquare {
+        levels: Vec<DrawingLevel>,
+        fans: Vec<DrawingLevel>,
+        arcs: Vec<DrawingLevel>,
+        reverse: bool,
+        show_prices: bool,
+        show_values: bool,
+        show_percents: bool,
+        label_align: String,
+    },
+    RegressionTrend {
+        source_id: Option<u32>,
+        deviations: f64,
+    },
+    Elliott {
+        wave_degree: String,
     },
     Generic,
 }
@@ -296,6 +341,7 @@ fn descriptor(
 /// Return the complete generic property schema for one built-in drawing kind.  The schema is
 /// data, so a host can build a property panel without a tool-specific switch statement.
 pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
+    let defaults = crate::drawings::Drawing::new(0, kind, 0, Vec::new());
     let mut properties = vec![
         descriptor("name", DrawingPropertyType::String, serde_json::json!("")),
         descriptor(
@@ -328,7 +374,11 @@ pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
             DrawingPropertyType::Color,
             serde_json::json!("#2962ff"),
         ),
-        descriptor("width", DrawingPropertyType::Number, serde_json::json!(2.0)),
+        descriptor(
+            "width",
+            DrawingPropertyType::Number,
+            serde_json::json!(defaults.width),
+        ),
         descriptor(
             "style",
             DrawingPropertyType::Enum,
@@ -342,7 +392,7 @@ pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
         descriptor(
             "stroke_end",
             DrawingPropertyType::Enum,
-            serde_json::json!("none"),
+            serde_json::to_value(defaults.stroke_end).unwrap_or_default(),
         ),
         descriptor(
             "extend_left",
@@ -357,7 +407,7 @@ pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
         descriptor(
             "fill_enabled",
             DrawingPropertyType::Boolean,
-            serde_json::json!(false),
+            serde_json::json!(defaults.fill_enabled),
         ),
         descriptor(
             "fill_color",
@@ -395,8 +445,16 @@ pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
             DrawingPropertyType::Enum,
             serde_json::json!("middle"),
         ),
-        descriptor("labels", DrawingPropertyType::Levels, serde_json::json!([])),
-        descriptor("levels", DrawingPropertyType::Levels, serde_json::json!([])),
+        descriptor(
+            "labels",
+            DrawingPropertyType::Levels,
+            serde_json::to_value(defaults.labels).unwrap_or_default(),
+        ),
+        descriptor(
+            "levels",
+            DrawingPropertyType::Levels,
+            serde_json::to_value(defaults.levels).unwrap_or_default(),
+        ),
         descriptor(
             "magnet",
             DrawingPropertyType::Enum,
@@ -423,6 +481,132 @@ pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
             property.max = Some(max);
             properties.push(property);
         }
+    }
+    if kind == DrawingKind::RegressionTrend {
+        properties.push(descriptor(
+            "regression_source_id",
+            DrawingPropertyType::Integer,
+            serde_json::Value::Null,
+        ));
+        let mut deviations = descriptor(
+            "regression_deviations",
+            DrawingPropertyType::Number,
+            serde_json::json!(2.0),
+        );
+        deviations.min = Some(0.0);
+        deviations.max = Some(10.0);
+        properties.push(deviations);
+    }
+    if kind.is_elliott() {
+        let mut degree = descriptor(
+            "wave_degree",
+            DrawingPropertyType::Enum,
+            serde_json::json!("minor"),
+        );
+        degree.enum_values = [
+            "subminuette",
+            "minuette",
+            "minute",
+            "minor",
+            "intermediate",
+            "primary",
+            "cycle",
+            "supercycle",
+            "grand_supercycle",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        properties.push(degree);
+    }
+    if kind == DrawingKind::AnchoredText {
+        for name in ["screen_x", "screen_y"] {
+            let mut position =
+                descriptor(name, DrawingPropertyType::Number, serde_json::json!(0.5));
+            position.min = Some(0.0);
+            position.max = Some(1.0);
+            properties.push(position);
+        }
+    }
+    if kind == DrawingKind::IconStamp {
+        properties.push(descriptor(
+            "icon_name",
+            DrawingPropertyType::String,
+            serde_json::json!(""),
+        ));
+        let mut size = descriptor(
+            "icon_size",
+            DrawingPropertyType::Number,
+            serde_json::json!(24.0),
+        );
+        size.min = Some(8.0);
+        size.max = Some(96.0);
+        properties.push(size);
+    }
+    if kind == DrawingKind::BarsPattern {
+        properties.push(descriptor(
+            "bars_pattern_mirror_x",
+            DrawingPropertyType::Boolean,
+            serde_json::json!(false),
+        ));
+        properties.push(descriptor(
+            "bars_pattern_mirror_y",
+            DrawingPropertyType::Boolean,
+            serde_json::json!(false),
+        ));
+        let mut mode = descriptor(
+            "bars_pattern_mode",
+            DrawingPropertyType::Enum,
+            serde_json::json!("bars"),
+        );
+        mode.enum_values = ["bars", "line_open", "line_high", "line_low", "line_close"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        properties.push(mode);
+    }
+    if kind.has_levels() {
+        for (name, default) in [
+            ("level_reverse", defaults.level_reverse),
+            ("level_show_prices", defaults.level_show_prices),
+            ("level_show_values", defaults.level_show_values),
+            ("level_show_percents", defaults.level_show_percents),
+        ] {
+            properties.push(descriptor(
+                name,
+                DrawingPropertyType::Boolean,
+                serde_json::json!(default),
+            ));
+        }
+        if kind.supports_log_levels() {
+            properties.push(descriptor(
+                "level_log_scale",
+                DrawingPropertyType::Boolean,
+                serde_json::json!(false),
+            ));
+        }
+        let mut align = descriptor(
+            "level_label_align",
+            DrawingPropertyType::Enum,
+            serde_json::json!(defaults.level_label_align),
+        );
+        align.enum_values = ["left", "center", "right"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        properties.push(align);
+    }
+    if matches!(kind, DrawingKind::GannSquare | DrawingKind::GannSquareFixed) {
+        properties.push(descriptor(
+            "gann_fans",
+            DrawingPropertyType::Levels,
+            serde_json::to_value(defaults.gann_fans).unwrap_or_default(),
+        ));
+        properties.push(descriptor(
+            "gann_arcs",
+            DrawingPropertyType::Levels,
+            serde_json::to_value(defaults.gann_arcs).unwrap_or_default(),
+        ));
     }
     for property in &mut properties {
         if property.name == "style" {

@@ -91,10 +91,12 @@ pub use drawing_text_edit::{DrawingTextEditKey, DrawingTextEditLayout};
 pub use drawings::{
     Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId, DrawingKind,
     DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats, TextCapCenterFn,
-    TextMeasureFn, DRAWING_DEFAULT_COLOR,
+    TextMeasureFn, DRAWING_DEFAULT_COLOR, MAX_DRAWING_ICONS, MAX_DRAWING_ICON_NAME_BYTES,
+    MAX_DRAWING_ICON_SIZE,
 };
 pub(crate) use drawings::{
-    DrawingAnchorTime, DrawingController, DrawingDrag, DrawingHistory, DrawingRuntime,
+    DrawingAnchorTime, DrawingController, DrawingDrag, DrawingHistory, DrawingIconRegistry,
+    DrawingRuntime,
 };
 pub use external_studies::{
     ExternalStudyError, ExternalStudyInputRequirements, ExternalStudyInputStream,
@@ -1869,6 +1871,7 @@ pub struct ChartEngine {
     /// Long/Short Position,
     /// text) in z-order, bottom first. See drawings.rs.
     drawings: Vec<Drawing>,
+    drawing_icons: DrawingIconRegistry,
     /// Derived, chart-local drawing bounds, pane candidates, and coordinate geometry. Semantic
     /// anchors and styles in `drawings` remain authoritative and are the only serialized state.
     drawing_runtime: RefCell<DrawingRuntime>,
@@ -2075,6 +2078,7 @@ impl ChartEngine {
             primitive_autoscale: Vec::new(),
             drawings: Vec::new(),
             drawing_runtime: RefCell::new(DrawingRuntime::default()),
+            drawing_icons: DrawingIconRegistry::default(),
             next_drawing_id: 1,
             selected_drawing: None,
             selected_drawings: Vec::new(),

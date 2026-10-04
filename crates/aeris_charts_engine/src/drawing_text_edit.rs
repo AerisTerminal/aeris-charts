@@ -426,9 +426,9 @@ impl ChartEngine {
 
     fn finish_drawing_text_edit(&mut self, id: DrawingId, text: String) {
         self.set_editing_drawing(None);
-        let standalone = self
-            .drawing(id)
-            .is_some_and(|drawing| drawing.kind == DrawingKind::Text);
+        let standalone = self.drawing(id).is_some_and(|drawing| {
+            drawing.kind == DrawingKind::Text || drawing.kind.is_text_annotation()
+        });
         if text.trim().is_empty() && standalone {
             self.remove_drawing(id);
         } else {
