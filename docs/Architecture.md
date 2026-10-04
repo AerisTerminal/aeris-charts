@@ -599,8 +599,14 @@ persistence, consistent with every financial series definition and market-histor
 The configured tick size owns the series min-move/formatter and the shared autoscale, frame, and hit
 paths use complete row bounds (whole `ticks_per_row` rows padded half a tick) on the series' ordinary
 pane-local price scale. Any series may carry a `render_before_time` cutoff: rows at or after it keep
-their data, scale participation, and last-value chrome but are not drawn, so a host can hand a
-price series' tail to a live footprint without a second price model.
+their data, scale participation, and last-value chrome but are not drawn. An order-flow
+presentation with a footprint sets its primary price series' cutoff before every row, so the
+footprint replaces the candles across the whole chart and bars the tape does not cover stay empty
+rather than falling back to OHLC; the primary still supplies the price scale, time axis, legend,
+and last-value chrome without a second price model. Appended host suffixes accumulate on the
+presentation's tape, so footprint bars outlive a host's shorter sliding trade window; the tape is
+capped at `ORDER_FLOW_MAX_RETAINED_TRADES` by evicting whole oldest bars (with the shared retention
+hysteresis) from the footprint, its studies, and the stream together.
 Footprint bars ultimately emit the same ordered `ChartFrame` as every other series, and no backend
 may infer order flow from OHLC or recalculate footprint math.
 

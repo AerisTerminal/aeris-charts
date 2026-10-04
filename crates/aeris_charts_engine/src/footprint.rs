@@ -26,6 +26,10 @@ pub const MAX_TRADE_STREAM_KEY_BYTES: usize = 128;
 pub const MAX_TIME_AND_SALES_ROWS: usize = 4_096;
 pub const ORDER_FLOW_TRADE_BUBBLE_CAPACITY: usize = 2_048;
 pub const ORDER_FLOW_SWEEP_WINDOW_MICROS: i64 = 100_000;
+/// Hard ceiling on the tape an order-flow presentation accumulates from host suffixes. Whole
+/// oldest bars are evicted with the shared retention hysteresis, so completed footprint bars
+/// outlive a host's shorter sliding window without unbounded growth.
+pub const ORDER_FLOW_MAX_RETAINED_TRADES: usize = 262_144;
 const ORDER_FLOW_AUTO_ROWS_PER_BAR: f64 = 24.0;
 const MAXIMUM_AUTO_TICKS_PER_ROW: u32 = 1_000_000;
 const MAXIMUM_BUBBLE_THRESHOLD_SAMPLES: usize = 4_096;
@@ -898,6 +902,27 @@ impl FootprintAggregator {
                 .filter_map(|checkpoint| checkpoint.active_bar.as_ref())
                 .map(|bar| bar.levels.capacity() * core::mem::size_of::<FootprintLevel>())
                 .sum::<usize>()
+    }
+
+    /// Newest whole bars whose trades fit `ceiling` less the retention hysteresis margin, or
+    /// `None` when the tape is within the ceiling or no whole bar can be released. The forming
+    /// bar is always kept.
+    pub(crate) fn bars_within_trade_budget(&self, ceiling: usize) -> Option<usize> {
+        if self.trades.len() <= ceiling {
+            return None;
+        }
+        let budget = ceiling - ceiling / crate::CAP_TRIM_MARGIN_DIVISOR;
+        // Trades masked by a replay clock follow the last bar and are retained by every trim.
+        let mut retained = self.trades.len() - self.visible_trade_count();
+        let mut keep = 0;
+        for bar in self.bars.iter().rev() {
+            retained = retained.saturating_add(bar.trade_count as usize);
+            if keep > 0 && retained > budget {
+                break;
+            }
+            keep += 1;
+        }
+        (keep < self.bars.len()).then_some(keep)
     }
 
     pub(crate) fn retain_last_bars(&mut self, keep: usize) {
@@ -1876,6 +1901,12 @@ impl ChartEngine {
             self.remove_order_flow_presentation(presentation);
             return Err(error);
         }
+        // The footprint replaces the primary candles across the whole chart: bars the tape does
+        // not cover stay empty instead of falling back to OHLC. The primary keeps its rows for
+        // the price scale, time axis, legend, and last-value chrome.
+        if presentation.footprint_series.is_some() {
+            self.set_series_render_before_time(primary_series, Some(i64::MIN));
+        }
         let chrome = self.indicator_chrome;
         for id in [
             presentation.cumulative_delta_series,
@@ -1894,6 +1925,9 @@ impl ChartEngine {
     }
 
     /// Replace or append canonical tape data and atomically advance every dependent presentation.
+    ///
+    /// Appending accumulates the host's new suffix onto the retained tape, so bars built from
+    /// trades the host has since evicted are kept up to [`ORDER_FLOW_MAX_RETAINED_TRADES`].
     pub fn update_order_flow_presentation(
         &mut self,
         presentation: OrderFlowPresentation,
@@ -1906,12 +1940,25 @@ impl ChartEngine {
             self.set_trade_stream_trades(presentation.trade_stream, trades)?;
             FootprintUpdateKind::Historical
         };
-        let footprint_start = presentation.footprint_series.and_then(|series| {
-            self.footprint_bar(series, 0)
-                .map(|bar| bar.start_timestamp_micros.div_euclid(MICROS_PER_SECOND))
-        });
-        self.set_series_render_before_time(presentation.primary_series, footprint_start);
+        self.enforce_order_flow_trade_budget(presentation);
         Ok(update)
+    }
+
+    fn enforce_order_flow_trade_budget(&mut self, presentation: OrderFlowPresentation) {
+        let Some(keep) = self
+            .trade_stream(presentation.trade_stream)
+            .and_then(|stream| stream.bars_within_trade_budget(ORDER_FLOW_MAX_RETAINED_TRADES))
+        else {
+            return;
+        };
+        if let Some(footprint) = presentation.footprint_series {
+            self.data.trim_front(footprint, keep);
+        }
+        self.trim_trade_stream_front(presentation.trade_stream, keep);
+        match presentation.footprint_series {
+            Some(footprint) => self.recompute_indicators_for(footprint),
+            None => self.sync_time_points(),
+        }
     }
 
     /// Tear down a complete order-flow graph and release its fixed aggregation stream.
@@ -2297,39 +2344,45 @@ impl ChartEngine {
 
     pub(crate) fn trim_footprint_rows_front(&mut self, id: SeriesId, keep: usize) {
         if let Some(stream_id) = self
-            .series_entry_mut(id)
-            .and_then(|series| series.footprint.as_mut())
+            .series_entry(id)
+            .and_then(|series| series.footprint.as_ref())
             .map(|state| state.trade_stream_id)
         {
-            if let Some(stream) = self.trade_streams.get_mut(&stream_id) {
-                stream.retain_last_bars(keep);
-            }
-            if let Some(dependents) = self.trade_dependents.get(&stream_id).cloned() {
-                for dependent in dependents {
-                    self.data.trim_front(dependent.series_id, keep);
-                }
-            }
-            if let Some(dependents) = self.trade_bar_dependents.get(&stream_id).cloned() {
-                for dependent in dependents {
-                    self.data.trim_front(dependent.series_id, keep);
-                }
-            }
-            let sequence_owner = self.trade_stream(stream_id).is_some_and(|stream| {
-                !matches!(stream.options().bars, FootprintBarAggregation::Time { .. })
-            });
-            if sequence_owner {
-                if let Some(points) = self.sequence_points.as_mut() {
-                    if points.len() > keep {
-                        points.drain(..points.len() - keep);
-                    }
-                    for (index, point) in points.iter_mut().enumerate() {
-                        point.logical_index = index as u64;
-                    }
-                    self.sync_sequence_axis_times();
-                }
-            }
-            let _ = self.refresh_trade_bubbles(stream_id);
+            self.trim_trade_stream_front(stream_id, keep);
         }
+    }
+
+    /// Keep a trade stream's newest `keep` bars and trim every bound dependent to the same bar
+    /// boundary. Footprint series rows are trimmed by their caller.
+    fn trim_trade_stream_front(&mut self, stream_id: u64, keep: usize) {
+        if let Some(stream) = self.trade_streams.get_mut(&stream_id) {
+            stream.retain_last_bars(keep);
+        }
+        if let Some(dependents) = self.trade_dependents.get(&stream_id).cloned() {
+            for dependent in dependents {
+                self.data.trim_front(dependent.series_id, keep);
+            }
+        }
+        if let Some(dependents) = self.trade_bar_dependents.get(&stream_id).cloned() {
+            for dependent in dependents {
+                self.data.trim_front(dependent.series_id, keep);
+            }
+        }
+        let sequence_owner = self.trade_stream(stream_id).is_some_and(|stream| {
+            !matches!(stream.options().bars, FootprintBarAggregation::Time { .. })
+        });
+        if sequence_owner {
+            if let Some(points) = self.sequence_points.as_mut() {
+                if points.len() > keep {
+                    points.drain(..points.len() - keep);
+                }
+                for (index, point) in points.iter_mut().enumerate() {
+                    point.logical_index = index as u64;
+                }
+                self.sync_sequence_axis_times();
+            }
+        }
+        let _ = self.refresh_trade_bubbles(stream_id);
     }
 
     fn trade_stream_bars(&self, stream_id: u64) -> Result<&[FootprintBar], FootprintError> {
@@ -5311,6 +5364,11 @@ mod tests {
         assert!(presentation.delta_series().is_some());
         assert_eq!(chart.panes[1].stretch_factor, 0.3);
         assert_eq!(chart.panes[2].stretch_factor, 0.3);
+        // Before any tape arrives the primary candles are already handed to the footprint.
+        assert_eq!(
+            chart.series_entry(0).unwrap().render_before_time,
+            Some(i64::MIN)
+        );
 
         chart
             .update_order_flow_presentation(
@@ -5319,10 +5377,143 @@ mod tests {
                 false,
             )
             .unwrap();
-        assert_eq!(chart.series_entry(0).unwrap().render_before_time, Some(60));
+        // Bars older than the first footprint bar stay empty rather than drawing OHLC candles.
+        assert_eq!(
+            chart.series_entry(0).unwrap().render_before_time,
+            Some(i64::MIN)
+        );
         assert!(chart.remove_order_flow_presentation(presentation));
         assert_eq!(chart.series_entry(0).unwrap().render_before_time, None);
         assert!(chart.trade_stream(presentation.trade_stream()).is_none());
+    }
+
+    fn order_flow_options(show_footprint: bool) -> OrderFlowPresentationOptions {
+        OrderFlowPresentationOptions {
+            aggregation: FootprintAggregationOptions {
+                tick_size: 1.0,
+                ticks_per_row: 1,
+                ..FootprintAggregationOptions::default()
+            },
+            visual: FootprintVisualOptions::default(),
+            recent_median_price_range: None,
+            show_footprint,
+            show_cumulative_delta: true,
+            show_delta_histogram: false,
+            show_trade_bubbles: false,
+            trade_bubble_minimum_volume: 0.0,
+        }
+    }
+
+    #[test]
+    fn order_flow_studies_without_a_footprint_keep_the_primary_candles() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let presentation = chart
+            .add_order_flow_presentation("CME:ES", 0, order_flow_options(false), &[])
+            .unwrap();
+        chart
+            .update_order_flow_presentation(
+                presentation,
+                vec![trade(60_000_000, 100.0, 2.0, AggressorSide::Buy)],
+                false,
+            )
+            .unwrap();
+        assert_eq!(chart.series_entry(0).unwrap().render_before_time, None);
+    }
+
+    #[test]
+    fn appended_suffixes_keep_bars_whose_trades_the_host_evicted() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let presentation = chart
+            .add_order_flow_presentation("CME:ES", 0, order_flow_options(true), &[])
+            .unwrap();
+        let footprint = presentation.footprint_series().unwrap();
+        chart
+            .update_order_flow_presentation(
+                presentation,
+                vec![
+                    trade(1_000_000, 100.0, 3.0, AggressorSide::Buy),
+                    trade(61_000_000, 101.0, 1.0, AggressorSide::Sell),
+                ],
+                false,
+            )
+            .unwrap();
+        // The host's sliding window has since dropped both trades and sends only its new suffix.
+        let update = chart
+            .update_order_flow_presentation(
+                presentation,
+                vec![trade(121_000_000, 102.0, 2.0, AggressorSide::Buy)],
+                true,
+            )
+            .unwrap();
+        assert_eq!(update, FootprintUpdateKind::Tip);
+        let bars = chart.footprint_bars(footprint).unwrap();
+        assert_eq!(bars.len(), 3);
+        assert_eq!(bars[0].start_timestamp_micros, 0);
+        assert_eq!(
+            (bars[0].delta, bars[1].delta, bars[2].session_delta),
+            (3.0, -1.0, 4.0)
+        );
+        assert_eq!(
+            chart.data_layer().series_data(footprint).unwrap().0.len(),
+            3
+        );
+    }
+
+    #[test]
+    fn order_flow_tape_is_bounded_by_evicting_whole_oldest_bars() {
+        const TRADES_PER_BAR: usize = 16_384;
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let presentation = chart
+            .add_order_flow_presentation("CME:ES", 0, order_flow_options(true), &[])
+            .unwrap();
+        let footprint = presentation.footprint_series().unwrap();
+        let cvd = presentation.cumulative_delta_series().unwrap();
+        let bar_trades = |bar: usize| {
+            (0..TRADES_PER_BAR).map(move |index| {
+                trade(
+                    (bar as i64) * 60_000_000 + index as i64,
+                    100.0,
+                    1.0,
+                    AggressorSide::Buy,
+                )
+            })
+        };
+        let full_bars = ORDER_FLOW_MAX_RETAINED_TRADES / TRADES_PER_BAR;
+        chart
+            .update_order_flow_presentation(
+                presentation,
+                (0..full_bars).flat_map(bar_trades).collect(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(chart.footprint_bars(footprint).unwrap().len(), full_bars);
+
+        chart
+            .update_order_flow_presentation(presentation, bar_trades(full_bars).collect(), true)
+            .unwrap();
+        let stream = chart.trade_stream(presentation.trade_stream()).unwrap();
+        let budget = ORDER_FLOW_MAX_RETAINED_TRADES
+            - ORDER_FLOW_MAX_RETAINED_TRADES / crate::CAP_TRIM_MARGIN_DIVISOR;
+        assert!(stream.trades().len() <= budget);
+        let bars = chart.footprint_bars(footprint).unwrap();
+        assert_eq!(bars.len() * TRADES_PER_BAR, stream.trades().len());
+        assert_eq!(
+            bars.last().unwrap().start_timestamp_micros,
+            full_bars as i64 * 60_000_000
+        );
+        // Evicted bars leave the footprint rows, studies, and the cumulative-delta seed aligned.
+        assert_eq!(
+            chart.data_layer().series_data(footprint).unwrap().0.len(),
+            bars.len()
+        );
+        assert_eq!(
+            chart.data_layer().series_data(cvd).unwrap().0.len(),
+            bars.len()
+        );
+        assert_eq!(
+            bars.last().unwrap().session_delta,
+            ((full_bars + 1) * TRADES_PER_BAR) as f64
+        );
     }
 
     #[test]
