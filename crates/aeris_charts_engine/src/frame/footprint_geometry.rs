@@ -780,7 +780,29 @@ fn compact_volume(value: f64) -> String {
         format!("{value:.0}")
     } else if absolute >= 10.0 {
         format!("{value:.1}")
-    } else {
+    } else if absolute >= 0.01 {
         format!("{value:.2}")
+    } else {
+        // Fractional crypto sizes: two significant digits, so a traded level never reads "0.00".
+        let decimals = (1.0 - absolute.log10().floor()).clamp(2.0, 8.0) as usize;
+        let text = format!("{value:.decimals$}");
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compact_volume;
+
+    #[test]
+    fn compact_volume_never_rounds_a_traded_size_to_zero() {
+        assert_eq!(compact_volume(0.003), "0.003");
+        assert_eq!(compact_volume(0.00042), "0.00042");
+        assert_eq!(compact_volume(-0.0051), "-0.0051");
+        assert_eq!(compact_volume(0.16), "0.16");
+        assert_eq!(compact_volume(4.01), "4.01");
+        assert_eq!(compact_volume(26.4), "26.4");
+        assert_eq!(compact_volume(70.0), "70");
+        assert_eq!(compact_volume(1_500.0), "1.5K");
     }
 }
