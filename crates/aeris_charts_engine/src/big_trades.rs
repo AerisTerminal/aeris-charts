@@ -1130,7 +1130,6 @@ mod tests {
                         ..FootprintAggregationOptions::default()
                     },
                     visual: crate::FootprintVisualOptions::default(),
-                    recent_median_price_range: None,
                     show_footprint: false,
                     show_cumulative_delta: false,
                     show_delta_histogram: false,
@@ -1147,7 +1146,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(chart.big_trades_snapshot(id).unwrap().bubbles.len(), 1);
-        assert_eq!(chart.series_entry(0).unwrap().render_before_time, None);
         assert!(chart.remove_order_flow_presentation(presentation));
         assert_eq!(chart.big_trades_options(id), None);
         assert!(chart.trade_stream(presentation.trade_stream()).is_none());

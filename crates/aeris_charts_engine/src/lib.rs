@@ -121,13 +121,13 @@ pub use financial_legend::{
 };
 pub use footprint::{
     AggressorSide, BarSequence, BarSequenceMapping, BarSequencePoint, CumulativeDeltaReset,
-    FootprintAggregationOptions, FootprintAggregator, FootprintBar, FootprintBarAggregation,
-    FootprintCellMode, FootprintError, FootprintImbalanceOptions, FootprintLevel,
-    FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind, FootprintVisualOptions,
-    FootprintWorkStats, MAX_TIME_AND_SALES_ROWS, MAX_TRADE_STREAM_KEY_BYTES, MAX_TRADE_STREAMS,
-    OrderFlowPresentation, OrderFlowPresentationOptions, ReplayClockStats, ReplaySeekStats,
-    TimeAndSalesOptions, TimeAndSalesRow, TradeStreamStats, TradeStudyKind, TradeStudyOptions,
-    auto_footprint_ticks_per_row,
+    FOOTPRINT_BAR_SPACING, FootprintAggregationOptions, FootprintAggregator, FootprintBar,
+    FootprintBarAggregation, FootprintCellMode, FootprintError, FootprintImbalanceOptions,
+    FootprintLevel, FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind,
+    FootprintVisualOptions, FootprintWorkStats, MAX_TIME_AND_SALES_ROWS,
+    MAX_TRADE_STREAM_KEY_BYTES, MAX_TRADE_STREAMS, OrderFlowPresentation,
+    OrderFlowPresentationOptions, ReplayClockStats, ReplaySeekStats, TimeAndSalesOptions,
+    TimeAndSalesRow, TradeStreamStats, TradeStudyKind, TradeStudyOptions, footprint_row_merge,
 };
 pub use frame::{
     AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,

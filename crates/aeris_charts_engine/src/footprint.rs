@@ -27,8 +27,8 @@ pub const MAX_TIME_AND_SALES_ROWS: usize = 4_096;
 /// oldest bars are evicted with the shared retention hysteresis, so completed footprint bars
 /// outlive a host's shorter sliding window without unbounded growth.
 pub const ORDER_FLOW_MAX_RETAINED_TRADES: usize = 262_144;
-const ORDER_FLOW_AUTO_ROWS_PER_BAR: f64 = 24.0;
-const MAXIMUM_AUTO_TICKS_PER_ROW: u32 = 1_000_000;
+/// Footprint bar spacing in CSS px that fits `bid x ask` numbers at the default font size.
+pub const FOOTPRINT_BAR_SPACING: f64 = 104.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TradeStudyKind {
@@ -242,6 +242,8 @@ pub struct FootprintVisualOptions {
     pub stacked_bid_color: Color,
     pub stacked_ask_color: Color,
     pub show_bar_summary: bool,
+    /// Merge stored rows into display rows that stay legible at the current zoom.
+    pub adaptive_rows: bool,
 }
 
 impl Default for FootprintVisualOptions {
@@ -263,6 +265,7 @@ impl Default for FootprintVisualOptions {
             stacked_bid_color: Color::rgb(255, 82, 82),
             stacked_ask_color: Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2),
             show_bar_summary: true,
+            adaptive_rows: false,
         }
     }
 }
@@ -293,7 +296,6 @@ pub struct FootprintSeriesOptions {
 pub struct OrderFlowPresentationOptions {
     pub aggregation: FootprintAggregationOptions,
     pub visual: FootprintVisualOptions,
-    pub recent_median_price_range: Option<f64>,
     pub show_footprint: bool,
     pub show_cumulative_delta: bool,
     pub show_delta_histogram: bool,
@@ -402,6 +404,15 @@ pub struct FootprintBar {
     pub poc_price: f64,
     /// Sorted ascending by integer price level.
     pub levels: Vec<FootprintLevel>,
+}
+
+impl FootprintBar {
+    fn clone_without_levels(&self) -> Self {
+        Self {
+            levels: Vec::new(),
+            ..*self
+        }
+    }
 }
 
 /// Read-only view of the canonical logical bar domain produced by a trade aggregator. The view
@@ -1784,6 +1795,11 @@ impl ChartEngine {
 
     /// Create the complete series/pane graph for one shared order-flow stream.
     ///
+    /// `ticks_per_row == 0` selects automatic rows: levels are kept at the instrument tick and
+    /// merged into legible display rows for the current zoom. The footprint series owns the
+    /// last-value label, price line, and countdown; the primary series only supplies the bar
+    /// grid, so a host installs it as whitespace while the footprint is shown.
+    ///
     /// Any failure rolls back every series, pane dependency, and stream created by this call.
     pub fn add_order_flow_presentation(
         &mut self,
@@ -1794,10 +1810,8 @@ impl ChartEngine {
         self.validate_series_id(primary_series)
             .map_err(series_error)?;
         if options.aggregation.ticks_per_row == 0 {
-            options.aggregation.ticks_per_row = auto_footprint_ticks_per_row(
-                options.recent_median_price_range,
-                options.aggregation.tick_size,
-            );
+            options.aggregation.ticks_per_row = 1;
+            options.visual.adaptive_rows = true;
         }
         validate_chart_projection(options.aggregation)?;
         validate_visual_options(&options.visual)?;
@@ -1820,8 +1834,7 @@ impl ChartEngine {
                 })?;
                 self.bind_footprint_series_to_stream(series, stream)?;
                 if let Some(entry) = self.series_entry_mut(series) {
-                    entry.last_value_visible = false;
-                    entry.price_line_visible = false;
+                    entry.countdown_visible = true;
                 }
                 presentation.footprint_series = Some(series);
             }
@@ -1841,20 +1854,14 @@ impl ChartEngine {
                 presentation.delta_series = Some(self.add_delta_series(stream, pane)?);
             }
             if let Some(big_trades) = options.big_trades.take() {
-                presentation.big_trades =
-                    Some(self.add_big_trades(stream, primary_series, big_trades)?);
+                let host = presentation.footprint_series.unwrap_or(primary_series);
+                presentation.big_trades = Some(self.add_big_trades(stream, host, big_trades)?);
             }
             Ok(())
         })();
         if let Err(error) = result {
             self.remove_order_flow_presentation(presentation);
             return Err(error);
-        }
-        // The footprint replaces the primary candles across the whole chart: bars the tape does
-        // not cover stay empty instead of falling back to OHLC. The primary keeps its rows for
-        // the price scale, time axis, legend, and last-value chrome.
-        if presentation.footprint_series.is_some() {
-            self.set_series_render_before_time(primary_series, Some(i64::MIN));
         }
         let chrome = self.indicator_chrome;
         for id in [
@@ -1928,8 +1935,21 @@ impl ChartEngine {
         if self.remove_trade_stream(presentation.trade_stream).is_ok() {
             changed = true;
         }
-        self.set_series_render_before_time(presentation.primary_series, None);
         changed
+    }
+
+    /// Open the footprint viewport: bars wide enough for `bid x ask` numbers, anchored at the
+    /// real-time edge. Hosts call it when the user enters footprint mode, never on rebuilds,
+    /// so the user's own zoom survives tape gaps and settings changes.
+    pub fn fit_footprint_viewport(&mut self) {
+        // A chart that has not been laid out yet has a zero-width time scale, which would clamp
+        // the spacing to nothing. Seed it with the CSS width; the first layout narrows it by the
+        // axis widths without changing the spacing.
+        if self.time_scale.width() <= 0.0 {
+            self.time_scale.set_width(self.css_width);
+        }
+        self.set_bar_spacing(FOOTPRINT_BAR_SPACING);
+        self.scroll_to_real_time();
     }
 
     /// Add a first-class tick-driven footprint series. Time bars use the chart's UTC-second
@@ -2590,31 +2610,67 @@ impl ChartEngine {
     }
 }
 
-/// Resolve an automatic footprint row size to a legible 1-2-5 tick step.
+const MAXIMUM_ROW_MERGE: u32 = 1_000_000_000;
+
+/// Smallest 1-2-5 multiple of the stored row that is at least `minimum_px` tall when one stored
+/// row is `row_px` tall.
 #[must_use]
-pub fn auto_footprint_ticks_per_row(recent_median_price_range: Option<f64>, tick_size: f64) -> u32 {
-    let Some(range) = recent_median_price_range.filter(|range| range.is_finite() && *range > 0.0)
-    else {
-        return 1;
-    };
-    if !tick_size.is_finite() || tick_size <= 0.0 {
+pub fn footprint_row_merge(row_px: f64, minimum_px: f64) -> u32 {
+    if !row_px.is_finite() || row_px <= 0.0 || row_px >= minimum_px {
         return 1;
     }
-    let wanted = range / ORDER_FLOW_AUTO_ROWS_PER_BAR / tick_size;
-    if !wanted.is_finite() || wanted <= 1.0 {
-        return 1;
-    }
+    let wanted = minimum_px / row_px;
     let mut decade = 1_u32;
-    while decade <= MAXIMUM_AUTO_TICKS_PER_ROW {
+    while decade <= MAXIMUM_ROW_MERGE / 5 {
         for step in [1, 2, 5] {
-            let candidate = decade.saturating_mul(step);
+            let candidate = decade * step;
             if f64::from(candidate) >= wanted {
-                return candidate.min(MAXIMUM_AUTO_TICKS_PER_ROW);
+                return candidate;
             }
         }
-        decade = decade.saturating_mul(10);
+        decade *= 10;
     }
-    MAXIMUM_AUTO_TICKS_PER_ROW
+    MAXIMUM_ROW_MERGE
+}
+
+/// One bar's levels regrouped into rows of `merge` stored rows, with imbalances, stacks, and POC
+/// recomputed on the display rows so every highlight describes what is drawn.
+pub(crate) fn merged_footprint_bar(
+    bar: &FootprintBar,
+    merge: u32,
+    imbalance: FootprintImbalanceOptions,
+    display_row_size: f64,
+) -> FootprintBar {
+    let merge = i64::from(merge.max(1));
+    let mut levels: Vec<FootprintLevel> = Vec::new();
+    for level in &bar.levels {
+        let row = level.level.div_euclid(merge);
+        match levels.last_mut() {
+            Some(last) if last.level == row => {
+                last.bid_volume += level.bid_volume;
+                last.ask_volume += level.ask_volume;
+                last.unknown_volume += level.unknown_volume;
+                last.total_volume += level.total_volume;
+                last.delta += level.delta;
+            }
+            _ => levels.push(FootprintLevel {
+                level: row,
+                price: row as f64 * display_row_size,
+                bid_volume: level.bid_volume,
+                ask_volume: level.ask_volume,
+                unknown_volume: level.unknown_volume,
+                total_volume: level.total_volume,
+                delta: level.delta,
+                ..FootprintLevel::default()
+            }),
+        }
+    }
+    let mut merged = FootprintBar {
+        levels,
+        ..bar.clone_without_levels()
+    };
+    recompute_bar_derived(&mut merged, imbalance);
+    merged
 }
 
 fn cumulative_delta_values(bars: &[FootprintBar], options: TradeStudyOptions) -> Vec<f64> {
@@ -4554,19 +4610,34 @@ mod tests {
             .find(|segment| segment.series_id == Some(0))
             .unwrap();
         let prims = &detailed.panes[0].main[segment.start..segment.end];
+        let texts = prims
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            texts.contains(&"Δ 70") && texts.contains(&"V 110"),
+            "{texts:?}"
+        );
+        // bid x ask cells print both sides of every row.
+        assert!(texts.contains(&"10") && texts.contains(&"40") && texts.contains(&"50"));
         assert!(prims.iter().any(|primitive| {
-            matches!(primitive, Prim::Text { text, .. } if text.contains("Δ 70") && text.contains("H 70") && text.contains("L -10"))
+            matches!(primitive, Prim::Rect { color, .. } if *color == stacked_ask.solid())
         }));
+        // POC outlines its row without covering the numbers.
+        let poc_outline = |prims: &[Prim]| {
+            prims.iter().any(|primitive| {
+                matches!(primitive, Prim::RoundRect { fill, border_color, border_width, .. }
+                    if fill.a() == 0 && *border_color == poc.solid() && *border_width >= 1.0)
+            })
+        };
+        assert!(poc_outline(prims));
+        // The traded range sits on the cluster's left edge in the direction color.
+        let up = FootprintVisualOptions::default().ask_color.solid();
         assert!(prims.iter().any(|primitive| {
-            matches!(primitive, Prim::Text { text, .. } if text.contains("V 110") && text.contains("B 20") && text.contains("A 90"))
-        }));
-        assert!(prims.iter().any(|primitive| {
-            matches!(primitive, Prim::Rect { color, .. } if *color == stacked_ask)
-        }));
-        // POC reads as a side stripe on its row, not a full outline.
-        assert!(prims.iter().any(|primitive| {
-            matches!(primitive, Prim::Rect { rect, color }
-                if *color == poc.solid() && rect.w == 2 && rect.h > 1)
+            matches!(primitive, Prim::Rect { rect, color } if *color == up && rect.w == 2 && rect.h > 1)
         }));
         // Imbalance glyphs are bold so the signal scans at a glance.
         assert!(
@@ -4612,10 +4683,7 @@ mod tests {
                 .iter()
                 .any(|primitive| matches!(primitive, Prim::Text { .. }))
         );
-        assert!(prims.iter().any(|primitive| {
-            matches!(primitive, Prim::Rect { rect, color }
-                if *color == poc.solid() && rect.w == 2 && rect.h > 1)
-        }));
+        assert!(poc_outline(prims));
         assert!(
             prims
                 .iter()
@@ -4637,11 +4705,9 @@ mod tests {
                 .iter()
                 .any(|primitive| matches!(primitive, Prim::Text { .. }))
         );
-        assert!(
-            prims
-                .iter()
-                .any(|primitive| matches!(primitive, Prim::Rect { color, .. } if *color == poc))
-        );
+        assert!(prims.iter().any(
+            |primitive| matches!(primitive, Prim::Rect { color, .. } if *color == poc.solid())
+        ));
     }
 
     #[test]
@@ -4741,7 +4807,7 @@ mod tests {
     }
 
     #[test]
-    fn footprint_numbers_grow_into_tall_rows() {
+    fn footprint_numbers_keep_the_configured_size_in_tall_rows() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         chart
             .configure_footprint_series(
@@ -4767,8 +4833,8 @@ mod tests {
                 },
             )
             .unwrap();
-        // Three levels across a tall pane: rows are far taller than the
-        // configured 9px, so numbers must grow instead of floating tiny.
+        // Three levels across a tall pane: rows are far taller than 9px, but numbers stay at the
+        // configured size so zooming in never balloons the text.
         chart
             .set_footprint_trades(
                 0,
@@ -4788,16 +4854,17 @@ mod tests {
             .iter()
             .find(|segment| segment.series_id == Some(0))
             .unwrap();
-        let largest = frame.panes[0].main[segment.start..segment.end]
+        let sizes = frame.panes[0].main[segment.start..segment.end]
             .iter()
             .filter_map(|primitive| match primitive {
                 Prim::Text { size, .. } => Some(*size),
                 _ => None,
             })
-            .fold(0.0f32, f32::max);
+            .collect::<Vec<_>>();
+        assert!(!sizes.is_empty());
         assert!(
-            largest > 9.0,
-            "tall rows must grow numbers past the configured 9px, got {largest}"
+            sizes.iter().all(|size| *size <= 9.0),
+            "numbers must stay at the configured 9px, got {sizes:?}"
         );
     }
 
@@ -4845,10 +4912,10 @@ mod tests {
                 )
                 .count()
         };
-        // 9px type needs spacing >= 81; at 72 the summary would overprint neighbors.
         chart.set_bar_spacing(100.0);
         assert!(summaries(&mut chart) > 0);
-        chart.set_bar_spacing(72.0);
+        // Below the numbers threshold the summary drops out with the cell numbers.
+        chart.set_bar_spacing(40.0);
         assert_eq!(summaries(&mut chart), 0);
     }
 
@@ -4910,7 +4977,9 @@ mod tests {
         );
         assert!(
             !prims.iter().any(
-                |primitive| matches!(primitive, Prim::Rect { color, .. } if *color == stacked_ask)
+                // The 2px range line shares the up color; only cells count here.
+                |primitive| matches!(primitive, Prim::Rect { rect, color }
+                    if *color == stacked_ask.solid() && rect.w > 2)
             ),
             "a run shorter than the stacked threshold must not use the stacked treatment"
         );
@@ -5049,7 +5118,7 @@ mod tests {
     }
 
     #[test]
-    fn order_flow_presentation_is_atomic_and_owns_cutover_and_policy() {
+    fn order_flow_presentation_is_atomic_and_the_footprint_owns_the_price_chrome() {
         let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
         let presentation = chart
             .add_order_flow_presentation(
@@ -5062,7 +5131,6 @@ mod tests {
                         ..FootprintAggregationOptions::default()
                     },
                     visual: FootprintVisualOptions::default(),
-                    recent_median_price_range: Some(120.0),
                     show_footprint: true,
                     show_cumulative_delta: true,
                     show_delta_histogram: true,
@@ -5070,18 +5138,25 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(presentation.ticks_per_row(), 20);
-        assert!(presentation.footprint_series().is_some());
+        // Automatic rows keep tick truth and merge for display.
+        assert_eq!(presentation.ticks_per_row(), 1);
+        let footprint = presentation.footprint_series().unwrap();
+        assert!(
+            chart
+                .footprint_series_options(footprint)
+                .unwrap()
+                .visual
+                .adaptive_rows
+        );
         assert!(presentation.cumulative_delta_series().is_some());
         assert!(presentation.delta_series().is_some());
         let big_trades = presentation.big_trades().unwrap();
         assert_eq!(chart.panes[1].stretch_factor, 0.3);
         assert_eq!(chart.panes[2].stretch_factor, 0.3);
-        // Before any tape arrives the primary candles are already handed to the footprint.
-        assert_eq!(
-            chart.series_entry(0).unwrap().render_before_time,
-            Some(i64::MIN)
-        );
+        let entry = chart.series_entry(footprint).unwrap();
+        assert!(entry.last_value_visible && entry.price_line_visible && entry.countdown_visible);
+        // The primary is never cut over: the host supplies it as whitespace instead.
+        assert_eq!(chart.series_entry(0).unwrap().render_before_time, None);
 
         chart
             .update_order_flow_presentation(
@@ -5090,13 +5165,7 @@ mod tests {
                 false,
             )
             .unwrap();
-        // Bars older than the first footprint bar stay empty rather than drawing OHLC candles.
-        assert_eq!(
-            chart.series_entry(0).unwrap().render_before_time,
-            Some(i64::MIN)
-        );
         assert!(chart.remove_order_flow_presentation(presentation));
-        assert_eq!(chart.series_entry(0).unwrap().render_before_time, None);
         assert_eq!(chart.big_trades_options(big_trades), None);
         assert!(chart.trade_stream(presentation.trade_stream()).is_none());
     }
@@ -5109,7 +5178,6 @@ mod tests {
                 ..FootprintAggregationOptions::default()
             },
             visual: FootprintVisualOptions::default(),
-            recent_median_price_range: None,
             show_footprint,
             show_cumulative_delta: true,
             show_delta_histogram: false,
@@ -5254,8 +5322,144 @@ mod tests {
     }
 
     #[test]
-    fn automatic_order_flow_policies_are_bounded_and_deterministic() {
-        assert_eq!(auto_footprint_ticks_per_row(Some(120.0), 0.25), 20);
-        assert_eq!(auto_footprint_ticks_per_row(None, 0.25), 1);
+    fn whitespace_primary_draws_only_tape_covered_footprints_at_a_legible_zoom() {
+        let mut chart = ChartEngine::new(1200.0, 600.0, 1.0);
+        // Ten one-minute slots; the tape only covers the last two.
+        let times = (0..10)
+            .map(|index| f64::from(index) * 60.0)
+            .collect::<Vec<_>>();
+        let nan = vec![f64::NAN; times.len()];
+        chart
+            .set_series_data(0, &times, &nan, &nan, &nan, &nan)
+            .unwrap();
+        let presentation = chart
+            .add_order_flow_presentation(
+                "BTC",
+                0,
+                OrderFlowPresentationOptions {
+                    aggregation: FootprintAggregationOptions {
+                        tick_size: 1.0,
+                        ticks_per_row: 0,
+                        ..FootprintAggregationOptions::default()
+                    },
+                    visual: FootprintVisualOptions::default(),
+                    show_footprint: true,
+                    show_cumulative_delta: false,
+                    show_delta_histogram: false,
+                    big_trades: None,
+                },
+            )
+            .unwrap();
+        let footprint = presentation.footprint_series().unwrap();
+        let tape = (0..200)
+            .map(|index| {
+                let minute = 8 + index / 100;
+                let side = if index % 3 == 0 {
+                    AggressorSide::Sell
+                } else {
+                    AggressorSide::Buy
+                };
+                trade(
+                    i64::from(minute) * 60_000_000 + i64::from(index),
+                    100.0 + f64::from(index % 40),
+                    1.0,
+                    side,
+                )
+            })
+            .collect();
+        chart
+            .update_order_flow_presentation(presentation, tape, false)
+            .unwrap();
+        chart.fit_footprint_viewport();
+        assert_eq!(chart.time_scale.bar_spacing(), FOOTPRINT_BAR_SPACING);
+
+        let frame = chart.build_frame();
+        let primary = chart
+            .frame_series_segments(0)
+            .iter()
+            .filter(|segment| segment.series_id == Some(0))
+            .map(|segment| segment.end - segment.start)
+            .sum::<usize>();
+        assert_eq!(primary, 0, "a whitespace primary draws no candles");
+        let segment = chart
+            .frame_series_segments(0)
+            .iter()
+            .find(|segment| segment.series_id == Some(footprint))
+            .unwrap();
+        let prims = &frame.panes[0].main[segment.start..segment.end];
+        let summaries = prims
+            .iter()
+            .filter(
+                |primitive| matches!(primitive, Prim::Text { text, .. } if text.starts_with('Δ')),
+            )
+            .count();
+        assert_eq!(summaries, 2, "only the two tape-covered bars draw clusters");
+        let font = FootprintVisualOptions::default().font_size;
+        let row_heights = prims.iter().filter_map(|primitive| match primitive {
+            Prim::RoundRect { h, .. } => Some(*h),
+            _ => None,
+        });
+        for height in row_heights {
+            assert!(
+                f64::from(height) + 1.0 >= font + 5.0,
+                "adaptive rows stay legible, got {height}px"
+            );
+        }
+    }
+
+    #[test]
+    fn display_rows_merge_in_one_two_five_steps_until_legible() {
+        assert_eq!(footprint_row_merge(20.0, 16.0), 1);
+        assert_eq!(footprint_row_merge(9.0, 16.0), 2);
+        assert_eq!(footprint_row_merge(4.0, 16.0), 5);
+        assert_eq!(footprint_row_merge(0.1, 16.0), 200);
+        assert_eq!(footprint_row_merge(f64::NAN, 16.0), 1);
+        assert_eq!(footprint_row_merge(1e-12, 16.0), MAXIMUM_ROW_MERGE);
+    }
+
+    #[test]
+    fn merged_display_rows_sum_volumes_and_recompute_imbalance_and_poc() {
+        let mut aggregator = FootprintAggregator::new(FootprintAggregationOptions {
+            tick_size: 1.0,
+            ticks_per_row: 1,
+            bars: FootprintBarAggregation::Time {
+                interval_micros: 60_000_000,
+                anchor_micros: 0,
+            },
+            imbalance: FootprintImbalanceOptions {
+                ratio: 3.0,
+                minimum_volume: 1.0,
+                consecutive_levels: 2,
+            },
+        })
+        .unwrap();
+        aggregator
+            .set_trades(vec![
+                trade(1, 100.0, 1.0, AggressorSide::Sell),
+                trade(2, 101.0, 1.0, AggressorSide::Sell),
+                trade(3, 102.0, 4.0, AggressorSide::Buy),
+                trade(4, 103.0, 4.0, AggressorSide::Buy),
+                trade(5, 104.0, 9.0, AggressorSide::Buy),
+            ])
+            .unwrap();
+        let bar = &aggregator.bars()[0];
+        let merged = merged_footprint_bar(bar, 2, aggregator.options().imbalance, 2.0);
+        let rows = merged
+            .levels
+            .iter()
+            .map(|level| (level.level, level.price, level.bid_volume, level.ask_volume))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            [
+                (50, 100.0, 2.0, 0.0),
+                (51, 102.0, 0.0, 8.0),
+                (52, 104.0, 0.0, 9.0)
+            ]
+        );
+        assert!(merged.levels[1].ask_imbalance, "8 asks over 2 bids below");
+        assert!(merged.levels[2].stacked_ask_imbalance);
+        assert_eq!(merged.poc_level, 52);
+        assert_eq!(merged.total_volume, bar.total_volume);
     }
 }

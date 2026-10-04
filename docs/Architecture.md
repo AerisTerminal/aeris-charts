@@ -603,10 +603,13 @@ The configured tick size owns the series min-move/formatter and the shared autos
 paths use complete row bounds (whole `ticks_per_row` rows padded half a tick) on the series' ordinary
 pane-local price scale. Any series may carry a `render_before_time` cutoff: rows at or after it keep
 their data, scale participation, and last-value chrome but are not drawn. An order-flow
-presentation with a footprint sets its primary price series' cutoff before every row, so the
-footprint replaces the candles across the whole chart and bars the tape does not cover stay empty
-rather than falling back to OHLC; the primary still supplies the price scale, time axis, legend,
-and last-value chrome without a second price model. Appended host suffixes accumulate on the
+presentation never hides its primary: a host showing a footprint installs the primary as
+whitespace (times only), so it supplies the bar grid and time axis while the footprint series owns
+autoscale, the last-value label, price line, and countdown. Bars the tape does not cover stay empty
+rather than falling back to OHLC. Automatic rows (`ticks_per_row == 0`) keep levels at the
+instrument tick and merge them per frame in 1-2-5 steps into legible display rows, recomputing
+imbalances and POC on the merged rows; text stays at the configured size. `fit_footprint_viewport`
+opens the cluster zoom (`FOOTPRINT_BAR_SPACING`) at the real-time edge. Appended host suffixes accumulate on the
 presentation's tape, so footprint bars outlive a host's shorter sliding trade window; the tape is
 capped at `ORDER_FLOW_MAX_RETAINED_TRADES` by evicting whole oldest bars (with the shared retention
 hysteresis) from the footprint, its studies, and the stream together.
