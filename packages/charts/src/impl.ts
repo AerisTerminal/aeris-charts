@@ -50,6 +50,7 @@ import type {
   trading_style_options, instrument_metadata, working_order, host_overlay_snapshot, host_event_hit,
   visible_logical_range_handler, visible_time_range_handler,
   volume_profile_indicator_api, volume_profile_indicator_options, volume_profile_indicator_snapshot,
+  big_trades_api, big_trades_options, big_trades_snapshot,
 } from "./types.js";
 import {
   DRAWING_KIND_TO_U8, FEATURE_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8,
@@ -4753,22 +4754,40 @@ export class chart_impl implements chart_api {
     return series;
   }
 
-  add_trade_bubbles(
-    series: series_api | number,
-    stream_id: number,
-    options: { minimum_volume?: number; max_markers?: number; aggregation_window_micros?: number } = {},
-  ): void {
+  add_big_trades(series: series_api | number, stream_id: number, options: Partial<big_trades_options> = {}): big_trades_api {
     const series_id = typeof series === "number" ? series : series.id;
-    if (!this.wasm.add_trade_bubbles(
-      stream_id,
-      series_id,
-      options.minimum_volume ?? 0,
-      options.max_markers ?? 2048,
-      options.aggregation_window_micros ?? 0,
-    )) {
-      throw new AerisChartsError("invalid_options", "trade bubbles were rejected by the engine");
+    const id = this.wasm.add_big_trades(stream_id, series_id, JSON.stringify(options));
+    if (id === 0) {
+      throw new AerisChartsError("invalid_options", "invalid big-trades stream, price series, options, or indicator limit (16)");
     }
+    let removed = false;
+    const read_options = (): big_trades_options => {
+      const result = removed ? null : JSON.parse(this.wasm.big_trades_options(id)) as big_trades_options | null;
+      if (result === null) throw new AerisChartsError("stale_handle", "big-trades indicator has been removed");
+      return result;
+    };
     this.repaint();
+    return {
+      id,
+      options: read_options,
+      apply_options: (patch) => {
+        const merged = { ...read_options(), ...patch };
+        if (!this.wasm.set_big_trades_options(id, JSON.stringify(merged))) {
+          throw new AerisChartsError("invalid_options", "invalid big-trades options");
+        }
+        this.repaint();
+      },
+      snapshot: () => {
+        const result = removed ? null : JSON.parse(this.wasm.big_trades_snapshot(id)) as big_trades_snapshot | null;
+        if (result === null) throw new AerisChartsError("stale_handle", "big-trades indicator has been removed");
+        return result;
+      },
+      remove: () => {
+        if (removed) return;
+        if (this.wasm.remove_big_trades(id)) this.repaint();
+        removed = true;
+      },
+    };
   }
 
   add_series(

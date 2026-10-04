@@ -169,8 +169,9 @@ builds a generic property panel from schemas alone, and old layouts migrate.
 - [x] **OF1** Cumulative volume delta pane (candles or line; session, continuous and anchored
       reset).
 - [x] **OF2** Bar delta histogram, delta %, max/min delta and buy/sell/unknown volume split.
-- [x] **OF11** Large-trade bubbles and volume dots with size by volume, color by side, threshold
-      filters and consecutive-print aggregation, on a bounded marker primitive path.
+- [x] **OF11** Big trades: a standalone indicator over any price series that rebuilds aggressive
+      orders from consecutive prints, filters them (rolling percentile or fixed minimum), and draws
+      bounded side-colored volume bubbles with in-bubble volume labels and sweep ranges.
 - [x] **OF12** Footprint variants: profile-in-bar, volume ladder, horizontal imbalance, delta-only
       and bid/ask histogram cells.
 - [x] **PD10** Release benchmarks for dense footprint text on GPUI and WebGPU; shared caching of
@@ -182,7 +183,7 @@ builds a generic property panel from schemas alone, and old layouts migrate.
 
 Implementation evidence so far: `chart_trade_stream_is_shared_by_bound_footprint_dependents`,
 `cvd_and_delta_dependents_follow_late_corrections_and_report_rebuilds`,
-`trade_bubbles_are_bounded_and_rebuilt_from_the_shared_tape`, and
+the `big_trades` module tests, and
 `footprint_retention_evicts_shared_studies_with_the_same_bar_boundary` cover shared revisions,
 derived-study updates, bounded markers, and retention. Rust, WASM, and TypeScript APIs expose the
 same stream/dependent contracts. The native release `perf_gate` now exercises the shared-study tape,
@@ -328,7 +329,7 @@ bar boundaries. The chart engine now projects trade-count, volume, and range foo
 chart-local logical row keys with a full-resolution sequence sidecar; the WASM and TypeScript APIs
 round-trip those policies, and native/browser fixtures cover labels, crosshair lookup, and logical
 keys. Non-time tip updates now replace only the affected suffix (with a full path when retention
-can shift the prefix), and derived delta studies and trade-bubble markers use the same logical keys.
+can shift the prefix), and derived delta studies and big-trades orders use the same logical keys.
 Value queries and transient trading/event overlays now resolve timestamp labels through the same
 sidecar. Non-time sequence rebuilds also rebase committed, pending, drag, brush, and drawing-history
 logical anchors through the full-resolution bar mapping, and persistence now carries an optional

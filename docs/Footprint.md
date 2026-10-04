@@ -60,8 +60,8 @@ and visible-range lookup, so several bars in one second are never assigned false
 The chart retires the sidecar when its last non-time footprint and dependent are removed, so a
 later time-only series cannot inherit stale logical labels.
 Non-time tip updates replace only the affected suffix and keep derived delta studies on the same
-logical row keys; capped series use the full path when retention can shift the prefix. Trade bubbles
-also use logical bar indices while their aggregation windows retain microsecond comparison precision.
+logical row keys; capped series use the full path when retention can shift the prefix. Big-trades
+bubbles also use logical bar indices while their order grouping windows retain microsecond precision.
 Chart value snapshots and series queries expose the corresponding UTC-second label instead of the
 internal row key.
 Incremental replay and release performance evidence remain part of the B5 performance exit.
@@ -100,16 +100,29 @@ data without rebuilding the tape.
 
 `ChartEngine::add_trade_stream` creates one bounded stream keyed by a host instrument identity.
 The stream owns classification, canonical ordering, corrections, retention, and a monotonic revision;
-footprints, CVD, delta histograms, and bubble markers bind to that identity rather than retaining a
-second provider-event tape. CVD supports session, continuous, and anchored resets. Delta dependents
-read final delta, Max/Min Delta, delta percentage, and bid/ask/unknown volumes from the same bars.
+footprints, CVD, delta histograms, and big-trades indicators bind to that identity rather than
+retaining a second provider-event tape. CVD supports session, continuous, and anchored resets. Delta
+dependents read final delta, Max/Min Delta, delta percentage, and bid/ask/unknown volumes from the
+same bars.
 
-Large-trade bubbles are bounded marker dependents: translucent circles centred on the traded price,
-colored by aggressor side, with area proportional to volume relative to the largest retained bubble.
-They support minimum-volume filtering, optional same-side same-price consecutive-print aggregation
-(merged volume sets the size), and a hard marker cap that retains the newest prints. Late events refresh
-all dependents after one canonical rebuild; stream telemetry reports revision, retained capacity,
-dependent count, and dependent rebuilds.
+Big trades (`ChartEngine::add_big_trades`, `big_trades.rs`) is a standalone indicator over any
+candlestick, bar, line, area, baseline, or footprint series. An exchange reports one aggressive order
+as several prints when it fills against several resting orders, so the indicator first rebuilds
+orders: consecutive prints with the same classified aggressor and session, each within the grouping
+window (default 1 ms) of the previous print, whose price never moves against the aggressor. Prints
+the stream cannot classify never start an order. The filter then runs on the rebuilt orders, so a
+large order filled as many small prints still qualifies. The automatic filter keeps orders strictly
+above the weak (95th), medium (98th), or strong (99.5th) percentile of the last 4096 completed
+orders, refreshed every 128 orders; the fixed filter keeps orders of at least a minimum volume.
+Tip appends continue the still-open order incrementally; corrections, retention trims, and replay
+seeks replay the visible tape, and both paths produce identical results. The newest 4096 qualifying
+orders are retained.
+
+Each order draws one translucent circle with a side-colored outline at its volume-weighted price,
+area proportional to volume relative to the largest retained order, largest first so smaller orders
+stay on top. A sweep across several prices also draws a thin range line, and bubbles large enough
+to hold it show the compact order volume (`250`, `1.2k`). Bubbles are pane chrome above every
+series. Stream telemetry counts big-trades indicators as dependents.
 
 ## 4. Rendering and LOD
 
@@ -145,7 +158,8 @@ Every backend therefore receives exactly the same chosen LOD.
 ## 5. Storage, invalidation, and recovery
 
 One chart-level stream owns one canonical trade tape and one derived bar vector. A footprint series
-owns only visual options and a stream handle; CVD, delta, and bubble dependents own no provider tape.
+owns only visual options and a stream handle; CVD, delta, and big-trades dependents own no provider
+tape.
 A bar owns sorted price levels;
 there is no renderer-side cluster cache. Tip append mutates only the active bar or appends one bar,
 updates its canonical scale projection, and invalidates that series. Closed bars are immutable on the
@@ -172,7 +186,8 @@ The TypeScript package exposes a dedicated `footprint_series_api` from
 `chart.add_series("footprint", options)`. Its input is `footprint_trade`, not `series_data`; generic
 OHLC `set_data` is rejected for this kind. Queries expose bar OHLC, price levels, POC, final/Max/Min
 Delta, delta percentage, bid/ask/unknown/total volume, session delta, and stacked flags. Chart-level
-methods create CVD, delta, and bounded bubble dependents and query stream revision/telemetry. Data-change notifications use
+methods create CVD and delta dependents, `add_big_trades` returns a handle for options, snapshot, and
+removal, and stream methods query revision/telemetry. Data-change notifications use
 `full` for replacement/historical reconstruction and `update` for a true tip update.
 
 Options cover tick size, ticks per row, time-bar interval/anchor or trade-count/volume/range construction, imbalance

@@ -1822,21 +1822,46 @@ impl AerisChart {
             .add_delta_series(stream_id, pane_index)
     }
 
-    pub fn add_trade_bubbles(
-        &mut self,
-        stream_id: u32,
-        series_id: u32,
-        minimum_volume: f64,
-        max_markers: usize,
-        aggregation_window_micros: f64,
-    ) -> bool {
-        self.inner.borrow_mut().add_trade_bubbles(
-            stream_id,
-            series_id,
-            minimum_volume,
-            max_markers,
-            aggregation_window_micros,
-        )
+    /// Draw a trade stream's large aggressive orders as volume bubbles over a price series.
+    /// Returns 0 when the stream, series, options, or indicator limit is rejected.
+    pub fn add_big_trades(&mut self, stream_id: u32, series_id: u32, options_json: &str) -> u32 {
+        let Ok(options) =
+            serde_json::from_str::<aeris_charts_engine::BigTradesOptions>(options_json)
+        else {
+            return 0;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .add_big_trades(u64::from(stream_id), series_id, options)
+            .unwrap_or(0)
+    }
+
+    pub fn set_big_trades_options(&mut self, id: u32, options_json: &str) -> bool {
+        let Ok(options) =
+            serde_json::from_str::<aeris_charts_engine::BigTradesOptions>(options_json)
+        else {
+            return false;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_big_trades_options(id, options)
+            .is_ok()
+    }
+
+    pub fn big_trades_options(&self, id: u32) -> String {
+        serde_json::to_string(&self.inner.borrow().engine.big_trades_options(id))
+            .expect("validated big-trades options serialize")
+    }
+
+    pub fn big_trades_snapshot(&self, id: u32) -> String {
+        serde_json::to_string(&self.inner.borrow().engine.big_trades_snapshot(id))
+            .expect("big-trades snapshot serializes")
+    }
+
+    pub fn remove_big_trades(&mut self, id: u32) -> bool {
+        self.inner.borrow_mut().engine.remove_big_trades(id)
     }
 
     #[allow(clippy::too_many_arguments)]

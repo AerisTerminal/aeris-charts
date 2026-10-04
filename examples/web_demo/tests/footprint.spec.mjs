@@ -326,6 +326,78 @@ test("ordinary candles consume one canonical non-time trade stream", async ({ pa
   expect(result.scalar_error).toContain("candlestick or bar");
 });
 
+test("big trades rebuild split prints into one order over ordinary candles", async ({ page }) => {
+  await open_chart(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const stream = chart.add_trade_stream("CME:ES:big-trades", { tick_size: 0.25 });
+    const big_trades = chart.add_big_trades(window.__main, stream, {
+      filter: { mode: "fixed", minimum_volume: 10 },
+    });
+    const micros = window.__data[0].time * 1_000_000;
+    chart.set_trade_stream_trades(stream, [
+      // One sell order sweeping two levels, reported as two 6-lot prints.
+      { timestamp_micros: micros + 1, price: 100, volume: 6, aggressor: "sell", session_id: 1 },
+      { timestamp_micros: micros + 1, price: 99.75, volume: 6, aggressor: "sell", session_id: 1 },
+      { timestamp_micros: micros + 2, price: 100, volume: 3, aggressor: "buy", session_id: 1 },
+    ]);
+    const snapshot = big_trades.snapshot();
+    const defaults = big_trades.options();
+    big_trades.apply_options({ size: "large", show_volume: false });
+    const restyled = big_trades.options();
+    const invalid = (() => {
+      try {
+        big_trades.apply_options({ grouping_window_micros: -1 });
+        return null;
+      } catch (error) {
+        return error.code;
+      }
+    })();
+    const in_use = chart.trade_stream_stats(stream).dependent_count;
+    big_trades.remove();
+    const stale = (() => {
+      try {
+        big_trades.snapshot();
+        return null;
+      } catch (error) {
+        return error.code;
+      }
+    })();
+    return {
+      snapshot,
+      defaults,
+      restyled,
+      invalid,
+      in_use,
+      released: chart.trade_stream_stats(stream).dependent_count,
+      stale,
+    };
+  });
+
+  expect(result.snapshot.threshold).toBe(10);
+  expect(result.snapshot.bubbles).toHaveLength(1);
+  expect(result.snapshot.bubbles[0]).toMatchObject({
+    side: "sell",
+    volume: 12,
+    prints: 2,
+    low: 99.75,
+    high: 100,
+    vwap: 99.875,
+  });
+  expect(result.defaults).toMatchObject({
+    grouping_window_micros: 1000,
+    size: "medium",
+    show_volume: true,
+    visible: true,
+    text_color: null,
+  });
+  expect(result.restyled).toMatchObject({ size: "large", show_volume: false });
+  expect(result.invalid).toBe("invalid_options");
+  expect(result.in_use).toBe(1);
+  expect(result.released).toBe(0);
+  expect(result.stale).toBe("stale_handle");
+});
+
 test("trade replay clock masks retained future events and reports seek work", async ({ page }) => {
   await open_chart(page);
   const result = await page.evaluate(() => {

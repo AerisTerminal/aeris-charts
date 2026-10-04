@@ -23,14 +23,13 @@
 use std::time::Instant;
 
 use aeris_charts_engine::{
-    AggressorSide, AxisDimension, ChartEngine, ChartFrame, ContinuousScaleType,
+    AggressorSide, AxisDimension, BigTradesOptions, ChartEngine, ChartFrame, ContinuousScaleType,
     DepthHeatmapOptions, DepthLevel, DepthOptions, DepthSide, DepthSnapshot, DepthUpdate,
     FootprintAggregationOptions, FootprintBarAggregation, FootprintSeriesOptions, FootprintTrade,
     FootprintVisualOptions, GeneralAxisOptions, GeneralHitMode, GeneralScaleType,
     GeneralSeriesOptions, GeneralXyInput, GestureResolver, HorizontalDomain, InputDevice,
     InputTarget, PeriodicProfilePresentationOptions, PeriodicProfilePresentationRequest,
-    PointerSample, ProfileSource, ResampleBoundary, SeriesKind, TradeBubbleOptions,
-    TradeStudyOptions,
+    PointerSample, ProfileSource, ResampleBoundary, SeriesKind, TradeStudyOptions,
 };
 use aeris_charts_render::draw_list::Prim;
 use aeris_charts_render_wgpu::{prims_to_group, DrawGroup, TexQuadInstance};
@@ -329,16 +328,8 @@ fn main() {
         .add_delta_series(footprint_stream, 1)
         .expect("add delta dependent");
     footprint
-        .add_trade_bubbles(
-            footprint_stream,
-            0,
-            TradeBubbleOptions {
-                minimum_volume: 10.0,
-                max_markers: 2_048,
-                aggregation_window_micros: 0,
-            },
-        )
-        .expect("add bubble dependent");
+        .add_big_trades(footprint_stream, 0, BigTradesOptions::default())
+        .expect("add big-trades dependent");
     let history = gen_footprint_trades(0, FOOTPRINT_HISTORY_BARS, FOOTPRINT_TRADES_PER_BAR);
     let start = Instant::now();
     footprint

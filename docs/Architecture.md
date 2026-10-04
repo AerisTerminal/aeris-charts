@@ -508,7 +508,7 @@ The official advanced-series examples are engine-owned feature series, not brows
 
 Professional footprint / numbers-bar data has a chart-level tick-truth owner described in
 `Footprint.md`. `ChartEngine::add_trade_stream` retains one bounded keyed canonical microsecond tape;
-footprints, CVD, delta histograms, and bounded large-trade bubble markers hold dependent handles, not
+footprints, CVD, delta histograms, and big-trades indicators hold dependent handles, not
 provider-event copies. The stream derives integer tick-grid levels, bid/ask/unknown/total volume, POC,
 final/session delta, delta percentage, running Max/Min Delta, and diagonal stacked imbalances. CVD
 supports session, continuous, and anchored resets, and every dependent carries the stream revision
@@ -526,12 +526,15 @@ the sidecar's full-resolution open times, never synthetic UTC timestamps. `BarSe
 matches ordered full-resolution bounds and rebases logical anchors across prepend/rebuild operations
 without collapsing duplicate second labels. Ordinary candlestick and OHLC-bar presentations bind
 to that same chart-level stream and consume the aggregator's canonical OHLC bars; stream-identity
-replacement and live batches update footprint, ordinary bars, studies, and bubbles together without
+replacement and live batches update footprint, ordinary bars, studies, and big trades together without
 copying or reclassifying the tape. Bound ordinary bars reject independent retention caps because all
 presentations in a non-time domain must retain the same logical rows. Non-time tip updates now
 replace only the affected suffix (falling back to a full projection when retention can shift the
-prefix), and derived delta studies and trade-bubble markers use the same logical row keys. Bubble aggregation windows compare
-the original microsecond trade times; value snapshots and series queries resolve their time labels
+prefix), and derived delta studies and big-trades orders use the same logical row keys. Big-trades
+order grouping compares the original microsecond trade times. Big trades (`big_trades.rs`) rebuilds
+aggressive orders from the classified tape before filtering them (automatic rolling percentile or
+fixed minimum), advances incrementally on tip appends and replays on any other tape change, and
+draws its bounded bubbles as pane chrome above every series of the host price series' pane; value snapshots and series queries resolve their time labels
 through the same sidecar. Trading executions, host events, and round-trip geometry resolve their
 timestamp anchors through the same index helper. The sidecar is retired when the last live
 non-time footprint, candle/bar, or study dependent leaves the chart,
@@ -1096,8 +1099,8 @@ price-format inheritance, retained chrome, group visibility, and group removal. 
 the computation of those values remain host-runtime responsibilities.
 Order-flow presentation is likewise installed and removed as one engine transaction. The engine
 owns the shared trade-stream graph, footprint/CVD/delta series and panes, candle-to-footprint
-cutover, retained indicator chrome, bounded adaptive bubble threshold, and automatic 1-2-5 row-size
-policy. A product host supplies instrument/provider generation fencing, canonical bounded trades,
+cutover, retained indicator chrome, an optional big-trades indicator on the primary series, and
+automatic 1-2-5 row-size policy. A product host supplies instrument/provider generation fencing, canonical bounded trades,
 bar aggregation intent, current price metadata, and presentation preferences; it does not assemble
 or tear down the dependent chart graph itself.
 Financial

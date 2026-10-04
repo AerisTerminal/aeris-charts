@@ -1817,6 +1817,14 @@ impl ChartEngine {
                             ),
                             _ => {}
                         }
+                        self.build_big_trades_frame(
+                            rs.id,
+                            from,
+                            to,
+                            hpr,
+                            vpr,
+                            &mut cache.chrome.prims,
+                        );
                     }
                     self.build_depth_event_frame(
                         pi,

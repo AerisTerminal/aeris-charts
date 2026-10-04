@@ -4,7 +4,7 @@
 //! imbalances are derived state and can be rebuilt deterministically after a late event. Rendering
 //! consumes [`FootprintBar`] values; it never attempts to infer order flow from OHLC rows.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use aeris_charts_core::model::data_layer::{SeriesId, SeriesIdError};
 use aeris_charts_core::model::data_validation::{MAX_SAFE_VALUE, MIN_SAFE_VALUE};
@@ -12,8 +12,7 @@ use aeris_charts_core::style::{MARKET_DOWN_RGB, MARKET_UP_RGB};
 use aeris_charts_render::color::Color;
 
 use crate::{
-    marker_pos, marker_shape, ChartEngine, Marker, PriceFormatKind, SeriesKind, SeriesPriceFormat,
-    SEPARATE_INDICATOR_PANE_STRETCH,
+    ChartEngine, PriceFormatKind, SeriesKind, SeriesPriceFormat, SEPARATE_INDICATOR_PANE_STRETCH,
 };
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
@@ -24,15 +23,12 @@ const MAX_TIMESTAMP_MICROS: i64 = 253_402_300_799 * MICROS_PER_SECOND + 999_999;
 pub const MAX_TRADE_STREAMS: usize = 64;
 pub const MAX_TRADE_STREAM_KEY_BYTES: usize = 128;
 pub const MAX_TIME_AND_SALES_ROWS: usize = 4_096;
-pub const ORDER_FLOW_TRADE_BUBBLE_CAPACITY: usize = 2_048;
-pub const ORDER_FLOW_SWEEP_WINDOW_MICROS: i64 = 100_000;
 /// Hard ceiling on the tape an order-flow presentation accumulates from host suffixes. Whole
 /// oldest bars are evicted with the shared retention hysteresis, so completed footprint bars
 /// outlive a host's shorter sliding window without unbounded growth.
 pub const ORDER_FLOW_MAX_RETAINED_TRADES: usize = 262_144;
 const ORDER_FLOW_AUTO_ROWS_PER_BAR: f64 = 24.0;
 const MAXIMUM_AUTO_TICKS_PER_ROW: u32 = 1_000_000;
-const MAXIMUM_BUBBLE_THRESHOLD_SAMPLES: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TradeStudyKind {
@@ -83,30 +79,6 @@ pub struct ReplayClockStats {
     pub incremental_trades: usize,
     pub visible_depth_events: usize,
     pub rebuilt_depth_events: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TradeBubbleOptions {
-    pub minimum_volume: f64,
-    pub max_markers: usize,
-    pub aggregation_window_micros: i64,
-}
-
-impl Default for TradeBubbleOptions {
-    fn default() -> Self {
-        Self {
-            minimum_volume: 0.0,
-            max_markers: 2_048,
-            aggregation_window_micros: 0,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct TradeBubbleDependent {
-    pub series_id: SeriesId,
-    pub options: TradeBubbleOptions,
-    pub applied_revision: u64,
 }
 
 /// Which side initiated a trade. Unknown trades remain in total volume but never manufacture bid
@@ -325,9 +297,8 @@ pub struct OrderFlowPresentationOptions {
     pub show_footprint: bool,
     pub show_cumulative_delta: bool,
     pub show_delta_histogram: bool,
-    pub show_trade_bubbles: bool,
-    /// Zero selects the bounded adaptive 90th-percentile policy.
-    pub trade_bubble_minimum_volume: f64,
+    /// Big-trades bubbles over the primary price series.
+    pub big_trades: Option<crate::BigTradesOptions>,
 }
 
 /// Engine-issued identities for one order-flow presentation graph.
@@ -337,6 +308,7 @@ pub struct OrderFlowPresentation {
     footprint_series: Option<SeriesId>,
     cumulative_delta_series: Option<SeriesId>,
     delta_series: Option<SeriesId>,
+    big_trades: Option<crate::NativePrimitiveId>,
     ticks_per_row: u32,
     primary_series: SeriesId,
 }
@@ -360,6 +332,11 @@ impl OrderFlowPresentation {
     #[must_use]
     pub const fn delta_series(self) -> Option<SeriesId> {
         self.delta_series
+    }
+
+    #[must_use]
+    pub const fn big_trades(self) -> Option<crate::NativePrimitiveId> {
+        self.big_trades
     }
 
     #[must_use]
@@ -395,7 +372,7 @@ pub struct FootprintLevel {
     pub stacked_ask_imbalance: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct FootprintBar {
     /// Deterministic logical position within the canonical bar sequence. Unlike the display
     /// timestamp, this position remains distinct when several non-time bars open within one second.
@@ -633,6 +610,10 @@ pub enum FootprintError {
     SequenceDomainInUse,
     ProjectionTimeCollision,
     UnsupportedTradeBarSeries(SeriesId),
+    UnsupportedBigTradesSeries(SeriesId),
+    InvalidBigTradesOptions,
+    BigTradesCapacity,
+    UnknownBigTrades(crate::NativePrimitiveId),
     UnknownSeries(SeriesId),
     StaleSeries(SeriesId),
     Depth(crate::DepthError),
@@ -676,6 +657,13 @@ impl core::fmt::Display for FootprintError {
                 f,
                 "series {id} must be a candlestick or OHLC bar presentation"
             ),
+            Self::UnsupportedBigTradesSeries(id) => write!(
+                f,
+                "series {id} must be a candlestick, bar, line, area, baseline, or footprint series"
+            ),
+            Self::InvalidBigTradesOptions => write!(f, "big-trades options are invalid"),
+            Self::BigTradesCapacity => write!(f, "big-trades indicator capacity is exhausted"),
+            Self::UnknownBigTrades(id) => write!(f, "unknown big-trades indicator {id}"),
             Self::UnknownSeries(id) => write!(f, "unknown series id {id}"),
             Self::StaleSeries(id) => write!(f, "stale series id {id}"),
             Self::Depth(error) => write!(f, "depth replay failed: {error}"),
@@ -805,9 +793,23 @@ impl FootprintAggregator {
     pub(crate) fn classified_trades(
         &self,
     ) -> impl ExactSizeIterator<Item = (&FootprintTrade, AggressorSide)> {
-        self.trades[..self.visible_trade_count()]
+        self.classified_trades_from(0)
+    }
+
+    pub(crate) fn classified_trades_from(
+        &self,
+        from: usize,
+    ) -> impl ExactSizeIterator<Item = (&FootprintTrade, AggressorSide)> {
+        let end = self.visible_trade_count();
+        self.trades[from.min(end)..end]
             .iter()
             .map(|trade| (&trade.event, trade.classified_side))
+    }
+
+    pub(crate) fn trade_at(&self, index: usize) -> Option<&FootprintTrade> {
+        self.trades[..self.visible_trade_count()]
+            .get(index)
+            .map(|trade| &trade.event)
     }
 
     pub fn work_stats(&self) -> FootprintWorkStats {
@@ -1540,13 +1542,12 @@ impl ChartEngine {
         let stream = self.trade_stream(stream_id)?;
         let dependents = self.trade_dependents.get(&stream_id);
         let bar_dependents = self.trade_bar_dependents.get(&stream_id);
-        let bubbles = self.trade_bubbles.get(&stream_id);
         Some(TradeStreamStats {
             revision: stream.revision(),
             stream_capacity_bytes: stream.capacity_bytes(),
             dependent_count: dependents.map_or(0, Vec::len)
                 + bar_dependents.map_or(0, Vec::len)
-                + bubbles.map_or(0, Vec::len),
+                + self.big_trades_count(stream_id),
             dependent_rebuilds: dependents
                 .into_iter()
                 .flatten()
@@ -1625,10 +1626,7 @@ impl ChartEngine {
                 .trade_dependents
                 .get(&stream_id)
                 .is_some_and(|dependents| !dependents.is_empty())
-            || self
-                .trade_bubbles
-                .get(&stream_id)
-                .is_some_and(|dependents| !dependents.is_empty())
+            || self.big_trades_count(stream_id) > 0
         {
             return Err(FootprintError::TradeStreamInUse(stream_id));
         }
@@ -1784,38 +1782,6 @@ impl ChartEngine {
         Ok(id)
     }
 
-    pub fn add_trade_bubbles(
-        &mut self,
-        stream_id: u64,
-        series_id: SeriesId,
-        options: TradeBubbleOptions,
-    ) -> Result<(), FootprintError> {
-        self.trade_stream(stream_id)
-            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
-        self.validate_series_id(series_id).map_err(series_error)?;
-        if !options.minimum_volume.is_finite()
-            || options.minimum_volume < 0.0
-            || options.max_markers == 0
-            || options.max_markers > 4_096
-            || options.aggregation_window_micros < 0
-        {
-            return Err(FootprintError::InvalidAggregation);
-        }
-        self.trade_bubbles
-            .entry(stream_id)
-            .or_default()
-            .retain(|dependent| dependent.series_id != series_id);
-        self.trade_bubbles
-            .entry(stream_id)
-            .or_default()
-            .push(TradeBubbleDependent {
-                series_id,
-                options,
-                applied_revision: 0,
-            });
-        self.refresh_trade_bubbles(stream_id)
-    }
-
     /// Create the complete series/pane graph for one shared order-flow stream.
     ///
     /// Any failure rolls back every series, pane dependency, and stream created by this call.
@@ -1824,7 +1790,6 @@ impl ChartEngine {
         stream_key: &str,
         primary_series: SeriesId,
         mut options: OrderFlowPresentationOptions,
-        initial_trade_volumes: &[f64],
     ) -> Result<OrderFlowPresentation, FootprintError> {
         self.validate_series_id(primary_series)
             .map_err(series_error)?;
@@ -1833,11 +1798,6 @@ impl ChartEngine {
                 options.recent_median_price_range,
                 options.aggregation.tick_size,
             );
-        }
-        if !options.trade_bubble_minimum_volume.is_finite()
-            || options.trade_bubble_minimum_volume < 0.0
-        {
-            return Err(FootprintError::InvalidAggregation);
         }
         validate_chart_projection(options.aggregation)?;
         validate_visual_options(&options.visual)?;
@@ -1848,6 +1808,7 @@ impl ChartEngine {
             footprint_series: None,
             cumulative_delta_series: None,
             delta_series: None,
+            big_trades: None,
             ticks_per_row: options.aggregation.ticks_per_row,
             primary_series,
         };
@@ -1879,21 +1840,9 @@ impl ChartEngine {
                 self.panes[pane].stretch_factor = SEPARATE_INDICATOR_PANE_STRETCH;
                 presentation.delta_series = Some(self.add_delta_series(stream, pane)?);
             }
-            if options.show_trade_bubbles {
-                if let Some(series) = presentation.footprint_series {
-                    self.add_trade_bubbles(
-                        stream,
-                        series,
-                        TradeBubbleOptions {
-                            minimum_volume: adaptive_trade_bubble_threshold(
-                                options.trade_bubble_minimum_volume,
-                                initial_trade_volumes,
-                            ),
-                            max_markers: ORDER_FLOW_TRADE_BUBBLE_CAPACITY,
-                            aggregation_window_micros: ORDER_FLOW_SWEEP_WINDOW_MICROS,
-                        },
-                    )?;
-                }
+            if let Some(big_trades) = options.big_trades.take() {
+                presentation.big_trades =
+                    Some(self.add_big_trades(stream, primary_series, big_trades)?);
             }
             Ok(())
         })();
@@ -1963,7 +1912,9 @@ impl ChartEngine {
 
     /// Tear down a complete order-flow graph and release its fixed aggregation stream.
     pub fn remove_order_flow_presentation(&mut self, presentation: OrderFlowPresentation) -> bool {
-        let mut changed = false;
+        let mut changed = presentation
+            .big_trades
+            .is_some_and(|id| self.remove_big_trades(id));
         for series in [
             presentation.cumulative_delta_series,
             presentation.delta_series,
@@ -2089,7 +2040,7 @@ impl ChartEngine {
             })
             .count()
             + self.trade_dependents.get(&stream_id).map_or(0, Vec::len)
-            + self.trade_bubbles.get(&stream_id).map_or(0, Vec::len);
+            + self.big_trades_count(stream_id);
         if dependent_count > 1 {
             return Err(FootprintError::TradeStreamInUse(stream_id));
         }
@@ -2382,7 +2333,7 @@ impl ChartEngine {
                 self.sync_sequence_axis_times();
             }
         }
-        let _ = self.refresh_trade_bubbles(stream_id);
+        self.refresh_big_trades(stream_id, false);
     }
 
     fn trade_stream_bars(&self, stream_id: u64) -> Result<&[FootprintBar], FootprintError> {
@@ -2402,7 +2353,7 @@ impl ChartEngine {
             .any(|dependent| dependent.series_id == series_id)
     }
 
-    fn prune_trade_stream_if_unused(&mut self, stream_id: u64) {
+    pub(crate) fn prune_trade_stream_if_unused(&mut self, stream_id: u64) {
         let used = self.series.iter().any(|series| {
             !series.removed
                 && series
@@ -2418,10 +2369,7 @@ impl ChartEngine {
                 .trade_dependents
                 .get(&stream_id)
                 .is_some_and(|dependents| !dependents.is_empty())
-            || self
-                .trade_bubbles
-                .get(&stream_id)
-                .is_some_and(|dependents| !dependents.is_empty());
+            || self.big_trades_count(stream_id) > 0;
         if !used {
             self.trade_streams.remove(&stream_id);
         }
@@ -2559,7 +2507,8 @@ impl ChartEngine {
             }
         }
         self.refresh_trade_bar_dependents_from(stream_id, incremental_from)?;
-        self.refresh_trade_bubbles(stream_id)
+        self.refresh_big_trades(stream_id, incremental_from.is_some());
+        Ok(())
     }
 
     fn refresh_trade_bar_dependents_from(
@@ -2641,150 +2590,6 @@ impl ChartEngine {
         }
         Ok(())
     }
-
-    fn refresh_trade_bubbles(&mut self, stream_id: u64) -> Result<(), FootprintError> {
-        let stream = self
-            .trade_stream(stream_id)
-            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
-        let revision = stream.revision();
-        let sequence_axis = !matches!(stream.options().bars, FootprintBarAggregation::Time { .. });
-        let trade_bar_indices =
-            sequence_axis.then(|| bar_indices_for_trades(stream.bars(), stream.trades().len()));
-        let dependents = self
-            .trade_bubbles
-            .get(&stream_id)
-            .cloned()
-            .unwrap_or_default();
-        // Markers are derived from the borrowed tape before any series mutation, so the full
-        // trade tape and bar list are never copied per update.
-        let mut updates = Vec::with_capacity(dependents.len());
-        for dependent in &dependents {
-            // Newest prints matter most: retain the latest `max_markers` bubbles.
-            let mut bubbles = VecDeque::with_capacity(dependent.options.max_markers);
-            for (trade_index, trade) in stream.trades().enumerate() {
-                if trade.volume < dependent.options.minimum_volume {
-                    continue;
-                }
-                let time = trade_bar_indices
-                    .as_ref()
-                    .and_then(|indices| indices.get(trade_index).copied())
-                    .map_or_else(
-                        || trade.timestamp_micros.div_euclid(MICROS_PER_SECOND),
-                        |index| index as i64,
-                    );
-                let merged = dependent.options.aggregation_window_micros > 0
-                    && bubbles.back_mut().is_some_and(|bubble: &mut TradeBubble| {
-                        let mergeable = bubble.time == time
-                            && bubble.aggressor == trade.aggressor
-                            && bubble.price.to_bits() == trade.price.to_bits()
-                            && (trade.timestamp_micros - bubble.last_timestamp_micros).abs()
-                                <= dependent.options.aggregation_window_micros;
-                        if mergeable {
-                            bubble.volume += trade.volume;
-                            bubble.last_timestamp_micros = trade.timestamp_micros;
-                        }
-                        mergeable
-                    });
-                if merged {
-                    continue;
-                }
-                if bubbles.len() == dependent.options.max_markers {
-                    bubbles.pop_front();
-                }
-                bubbles.push_back(TradeBubble {
-                    time,
-                    price: trade.price,
-                    volume: trade.volume,
-                    aggressor: trade.aggressor,
-                    last_timestamp_micros: trade.timestamp_micros,
-                    trade_id: trade.trade_id,
-                });
-            }
-            let peak_volume = bubbles
-                .iter()
-                .map(|bubble| bubble.volume)
-                .fold(0.0_f64, f64::max);
-            let markers: Vec<Marker> = bubbles
-                .into_iter()
-                .map(|bubble| bubble.into_marker(peak_volume))
-                .collect();
-            updates.push((dependent.series_id, markers));
-        }
-        for (series_id, markers) in updates {
-            self.set_series_markers(series_id, markers);
-        }
-        if let Some(dependents) = self.trade_bubbles.get_mut(&stream_id) {
-            for dependent in dependents {
-                dependent.applied_revision = revision;
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Smallest and largest bubble diameter as a multiple of the marker envelope.
-const TRADE_BUBBLE_MIN_SIZE: f64 = 0.5;
-const TRADE_BUBBLE_MAX_SIZE: f64 = 2.5;
-
-/// One large print, or consecutive same-side prints merged at one price, before sizing.
-struct TradeBubble {
-    time: i64,
-    price: f64,
-    volume: f64,
-    aggressor: AggressorSide,
-    last_timestamp_micros: i64,
-    /// Formatted into the marker id only for retained bubbles: most candidates are evicted.
-    trade_id: Option<u64>,
-}
-
-impl TradeBubble {
-    /// A translucent circle centred on the traded price. Area scales with volume relative to
-    /// the largest retained bubble, so size compares prints instead of saturating.
-    fn into_marker(self, peak_volume: f64) -> Marker {
-        let ratio = if peak_volume > 0.0 {
-            (self.volume / peak_volume).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let size =
-            TRADE_BUBBLE_MIN_SIZE + (TRADE_BUBBLE_MAX_SIZE - TRADE_BUBBLE_MIN_SIZE) * ratio.sqrt();
-        let color = match self.aggressor {
-            AggressorSide::Buy => Color::rgba(76, 175, 80, 150),
-            AggressorSide::Sell => Color::rgba(239, 83, 80, 150),
-            AggressorSide::Unknown => Color::rgba(158, 158, 158, 150),
-        };
-        Marker {
-            time: self.time,
-            position: marker_pos::AT_PRICE_MIDDLE,
-            shape: marker_shape::CIRCLE,
-            color,
-            text: String::new(),
-            id: self.trade_id.map_or_else(
-                || format!("trade-{}", self.time),
-                |id| format!("trade-{id}"),
-            ),
-            size,
-            price: Some(self.price),
-        }
-    }
-}
-
-fn bar_indices_for_trades(bars: &[FootprintBar], trade_count: usize) -> Vec<usize> {
-    if bars.is_empty() {
-        return vec![0; trade_count];
-    }
-    let mut bar_index = 0usize;
-    let mut remaining = bars[0].trade_count as usize;
-    let mut indices = Vec::with_capacity(trade_count);
-    for _ in 0..trade_count {
-        while remaining == 0 && bar_index + 1 < bars.len() {
-            bar_index += 1;
-            remaining = bars[bar_index].trade_count as usize;
-        }
-        indices.push(bar_index);
-        remaining = remaining.saturating_sub(1);
-    }
-    indices
 }
 
 /// Resolve an automatic footprint row size to a legible 1-2-5 tick step.
@@ -2812,27 +2617,6 @@ pub fn auto_footprint_ticks_per_row(recent_median_price_range: Option<f64>, tick
         decade = decade.saturating_mul(10);
     }
     MAXIMUM_AUTO_TICKS_PER_ROW
-}
-
-/// Resolve zero to a bounded recent-volume 90th percentile; explicit thresholds pass through.
-#[must_use]
-pub fn adaptive_trade_bubble_threshold(configured: f64, trade_volumes: &[f64]) -> f64 {
-    if configured > 0.0 {
-        return configured;
-    }
-    let mut volumes = trade_volumes
-        .iter()
-        .rev()
-        .take(MAXIMUM_BUBBLE_THRESHOLD_SAMPLES)
-        .copied()
-        .filter(|volume| volume.is_finite() && *volume > 0.0)
-        .collect::<Vec<_>>();
-    if volumes.is_empty() {
-        return f64::MAX;
-    }
-    let index = volumes.len().saturating_mul(9).saturating_sub(1) / 10;
-    volumes.select_nth_unstable_by(index, f64::total_cmp);
-    volumes[index]
 }
 
 fn cumulative_delta_values(bars: &[FootprintBar], options: TradeStudyOptions) -> Vec<f64> {
@@ -4123,7 +3907,7 @@ mod tests {
     }
 
     #[test]
-    fn non_time_trade_bubbles_use_logical_bar_indices() {
+    fn non_time_big_trades_use_logical_bar_indices() {
         let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
         let footprint = chart
             .add_footprint_series(FootprintSeriesOptions {
@@ -4152,32 +3936,32 @@ mod tests {
             .as_ref()
             .unwrap()
             .trade_stream_id;
-        chart
-            .add_trade_bubbles(stream_id, footprint, TradeBubbleOptions::default())
+        let big_trades = chart
+            .add_big_trades(
+                stream_id,
+                footprint,
+                crate::BigTradesOptions {
+                    filter: crate::BigTradesFilter::Fixed {
+                        minimum_volume: 1.0,
+                    },
+                    ..crate::BigTradesOptions::default()
+                },
+            )
             .unwrap();
-        assert_eq!(
+        let bar_times = |chart: &ChartEngine| {
             chart
-                .series_entry(footprint)
+                .big_trades_snapshot(big_trades)
                 .unwrap()
-                .markers
+                .bubbles
                 .iter()
-                .map(|marker| marker.time)
-                .collect::<Vec<_>>(),
-            vec![0, 0]
-        );
+                .map(|order| order.bar_time)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bar_times(&chart), vec![0, 0]);
         chart
             .update_footprint_trade(footprint, trade(1_000_003, 102.0, 1.0, AggressorSide::Buy))
             .unwrap();
-        assert_eq!(
-            chart
-                .series_entry(footprint)
-                .unwrap()
-                .markers
-                .iter()
-                .map(|marker| marker.time)
-                .collect::<Vec<_>>(),
-            vec![0, 0, 1]
-        );
+        assert_eq!(bar_times(&chart), vec![0, 0, 1]);
     }
 
     #[test]
@@ -4392,9 +4176,21 @@ mod tests {
             .bind_trade_bar_series_to_stream(candles, stream)
             .unwrap();
         let delta = chart.add_delta_series(stream, 1).unwrap();
-        chart
-            .add_trade_bubbles(stream, footprint, TradeBubbleOptions::default())
+        let big_trades = chart
+            .add_big_trades(
+                stream,
+                footprint,
+                crate::BigTradesOptions {
+                    filter: crate::BigTradesFilter::Fixed {
+                        minimum_volume: 1.0,
+                    },
+                    grouping_window_micros: 0,
+                    ..crate::BigTradesOptions::default()
+                },
+            )
             .unwrap();
+        let bubbles =
+            |chart: &ChartEngine| chart.big_trades_snapshot(big_trades).unwrap().bubbles.len();
         chart
             .set_trade_stream_trades(
                 stream,
@@ -4413,7 +4209,7 @@ mod tests {
         assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 2);
         assert_eq!(chart.data_layer().series_data(candles).unwrap().0.len(), 2);
         assert_eq!(chart.data_layer().series_data(delta).unwrap().0.len(), 2);
-        assert_eq!(chart.series_entry(footprint).unwrap().markers.len(), 2);
+        assert_eq!(bubbles(&chart), 2);
 
         let before_future = chart.trade_stream_stats(stream).unwrap();
         chart
@@ -4432,9 +4228,11 @@ mod tests {
         let forward = chart.set_replay_clock_micros(Some(4)).unwrap();
         assert_eq!(forward.visible_trades, 4);
         assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 4);
+        assert_eq!(bubbles(&chart), 4);
         let backward = chart.set_replay_clock_micros(Some(1)).unwrap();
         assert_eq!(backward.visible_trades, 1);
         assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 1);
+        assert_eq!(bubbles(&chart), 1);
         chart.set_replay_clock_micros(None).unwrap();
         assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 4);
     }
@@ -4561,49 +4359,6 @@ mod tests {
     }
 
     #[test]
-    fn trade_bubbles_are_bounded_and_rebuilt_from_the_shared_tape() {
-        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
-        let stream = chart
-            .add_trade_stream("CME:RTY", FootprintAggregationOptions::default())
-            .unwrap();
-        let series = chart.add_series(SeriesKind::Footprint);
-        chart
-            .configure_footprint_series(series, FootprintSeriesOptions::default())
-            .unwrap();
-        chart
-            .bind_footprint_series_to_stream(series, stream)
-            .unwrap();
-        chart
-            .set_footprint_trades(
-                series,
-                vec![
-                    trade(1_000_000, 100.0, 1.0, AggressorSide::Buy),
-                    trade(1_100_000, 100.0, 3.0, AggressorSide::Buy),
-                    trade(2_000_000, 101.0, 10.0, AggressorSide::Sell),
-                ],
-            )
-            .unwrap();
-        chart
-            .add_trade_bubbles(
-                stream,
-                series,
-                TradeBubbleOptions {
-                    minimum_volume: 2.0,
-                    max_markers: 2,
-                    aggregation_window_micros: 200_000,
-                },
-            )
-            .unwrap();
-        let entry = chart.series_entry(series).unwrap();
-        assert_eq!(entry.markers.len(), 2);
-        let expected = TRADE_BUBBLE_MIN_SIZE
-            + (TRADE_BUBBLE_MAX_SIZE - TRADE_BUBBLE_MIN_SIZE) * (3.0_f64 / 10.0).sqrt();
-        assert!((entry.markers[0].size - expected).abs() < 1e-12);
-        assert_eq!(entry.markers[1].size, TRADE_BUBBLE_MAX_SIZE);
-        assert_eq!(chart.trade_stream_stats(stream).unwrap().dependent_count, 1);
-    }
-
-    #[test]
     fn ticks_per_row_groups_adjacent_ticks_into_one_row() {
         let options = FootprintAggregationOptions {
             tick_size: 1.0,
@@ -4665,63 +4420,6 @@ mod tests {
             ..options
         })
         .is_err());
-    }
-
-    #[test]
-    fn trade_bubbles_are_price_centred_circles_that_keep_the_newest_prints() {
-        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
-        let stream = chart
-            .add_trade_stream("CME:ES", FootprintAggregationOptions::default())
-            .unwrap();
-        let series = chart.add_series(SeriesKind::Footprint);
-        chart
-            .configure_footprint_series(series, FootprintSeriesOptions::default())
-            .unwrap();
-        chart
-            .bind_footprint_series_to_stream(series, stream)
-            .unwrap();
-        chart
-            .set_footprint_trades(
-                series,
-                vec![
-                    trade(1_000_000, 100.0, 4.0, AggressorSide::Sell),
-                    trade(2_000_000, 101.0, 2.0, AggressorSide::Buy),
-                    // Merged into the previous buy: same side, price, bar and window.
-                    trade(2_050_000, 101.0, 2.0, AggressorSide::Buy),
-                    trade(3_000_000, 99.0, 1.0, AggressorSide::Sell),
-                ],
-            )
-            .unwrap();
-        chart
-            .add_trade_bubbles(
-                stream,
-                series,
-                TradeBubbleOptions {
-                    minimum_volume: 0.0,
-                    max_markers: 2,
-                    aggregation_window_micros: 100_000,
-                },
-            )
-            .unwrap();
-        let markers = &chart.series_entry(series).unwrap().markers;
-        assert_eq!(markers.len(), 2, "the oldest bubble is evicted first");
-        assert_eq!(markers[0].price, Some(101.0));
-        assert_eq!(markers[1].price, Some(99.0));
-        for marker in markers {
-            assert_eq!(marker.shape, marker_shape::CIRCLE);
-            assert_eq!(marker.position, marker_pos::AT_PRICE_MIDDLE);
-        }
-        assert!(
-            markers[0].color.g() > markers[0].color.r(),
-            "buys are green"
-        );
-        assert!(markers[1].color.r() > markers[1].color.g(), "sells are red");
-        assert_eq!(
-            markers[0].size, TRADE_BUBBLE_MAX_SIZE,
-            "merged volume sets the peak"
-        );
-        let quarter = TRADE_BUBBLE_MIN_SIZE + (TRADE_BUBBLE_MAX_SIZE - TRADE_BUBBLE_MIN_SIZE) * 0.5;
-        assert!((markers[1].size - quarter).abs() < 1e-12);
     }
 
     #[test]
@@ -5352,16 +5050,15 @@ mod tests {
                     show_footprint: true,
                     show_cumulative_delta: true,
                     show_delta_histogram: true,
-                    show_trade_bubbles: true,
-                    trade_bubble_minimum_volume: 0.0,
+                    big_trades: Some(crate::BigTradesOptions::default()),
                 },
-                &[1.0, 2.0, 3.0, 100.0],
             )
             .unwrap();
         assert_eq!(presentation.ticks_per_row(), 20);
         assert!(presentation.footprint_series().is_some());
         assert!(presentation.cumulative_delta_series().is_some());
         assert!(presentation.delta_series().is_some());
+        let big_trades = presentation.big_trades().unwrap();
         assert_eq!(chart.panes[1].stretch_factor, 0.3);
         assert_eq!(chart.panes[2].stretch_factor, 0.3);
         // Before any tape arrives the primary candles are already handed to the footprint.
@@ -5384,6 +5081,7 @@ mod tests {
         );
         assert!(chart.remove_order_flow_presentation(presentation));
         assert_eq!(chart.series_entry(0).unwrap().render_before_time, None);
+        assert_eq!(chart.big_trades_options(big_trades), None);
         assert!(chart.trade_stream(presentation.trade_stream()).is_none());
     }
 
@@ -5399,8 +5097,7 @@ mod tests {
             show_footprint,
             show_cumulative_delta: true,
             show_delta_histogram: false,
-            show_trade_bubbles: false,
-            trade_bubble_minimum_volume: 0.0,
+            big_trades: None,
         }
     }
 
@@ -5408,7 +5105,7 @@ mod tests {
     fn order_flow_studies_without_a_footprint_keep_the_primary_candles() {
         let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
         let presentation = chart
-            .add_order_flow_presentation("CME:ES", 0, order_flow_options(false), &[])
+            .add_order_flow_presentation("CME:ES", 0, order_flow_options(false))
             .unwrap();
         chart
             .update_order_flow_presentation(
@@ -5424,7 +5121,7 @@ mod tests {
     fn appended_suffixes_keep_bars_whose_trades_the_host_evicted() {
         let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
         let presentation = chart
-            .add_order_flow_presentation("CME:ES", 0, order_flow_options(true), &[])
+            .add_order_flow_presentation("CME:ES", 0, order_flow_options(true))
             .unwrap();
         let footprint = presentation.footprint_series().unwrap();
         chart
@@ -5464,10 +5161,23 @@ mod tests {
         const TRADES_PER_BAR: usize = 16_384;
         let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
         let presentation = chart
-            .add_order_flow_presentation("CME:ES", 0, order_flow_options(true), &[])
+            .add_order_flow_presentation("CME:ES", 0, order_flow_options(true))
             .unwrap();
         let footprint = presentation.footprint_series().unwrap();
         let cvd = presentation.cumulative_delta_series().unwrap();
+        // Every bar is one rapid buy sweep, so each retained bar holds exactly one big order.
+        let big_trades = chart
+            .add_big_trades(
+                presentation.trade_stream(),
+                0,
+                crate::BigTradesOptions {
+                    filter: crate::BigTradesFilter::Fixed {
+                        minimum_volume: 1.0,
+                    },
+                    ..crate::BigTradesOptions::default()
+                },
+            )
+            .unwrap();
         let bar_trades = |bar: usize| {
             (0..TRADES_PER_BAR).map(move |index| {
                 trade(
@@ -5514,16 +5224,22 @@ mod tests {
             bars.last().unwrap().session_delta,
             ((full_bars + 1) * TRADES_PER_BAR) as f64
         );
+        let bubbles = chart.big_trades_snapshot(big_trades).unwrap().bubbles;
+        assert_eq!(
+            bubbles.len(),
+            bars.len(),
+            "evicted bars take their orders along"
+        );
+        assert_eq!(
+            bubbles[0].bar_time,
+            bars[0].start_timestamp_micros / MICROS_PER_SECOND
+        );
+        assert_eq!(bubbles[0].volume, TRADES_PER_BAR as f64);
     }
 
     #[test]
     fn automatic_order_flow_policies_are_bounded_and_deterministic() {
         assert_eq!(auto_footprint_ticks_per_row(Some(120.0), 0.25), 20);
         assert_eq!(auto_footprint_ticks_per_row(None, 0.25), 1);
-        assert_eq!(adaptive_trade_bubble_threshold(7.0, &[1.0, 2.0]), 7.0);
-        assert_eq!(
-            adaptive_trade_bubble_threshold(0.0, &[1.0, 2.0, 3.0, 100.0]),
-            100.0
-        );
     }
 }

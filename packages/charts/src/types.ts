@@ -3282,6 +3282,56 @@ export interface volume_profile_indicator_api {
   remove(): void;
 }
 
+/** Which orders become bubbles. `auto` keeps orders above a percentile of the recently completed
+ * orders (weak 95th, medium 98th, strong 99.5th); `fixed` keeps orders of at least the volume. */
+export type big_trades_filter =
+  | { mode: "auto"; intensity: "weak" | "medium" | "strong" }
+  | { mode: "fixed"; minimum_volume: number };
+/** Large aggressive orders rebuilt from consecutive same-aggressor prints, then filtered. */
+export interface big_trades_options {
+  /** Default `{ mode: "auto", intensity: "medium" }`. */
+  filter: big_trades_filter;
+  /** Largest gap between prints of one order, 0-1,000,000 µs. Default 1000. */
+  grouping_window_micros: number;
+  /** Bubble diameter range. Default `medium`. */
+  size: "small" | "medium" | "large";
+  /** Draw the order volume inside bubbles large enough to hold it. Default true. */
+  show_volume: boolean;
+  visible: boolean;
+  buy_color: string;
+  sell_color: string;
+  buy_border_color: string;
+  sell_border_color: string;
+  /** `null` follows the chart layout text color. */
+  text_color: string | null;
+}
+export interface big_trade {
+  side: "buy" | "sell";
+  volume: number;
+  prints: number;
+  /** Volume-weighted fill price; the bubble is centred here. */
+  vwap: number;
+  low: number;
+  high: number;
+  start_timestamp_micros: number;
+  end_timestamp_micros: number;
+  /** UTC seconds of the bar the order opened in, or its logical index on non-time bars. */
+  bar_time: number;
+}
+export interface big_trades_snapshot {
+  /** The filter applied, or `null` while the automatic filter is still sampling. */
+  threshold: number | null;
+  /** Qualifying orders oldest first; the newest 4096 are kept. */
+  bubbles: readonly big_trade[];
+}
+export interface big_trades_api {
+  readonly id: number;
+  options(): big_trades_options;
+  apply_options(options: Partial<big_trades_options>): void;
+  snapshot(): big_trades_snapshot;
+  remove(): void;
+}
+
 /** The chart. Create with {@link create_chart}. */
 export interface chart_api {
   /** Format a time with the chart's time zone, date pattern, and crosshair time formatter. */
@@ -3376,7 +3426,8 @@ export interface chart_api {
   bind_trade_bar_series_to_stream(series: series_api | number, stream_id: number): void;
   add_cvd_series(stream_id: number, pane?: number, reset?: "session" | "continuous" | "anchored", anchor_timestamp_micros?: number): series_api;
   add_delta_series(stream_id: number, pane?: number): series_api;
-  add_trade_bubbles(series: series_api | number, stream_id: number, options?: { minimum_volume?: number; max_markers?: number; aggregation_window_micros?: number }): void;
+  /** Draw a trade stream's large aggressive orders as volume bubbles over a price series. */
+  add_big_trades(series: series_api | number, stream_id: number, options?: Partial<big_trades_options>): big_trades_api;
   /** Derive OHLCV into a host-created target for higher-timeframe overlays and study inputs. */
   configure_resampled_series(source: series_api, target: series_api, options: resample_options, volume_source?: series_api | null, volume_target?: series_api | null): void;
   /** Read the engine's current aggregate rows for a derived target. */
