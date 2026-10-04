@@ -371,14 +371,14 @@ impl DrawingBounds {
             DrawingKind::FibonacciTimeZones | DrawingKind::FibonacciTrendTime
         ) && drawing.points.len() == drawing.kind.anchor_count()
         {
-            let origin = if drawing.kind == DrawingKind::FibonacciTimeZones {
+            let pivot = if drawing.kind == DrawingKind::FibonacciTimeZones {
                 drawing.points[0].logical
             } else {
                 drawing.points[2].logical
             };
             let step = drawing.points[1].logical - drawing.points[0].logical;
             for level in drawing.levels.iter().filter(|level| level.visible) {
-                let projected = origin + step * drawing.level_value(level.value);
+                let projected = pivot + step * drawing.level_value(level.value);
                 if projected.is_finite() {
                     min_logical = min_logical.min(projected);
                     max_logical = max_logical.max(projected);
@@ -731,9 +731,9 @@ pub enum DrawingKind {
     FibonacciWedge,
     /// Andrews median line with parallel outer tines.
     AndrewsPitchfork,
-    /// Pitchfork with the median origin shifted halfway in price.
+    /// Pitchfork with the median pivot shifted halfway in price.
     SchiffPitchfork,
-    /// Pitchfork with the median origin shifted halfway in time and price.
+    /// Pitchfork with the median pivot shifted halfway in time and price.
     ModifiedSchiffPitchfork,
     /// Pitchfork with a median from the first two anchors' midpoint through the third.
     InsidePitchfork,
@@ -751,11 +751,11 @@ pub enum DrawingKind {
     PatternTriangle,
     /// Three-drive reversal path.
     PatternThreeDrives,
-    /// Elliott impulse path, origin through waves one to five.
+    /// Elliott impulse path, pivot through waves one to five.
     ElliottImpulse,
-    /// Elliott correction path, origin through waves A to C.
+    /// Elliott correction path, pivot through waves A to C.
     ElliottCorrection,
-    /// Elliott triangle path, origin through waves A to E.
+    /// Elliott triangle path, pivot through waves A to E.
     ElliottTriangle,
     /// Elliott double combination path.
     ElliottDoubleCombination,
@@ -801,7 +801,7 @@ pub enum DrawingKind {
     GannSquareFixed,
     /// Nine proportionate Gann angle rays from a pivot.
     GannFan,
-    /// Three-anchor future price sector: origin, time horizon, projected price.
+    /// Three-anchor future price sector: pivot, time horizon, projected price.
     Projection,
     /// Trade target projection with a data-derived result after its time horizon.
     Forecast,
@@ -1404,7 +1404,7 @@ impl Drawing {
     }
 
     /// Long/Short Position has semantic levels, not three unrelated corners. Keep the stop on the
-    /// origin edge and project target/stop to the correct side of entry while preserving each
+    /// pivot edge and project target/stop to the correct side of entry while preserving each
     /// supplied distance. This also repairs older malformed persisted/programmatic values.
     fn normalize_position_points(kind: DrawingKind, points: &mut [DrawingPoint]) {
         if points.len() != 3 {
@@ -5518,7 +5518,7 @@ impl ChartEngine {
                                 _ => cursor_pt.price,
                             };
                         }
-                        // Entry/origin: move the entry level and the origin edge. Keep the stop
+                        // Entry/pivot: move the entry level and the pivot edge. Keep the stop
                         // point on that edge so its x never becomes an independent corner.
                         1 => {
                             let low = points[1].price.min(points[2].price);

@@ -1404,12 +1404,12 @@ impl ChartEngine {
                     }
                     let mut prior_fan: Option<(f64, f64)> = None;
                     for level in drawing.gann_fans.iter().filter(|level| level.visible) {
-                        let (origin, end) = grid.fan_segment(level.value, drawing.level_reverse);
+                        let (pivot, end) = grid.fan_segment(level.value, drawing.level_reverse);
                         if level.fill_between
                             && let Some(previous) = prior_fan
                         {
                             out.push(Prim::Triangle {
-                                a: [origin.0 as f32, origin.1 as f32],
+                                a: [pivot.0 as f32, pivot.1 as f32],
                                 b: [previous.0 as f32, previous.1 as f32],
                                 c: [end.0 as f32, end.1 as f32],
                                 color: Self::drawing_level_fill(level, color),
@@ -2998,7 +2998,7 @@ impl ChartEngine {
                 continue;
             };
 
-            // The progress origin is the first post-placement candle that actually reaches/crosses
+            // The progress pivot is the first post-placement candle that actually reaches/crosses
             // the entry. A position that has not filled emits no progress geometry at all.
             let Some((start_x, _)) =
                 self.drawing_to_px_for(pane_index, drawing.price_scale, run_start)
@@ -3576,7 +3576,7 @@ fn build_anchor_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Vec<
     }
 }
 
-/// Long/Short Position selection controls. The controls correspond to target, entry/origin,
+/// Long/Short Position selection controls. The controls correspond to target, entry/pivot,
 /// horizontal extent, and stop; they are intentionally not generic drawing-point anchors.
 fn build_position_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Vec<Prim>) {
     if px.len() != 3 {

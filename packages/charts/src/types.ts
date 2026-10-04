@@ -1089,10 +1089,10 @@ export interface comparison_legend_entry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "zigzag" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
+export type indicator_kind = "aroon" | "awesome_oscillator" | "dpo" | "chande_momentum" | "bollinger_metrics" | "envelopes" | "alma" | "accumulation_distribution" | "price_volume_trend" | "chaikin_oscillator" | "relative_volume" | "volume_oscillator" | "elder_force" | "ease_of_movement" | "historical_volatility" | "trix" | "coppock_curve" | "fisher_transform" | "ultimate_oscillator" | "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "zigzag" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
 export type pivot_kind = "standard" | "fibonacci" | "camarilla" | "woodie" | "demark";
 export type vwap_reset = "session" | "weekly" | "monthly";
-export type indicator_parameter_type = "integer" | "number" | "source" | "series";
+export type indicator_parameter_type = "integer" | "number" | "boolean" | "source" | "series";
 export interface indicator_parameter_descriptor {
   name: string;
   parameter_type: indicator_parameter_type;
@@ -1149,6 +1149,14 @@ export interface indicator_info {
     reset: vwap_reset | null;
     standard_deviation: number | null;
     percent: number | null;
+    exponential: boolean | null;
+    offset: number | null;
+    sigma: number | null;
+    divisor: number | null;
+    annualization: number | null;
+    long_period: number | null;
+    short_period: number | null;
+    smoothing: number | null;
   };
   period: number;
   /** Second parameter when the kind has one: Bollinger deviation, MACD signal period,
@@ -3491,6 +3499,13 @@ export interface chart_api {
   set_series_order(ordered: series_api[]): boolean;
   /** Add a Rust-native simple moving-average line derived from an existing series. */
   add_sma(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  add_aroon(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api];
+  add_awesome_oscillator(source: series_api, options?: Partial<series_options>): series_api;
+  add_dpo(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  add_chande_momentum(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  add_bollinger_metrics(source: series_api, period: number, deviation: number, options?: Partial<series_options>): [series_api, series_api];
+  add_envelopes(source: series_api, period: number, percent: number, exponential?: boolean, options?: Partial<series_options>): [series_api, series_api, series_api];
+  add_alma(source: series_api, period: number, offset?: number, sigma?: number, options?: Partial<series_options>): series_api;
   /** Add an SMA using an explicit OHLC/aggregate input from the source series. */
   add_sma_with_source(source: series_api, input: indicator_input_source, period: number, options?: Partial<series_options>): series_api;
   /** Add a Rust-native exponential moving-average line derived from an existing series. */
@@ -3532,6 +3547,18 @@ export interface chart_api {
    *  supplies per-bar volume (e.g. the volume histogram series); `null`/omitted = unit weights. */
   add_vwap(source: series_api, volume_source?: series_api | null, options?: Partial<series_options>): series_api;
   add_obv(source: series_api, volume_source: series_api, options?: Partial<series_options>): series_api;
+  add_accumulation_distribution(source: series_api, volume_source: series_api, options?: Partial<series_options>): series_api;
+  add_price_volume_trend(source: series_api, volume_source: series_api, options?: Partial<series_options>): series_api;
+  add_chaikin_oscillator(source: series_api, fast: number, slow: number, volume_source: series_api, options?: Partial<series_options>): series_api;
+  add_relative_volume(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api;
+  add_volume_oscillator(source: series_api, fast: number, slow: number, signal: number, volume_source: series_api, options?: Partial<series_options>): [series_api, series_api, series_api];
+  add_elder_force(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api;
+  add_ease_of_movement(source: series_api, period: number, volume_source: series_api, divisor?: number, options?: Partial<series_options>): series_api;
+  add_historical_volatility(source: series_api, period: number, annualization?: number, options?: Partial<series_options>): series_api;
+  add_trix(source: series_api, period: number, signal?: number, options?: Partial<series_options>): [series_api, series_api];
+  add_coppock_curve(source: series_api, long_period?: number, short_period?: number, smoothing?: number, options?: Partial<series_options>): series_api;
+  add_fisher_transform(source: series_api, period?: number, options?: Partial<series_options>): [series_api, series_api];
+  add_ultimate_oscillator(source: series_api, short_period?: number, medium_period?: number, long_period?: number, options?: Partial<series_options>): series_api;
   add_cmf(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api;
   add_mfi(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api;
   add_volume(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): [series_api, series_api];

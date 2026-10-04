@@ -157,7 +157,7 @@ bytes respectively in the same CI workflow. Thus the audit added 2.2% tarball, 2
 shrunk from 375,848 to 366,220 bytes and remains under the original JavaScript ceilings.
 The v5 maxima give the measured package artifacts about 7% headroom and keep size growth blocking:
 
-| Current metric | Observed bytes | Blocking maximum |
+| v5 metric | Observed bytes | Blocking maximum |
 | --- | ---: | ---: |
 | npm tarball | 1,781,356 | 1,910,000 |
 | npm unpacked | 5,714,896 | 6,100,000 |
@@ -165,6 +165,24 @@ The v5 maxima give the measured package artifacts about 7% headroom and keep siz
 | JavaScript Brotli | 63,272 | 95,000 |
 | WASM raw | 4,918,412 | 5,260,000 |
 | WASM Brotli | 1,094,509 | 1,170,000 |
+
+Budget policy v6 resets the package and WASM ceilings after the B7 profile/resampling, B8 drawing
+catalog, big-trades, and breadth-tier indicator work (nineteen additional `IndicatorKind` variants with
+their WASM and TypeScript bindings). The v5 ceilings had already failed on `c35c654` after B7/B8: a
+local Windows production build measured 1,901,167 tarball, 6,052,062 unpacked, 5,239,386 WASM raw,
+and 1,175,089 WASM Brotli bytes. The Rust 1.99 / edition 2024 toolchain migration measured 368 bytes
+smaller in WASM Brotli on the same source, so the growth is feature code rather than toolchain output.
+JavaScript stays under its original ceilings. The v6 maxima keep the v5 ~7% headroom above the
+measured release build (Rust 1.99.0, `wasm-pack` 0.15.0, `wasm-opt -Oz`) and keep size growth blocking:
+
+| Current metric | Observed bytes | Blocking maximum |
+| --- | ---: | ---: |
+| npm tarball | 1,944,147 | 2,090,000 |
+| npm unpacked | 6,224,128 | 6,660,000 |
+| JavaScript raw | 378,506 | 620,000 |
+| JavaScript Brotli | 64,562 | 95,000 |
+| WASM raw | 5,395,704 | 5,780,000 |
+| WASM Brotli | 1,201,784 | 1,290,000 |
 
 Phase 2 adds release-blocking maxima for `general-dashboard-100k`: p50 startup through the first following rAF
 must stay at or below 2,000 ms, and first-frame WebGPU vertex uploads must stay at or below 96 MiB. These are

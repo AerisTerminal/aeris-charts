@@ -103,7 +103,7 @@ pub(crate) struct FibonacciGeometry {
     pub(crate) kind: DrawingKind,
     pub(crate) start: (f64, f64),
     pub(crate) end: (f64, f64),
-    pub(crate) origin: Option<(f64, f64)>,
+    pub(crate) pivot: Option<(f64, f64)>,
     pub(crate) x0: f64,
     pub(crate) x1: f64,
 }
@@ -136,19 +136,19 @@ impl FibonacciGeometry {
                 }
             }
             DrawingKind::FibonacciExtension => {
-                let origin = self.origin.unwrap_or(self.end);
-                let y = origin.1 + (self.end.1 - self.start.1) * value;
+                let pivot = self.pivot.unwrap_or(self.end);
+                let y = pivot.1 + (self.end.1 - self.start.1) * value;
                 ((self.x0, y), (self.x1, y))
             }
             DrawingKind::FibonacciChannel => {
-                let origin = self.origin.unwrap_or(self.end);
+                let pivot = self.pivot.unwrap_or(self.end);
                 let dx = self.end.0 - self.start.0;
                 let base_y = if dx.abs() > f64::EPSILON {
-                    self.start.1 + (origin.0 - self.start.0) * (self.end.1 - self.start.1) / dx
+                    self.start.1 + (pivot.0 - self.start.0) * (self.end.1 - self.start.1) / dx
                 } else {
                     self.start.1
                 };
-                let offset = (origin.1 - base_y) * value;
+                let offset = (pivot.1 - base_y) * value;
                 (
                     (self.start.0, self.start.1 + offset),
                     (self.end.0, self.end.1 + offset),
@@ -164,7 +164,7 @@ impl FibonacciGeometry {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TimeLevelGeometry {
-    pub(crate) origin_x: f64,
+    pub(crate) pivot_x: f64,
     pub(crate) step_x: f64,
     pub(crate) pane_top: f64,
     pub(crate) pane_bottom: f64,
@@ -172,7 +172,7 @@ pub(crate) struct TimeLevelGeometry {
 
 impl TimeLevelGeometry {
     pub(crate) fn x(self, value: f64) -> f64 {
-        self.origin_x + self.step_x * value
+        self.pivot_x + self.step_x * value
     }
 }
 
@@ -217,7 +217,7 @@ impl FibonacciArcGeometry {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PitchforkGeometry {
     pub(crate) kind: DrawingKind,
-    pub(crate) origin: (f64, f64),
+    pub(crate) pivot: (f64, f64),
     pub(crate) b: (f64, f64),
     pub(crate) c: (f64, f64),
     pub(crate) pane_w: f64,
@@ -242,22 +242,14 @@ impl PitchforkGeometry {
         let anchor = self.anchor(value);
         let midpoint = self.anchor(0.5);
         let (start, dx, dy) = if self.kind == DrawingKind::Pitchfan {
-            (
-                self.origin,
-                anchor.0 - self.origin.0,
-                anchor.1 - self.origin.1,
-            )
+            (self.pivot, anchor.0 - self.pivot.0, anchor.1 - self.pivot.1)
         } else {
             let start = if (value - 0.5).abs() < f64::EPSILON {
-                self.origin
+                self.pivot
             } else {
                 anchor
             };
-            (
-                start,
-                midpoint.0 - self.origin.0,
-                midpoint.1 - self.origin.1,
-            )
+            (start, midpoint.0 - self.pivot.0, midpoint.1 - self.pivot.1)
         };
         let end = if dx.abs() > f64::EPSILON {
             let edge = if dx > 0.0 { self.pane_w } else { 0.0 };
@@ -279,7 +271,7 @@ impl PitchforkGeometry {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CycleGeometry {
     pub(crate) kind: DrawingKind,
-    pub(crate) origin_x: f64,
+    pub(crate) pivot_x: f64,
     pub(crate) step_x: f64,
     pub(crate) pane_w: f64,
     pub(crate) pane_top: f64,
@@ -291,8 +283,8 @@ impl CycleGeometry {
         if !self.step_x.is_finite() || self.step_x.abs() < 1e-6 {
             return;
         }
-        let at_left = -self.origin_x / self.step_x;
-        let at_right = (self.pane_w - self.origin_x) / self.step_x;
+        let at_left = -self.pivot_x / self.step_x;
+        let at_right = (self.pane_w - self.pivot_x) / self.step_x;
         let first = at_left.min(at_right).ceil().max(-1_000_000.0);
         let last = at_left.max(at_right).floor().min(1_000_000.0);
         let first = if self.kind == DrawingKind::TimeCycles {
@@ -307,7 +299,7 @@ impl CycleGeometry {
         let stride = ((last - first + 256) / 256).max(1);
         let mut index = first;
         while index <= last {
-            emit(index, self.origin_x + index as f64 * self.step_x);
+            emit(index, self.pivot_x + index as f64 * self.step_x);
             index += stride;
         }
     }
@@ -315,7 +307,7 @@ impl CycleGeometry {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SineGeometry {
-    pub(crate) origin: (f64, f64),
+    pub(crate) pivot: (f64, f64),
     pub(crate) quarter_width: f64,
     pub(crate) amplitude: f64,
     pub(crate) pane_w: f64,
@@ -324,17 +316,17 @@ pub(crate) struct SineGeometry {
 impl SineGeometry {
     pub(crate) fn visible_x(self) -> Option<(f64, f64)> {
         let (left, right) = if self.quarter_width > 0.0 {
-            (self.origin.0.max(0.0), self.pane_w)
+            (self.pivot.0.max(0.0), self.pane_w)
         } else {
-            (0.0, self.origin.0.min(self.pane_w))
+            (0.0, self.pivot.0.min(self.pane_w))
         };
         (right > left).then_some((left, right))
     }
 
     pub(crate) fn y(self, x: f64) -> f64 {
-        self.origin.1
+        self.pivot.1
             + self.amplitude
-                * (std::f64::consts::FRAC_PI_2 * (x - self.origin.0) / self.quarter_width).sin()
+                * (std::f64::consts::FRAC_PI_2 * (x - self.pivot.0) / self.quarter_width).sin()
     }
 
     pub(crate) fn sample_count(self) -> u32 {
@@ -767,7 +759,7 @@ pub(crate) fn resolve_drawing_geometry<'a>(
         | DrawingKind::FibonacciSpeedFan => {
             let start = *px.first()?;
             let end = *px.get(1)?;
-            let origin = if matches!(
+            let pivot = if matches!(
                 kind,
                 DrawingKind::FibonacciRetracement | DrawingKind::FibonacciSpeedFan
             ) {
@@ -776,9 +768,9 @@ pub(crate) fn resolve_drawing_geometry<'a>(
                 Some(*px.get(2)?)
             };
             let (left, right) = if kind == DrawingKind::FibonacciExtension {
-                let origin = origin?;
-                let projected_x = origin.0 + end.0 - start.0;
-                (origin.0.min(projected_x), origin.0.max(projected_x))
+                let pivot = pivot?;
+                let projected_x = pivot.0 + end.0 - start.0;
+                (pivot.0.min(projected_x), pivot.0.max(projected_x))
             } else {
                 (start.0.min(end.0), start.0.max(end.0))
             };
@@ -786,7 +778,7 @@ pub(crate) fn resolve_drawing_geometry<'a>(
                 kind,
                 start,
                 end,
-                origin,
+                pivot,
                 x0: if options.extend_left { 0.0 } else { left },
                 x1: if options.extend_right { pane_w } else { right },
             })
@@ -794,13 +786,13 @@ pub(crate) fn resolve_drawing_geometry<'a>(
         DrawingKind::FibonacciTimeZones | DrawingKind::FibonacciTrendTime => {
             let start = *px.first()?;
             let end = *px.get(1)?;
-            let origin_x = if kind == DrawingKind::FibonacciTrendTime {
+            let pivot_x = if kind == DrawingKind::FibonacciTrendTime {
                 px.get(2)?.0
             } else {
                 start.0
             };
             DrawingBodyGeometry::TimeLevels(TimeLevelGeometry {
-                origin_x,
+                pivot_x,
                 step_x: end.0 - start.0,
                 pane_top,
                 pane_bottom: pane_top + pane_h,
@@ -850,7 +842,7 @@ pub(crate) fn resolve_drawing_geometry<'a>(
             let a = *px.first()?;
             let b = *px.get(1)?;
             let c = *px.get(2)?;
-            let origin = match kind {
+            let pivot = match kind {
                 DrawingKind::SchiffPitchfork => (a.0, (a.1 + b.1) / 2.0),
                 DrawingKind::ModifiedSchiffPitchfork => ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0),
                 DrawingKind::InsidePitchfork => ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0),
@@ -858,7 +850,7 @@ pub(crate) fn resolve_drawing_geometry<'a>(
             };
             DrawingBodyGeometry::Pitchfork(PitchforkGeometry {
                 kind,
-                origin,
+                pivot,
                 b,
                 c,
                 pane_w,
@@ -869,7 +861,7 @@ pub(crate) fn resolve_drawing_geometry<'a>(
         DrawingKind::CyclicLines | DrawingKind::TimeCycles => {
             DrawingBodyGeometry::Cycles(CycleGeometry {
                 kind,
-                origin_x: px.first()?.0,
+                pivot_x: px.first()?.0,
                 step_x: px.get(1)?.0 - px.first()?.0,
                 pane_w,
                 pane_top,
@@ -883,7 +875,7 @@ pub(crate) fn resolve_drawing_geometry<'a>(
                 DrawingBodyGeometry::Empty
             } else {
                 DrawingBodyGeometry::Sine(SineGeometry {
-                    origin: start,
+                    pivot: start,
                     quarter_width: peak.0 - start.0,
                     amplitude: peak.1 - start.1,
                     pane_w,
@@ -1015,16 +1007,16 @@ pub(crate) fn resolve_drawing_geometry<'a>(
                 kind,
                 start,
                 end,
-                origin: None,
+                pivot: None,
                 x0: start.0,
                 x1: pane_w,
             })
         }
         DrawingKind::Projection => {
-            let origin = px[0];
+            let pivot = px[0];
             let target = *px.get(1)?;
             DrawingBodyGeometry::Triangle {
-                corners: [origin, (target.0, origin.1), target],
+                corners: [pivot, (target.0, pivot.1), target],
             }
         }
         DrawingKind::IconStamp => DrawingBodyGeometry::IconStamp {
@@ -1144,8 +1136,8 @@ pub(crate) fn resolve_drawing_geometry<'a>(
                 bottom: fib.start.1.max(fib.end.1),
             },
             DrawingBodyGeometry::TimeLevels(time) => TextBox {
-                left: time.origin_x,
-                right: time.origin_x + time.step_x,
+                left: time.pivot_x,
+                right: time.pivot_x + time.step_x,
                 top: time.pane_top,
                 bottom: time.pane_bottom,
             },
@@ -1155,18 +1147,18 @@ pub(crate) fn resolve_drawing_geometry<'a>(
                 top: arcs.center.1 - arcs.radius,
                 bottom: arcs.center.1 + arcs.radius,
             },
-            DrawingBodyGeometry::Pitchfork(fork) => points_box(&[fork.origin, fork.b, fork.c])?,
+            DrawingBodyGeometry::Pitchfork(fork) => points_box(&[fork.pivot, fork.b, fork.c])?,
             DrawingBodyGeometry::Cycles(cycles) => TextBox {
-                left: cycles.origin_x,
-                right: cycles.origin_x + cycles.step_x,
+                left: cycles.pivot_x,
+                right: cycles.pivot_x + cycles.step_x,
                 top: cycles.pane_top,
                 bottom: cycles.pane_bottom,
             },
             DrawingBodyGeometry::Sine(sine) => TextBox {
-                left: sine.origin.0,
-                right: sine.origin.0 + sine.quarter_width,
-                top: sine.origin.1.min(sine.origin.1 + sine.amplitude),
-                bottom: sine.origin.1.max(sine.origin.1 + sine.amplitude),
+                left: sine.pivot.0,
+                right: sine.pivot.0 + sine.quarter_width,
+                top: sine.pivot.1.min(sine.pivot.1 + sine.amplitude),
+                bottom: sine.pivot.1.max(sine.pivot.1 + sine.amplitude),
             },
             DrawingBodyGeometry::Marker(marker) => {
                 let triangle = marker.triangle();
@@ -1426,7 +1418,7 @@ mod tests {
     }
 
     #[test]
-    fn fibonacci_time_levels_use_the_interval_and_optional_projection_origin() {
+    fn fibonacci_time_levels_use_the_interval_and_optional_projection_pivot() {
         let options = DrawingGeometryOptions::default();
         for (kind, anchors, expected_x) in [
             (
@@ -1451,7 +1443,7 @@ mod tests {
     }
 
     #[test]
-    fn fibonacci_speed_fan_resolves_distinct_rays_from_one_origin() {
+    fn fibonacci_speed_fan_resolves_distinct_rays_from_one_pivot() {
         let geometry = resolve_drawing_geometry(
             DrawingKind::FibonacciSpeedFan,
             &[(10.0, 20.0), (30.0, 60.0)],
@@ -1542,9 +1534,9 @@ mod tests {
     }
 
     #[test]
-    fn pitchfork_origins_and_fan_rays_follow_their_anchor_rules() {
+    fn pitchfork_pivots_and_fan_rays_follow_their_anchor_rules() {
         let anchors = [(10.0, 20.0), (30.0, 40.0), (30.0, 60.0)];
-        for (kind, expected_origin) in [
+        for (kind, expected_pivot) in [
             (DrawingKind::AndrewsPitchfork, (10.0, 20.0)),
             (DrawingKind::SchiffPitchfork, (10.0, 30.0)),
             (DrawingKind::ModifiedSchiffPitchfork, (20.0, 30.0)),
@@ -1563,8 +1555,8 @@ mod tests {
             let DrawingBodyGeometry::Pitchfork(fork) = geometry.body else {
                 panic!("pitchfork must resolve to shared geometry");
             };
-            assert_eq!(fork.origin, expected_origin);
-            assert_eq!(fork.segment(0.5).0, expected_origin);
+            assert_eq!(fork.pivot, expected_pivot);
+            assert_eq!(fork.segment(0.5).0, expected_pivot);
             if kind == DrawingKind::Pitchfan {
                 assert_eq!(fork.segment(0.0), ((10.0, 20.0), (100.0, 110.0)));
                 assert_eq!(fork.segment(1.0), ((10.0, 20.0), (100.0, 200.0)));
