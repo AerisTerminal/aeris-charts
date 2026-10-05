@@ -296,7 +296,7 @@
     <div class="group" id="overlays_group" data-caption="Indicators">
       <h2>Indicators</h2>
       <label>Find an indicator <input type="search" id="indicator_search" placeholder="Name or abbreviation"></label>
-      <span class="hint">11 built-in indicators · select to add, clear to remove</span>
+      <span class="hint">15 built-in indicators · select to add, clear to remove</span>
       <div id="indicator_catalog" style="display:grid;gap:8px;width:100%"></div>
       <span id="indicator_empty" class="hint" hidden>No matching indicators</span>
       <span id="indicator_error" role="alert"></span>
@@ -1569,6 +1569,10 @@ const indicator_definitions = [
   ["atr", "ATR · Average true range (14)", () => chart.add_atr(main, 14)],
   ["vwap", "VWAP · Session volume-weighted price", (volume) => chart.add_vwap(main, volume)],
   ["volume_profile", "Volume Profile · Visible range / POC / 70%", (volume) => chart.add_volume_profile(main, volume)],
+  ["swing_points", "Swing Points · Confirmed pivot levels (5 / 5)", () => chart.add_swing_points(main)],
+  ["market_structure", "Market Structure · BOS / CHoCH (close)", () => chart.add_market_structure(main)],
+  ["fair_value_gaps", "Fair Value Gaps · Active imbalance zones", () => chart.add_fair_value_gaps(main)],
+  ["order_blocks", "Order Blocks · Last opposite candle before break", () => chart.add_order_blocks(main)],
 ];
 const indicator_catalog = document.getElementById("indicator_catalog");
 const indicator_handles = new Map();

@@ -2427,6 +2427,12 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
             ]
         }
         IndicatorKind::Wma { period } => vec![aeris_charts_indicators::wma(source[3], period)],
+        IndicatorKind::SwingPoints { .. }
+        | IndicatorKind::MarketStructure { .. }
+        | IndicatorKind::FairValueGaps { .. }
+        | IndicatorKind::OrderBlocks { .. } => {
+            panic!("structural studies require annotation-aware reference fixtures")
+        }
     };
 
     for (&output, expected) in binding.outputs.iter().zip(expected) {

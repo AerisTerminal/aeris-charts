@@ -2427,6 +2427,66 @@ impl AerisChart {
     pub fn add_aroon(&mut self, source_id: u32, period: u32) -> Vec<u32> {
         self.inner.borrow_mut().add_aroon(source_id, period)
     }
+    pub fn add_swing_points(&mut self, source_id: u32, left: u32, right: u32) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_swing_points(source_id, left, right)
+    }
+    pub fn add_market_structure(
+        &mut self,
+        source_id: u32,
+        left: u32,
+        right: u32,
+        break_on: &str,
+    ) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_market_structure(source_id, left, right, break_on)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_fair_value_gaps(
+        &mut self,
+        source_id: u32,
+        min_size: f64,
+        mitigation: &str,
+        mitigation_price: &str,
+        max_active: u32,
+        show_mitigated: bool,
+    ) -> Vec<u32> {
+        self.inner.borrow_mut().add_fair_value_gaps(
+            source_id,
+            min_size,
+            mitigation,
+            mitigation_price,
+            max_active,
+            show_mitigated,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_order_blocks(
+        &mut self,
+        source_id: u32,
+        left: u32,
+        right: u32,
+        break_on: &str,
+        zone: &str,
+        mitigation: &str,
+        mitigation_price: &str,
+        max_active: u32,
+        show_mitigated: bool,
+    ) -> Vec<u32> {
+        self.inner.borrow_mut().add_order_blocks(
+            source_id,
+            left,
+            right,
+            break_on,
+            zone,
+            mitigation,
+            mitigation_price,
+            max_active,
+            show_mitigated,
+        )
+    }
 
     pub fn add_awesome_oscillator(&mut self, source_id: u32) -> u32 {
         self.inner.borrow_mut().add_awesome_oscillator(source_id)

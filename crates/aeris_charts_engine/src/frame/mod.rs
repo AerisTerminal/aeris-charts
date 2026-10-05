@@ -1769,7 +1769,16 @@ impl ChartEngine {
                                 rs.id,
                                 binding.source,
                                 annotations,
-                                false,
+                                matches!(
+                                    binding.kind,
+                                    crate::IndicatorKind::FairValueGaps {
+                                        show_mitigated: true,
+                                        ..
+                                    } | crate::IndicatorKind::OrderBlocks {
+                                        show_mitigated: true,
+                                        ..
+                                    }
+                                ),
                                 from,
                                 to,
                                 pane_w_px as i32,

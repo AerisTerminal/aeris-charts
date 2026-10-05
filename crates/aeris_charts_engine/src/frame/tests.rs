@@ -66,6 +66,49 @@ fn study_binding_paints_inside_its_output_layer_without_host_markers() {
 }
 
 #[test]
+fn mitigated_zone_visibility_follows_the_binding_choice() {
+    let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
+    let border = Color::rgb(0x11, 0x22, 0x33);
+    for (show_mitigated, visible) in [(false, false), (true, true)] {
+        let output = chart.add_fair_value_gaps(
+            0,
+            0.0,
+            crate::StructureMitigation::Touch,
+            crate::StructureMitigationPrice::Wick,
+            20,
+            show_mitigated,
+        )[0];
+        assert!(chart.set_indicator_output_style(
+            output,
+            crate::IndicatorOutputStyle {
+                visible: true,
+                line_color: Some("#112233".into()),
+                ..Default::default()
+            },
+        ));
+        let mut annotations = StudyAnnotations::default();
+        annotations.push_zone(StudyZone {
+            start_row: 3,
+            confirm_row: 4,
+            top: 110.0,
+            bottom: 105.0,
+            bullish: true,
+            end_row: Some(10),
+        });
+        assert!(chart.inject_study_annotations_for_test(output, annotations));
+        let frame = chart.build_frame();
+        assert_eq!(
+            frame.panes[0]
+                .main
+                .iter()
+                .any(|prim| matches!(prim, Prim::RectFrame { color, .. } if *color == border)),
+            visible,
+        );
+        assert!(chart.remove_indicator_binding(output));
+    }
+}
+
+#[test]
 fn study_annotations_paint_in_shared_order_and_clip_to_the_pane() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
     chart.build_frame();

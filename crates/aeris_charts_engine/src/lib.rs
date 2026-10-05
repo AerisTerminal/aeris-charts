@@ -171,7 +171,8 @@ pub use indicators::{
     EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS, INDICATOR_SCHEMA_REVISION,
     IndicatorBindingInfo, IndicatorChromeOptions, IndicatorInputSource, IndicatorKind,
     IndicatorOutputDescriptor, IndicatorOutputStyle, IndicatorParameterDescriptor,
-    IndicatorParameterType, IndicatorSchema, StudyCalendarPolicy,
+    IndicatorParameterType, IndicatorSchema, OrderBlockZone, StructureBreakOn, StructureMitigation,
+    StructureMitigationPrice, StudyCalendarPolicy,
 };
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use interaction::{
