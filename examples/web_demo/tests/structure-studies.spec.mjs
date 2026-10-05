@@ -73,6 +73,7 @@ test("browser structure studies expose values, typed annotations and parameter v
     row: 1, confirm_row: 2, price: 14, kind: "swing_high",
   }));
   expect(result.snapshot[0].data[2].value).toBe(14);
+  expect(result.snapshot[0].parameters).toMatchObject({ left: 1, right: 1 });
   expect(result.snapshot[2].annotations.markers).toContainEqual(expect.objectContaining({
     row: 3, confirm_row: 3, price: 14, from_row: 1, kind: { bos: { up: true } },
   }));
@@ -140,6 +141,7 @@ test("whitespace structure anchors align to source rows without expanding price 
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
   const result = await page.evaluate(() => {
     const chart = window.__chart;
+    chart.remove_series(window.__main);
     const source = chart.add_series("candlestick");
     source.set_data([
       { time: 1_700_000_000, open: 10, high: 12, low: 9, close: 11 },
@@ -147,15 +149,21 @@ test("whitespace structure anchors align to source rows without expanding price 
       { time: 1_700_000_120, open: 11, high: 13, low: 9, close: 10 },
       { time: 1_700_000_180, open: 16, high: 18, low: 14, close: 17 },
     ]);
+    chart.time_scale().fit_content();
+    source.price_scale().set_auto_scale(true);
     const before = source.price_scale().get_visible_range();
     const outputs = [
       chart.add_market_structure(source, 1, 1),
       chart.add_fair_value_gaps(source),
       chart.add_order_blocks(source, { left: 1, right: 1 }),
     ];
+    const after = source.price_scale().get_visible_range();
+    const outlier = chart.add_series("line");
+    outlier.set_data([{ time: 1_700_000_180, value: 1000 }]);
     return {
       before,
-      after: source.price_scale().get_visible_range(),
+      after,
+      withOutlier: source.price_scale().get_visible_range(),
       times: source.data().map(({ time }) => time),
       anchors: outputs.map((output) => output.data().map(({ time, value }) => ({
         time, hasValue: value !== undefined,
@@ -163,7 +171,11 @@ test("whitespace structure anchors align to source rows without expanding price 
     };
   });
   expect(result.before).not.toBeNull();
+  expect(result.before.from).toBeLessThanOrEqual(9);
+  expect(result.before.to).toBeGreaterThanOrEqual(18);
   expect(result.after).toEqual(result.before);
+  expect(result.withOutlier.to).toBeGreaterThan(result.after.to);
+  expect(result.withOutlier.to).toBeGreaterThanOrEqual(1000);
   for (const anchor of result.anchors) {
     expect(anchor.map(({ time }) => time)).toEqual(result.times);
     expect(anchor.every(({ hasValue }) => !hasValue)).toBe(true);

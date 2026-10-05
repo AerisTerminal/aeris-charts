@@ -11,11 +11,13 @@ const candles = [
   { time: start + 360, open: 19, high: 21, low: 16, close: 20 },
 ];
 
-test("replay clock masks future structure annotations and session levels, and backward seek matches fresh load", async ({ page }) => {
+test("replay seeks in both directions match fresh prefix loads without a replay clock", async ({ page }) => {
   await page.goto("/?backend=canvas2d");
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
-  const replay = await page.evaluate(({ candles, cutoff }) => {
+  const cursors = [3, 6, 2, 5, 1, 4, 0, 6];
+  const replay = await page.evaluate(({ candles, cursors }) => {
     const chart = window.__chart;
+    chart.remove_series(window.__main);
     const source = chart.add_series("candlestick");
     source.set_data(candles);
     const market = chart.add_market_structure(source, 1, 1);
@@ -29,46 +31,51 @@ test("replay clock masks future structure annotations and session levels, and ba
       levels: levels.map((output) => output.data().map(({ time, value }) => ({ time, value: value ?? null }))),
     });
     const complete = snapshot();
-    chart.set_replay_clock_micros(cutoff);
-    const masked = snapshot();
+    const sought = cursors.map((cursor) => {
+      chart.set_replay_clock_micros(candles[cursor].time * 1_000_000);
+      return { cursor, clock: chart.replay_clock_micros(), snapshot: snapshot() };
+    });
     chart.set_replay_clock_micros(null);
-    const resumed = snapshot();
-    chart.set_replay_clock_micros(cutoff);
-    return { complete, masked, resumed, soughtBack: snapshot(), clock: chart.replay_clock_micros() };
-  }, { candles, cutoff: (start + 180) * 1_000_000 });
+    return { complete, sought, resumed: snapshot() };
+  }, { candles, cursors });
 
-  expect(replay.clock).toBe((start + 180) * 1_000_000);
   expect(replay.complete.market.markers.some(({ row }) => row > 3)).toBe(true);
   expect(replay.complete.blocks.zones.some(({ confirm_row }) => confirm_row > 3)).toBe(true);
   expect(replay.complete.levels[0]).toHaveLength(candles.length);
   expect(replay.complete.levels[0].at(-1).value).toBe(21);
-  for (const { markers, zones } of [replay.masked.market, replay.masked.gaps, replay.masked.blocks]) {
-    expect(markers.every(({ row, confirm_row }) => row <= 3 && confirm_row <= 3)).toBe(true);
-    expect(zones.every(({ start_row, confirm_row, end_row }) =>
-      start_row <= 3 && confirm_row <= 3 && (end_row === null || end_row <= 3))).toBe(true);
-  }
-  expect(replay.masked.levels.every((output) => output.length === 4)).toBe(true);
-  expect(replay.masked.levels[0].at(-1).value).toBe(18);
   expect(replay.resumed).toEqual(replay.complete);
-  expect(replay.soughtBack).toEqual(replay.masked);
 
-  await page.reload();
-  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
-  const fresh = await page.evaluate(({ candles, cutoff }) => {
-    const chart = window.__chart;
-    chart.set_replay_clock_micros(cutoff);
-    const source = chart.add_series("candlestick");
-    source.set_data(candles);
-    const market = chart.add_market_structure(source, 1, 1);
-    const gaps = chart.add_fair_value_gaps(source);
-    const blocks = chart.add_order_blocks(source, { left: 1, right: 1 });
-    const levels = chart.add_session_levels(source);
-    return {
-      market: chart.study_annotations(market),
-      gaps: chart.study_annotations(gaps),
-      blocks: chart.study_annotations(blocks),
-      levels: levels.map((output) => output.data().map(({ time, value }) => ({ time, value: value ?? null }))),
-    };
-  }, { candles, cutoff: (start + 180) * 1_000_000 });
-  expect(replay.soughtBack).toEqual(fresh);
+  for (const { cursor, clock, snapshot } of replay.sought) {
+    expect(clock).toBe(candles[cursor].time * 1_000_000);
+    for (const { markers, zones } of [snapshot.market, snapshot.gaps, snapshot.blocks]) {
+      expect(markers.every(({ row, confirm_row }) => row <= cursor && confirm_row <= cursor)).toBe(true);
+      expect(zones.every(({ start_row, confirm_row, end_row }) =>
+        start_row <= cursor && confirm_row <= cursor && (end_row === null || end_row <= cursor))).toBe(true);
+    }
+    expect(snapshot.levels.every((output) => output.length === cursor + 1)).toBe(true);
+
+    await page.reload();
+    await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+    const fresh = await page.evaluate(({ candles, cursor }) => {
+      const chart = window.__chart;
+      chart.remove_series(window.__main);
+      const source = chart.add_series("candlestick");
+      source.set_data(candles.slice(0, cursor + 1));
+      const market = chart.add_market_structure(source, 1, 1);
+      const gaps = chart.add_fair_value_gaps(source);
+      const blocks = chart.add_order_blocks(source, { left: 1, right: 1 });
+      const levels = chart.add_session_levels(source);
+      return {
+        clock: chart.replay_clock_micros(),
+        snapshot: {
+          market: chart.study_annotations(market),
+          gaps: chart.study_annotations(gaps),
+          blocks: chart.study_annotations(blocks),
+          levels: levels.map((output) => output.data().map(({ time, value }) => ({ time, value: value ?? null }))),
+        },
+      };
+    }, { candles, cursor });
+    expect(fresh.clock).toBeNull();
+    expect(snapshot).toEqual(fresh.snapshot);
+  }
 });
