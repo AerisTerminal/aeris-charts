@@ -117,3 +117,43 @@ test("demo catalog creates and clears every session study output", async ({ page
   }
   await expect(page.locator("#indicator_error")).toBeEmpty();
 });
+
+test("all seven study kinds inherit the source pane without creating oscillator panes", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const pane = chart.add_pane();
+    const source = chart.add_series("candlestick");
+    source.move_to_pane(pane.pane_index());
+    source.set_data([
+      { time: 1_700_000_000, open: 9, high: 10, low: 8, close: 9 },
+      { time: 1_700_000_060, open: 10, high: 15, low: 9, close: 14 },
+      { time: 1_700_000_120, open: 12, high: 13, low: 10, close: 12 },
+    ]);
+    const groups = [
+      chart.add_session_levels(source),
+      chart.add_previous_period_levels(source),
+      chart.add_opening_range(source, 60),
+      chart.add_swing_points(source, 1, 1),
+      [chart.add_market_structure(source, 1, 1)],
+      [chart.add_fair_value_gaps(source)],
+      [chart.add_order_blocks(source, { left: 1, right: 1 })],
+    ];
+    return {
+      sourcePane: source.pane_index(),
+      paneCount: chart.panes().length,
+      outputs: groups.map((group) => group.map((output) => ({
+        pane: output.pane_index(), kind: output.indicator_info().kind,
+      }))),
+    };
+  });
+  expect(result.sourcePane).toBe(1);
+  expect(result.paneCount).toBe(2);
+  expect(result.outputs.map((group) => group.length)).toEqual([2, 3, 3, 2, 1, 1, 1]);
+  expect(result.outputs.map((group) => group[0].kind)).toEqual([
+    "session_levels", "previous_period_levels", "opening_range",
+    "swing_points", "market_structure", "fair_value_gaps", "order_blocks",
+  ]);
+  expect(result.outputs.flat().every(({ pane }) => pane === result.sourcePane), JSON.stringify(result)).toBe(true);
+});

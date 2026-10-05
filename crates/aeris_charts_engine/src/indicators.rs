@@ -423,8 +423,9 @@ pub enum IndicatorKind {
 
 impl IndicatorKind {
     /// Resolve the browser's legacy name/period/deviation schema query to an engine definition.
-    /// The implicit (14, 2) query uses each study's canonical defaults; a different
-    /// period retains the legacy query's period substitution for multi-period studies.
+    /// The implicit (14, 2) query uses each study's canonical defaults. Legacy
+    /// period/deviation overrides apply only to kinds whose mapping uses those arguments;
+    /// multi-period kinds with fixed canonical parameters ignore the period argument.
     pub fn schema_definition(kind: &str, period: usize, deviation: f64) -> Option<Self> {
         use aeris_charts_indicators::{PivotKind, VwapReset};
         Some(match kind {
@@ -926,6 +927,12 @@ impl ChartEngine {
                 series.title_visible = true;
                 series.line_width = Some(indicator_default_line_width(&kind));
                 series.line_color = indicator_output_color(&kind, output_index).map(str::to_string);
+                if matches!(
+                    kind,
+                    IndicatorKind::MarketStructure { .. } | IndicatorKind::OrderBlocks { .. }
+                ) {
+                    series.line_style = 2;
+                }
             }
         }
     }
@@ -3683,6 +3690,9 @@ impl ChartEngine {
                 series.price_format.min_move,
             )
         });
+        let source_placement = self
+            .series_entry(source)
+            .map(|series| (series.pane_index, series.price_scale_target));
         let ids = (0..output_count)
             .map(|_| self.add_series(SeriesKind::Line))
             .collect::<Vec<_>>();
@@ -3699,6 +3709,26 @@ impl ChartEngine {
                 s.price_line_visible = self.indicator_chrome.price_lines_visible;
                 s.title = indicator_output_title(&kind, output_index);
                 s.line_width = Some(indicator_default_line_width(&kind));
+                if matches!(
+                    kind,
+                    IndicatorKind::SwingPoints { .. }
+                        | IndicatorKind::MarketStructure { .. }
+                        | IndicatorKind::FairValueGaps { .. }
+                        | IndicatorKind::OrderBlocks { .. }
+                        | IndicatorKind::SessionLevels { .. }
+                        | IndicatorKind::PreviousPeriodLevels { .. }
+                        | IndicatorKind::OpeningRange { .. }
+                ) && let Some((pane_index, price_scale_target)) = source_placement
+                {
+                    s.pane_index = pane_index;
+                    s.price_scale_target = price_scale_target;
+                }
+                if matches!(
+                    kind,
+                    IndicatorKind::MarketStructure { .. } | IndicatorKind::OrderBlocks { .. }
+                ) {
+                    s.line_style = 2;
+                }
                 if matches!(kind, IndicatorKind::SwingPoints { .. }) {
                     s.line_type = LineType::WithSteps;
                 }

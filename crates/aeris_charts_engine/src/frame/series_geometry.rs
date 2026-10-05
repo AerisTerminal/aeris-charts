@@ -56,6 +56,7 @@ mod study_segment_tests {
         chart.time_scale.set_width(800.0);
         chart.fit_content();
         chart.build_frame();
+        chart.series_entry_mut(0).unwrap().line_style = 2;
 
         let mut annotations = StudyAnnotations::default();
         annotations.push_marker(StudyMarker {
@@ -456,7 +457,7 @@ impl ChartEngine {
                     x0: left,
                     x1: right,
                     width: 1.max(hpr.floor() as i32),
-                    style: LineStyle::Dashed,
+                    style: crate::line_style_from_u8(series.line_style),
                     color,
                 });
                 // At sub-4 CSS-px spacing the stroke remains legible but text is not.

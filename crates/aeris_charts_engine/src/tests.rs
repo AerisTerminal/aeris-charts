@@ -194,6 +194,17 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
     assert!(chart.add_kama(0, 10, 2, 30).is_some());
     assert!(chart.add_mcginley(0, 10).is_some());
     assert_eq!(chart.add_linear_regression(0, 10, 2.0).len(), 3);
+    assert_eq!(
+        chart
+            .add_kst(0, [10, 15, 20, 30], [10, 10, 10, 15], 9)
+            .len(),
+        2
+    );
+    assert_eq!(chart.add_tsi(0, 25, 13, 13).len(), 2);
+    assert!(chart.add_mass_index(0, 9, 25).is_some());
+    assert_eq!(chart.add_vortex(0, 14).len(), 2);
+    assert!(chart.add_choppiness(0, 14).is_some());
+    assert_eq!(chart.add_atr_bands(0, 14, 2.0).len(), 3);
     assert!(chart.add_relative_volume(0, histogram, 5).is_some());
     assert!(chart.add_elder_force(0, histogram, 5).is_some());
     assert!(chart.add_ease_of_movement(0, histogram, 5, 100.0).is_some());
@@ -265,6 +276,26 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
             IndicatorKind::LinearRegression {
                 period: 10,
                 deviation: 2.0,
+            },
+            IndicatorKind::Kst {
+                roc: [10, 15, 20, 30],
+                smoothing: [10, 10, 10, 15],
+                signal: 9,
+            },
+            IndicatorKind::Tsi {
+                long: 25,
+                short: 13,
+                signal: 13,
+            },
+            IndicatorKind::MassIndex {
+                ema_period: 9,
+                sum_period: 25,
+            },
+            IndicatorKind::Vortex { period: 14 },
+            IndicatorKind::Choppiness { period: 14 },
+            IndicatorKind::AtrBands {
+                period: 14,
+                multiplier: 2.0,
             },
             IndicatorKind::RelativeVolume { period: 5 },
             IndicatorKind::ElderForce { period: 5 },
@@ -388,6 +419,131 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
             .collect::<Vec<_>>(),
         drawing_kinds
     );
+}
+
+#[test]
+fn all_i2_studies_round_trip_together_in_v3_with_non_default_parameters() {
+    let times = (0..96).map(|row| row as f64 * 60.0).collect::<Vec<_>>();
+    let close = (0..96)
+        .map(|row| 100.0 + row as f64 * 0.3 + (row as f64 * 0.21).sin())
+        .collect::<Vec<_>>();
+    let high = close.iter().map(|value| value + 1.0).collect::<Vec<_>>();
+    let low = close.iter().map(|value| value - 1.0).collect::<Vec<_>>();
+    let volume_values = (0..96)
+        .map(|row| 20.0 + (row % 7) as f64)
+        .collect::<Vec<_>>();
+    let install_sources = || {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart
+            .set_series_data(0, &times, &close, &high, &low, &close)
+            .unwrap();
+        let volume = chart.add_series(SeriesKind::Histogram);
+        chart
+            .set_series_data(
+                volume,
+                &times,
+                &volume_values,
+                &volume_values,
+                &volume_values,
+                &volume_values,
+            )
+            .unwrap();
+        (chart, volume)
+    };
+    let (mut chart, volume) = install_sources();
+    let kinds = [
+        IndicatorKind::Klinger {
+            fast: 4,
+            slow: 9,
+            signal: 3,
+        },
+        IndicatorKind::Kama {
+            period: 7,
+            fast: 3,
+            slow: 12,
+        },
+        IndicatorKind::McGinley { period: 9 },
+        IndicatorKind::LinearRegression {
+            period: 8,
+            deviation: 1.5,
+        },
+        IndicatorKind::Kst {
+            roc: [3, 5, 7, 9],
+            smoothing: [2, 3, 4, 5],
+            signal: 4,
+        },
+        IndicatorKind::Tsi {
+            long: 7,
+            short: 4,
+            signal: 5,
+        },
+        IndicatorKind::MassIndex {
+            ema_period: 4,
+            sum_period: 7,
+        },
+        IndicatorKind::Vortex { period: 8 },
+        IndicatorKind::Choppiness { period: 8 },
+        IndicatorKind::AtrBands {
+            period: 8,
+            multiplier: 1.75,
+        },
+    ];
+    let mut original_outputs = Vec::new();
+    for (index, (kind, expected_outputs)) in
+        kinds.iter().zip([2, 1, 1, 3, 2, 2, 1, 2, 1, 3]).enumerate()
+    {
+        let outputs = chart.add_indicator_kind(0, kind.clone(), (index == 0).then_some(volume));
+        assert_eq!(outputs.len(), expected_outputs, "{kind:?}");
+        original_outputs.push(outputs);
+    }
+    assert!(chart.set_indicator_output_style(
+        original_outputs[3][1],
+        IndicatorOutputStyle {
+            visible: false,
+            line_color: Some("#123456".into()),
+            ..Default::default()
+        }
+    ));
+    let original_bindings = chart.indicator_bindings();
+    let document = chart.export_state_json().unwrap();
+    let json: serde_json::Value = serde_json::from_str(&document).unwrap();
+    assert_eq!(json["schema_version"], 3);
+    assert_eq!(json["indicators"].as_array().unwrap().len(), kinds.len());
+
+    let (mut restored, restored_volume) = install_sources();
+    assert_eq!(restored_volume, volume);
+    restored.import_state_json(&document).unwrap();
+    let bindings = restored.indicator_bindings();
+    assert_eq!(bindings.len(), kinds.len());
+    for (index, ((kind, original), binding)) in kinds
+        .iter()
+        .zip(&original_bindings)
+        .zip(&bindings)
+        .enumerate()
+    {
+        assert_eq!(&binding.kind, kind, "study {index}");
+        assert_eq!(binding.outputs, original.outputs, "study {index}");
+        assert_eq!(binding.styles, original.styles, "study {index}");
+        assert_eq!(
+            binding.volume_source,
+            (index == 0).then_some(restored_volume),
+            "study {index}"
+        );
+        for &output in &original_outputs[index] {
+            let before = chart.data.series_data(output).unwrap();
+            let after = restored.data.series_data(output).unwrap();
+            assert_eq!(before.0, after.0, "output {output} timestamps");
+            for (left, right) in before.1.into_iter().zip(after.1) {
+                assert_eq!(left.len(), right.len(), "output {output} rows");
+                assert!(
+                    left.iter()
+                        .zip(right)
+                        .all(|(a, b)| a == b || a.is_nan() && b.is_nan()),
+                    "output {output} values"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -9209,9 +9365,19 @@ mod session_study_regressions {
     fn retention_trim_rebuilds_structure_from_only_the_retained_rows() {
         let times = (0..96).map(|row| row as f64 + 1.).collect::<Vec<_>>();
         let highs = (0..96)
-            .map(|row| 30. + (row % 7) as f64 * 3.)
+            .map(|row| 30. + (row / 7) as f64 * 16. + [0., 4., 2., 8., 6., 10., 11.][row % 7])
             .collect::<Vec<_>>();
         let lows = highs.iter().map(|high| high - 6.).collect::<Vec<_>>();
+        let opens = highs
+            .iter()
+            .enumerate()
+            .map(|(row, high)| high - if row % 7 == 4 { 1. } else { 3. })
+            .collect::<Vec<_>>();
+        let closes = highs
+            .iter()
+            .enumerate()
+            .map(|(row, high)| high - if row % 7 == 4 { 5. } else { 3. })
+            .collect::<Vec<_>>();
         let kinds = [
             IndicatorKind::SwingPoints { left: 1, right: 1 },
             IndicatorKind::MarketStructure {
@@ -9238,19 +9404,22 @@ mod session_study_regressions {
             },
         ];
         let mut chart = ChartEngine::new(800., 500., 1.);
-        install(&mut chart, &times, &highs, &lows);
+        chart
+            .set_series_data(0, &times, &opens, &highs, &lows, &closes)
+            .unwrap();
         let bindings = kinds
             .iter()
             .map(|kind| chart.add_indicator_kind(0, kind.clone(), None))
             .collect::<Vec<_>>();
         assert!(chart.set_series_max_points(0, Some(40)));
         for row in 96..110 {
-            let high = 30. + (row % 7) as f64 * 3.;
-            assert!(chart.update_series_bar(
-                0,
-                row as f64 + 1.,
-                [high - 3., high, high - 6., high - 3.]
-            ));
+            let high = 30. + (row / 7) as f64 * 16. + [0., 4., 2., 8., 6., 10., 11.][row % 7];
+            let (open, close) = if row % 7 == 4 {
+                (high - 1., high - 5.)
+            } else {
+                (high - 3., high - 3.)
+            };
+            assert!(chart.update_series_bar(0, row as f64 + 1., [open, high, high - 6., close]));
         }
         let (retained, columns) = chart.data.series_data(0).unwrap();
         let (retained, open, high, low, close) = (
@@ -9281,9 +9450,10 @@ mod session_study_regressions {
                 assert_eq!(values(&chart, actual), values(&fresh, expected), "{kind:?}");
             }
             let snapshot = chart.study_annotations(actual[0]).unwrap();
-            if matches!(kind, IndicatorKind::SwingPoints { .. }) {
-                assert!(!snapshot.markers().is_empty());
-            }
+            assert!(
+                !snapshot.markers().is_empty() || !snapshot.zones().is_empty(),
+                "{kind:?} must generate annotations after trimming"
+            );
             assert_eq!(
                 snapshot,
                 fresh.study_annotations(expected[0]).unwrap(),

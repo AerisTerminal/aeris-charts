@@ -115,6 +115,7 @@ fn study_annotations_paint_in_shared_order_and_clip_to_the_pane() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
     chart.build_frame();
     let anchor = chart.series[0].id;
+    chart.series_entry_mut(anchor).unwrap().line_style = 2;
     let mut study = StudyAnnotations::default();
     study.push_zone(StudyZone {
         start_row: 2,
@@ -190,6 +191,46 @@ fn study_annotations_paint_in_shared_order_and_clip_to_the_pane() {
             .iter()
             .all(|p| !matches!(p, Prim::Rect { rect, .. } if rect.x < 0))
     );
+}
+#[test]
+fn structure_segment_uses_anchor_output_style_with_dashed_default() {
+    let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
+    let anchor = chart.add_market_structure(0, 1, 1, crate::StructureBreakOn::Wick)[0];
+    chart.build_frame();
+    let mut study = StudyAnnotations::default();
+    study.push_marker(StudyMarker {
+        row: 8,
+        confirm_row: 8,
+        price: 108.0,
+        kind: StudyMarkerKind::Bos { up: true },
+        from_row: Some(2),
+    });
+    let segment_style = |chart: &ChartEngine| {
+        let mut prims = Vec::new();
+        chart.build_study_annotations_frame(
+            anchor, 0, &study, false, 0, 19, 800, 1.0, 1.0, &mut prims,
+        );
+        prims.into_iter().find_map(|prim| match prim {
+            Prim::HLine { style, .. } => Some(style),
+            _ => None,
+        })
+    };
+    assert_eq!(segment_style(&chart), Some(LineStyle::Dashed));
+    for (line_style, expected) in [
+        (0, LineStyle::Solid),
+        (1, LineStyle::Dotted),
+        (2, LineStyle::Dashed),
+    ] {
+        assert!(chart.set_indicator_output_style(
+            anchor,
+            crate::IndicatorOutputStyle {
+                visible: true,
+                line_style,
+                ..Default::default()
+            },
+        ));
+        assert_eq!(segment_style(&chart), Some(expected));
+    }
 }
 
 #[test]
