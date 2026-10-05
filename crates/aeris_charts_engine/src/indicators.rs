@@ -4,6 +4,7 @@
 //! ordinary engine series (`aeris_charts_indicators` holds the pure math). Extracted from `lib.rs`.
 
 use super::*;
+use aeris_charts_indicators::study_annotations::StudyAnnotations;
 use std::borrow::Cow;
 
 /// Scalar source selected by a study.  The aggregate sources are calculated from the source
@@ -44,6 +45,15 @@ pub enum IndicatorParameterType {
     Boolean,
     Source,
     Series,
+    Choice,
+}
+
+/// Session policy selected by calendar-aware studies. No timezone is inferred from the host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StudyCalendarPolicy {
+    Utc,
+    Host,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -55,6 +65,25 @@ pub struct IndicatorParameterDescriptor {
     pub min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+}
+
+impl IndicatorParameterDescriptor {
+    /// A choice has an ordered, nonempty option list and a default from that list.
+    pub fn choice(name: &str, default: &str, options: &[&str]) -> Option<Self> {
+        if options.is_empty() || !options.contains(&default) {
+            return None;
+        }
+        Some(Self {
+            name: name.into(),
+            parameter_type: IndicatorParameterType::Choice,
+            default: serde_json::json!(default),
+            min: None,
+            max: None,
+            options: Some(options.iter().map(|option| (*option).into()).collect()),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -90,7 +119,7 @@ pub struct IndicatorSchema {
     pub outputs: Vec<IndicatorOutputDescriptor>,
 }
 
-pub const INDICATOR_SCHEMA_REVISION: u32 = 1;
+pub const INDICATOR_SCHEMA_REVISION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -506,6 +535,9 @@ pub(crate) struct IndicatorBinding {
     pub(crate) outputs: Vec<SeriesId>,
     /// Parallel volume column source (VWAP); `None` = unit weights.
     pub(crate) volume_source: Option<SeriesId>,
+    /// Structural-study geometry is binding-owned, never a synthetic output series.
+    pub(crate) annotations: Option<StudyAnnotations>,
+    pub(crate) calendar: Option<StudyCalendarPolicy>,
     runtime: aeris_charts_indicators::IncrementalState,
     source_generation: u64,
     volume_generation: Option<u64>,
@@ -704,6 +736,48 @@ impl ChartEngine {
                     .collect(),
             })
             .collect()
+    }
+
+    /// Snapshot the bounded annotation history of a structural study by its binding identity.
+    ///
+    /// An ordinary scalar binding has no annotation output; passing an output other than the
+    /// binding's first output is not a binding identity.
+    pub fn study_annotations(&self, binding: SeriesId) -> Result<StudyAnnotations, ChartError> {
+        let producer = self
+            .indicators
+            .iter()
+            .find(|producer| producer.outputs.first() == Some(&binding))
+            .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "unknown study binding"))?;
+        producer.annotations.clone().ok_or_else(|| {
+            ChartError::new(
+                ErrorCode::UnsupportedOperation,
+                "study binding has no structural annotations",
+            )
+        })
+    }
+
+    /// Install bounded test geometry without exposing an incomplete structural-study kind.
+    #[cfg(test)]
+    pub(crate) fn inject_study_annotations_for_test(
+        &mut self,
+        binding: SeriesId,
+        annotations: StudyAnnotations,
+    ) -> bool {
+        let Some(producer) = self
+            .indicators
+            .iter_mut()
+            .find(|producer| producer.outputs.first() == Some(&binding))
+        else {
+            return false;
+        };
+        producer.annotations = Some(annotations);
+        let source = producer.source;
+        let outputs = producer.outputs.clone();
+        self.invalidate_frame_series(source);
+        for output in outputs {
+            self.invalidate_frame_series(output);
+        }
+        true
     }
 
     /// Whether the chart currently owns at least one live native indicator binding.
@@ -2408,6 +2482,7 @@ impl ChartEngine {
             default: serde_json::json!(IndicatorInputSource::Close),
             min: None,
             max: None,
+            options: None,
         }];
         let integer = |name: &str, default: usize| IndicatorParameterDescriptor {
             name: name.into(),
@@ -2415,6 +2490,7 @@ impl ChartEngine {
             default: serde_json::json!(default),
             min: Some(1.0),
             max: Some(1_000_000.0),
+            options: None,
         };
         let number = |name: &str, default: f64| IndicatorParameterDescriptor {
             name: name.into(),
@@ -2422,6 +2498,7 @@ impl ChartEngine {
             default: serde_json::json!(default),
             min: Some(0.0),
             max: Some(1_000_000.0),
+            options: None,
         };
         match *kind {
             IndicatorKind::Aroon { period } => parameters.push(integer("period", period)),
@@ -2473,6 +2550,7 @@ impl ChartEngine {
                     default: serde_json::json!(exponential),
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::ChaikinOscillator { fast, slow } => {
@@ -2484,6 +2562,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::Klinger { fast, slow, signal } => {
@@ -2496,6 +2575,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::Kama { period, fast, slow } => {
@@ -2525,6 +2605,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::ElderForce { period } => {
@@ -2535,6 +2616,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::EaseOfMovement { period, divisor } => {
@@ -2546,6 +2628,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::HistoricalVolatility {
@@ -2618,6 +2701,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::Alma {
@@ -2632,6 +2716,7 @@ impl ChartEngine {
                     default: serde_json::json!(offset),
                     min: Some(0.0),
                     max: Some(1.0),
+                    options: None,
                 });
                 parameters.push(IndicatorParameterDescriptor {
                     name: "sigma".into(),
@@ -2639,6 +2724,7 @@ impl ChartEngine {
                     default: serde_json::json!(sigma),
                     min: Some(0.01),
                     max: Some(1_000_000.0),
+                    options: None,
                 });
             }
             IndicatorKind::Keltner { period, multiplier } => {
@@ -2678,6 +2764,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::Obv
@@ -2689,6 +2776,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::Cmf { period } => {
@@ -2699,6 +2787,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::Mfi { period } => {
@@ -2709,6 +2798,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::Volume { period } => {
@@ -2719,6 +2809,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::Vwma { period } => {
@@ -2729,6 +2820,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
             IndicatorKind::VwapBands {
@@ -2742,6 +2834,7 @@ impl ChartEngine {
                     default: serde_json::json!(reset),
                     min: None,
                     max: None,
+                    options: None,
                 });
                 parameters.push(number("standard_deviation", standard_deviation));
                 parameters.push(number("percent", percent));
@@ -2751,6 +2844,7 @@ impl ChartEngine {
                     default: serde_json::Value::Null,
                     min: None,
                     max: None,
+                    options: None,
                 });
             }
         }
@@ -3077,6 +3171,8 @@ impl ChartEngine {
             kind,
             outputs: ids.clone(),
             volume_source,
+            annotations: None,
+            calendar: None,
             source_generation: 0,
             volume_generation: None,
         });
@@ -3138,7 +3234,7 @@ impl ChartEngine {
         self.refresh_resampled_dependents(dependency);
     }
 
-    fn propagate_indicator_changes(&mut self) {
+    pub(crate) fn propagate_indicator_changes(&mut self) {
         // Bindings are topological by construction: an indicator output must exist before it can
         // be selected as a later indicator's source. One forward pass therefore updates direct
         // dependencies and every downstream chain without repeatedly scanning the whole graph.
@@ -3170,7 +3266,7 @@ impl ChartEngine {
         }
     }
 
-    fn rebuild_indicator(
+    pub(crate) fn rebuild_indicator(
         &mut self,
         index: usize,
         from: usize,
@@ -3186,6 +3282,12 @@ impl ChartEngine {
         let source = self.indicators[index].source;
         let source_input = self.indicators[index].source_input;
         let volume_source = self.indicators[index].volume_source;
+        let source_generation = self.data.series_generation(source).unwrap_or(0);
+        if (full_replace || self.indicators[index].source_generation != source_generation)
+            && let Some(annotations) = self.indicators[index].annotations.as_mut()
+        {
+            annotations.rebuild_from(if full_replace { 0 } else { from });
+        }
         {
             let Some((times, values)) = self.data.series_data(source) else {
                 return changes;
@@ -3234,7 +3336,7 @@ impl ChartEngine {
                 if full_replace { 0 } else { from },
             );
         }
-        self.indicators[index].source_generation = self.data.series_generation(source).unwrap_or(0);
+        self.indicators[index].source_generation = source_generation;
         self.indicators[index].volume_generation =
             volume_source.and_then(|id| self.data.series_generation(id));
 
@@ -3918,6 +4020,126 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
             ["Basis", "Std Upper", "Std Lower", "% Upper", "% Lower"][output_index]
         }
         IndicatorKind::Wma { .. } => "WMA",
+    }
+}
+
+#[cfg(test)]
+mod annotation_binding_tests {
+    use super::*;
+    use aeris_charts_indicators::study_annotations::{StudyMarker, StudyMarkerKind, StudyZone};
+
+    #[test]
+    fn schema_revision_two_exposes_only_choice_options() {
+        assert_eq!(INDICATOR_SCHEMA_REVISION, 2);
+        let choice =
+            IndicatorParameterDescriptor::choice("calendar", "host", &["utc", "host"]).unwrap();
+        assert_eq!(
+            choice.options.as_deref(),
+            Some(&["utc".into(), "host".into()][..])
+        );
+        assert_eq!(choice.default, serde_json::json!("host"));
+        assert!(
+            IndicatorParameterDescriptor::choice("calendar", "local", &["utc", "host"]).is_none()
+        );
+        let schema = ChartEngine::indicator_schema(&IndicatorKind::Sma { period: 14 });
+        assert_eq!(schema.revision, 2);
+        assert!(
+            schema
+                .parameters
+                .iter()
+                .all(|parameter| parameter.options.is_none())
+        );
+    }
+
+    #[test]
+    fn binding_snapshot_repairs_on_source_changes_and_drops_on_removal() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let values = [10.0, 11.0, 12.0, 13.0];
+        chart
+            .set_series_data(0, &[1.0, 2.0, 3.0, 4.0], &values, &values, &values, &values)
+            .unwrap();
+        let binding = chart.add_sma(0, 2).unwrap();
+        assert_eq!(
+            chart.study_annotations(binding).unwrap_err().code(),
+            ErrorCode::UnsupportedOperation
+        );
+        assert_eq!(
+            chart.study_annotations(0).unwrap_err().code(),
+            ErrorCode::InvalidHandle
+        );
+        let mut annotations = StudyAnnotations::default();
+        for confirm_row in [1, 3] {
+            annotations.push_marker(StudyMarker {
+                row: confirm_row,
+                confirm_row,
+                price: values[confirm_row],
+                kind: StudyMarkerKind::SwingHigh,
+                from_row: None,
+            });
+        }
+        annotations.push_zone(StudyZone {
+            start_row: 0,
+            confirm_row: 1,
+            top: 12.0,
+            bottom: 10.0,
+            bullish: true,
+            end_row: None,
+        });
+        assert!(annotations.end_zone(0, 3));
+        assert!(chart.inject_study_annotations_for_test(binding, annotations.clone()));
+        let snapshot = chart.study_annotations(binding).unwrap();
+        assert_eq!(snapshot, annotations);
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["markers"].as_array().unwrap().len(), 2);
+        assert_eq!(json["zones"].as_array().unwrap().len(), 1);
+        assert!(json.get("active_zones").is_none());
+        assert!(chart.update_series_bar(0, 4.0, [14.0; 4]));
+        let repaired = chart.study_annotations(binding).unwrap();
+        assert_eq!(repaired.markers().len(), 1);
+        assert_eq!(repaired.markers()[0].confirm_row, 1);
+        assert_eq!(repaired.zones()[0].end_row, None);
+        assert_eq!(snapshot.markers().len(), 2); // The returned snapshot does not alias the binding.
+        assert!(chart.remove_indicator_binding(binding));
+        assert_eq!(
+            chart.study_annotations(binding).unwrap_err().code(),
+            ErrorCode::InvalidHandle
+        );
+    }
+
+    #[test]
+    fn full_source_replacement_clears_test_annotations() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let values = [10.0, 11.0, 12.0];
+        chart
+            .set_series_data(0, &[1.0, 2.0, 3.0], &values, &values, &values, &values)
+            .unwrap();
+        let binding = chart.add_sma(0, 2).unwrap();
+        let mut annotations = StudyAnnotations::default();
+        annotations.push_marker(StudyMarker {
+            row: 1,
+            confirm_row: 2,
+            price: 11.0,
+            kind: StudyMarkerKind::SwingLow,
+            from_row: None,
+        });
+        assert!(chart.inject_study_annotations_for_test(binding, annotations));
+        chart
+            .set_series_data(
+                0,
+                &[2.0, 3.0],
+                &values[..2],
+                &values[..2],
+                &values[..2],
+                &values[..2],
+            )
+            .unwrap();
+        assert!(
+            chart
+                .study_annotations(binding)
+                .unwrap()
+                .markers()
+                .is_empty()
+        );
     }
 }
 

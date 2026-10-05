@@ -223,6 +223,18 @@ impl ChartInner {
             .unwrap_or_else(|_| "null".into())
     }
 
+    pub fn study_annotations_json(&self, binding: u32) -> String {
+        match self.engine.study_annotations(binding) {
+            Ok(annotations) => {
+                serde_json::to_string(&annotations).expect("finite study annotations")
+            }
+            Err(error) => {
+                serde_json::json!({ "error": error.message(), "code": error.code().name() })
+                    .to_string()
+            }
+        }
+    }
+
     fn indicator_input_source(value: &str) -> Option<IndicatorInputSource> {
         match value {
             "open" => Some(IndicatorInputSource::Open),

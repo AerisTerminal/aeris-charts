@@ -3,6 +3,39 @@
 
 use super::*;
 use aeris_charts_core::TimePointIndex;
+use aeris_charts_indicators::study_annotations::{StudyAnnotations, StudyMarkerKind};
+
+/// The two-triangle/shaft arrow shared by ordinary series markers and structural swings.
+fn push_marker_arrow(
+    out: &mut Vec<Prim>,
+    x: f32,
+    y: f32,
+    size: f64,
+    hpr: f64,
+    up: bool,
+    color: Color,
+) {
+    let arrow_size = marker_shape_size(size, 1.0);
+    let half_arrow = (((arrow_size - 1.0) * 0.5) * hpr) as f32;
+    let base_size = ceiled_odd(size / 2.0);
+    let half_base = (((base_size - 1.0) * 0.5) * hpr) as f32;
+    out.push(Prim::Triangle {
+        a: [x, y + if up { -half_arrow } else { half_arrow }],
+        b: [x - half_arrow, y],
+        c: [x + half_arrow, y],
+        color,
+    });
+    out.push(Prim::RoundRect {
+        x: x - half_base,
+        y: if up { y } else { y - half_arrow },
+        w: half_base * 2.0,
+        h: half_arrow,
+        radii: [0.0; 4],
+        fill: color,
+        border_width: 0.0,
+        border_color: color,
+    });
+}
 
 /// Emit a polyline stroke. A solid style emits a single `Polyline` prim (the backends expand
 /// `line_type` themselves, as before). Any dashed style is expanded with `line_type` and split
@@ -211,6 +244,199 @@ fn push_area_brush_fill(
 }
 
 impl ChartEngine {
+    /// Paint confirmed study annotations into the anchor series' ordered geometry layer.
+    /// Rows are source-series rows, not LOD rows: sparse time mappings remain exact. The caller
+    /// owns confirmation-time gating and invalidation; this painter only projects visible geometry.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn build_study_annotations_frame(
+        &self,
+        anchor: SeriesId,
+        source: SeriesId,
+        annotations: &StudyAnnotations,
+        show_mitigated: bool,
+        from: i64,
+        to: i64,
+        width: i32,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        let Some(series) = self
+            .series
+            .iter()
+            .find(|s| s.id == anchor && s.visible && !s.removed)
+        else {
+            return;
+        };
+        let Some(pane) = self.panes.get(series.pane_index) else {
+            return;
+        };
+        let scale = pane_scale(pane, series_scale_target(series));
+        let Some(base) = self.series_base_value(source, from) else {
+            return;
+        };
+        if scale.is_empty() || from > to || width <= 0 {
+            return;
+        }
+        let plot = self.data.plot(source);
+        let top = (pane.top * vpr).round() as i32;
+        let bottom = ((pane.top + pane.height) * vpr).round() as i32;
+        if bottom <= top {
+            return;
+        }
+        let up_color = verbatim_color(&series.up_color, UP);
+        let down_color = verbatim_color(&series.down_color, DOWN);
+        let border_color = series_stroke_color(series);
+        let x_for_row = |row: usize| -> Option<i32> {
+            let logical = plot.index_at(row)?;
+            Some((self.time_scale.index_to_coordinate(logical) * hpr).round() as i32)
+        };
+        let y_for_price = |price: f64| -> Option<i32> {
+            let y = scale.price_to_coordinate(price, base) * vpr;
+            y.is_finite().then(|| y.round() as i32)
+        };
+        let x_min = 0;
+        let x_max = width;
+
+        // Fills first, then borders, then structure strokes, then swing glyphs. No backend
+        // receives a separate clipping or annotation contract.
+        for zone in annotations.zones() {
+            if zone.end_row.is_some() && !show_mitigated {
+                continue;
+            }
+            if plot.index_at(zone.start_row).is_none_or(|index| index > to)
+                || zone
+                    .end_row
+                    .is_some_and(|end| plot.index_at(end).is_none_or(|index| index < from))
+            {
+                continue;
+            }
+            let (Some(start_x), Some(end_x), Some(y_top), Some(y_bottom)) = (
+                x_for_row(zone.start_row),
+                zone.end_row.and_then(x_for_row).or(Some(width)),
+                y_for_price(zone.top),
+                y_for_price(zone.bottom),
+            ) else {
+                continue;
+            };
+            let left = start_x.min(end_x).max(x_min);
+            let right = start_x.max(end_x).min(x_max);
+            let upper = y_top.min(y_bottom).max(top);
+            let lower = y_top.max(y_bottom).min(bottom);
+            if right <= left || lower <= upper {
+                continue;
+            }
+            let tone = if zone.bullish { up_color } else { down_color };
+            let fill = Color::rgba(tone.r(), tone.g(), tone.b(), 38);
+            let rect = IRect {
+                x: left,
+                y: upper,
+                w: right - left,
+                h: lower - upper,
+            };
+            out.push(Prim::Rect { rect, color: fill });
+            out.push(Prim::RectFrame {
+                rect,
+                border: 1,
+                color: border_color,
+            });
+        }
+        for marker in annotations.markers() {
+            let (StudyMarkerKind::Bos { .. } | StudyMarkerKind::Choch { .. }) = marker.kind else {
+                continue;
+            };
+            if plot
+                .index_at(marker.row)
+                .is_none_or(|index| index < from || index > to)
+            {
+                continue;
+            }
+            let (Some(start), Some(end), Some(y)) = (
+                marker.from_row.and_then(x_for_row),
+                x_for_row(marker.row),
+                y_for_price(marker.price),
+            ) else {
+                continue;
+            };
+            let left = start.min(end).max(x_min);
+            let right = start.max(end).min(x_max);
+            if right <= left || y < top || y >= bottom {
+                continue;
+            }
+            let color = border_color;
+            out.push(Prim::HLine {
+                y,
+                x0: left,
+                x1: right,
+                width: 1.max(hpr.floor() as i32),
+                style: LineStyle::Dashed,
+                color,
+            });
+            // At sub-4 CSS-px spacing the stroke remains legible but text is not.
+            if self.time_scale.bar_spacing() >= 4.0 {
+                let label = if matches!(marker.kind, StudyMarkerKind::Bos { .. }) {
+                    "BOS"
+                } else {
+                    "CHoCH"
+                };
+                let label_y = (y - (10.0 * vpr).round() as i32).max(top);
+                if label_y < bottom {
+                    out.push(Prim::Text {
+                        x: ((left + right) as f64 * 0.5) as f32,
+                        y: label_y as f32,
+                        text: label.into(),
+                        color,
+                        size: (self.options.get().layout.font_size * vpr) as f32,
+                        family: self.options.get().layout.font_family.clone(),
+                        align: TextAlign::Center,
+                        weight: 400,
+                        italic: false,
+                    });
+                }
+            }
+        }
+        for marker in annotations.markers() {
+            let up = match marker.kind {
+                StudyMarkerKind::SwingHigh => false,
+                StudyMarkerKind::SwingLow => true,
+                _ => continue,
+            };
+            if plot
+                .index_at(marker.row)
+                .is_none_or(|index| index < from || index > to)
+            {
+                continue;
+            }
+            let (Some(x), Some(y)) = (x_for_row(marker.row), y_for_price(marker.price)) else {
+                continue;
+            };
+            let size = marker_envelope_size(self.time_scale.bar_spacing());
+            let glyph_half = marker_shape_size(size, 1.0) * hpr * 0.5;
+            let glyph_y = y as f64
+                + if up {
+                    size * vpr * 0.6
+                } else {
+                    -size * vpr * 0.6
+                };
+            if x as f64 - glyph_half < x_min as f64
+                || x as f64 + glyph_half > x_max as f64
+                || glyph_y - glyph_half < top as f64
+                || glyph_y + glyph_half >= bottom as f64
+            {
+                continue;
+            }
+            push_marker_arrow(
+                out,
+                x as f32,
+                glyph_y as f32,
+                size,
+                hpr,
+                up,
+                if up { up_color } else { down_color },
+            );
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_grid_frame(
         &self,
@@ -1295,27 +1521,8 @@ impl ChartEngine {
                     });
                 }
                 crate::marker_shape::ARROW_UP | crate::marker_shape::ARROW_DOWN => {
-                    let arrow_size = marker_shape_size(size, 1.0);
-                    let half_arrow = (((arrow_size - 1.0) * 0.5) * hpr) as f32;
-                    let base_size = ceiled_odd(size / 2.0);
-                    let half_base = (((base_size - 1.0) * 0.5) * hpr) as f32;
                     let up = marker.shape == crate::marker_shape::ARROW_UP;
-                    out.push(Prim::Triangle {
-                        a: [x, y + if up { -half_arrow } else { half_arrow }],
-                        b: [x - half_arrow, y],
-                        c: [x + half_arrow, y],
-                        color: marker.color,
-                    });
-                    out.push(Prim::RoundRect {
-                        x: x - half_base,
-                        y: if up { y } else { y - half_arrow },
-                        w: half_base * 2.0,
-                        h: half_arrow,
-                        radii: [0.0; 4],
-                        fill: marker.color,
-                        border_width: 0.0,
-                        border_color: marker.color,
-                    });
+                    push_marker_arrow(out, x, y, size, hpr, up, marker.color);
                 }
                 _ => {
                     let radius = (((marker_shape_size(size, 0.8) - 1.0) * 0.5) * hpr) as f32;

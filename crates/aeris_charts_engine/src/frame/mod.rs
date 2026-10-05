@@ -1761,6 +1761,23 @@ impl ChartEngine {
                             &mut series_layer.layer.points,
                             scale,
                         );
+                        if let Some(binding) = self.indicators.iter().find(|binding| {
+                            binding.outputs.first() == Some(&rs.id) && binding.annotations.is_some()
+                        }) && let Some(annotations) = &binding.annotations
+                        {
+                            self.build_study_annotations_frame(
+                                rs.id,
+                                binding.source,
+                                annotations,
+                                false,
+                                from,
+                                to,
+                                pane_w_px as i32,
+                                hpr,
+                                vpr,
+                                &mut series_layer.layer.prims,
+                            );
+                        }
                         if self
                             .series
                             .iter()

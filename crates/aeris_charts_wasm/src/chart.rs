@@ -2384,6 +2384,10 @@ impl AerisChart {
             .indicator_schema_json(kind, period, deviation)
     }
 
+    pub fn study_annotations_json(&self, binding: u32) -> String {
+        self.inner.borrow().study_annotations_json(binding)
+    }
+
     /// reference v5.2 `ISeriesApi.pop(count)`: remove the last `count` data points (count clamps
     /// to the data length; per-point colors shift along). Returns the new data length.
     pub fn series_pop(&mut self, id: u32, count: u32) -> u32 {
@@ -2667,6 +2671,24 @@ impl AerisChart {
     /// Add a session-anchored VWAP line on the source's pane (`volume_source` -1 = unit weights).
     pub fn add_vwap(&mut self, source_id: u32, volume_source: i32) -> u32 {
         self.inner.borrow_mut().add_vwap(source_id, volume_source)
+    }
+
+    /// Replace the host study calendar; invalid JSON or intervals leave the previous calendar intact.
+    pub fn set_study_calendar_json(&mut self, boundaries_json: &str) -> bool {
+        let Ok(boundaries) =
+            serde_json::from_str::<Vec<aeris_charts_engine::ResampleBoundary>>(boundaries_json)
+        else {
+            return false;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_study_calendar(boundaries)
+            .is_ok()
+    }
+
+    pub fn clear_study_calendar(&mut self) {
+        self.inner.borrow_mut().engine.clear_study_calendar();
     }
 
     /// Bind a host-created target to engine-owned, UTC boundary-driven OHLCV aggregation.

@@ -4,7 +4,12 @@
 //! rendering. It consumes a close/value slice and returns a derived value column that the
 //! headless engine can install as an ordinary series. `None` represents the warm-up window.
 
+pub mod study_annotations;
 pub mod volume_profile;
+
+pub use study_annotations::{
+    SessionSpan, StudyAnnotations, StudyMarker, StudyMarkerKind, StudyZone,
+};
 
 use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc};
 

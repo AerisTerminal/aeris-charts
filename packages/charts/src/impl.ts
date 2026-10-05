@@ -40,7 +40,7 @@ import type {
   price_scale_info, price_scale_options, ring_source_layout,
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
-  replay_clock_stats, replay_seek_stats, resample_boundary, resample_options, resampled_bar, synthetic_bar_options, trade_stream_stats,
+  replay_clock_stats, replay_seek_stats, resample_boundary, resample_options, resampled_bar, study_annotations, synthetic_bar_options, trade_stream_stats,
   profile_source, profile_request, profile_snapshot, naked_profile_level, tpo_request, tpo_snapshot, tpo_presentation_options,
   periodic_profile_presentation_request, periodic_profile_presentation_options,
   anchored_vwap_point, profile_drawing_options, profile_drawing_snapshot,
@@ -5060,6 +5060,33 @@ export class chart_impl implements chart_api {
       throw new AerisChartsError("invalid_options", "invalid resampling sources, targets, or UTC boundaries");
     }
     this.repaint();
+  }
+
+  set_study_calendar(boundaries: readonly resample_boundary[]): void {
+    if (!Array.isArray(boundaries) || boundaries.length > 20_000 ||
+      boundaries.some((b, i) => !Number.isSafeInteger(b.startTime) || !Number.isSafeInteger(b.endTime) ||
+        !Number.isSafeInteger(b.sessionId) || b.sessionId < 0 || b.endTime <= b.startTime ||
+        (i > 0 && boundaries[i - 1]!.endTime > b.startTime))) {
+      throw new AerisChartsError("invalid_options", "study calendar requires ordered, disjoint UTC spans (at most 20,000)");
+    }
+    if (!this.wasm.set_study_calendar_json(JSON.stringify(boundaries))) {
+      throw new AerisChartsError("invalid_options", "invalid study calendar boundaries");
+    }
+    this.repaint();
+  }
+
+  clear_study_calendar(): void {
+    this.wasm.clear_study_calendar();
+    this.repaint();
+  }
+
+  study_annotations(binding: series_api): study_annotations {
+    if (this.series_by_id.get(binding.id) !== binding) {
+      throw new AerisChartsError("invalid_handle", "study binding must be a live output of this chart");
+    }
+    const result = JSON.parse(this.wasm.study_annotations_json(binding.id)) as study_annotations | { code: "invalid_handle" | "unsupported_operation"; error: string };
+    if ("error" in result) throw new AerisChartsError(result.code, result.error);
+    return result;
   }
 
   resampled_bars(target: series_api): readonly resampled_bar[] | null {
