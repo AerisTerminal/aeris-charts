@@ -638,6 +638,9 @@ footprint, its studies, big trades, and the stream together. `prepend_order_flow
 older backfill page in front: into the raw tape while nothing is sealed, otherwise as sealed bars
 aggregated on their own, joining a shared boundary time bar exactly and carrying the page's session
 delta forward. Once bars were evicted, older pages are refused (`history_full`).
+`replace_order_flow_window` installs a host's rewritten bounded window (corrections,
+cancellations, backfill, a restarted tape) as authoritative only from its earliest print onward,
+so bars older than the window, sealed history included, are kept.
 `reconfigure_order_flow_presentation` changes rows, imbalance rules, cell display, the shown
 footprint, CVD and delta series, and the big-trades indicator in place on the same stream, so a
 host never rebuilds history for a settings or chart-type change; only a different tick size or bar

@@ -1537,6 +1537,56 @@ impl FootprintAggregator {
         Ok((FootprintUpdateKind::Historical, first_bar))
     }
 
+    /// Replace every retained print at or after the batch's earliest timestamp with the batch and
+    /// keep everything older. Returns the first bar index whose derived state may have changed,
+    /// or `None` for an empty batch, which covers no span. Prints sorting into sealed history are
+    /// skipped, as for [`Self::update_trades`].
+    pub(crate) fn replace_trades_from_window(
+        &mut self,
+        input: Vec<FootprintTrade>,
+    ) -> Result<Option<usize>, FootprintError> {
+        validate_trade_batch(self.options, &input)?;
+        let Some(from) = input.iter().map(|trade| trade.timestamp_micros).min() else {
+            return Ok(None);
+        };
+        let cut = self
+            .trades
+            .partition_point(|trade| trade.event.timestamp_micros < from);
+        let mut next_input_order = self.next_input_order;
+        let mut window = Vec::with_capacity(input.len());
+        for event in input {
+            let input_order = next_input_order;
+            next_input_order = next_input_order.saturating_add(1);
+            let key = (
+                event.timestamp_micros,
+                event.sequence.unwrap_or(u64::MAX),
+                input_order,
+            );
+            if self.sealed_floor.is_some_and(|floor| key < floor) {
+                self.work.skipped_sealed_trades += 1;
+                continue;
+            }
+            window.push(StoredTrade {
+                event,
+                input_order,
+                classified_side: AggressorSide::Unknown,
+            });
+        }
+        self.trades.truncate(cut);
+        self.trades.extend(window);
+        self.trades[cut..].sort_by_key(trade_order_key);
+        self.next_input_order = next_input_order;
+        self.trade_ids.retain(|_, position| *position < cut);
+        for (index, trade) in self.trades.iter().enumerate().skip(cut) {
+            if let Some(trade_id) = trade.event.trade_id {
+                self.trade_ids.insert(trade_id, index);
+            }
+        }
+        let first_bar = self.rebuild_from(cut);
+        self.revision = self.revision.saturating_add(1);
+        Ok(Some(first_bar))
+    }
+
     pub(crate) fn batch_is_tip(&self, input: &[FootprintTrade]) -> bool {
         let mut previous = self.trades.last().map(trade_order_key);
         for (index, event) in input.iter().enumerate() {
@@ -2486,6 +2536,43 @@ impl ChartEngine {
         };
         self.enforce_order_flow_retention(presentation);
         Ok(update)
+    }
+
+    /// Install a host's rewritten bounded tape window without discarding older history.
+    ///
+    /// The window is authoritative only for the span it covers: every print at or after its
+    /// earliest timestamp is replaced by the window, so corrections, cancellations, backfilled
+    /// prints and a restarted tape take effect, while bars built before that span (including
+    /// sealed history) are kept. An empty window covers nothing and changes nothing.
+    pub fn replace_order_flow_window(
+        &mut self,
+        presentation: OrderFlowPresentation,
+        trades: Vec<FootprintTrade>,
+    ) -> Result<(), FootprintError> {
+        let stream_id = presentation.trade_stream;
+        let previous_bar_count = self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?
+            .bars()
+            .len();
+        let Some(first_bar) = self
+            .trade_streams
+            .get_mut(&stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?
+            .replace_trades_from_window(trades)?
+        else {
+            return Ok(());
+        };
+        // A suffix projection only upserts rows, so a window that removed bars re-projects all.
+        let incremental_from = self
+            .trade_stream(stream_id)
+            .is_some_and(|stream| stream.bars().len() >= previous_bar_count)
+            .then_some(first_bar);
+        self.invalidate_profile_drawings_using_stream(stream_id);
+        self.refresh_trade_dependents_from(stream_id, incremental_from, false)?;
+        self.refresh_footprint_series_from_stream(stream_id, incremental_from)?;
+        self.enforce_order_flow_retention(presentation);
+        Ok(())
     }
 
     /// Join an older tape page to the front of an order-flow history, typically one page of a
@@ -6231,6 +6318,75 @@ mod tests {
             chart.data_layer().series_data(footprint).unwrap().0.len(),
             3
         );
+    }
+
+    #[test]
+    fn a_rewritten_window_replaces_only_the_span_it_covers() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let presentation = chart
+            .add_order_flow_presentation("CME:ES", 0, order_flow_options(true))
+            .unwrap();
+        let footprint = presentation.footprint_series().unwrap();
+        let cvd = presentation.cumulative_delta_series().unwrap();
+        chart
+            .update_order_flow_presentation(
+                presentation,
+                vec![
+                    trade(1_000_000, 100.0, 3.0, AggressorSide::Buy),
+                    trade(61_000_000, 101.0, 1.0, AggressorSide::Sell),
+                    trade(121_000_000, 102.0, 2.0, AggressorSide::Buy),
+                    trade(125_000_000, 102.0, 4.0, AggressorSide::Buy),
+                ],
+                false,
+            )
+            .unwrap();
+        // The host's window no longer holds the first two bars' trades. It corrected the print
+        // at 121 s, cancelled the one at 125 s and gained a new bar.
+        chart
+            .replace_order_flow_window(
+                presentation,
+                vec![
+                    trade(121_000_000, 102.0, 5.0, AggressorSide::Sell),
+                    trade(181_000_000, 103.0, 2.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        let bars = chart.footprint_bars(footprint).unwrap();
+        let deltas = bars.iter().map(|bar| bar.delta).collect::<Vec<_>>();
+        assert_eq!(deltas, [3.0, -1.0, -5.0, 2.0]);
+        assert_eq!(bars[3].session_delta, -1.0);
+        assert_eq!(
+            chart.data_layer().series_data(footprint).unwrap().0.len(),
+            4
+        );
+        assert_eq!(
+            chart.data_layer().series_data(cvd).unwrap().1[3]
+                .last()
+                .copied(),
+            Some(-1.0)
+        );
+
+        // A restarted window that removes the newest bars shrinks every dependent with them.
+        chart
+            .replace_order_flow_window(
+                presentation,
+                vec![trade(61_000_000, 101.0, 2.0, AggressorSide::Buy)],
+            )
+            .unwrap();
+        let bars = chart.footprint_bars(footprint).unwrap();
+        let deltas = bars.iter().map(|bar| bar.delta).collect::<Vec<_>>();
+        assert_eq!(deltas, [3.0, 2.0]);
+        assert_eq!(
+            chart.data_layer().series_data(footprint).unwrap().0.len(),
+            2
+        );
+        assert_eq!(chart.data_layer().series_data(cvd).unwrap().0.len(), 2);
+
+        // An empty window covers no span, so it keeps every bar.
+        chart
+            .replace_order_flow_window(presentation, Vec::new())
+            .unwrap();
+        assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 2);
     }
 
     #[test]
