@@ -625,6 +625,9 @@ pub enum FootprintError {
     InvalidBigTradesOptions,
     BigTradesCapacity,
     UnknownBigTrades(crate::NativePrimitiveId),
+    InvalidAuctionMarkerOptions,
+    AuctionMarkerCapacity,
+    UnknownAuctionMarkers(crate::NativePrimitiveId),
     UnknownSeries(SeriesId),
     StaleSeries(SeriesId),
     Depth(crate::DepthError),
@@ -675,6 +678,9 @@ impl core::fmt::Display for FootprintError {
             Self::InvalidBigTradesOptions => write!(f, "big-trades options are invalid"),
             Self::BigTradesCapacity => write!(f, "big-trades indicator capacity is exhausted"),
             Self::UnknownBigTrades(id) => write!(f, "unknown big-trades indicator {id}"),
+            Self::InvalidAuctionMarkerOptions => write!(f, "auction-marker options are invalid"),
+            Self::AuctionMarkerCapacity => write!(f, "auction-marker capacity is exhausted"),
+            Self::UnknownAuctionMarkers(id) => write!(f, "unknown auction markers {id}"),
             Self::UnknownSeries(id) => write!(f, "unknown series id {id}"),
             Self::StaleSeries(id) => write!(f, "stale series id {id}"),
             Self::Depth(error) => write!(f, "depth replay failed: {error}"),
@@ -1633,7 +1639,8 @@ impl ChartEngine {
             stream_capacity_bytes: stream.capacity_bytes(),
             dependent_count: dependents.map_or(0, Vec::len)
                 + bar_dependents.map_or(0, Vec::len)
-                + self.big_trades_count(stream_id),
+                + self.big_trades_count(stream_id)
+                + self.auction_markers_count(stream_id),
             dependent_rebuilds: dependents
                 .into_iter()
                 .flatten()
@@ -1713,6 +1720,7 @@ impl ChartEngine {
                 .get(&stream_id)
                 .is_some_and(|dependents| !dependents.is_empty())
             || self.big_trades_count(stream_id) > 0
+            || self.auction_markers_count(stream_id) > 0
         {
             return Err(FootprintError::TradeStreamInUse(stream_id));
         }
@@ -2135,7 +2143,8 @@ impl ChartEngine {
             })
             .count()
             + self.trade_dependents.get(&stream_id).map_or(0, Vec::len)
-            + self.big_trades_count(stream_id);
+            + self.big_trades_count(stream_id)
+            + self.auction_markers_count(stream_id);
         if dependent_count > 1 {
             return Err(FootprintError::TradeStreamInUse(stream_id));
         }
@@ -2280,6 +2289,28 @@ impl ChartEngine {
         let historical = !stream.batch_is_tip(&trades);
         let previous_bar_count = stream.bars().len();
         if historical {
+            let earliest_trade = trades
+                .iter()
+                .flat_map(|trade| {
+                    let original = trade
+                        .trade_id
+                        .and_then(|id| stream.trade_ids.get(&id))
+                        .map(|&position| stream.trades[position].event.timestamp_micros);
+                    [Some(trade.timestamp_micros), original]
+                        .into_iter()
+                        .flatten()
+                })
+                .min()
+                .unwrap();
+            let auction_from = stream
+                .bars()
+                .partition_point(|bar| bar.start_timestamp_micros <= earliest_trade)
+                .saturating_sub(1);
+            let auction_from = if matches!(options.bars, FootprintBarAggregation::Time { .. }) {
+                auction_from
+            } else {
+                auction_from.saturating_sub(1)
+            };
             // The batch is validated above, so the in-place merge cannot fail part-way.
             let (result, first_bar) = self
                 .trade_streams
@@ -2291,7 +2322,12 @@ impl ChartEngine {
                 return Ok(FootprintUpdateKind::Historical);
             }
             self.invalidate_profile_drawings_using_stream(stream_id);
-            self.refresh_trade_dependents_from(stream_id, Some(first_bar), false)?;
+            self.refresh_trade_dependents_from(
+                stream_id,
+                Some(first_bar),
+                false,
+                Some(auction_from),
+            )?;
             self.refresh_footprint_series_from_stream(stream_id, Some(first_bar))?;
             return Ok(FootprintUpdateKind::Historical);
         }
@@ -2310,7 +2346,7 @@ impl ChartEngine {
         }
         self.invalidate_profile_drawings_using_stream(stream_id);
         let from = previous_bar_count.saturating_sub(1);
-        self.refresh_trade_dependents_from(stream_id, Some(from), true)?;
+        self.refresh_trade_dependents_from(stream_id, Some(from), true, Some(from))?;
         self.refresh_footprint_series_from_stream(stream_id, Some(from))?;
         Ok(result)
     }
@@ -2430,6 +2466,7 @@ impl ChartEngine {
             self.sync_sequence_axis_times();
         }
         self.refresh_big_trades(stream_id, false);
+        self.refresh_auction_markers(stream_id, None);
     }
 
     fn trade_stream_bars(&self, stream_id: u64) -> Result<&[FootprintBar], FootprintError> {
@@ -2465,7 +2502,8 @@ impl ChartEngine {
                 .trade_dependents
                 .get(&stream_id)
                 .is_some_and(|dependents| !dependents.is_empty())
-            || self.big_trades_count(stream_id) > 0;
+            || self.big_trades_count(stream_id) > 0
+            || self.auction_markers_count(stream_id) > 0;
         if !used {
             self.trade_streams.remove(&stream_id);
         }
@@ -2491,7 +2529,7 @@ impl ChartEngine {
     }
 
     fn refresh_trade_dependents(&mut self, stream_id: u64) -> Result<(), FootprintError> {
-        self.refresh_trade_dependents_from(stream_id, None, false)
+        self.refresh_trade_dependents_from(stream_id, None, false, None)
     }
 
     /// Re-project every dependent from bar `incremental_from` onward (all bars when `None`).
@@ -2502,6 +2540,7 @@ impl ChartEngine {
         stream_id: u64,
         incremental_from: Option<usize>,
         tip_append: bool,
+        auction_from: Option<usize>,
     ) -> Result<(), FootprintError> {
         let stream = self
             .trade_stream(stream_id)
@@ -2608,6 +2647,7 @@ impl ChartEngine {
         }
         self.refresh_trade_bar_dependents_from(stream_id, incremental_from)?;
         self.refresh_big_trades(stream_id, tip_append);
+        self.refresh_auction_markers(stream_id, auction_from);
         Ok(())
     }
 

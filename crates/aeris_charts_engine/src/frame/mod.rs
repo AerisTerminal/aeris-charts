@@ -1853,6 +1853,14 @@ impl ChartEngine {
                             vpr,
                             &mut cache.chrome.prims,
                         );
+                        self.build_auction_markers_frame(
+                            rs.id,
+                            from,
+                            to,
+                            hpr,
+                            vpr,
+                            &mut cache.chrome.prims,
+                        );
                     }
                     self.build_depth_event_frame(
                         pi,

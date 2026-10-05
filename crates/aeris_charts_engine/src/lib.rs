@@ -60,9 +60,13 @@ pub use aeris_charts_indicators::study_annotations::{
     SessionSpan, StudyAnnotations, StudyMarker, StudyMarkerKind, StudyZone,
 };
 pub use aeris_charts_indicators::{PivotKind, VwapReset};
+mod auction_markers;
 pub use alerts::{
     AlertCondition, AlertCreateRequest, AlertFrequency, AlertId, AlertLine, AlertLineStatus,
     AlertPriceScale, AlertSnapshot, MAX_ALERT_LINES,
+};
+pub use auction_markers::{
+    AuctionMark, AuctionMarkKind, AuctionMarkerOptions, AuctionSide, MAX_AUCTION_MARKERS,
 };
 pub use big_trades::{
     BigTrade, BigTradesFilter, BigTradesIntensity, BigTradesOptions, BigTradesSize,
@@ -1842,6 +1846,7 @@ pub struct ChartEngine {
     trade_bar_dependents: HashMap<u64, Vec<footprint::TradeBarDependent>>,
     trade_dependents: HashMap<u64, Vec<footprint::TradeStudyDependent>>,
     big_trades: HashMap<u64, Vec<big_trades::BigTradesIndicator>>,
+    auction_markers: HashMap<u64, Vec<auction_markers::AuctionMarkerIndicator>>,
     next_trade_stream_id: u64,
     synced_points_len: usize,
     synced_time_points_generation: u64,
@@ -2076,6 +2081,7 @@ impl ChartEngine {
             trade_bar_dependents: HashMap::new(),
             trade_dependents: HashMap::new(),
             big_trades: HashMap::new(),
+            auction_markers: HashMap::new(),
             next_trade_stream_id: 1,
             synced_points_len: 0,
             synced_time_points_generation: 0,
@@ -2771,6 +2777,11 @@ impl ChartEngine {
         }
         self.big_trades
             .retain(|_, indicators| !indicators.is_empty());
+        for indicators in self.auction_markers.values_mut() {
+            indicators.retain(|indicator| !tombstones.contains(&indicator.series_id));
+        }
+        self.auction_markers
+            .retain(|_, indicators| !indicators.is_empty());
         let mut live_streams = self
             .series
             .iter()
@@ -2780,6 +2791,7 @@ impl ChartEngine {
         live_streams.extend(self.trade_bar_dependents.keys().copied());
         live_streams.extend(self.trade_dependents.keys().copied());
         live_streams.extend(self.big_trades.keys().copied());
+        live_streams.extend(self.auction_markers.keys().copied());
         self.trade_streams
             .retain(|stream_id, _| live_streams.contains(stream_id));
         self.trade_stream_keys

@@ -3405,6 +3405,36 @@ export interface big_trades_api {
   remove(): void;
 }
 
+/** Tape-derived footprint auction event rules; all volumes use the stream's native units. */
+export interface auction_marker_options {
+  min_side_volume: number;
+  exhaustion_max_volume: number;
+  exhaustion_levels: number;
+  absorption_min_volume: number;
+  absorption_ratio: number;
+  extreme_levels: number;
+  min_rejection_rows: number;
+  extend_until_revisited: boolean;
+  include_forming_bar: boolean;
+  visible: boolean;
+}
+export interface auction_mark {
+  /** UTC seconds for time bars; logical row key for non-time bars. */
+  bar_time: number;
+  kind: "unfinished_auction" | "exhaustion" | "absorption";
+  side: "high" | "low";
+  price: number;
+  volume: number;
+}
+export interface auction_markers_api {
+  readonly id: number;
+  options(): auction_marker_options;
+  apply_options(options: Partial<auction_marker_options>): void;
+  /** Tape-derived marks in engine order. */
+  snapshot(): readonly auction_mark[];
+  remove(): void;
+}
+
 /** The chart. Create with {@link create_chart}. */
 export interface chart_api {
   /** Format a time with the chart's time zone, date pattern, and crosshair time formatter. */
@@ -3501,6 +3531,8 @@ export interface chart_api {
   add_delta_series(stream_id: number, pane?: number): series_api;
   /** Draw a trade stream's large aggressive orders as volume bubbles over a price series. */
   add_big_trades(series: series_api | number, stream_id: number, options?: Partial<big_trades_options>): big_trades_api;
+  /** Present tape-derived auction markers on a price series. */
+  add_auction_markers(series: series_api | number, stream_id: number, options?: Partial<auction_marker_options>): auction_markers_api;
   /** Derive OHLCV into a host-created target for higher-timeframe overlays and study inputs. */
   configure_resampled_series(source: series_api, target: series_api, options: resample_options, volume_source?: series_api | null, volume_target?: series_api | null): void;
   /** Replace runtime-only UTC session spans atomically; an empty list clears them. */

@@ -508,7 +508,7 @@ The official advanced-series examples are engine-owned feature series, not brows
 
 Professional footprint / numbers-bar data has a chart-level tick-truth owner described in
 `Footprint.md`. `ChartEngine::add_trade_stream` retains one bounded keyed canonical microsecond tape;
-footprints, CVD, delta histograms, and big-trades indicators hold dependent handles, not
+footprints, CVD, delta histograms, big-trades indicators and auction markers hold dependent handles, not
 provider-event copies. The stream derives integer tick-grid levels, bid/ask/unknown/total volume, POC,
 final/session delta, delta percentage, running Max/Min Delta, and diagonal stacked imbalances. CVD
 supports session, continuous, and anchored resets, and every dependent carries the stream revision
@@ -542,6 +542,11 @@ through the same sidecar. Trading executions, host events, and round-trip geomet
 timestamp anchors through the same index helper. The sidecar is retired when the last live
 non-time footprint, candle/bar, or study dependent leaves the chart,
 preventing stale sequence labels from affecting later time series.
+Auction markers (`auction_markers.rs`) are a separate runtime-only stream dependent capped at 16
+handles. Their per-bar marks use canonical footprint levels, update from the earliest changed bar,
+follow stream retention and replay, and paint visible-only triangles, circles, framed labels and
+dashed revisitation rays in the same pane chrome beside big trades. They do not add frame primitives
+or backend-specific rendering.
 
 Level-two depth uses the parallel chart-side projection boundary documented in `Depth.md`.
 `ChartEngine::add_depth_stream` owns one keyed, bounded book per host instrument publication. A

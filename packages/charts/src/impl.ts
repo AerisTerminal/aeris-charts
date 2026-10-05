@@ -52,6 +52,7 @@ import type {
   visible_logical_range_handler, visible_time_range_handler,
   volume_profile_indicator_api, volume_profile_indicator_options, volume_profile_indicator_snapshot,
   big_trades_api, big_trades_options, big_trades_snapshot,
+  auction_mark, auction_marker_options, auction_markers_api,
 } from "./types.js";
 import {
   DRAWING_KIND_TO_U8, FEATURE_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8,
@@ -4786,6 +4787,46 @@ export class chart_impl implements chart_api {
       remove: () => {
         if (removed) return;
         if (this.wasm.remove_big_trades(id)) this.repaint();
+        removed = true;
+      },
+    };
+  }
+
+  add_auction_markers(
+    series: series_api | number,
+    stream_id: number,
+    options: Partial<auction_marker_options> = {},
+  ): auction_markers_api {
+    const series_id = typeof series === "number" ? series : series.id;
+    const id = this.wasm.add_auction_markers(stream_id, series_id, JSON.stringify(options));
+    if (id === 0) {
+      throw new AerisChartsError("invalid_options", "invalid auction marker stream, footprint series, options, or dependent limit");
+    }
+    let removed = false;
+    const read_options = (): auction_marker_options => {
+      const result = removed ? null : JSON.parse(this.wasm.auction_marker_options(id)) as auction_marker_options | null;
+      if (result === null) throw new AerisChartsError("stale_handle", "auction markers have been removed");
+      return result;
+    };
+    this.repaint();
+    return {
+      id,
+      options: read_options,
+      apply_options: (patch) => {
+        const merged = { ...read_options(), ...patch };
+        if (!this.wasm.set_auction_marker_options(id, JSON.stringify(merged))) {
+          throw new AerisChartsError("invalid_options", "invalid auction marker options");
+        }
+        this.repaint();
+      },
+      snapshot: () => {
+        const result = removed ? null : JSON.parse(this.wasm.auction_markers_snapshot(id)) as auction_mark[] | null;
+        if (result === null) throw new AerisChartsError("stale_handle", "auction markers have been removed");
+        return result;
+      },
+      remove: () => {
+        if (removed) return;
+        if (this.wasm.remove_auction_markers(id)) this.repaint();
         removed = true;
       },
     };

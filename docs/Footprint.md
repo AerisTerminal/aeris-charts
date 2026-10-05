@@ -124,6 +124,35 @@ stay on top. A sweep across several prices also draws a thin range line, and bub
 to hold it show the compact order volume (`250`, `1.2k`). Bubbles are pane chrome above every
 series. Stream telemetry counts big-trades indicators as dependents.
 
+### Auction markers
+
+`add_auction_markers` binds a runtime-only marker set to the same canonical trade stream and a
+price series, with at most 16 marker sets per chart. Marks use ascending **canonical aggregator
+levels**, not visually merged display cells. Each rule emits at most one mark per side and kind per
+bar. The last, still-forming bar is excluded unless `include_forming_bar` is true (default false).
+Replay shows only bars available at its clock; late prints repair the affected suffix and retention
+removes marks with their evicted bars. The snapshot reports bar time, kind, high/low side, level
+price and qualifying volume. Marks are not clickable.
+
+- **Unfinished auction**: the high (last level) or low (first level) has both bid and ask volumes
+  strictly positive and each at least `min_side_volume` (default 0). When
+  `extend_until_revisited` is enabled (default false), a dashed ray reaches the first later bar
+  whose exact high/low range includes the level, or continues to the visible right edge.
+- **Exhaustion**: the high ask or low bid is positive, no greater than
+  `exhaustion_max_volume` (default 10), and strictly decreases toward the extreme over
+  `exhaustion_levels` canonical levels (default 3, allowed 2–8). Equal adjacent volumes fail.
+- **Absorption**: within `extreme_levels` levels of the low/high (default 2), bid/ask volume
+  respectively is at least `absorption_min_volume` (default 100) and at least
+  `absorption_ratio` times opposite volume (default 3). The close must be at least
+  `min_rejection_rows` canonical levels beyond the candidate toward the opposite side (default
+  1). The greatest qualifying aggressor volume wins, then the level nearest its extreme.
+
+Volumes and ratio must be finite and nonnegative; `extreme_levels` is 1–8 and
+`min_rejection_rows` is 0–8. `visible` defaults true and only affects painting. Unfinished
+auctions paint triangles, exhaustion circles, absorption framed squares with `ABS` labels when
+bar spacing is at least 6 CSS px, and extensions dashed lines. All lower through the common frame
+primitives on the bound series' price scale.
+
 ## 4. Rendering and LOD
 
 Footprint geometry is constructed in `aeris_charts_engine` as ordinary backend-neutral primitives.

@@ -1864,6 +1864,64 @@ impl AerisChart {
         self.inner.borrow_mut().engine.remove_big_trades(id)
     }
 
+    /// Attach tape-derived auction markers to a footprint price series.
+    /// Returns 0 if the stream, series, options, or dependent limit is rejected.
+    pub fn add_auction_markers(
+        &mut self,
+        stream_id: u32,
+        series_id: u32,
+        options_json: &str,
+    ) -> u32 {
+        let Ok(options) =
+            serde_json::from_str::<aeris_charts_engine::AuctionMarkerOptions>(options_json)
+        else {
+            return 0;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .add_auction_markers(u64::from(stream_id), series_id, options)
+            .unwrap_or(0)
+    }
+
+    pub fn set_auction_marker_options(&mut self, id: u32, options_json: &str) -> bool {
+        let Ok(options) =
+            serde_json::from_str::<aeris_charts_engine::AuctionMarkerOptions>(options_json)
+        else {
+            return false;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_auction_marker_options(id, options)
+            .is_ok()
+    }
+
+    pub fn auction_marker_options(&self, id: u32) -> String {
+        serde_json::to_string(&self.inner.borrow().engine.auction_marker_options(id))
+            .expect("validated auction marker options serialize")
+    }
+
+    pub fn auction_markers_snapshot(&self, id: u32) -> String {
+        serde_json::to_string(
+            &self
+                .inner
+                .borrow_mut()
+                .engine
+                .auction_markers_snapshot(id)
+                .ok(),
+        )
+        .expect("auction markers snapshot serializes")
+    }
+
+    pub fn remove_auction_markers(&mut self, id: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .remove_auction_markers(id)
+            .is_ok()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn set_footprint_trades_typed(
         &mut self,
