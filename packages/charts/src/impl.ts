@@ -26,7 +26,7 @@ import type {
   depth_event_columns, depth_event_layer_options, depth_heatmap_options, depth_ladder_row, depth_options, depth_snapshot_columns, depth_study_snapshot, depth_update_columns,
   drawing_point, drawing_tool_change_handler, drawing_interval, drawing_property_schema, drawing_kind_options, drawing_template,
   ema_ribbon_options, ema_ribbon_periods, kst_periods, fair_value_gap_options, order_block_options,
-  structure_break_on, structure_zone_options,
+  structure_break_on, structure_zone_options, study_calendar_policy, previous_period,
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
   general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_snapshot, general_legend_snapshot, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
@@ -5993,6 +5993,49 @@ export class chart_impl implements chart_api {
     const ids = this.wasm.add_swing_points(source.id, left, right);
     if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid Swing Points source or configuration");
     return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
+  }
+  private validate_study_calendar_policy(calendar: study_calendar_policy): void {
+    if (calendar !== "utc" && calendar !== "host") {
+      throw new AerisChartsError("invalid_options", "study calendar must be utc or host");
+    }
+  }
+  add_session_levels(source: series_api, calendar: study_calendar_policy = "utc", options?: Partial<series_options>): [series_api, series_api] {
+    this.validate_study_calendar_policy(calendar);
+    const ids = this.wasm.add_session_levels(source.id, calendar);
+    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid Session Levels source or configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
+  }
+  add_previous_period_levels(
+    source: series_api, period: previous_period = "day", calendar: study_calendar_policy = "utc",
+    options?: Partial<series_options>,
+  ): [series_api, series_api, series_api] {
+    if (!["day", "week", "month"].includes(period)) {
+      throw new AerisChartsError("invalid_options", "previous period must be day, week, or month");
+    }
+    this.validate_study_calendar_policy(calendar);
+    const ids = this.wasm.add_previous_period_levels(source.id, period, calendar);
+    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Previous Period Levels source or configuration");
+    return [
+      this.indicator_series(ids[0]!, options),
+      this.indicator_series(ids[1]!, options),
+      this.indicator_series(ids[2]!, options),
+    ];
+  }
+  add_opening_range(
+    source: series_api, duration_seconds: number, calendar: study_calendar_policy = "utc",
+    options?: Partial<series_options>,
+  ): [series_api, series_api, series_api] {
+    if (!Number.isInteger(duration_seconds) || duration_seconds < 1 || duration_seconds > 0xffffffff) {
+      throw new AerisChartsError("invalid_options", "opening range duration_seconds must be a positive u32 integer");
+    }
+    this.validate_study_calendar_policy(calendar);
+    const ids = this.wasm.add_opening_range(source.id, duration_seconds, calendar);
+    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Opening Range source or configuration");
+    return [
+      this.indicator_series(ids[0]!, options),
+      this.indicator_series(ids[1]!, options),
+      this.indicator_series(ids[2]!, options),
+    ];
   }
   add_market_structure(source: series_api, left = 5, right = 5, break_on: structure_break_on = "close", options?: Partial<series_options>): series_api {
     this.validate_structure_pivots(left, right);

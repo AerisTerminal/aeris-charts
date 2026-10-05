@@ -100,12 +100,14 @@ impl ChartEngine {
     ) -> Result<(), ResampleError> {
         validate_boundaries(&boundaries, true)?;
         self.study_calendar = boundaries;
+        self.study_calendar_spans = self.study_session_spans();
         self.rebuild_host_calendar_studies();
         Ok(())
     }
 
     pub fn clear_study_calendar(&mut self) {
         self.study_calendar.clear();
+        self.study_calendar_spans.clear();
         self.rebuild_host_calendar_studies();
     }
 

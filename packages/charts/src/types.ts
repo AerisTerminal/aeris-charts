@@ -1089,7 +1089,10 @@ export interface comparison_legend_entry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "swing_points" | "market_structure" | "fair_value_gaps" | "order_blocks" | "aroon" | "awesome_oscillator" | "dpo" | "chande_momentum" | "bollinger_metrics" | "envelopes" | "alma" | "accumulation_distribution" | "price_volume_trend" | "chaikin_oscillator" | "klinger" | "kama" | "mcginley" | "linear_regression" | "choppiness" | "atr_bands" | "relative_volume" | "volume_oscillator" | "elder_force" | "ease_of_movement" | "historical_volatility" | "trix" | "kst" | "tsi" | "mass_index" | "vortex" | "coppock_curve" | "fisher_transform" | "ultimate_oscillator" | "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "zigzag" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
+export type indicator_kind = "session_levels" | "previous_period_levels" | "opening_range" | "swing_points" | "market_structure" | "fair_value_gaps" | "order_blocks" | "aroon" | "awesome_oscillator" | "dpo" | "chande_momentum" | "bollinger_metrics" | "envelopes" | "alma" | "accumulation_distribution" | "price_volume_trend" | "chaikin_oscillator" | "klinger" | "kama" | "mcginley" | "linear_regression" | "choppiness" | "atr_bands" | "relative_volume" | "volume_oscillator" | "elder_force" | "ease_of_movement" | "historical_volatility" | "trix" | "kst" | "tsi" | "mass_index" | "vortex" | "coppock_curve" | "fisher_transform" | "ultimate_oscillator" | "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "zigzag" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
+/** UTC groups by calendar day/week/month; host uses spans supplied by set_study_calendar. */
+export type study_calendar_policy = "utc" | "host";
+export type previous_period = "day" | "week" | "month";
 export type structure_break_on = "close" | "wick";
 export type structure_mitigation = "touch" | "half" | "full";
 export type structure_mitigation_price = "wick" | "close";
@@ -3565,6 +3568,12 @@ export interface chart_api {
   add_aroon(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api];
   /** Confirmed pivot levels and marker snapshots; levels begin at confirmation, never at the pivot. */
   add_swing_points(source: series_api, left?: number, right?: number, options?: Partial<series_options>): [series_api, series_api];
+  /** Intraday running session high/low. Host policy uses set_study_calendar boundaries. */
+  add_session_levels(source: series_api, calendar?: study_calendar_policy, options?: Partial<series_options>): [series_api, series_api];
+  /** Completed previous day/week/month high/low/close, available only in the next period. */
+  add_previous_period_levels(source: series_api, period?: previous_period, calendar?: study_calendar_policy, options?: Partial<series_options>): [series_api, series_api, series_api];
+  /** Running opening high/low/mid, fixed after duration_seconds from the session start. */
+  add_opening_range(source: series_api, duration_seconds: number, calendar?: study_calendar_policy, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** BOS/CHoCH segments rendered by the engine; the returned anchor is whitespace. */
   add_market_structure(source: series_api, left?: number, right?: number, break_on?: structure_break_on, options?: Partial<series_options>): series_api;
   /** Three-candle imbalance zones with bounded active retention; returns a whitespace anchor. */

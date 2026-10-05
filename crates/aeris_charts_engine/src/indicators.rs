@@ -9,6 +9,7 @@ use aeris_charts_indicators::structure_studies::{
     StructureStudy, StructureStudyKind,
 };
 use aeris_charts_indicators::study_annotations::StudyAnnotations;
+use aeris_charts_indicators::{SessionSource, SessionStudy, SessionStudyState};
 use std::borrow::Cow;
 
 /// Scalar source selected by a study.  The aggregate sources are calculated from the source
@@ -58,6 +59,14 @@ pub enum IndicatorParameterType {
 pub enum StudyCalendarPolicy {
     Utc,
     Host,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviousPeriod {
+    Day,
+    Week,
+    Month,
 }
 
 /// Price used to detect a structural break.
@@ -399,6 +408,17 @@ pub enum IndicatorKind {
         max_active: usize,
         show_mitigated: bool,
     },
+    SessionLevels {
+        calendar: StudyCalendarPolicy,
+    },
+    PreviousPeriodLevels {
+        period: PreviousPeriod,
+        calendar: StudyCalendarPolicy,
+    },
+    OpeningRange {
+        duration_seconds: u32,
+        calendar: StudyCalendarPolicy,
+    },
 }
 
 impl IndicatorKind {
@@ -430,6 +450,17 @@ impl IndicatorKind {
                 mitigation_price: StructureMitigationPrice::Wick,
                 max_active: 20,
                 show_mitigated: false,
+            },
+            "session_levels" => Self::SessionLevels {
+                calendar: StudyCalendarPolicy::Utc,
+            },
+            "previous_period_levels" => Self::PreviousPeriodLevels {
+                period: PreviousPeriod::Day,
+                calendar: StudyCalendarPolicy::Utc,
+            },
+            "opening_range" => Self::OpeningRange {
+                duration_seconds: 1800,
+                calendar: StudyCalendarPolicy::Utc,
             },
             "aroon" => Self::Aroon { period },
             "awesome_oscillator" => Self::AwesomeOscillator,
@@ -626,6 +657,7 @@ pub(crate) struct IndicatorBinding {
     pub(crate) annotations: Option<StudyAnnotations>,
     /// Incremental OHLC scanner for structure studies; its history is not persisted.
     pub(crate) structure: Option<StructureStudy>,
+    pub(crate) session: Option<SessionStudyState>,
     pub(crate) calendar: Option<StudyCalendarPolicy>,
     runtime: aeris_charts_indicators::IncrementalState,
     source_generation: u64,
@@ -708,6 +740,9 @@ pub struct IndicatorInfo {
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct IndicatorParameters {
+    pub calendar: Option<StudyCalendarPolicy>,
+    pub previous_period: Option<PreviousPeriod>,
+    pub duration_seconds: Option<u32>,
     pub left: Option<usize>,
     pub right: Option<usize>,
     pub break_on: Option<StructureBreakOn>,
@@ -760,6 +795,43 @@ fn indicator_default_line_width(kind: &IndicatorKind) -> f64 {
 }
 
 impl ChartEngine {
+    pub fn add_session_levels(
+        &mut self,
+        source: SeriesId,
+        calendar: StudyCalendarPolicy,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::SessionLevels { calendar }, None)
+    }
+
+    pub fn add_previous_period_levels(
+        &mut self,
+        source: SeriesId,
+        period: PreviousPeriod,
+        calendar: StudyCalendarPolicy,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(
+            source,
+            IndicatorKind::PreviousPeriodLevels { period, calendar },
+            None,
+        )
+    }
+
+    pub fn add_opening_range(
+        &mut self,
+        source: SeriesId,
+        duration_seconds: u32,
+        calendar: StudyCalendarPolicy,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(
+            source,
+            IndicatorKind::OpeningRange {
+                duration_seconds,
+                calendar,
+            },
+            None,
+        )
+    }
+
     /// Add confirmed swing levels on the source price pane.
     pub fn add_swing_points(
         &mut self,
@@ -888,6 +960,10 @@ impl ChartEngine {
                         .structure
                         .as_ref()
                         .map_or(0, StructureStudy::capacity_bytes)
+                    + binding
+                        .session
+                        .as_ref()
+                        .map_or(0, SessionStudyState::capacity_bytes)
                     + binding
                         .annotations
                         .as_ref()
@@ -1184,6 +1260,38 @@ impl ChartEngine {
                                 mitigation_price: Some(mitigation_price),
                                 max_active: Some(max_active),
                                 show_mitigated: Some(show_mitigated),
+                                ..Default::default()
+                            },
+                        ),
+                        IndicatorKind::SessionLevels { calendar } => (
+                            "session_levels",
+                            0,
+                            None,
+                            IndicatorParameters {
+                                calendar: Some(calendar),
+                                ..Default::default()
+                            },
+                        ),
+                        IndicatorKind::PreviousPeriodLevels { period, calendar } => (
+                            "previous_period_levels",
+                            0,
+                            None,
+                            IndicatorParameters {
+                                calendar: Some(calendar),
+                                previous_period: Some(period),
+                                ..Default::default()
+                            },
+                        ),
+                        IndicatorKind::OpeningRange {
+                            duration_seconds,
+                            calendar,
+                        } => (
+                            "opening_range",
+                            0,
+                            None,
+                            IndicatorParameters {
+                                calendar: Some(calendar),
+                                duration_seconds: Some(duration_seconds),
                                 ..Default::default()
                             },
                         ),
@@ -2711,6 +2819,9 @@ impl ChartEngine {
             | IndicatorKind::MarketStructure { .. }
             | IndicatorKind::FairValueGaps { .. }
             | IndicatorKind::OrderBlocks { .. }
+            | IndicatorKind::SessionLevels { .. }
+            | IndicatorKind::PreviousPeriodLevels { .. }
+            | IndicatorKind::OpeningRange { .. }
             | IndicatorKind::Wma { .. } => {}
         }
         ids
@@ -2758,6 +2869,14 @@ impl ChartEngine {
             options: None,
         }];
         if structure_output_count(kind).is_some() {
+            parameters.clear();
+        }
+        if matches!(
+            kind,
+            IndicatorKind::SessionLevels { .. }
+                | IndicatorKind::PreviousPeriodLevels { .. }
+                | IndicatorKind::OpeningRange { .. }
+        ) {
             parameters.clear();
         }
         let integer = |name: &str, default: usize| IndicatorParameterDescriptor {
@@ -2901,6 +3020,42 @@ impl ChartEngine {
                     mitigation_price,
                     max_active,
                     show_mitigated,
+                );
+            }
+            IndicatorKind::SessionLevels { calendar }
+            | IndicatorKind::PreviousPeriodLevels { calendar, .. }
+            | IndicatorKind::OpeningRange { calendar, .. } => {
+                if let IndicatorKind::PreviousPeriodLevels { period, .. } = kind {
+                    parameters.push(
+                        IndicatorParameterDescriptor::choice(
+                            "period",
+                            match period {
+                                PreviousPeriod::Day => "day",
+                                PreviousPeriod::Week => "week",
+                                PreviousPeriod::Month => "month",
+                            },
+                            &["day", "week", "month"],
+                        )
+                        .unwrap(),
+                    );
+                }
+                if let IndicatorKind::OpeningRange {
+                    duration_seconds, ..
+                } = kind
+                {
+                    parameters.push(integer("duration_seconds", *duration_seconds as usize));
+                }
+                parameters.push(
+                    IndicatorParameterDescriptor::choice(
+                        "calendar",
+                        if calendar == StudyCalendarPolicy::Utc {
+                            "utc"
+                        } else {
+                            "host"
+                        },
+                        &["utc", "host"],
+                    )
+                    .unwrap(),
                 );
             }
             IndicatorKind::Aroon { period } => parameters.push(integer("period", period)),
@@ -3250,8 +3405,9 @@ impl ChartEngine {
                 });
             }
         }
-        let output_count =
-            structure_output_count(kind).unwrap_or_else(|| incremental_state(kind).output_count());
+        let output_count = session_output_count(kind)
+            .or_else(|| structure_output_count(kind))
+            .unwrap_or_else(|| incremental_state(kind).output_count());
         IndicatorSchema {
             revision: INDICATOR_SCHEMA_REVISION,
             kind: indicator_kind_name(kind).into(),
@@ -3506,12 +3662,19 @@ impl ChartEngine {
                 | IndicatorKind::MarketStructure { .. }
                 | IndicatorKind::FairValueGaps { .. }
                 | IndicatorKind::OrderBlocks { .. } => !structure_kind_is_valid(&kind),
+                IndicatorKind::SessionLevels { .. }
+                | IndicatorKind::PreviousPeriodLevels { .. } => false,
+                IndicatorKind::OpeningRange {
+                    duration_seconds, ..
+                } => *duration_seconds == 0,
             }
         {
             return Vec::new();
         }
         let runtime = incremental_state(&kind);
-        let output_count = structure_output_count(&kind).unwrap_or_else(|| runtime.output_count());
+        let output_count = session_output_count(&kind)
+            .or_else(|| structure_output_count(&kind))
+            .unwrap_or_else(|| runtime.output_count());
         let structure = structure_study_kind(&kind).map(StructureStudy::new);
         let source_price_format = self.series_entry(source).map(|series| {
             (
@@ -3576,6 +3739,13 @@ impl ChartEngine {
                 }
             }
         }
+        let calendar = match &kind {
+            IndicatorKind::SessionLevels { calendar }
+            | IndicatorKind::PreviousPeriodLevels { calendar, .. }
+            | IndicatorKind::OpeningRange { calendar, .. } => Some(*calendar),
+            _ => None,
+        };
+        let session = session_study_kind(&kind).map(SessionStudyState::new);
         self.indicators.push(IndicatorBinding {
             source,
             source_input,
@@ -3585,7 +3755,8 @@ impl ChartEngine {
             volume_source,
             annotations: None,
             structure,
-            calendar: None,
+            session,
+            calendar,
             source_generation: 0,
             volume_generation: None,
         });
@@ -3741,6 +3912,90 @@ impl ChartEngine {
         changes
     }
 
+    fn rebuild_session_indicator(
+        &mut self,
+        index: usize,
+        from: usize,
+        full_replace: bool,
+        outputs: [Option<SeriesId>; aeris_charts_indicators::MAX_OUTPUTS],
+    ) -> [Option<(SeriesId, IndicatorChange)>; aeris_charts_indicators::MAX_OUTPUTS] {
+        let mut changes = [None; aeris_charts_indicators::MAX_OUTPUTS];
+        let source = self.indicators[index].source;
+        let Some((times, values)) = self.data.series_data(source) else {
+            return changes;
+        };
+        let session_source = if self.indicators[index].calendar == Some(StudyCalendarPolicy::Host) {
+            SessionSource::Host(&self.study_calendar_spans)
+        } else {
+            SessionSource::Utc
+        };
+        let kind = session_study_kind(&self.indicators[index].kind).expect("session kind");
+        let state = self.indicators[index]
+            .session
+            .as_mut()
+            .expect("session runtime");
+        if full_replace {
+            *state = SessionStudyState::new(kind);
+        }
+        state.update(
+            aeris_charts_indicators::IndicatorInput {
+                times,
+                open: values[0],
+                high: values[1],
+                low: values[2],
+                close: values[3],
+                volume: &[],
+            },
+            session_source,
+            if full_replace { 0 } else { from },
+        );
+        let points = state.outputs();
+        let source_generation = self.data.series_generation(source).unwrap_or(0);
+        let start = if full_replace {
+            0
+        } else {
+            from.min(points.len())
+        };
+        for (output_index, output) in outputs.iter().flatten().copied().enumerate() {
+            let previous_generation = self.data.series_generation(output).unwrap_or(0);
+            let values = points[start..]
+                .iter()
+                .map(|p| {
+                    match output_index {
+                        0 => p.high,
+                        1 => p.low,
+                        2 if matches!(kind, SessionStudy::OpeningRange { .. }) => {
+                            p.high.zip(p.low).map(|(high, low)| (high + low) * 0.5)
+                        }
+                        2 => p.close,
+                        _ => None,
+                    }
+                    .unwrap_or(f64::NAN)
+                })
+                .collect::<Vec<_>>();
+            let output_from = if full_replace {
+                self.data.set_single_data_aligned(output, source, 0, values);
+                0
+            } else {
+                self.data
+                    .update_single_aligned(output, source, start, &values)
+                    .expect("session output remains aligned to source")
+            };
+            if self.data.series_generation(output).unwrap_or(0) != previous_generation {
+                changes[output_index] = Some((
+                    output,
+                    IndicatorChange {
+                        from: output_from,
+                        previous_generation,
+                        full_replace,
+                    },
+                ));
+            }
+        }
+        self.indicators[index].source_generation = source_generation;
+        changes
+    }
+
     pub(crate) fn rebuild_indicator(
         &mut self,
         index: usize,
@@ -3760,6 +4015,9 @@ impl ChartEngine {
         let source_generation = self.data.series_generation(source).unwrap_or(0);
         if self.indicators[index].structure.is_some() {
             return self.rebuild_structure_indicator(index, from, full_replace, outputs);
+        }
+        if session_output_count(&self.indicators[index].kind).is_some() {
+            return self.rebuild_session_indicator(index, from, full_replace, outputs);
         }
         if (full_replace || self.indicators[index].source_generation != source_generation)
             && let Some(annotations) = self.indicators[index].annotations.as_mut()
@@ -3984,6 +4242,9 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::MarketStructure { .. } => "market_structure",
         IndicatorKind::FairValueGaps { .. } => "fair_value_gaps",
         IndicatorKind::OrderBlocks { .. } => "order_blocks",
+        IndicatorKind::SessionLevels { .. } => "session_levels",
+        IndicatorKind::PreviousPeriodLevels { .. } => "previous_period_levels",
+        IndicatorKind::OpeningRange { .. } => "opening_range",
         IndicatorKind::Aroon { .. } => "aroon",
         IndicatorKind::AwesomeOscillator => "awesome_oscillator",
         IndicatorKind::Dpo { .. } => "dpo",
@@ -4056,6 +4317,33 @@ fn structure_output_count(kind: &IndicatorKind) -> Option<usize> {
         IndicatorKind::MarketStructure { .. }
         | IndicatorKind::FairValueGaps { .. }
         | IndicatorKind::OrderBlocks { .. } => Some(1),
+        _ => None,
+    }
+}
+
+fn session_output_count(kind: &IndicatorKind) -> Option<usize> {
+    match kind {
+        IndicatorKind::SessionLevels { .. } => Some(2),
+        IndicatorKind::PreviousPeriodLevels { .. } | IndicatorKind::OpeningRange { .. } => Some(3),
+        _ => None,
+    }
+}
+
+fn session_study_kind(kind: &IndicatorKind) -> Option<SessionStudy> {
+    match kind {
+        IndicatorKind::SessionLevels { .. } => Some(SessionStudy::SessionLevels),
+        IndicatorKind::PreviousPeriodLevels { period, .. } => {
+            Some(SessionStudy::PreviousPeriodLevels(match period {
+                PreviousPeriod::Day => aeris_charts_indicators::PreviousPeriod::Day,
+                PreviousPeriod::Week => aeris_charts_indicators::PreviousPeriod::Week,
+                PreviousPeriod::Month => aeris_charts_indicators::PreviousPeriod::Month,
+            }))
+        }
+        IndicatorKind::OpeningRange {
+            duration_seconds, ..
+        } => Some(SessionStudy::OpeningRange {
+            duration_seconds: i64::from(*duration_seconds),
+        }),
         _ => None,
     }
 }
@@ -4147,6 +4435,9 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         IndicatorKind::MarketStructure { .. }
         | IndicatorKind::FairValueGaps { .. }
         | IndicatorKind::OrderBlocks { .. } => aeris_charts_indicators::IncrementalState::sma(1),
+        IndicatorKind::SessionLevels { .. }
+        | IndicatorKind::PreviousPeriodLevels { .. }
+        | IndicatorKind::OpeningRange { .. } => aeris_charts_indicators::IncrementalState::sma(1),
         IndicatorKind::Aroon { period } => aeris_charts_indicators::IncrementalState::aroon(period),
         IndicatorKind::AwesomeOscillator => {
             aeris_charts_indicators::IncrementalState::awesome_oscillator()
@@ -4355,6 +4646,11 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         }
         IndicatorKind::FairValueGaps { .. } => "Fair Value Gaps".into(),
         IndicatorKind::OrderBlocks { .. } => "Order Blocks".into(),
+        IndicatorKind::SessionLevels { .. } => "Session Levels".into(),
+        IndicatorKind::PreviousPeriodLevels { period, .. } => format!("Previous {period:?} Levels"),
+        IndicatorKind::OpeningRange {
+            duration_seconds, ..
+        } => format!("Opening Range {duration_seconds}s"),
         IndicatorKind::Aroon { period } => format!("Aroon {period}"),
         IndicatorKind::AwesomeOscillator => "Awesome Oscillator".to_string(),
         IndicatorKind::Dpo { period } => format!("DPO {period}"),
@@ -4528,6 +4824,9 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::MarketStructure { .. }
         | IndicatorKind::FairValueGaps { .. }
         | IndicatorKind::OrderBlocks { .. } => "anchor",
+        IndicatorKind::SessionLevels { .. } => ["high", "low"][output_index],
+        IndicatorKind::PreviousPeriodLevels { .. } => ["high", "low", "close"][output_index],
+        IndicatorKind::OpeningRange { .. } => ["high", "low", "mid"][output_index],
         IndicatorKind::Aroon { .. } => ["Aroon Up", "Aroon Down"][output_index],
         IndicatorKind::AwesomeOscillator => "AO",
         IndicatorKind::Dpo { .. } => "DPO",

@@ -2432,6 +2432,31 @@ impl AerisChart {
             .borrow_mut()
             .add_swing_points(source_id, left, right)
     }
+    pub fn add_session_levels(&mut self, source_id: u32, calendar: &str) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_session_levels(source_id, calendar)
+    }
+    pub fn add_previous_period_levels(
+        &mut self,
+        source_id: u32,
+        period: &str,
+        calendar: &str,
+    ) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_previous_period_levels(source_id, period, calendar)
+    }
+    pub fn add_opening_range(
+        &mut self,
+        source_id: u32,
+        duration_seconds: u32,
+        calendar: &str,
+    ) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_opening_range(source_id, duration_seconds, calendar)
+    }
     pub fn add_market_structure(
         &mut self,
         source_id: u32,

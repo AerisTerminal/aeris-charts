@@ -2430,8 +2430,13 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
         IndicatorKind::SwingPoints { .. }
         | IndicatorKind::MarketStructure { .. }
         | IndicatorKind::FairValueGaps { .. }
-        | IndicatorKind::OrderBlocks { .. } => {
-            panic!("structural studies require annotation-aware reference fixtures")
+        | IndicatorKind::OrderBlocks { .. }
+        | IndicatorKind::SessionLevels { .. }
+        | IndicatorKind::PreviousPeriodLevels { .. }
+        | IndicatorKind::OpeningRange { .. } => {
+            panic!(
+                "session and structural studies require calendar/annotation-aware reference fixtures"
+            )
         }
     };
 
@@ -8817,4 +8822,554 @@ fn comparison_anchor_drives_shared_bases_and_bounded_legend_values() {
     assert_eq!(legend[1].percent_change, Some(200.0 / 9.0));
     assert!(chart.set_comparison_anchor(None));
     assert_eq!(chart.comparison_anchor(), None);
+}
+
+mod session_study_regressions {
+    use super::*;
+
+    fn boundary(start_time: i64, end_time: i64, session_id: u64) -> ResampleBoundary {
+        ResampleBoundary {
+            start_time,
+            end_time,
+            session_id,
+        }
+    }
+
+    fn install(chart: &mut ChartEngine, times: &[f64], highs: &[f64], lows: &[f64]) {
+        let open = highs
+            .iter()
+            .zip(lows)
+            .map(|(h, l)| (h + l) / 2.0)
+            .collect::<Vec<_>>();
+        chart
+            .set_series_data(0, times, &open, highs, lows, &open)
+            .unwrap();
+    }
+
+    fn values(chart: &ChartEngine, id: SeriesId) -> Vec<Option<f64>> {
+        chart.data.series_data(id).unwrap().1[3]
+            .iter()
+            .map(|value| value.is_finite().then_some(*value))
+            .collect()
+    }
+
+    fn all_studies(chart: &mut ChartEngine) -> Vec<Vec<SeriesId>> {
+        let mut bindings = Vec::new();
+        for calendar in [StudyCalendarPolicy::Utc, StudyCalendarPolicy::Host] {
+            bindings.push(chart.add_session_levels(0, calendar));
+            for period in [
+                PreviousPeriod::Day,
+                PreviousPeriod::Week,
+                PreviousPeriod::Month,
+            ] {
+                bindings.push(chart.add_previous_period_levels(0, period, calendar));
+            }
+            bindings.push(chart.add_opening_range(0, 60, calendar));
+        }
+        assert_eq!(
+            bindings.iter().map(Vec::len).collect::<Vec<_>>(),
+            [2, 3, 3, 3, 3, 2, 3, 3, 3, 3]
+        );
+        bindings
+    }
+
+    #[test]
+    fn host_calendar_merges_touching_identity_but_keeps_gaps_and_new_sessions_empty() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let times = [0., 30., 60., 90., 120., 150., 160., 86400., 86430.];
+        let high = [12., 15., 14., 20., 17., 16., 50., 30., 34.];
+        let low = [8., 7., 9., 6., 10., 11., 40., 25., 24.];
+        install(&mut chart, &times, &high, &low);
+        chart
+            .set_study_calendar(vec![
+                boundary(0, 100, 7),
+                boundary(100, 160, 7),
+                boundary(86400, 86500, 8),
+            ])
+            .unwrap();
+        assert_eq!(
+            chart.study_session_spans(),
+            vec![
+                aeris_charts_indicators::SessionSpan {
+                    start: 0,
+                    end: 160,
+                    session_id: 7
+                },
+                aeris_charts_indicators::SessionSpan {
+                    start: 86400,
+                    end: 86500,
+                    session_id: 8
+                }
+            ]
+        );
+        let session = chart.add_session_levels(0, StudyCalendarPolicy::Host);
+        let previous =
+            chart.add_previous_period_levels(0, PreviousPeriod::Day, StudyCalendarPolicy::Host);
+        let opening = chart.add_opening_range(0, 70, StudyCalendarPolicy::Host);
+        assert_eq!(
+            values(&chart, session[0]),
+            [
+                Some(12.),
+                Some(15.),
+                Some(15.),
+                Some(20.),
+                Some(20.),
+                Some(20.),
+                None,
+                Some(30.),
+                Some(34.)
+            ]
+        );
+        assert_eq!(
+            values(&chart, session[1]),
+            [
+                Some(8.),
+                Some(7.),
+                Some(7.),
+                Some(6.),
+                Some(6.),
+                Some(6.),
+                None,
+                Some(25.),
+                Some(24.)
+            ]
+        );
+        assert_eq!(
+            values(&chart, opening[0]),
+            [
+                Some(12.),
+                Some(15.),
+                Some(15.),
+                Some(15.),
+                Some(15.),
+                Some(15.),
+                None,
+                Some(30.),
+                Some(34.)
+            ]
+        );
+        assert_eq!(
+            values(&chart, opening[2]),
+            [
+                Some(10.),
+                Some(11.),
+                Some(11.),
+                Some(11.),
+                Some(11.),
+                Some(11.),
+                None,
+                Some(27.5),
+                Some(29.)
+            ]
+        );
+        assert_eq!(values(&chart, previous[0])[..7], [None; 7]);
+        assert_eq!(values(&chart, previous[0])[7..], [Some(20.), Some(20.)]);
+        assert_eq!(values(&chart, previous[1])[7..], [Some(6.), Some(6.)]);
+        assert_eq!(values(&chart, previous[2])[7..], [Some(13.5), Some(13.5)]);
+
+        // A rejected replacement cannot disturb the live calendar or any outputs.
+        let before = values(&chart, session[0]);
+        assert!(
+            chart
+                .set_study_calendar(vec![boundary(0, 100, 1), boundary(90, 200, 2)])
+                .is_err()
+        );
+        assert_eq!(values(&chart, session[0]), before);
+        chart
+            .set_study_calendar(vec![boundary(0, 80, 1), boundary(86400, 86500, 8)])
+            .unwrap();
+        assert_eq!(values(&chart, session[0])[3..7], [None; 4]);
+        chart.clear_study_calendar();
+        assert!(values(&chart, session[0]).iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn utc_previous_periods_use_day_monday_week_and_civil_month_not_host_boundaries() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        // Monday Jan 29, Wednesday Jan 31, Thursday Feb 1, Monday Feb 5, 2024.
+        let times = [1706486400., 1706659200., 1706745600., 1707091200.];
+        install(
+            &mut chart,
+            &times,
+            &[12., 22., 32., 42.],
+            &[8., 18., 28., 38.],
+        );
+        chart
+            .set_study_calendar(vec![boundary(1706486400, 1707177600, 1)])
+            .unwrap();
+        let day =
+            chart.add_previous_period_levels(0, PreviousPeriod::Day, StudyCalendarPolicy::Utc);
+        let week =
+            chart.add_previous_period_levels(0, PreviousPeriod::Week, StudyCalendarPolicy::Utc);
+        let month =
+            chart.add_previous_period_levels(0, PreviousPeriod::Month, StudyCalendarPolicy::Utc);
+        let session = chart.add_session_levels(0, StudyCalendarPolicy::Utc);
+        let opening = chart.add_opening_range(0, 60, StudyCalendarPolicy::Utc);
+        assert_eq!(
+            values(&chart, session[0]),
+            [Some(12.), Some(22.), Some(32.), Some(42.)]
+        );
+        assert_eq!(
+            values(&chart, opening[2]),
+            [Some(10.), Some(20.), Some(30.), Some(40.)]
+        );
+        assert_eq!(
+            values(&chart, day[0]),
+            [None, Some(12.), Some(22.), Some(32.)]
+        );
+        assert_eq!(values(&chart, week[0]), [None, None, None, Some(32.)]);
+        assert_eq!(values(&chart, week[1]), [None, None, None, Some(8.)]);
+        assert_eq!(values(&chart, month[0]), [None, None, Some(22.), Some(22.)]);
+        assert_eq!(values(&chart, month[2]), [None, None, Some(20.), Some(20.)]);
+        chart.clear_study_calendar();
+        assert_eq!(values(&chart, week[0])[3], Some(32.));
+    }
+
+    #[test]
+    fn calendar_replacement_tip_updates_and_chained_sma_match_fresh_engine() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let times = [0., 30., 60., 90., 120., 180.];
+        let high = [12., 15., 14., 20., 17., 30.];
+        let low = [8., 7., 9., 6., 10., 25.];
+        install(&mut chart, &times, &high, &low);
+        let calendar = vec![boundary(0, 160, 1), boundary(180, 260, 2)];
+        chart.set_study_calendar(calendar.clone()).unwrap();
+        let levels = chart.add_session_levels(0, StudyCalendarPolicy::Host);
+        let opening = chart.add_opening_range(0, 90, StudyCalendarPolicy::Host);
+        let sma = chart.add_indicator_kind(levels[0], IndicatorKind::Sma { period: 2 }, None)[0];
+        let check =
+            |chart: &ChartEngine, calendar: Vec<ResampleBoundary>, high: &[f64], low: &[f64]| {
+                let mut fresh = ChartEngine::new(800.0, 500.0, 1.0);
+                install(&mut fresh, &times, high, low);
+                fresh.set_study_calendar(calendar).unwrap();
+                let expected = fresh.add_session_levels(0, StudyCalendarPolicy::Host);
+                let expected_open = fresh.add_opening_range(0, 90, StudyCalendarPolicy::Host);
+                let expected_sma =
+                    fresh.add_indicator_kind(expected[0], IndicatorKind::Sma { period: 2 }, None)
+                        [0];
+                for (left, right) in levels
+                    .iter()
+                    .zip(expected.iter())
+                    .chain(opening.iter().zip(expected_open.iter()))
+                {
+                    assert_eq!(values(chart, *left), values(&fresh, *right));
+                }
+                assert_eq!(values(chart, sma), values(&fresh, expected_sma));
+            };
+        check(&chart, calendar.clone(), &high, &low);
+        assert!(chart.update_series_bar(0, 180., [31., 36., 22., 29.]));
+        let mut high = high;
+        let mut low = low;
+        high[5] = 36.;
+        low[5] = 22.;
+        check(&chart, calendar.clone(), &high, &low);
+        let changed = vec![boundary(0, 100, 1), boundary(100, 200, 2)];
+        chart.set_study_calendar(changed.clone()).unwrap();
+        check(&chart, changed, &high, &low);
+        assert!(chart.update_series_bar(0, 190., [29., 38., 20., 31.]));
+        assert_eq!(values(&chart, levels[0]).last(), Some(&Some(38.)));
+        assert_eq!(values(&chart, opening[0]).last(), Some(&Some(36.)));
+        assert_eq!(values(&chart, sma).last(), Some(&Some(37.)));
+    }
+
+    #[test]
+    fn all_session_variants_are_prefix_stable_through_replay_seek_and_tip_replacement() {
+        let times = [
+            1706486400.,
+            1706486460.,
+            1706659200.,
+            1706745600.,
+            1706745660.,
+            1707091200.,
+        ];
+        let high = [12., 15., 22., 32., 34., 42.];
+        let low = [8., 7., 18., 28., 24., 38.];
+        let calendar = vec![
+            boundary(1706486400, 1706659200, 1),
+            boundary(1706659200, 1706745600, 1),
+            boundary(1706745600, 1706918400, 2),
+            boundary(1707091200, 1707177600, 3),
+        ];
+        let mut replay = ChartEngine::new(800.0, 500.0, 1.0);
+        replay.set_study_calendar(calendar.clone()).unwrap();
+        let bindings = all_studies(&mut replay);
+        for len in (0..=times.len()).chain((0..times.len()).rev()) {
+            install(&mut replay, &times[..len], &high[..len], &low[..len]);
+            let mut fresh = ChartEngine::new(800.0, 500.0, 1.0);
+            fresh.set_study_calendar(calendar.clone()).unwrap();
+            install(&mut fresh, &times[..len], &high[..len], &low[..len]);
+            let reference = all_studies(&mut fresh);
+            for (actual, expected) in bindings.iter().zip(reference.iter()) {
+                for (&actual, &expected) in actual.iter().zip(expected) {
+                    assert_eq!(
+                        values(&replay, actual),
+                        values(&fresh, expected),
+                        "prefix {len}"
+                    );
+                }
+            }
+        }
+        install(&mut replay, &times, &high, &low);
+        assert!(replay.update_series_bar(0, times[5], [40., 60., 35., 45.]));
+        let mut high = high;
+        let mut low = low;
+        high[5] = 60.;
+        low[5] = 35.;
+        let mut fresh = ChartEngine::new(800.0, 500.0, 1.0);
+        fresh.set_study_calendar(calendar).unwrap();
+        install(&mut fresh, &times, &high, &low);
+        let reference = all_studies(&mut fresh);
+        for (actual, expected) in bindings.iter().zip(reference.iter()) {
+            for (&actual, &expected) in actual.iter().zip(expected) {
+                assert_eq!(values(&replay, actual), values(&fresh, expected));
+            }
+        }
+    }
+
+    #[test]
+    fn pd2_clock_seek_matches_fresh_prefix_for_all_seven_structure_studies() {
+        let times = (1..=12).map(f64::from).collect::<Vec<_>>();
+        let highs = [10., 14., 12., 18., 16., 20., 19., 17., 25., 21., 24., 15.];
+        let lows = [8., 9., 10., 15., 11., 8., 16., 13., 22., 17., 20., 9.];
+        let kinds = [
+            IndicatorKind::SwingPoints { left: 1, right: 1 },
+            IndicatorKind::MarketStructure {
+                left: 1,
+                right: 1,
+                break_on: StructureBreakOn::Wick,
+            },
+            IndicatorKind::FairValueGaps {
+                min_size: 0.0,
+                mitigation: StructureMitigation::Touch,
+                mitigation_price: StructureMitigationPrice::Wick,
+                max_active: 3,
+                show_mitigated: true,
+            },
+            IndicatorKind::OrderBlocks {
+                left: 1,
+                right: 1,
+                break_on: StructureBreakOn::Wick,
+                zone: OrderBlockZone::Wick,
+                mitigation: StructureMitigation::Touch,
+                mitigation_price: StructureMitigationPrice::Wick,
+                max_active: 3,
+                show_mitigated: true,
+            },
+            IndicatorKind::SessionLevels {
+                calendar: StudyCalendarPolicy::Utc,
+            },
+            IndicatorKind::PreviousPeriodLevels {
+                period: PreviousPeriod::Day,
+                calendar: StudyCalendarPolicy::Utc,
+            },
+            IndicatorKind::OpeningRange {
+                duration_seconds: 3,
+                calendar: StudyCalendarPolicy::Utc,
+            },
+        ];
+        let mut replay = ChartEngine::new(800.0, 500.0, 1.0);
+        install(&mut replay, &times, &highs, &lows);
+        let outputs = kinds
+            .iter()
+            .map(|kind| replay.add_indicator_kind(0, kind.clone(), None))
+            .collect::<Vec<_>>();
+        for len in [8usize, 4, 11, 1, 12, 6] {
+            replay
+                .set_replay_clock_micros(Some(times[len - 1] as i64 * 1_000_000))
+                .unwrap();
+            let mut fresh = ChartEngine::new(800.0, 500.0, 1.0);
+            install(&mut fresh, &times[..len], &highs[..len], &lows[..len]);
+            for (kind, actual) in kinds.iter().zip(&outputs) {
+                let expected = fresh.add_indicator_kind(0, kind.clone(), None);
+                for (&actual, &expected) in actual.iter().zip(&expected) {
+                    assert_eq!(
+                        values(&replay, actual),
+                        values(&fresh, expected),
+                        "{kind:?} prefix {len}"
+                    );
+                }
+                if matches!(
+                    kind,
+                    IndicatorKind::SwingPoints { .. }
+                        | IndicatorKind::MarketStructure { .. }
+                        | IndicatorKind::FairValueGaps { .. }
+                        | IndicatorKind::OrderBlocks { .. }
+                ) {
+                    assert_eq!(
+                        replay.study_annotations(actual[0]).unwrap(),
+                        fresh.study_annotations(expected[0]).unwrap(),
+                        "{kind:?} prefix {len}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn kama_and_swings_on_chained_indicator_outputs_follow_source_repairs() {
+        let times = (1..=16).map(f64::from).collect::<Vec<_>>();
+        let high = [
+            12., 14., 18., 14., 11., 16., 22., 19., 15., 12., 17., 24., 18., 13., 20., 15.,
+        ];
+        let low = high.map(|high| high - 4.0);
+        let setup = |chart: &mut ChartEngine| {
+            let base = chart.add_indicator_kind(0, IndicatorKind::Sma { period: 2 }, None)[0];
+            let kama = chart.add_indicator_kind(
+                base,
+                IndicatorKind::Kama {
+                    period: 2,
+                    fast: 2,
+                    slow: 5,
+                },
+                None,
+            )[0];
+            let swings = chart.add_swing_points(kama, 1, 1);
+            assert_eq!(swings.len(), 2);
+            (base, kama, swings)
+        };
+        let mut incremental = ChartEngine::new(800.0, 500.0, 1.0);
+        install(&mut incremental, &times[..8], &high[..8], &low[..8]);
+        let (base, kama, swings) = setup(&mut incremental);
+        let mut final_high = high;
+        let mut final_low = low;
+        for len in 9..=times.len() {
+            assert!(incremental.update_series_bar(
+                0,
+                times[len - 1],
+                [
+                    (high[len - 1] + low[len - 1]) / 2.0,
+                    high[len - 1],
+                    low[len - 1],
+                    (high[len - 1] + low[len - 1]) / 2.0
+                ],
+            ));
+        }
+        for (row, new_high) in [(15, 28.), (4, 25.)] {
+            final_high[row] = new_high;
+            final_low[row] = new_high - 4.0;
+            assert!(incremental.update_series_bar(
+                0,
+                times[row],
+                [new_high - 2.0, new_high, new_high - 4.0, new_high - 2.0],
+            ));
+            let mut fresh = ChartEngine::new(800.0, 500.0, 1.0);
+            install(&mut fresh, &times, &final_high, &final_low);
+            let (fresh_base, fresh_kama, fresh_swings) = setup(&mut fresh);
+            for (actual, expected) in [(base, fresh_base), (kama, fresh_kama)]
+                .into_iter()
+                .chain(swings.iter().copied().zip(fresh_swings.iter().copied()))
+            {
+                assert_eq!(values(&incremental, actual), values(&fresh, expected));
+            }
+            assert_eq!(
+                incremental.study_annotations(swings[0]).unwrap(),
+                fresh.study_annotations(fresh_swings[0]).unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn opening_range_zero_and_invalid_sources_are_atomic() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let before = chart.indicator_bindings().len();
+        assert!(
+            chart
+                .add_opening_range(0, 0, StudyCalendarPolicy::Utc)
+                .is_empty()
+        );
+        assert!(
+            chart
+                .add_session_levels(u32::MAX, StudyCalendarPolicy::Host)
+                .is_empty()
+        );
+        assert!(
+            chart
+                .add_previous_period_levels(
+                    u32::MAX,
+                    PreviousPeriod::Month,
+                    StudyCalendarPolicy::Utc
+                )
+                .is_empty()
+        );
+        assert!(
+            chart
+                .add_opening_range(u32::MAX, 30, StudyCalendarPolicy::Host)
+                .is_empty()
+        );
+        assert_eq!(chart.indicator_bindings().len(), before);
+        let valid = chart.add_opening_range(0, 1, StudyCalendarPolicy::Utc);
+        assert_eq!(valid.len(), 3);
+    }
+
+    #[test]
+    fn v3_persists_study_policies_not_runtime_calendar_or_annotations() {
+        let times = [0., 30., 60., 86400.];
+        let high = [12., 15., 14., 20.];
+        let low = [8., 7., 9., 16.];
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        install(&mut chart, &times, &high, &low);
+        chart
+            .set_study_calendar(vec![boundary(0, 100, 1), boundary(86400, 86500, 2)])
+            .unwrap();
+        let session = chart.add_session_levels(0, StudyCalendarPolicy::Host);
+        let previous =
+            chart.add_previous_period_levels(0, PreviousPeriod::Day, StudyCalendarPolicy::Utc);
+        let opening = chart.add_opening_range(0, 50, StudyCalendarPolicy::Host);
+        let sma = chart.add_indicator_kind(session[0], IndicatorKind::Sma { period: 2 }, None)[0];
+        let mut annotations = aeris_charts_indicators::StudyAnnotations::default();
+        annotations.push_marker(aeris_charts_indicators::StudyMarker {
+            row: 1,
+            confirm_row: 2,
+            price: 15.,
+            kind: aeris_charts_indicators::StudyMarkerKind::SwingHigh,
+            from_row: None,
+        });
+        assert!(chart.inject_study_annotations_for_test(session[0], annotations));
+        let document = chart.export_state_json().unwrap();
+        let json: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(json["schema_version"], 3);
+        assert!(json.get("study_calendar").is_none());
+        assert!(!document.contains("\"annotations\""));
+        assert_eq!(json["indicators"][0]["kind"]["calendar"], "host");
+        assert_eq!(json["indicators"][1]["kind"]["period"], "day");
+        assert_eq!(json["indicators"][2]["kind"]["duration_seconds"], 50);
+
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        install(&mut restored, &times, &high, &low);
+        restored.import_state_json(&document).unwrap();
+        assert!(restored.study_session_spans().is_empty());
+        assert_eq!(restored.indicator_bindings().len(), 4);
+        assert_eq!(restored.indicator_bindings()[0].outputs, session);
+        assert_eq!(restored.indicator_bindings()[1].outputs, previous);
+        assert_eq!(restored.indicator_bindings()[2].outputs, opening);
+        assert_eq!(restored.indicator_bindings()[3].outputs, [sma]);
+        assert!(values(&restored, session[0]).iter().all(Option::is_none));
+        assert_eq!(values(&restored, previous[0]), values(&chart, previous[0]));
+        assert!(restored.study_annotations(session[0]).is_err());
+        restored
+            .set_study_calendar(vec![boundary(0, 100, 1), boundary(86400, 86500, 2)])
+            .unwrap();
+        for id in session.into_iter().chain(opening).chain([sma]) {
+            assert_eq!(values(&restored, id), values(&chart, id));
+        }
+
+        // Invalid persisted parameters fail without installing any binding.
+        for (index, field, invalid) in [
+            (0, "calendar", serde_json::json!("local")),
+            (1, "period", serde_json::json!("quarter")),
+            (2, "duration_seconds", serde_json::json!(0)),
+        ] {
+            let mut invalid_document = json.clone();
+            invalid_document["indicators"][index]["kind"][field] = invalid;
+            let mut target = ChartEngine::new(800.0, 500.0, 1.0);
+            install(&mut target, &times, &high, &low);
+            let before = target.export_state_json().unwrap();
+            assert!(
+                target
+                    .import_state_json(&invalid_document.to_string())
+                    .is_err()
+            );
+            assert_eq!(target.export_state_json().unwrap(), before);
+        }
+    }
 }

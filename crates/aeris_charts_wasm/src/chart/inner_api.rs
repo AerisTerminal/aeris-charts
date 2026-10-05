@@ -5,8 +5,8 @@ use super::inner_render::measure_text_ctx;
 use super::*;
 use aeris_charts_engine::{
     ChartEngine, IndicatorInputSource, IndicatorKind, IndicatorOutputStyle, OrderBlockZone,
-    PivotKind, StructureBreakOn, StructureMitigation, StructureMitigationPrice,
-    SyntheticBarOptions, SyntheticSourceBar, VwapReset,
+    PivotKind, PreviousPeriod, StructureBreakOn, StructureMitigation, StructureMitigationPrice,
+    StudyCalendarPolicy, SyntheticBarOptions, SyntheticSourceBar, VwapReset,
 };
 
 impl ChartInner {
@@ -275,6 +275,56 @@ impl ChartInner {
     pub fn add_swing_points(&mut self, source_id: u32, left: u32, right: u32) -> Vec<u32> {
         self.engine
             .add_swing_points(source_id as SeriesId, left as usize, right as usize)
+    }
+
+    fn study_calendar_policy(value: &str) -> Option<StudyCalendarPolicy> {
+        match value {
+            "utc" => Some(StudyCalendarPolicy::Utc),
+            "host" => Some(StudyCalendarPolicy::Host),
+            _ => None,
+        }
+    }
+
+    pub fn add_session_levels(&mut self, source_id: u32, calendar: &str) -> Vec<u32> {
+        let Some(calendar) = Self::study_calendar_policy(calendar) else {
+            return Vec::new();
+        };
+        self.engine
+            .add_session_levels(source_id as SeriesId, calendar)
+    }
+
+    pub fn add_previous_period_levels(
+        &mut self,
+        source_id: u32,
+        period: &str,
+        calendar: &str,
+    ) -> Vec<u32> {
+        let (Some(period), Some(calendar)) = (
+            match period {
+                "day" => Some(PreviousPeriod::Day),
+                "week" => Some(PreviousPeriod::Week),
+                "month" => Some(PreviousPeriod::Month),
+                _ => None,
+            },
+            Self::study_calendar_policy(calendar),
+        ) else {
+            return Vec::new();
+        };
+        self.engine
+            .add_previous_period_levels(source_id as SeriesId, period, calendar)
+    }
+
+    pub fn add_opening_range(
+        &mut self,
+        source_id: u32,
+        duration_seconds: u32,
+        calendar: &str,
+    ) -> Vec<u32> {
+        let Some(calendar) = Self::study_calendar_policy(calendar) else {
+            return Vec::new();
+        };
+        self.engine
+            .add_opening_range(source_id as SeriesId, duration_seconds, calendar)
     }
 
     pub fn add_market_structure(

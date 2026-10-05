@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 test("catalog exposes every built-in indicator with working creation and removal", async ({ page }) => {
   await page.goto("/?backend=canvas2d");
   await page.waitForFunction(() => window.__demo_indicators);
-  const ids = ["sma", "ema", "wma", "ema_ribbon", "bollinger", "rsi", "macd", "stochastic", "atr", "vwap", "volume_profile", "swing_points", "market_structure", "fair_value_gaps", "order_blocks"];
+  const ids = ["sma", "ema", "wma", "ema_ribbon", "bollinger", "rsi", "macd", "stochastic", "atr", "vwap", "volume_profile", "swing_points", "market_structure", "fair_value_gaps", "order_blocks", "session_levels", "previous_period_levels", "opening_range"];
   await expect(page.locator("#indicator_catalog input")).toHaveCount(ids.length);
   for (const id of ids) {
     await page.locator(`#${id}_toggle`).check();

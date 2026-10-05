@@ -171,8 +171,8 @@ pub use indicators::{
     EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS, INDICATOR_SCHEMA_REVISION,
     IndicatorBindingInfo, IndicatorChromeOptions, IndicatorInputSource, IndicatorKind,
     IndicatorOutputDescriptor, IndicatorOutputStyle, IndicatorParameterDescriptor,
-    IndicatorParameterType, IndicatorSchema, OrderBlockZone, StructureBreakOn, StructureMitigation,
-    StructureMitigationPrice, StudyCalendarPolicy,
+    IndicatorParameterType, IndicatorSchema, OrderBlockZone, PreviousPeriod, StructureBreakOn,
+    StructureMitigation, StructureMitigationPrice, StudyCalendarPolicy,
 };
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use interaction::{
@@ -1718,6 +1718,7 @@ pub struct ChartEngine {
     resampled_series: HashMap<SeriesId, resampling::ResampleBinding>,
     /// Host-supplied study sessions; runtime-only, never included in workspace persistence.
     study_calendar: Vec<ResampleBoundary>,
+    study_calendar_spans: Vec<aeris_charts_indicators::SessionSpan>,
     depth_streams: HashMap<u64, DepthBook>,
     depth_stream_keys: HashMap<String, u64>,
     next_depth_stream_id: u64,
@@ -2001,6 +2002,7 @@ impl ChartEngine {
             synthetic_series: HashMap::new(),
             resampled_series: HashMap::new(),
             study_calendar: Vec::new(),
+            study_calendar_spans: Vec::new(),
             depth_streams: HashMap::new(),
             depth_stream_keys: HashMap::new(),
             next_depth_stream_id: 1,

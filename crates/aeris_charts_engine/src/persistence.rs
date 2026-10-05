@@ -393,7 +393,8 @@ fn validate_positive_number(value: f64, field: &str) -> Result<(), ChartError> {
 
 fn incremental_output_count(kind: &IndicatorKind) -> usize {
     match kind {
-        IndicatorKind::SwingPoints { .. } => 2,
+        IndicatorKind::SwingPoints { .. } | IndicatorKind::SessionLevels { .. } => 2,
+        IndicatorKind::PreviousPeriodLevels { .. } | IndicatorKind::OpeningRange { .. } => 3,
         IndicatorKind::MarketStructure { .. }
         | IndicatorKind::FairValueGaps { .. }
         | IndicatorKind::OrderBlocks { .. } => 1,
@@ -495,6 +496,10 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         | IndicatorKind::MarketStructure { .. }
         | IndicatorKind::FairValueGaps { .. }
         | IndicatorKind::OrderBlocks { .. } => super::indicators::structure_kind_is_valid(kind),
+        IndicatorKind::SessionLevels { .. } | IndicatorKind::PreviousPeriodLevels { .. } => true,
+        IndicatorKind::OpeningRange {
+            duration_seconds, ..
+        } => *duration_seconds > 0,
         IndicatorKind::Aroon { period } => *period > 0,
         IndicatorKind::AwesomeOscillator => true,
         IndicatorKind::Dpo { period } => *period > 0,

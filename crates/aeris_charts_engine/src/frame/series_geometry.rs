@@ -37,6 +37,76 @@ fn push_marker_arrow(
     });
 }
 
+#[cfg(test)]
+mod study_segment_tests {
+    use super::*;
+    use aeris_charts_indicators::study_annotations::StudyMarker;
+
+    #[test]
+    fn structure_stroke_crosses_viewport_before_its_break_label_enters() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let times: Vec<_> = (0..200).map(|row| row as f64).collect();
+        let open: Vec<_> = (0..200).map(|row| 100.0 + row as f64).collect();
+        let high: Vec<_> = open.iter().map(|value| value + 2.0).collect();
+        let low: Vec<_> = open.iter().map(|value| value - 2.0).collect();
+        let close: Vec<_> = open.iter().map(|value| value + 0.5).collect();
+        chart
+            .set_series_data(0, &times, &open, &high, &low, &close)
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.build_frame();
+
+        let mut annotations = StudyAnnotations::default();
+        annotations.push_marker(StudyMarker {
+            row: 160,
+            confirm_row: 160,
+            price: 120.0,
+            kind: StudyMarkerKind::Bos { up: true },
+            from_row: Some(20),
+        });
+        let mut prims = Vec::new();
+        chart.build_study_annotations_frame(
+            0,
+            0,
+            &annotations,
+            false,
+            80,
+            90,
+            800,
+            1.0,
+            1.0,
+            &mut prims,
+        );
+        assert!(prims.iter().any(|prim| matches!(
+            prim,
+            Prim::HLine {
+                style: LineStyle::Dashed,
+                ..
+            }
+        )));
+        assert!(!prims.iter().any(|prim| matches!(prim, Prim::Text { .. })));
+        prims.clear();
+        chart.build_study_annotations_frame(
+            0,
+            0,
+            &annotations,
+            false,
+            150,
+            170,
+            800,
+            1.0,
+            1.0,
+            &mut prims,
+        );
+        assert!(
+            prims
+                .iter()
+                .any(|prim| matches!(prim, Prim::Text { text, .. } if text == "BOS"))
+        );
+    }
+}
+
 /// Emit a polyline stroke. A solid style emits a single `Polyline` prim (the backends expand
 /// `line_type` themselves, as before). Any dashed style is expanded with `line_type` and split
 /// into solid dash sub-segments here in the frame builder — reference `setLineDash` semantics on the
@@ -279,6 +349,7 @@ impl ChartEngine {
             return;
         }
         let plot = self.data.plot(source);
+        let visible_rows = plot.visible_rows(from, to);
         let top = (pane.top * vpr).round() as i32;
         let bottom = ((pane.top + pane.height) * vpr).round() as i32;
         if bottom <= top {
@@ -300,115 +371,132 @@ impl ChartEngine {
 
         // Fills first, then borders, then structure strokes, then swing glyphs. No backend
         // receives a separate clipping or annotation contract.
-        for zone in annotations.zones() {
-            if zone.end_row.is_some() && !show_mitigated {
-                continue;
-            }
-            if plot.index_at(zone.start_row).is_none_or(|index| index > to)
-                || zone
-                    .end_row
-                    .is_some_and(|end| plot.index_at(end).is_none_or(|index| index < from))
-            {
-                continue;
-            }
-            let (Some(start_x), Some(end_x), Some(y_top), Some(y_bottom)) = (
-                x_for_row(zone.start_row),
-                zone.end_row.and_then(x_for_row).or(Some(width)),
-                y_for_price(zone.top),
-                y_for_price(zone.bottom),
-            ) else {
-                continue;
-            };
-            let left = start_x.min(end_x).max(x_min);
-            let right = start_x.max(end_x).min(x_max);
-            let upper = y_top.min(y_bottom).max(top);
-            let lower = y_top.max(y_bottom).min(bottom);
-            if right <= left || lower <= upper {
-                continue;
-            }
-            let tone = if zone.bullish { up_color } else { down_color };
-            let fill = Color::rgba(tone.r(), tone.g(), tone.b(), 38);
-            let rect = IRect {
-                x: left,
-                y: upper,
-                w: right - left,
-                h: lower - upper,
-            };
-            out.push(Prim::Rect { rect, color: fill });
-            out.push(Prim::RectFrame {
-                rect,
-                border: 1,
-                color: border_color,
-            });
-        }
-        for marker in annotations.markers() {
-            let (StudyMarkerKind::Bos { .. } | StudyMarkerKind::Choch { .. }) = marker.kind else {
-                continue;
-            };
-            if plot
-                .index_at(marker.row)
-                .is_none_or(|index| index < from || index > to)
-            {
-                continue;
-            }
-            let (Some(start), Some(end), Some(y)) = (
-                marker.from_row.and_then(x_for_row),
-                x_for_row(marker.row),
-                y_for_price(marker.price),
-            ) else {
-                continue;
-            };
-            let left = start.min(end).max(x_min);
-            let right = start.max(end).min(x_max);
-            if right <= left || y < top || y >= bottom {
-                continue;
-            }
-            let color = border_color;
-            out.push(Prim::HLine {
-                y,
-                x0: left,
-                x1: right,
-                width: 1.max(hpr.floor() as i32),
-                style: LineStyle::Dashed,
-                color,
-            });
-            // At sub-4 CSS-px spacing the stroke remains legible but text is not.
-            if self.time_scale.bar_spacing() >= 4.0 {
-                let label = if matches!(marker.kind, StudyMarkerKind::Bos { .. }) {
-                    "BOS"
-                } else {
-                    "CHoCH"
-                };
-                let label_y = (y - (10.0 * vpr).round() as i32).max(top);
-                if label_y < bottom {
-                    out.push(Prim::Text {
-                        x: ((left + right) as f64 * 0.5) as f32,
-                        y: label_y as f32,
-                        text: label.into(),
-                        color,
-                        size: (self.options.get().layout.font_size * vpr) as f32,
-                        family: self.options.get().layout.font_family.clone(),
-                        align: TextAlign::Center,
-                        weight: 400,
-                        italic: false,
-                    });
+        // A closed zone can also span a sparse gap with no rows in the viewport.
+        // The exact logical-index checks below reject a candidate beginning after `to`.
+        annotations.visit_visible_zones(
+            visible_rows.start,
+            visible_rows.end.max(visible_rows.start.saturating_add(1)),
+            show_mitigated,
+            |zone| {
+                if zone.end_row.is_some() && !show_mitigated {
+                    return;
                 }
-            }
-        }
-        for marker in annotations.markers() {
+                if plot.index_at(zone.start_row).is_none_or(|index| index > to)
+                    || zone
+                        .end_row
+                        .is_some_and(|end| plot.index_at(end).is_none_or(|index| index < from))
+                {
+                    return;
+                }
+                let (Some(start_x), Some(end_x), Some(y_top), Some(y_bottom)) = (
+                    x_for_row(zone.start_row),
+                    zone.end_row.and_then(x_for_row).or(Some(width)),
+                    y_for_price(zone.top),
+                    y_for_price(zone.bottom),
+                ) else {
+                    return;
+                };
+                let left = start_x.min(end_x).max(x_min);
+                let right = start_x.max(end_x).min(x_max);
+                let upper = y_top.min(y_bottom).max(top);
+                let lower = y_top.max(y_bottom).min(bottom);
+                if right <= left || lower <= upper {
+                    return;
+                }
+                let tone = if zone.bullish { up_color } else { down_color };
+                let fill = Color::rgba(tone.r(), tone.g(), tone.b(), 38);
+                let rect = IRect {
+                    x: left,
+                    y: upper,
+                    w: right - left,
+                    h: lower - upper,
+                };
+                out.push(Prim::Rect { rect, color: fill });
+                out.push(Prim::RectFrame {
+                    rect,
+                    border: 1,
+                    color: border_color,
+                });
+            },
+        );
+        // A BOS/CHoCH stroke can cross a sparse viewport without a source row
+        // inside it, just as a closed zone can.
+        annotations.visit_visible_markers(
+            visible_rows.start,
+            visible_rows.end.max(visible_rows.start.saturating_add(1)),
+            |marker| {
+                let (StudyMarkerKind::Bos { .. } | StudyMarkerKind::Choch { .. }) = marker.kind
+                else {
+                    return;
+                };
+                let (Some(start_index), Some(end_index)) = (
+                    marker.from_row.and_then(|row| plot.index_at(row)),
+                    plot.index_at(marker.row),
+                ) else {
+                    return;
+                };
+                if start_index.min(end_index) > to || start_index.max(end_index) < from {
+                    return;
+                }
+                let (Some(start), Some(end), Some(y)) = (
+                    marker.from_row.and_then(x_for_row),
+                    x_for_row(marker.row),
+                    y_for_price(marker.price),
+                ) else {
+                    return;
+                };
+                let left = start.min(end).max(x_min);
+                let right = start.max(end).min(x_max);
+                if right <= left || y < top || y >= bottom {
+                    return;
+                }
+                let color = border_color;
+                out.push(Prim::HLine {
+                    y,
+                    x0: left,
+                    x1: right,
+                    width: 1.max(hpr.floor() as i32),
+                    style: LineStyle::Dashed,
+                    color,
+                });
+                // At sub-4 CSS-px spacing the stroke remains legible but text is not.
+                if end_index >= from && end_index <= to && self.time_scale.bar_spacing() >= 4.0 {
+                    let label = if matches!(marker.kind, StudyMarkerKind::Bos { .. }) {
+                        "BOS"
+                    } else {
+                        "CHoCH"
+                    };
+                    let label_y = (y - (10.0 * vpr).round() as i32).max(top);
+                    if label_y < bottom {
+                        out.push(Prim::Text {
+                            x: ((left + right) as f64 * 0.5) as f32,
+                            y: label_y as f32,
+                            text: label.into(),
+                            color,
+                            size: (self.options.get().layout.font_size * vpr) as f32,
+                            family: self.options.get().layout.font_family.clone(),
+                            align: TextAlign::Center,
+                            weight: 400,
+                            italic: false,
+                        });
+                    }
+                }
+            },
+        );
+        annotations.visit_visible_markers(visible_rows.start, visible_rows.end, |marker| {
             let up = match marker.kind {
                 StudyMarkerKind::SwingHigh => false,
                 StudyMarkerKind::SwingLow => true,
-                _ => continue,
+                _ => return,
             };
             if plot
                 .index_at(marker.row)
                 .is_none_or(|index| index < from || index > to)
             {
-                continue;
+                return;
             }
             let (Some(x), Some(y)) = (x_for_row(marker.row), y_for_price(marker.price)) else {
-                continue;
+                return;
             };
             let size = marker_envelope_size(self.time_scale.bar_spacing());
             let glyph_half = marker_shape_size(size, 1.0) * hpr * 0.5;
@@ -423,7 +511,7 @@ impl ChartEngine {
                 || glyph_y - glyph_half < top as f64
                 || glyph_y + glyph_half >= bottom as f64
             {
-                continue;
+                return;
             }
             push_marker_arrow(
                 out,
@@ -434,7 +522,7 @@ impl ChartEngine {
                 up,
                 if up { up_color } else { down_color },
             );
-        }
+        });
     }
 
     #[allow(clippy::too_many_arguments)]

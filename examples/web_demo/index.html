@@ -1573,6 +1573,9 @@ const indicator_definitions = [
   ["market_structure", "Market Structure · BOS / CHoCH (close)", () => chart.add_market_structure(main)],
   ["fair_value_gaps", "Fair Value Gaps · Active imbalance zones", () => chart.add_fair_value_gaps(main)],
   ["order_blocks", "Order Blocks · Last opposite candle before break", () => chart.add_order_blocks(main)],
+  ["session_levels", "Session Levels · Running session high / low", () => chart.add_session_levels(main)],
+  ["previous_period_levels", "Previous Period Levels · Prior day high / low / close", () => chart.add_previous_period_levels(main)],
+  ["opening_range", "Opening Range · First 30 minutes high / low / mid", () => chart.add_opening_range(main, 1800)],
 ];
 const indicator_catalog = document.getElementById("indicator_catalog");
 const indicator_handles = new Map();

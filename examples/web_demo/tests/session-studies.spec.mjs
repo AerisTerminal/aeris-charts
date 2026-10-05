@@ -1,0 +1,112 @@
+import { test, expect } from "@playwright/test";
+
+test("session studies expose UTC and host-boundary values with choice schemas", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const source = chart.add_series("candlestick", { visible: false });
+    const start = Date.UTC(2024, 0, 1) / 1000;
+    source.set_data([
+      { time: start, open: 9, high: 10, low: 8, close: 9 },
+      { time: start + 600, open: 10, high: 15, low: 7, close: 14 },
+      { time: start + 1200, open: 12, high: 13, low: 9, close: 12 },
+      { time: start + 86400, open: 19, high: 20, low: 18, close: 19 },
+      { time: start + 87000, open: 20, high: 25, low: 17, close: 22 },
+    ]);
+    const utc = {
+      session: chart.add_session_levels(source),
+      previous: chart.add_previous_period_levels(source),
+      opening: chart.add_opening_range(source, 900),
+    };
+    chart.set_study_calendar([
+      { startTime: start, endTime: start + 900, sessionId: 1 },
+      { startTime: start + 900, endTime: start + 2 * 86400, sessionId: 2 },
+    ]);
+    const host = {
+      session: chart.add_session_levels(source, "host"),
+      previous: chart.add_previous_period_levels(source, "day", "host"),
+      opening: chart.add_opening_range(source, 900, "host"),
+    };
+    const values = (outputs) => outputs.map((output) => ({
+      kind: output.indicator_info().kind,
+      values: output.data().map(({ value }) => value ?? null),
+    }));
+    const schemas = ["session_levels", "previous_period_levels", "opening_range"]
+      .map((kind) => chart.indicator_schema(kind));
+    const snapshot = {
+      utc: Object.fromEntries(Object.entries(utc).map(([kind, outputs]) => [kind, values(outputs)])),
+      host: Object.fromEntries(Object.entries(host).map(([kind, outputs]) => [kind, values(outputs)])),
+      schemas,
+    };
+    chart.remove_series(source);
+    return snapshot;
+  });
+  expect(result.utc.session.map(({ values }) => values)).toEqual([
+    [10, 15, 15, 20, 25], [8, 7, 7, 18, 17],
+  ]);
+  expect(result.utc.previous.map(({ values }) => values)).toEqual([
+    [null, null, null, 15, 15], [null, null, null, 7, 7], [null, null, null, 12, 12],
+  ]);
+  expect(result.utc.opening.map(({ values }) => values)).toEqual([
+    [10, 15, 15, 20, 25], [8, 7, 7, 18, 17], [9, 11, 11, 19, 21],
+  ]);
+  expect(result.host.session.map(({ values }) => values)).toEqual([
+    [10, 15, 13, 20, 25], [8, 7, 9, 9, 9],
+  ]);
+  expect(result.host.previous.map(({ values }) => values)).toEqual([
+    [null, null, 15, 15, 15], [null, null, 7, 7, 7], [null, null, 14, 14, 14],
+  ]);
+  expect(result.host.opening.map(({ values }) => values)).toEqual([
+    [10, 15, 13, 13, 13], [8, 7, 9, 9, 9], [9, 11, 11, 11, 11],
+  ]);
+  for (const [kind, count] of [["session_levels", 2], ["previous_period_levels", 3], ["opening_range", 3]]) {
+    const schema = result.schemas.find((item) => item.kind === kind);
+    expect(schema.outputs).toHaveLength(count);
+    expect(schema.parameters.find(({ name }) => name === "calendar")).toMatchObject({
+      parameter_type: "choice", default: "utc", options: ["utc", "host"],
+    });
+  }
+  expect(result.schemas[1].parameters.find(({ name }) => name === "period")).toMatchObject({
+    parameter_type: "choice", default: "day", options: ["day", "week", "month"],
+  });
+});
+
+test("session study arguments reject invalid choices before engine mutation", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const source = chart.add_series("candlestick");
+    const count = chart.series_order().length;
+    const errors = [
+      () => chart.add_session_levels(source, "local"),
+      () => chart.add_session_levels(source, null),
+      () => chart.add_previous_period_levels(source, "year"),
+      () => chart.add_previous_period_levels(source, "day", "local"),
+      () => chart.add_opening_range(source, 0),
+      () => chart.add_opening_range(source, -1),
+      () => chart.add_opening_range(source, 1.5),
+      () => chart.add_opening_range(source, 4294967296),
+      () => chart.add_opening_range(source, 300, "local"),
+    ].map((invoke) => {
+      try { invoke(); return null; } catch (error) { return error.code; }
+    });
+    return { errors, count, after: chart.series_order().length };
+  });
+  expect(result.errors).toEqual(Array(9).fill("invalid_options"));
+  expect(result.after).toBe(result.count);
+});
+
+test("demo catalog creates and clears every session study output", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  for (const [kind, count] of [["session_levels", 2], ["previous_period_levels", 3], ["opening_range", 3]]) {
+    const toggle = page.locator(`#${kind}_toggle`);
+    await toggle.check();
+    expect(await page.evaluate((id) => window.__demo_indicators.get(id)?.outputs.length, kind)).toBe(count);
+    await toggle.uncheck();
+    expect(await page.evaluate((id) => window.__demo_indicators.has(id), kind)).toBe(false);
+  }
+  await expect(page.locator("#indicator_error")).toBeEmpty();
+});
