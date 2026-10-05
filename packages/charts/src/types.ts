@@ -1183,6 +1183,9 @@ export interface indicator_info {
   kind: indicator_kind;
   /** Complete structured parameters. Fields not used by this kind are `null`. */
   parameters: {
+    calendar: study_calendar_policy | null;
+    previous_period: previous_period | null;
+    duration_seconds: number | null;
     left: number | null;
     right: number | null;
     break_on: structure_break_on | null;

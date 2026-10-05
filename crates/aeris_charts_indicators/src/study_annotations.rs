@@ -96,6 +96,8 @@ struct RowIntervalIndex {
     tree: Vec<(usize, usize)>,
     base: usize,
     len: usize,
+    #[cfg(test)]
+    repair_nodes: usize,
 }
 
 impl RowIntervalIndex {
@@ -122,21 +124,45 @@ impl RowIntervalIndex {
         self.len = self.len.max(index + 1);
         let mut node = self.base + index;
         self.tree[node] = value;
+        #[cfg(test)]
+        {
+            self.repair_nodes += 1;
+        }
         while node > 1 {
             node /= 2;
             self.tree[node] = Self::merge(self.tree[2 * node], self.tree[2 * node + 1]);
+            #[cfg(test)]
+            {
+                self.repair_nodes += 1;
+            }
         }
     }
 
-    fn rebuild(&mut self, len: usize, mut value: impl FnMut(usize) -> (usize, usize)) {
-        self.len = len;
-        self.base = len.next_power_of_two();
-        self.tree = vec![Self::EMPTY; self.base * 2];
-        for i in 0..len {
-            self.tree[self.base + i] = value(i);
+    /// Clear discarded leaves and recompute only their ancestors. The tree's
+    /// base and allocation survive suffix repair; each level covers at most
+    /// half as many nodes as the one below it.
+    fn truncate(&mut self, len: usize) {
+        assert!(len <= self.len);
+        if len == self.len {
+            return;
         }
-        for node in (1..self.base).rev() {
-            self.tree[node] = Self::merge(self.tree[2 * node], self.tree[2 * node + 1]);
+        let (mut first, mut end) = (self.base + len, self.base + self.len);
+        self.tree[first..end].fill(Self::EMPTY);
+        #[cfg(test)]
+        {
+            self.repair_nodes += end - first;
+        }
+        self.len = len;
+        while first > 1 {
+            first /= 2;
+            end = end.div_ceil(2);
+            for node in first..end {
+                self.tree[node] = Self::merge(self.tree[2 * node], self.tree[2 * node + 1]);
+                #[cfg(test)]
+                {
+                    self.repair_nodes += 1;
+                }
+            }
         }
     }
 
@@ -289,38 +315,6 @@ impl StudyAnnotations {
         true
     }
 
-    /// Discard annotations anchored on evicted source rows, preserving all other history.
-    pub fn drop_before(&mut self, first_row: usize) {
-        self.markers.retain(|m| m.row >= first_row);
-        let mut mapping = vec![None; self.zones.len()];
-        let mut next = 0;
-        for (i, zone) in self.zones.iter().enumerate() {
-            if zone.start_row >= first_row {
-                mapping[i] = Some(next);
-                next += 1;
-            }
-        }
-        self.zones.retain(|z| z.start_row >= first_row);
-        for side in &mut self.active_zones {
-            *side = side.iter().filter_map(|&i| mapping[i]).collect();
-        }
-        self.ends = self
-            .ends
-            .iter()
-            .filter_map(|&(end, i)| mapping[i].map(|i| (end, i)))
-            .collect();
-        self.marker_index.rebuild(self.markers.len(), |i| {
-            Self::marker_interval(self.markers[i])
-        });
-        self.closed_zone_index.rebuild(self.zones.len(), |i| {
-            let z = self.zones[i];
-            z.end_row
-                .map_or(RowIntervalIndex::EMPTY, |end| (z.start_row, end))
-        });
-        self.markers.shrink_to_fit();
-        self.zones.shrink_to_fit();
-    }
-
     /// Discard confirmations in the repaired suffix and undo its mitigations.
     ///
     /// Confirmation order makes the retained prefix searchable without scanning the history.
@@ -351,14 +345,17 @@ impl StudyAnnotations {
             lo
         }
         let marker_end = first_at_or_after(&self.markers, from, |m| m.confirm_row);
+        self.marker_index.truncate(marker_end);
         self.markers.truncate(marker_end);
         let zone_end = first_at_or_after(&self.zones, from, |z| z.confirm_row);
+        self.closed_zone_index.truncate(zone_end);
         self.zones.truncate(zone_end);
         while self.ends.last().is_some_and(|&(end, _)| end >= from) {
             let (_, index) = self.ends.pop().expect("last end");
             if index < self.zones.len() {
                 self.zones[index].end_row = None;
                 self.zones[index].retired = false;
+                self.closed_zone_index.set(index, RowIntervalIndex::EMPTY);
             }
         }
         self.active_zones = active.unwrap_or_else(|| {
@@ -369,14 +366,6 @@ impl StudyAnnotations {
                 }
             }
             sides
-        });
-        self.marker_index.rebuild(self.markers.len(), |i| {
-            Self::marker_interval(self.markers[i])
-        });
-        self.closed_zone_index.rebuild(self.zones.len(), |i| {
-            let z = self.zones[i];
-            z.end_row
-                .map_or(RowIntervalIndex::EMPTY, |end| (z.start_row, end))
         });
     }
 
@@ -476,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn long_history_retains_every_annotation_and_drops_only_evicted_source_rows() {
+    fn long_history_retains_every_annotation_until_source_rebuild() {
         let mut annotations = StudyAnnotations::default();
         for row in 0..10_000 {
             annotations.push_marker(marker(row));
@@ -486,17 +475,15 @@ mod tests {
         }
         assert_eq!(annotations.markers().len(), 10_000);
         assert_eq!(annotations.zones().len(), 10_000);
-        let bytes = annotations.capacity_bytes();
         assert!(
-            bytes
+            annotations.capacity_bytes()
                 >= 10_000 * (std::mem::size_of::<StudyMarker>() + std::mem::size_of::<StudyZone>())
         );
-        annotations.drop_before(5_000);
-        assert!(annotations.capacity_bytes() < bytes);
-        assert_eq!(annotations.markers().front().unwrap().row, 5_000);
-        assert_eq!(annotations.zones().front().unwrap().start_row, 5_000);
-        assert_eq!(annotations.markers().len(), 4_998);
-        assert_eq!(annotations.zones().len(), 4_999);
+        annotations.rebuild_from(5_000);
+        assert_eq!(annotations.markers().len(), 5_000);
+        assert_eq!(annotations.zones().len(), 5_000);
+        assert_eq!(annotations.marker_index.len, 5_000);
+        assert_eq!(annotations.closed_zone_index.len, 5_000);
     }
 
     #[test]
@@ -612,10 +599,10 @@ mod tests {
         zone_rows.clear();
         annotations.visit_visible_zones(80_000, 80_010, true, |z| zone_rows.push(z.confirm_row));
         assert_eq!(zone_rows, (80_000..80_011).collect::<Vec<_>>());
-        annotations.drop_before(80_005);
+        annotations.rebuild_from(80_005);
         zone_rows.clear();
         annotations.visit_visible_zones(80_000, 80_010, true, |z| zone_rows.push(z.confirm_row));
-        assert_eq!(zone_rows, (80_006..80_011).collect::<Vec<_>>());
+        assert_eq!(zone_rows, (80_000..80_005).collect::<Vec<_>>());
     }
 
     #[test]
@@ -640,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn repair_and_batch_history_compare_equal_despite_index_rebuild() {
+    fn repair_and_batch_history_compare_equal_despite_reused_index_capacity() {
         let mut batch = StudyAnnotations::default();
         let mut repaired = StudyAnnotations::default();
         for row in 0..40 {
@@ -667,6 +654,41 @@ mod tests {
                 (markers, zones)
             };
             assert_eq!(visible(&batch), visible(&repaired));
+        }
+    }
+
+    #[test]
+    fn long_history_tip_repair_reuses_both_trees_with_bounded_index_work() {
+        let mut annotations = StudyAnnotations::default();
+        for row in 0..100_000 {
+            annotations.push_marker(marker(row));
+            let mut finished = zone(row, true);
+            if row != 123 {
+                finished.end_row = Some(row);
+            }
+            annotations.push_zone(finished);
+        }
+        assert!(annotations.end_zone(123, 99_999));
+        let marker_tree = annotations.marker_index.tree.as_ptr();
+        let zone_tree = annotations.closed_zone_index.tree.as_ptr();
+        let marker_capacity = annotations.marker_index.tree.capacity();
+        let zone_capacity = annotations.closed_zone_index.tree.capacity();
+        for _ in 0..8 {
+            annotations.marker_index.repair_nodes = 0;
+            annotations.closed_zone_index.repair_nodes = 0;
+            annotations.rebuild_from(99_999);
+            assert_eq!(annotations.zones()[123].end_row, None);
+            annotations.push_marker(marker(99_999));
+            let mut finished = zone(99_999, true);
+            finished.end_row = Some(99_999);
+            annotations.push_zone(finished);
+            assert!(annotations.end_zone(123, 99_999));
+            assert_eq!(annotations.marker_index.tree.as_ptr(), marker_tree);
+            assert_eq!(annotations.closed_zone_index.tree.as_ptr(), zone_tree);
+            assert_eq!(annotations.marker_index.tree.capacity(), marker_capacity);
+            assert_eq!(annotations.closed_zone_index.tree.capacity(), zone_capacity);
+            assert!(annotations.marker_index.repair_nodes < 128);
+            assert!(annotations.closed_zone_index.repair_nodes < 128);
         }
     }
 

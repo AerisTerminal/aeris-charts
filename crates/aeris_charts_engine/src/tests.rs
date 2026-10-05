@@ -9206,6 +9206,106 @@ mod session_study_regressions {
     }
 
     #[test]
+    fn retention_trim_rebuilds_structure_from_only_the_retained_rows() {
+        let times = (0..96).map(|row| row as f64 + 1.).collect::<Vec<_>>();
+        let highs = (0..96)
+            .map(|row| 30. + (row % 7) as f64 * 3.)
+            .collect::<Vec<_>>();
+        let lows = highs.iter().map(|high| high - 6.).collect::<Vec<_>>();
+        let kinds = [
+            IndicatorKind::SwingPoints { left: 1, right: 1 },
+            IndicatorKind::MarketStructure {
+                left: 1,
+                right: 1,
+                break_on: StructureBreakOn::Wick,
+            },
+            IndicatorKind::FairValueGaps {
+                min_size: 0.,
+                mitigation: StructureMitigation::Touch,
+                mitigation_price: StructureMitigationPrice::Wick,
+                max_active: 3,
+                show_mitigated: true,
+            },
+            IndicatorKind::OrderBlocks {
+                left: 1,
+                right: 1,
+                break_on: StructureBreakOn::Wick,
+                zone: OrderBlockZone::Wick,
+                mitigation: StructureMitigation::Touch,
+                mitigation_price: StructureMitigationPrice::Wick,
+                max_active: 3,
+                show_mitigated: true,
+            },
+        ];
+        let mut chart = ChartEngine::new(800., 500., 1.);
+        install(&mut chart, &times, &highs, &lows);
+        let bindings = kinds
+            .iter()
+            .map(|kind| chart.add_indicator_kind(0, kind.clone(), None))
+            .collect::<Vec<_>>();
+        assert!(chart.set_series_max_points(0, Some(40)));
+        for row in 96..110 {
+            let high = 30. + (row % 7) as f64 * 3.;
+            assert!(chart.update_series_bar(
+                0,
+                row as f64 + 1.,
+                [high - 3., high, high - 6., high - 3.]
+            ));
+        }
+        let (retained, columns) = chart.data.series_data(0).unwrap();
+        let (retained, open, high, low, close) = (
+            retained.to_vec(),
+            columns[0].to_vec(),
+            columns[1].to_vec(),
+            columns[2].to_vec(),
+            columns[3].to_vec(),
+        );
+        assert!(
+            retained[0] > times[56] as i64,
+            "streaming must evict additional leading rows"
+        );
+        let mut fresh = ChartEngine::new(800., 500., 1.);
+        fresh
+            .set_series_data(
+                0,
+                &retained.iter().map(|&t| t as f64).collect::<Vec<_>>(),
+                &open,
+                &high,
+                &low,
+                &close,
+            )
+            .unwrap();
+        for (kind, actual) in kinds.iter().zip(&bindings) {
+            let expected = fresh.add_indicator_kind(0, kind.clone(), None);
+            for (&actual, &expected) in actual.iter().zip(&expected) {
+                assert_eq!(values(&chart, actual), values(&fresh, expected), "{kind:?}");
+            }
+            let snapshot = chart.study_annotations(actual[0]).unwrap();
+            if matches!(kind, IndicatorKind::SwingPoints { .. }) {
+                assert!(!snapshot.markers().is_empty());
+            }
+            assert_eq!(
+                snapshot,
+                fresh.study_annotations(expected[0]).unwrap(),
+                "{kind:?}"
+            );
+            assert!(
+                snapshot
+                    .markers()
+                    .iter()
+                    .all(|marker| marker.row < retained.len()
+                        && marker.from_row.is_none_or(|row| row < retained.len()))
+            );
+            assert!(
+                snapshot
+                    .zones()
+                    .iter()
+                    .all(|zone| zone.start_row < retained.len())
+            );
+        }
+    }
+
+    #[test]
     fn kama_and_swings_on_chained_indicator_outputs_follow_source_repairs() {
         let times = (1..=16).map(f64::from).collect::<Vec<_>>();
         let high = [

@@ -30,6 +30,7 @@ test("session studies expose UTC and host-boundary values with choice schemas", 
     };
     const values = (outputs) => outputs.map((output) => ({
       kind: output.indicator_info().kind,
+      parameters: output.indicator_info().parameters,
       values: output.data().map(({ value }) => value ?? null),
     }));
     const schemas = ["session_levels", "previous_period_levels", "opening_range"]
@@ -60,6 +61,12 @@ test("session studies expose UTC and host-boundary values with choice schemas", 
   expect(result.host.opening.map(({ values }) => values)).toEqual([
     [10, 15, 13, 13, 13], [8, 7, 9, 9, 9], [9, 11, 11, 11, 11],
   ]);
+  expect(result.utc.session[0].parameters).toMatchObject({ calendar: "utc" });
+  expect(result.utc.previous[0].parameters).toMatchObject({ calendar: "utc", previous_period: "day" });
+  expect(result.utc.opening[0].parameters).toMatchObject({ calendar: "utc", duration_seconds: 900 });
+  expect(result.host.session[0].parameters).toMatchObject({ calendar: "host" });
+  expect(result.host.previous[0].parameters).toMatchObject({ calendar: "host", previous_period: "day" });
+  expect(result.host.opening[0].parameters).toMatchObject({ calendar: "host", duration_seconds: 900 });
   for (const [kind, count] of [["session_levels", 2], ["previous_period_levels", 3], ["opening_range", 3]]) {
     const schema = result.schemas.find((item) => item.kind === kind);
     expect(schema.outputs).toHaveLength(count);
