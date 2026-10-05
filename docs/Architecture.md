@@ -514,9 +514,12 @@ final/session delta, delta percentage, running Max/Min Delta, and diagonal stack
 supports session, continuous, and anchored resets, and every dependent carries the stream revision
 through tip, correction, and retention updates. Stream telemetry attributes retained tape capacity
 and dependent rebuild work.
-Live tip events update only the active derived bar; a late-event or provider-correction batch merges
-atomically into the final canonical tape, validates its final session/bar projection, and reconstructs
-exactly once.
+Live tip events update only the active derived bar; a late-event or provider-correction batch is
+validated against its final session/bar projection, then merges in place into the canonical tape:
+only the tail from the earliest touched canonical position is re-sorted and re-indexed, and the
+derived bars reconstruct exactly once from the newest replay checkpoint preceding that position.
+Dependents re-project from the first rebuilt bar, so a late print near the tip costs at most one
+checkpoint interval of replay instead of the retained tape; tape-replaying big trades still replay.
 Each derived bar also carries an engine-owned logical index plus its full-resolution open and close
 microsecond times. `FootprintAggregator::bar_sequence` exposes those bounds without collapsing them
 to whole-second labels, so several non-time bars in one second and long gaps remain distinct.
@@ -576,12 +579,16 @@ suffix, and produce the same bars as a fresh load to that clock. Checkpoints are
 1,024 eligible trades and capped at 64 per stream; an older seek starts from the retained tape's
 rebuild seed. Depth uses the same 1,024-event interval and 64-checkpoint cap, restores the nearest
 book snapshot, and replays only the reported suffix; its ladder, studies, heatmap, and marker
-queries all read the replay projection. Retention reconstructs checkpoints for the surviving suffix. Ingest wholly beyond
+queries all read the replay projection. Retention evicts whole bars and the exact trades they
+counted without re-aggregating the survivors: retained bars are renumbered and surviving checkpoints
+are rebased onto the new tape start. Ingest wholly beyond
 the clock changes only source truth and performs no dependent work. The existing columnar
 `update_typed` path is the bulk ordered bar boundary, while trade batches cross as parallel typed
 arrays and update all stream dependents once. The release `perf_gate` advances a shared
 footprint/candle chart through 6,000 recorded seconds at 100×, builds every frame, and requires
-steady-state retained memory not to grow across complete passes.
+steady-state retained memory not to grow across complete passes. It also streams a sustained
+order-flow tape across the retention ceiling and injects a late print one bar behind the tip,
+requiring the per-update p99, the worst retention crossing, and the late print to fit a 60 Hz frame.
 
 Renko, Line Break, Kagi, and Point & Figure are engine-owned price-action transforms over one
 canonical host OHLC source. Fixed-box Renko requires a two-box reversal; ATR Renko uses Wilder true

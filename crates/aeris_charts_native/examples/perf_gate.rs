@@ -13,6 +13,7 @@
 //!   Target I — 100k-row numeric error bars frame, hit interaction, and retained memory
 //!   Target K — 100x replay clock advance, shared projections, frame work, and flat retained memory
 //!   Target L — sustained depth updates, bounded heatmap frame work, and live-edge upload size
+//!   Target M — sustained live order-flow tape: per-batch update + frame, retention, late print
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `AERIS_CHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -28,8 +29,9 @@ use aeris_charts_engine::{
     FootprintAggregationOptions, FootprintBarAggregation, FootprintSeriesOptions, FootprintTrade,
     FootprintVisualOptions, GeneralAxisOptions, GeneralHitMode, GeneralScaleType,
     GeneralSeriesOptions, GeneralXyInput, GestureResolver, HorizontalDomain, InputDevice,
-    InputTarget, PeriodicProfilePresentationOptions, PeriodicProfilePresentationRequest,
-    PointerSample, ProfileSource, ResampleBoundary, SeriesKind, TradeStudyOptions,
+    InputTarget, OrderFlowPresentationOptions, PeriodicProfilePresentationOptions,
+    PeriodicProfilePresentationRequest, PointerSample, ProfileSource, ResampleBoundary, SeriesKind,
+    TradeStudyOptions,
 };
 use aeris_charts_render::draw_list::Prim;
 use aeris_charts_render_wgpu::{DrawGroup, TexQuadInstance, prims_to_group};
@@ -178,6 +180,136 @@ fn dense_footprint_wgpu_scene_ms() -> (usize, usize, f64) {
         text_instances,
         samples[p99_index] as f64 / 1_000_000.0,
     )
+}
+
+/// Sustained live order-flow tape timings, in milliseconds.
+struct LiveTapeTimings {
+    update_frame_p50_ms: f64,
+    update_frame_p99_ms: f64,
+    update_frame_max_ms: f64,
+    late_trade_ms: f64,
+    late_rebuilt_ticks: usize,
+    retained_trades_capped: bool,
+}
+
+/// One host-shaped order-flow presentation (time footprint + CVD + delta panes) fed the way a
+/// terminal feeds a live tape: small suffix batches, each followed by a frame. The history sits
+/// just under the retention ceiling so the loop crosses it, and one late print lands a bar back.
+fn sustained_order_flow_tape() -> LiveTapeTimings {
+    const HISTORY_BARS: usize = 2_600;
+    const TRADES_PER_BAR: usize = 100;
+    const BAR_MICROS: i64 = 60_000_000;
+    const TRADE_STEP_MICROS: i64 = BAR_MICROS / TRADES_PER_BAR as i64;
+    const UPDATES: usize = 600;
+    const TRADES_PER_UPDATE: usize = 4;
+    // The engine's order-flow retention ceiling (`footprint::ORDER_FLOW_MAX_RETAINED_TRADES`).
+    const ORDER_FLOW_MAX_RETAINED_TRADES: usize = 262_144;
+    let trade = |ordinal: u64, timestamp_micros: i64| FootprintTrade {
+        timestamp_micros,
+        price: 100.0 + ((ordinal * 7) % 21) as f64 * 0.25,
+        volume: (ordinal % 17 + 1) as f64,
+        aggressor: if ordinal.is_multiple_of(2) {
+            AggressorSide::Buy
+        } else {
+            AggressorSide::Sell
+        },
+        bid: None,
+        ask: None,
+        sequence: Some(ordinal),
+        trade_id: None,
+        conditions: 0,
+        session_id: Some(1),
+    };
+    let mut chart = ChartEngine::new(1600.0, 800.0, 1.0);
+    let presentation = chart
+        .add_order_flow_presentation(
+            "PERF:LIVE",
+            0,
+            OrderFlowPresentationOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 0.25,
+                    ticks_per_row: 0,
+                    bars: FootprintBarAggregation::Time {
+                        interval_micros: BAR_MICROS as u64,
+                        anchor_micros: 0,
+                    },
+                    ..FootprintAggregationOptions::default()
+                },
+                visual: FootprintVisualOptions::default(),
+                show_footprint: true,
+                show_cumulative_delta: true,
+                show_delta_histogram: true,
+                big_trades: None,
+            },
+        )
+        .expect("valid order-flow presentation");
+    chart.set_series_visible(0, false);
+    let mut ordinal = 0_u64;
+    let mut timestamp = 0_i64;
+    let history = (0..HISTORY_BARS * TRADES_PER_BAR)
+        .map(|_| {
+            ordinal += 1;
+            timestamp += TRADE_STEP_MICROS;
+            trade(ordinal, timestamp)
+        })
+        .collect::<Vec<_>>();
+    chart
+        .update_order_flow_presentation(presentation, history, false)
+        .expect("valid order-flow history");
+    chart.time_scale.set_width(1600.0);
+    chart.fit_footprint_viewport();
+    let mut frame = ChartFrame::default();
+    chart.build_frame_into(&mut frame);
+    chart.build_frame_into(&mut frame);
+
+    let mut samples = Vec::with_capacity(UPDATES);
+    for _ in 0..UPDATES {
+        let batch = (0..TRADES_PER_UPDATE)
+            .map(|_| {
+                ordinal += 1;
+                timestamp += TRADE_STEP_MICROS;
+                trade(ordinal, timestamp)
+            })
+            .collect::<Vec<_>>();
+        let started = Instant::now();
+        chart
+            .update_order_flow_presentation(presentation, batch, true)
+            .expect("valid live batch");
+        chart.build_frame_into(&mut frame);
+        samples.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    let footprint = presentation.footprint_series().expect("footprint drawn");
+    let retained_trades_capped = chart.footprint_bars(footprint).is_some_and(|bars| {
+        bars.iter()
+            .map(|bar| bar.trade_count as usize)
+            .sum::<usize>()
+            <= ORDER_FLOW_MAX_RETAINED_TRADES
+    });
+    let before = chart.footprint_work_stats(footprint).expect("work stats");
+    ordinal += 1;
+    let late = vec![trade(
+        ordinal,
+        timestamp - BAR_MICROS - TRADE_STEP_MICROS / 2,
+    )];
+    let started = Instant::now();
+    chart
+        .update_order_flow_presentation(presentation, late, true)
+        .expect("valid late print");
+    chart.build_frame_into(&mut frame);
+    let late_trade_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let after = chart.footprint_work_stats(footprint).expect("work stats");
+
+    samples.sort_unstable_by(f64::total_cmp);
+    let percentile =
+        |fraction: f64| samples[((samples.len() - 1) as f64 * fraction).round() as usize];
+    LiveTapeTimings {
+        update_frame_p50_ms: percentile(0.5),
+        update_frame_p99_ms: percentile(0.99),
+        update_frame_max_ms: samples[samples.len() - 1],
+        late_trade_ms,
+        late_rebuilt_ticks: after.rebuilt_ticks - before.rebuilt_ticks,
+        retained_trades_capped,
+    }
 }
 
 fn main() {
@@ -1147,6 +1279,37 @@ fn main() {
         depth_memory_second as f64 / (1024.0 * 1024.0),
     );
 
+    let live_tape = sustained_order_flow_tape();
+    println!(
+        "Target M — sustained live order-flow tape (footprint + CVD + delta, 260k-trade history, 600 x 4-trade batches each followed by a frame):"
+    );
+    println!(
+        "  update + frame p50 {:.3} ms, p99 {:.3} ms",
+        live_tape.update_frame_p50_ms, live_tape.update_frame_p99_ms
+    );
+    let m_p99 = report("update + frame p99", live_tape.update_frame_p99_ms, 4.0);
+    let m_max = report(
+        "worst update + frame (crosses retention ceiling)",
+        live_tape.update_frame_max_ms,
+        FRAME_BUDGET_MS,
+    );
+    let m_late = report(
+        &format!(
+            "late print one bar back + frame ({} rebuilt ticks)",
+            live_tape.late_rebuilt_ticks
+        ),
+        live_tape.late_trade_ms,
+        FRAME_BUDGET_MS,
+    );
+    println!(
+        "  [{}] retained tape stays within the order-flow ceiling",
+        if live_tape.retained_trades_capped {
+            "PASS"
+        } else {
+            "FAIL"
+        }
+    );
+
     let all_pass = a_pass
         && b_pass
         && c_pass
@@ -1171,7 +1334,11 @@ fn main() {
         && l_update
         && l_frame
         && l_upload
-        && l_flat_memory;
+        && l_flat_memory
+        && m_p99
+        && m_max
+        && m_late
+        && live_tape.retained_trades_capped;
     println!(
         "\n{}",
         if all_pass {
