@@ -124,8 +124,9 @@ pub use footprint::{
     FOOTPRINT_BAR_SPACING, FootprintAggregationOptions, FootprintAggregator, FootprintBar,
     FootprintBarAggregation, FootprintCellMode, FootprintError, FootprintImbalanceOptions,
     FootprintLevel, FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind,
-    FootprintVisualOptions, FootprintWorkStats, MAX_TIME_AND_SALES_ROWS,
-    MAX_TRADE_STREAM_KEY_BYTES, MAX_TRADE_STREAMS, OrderFlowPresentation,
+    FootprintVisualOptions, FootprintWorkStats, HistoryPrefixStats, MAX_TIME_AND_SALES_ROWS,
+    MAX_TRADE_STREAM_KEY_BYTES, MAX_TRADE_STREAMS, ORDER_FLOW_MAX_RETAINED_SESSIONS,
+    ORDER_FLOW_MAX_RETAINED_TRADES, ORDER_FLOW_MAX_STREAM_BYTES, OrderFlowPresentation,
     OrderFlowPresentationOptions, ReplayClockStats, ReplaySeekStats, TimeAndSalesOptions,
     TimeAndSalesRow, TradeStreamStats, TradeStudyKind, TradeStudyOptions, footprint_row_merge,
 };

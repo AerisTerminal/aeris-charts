@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use super::*;
 use crate::footprint::{
     FootprintAggregationOptions, FootprintBar, FootprintCellMode, FootprintLevel,
-    footprint_row_merge, footprint_row_price_bounds, merged_footprint_bar,
+    footprint_row_merge, footprint_row_price_bounds, merged_footprint_bar, merged_poc_price,
 };
 
 /// Bars at least this wide (CSS px) print cell numbers.
@@ -158,9 +158,11 @@ impl ChartEngine {
             let x = self.time_scale.index_to_coordinate(logical);
             let column = ClusterColumn::new(x, spacing, hpr);
             if lod == FootprintLod::Summary {
+                let poc_price = merged_poc_price(source, stored.ticks_per_row, stored.row_size());
                 push_range_summary(
                     out,
                     source,
+                    poc_price,
                     column,
                     scale,
                     rs.base_value,
@@ -170,10 +172,11 @@ impl ChartEngine {
                 );
                 continue;
             }
-            let bar = if merge > 1 {
+            // Stored levels are per tick; display rows group `ticks_per_row` of them.
+            let bar = if aggregation.ticks_per_row > 1 {
                 Cow::Owned(merged_footprint_bar(
                     source,
-                    merge,
+                    aggregation.ticks_per_row,
                     stored.imbalance,
                     aggregation.row_size(),
                 ))
@@ -322,6 +325,7 @@ fn push_range_line(
 fn push_range_summary(
     out: &mut Vec<Prim>,
     bar: &FootprintBar,
+    poc_price: f64,
     column: ClusterColumn,
     scale: &PriceScaleCore,
     base_value: f64,
@@ -349,7 +353,7 @@ fn push_range_summary(
         },
         color: body,
     });
-    let poc_y = (scale.price_to_coordinate(bar.poc_price, base_value) * vpr).round() as i32;
+    let poc_y = (scale.price_to_coordinate(poc_price, base_value) * vpr).round() as i32;
     out.push(Prim::Rect {
         rect: IRect {
             x: column.left,
