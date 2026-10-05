@@ -142,6 +142,17 @@ fn color_runs(colors: &[Color]) -> Vec<(usize, usize, Color)> {
     out
 }
 
+/// Up (`close >= open`) or down for the bar at `index`; `None` for a missing or whitespace row.
+fn bar_direction(plot: PlotListView<'_>, index: TimePointIndex) -> Option<bool> {
+    let row = plot.search(index, MismatchDirection::None)?;
+    if plot.is_whitespace_row(row) {
+        return None;
+    }
+    let close = plot.value_at(row, PlotValueIndex::Close);
+    let open = plot.value_at(row, PlotValueIndex::Open);
+    (close.is_finite() && open.is_finite()).then_some(close >= open)
+}
+
 fn mix_area_brush_color(low: Color, high: Color, amount: f64) -> Color {
     let t = amount.clamp(0.0, 1.0);
     let channel = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * t).round() as u8;
@@ -573,7 +584,20 @@ impl ChartEngine {
         };
         // the public reference volume tint: the primary series' up/down direction per bar. The primary
         // is the first visible, non-removed series (id 0 may be tombstoned).
-        let main = self.primary_series().map(|s| self.data.plot(s.id));
+        let primary = self.primary_series();
+        let main = primary.map(|s| self.data.plot(s.id));
+        // A footprint drawn over a whitespace primary presents those bars, so it supplies the
+        // direction wherever the primary row carries none.
+        let presented = primary
+            .and_then(|primary| {
+                self.series.iter().find(|s| {
+                    !s.removed
+                        && s.visible
+                        && s.kind == SeriesKind::Footprint
+                        && s.pane_index == primary.pane_index
+                })
+            })
+            .map(|s| self.data.plot(s.id));
         let point_colors = self.data.point_colors(rs.id);
         let histogram_updown = self
             .series_entry(rs.id)
@@ -606,20 +630,12 @@ impl ChartEngine {
                     Some(c) => Color(c),
                     None => {
                         if histogram_updown {
-                            // A whitespace row (or no row) on the primary series carries no
-                            // direction — the column falls back to its solid color.
-                            let direction = main.and_then(|m| {
-                                let row = m.search(
-                                    plot.index_at(r).expect("histogram row index"),
-                                    MismatchDirection::None,
-                                )?;
-                                if m.is_whitespace_row(row) {
-                                    return None;
-                                }
-                                let close = m.value_at(row, PlotValueIndex::Close);
-                                let open = m.value_at(row, PlotValueIndex::Open);
-                                (close.is_finite() && open.is_finite()).then_some(close >= open)
-                            });
+                            // A slot no presented bar covers carries no direction — the column
+                            // falls back to its solid color.
+                            let index = plot.index_at(r).expect("histogram row index");
+                            let direction = main
+                                .and_then(|m| bar_direction(m, index))
+                                .or_else(|| presented.and_then(|m| bar_direction(m, index)));
                             match direction {
                                 Some(true) => VOLUME_UP,
                                 Some(false) => VOLUME_DOWN,

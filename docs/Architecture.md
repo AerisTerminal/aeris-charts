@@ -623,8 +623,10 @@ pane-local price scale. Any series may carry a `render_before_time` cutoff: rows
 their data, scale participation, and last-value chrome but are not drawn. An order-flow
 presentation never hides its primary: a host showing a footprint installs the primary as
 whitespace (times only), so it supplies the bar grid and time axis while the footprint series owns
-autoscale, the last-value label, price line, and countdown. Bars the tape does not cover stay empty
-rather than falling back to OHLC. Automatic rows (`ticks_per_row == 0`) keep levels at the
+autoscale, the last-value label, price line, and countdown. Up/down volume histograms read each
+column's direction from the primary bar and, where that row is whitespace, from the visible
+footprint bar in the same slot. Bars the tape does not cover stay empty
+rather than falling back to OHLC, and their volume columns keep the series' solid color. Automatic rows (`ticks_per_row == 0`) keep levels at the
 instrument tick and merge them per frame in 1-2-5 steps into legible display rows, recomputing
 imbalances and POC on the merged rows; text stays at the configured size. `fit_footprint_viewport`
 opens the cluster zoom (`FOOTPRINT_BAR_SPACING`) at the real-time edge. Appended host suffixes accumulate on the
