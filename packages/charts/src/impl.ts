@@ -5287,6 +5287,41 @@ export class chart_impl implements chart_api {
     return this.indicator_series(this.wasm.add_chaikin_oscillator(source.id, volume_source.id, fast, slow), options);
   }
 
+  add_klinger(source: series_api, fast: number | undefined, slow: number | undefined, signal: number | undefined, volume_source: series_api, options?: Partial<series_options>): [series_api, series_api] {
+    fast ??= 34;
+    slow ??= 55;
+    signal ??= 13;
+    if (![fast, slow, signal].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000) || fast >= slow || !volume_source) {
+      throw new AerisChartsError("invalid_options", "Klinger requires volume and periods satisfying 1 <= fast < slow <= 1000000 and 1 <= signal <= 1000000");
+    }
+    const ids = this.wasm.add_klinger(source.id, volume_source.id, fast, slow, signal);
+    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid Klinger configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
+  }
+
+  add_kama(source: series_api, period = 10, fast = 2, slow = 30, options?: Partial<series_options>): series_api {
+    if (![period, fast, slow].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000) || fast >= slow) {
+      throw new AerisChartsError("invalid_options", "KAMA requires 1 <= period <= 1000000 and 1 <= fast < slow <= 1000000");
+    }
+    return this.indicator_series(this.wasm.add_kama(source.id, period, fast, slow), options);
+  }
+
+  add_mcginley(source: series_api, period = 14, options?: Partial<series_options>): series_api {
+    if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
+      throw new AerisChartsError("invalid_options", "McGinley period must be an integer from 1 to 1000000");
+    }
+    return this.indicator_series(this.wasm.add_mcginley(source.id, period), options);
+  }
+
+  add_linear_regression(source: series_api, period = 20, deviation = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
+    if (!Number.isInteger(period) || period < 1 || period > 1_000_000 || !Number.isFinite(deviation) || deviation < 0) {
+      throw new AerisChartsError("invalid_options", "Linear Regression requires a period from 1 to 1000000 and a nonnegative finite deviation");
+    }
+    const ids = this.wasm.add_linear_regression(source.id, period, deviation);
+    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Linear Regression configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
+  }
+
   add_relative_volume(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api {
     if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
       throw new AerisChartsError("invalid_options", "Relative Volume period must be an integer from 1 to 1000000");

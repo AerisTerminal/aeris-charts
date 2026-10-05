@@ -757,6 +757,79 @@ mod breadth_reference_tests {
         assert!(gap[6].unwrap().is_nan());
         assert!(gap[7].unwrap().is_finite());
     }
+
+    #[test]
+    fn klinger_uses_signed_cumulative_range_force_and_ema_signal() {
+        // Ranges are all two; trends +,+,-,-. Force = 100, 0, 0, -100/3.
+        let highs = [3.0, 4.0, 3.0, 2.0];
+        let lows = [1.0, 2.0, 1.0, 0.0];
+        let closes = [2.0, 3.0, 2.0, 1.0];
+        let out = klinger(&highs, &lows, &closes, &[1.0; 4], 1, 2, 2);
+        assert_eq!(out[0].line, None);
+        assert_eq!(out[1].line, Some(-50.0));
+        assert_eq!(out[1].signal, None);
+        assert!((out[2].line.unwrap() + 50.0 / 3.0).abs() < 1e-12);
+        assert!((out[2].signal.unwrap() + 100.0 / 3.0).abs() < 1e-12);
+        let gap = klinger(
+            &[3.0, f64::NAN, 3.0, 4.0],
+            &[1.0; 4],
+            &[2.0; 4],
+            &[1.0; 4],
+            1,
+            2,
+            2,
+        );
+        assert!(gap[1].line.unwrap().is_nan());
+        assert!(gap[2].line.unwrap().is_nan());
+        assert!(gap[3].line.unwrap().is_finite());
+    }
+
+    #[test]
+    fn kama_squares_efficiency_adjusted_smoothing_and_reseeds() {
+        let out = kama(&[1.0, 2.0, 3.0, 4.0, 3.0, 4.0], 3, 2, 5);
+        assert_eq!(out[..2], [None, None]);
+        assert_eq!(out[2], Some(2.0));
+        assert!((out[3].unwrap() - (2.0 + 2.0 * (2.0_f64 / 3.0).powi(2))).abs() < 1e-12);
+        // Net 1, path 3: ER=1/3, SC=(1/3*(2/3-1/3)+1/3)^2 = 16/81.
+        let expected = out[3].unwrap() + (3.0 - out[3].unwrap()) * 16.0 / 81.0;
+        assert!((out[4].unwrap() - expected).abs() < 1e-12);
+        let gap = kama(&[1.0, 2.0, 3.0, f64::NAN, 4.0, 5.0, 6.0], 3, 2, 5);
+        assert!(gap[3..6].iter().all(|value| value.unwrap().is_nan()));
+        assert_eq!(gap[6], Some(5.0));
+        assert_eq!(kama(&[1.0; 5], 2, 2, 5)[4], Some(1.0));
+    }
+
+    #[test]
+    fn mcginley_adapts_with_fourth_power_ratio() {
+        let out = mcginley(&[2.0, 4.0, 4.0, f64::NAN, 8.0], 2);
+        assert_eq!(out[0], Some(2.0));
+        assert_eq!(out[1], Some(2.0625)); // 2 + (4-2)/(2 * (4/2)^4)
+        assert!(out[3].unwrap().is_nan());
+        assert_eq!(out[4], Some(8.0));
+        assert!(mcginley(&[0.0, 2.0], 2)[0].unwrap().is_nan());
+    }
+
+    #[test]
+    fn regression_channel_uses_residual_not_price_deviation() {
+        let out = linear_regression(&[1.0, 3.0, 2.0, 5.0], 3, 2.0);
+        assert_eq!(out[0].curve, None);
+        assert_eq!(out[1].upper, None);
+        // Window 1,3,2: slope 1/2, intercept 3/2, fitted 3/2,2,5/2.
+        // Residuals -1/2,1,-1/2: population variance 1/2.
+        assert!((out[2].curve.unwrap() - 2.5).abs() < 1e-12);
+        assert!((out[2].upper.unwrap() - (2.5 + 2.0 / 2.0_f64.sqrt())).abs() < 1e-12);
+        assert!((out[2].lower.unwrap() - (2.5 - 2.0 / 2.0_f64.sqrt())).abs() < 1e-12);
+        let linear = linear_regression(&[1.0, 2.0, 3.0], 3, 3.0);
+        assert_eq!(linear[2].upper, Some(3.0));
+        assert_eq!(linear[2].lower, Some(3.0));
+        assert!(
+            linear_regression(&[1.0, f64::NAN, 3.0], 2, 2.0)[2]
+                .curve
+                .unwrap()
+                .is_nan()
+        );
+        assert_eq!(linear_regression(&[5.0], 1, 2.0)[0].curve, Some(5.0));
+    }
 }
 
 pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
@@ -775,6 +848,115 @@ pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
         }
     }
     out
+}
+
+/// Kaufman's adaptive moving average, SMA-seeded after `period` prices.
+/// Efficiency compares the net `period`-bar change with the sum of absolute
+/// changes; a flat window has zero efficiency.
+pub fn kama(values: &[f64], period: usize, fast: usize, slow: usize) -> Vec<Option<f64>> {
+    let mut out = vec![None; values.len()];
+    if period == 0 || fast == 0 || slow == 0 || fast >= slow {
+        return out;
+    }
+    let mut state = KamaState::default();
+    for (row, slot) in out.iter_mut().enumerate() {
+        let value = kama_step(&mut state, values, row, period, fast, slow);
+        if row + 1 >= period {
+            *slot = Some(value.unwrap_or(f64::NAN));
+        }
+    }
+    out
+}
+
+/// McGinley Dynamic, initialized at the first close. A nonpositive
+/// price/ratio or an invalid input breaks the recurrence until a new
+/// positive close seeds it.
+pub fn mcginley(values: &[f64], period: usize) -> Vec<Option<f64>> {
+    let mut out = vec![None; values.len()];
+    if period == 0 {
+        return out;
+    }
+    let mut state = McGinleyState::default();
+    for (slot, &value) in out.iter_mut().zip(values) {
+        *slot = Some(mcginley_step(&mut state, value, period).unwrap_or(f64::NAN));
+    }
+    out
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LinearRegressionPoint {
+    pub curve: Option<f64>,
+    pub upper: Option<f64>,
+    pub lower: Option<f64>,
+}
+
+/// Rolling least-squares line evaluated at the current bar. Channel width is
+/// `deviation` times the population standard deviation of residuals inside
+/// that window (not the standard deviation of the price itself).
+pub fn linear_regression(
+    values: &[f64],
+    period: usize,
+    deviation: f64,
+) -> Vec<LinearRegressionPoint> {
+    let mut out = vec![
+        LinearRegressionPoint {
+            curve: None,
+            upper: None,
+            lower: None,
+        };
+        values.len()
+    ];
+    if period == 0 || !deviation.is_finite() || deviation < 0.0 {
+        return out;
+    }
+    for (row, slot) in out.iter_mut().enumerate().skip(period - 1) {
+        let (curve, upper, lower) = linear_regression_at(values, row, period, deviation);
+        *slot = LinearRegressionPoint {
+            curve: Some(curve),
+            upper: Some(upper),
+            lower: Some(lower),
+        };
+    }
+    out
+}
+
+fn linear_regression_at(
+    values: &[f64],
+    row: usize,
+    period: usize,
+    deviation: f64,
+) -> (f64, f64, f64) {
+    let window = &values[row + 1 - period..=row];
+    if window.iter().any(|value| !value.is_finite()) {
+        return (f64::NAN, f64::NAN, f64::NAN);
+    }
+    let n = period as f64;
+    let mean_x = (n - 1.0) * 0.5;
+    let mean_y = window.iter().sum::<f64>() / n;
+    let denominator = n * (n * n - 1.0) / 12.0;
+    let slope = if period == 1 {
+        0.0
+    } else {
+        window
+            .iter()
+            .enumerate()
+            .map(|(x, &y)| (x as f64 - mean_x) * (y - mean_y))
+            .sum::<f64>()
+            / denominator
+    };
+    let intercept = mean_y - slope * mean_x;
+    let curve = intercept + slope * (n - 1.0);
+    let variance = window
+        .iter()
+        .enumerate()
+        .map(|(x, &y)| {
+            let residual = y - (intercept + slope * x as f64);
+            residual * residual
+        })
+        .sum::<f64>()
+        / n;
+    let spread = variance.sqrt() * deviation;
+    (curve, curve + spread, curve - spread)
 }
 
 /// Exponential moving average using the standard SMA seed, followed by the EMA recurrence.
@@ -1666,6 +1848,61 @@ pub struct VolumeOscillatorPoint {
     pub histogram: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KlingerPoint {
+    pub line: Option<f64>,
+    pub signal: Option<f64>,
+}
+
+/// Klinger volume oscillator: EMA(fast) - EMA(slow) of signed volume force,
+/// and an EMA signal. The trend follows the change in high + low + close;
+/// cumulative measurement restarts when the trend reverses. Flat ranges
+/// contribute zero force. Invalid OHLCV rows restart both EMA seeds.
+pub fn klinger(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    volumes: &[f64],
+    fast: usize,
+    slow: usize,
+    signal: usize,
+) -> Vec<KlingerPoint> {
+    let n = highs
+        .len()
+        .min(lows.len())
+        .min(closes.len())
+        .min(volumes.len());
+    let mut out = vec![
+        KlingerPoint {
+            line: None,
+            signal: None
+        };
+        n
+    ];
+    if fast == 0 || slow == 0 || signal == 0 || fast >= slow {
+        return out;
+    }
+    let mut state = KlingerState::default();
+    let signal_start = slow.saturating_add(signal).saturating_sub(2);
+    for row in 0..n {
+        let (line, signal_value) = klinger_step(
+            &mut state,
+            highs[row],
+            lows[row],
+            closes[row],
+            volumes[row],
+            [fast, slow, signal],
+        );
+        if row + 1 >= slow {
+            out[row].line = Some(line.unwrap_or(f64::NAN));
+        }
+        if row >= signal_start {
+            out[row].signal = Some(signal_value.unwrap_or(f64::NAN));
+        }
+    }
+    out
+}
+
 /// Percentage Volume Oscillator with an EMA signal and line-minus-signal histogram.
 pub fn volume_oscillator(
     volumes: &[f64],
@@ -2307,6 +2544,121 @@ struct TsiState {
     absolute_long: EmaState,
     absolute_short: EmaState,
     signal: EmaState,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct KamaState {
+    seen: usize,
+    value: f64,
+}
+
+fn kama_step(
+    state: &mut KamaState,
+    values: &[f64],
+    row: usize,
+    period: usize,
+    fast: usize,
+    slow: usize,
+) -> Option<f64> {
+    let close = values[row];
+    if !close.is_finite() {
+        *state = KamaState::default();
+        return None;
+    }
+    state.seen = state.seen.saturating_add(1).min(period.saturating_add(1));
+    if state.seen < period {
+        return None;
+    }
+    if state.seen == period {
+        state.value = values[row + 1 - period..=row].iter().sum::<f64>() / period as f64;
+    } else {
+        let window = &values[row - period..=row];
+        let change = (close - window[0]).abs();
+        let volatility = window
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .sum::<f64>();
+        let efficiency = if volatility == 0.0 {
+            0.0
+        } else {
+            change / volatility
+        };
+        let smoothing = (efficiency * (2.0 / (fast as f64 + 1.0) - 2.0 / (slow as f64 + 1.0))
+            + 2.0 / (slow as f64 + 1.0))
+            .powi(2);
+        state.value += smoothing * (close - state.value);
+    }
+    Some(state.value)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct McGinleyState {
+    value: Option<f64>,
+}
+
+fn mcginley_step(state: &mut McGinleyState, close: f64, period: usize) -> Option<f64> {
+    if !close.is_finite() || close <= 0.0 {
+        state.value = None;
+        return None;
+    }
+    let value = match state.value {
+        Some(previous) => {
+            let denominator = period as f64 * (close / previous).powi(4);
+            previous + (close - previous) / denominator
+        }
+        None => close,
+    };
+    state.value = value.is_finite().then_some(value);
+    state.value
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct KlingerState {
+    previous_sum: Option<f64>,
+    previous_range: f64,
+    trend: f64,
+    cumulative: f64,
+    fast: EmaState,
+    slow: EmaState,
+    signal: EmaState,
+}
+
+fn klinger_step(
+    state: &mut KlingerState,
+    high: f64,
+    low: f64,
+    close: f64,
+    volume: f64,
+    periods: [usize; 3],
+) -> (Option<f64>, Option<f64>) {
+    let range = high - low;
+    let sum = high + low + close;
+    if !sum.is_finite() || !range.is_finite() || range < 0.0 || !volume.is_finite() || volume < 0.0
+    {
+        *state = KlingerState::default();
+        return (None, None);
+    }
+    let trend = state
+        .previous_sum
+        .map_or(1.0, |previous| if sum > previous { 1.0 } else { -1.0 });
+    state.cumulative = if state.previous_sum.is_some() && trend == state.trend {
+        state.cumulative + range
+    } else {
+        state.previous_range + range
+    };
+    state.previous_range = range;
+    state.previous_sum = Some(sum);
+    state.trend = trend;
+    let force = if state.cumulative == 0.0 {
+        0.0
+    } else {
+        volume * trend * 100.0 * (2.0 * range / state.cumulative - 1.0).abs()
+    };
+    let first = ema_step(&mut state.fast, force, periods[0]);
+    let second = ema_step(&mut state.slow, force, periods[1]);
+    let line = first.zip(second).map(|(first, second)| first - second);
+    let signal_value = line.and_then(|line| ema_step(&mut state.signal, line, periods[2]));
+    (line, signal_value)
 }
 
 fn tsi_step(
@@ -4096,6 +4448,26 @@ enum IncrementalKind {
         sum_period: usize,
         state: RecursiveHistory<MassState>,
     },
+    Klinger {
+        fast: usize,
+        slow: usize,
+        signal: usize,
+        state: RecursiveHistory<KlingerState>,
+    },
+    Kama {
+        period: usize,
+        fast: usize,
+        slow: usize,
+        state: RecursiveHistory<KamaState>,
+    },
+    McGinley {
+        period: usize,
+        state: RecursiveHistory<McGinleyState>,
+    },
+    LinearRegression {
+        period: usize,
+        deviation: f64,
+    },
     CoppockCurve {
         long_period: usize,
         short_period: usize,
@@ -4538,6 +4910,44 @@ impl IncrementalState {
         )
     }
 
+    pub fn klinger(fast: usize, slow: usize, signal: usize) -> Self {
+        Self::new(
+            IncrementalKind::Klinger {
+                fast,
+                slow,
+                signal,
+                state: RecursiveHistory::new(),
+            },
+            2,
+        )
+    }
+
+    pub fn kama(period: usize, fast: usize, slow: usize) -> Self {
+        Self::new(
+            IncrementalKind::Kama {
+                period,
+                fast,
+                slow,
+                state: RecursiveHistory::new(),
+            },
+            1,
+        )
+    }
+
+    pub fn mcginley(period: usize) -> Self {
+        Self::new(
+            IncrementalKind::McGinley {
+                period,
+                state: RecursiveHistory::new(),
+            },
+            1,
+        )
+    }
+
+    pub fn linear_regression(period: usize, deviation: f64) -> Self {
+        Self::new(IncrementalKind::LinearRegression { period, deviation }, 3)
+    }
+
     pub fn coppock_curve(long_period: usize, short_period: usize, smoothing: usize) -> Self {
         Self::new(
             IncrementalKind::CoppockCurve {
@@ -4688,6 +5098,10 @@ impl IncrementalState {
             IncrementalKind::Kst { .. } => 0,
             IncrementalKind::Tsi { state, .. } => state.bytes(),
             IncrementalKind::MassIndex { state, .. } => state.bytes(),
+            IncrementalKind::Klinger { state, .. } => state.bytes(),
+            IncrementalKind::Kama { state, .. } => state.bytes(),
+            IncrementalKind::McGinley { state, .. } => state.bytes(),
+            IncrementalKind::LinearRegression { .. } => 0,
             IncrementalKind::CoppockCurve { .. } => 0,
             IncrementalKind::FisherTransform { state, window, .. } => {
                 state.bytes() + window.bytes()
@@ -5901,6 +6315,95 @@ impl IncrementalState {
                 }
                 state.finish(n, tail, before_tail);
             }
+            IncrementalKind::Klinger {
+                fast,
+                slow,
+                signal,
+                state,
+            } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let (line, signal_value) = klinger_step(
+                        &mut accumulator,
+                        input.high[row],
+                        input.low[row],
+                        input.close[row],
+                        input.volume.get(row).copied().unwrap_or(f64::NAN),
+                        [*fast, *slow, *signal],
+                    );
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(line.unwrap_or(f64::NAN));
+                    }
+                    if row >= self.output_from[1] {
+                        self.outputs[1].push(signal_value.unwrap_or(f64::NAN));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
+            IncrementalKind::Kama {
+                period,
+                fast,
+                slow,
+                state,
+            } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let value =
+                        kama_step(&mut accumulator, input.close, row, *period, *fast, *slow);
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(value.unwrap_or(f64::NAN));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
+            IncrementalKind::McGinley { period, state } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let value = mcginley_step(&mut accumulator, input.close[row], *period);
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(value.unwrap_or(f64::NAN));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
+            IncrementalKind::LinearRegression { period, deviation } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                for row in start..n {
+                    let (curve, upper, lower) =
+                        linear_regression_at(input.close, row, *period, *deviation);
+                    self.outputs[0].push(curve);
+                    self.outputs[1].push(upper);
+                    self.outputs[2].push(lower);
+                }
+            }
             IncrementalKind::CoppockCurve {
                 long_period,
                 short_period,
@@ -6212,6 +6715,16 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             sum_period,
             ..
         } => [mass_start(*ema_period, *sum_period), 0, 0, 0, 0],
+        IncrementalKind::Klinger { slow, signal, .. } => {
+            let line = slow.saturating_sub(1);
+            [line, line.saturating_add(signal.saturating_sub(1)), 0, 0, 0]
+        }
+        IncrementalKind::Kama { period, .. } => [period.saturating_sub(1), 0, 0, 0, 0],
+        IncrementalKind::McGinley { .. } => [0; MAX_OUTPUTS],
+        IncrementalKind::LinearRegression { period, .. } => {
+            let start = period.saturating_sub(1);
+            [start, start, start, 0, 0]
+        }
         IncrementalKind::CoppockCurve {
             long_period,
             short_period,
@@ -7431,6 +7944,10 @@ mod tests {
         Kst,
         Tsi,
         MassIndex,
+        Klinger,
+        Kama,
+        McGinley,
+        LinearRegression,
         CoppockCurve,
         FisherTransform,
         UltimateOscillator,
@@ -7651,6 +8168,23 @@ mod tests {
                 ]
             }
             TestKind::MassIndex => vec![mass_index(input.high, input.low, 3, 5)],
+            TestKind::Klinger => {
+                let points = klinger(input.high, input.low, input.close, input.volume, 3, 7, 4);
+                vec![
+                    points.iter().map(|point| point.line).collect(),
+                    points.iter().map(|point| point.signal).collect(),
+                ]
+            }
+            TestKind::Kama => vec![kama(input.close, 5, 2, 10)],
+            TestKind::McGinley => vec![mcginley(input.close, 5)],
+            TestKind::LinearRegression => {
+                let points = linear_regression(input.close, 5, 2.0);
+                vec![
+                    points.iter().map(|point| point.curve).collect(),
+                    points.iter().map(|point| point.upper).collect(),
+                    points.iter().map(|point| point.lower).collect(),
+                ]
+            }
             TestKind::CoppockCurve => vec![coppock_curve(input.close, 7, 5, 3)],
             TestKind::FisherTransform => {
                 let points = fisher_transform(input.high, input.low, 5);
@@ -7825,6 +8359,13 @@ mod tests {
             ),
             (TestKind::Tsi, IncrementalState::tsi(5, 3, 3)),
             (TestKind::MassIndex, IncrementalState::mass_index(3, 5)),
+            (TestKind::Klinger, IncrementalState::klinger(3, 7, 4)),
+            (TestKind::Kama, IncrementalState::kama(5, 2, 10)),
+            (TestKind::McGinley, IncrementalState::mcginley(5)),
+            (
+                TestKind::LinearRegression,
+                IncrementalState::linear_regression(5, 2.0),
+            ),
             (
                 TestKind::CoppockCurve,
                 IncrementalState::coppock_curve(7, 5, 3),
@@ -7945,6 +8486,13 @@ mod tests {
             ),
             (TestKind::Tsi, IncrementalState::tsi(5, 3, 3)),
             (TestKind::MassIndex, IncrementalState::mass_index(3, 5)),
+            (TestKind::Klinger, IncrementalState::klinger(3, 7, 4)),
+            (TestKind::Kama, IncrementalState::kama(5, 2, 10)),
+            (TestKind::McGinley, IncrementalState::mcginley(5)),
+            (
+                TestKind::LinearRegression,
+                IncrementalState::linear_regression(5, 2.0),
+            ),
             (TestKind::Vortex, IncrementalState::vortex(5)),
         ];
         let times = (0..1100).map(i64::from).collect::<Vec<_>>();

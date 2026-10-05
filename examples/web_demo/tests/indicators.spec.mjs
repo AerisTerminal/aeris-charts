@@ -166,6 +166,126 @@ test("volume oscillator keeps three ordered outputs across historical volume rep
   expect(result.after[2]).toBeCloseTo(-20 / 3, 8);
 });
 
+test("Klinger, KAMA, McGinley and regression expose ordered browser values and repair history", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const start = 1_702_000_000;
+    const price = chart.add_series("candlestick", { visible: false });
+    const volume = chart.add_series("histogram", { visible: false });
+    price.set_data([2, 3, 2, 1].map((close, i) => ({
+      time: start + i * 60, open: close, high: close + 1, low: close - 1, close,
+    })));
+    volume.set_data([0, 1, 2, 3].map((i) => ({ time: start + i * 60, value: 1 })));
+    const adaptive = chart.add_series("line", { visible: false });
+    adaptive.set_data([1, 2, 3, 4, 3, 4].map((value, i) => ({ time: start + i * 60, value })));
+    const dynamic = chart.add_series("line", { visible: false });
+    dynamic.set_data([2, 4, 4].map((value, i) => ({ time: start + i * 60, value })));
+    const regression = chart.add_series("line", { visible: false });
+    regression.set_data([1, 3, 2, 5].map((value, i) => ({ time: start + i * 60, value })));
+
+    const bindings = [
+      chart.add_klinger(price, 1, 2, 2, volume),
+      [chart.add_kama(adaptive, 3, 2, 5)],
+      [chart.add_mcginley(dynamic, 2)],
+      chart.add_linear_regression(regression, 3, 2),
+    ];
+    const before = [
+      bindings[0].map((s) => s.data().find((row) => row.time === start + 120)?.value),
+      [bindings[1][0].data().find((row) => row.time === start + 240)?.value],
+      [bindings[2][0].data().find((row) => row.time === start + 60)?.value],
+      bindings[3].map((s) => s.data().find((row) => row.time === start + 120)?.value),
+    ];
+    const signalAtLast = bindings[0][1].data().at(-1)?.value;
+    const metadata = bindings.map((group) => group.map((s) => ({
+      id: s.id,
+      kind: s.indicator_info().kind,
+      parameters: s.indicator_info().parameters,
+      index: s.indicator_info().output_index,
+      count: s.indicator_info().output_count,
+      binding_id: s.indicator_info().binding_id,
+      volume_id: s.indicator_info().volume_source?.id,
+      pane: s.pane_index(),
+    })));
+    const schemas = ["klinger", "kama", "mcginley", "linear_regression"].map((kind) =>
+      chart.indicator_schema(kind).parameters.map(({ name, default: value }) => [name, value]));
+    const panesBefore = chart.panes().length;
+    const invalid = [
+      () => chart.add_klinger(price, 2, 2, 2, volume),
+      () => chart.add_klinger(price, 1, 2, 2, null),
+      () => chart.add_klinger(price, 1, 2, 1.5, volume),
+      () => chart.add_kama(adaptive, 0, 2, 5),
+      () => chart.add_kama(adaptive, 3, 5, 2),
+      () => chart.add_mcginley(dynamic, Infinity),
+      () => chart.add_linear_regression(regression, 0, 2),
+      () => chart.add_linear_regression(regression, 3, -1),
+      () => chart.add_linear_regression(regression, 3, NaN),
+    ].map((add) => { try { add(); return false; } catch (error) { return error.code === "invalid_options"; } });
+    const panesAfter = chart.panes().length;
+    volume.update({ time: start + 60, value: 2 });
+    adaptive.update({ time: start + 180, value: 5 });
+    dynamic.update({ time: start + 60, value: 3 });
+    regression.update({ time: start + 60, value: 4 });
+    const after = bindings.map((group) => group.map((s) => s.data().at(-1)?.value));
+    const fresh = [
+      chart.add_klinger(price, 1, 2, 2, volume),
+      [chart.add_kama(adaptive, 3, 2, 5)],
+      [chart.add_mcginley(dynamic, 2)],
+      chart.add_linear_regression(regression, 3, 2),
+    ].map((group) => group.map((s) => s.data().at(-1)?.value));
+    const defaults = [
+      chart.add_klinger(price, undefined, undefined, undefined, volume)[0],
+      chart.add_kama(adaptive),
+      chart.add_mcginley(dynamic),
+      chart.add_linear_regression(regression)[0],
+    ].map((s) => s.indicator_info().parameters);
+    return { before, signalAtLast, after, fresh, defaults, metadata, schemas, invalid, panesBefore, panesAfter,
+      pricePane: price.pane_index(), volumeId: volume.id };
+  });
+  expect(result.before[0][0]).toBeCloseTo(-50 / 3, 8);
+  expect(result.before[0][1]).toBeCloseTo(-100 / 3, 8);
+  expect(result.signalAtLast).toBeCloseTo(-200 / 9, 8);
+  expect(result.before[1][0]).toBeCloseTo(2 + 8 / 9 + (3 - 2 - 8 / 9) * 16 / 81, 8);
+  expect(result.before[2][0]).toBeCloseTo(2.0625, 8);
+  expect(result.before[3][0]).toBeCloseTo(2.5, 8);
+  expect(result.before[3][1]).toBeCloseTo(2.5 + Math.SQRT2, 8);
+  expect(result.before[3][2]).toBeCloseTo(2.5 - Math.SQRT2, 8);
+  expect(result.invalid).toEqual(Array(9).fill(true));
+  expect(result.panesAfter).toBe(result.panesBefore);
+  expect(result.metadata.map((group) => group.map(({ kind }) => kind))).toEqual([
+    ["klinger", "klinger"], ["kama"], ["mcginley"],
+    ["linear_regression", "linear_regression", "linear_regression"],
+  ]);
+  for (const [i, group] of result.metadata.entries()) {
+    expect(group.map(({ index }) => index)).toEqual([...group.keys()]);
+    expect(group.map(({ count }) => count)).toEqual(Array(group.length).fill(group.length));
+    expect(group.map(({ binding_id }) => binding_id)).toEqual(Array(group.length).fill(group[0].id));
+    expect(new Set(group.map(({ pane }) => pane)).size).toBe(1);
+    for (let j = 0; j < group.length; j++) expect(result.after[i][j]).toBeCloseTo(result.fresh[i][j], 8);
+  }
+  expect(result.metadata[0][0]).toMatchObject({
+    parameters: { fast: 1, slow: 2, signal: 2 }, volume_id: result.volumeId,
+  });
+  expect(result.metadata[0][0].pane).not.toBe(result.pricePane);
+  expect(result.metadata.slice(1).every((group) => group[0].pane === result.pricePane)).toBe(true);
+  expect(result.metadata[1][0].parameters).toMatchObject({ period: 3, fast: 2, slow: 5 });
+  expect(result.metadata[2][0].parameters).toMatchObject({ period: 2 });
+  expect(result.metadata[3][0].parameters).toMatchObject({ period: 3, deviation: 2 });
+  expect(result.defaults).toEqual([
+    expect.objectContaining({ fast: 34, slow: 55, signal: 13 }),
+    expect.objectContaining({ period: 10, fast: 2, slow: 30 }),
+    expect.objectContaining({ period: 14 }),
+    expect.objectContaining({ period: 20, deviation: 2 }),
+  ]);
+  expect(result.schemas).toEqual([
+    [["source", "close"], ["fast", 34], ["slow", 55], ["signal", 13], ["volume_source", null]],
+    [["source", "close"], ["period", 10], ["fast", 2], ["slow", 30]],
+    [["source", "close"], ["period", 14]],
+    [["source", "close"], ["period", 20], ["deviation", 2]],
+  ]);
+});
+
 test("historical volatility annualizes sample log returns and repairs corrected history", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);

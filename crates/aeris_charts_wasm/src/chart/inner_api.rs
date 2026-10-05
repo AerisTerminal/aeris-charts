@@ -294,6 +294,21 @@ impl ChartInner {
             "accumulation_distribution" => IndicatorKind::AccumulationDistribution,
             "price_volume_trend" => IndicatorKind::PriceVolumeTrend,
             "chaikin_oscillator" => IndicatorKind::ChaikinOscillator { fast: 3, slow: 10 },
+            "klinger" => IndicatorKind::Klinger {
+                fast: 34,
+                slow: 55,
+                signal: 13,
+            },
+            "kama" => IndicatorKind::Kama {
+                period: 10,
+                fast: 2,
+                slow: 30,
+            },
+            "mcginley" => IndicatorKind::McGinley { period },
+            "linear_regression" => IndicatorKind::LinearRegression {
+                period: 20,
+                deviation: 2.0,
+            },
             "relative_volume" => IndicatorKind::RelativeVolume { period },
             "elder_force" => IndicatorKind::ElderForce { period },
             "ease_of_movement" => IndicatorKind::EaseOfMovement {
@@ -719,6 +734,62 @@ impl ChartInner {
                 slow as usize,
             )
             .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_klinger(
+        &mut self,
+        source_id: u32,
+        volume_source: i32,
+        fast: u32,
+        slow: u32,
+        signal: u32,
+    ) -> Vec<u32> {
+        if volume_source < 0 || fast == 0 || fast >= slow || signal == 0 {
+            return Vec::new();
+        }
+        self.engine.add_klinger(
+            source_id as SeriesId,
+            volume_source as SeriesId,
+            fast as usize,
+            slow as usize,
+            signal as usize,
+        )
+    }
+
+    pub fn add_kama(&mut self, source_id: u32, period: u32, fast: u32, slow: u32) -> u32 {
+        if period == 0 || fast == 0 || fast >= slow {
+            return u32::MAX;
+        }
+        self.engine
+            .add_kama(
+                source_id as SeriesId,
+                period as usize,
+                fast as usize,
+                slow as usize,
+            )
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_mcginley(&mut self, source_id: u32, period: u32) -> u32 {
+        if period == 0 {
+            return u32::MAX;
+        }
+        self.engine
+            .add_mcginley(source_id as SeriesId, period as usize)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_linear_regression(
+        &mut self,
+        source_id: u32,
+        period: u32,
+        deviation: f64,
+    ) -> Vec<u32> {
+        if period == 0 || !deviation.is_finite() || deviation < 0.0 {
+            return Vec::new();
+        }
+        self.engine
+            .add_linear_regression(source_id as SeriesId, period as usize, deviation)
     }
 
     pub fn add_relative_volume(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {

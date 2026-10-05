@@ -417,6 +417,8 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::AccumulationDistribution
         | IndicatorKind::PriceVolumeTrend
         | IndicatorKind::ChaikinOscillator { .. }
+        | IndicatorKind::Kama { .. }
+        | IndicatorKind::McGinley { .. }
         | IndicatorKind::RelativeVolume { .. }
         | IndicatorKind::ElderForce { .. }
         | IndicatorKind::EaseOfMovement { .. }
@@ -430,6 +432,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         IndicatorKind::VolumeOscillator { .. } => 3,
         IndicatorKind::Trix { .. }
         | IndicatorKind::Kst { .. }
+        | IndicatorKind::Klinger { .. }
         | IndicatorKind::Tsi { .. }
         | IndicatorKind::Vortex { .. }
         | IndicatorKind::FisherTransform { .. } => 2,
@@ -444,6 +447,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         IndicatorKind::Ichimoku => 5,
         IndicatorKind::EmaRibbon { .. } => aeris_charts_indicators::MAX_OUTPUTS,
         IndicatorKind::Bollinger { .. } => 3,
+        IndicatorKind::LinearRegression { .. } => 3,
         IndicatorKind::BollingerMetrics { .. } => 2,
         IndicatorKind::Envelopes { .. } => 3,
         IndicatorKind::Alma { .. } => 1,
@@ -542,6 +546,12 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         IndicatorKind::Obv => true,
         IndicatorKind::AccumulationDistribution | IndicatorKind::PriceVolumeTrend => true,
         IndicatorKind::ChaikinOscillator { fast, slow } => *fast > 0 && *slow > 0 && *fast < *slow,
+        IndicatorKind::Klinger { fast, slow, signal } => *fast > 0 && *fast < *slow && *signal > 0,
+        IndicatorKind::Kama { period, fast, slow } => *period > 0 && *fast > 0 && *fast < *slow,
+        IndicatorKind::McGinley { period } => *period > 0,
+        IndicatorKind::LinearRegression { period, deviation } => {
+            *period > 0 && deviation.is_finite() && *deviation >= 0.0
+        }
         IndicatorKind::RelativeVolume { period } => *period > 0,
         IndicatorKind::ElderForce { period } => *period > 0,
         IndicatorKind::EaseOfMovement { period, divisor } => {
@@ -2388,6 +2398,110 @@ mod tests {
             }
         );
         assert_eq!(binding.outputs, outputs);
+    }
+
+    #[test]
+    fn adaptive_regression_and_klinger_round_trip_and_reject_invalid_parameters() {
+        let mut chart = settled_chart();
+        let volume = chart.add_series(crate::SeriesKind::Histogram);
+        let times = (0..40).map(|row| row as f64 * 3600.0).collect::<Vec<_>>();
+        let values = (0..40).map(|row| 10.0 + row as f64).collect::<Vec<_>>();
+        chart
+            .set_series_data(volume, &times, &values, &values, &values, &values)
+            .unwrap();
+        let cases = [
+            (
+                crate::IndicatorKind::Klinger {
+                    fast: 3,
+                    slow: 7,
+                    signal: 4,
+                },
+                chart.add_klinger(0, volume, 3, 7, 4),
+            ),
+            (
+                crate::IndicatorKind::Kama {
+                    period: 5,
+                    fast: 2,
+                    slow: 10,
+                },
+                vec![chart.add_kama(0, 5, 2, 10).unwrap()],
+            ),
+            (
+                crate::IndicatorKind::McGinley { period: 5 },
+                vec![chart.add_mcginley(0, 5).unwrap()],
+            ),
+            (
+                crate::IndicatorKind::LinearRegression {
+                    period: 5,
+                    deviation: 2.0,
+                },
+                chart.add_linear_regression(0, 5, 2.0),
+            ),
+        ];
+        for (kind, outputs) in &cases {
+            assert_eq!(outputs.len(), incremental_output_count(kind));
+        }
+        for (index, (_, outputs)) in cases.iter().enumerate() {
+            for (slot, &output) in outputs.iter().enumerate() {
+                assert!(chart.set_indicator_output_style(
+                    output,
+                    crate::IndicatorOutputStyle {
+                        visible: (index + slot) % 2 == 0,
+                        line_color: Some("#336699".to_string()),
+                        line_width: Some(1.5 + slot as f64),
+                        ..crate::IndicatorOutputStyle::default()
+                    }
+                ));
+            }
+        }
+        let original_bindings = chart.indicator_bindings();
+        let document = chart.export_state_json().unwrap();
+        let mut restored = settled_chart();
+        let restored_volume = restored.add_series(crate::SeriesKind::Histogram);
+        restored
+            .set_series_data(restored_volume, &times, &values, &values, &values, &values)
+            .unwrap();
+        restored.import_state_json(&document).unwrap();
+        for (((kind, outputs), before), binding) in cases
+            .iter()
+            .zip(&original_bindings)
+            .zip(restored.indicator_bindings())
+        {
+            assert_eq!(&binding.kind, kind);
+            assert_eq!(&binding.outputs, outputs);
+            assert_eq!(binding.styles, before.styles);
+            assert_eq!(
+                binding.volume_source,
+                matches!(kind, crate::IndicatorKind::Klinger { .. }).then_some(restored_volume)
+            );
+            for &output in outputs {
+                let original = chart.data.series_data(output).unwrap();
+                let round_trip = restored.data.series_data(output).unwrap();
+                assert_eq!(original.0, round_trip.0);
+                for (left, right) in original.1.into_iter().zip(round_trip.1) {
+                    assert_eq!(left.len(), right.len());
+                    for (&left, &right) in left.iter().zip(right) {
+                        assert!(left == right || left.is_nan() && right.is_nan());
+                    }
+                }
+            }
+        }
+        for (index, field, value) in [
+            (0, "signal", serde_json::json!(0)),
+            (0, "fast", serde_json::json!(7)),
+            (1, "period", serde_json::json!(0)),
+            (1, "slow", serde_json::json!(2)),
+            (2, "period", serde_json::json!(0)),
+            (3, "period", serde_json::json!(0)),
+            (3, "deviation", serde_json::json!(-1.0)),
+        ] {
+            let mut invalid: serde_json::Value = serde_json::from_str(&document).unwrap();
+            invalid["indicators"][index]["kind"][field] = value;
+            let mut target = settled_chart();
+            let baseline = target.export_state_json().unwrap();
+            assert!(target.import_state_json(&invalid.to_string()).is_err());
+            assert_eq!(target.export_state_json().unwrap(), baseline);
+        }
     }
 
     #[test]

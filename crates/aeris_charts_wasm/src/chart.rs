@@ -2904,6 +2904,40 @@ impl AerisChart {
             .add_chaikin_oscillator(source_id, volume_source, fast, slow)
     }
 
+    pub fn add_klinger(
+        &mut self,
+        source_id: u32,
+        volume_source: i32,
+        fast: u32,
+        slow: u32,
+        signal: u32,
+    ) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_klinger(source_id, volume_source, fast, slow, signal)
+    }
+
+    pub fn add_kama(&mut self, source_id: u32, period: u32, fast: u32, slow: u32) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_kama(source_id, period, fast, slow)
+    }
+
+    pub fn add_mcginley(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_mcginley(source_id, period)
+    }
+
+    pub fn add_linear_regression(
+        &mut self,
+        source_id: u32,
+        period: u32,
+        deviation: f64,
+    ) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_linear_regression(source_id, period, deviation)
+    }
+
     pub fn add_relative_volume(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {
         self.inner
             .borrow_mut()

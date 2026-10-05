@@ -211,6 +211,24 @@ pub enum IndicatorKind {
         fast: usize,
         slow: usize,
     },
+    Klinger {
+        fast: usize,
+        slow: usize,
+        signal: usize,
+    },
+    Kama {
+        period: usize,
+        fast: usize,
+        slow: usize,
+    },
+    #[serde(rename = "mcginley")]
+    McGinley {
+        period: usize,
+    },
+    LinearRegression {
+        period: usize,
+        deviation: f64,
+    },
     RelativeVolume {
         period: usize,
     },
@@ -995,6 +1013,47 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::Klinger { fast, slow, signal } => (
+                            "klinger",
+                            slow,
+                            Some(signal as f64),
+                            IndicatorParameters {
+                                fast: Some(fast),
+                                slow: Some(slow),
+                                signal: Some(signal),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::Kama { period, fast, slow } => (
+                            "kama",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                fast: Some(fast),
+                                slow: Some(slow),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::McGinley { period } => (
+                            "mcginley",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::LinearRegression { period, deviation } => (
+                            "linear_regression",
+                            period,
+                            Some(deviation),
+                            IndicatorParameters {
+                                period: Some(period),
+                                deviation: Some(deviation),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::RelativeVolume { period } => (
                             "relative_volume",
                             period,
@@ -1614,6 +1673,52 @@ impl ChartEngine {
         .next()
     }
 
+    pub fn add_klinger(
+        &mut self,
+        source: SeriesId,
+        volume_source: SeriesId,
+        fast: usize,
+        slow: usize,
+        signal: usize,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(
+            source,
+            IndicatorKind::Klinger { fast, slow, signal },
+            Some(volume_source),
+        )
+    }
+
+    pub fn add_kama(
+        &mut self,
+        source: SeriesId,
+        period: usize,
+        fast: usize,
+        slow: usize,
+    ) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Kama { period, fast, slow }, None)
+            .into_iter()
+            .next()
+    }
+
+    pub fn add_mcginley(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::McGinley { period }, None)
+            .into_iter()
+            .next()
+    }
+
+    pub fn add_linear_regression(
+        &mut self,
+        source: SeriesId,
+        period: usize,
+        deviation: f64,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(
+            source,
+            IndicatorKind::LinearRegression { period, deviation },
+            None,
+        )
+    }
+
     pub fn add_relative_volume(
         &mut self,
         source: SeriesId,
@@ -1967,6 +2072,7 @@ impl ChartEngine {
                 }
             }
             IndicatorKind::ChaikinOscillator { .. }
+            | IndicatorKind::Klinger { .. }
             | IndicatorKind::RelativeVolume { .. }
             | IndicatorKind::ElderForce { .. } => {
                 if !ids.is_empty() {
@@ -2044,6 +2150,9 @@ impl ChartEngine {
             | IndicatorKind::Ichimoku
             | IndicatorKind::Vwap
             | IndicatorKind::VwapBands { .. }
+            | IndicatorKind::Kama { .. }
+            | IndicatorKind::McGinley { .. }
+            | IndicatorKind::LinearRegression { .. }
             | IndicatorKind::Wma { .. } => {}
         }
         ids
@@ -2162,6 +2271,28 @@ impl ChartEngine {
                     min: None,
                     max: None,
                 });
+            }
+            IndicatorKind::Klinger { fast, slow, signal } => {
+                parameters.push(integer("fast", fast));
+                parameters.push(integer("slow", slow));
+                parameters.push(integer("signal", signal));
+                parameters.push(IndicatorParameterDescriptor {
+                    name: "volume_source".into(),
+                    parameter_type: IndicatorParameterType::Series,
+                    default: serde_json::Value::Null,
+                    min: None,
+                    max: None,
+                });
+            }
+            IndicatorKind::Kama { period, fast, slow } => {
+                parameters.push(integer("period", period));
+                parameters.push(integer("fast", fast));
+                parameters.push(integer("slow", slow));
+            }
+            IndicatorKind::McGinley { period } => parameters.push(integer("period", period)),
+            IndicatorKind::LinearRegression { period, deviation } => {
+                parameters.push(integer("period", period));
+                parameters.push(number("deviation", deviation));
             }
             IndicatorKind::RelativeVolume { period } => {
                 parameters.push(integer("period", period));
@@ -2492,6 +2623,7 @@ impl ChartEngine {
                 | IndicatorKind::AccumulationDistribution
                 | IndicatorKind::PriceVolumeTrend
                 | IndicatorKind::ChaikinOscillator { .. }
+                | IndicatorKind::Klinger { .. }
                 | IndicatorKind::RelativeVolume { .. }
                 | IndicatorKind::VolumeOscillator { .. }
                 | IndicatorKind::ElderForce { .. }
@@ -2582,6 +2714,16 @@ impl ChartEngine {
                 IndicatorKind::AccumulationDistribution | IndicatorKind::PriceVolumeTrend => false,
                 IndicatorKind::ChaikinOscillator { fast, slow } => {
                     *fast == 0 || *slow == 0 || *fast >= *slow
+                }
+                IndicatorKind::Klinger { fast, slow, signal } => {
+                    *fast == 0 || *fast >= *slow || *signal == 0
+                }
+                IndicatorKind::Kama { period, fast, slow } => {
+                    *period == 0 || *fast == 0 || *fast >= *slow
+                }
+                IndicatorKind::McGinley { period } => *period == 0,
+                IndicatorKind::LinearRegression { period, deviation } => {
+                    *period == 0 || !deviation.is_finite() || *deviation < 0.0
                 }
                 IndicatorKind::RelativeVolume { period } => *period == 0,
                 IndicatorKind::VolumeOscillator { fast, slow, signal } => {
@@ -2838,6 +2980,7 @@ impl ChartEngine {
                                     | IndicatorKind::AccumulationDistribution
                                     | IndicatorKind::PriceVolumeTrend
                                     | IndicatorKind::ChaikinOscillator { .. }
+                                    | IndicatorKind::Klinger { .. }
                                     | IndicatorKind::RelativeVolume { .. }
                                     | IndicatorKind::VolumeOscillator { .. }
                                     | IndicatorKind::ElderForce { .. }
@@ -3069,6 +3212,10 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::AccumulationDistribution => "accumulation_distribution",
         IndicatorKind::PriceVolumeTrend => "price_volume_trend",
         IndicatorKind::ChaikinOscillator { .. } => "chaikin_oscillator",
+        IndicatorKind::Klinger { .. } => "klinger",
+        IndicatorKind::Kama { .. } => "kama",
+        IndicatorKind::McGinley { .. } => "mcginley",
+        IndicatorKind::LinearRegression { .. } => "linear_regression",
         IndicatorKind::RelativeVolume { .. } => "relative_volume",
         IndicatorKind::VolumeOscillator { .. } => "volume_oscillator",
         IndicatorKind::ElderForce { .. } => "elder_force",
@@ -3187,6 +3334,18 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         }
         IndicatorKind::ChaikinOscillator { fast, slow } => {
             aeris_charts_indicators::IncrementalState::chaikin_oscillator(fast, slow)
+        }
+        IndicatorKind::Klinger { fast, slow, signal } => {
+            aeris_charts_indicators::IncrementalState::klinger(fast, slow, signal)
+        }
+        IndicatorKind::Kama { period, fast, slow } => {
+            aeris_charts_indicators::IncrementalState::kama(period, fast, slow)
+        }
+        IndicatorKind::McGinley { period } => {
+            aeris_charts_indicators::IncrementalState::mcginley(period)
+        }
+        IndicatorKind::LinearRegression { period, deviation } => {
+            aeris_charts_indicators::IncrementalState::linear_regression(period, deviation)
         }
         IndicatorKind::RelativeVolume { period } => {
             aeris_charts_indicators::IncrementalState::relative_volume(period)
@@ -3357,6 +3516,14 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::ChaikinOscillator { fast, slow } => {
             format!("Chaikin Oscillator {fast} {slow}")
         }
+        IndicatorKind::Klinger { fast, slow, signal } => {
+            format!("Klinger {fast} {slow} {signal}")
+        }
+        IndicatorKind::Kama { period, fast, slow } => format!("KAMA {period} {fast} {slow}"),
+        IndicatorKind::McGinley { period } => format!("McGinley {period}"),
+        IndicatorKind::LinearRegression { period, deviation } => {
+            format!("Linear Regression {period} {}", params(*deviation))
+        }
         IndicatorKind::RelativeVolume { period } => format!("Relative Volume {period}"),
         IndicatorKind::VolumeOscillator { fast, slow, signal } => {
             format!("Volume Oscillator {fast} {slow} {signal}")
@@ -3486,6 +3653,10 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::AccumulationDistribution => "A/D",
         IndicatorKind::PriceVolumeTrend => "PVT",
         IndicatorKind::ChaikinOscillator { .. } => "Chaikin Oscillator",
+        IndicatorKind::Klinger { .. } => ["Klinger", "Signal"][output_index],
+        IndicatorKind::Kama { .. } => "KAMA",
+        IndicatorKind::McGinley { .. } => "McGinley",
+        IndicatorKind::LinearRegression { .. } => ["Curve", "Upper", "Lower"][output_index],
         IndicatorKind::RelativeVolume { .. } => "Relative Volume",
         IndicatorKind::VolumeOscillator { .. } => ["PVO", "Signal", "Histogram"][output_index],
         IndicatorKind::ElderForce { .. } => "Elder Force",
