@@ -1762,8 +1762,15 @@ impl ChartEngine {
                             scale,
                         );
                         if let Some(binding) = self.indicators.iter().find(|binding| {
-                            binding.outputs.first() == Some(&rs.id) && binding.annotations.is_some()
-                        }) && let Some(annotations) = &binding.annotations
+                            binding.outputs.first() == Some(&rs.id)
+                                && (binding.annotations.is_some() || binding.structure.is_some())
+                        }) && let Some(annotations) =
+                            binding.annotations.as_ref().or_else(|| {
+                                binding
+                                    .structure
+                                    .as_ref()
+                                    .map(|structure| structure.annotations())
+                            })
                         {
                             self.build_study_annotations_frame(
                                 rs.id,

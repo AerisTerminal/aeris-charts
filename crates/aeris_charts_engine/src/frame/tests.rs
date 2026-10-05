@@ -39,6 +39,7 @@ fn study_binding_paints_inside_its_output_layer_without_host_markers() {
         bottom: 105.0,
         bullish: true,
         end_row: None,
+        retired: false,
     });
     assert!(chart.inject_study_annotations_for_test(output, study));
     let frame = chart.build_frame();
@@ -94,6 +95,7 @@ fn mitigated_zone_visibility_follows_the_binding_choice() {
             bottom: 105.0,
             bullish: true,
             end_row: Some(10),
+            retired: false,
         });
         assert!(chart.inject_study_annotations_for_test(output, annotations));
         let frame = chart.build_frame();
@@ -121,6 +123,7 @@ fn study_annotations_paint_in_shared_order_and_clip_to_the_pane() {
         bottom: 100.0,
         bullish: true,
         end_row: None,
+        retired: false,
     });
     study.push_zone(StudyZone {
         start_row: 4,
@@ -129,6 +132,7 @@ fn study_annotations_paint_in_shared_order_and_clip_to_the_pane() {
         bottom: 99.0,
         bullish: false,
         end_row: Some(10),
+        retired: false,
     });
     study.push_marker(StudyMarker {
         row: 8,
@@ -186,6 +190,67 @@ fn study_annotations_paint_in_shared_order_and_clip_to_the_pane() {
             .iter()
             .all(|p| !matches!(p, Prim::Rect { rect, .. } if rect.x < 0))
     );
+}
+
+#[test]
+fn retired_zone_is_hidden_until_show_mitigated_and_ends_at_retirement() {
+    let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
+    chart.build_frame();
+    let anchor = chart.series[0].id;
+    let mut study = StudyAnnotations::default();
+    for (start_row, confirm_row) in [(2, 3), (5, 6)] {
+        study.push_zone_with_cap(
+            StudyZone {
+                start_row,
+                confirm_row,
+                top: 112.,
+                bottom: 100.,
+                bullish: true,
+                end_row: None,
+                retired: false,
+            },
+            1,
+        );
+    }
+    assert!(study.zones()[0].retired);
+    assert_eq!(study.zones()[0].end_row, Some(6));
+    let mut hidden = Vec::new();
+    chart.build_study_annotations_frame(
+        anchor,
+        anchor,
+        &study,
+        false,
+        0,
+        19,
+        800,
+        1.,
+        1.,
+        &mut hidden,
+    );
+    let mut shown = Vec::new();
+    chart.build_study_annotations_frame(
+        anchor, anchor, &study, true, 0, 19, 800, 1., 1., &mut shown,
+    );
+    assert_eq!(
+        hidden
+            .iter()
+            .filter(|p| matches!(p, Prim::RectFrame { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        shown
+            .iter()
+            .filter(|p| matches!(p, Prim::RectFrame { .. }))
+            .count(),
+        2
+    );
+    let (Prim::RectFrame { rect: retired, .. }, Prim::RectFrame { rect: active, .. }) =
+        (&shown[1], &shown[3])
+    else {
+        panic!("fill then border for both zones")
+    };
+    assert!(retired.x + retired.w < active.x + active.w);
 }
 
 #[test]

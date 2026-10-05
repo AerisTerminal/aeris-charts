@@ -625,7 +625,7 @@ pub(crate) struct IndicatorBinding {
     /// Structural-study geometry is binding-owned, never a synthetic output series.
     pub(crate) annotations: Option<StudyAnnotations>,
     /// Incremental OHLC scanner for structure studies; its history is not persisted.
-    structure: Option<StructureStudy>,
+    pub(crate) structure: Option<StructureStudy>,
     pub(crate) calendar: Option<StudyCalendarPolicy>,
     runtime: aeris_charts_indicators::IncrementalState,
     source_generation: u64,
@@ -882,7 +882,16 @@ impl ChartEngine {
     pub(crate) fn indicator_memory_usage(&self) -> (usize, usize) {
         self.indicators.iter().fold((0, 0), |usage, binding| {
             (
-                usage.0 + binding.runtime.runtime_bytes(),
+                usage.0
+                    + binding.runtime.runtime_bytes()
+                    + binding
+                        .structure
+                        .as_ref()
+                        .map_or(0, StructureStudy::capacity_bytes)
+                    + binding
+                        .annotations
+                        .as_ref()
+                        .map_or(0, StudyAnnotations::capacity_bytes),
                 usage.1 + binding.runtime.transfer_capacity_bytes(),
             )
         })
@@ -925,12 +934,17 @@ impl ChartEngine {
             .iter()
             .find(|producer| producer.outputs.first() == Some(&binding))
             .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "unknown study binding"))?;
-        producer.annotations.clone().ok_or_else(|| {
-            ChartError::new(
-                ErrorCode::UnsupportedOperation,
-                "study binding has no structural annotations",
-            )
-        })
+        producer
+            .annotations
+            .as_ref()
+            .or_else(|| producer.structure.as_ref().map(StructureStudy::annotations))
+            .cloned()
+            .ok_or_else(|| {
+                ChartError::new(
+                    ErrorCode::UnsupportedOperation,
+                    "study binding has no structural annotations",
+                )
+            })
     }
 
     /// Install bounded test geometry without exposing an incomplete structural-study kind.
@@ -3698,7 +3712,6 @@ impl ChartEngine {
             *structure = StructureStudy::new(structure_study_kind(&binding.kind).unwrap());
         }
         structure.update(input, output_start);
-        binding.annotations = Some(structure.annotations().clone());
         binding.source_generation = source_generation;
         for (output_index, output) in outputs.iter().flatten().copied().enumerate() {
             let previous_generation = self.data.series_generation(output).unwrap_or(0);
@@ -4648,6 +4661,7 @@ mod annotation_binding_tests {
             bottom: 10.0,
             bullish: true,
             end_row: None,
+            retired: false,
         });
         assert!(annotations.end_zone(0, 3));
         assert!(chart.inject_study_annotations_for_test(binding, annotations.clone()));
@@ -4840,6 +4854,40 @@ mod schema_mapping_tests {
 mod structure_engine_tests {
     use super::*;
     use aeris_charts_indicators::structure_studies::StructureStudy;
+
+    #[test]
+    fn retained_source_bounds_annotations_and_attributes_their_bytes() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let n = 5_000;
+        let times: Vec<_> = (0..n).map(|i| i as f64 + 1.).collect();
+        let close: Vec<_> = (0..n).map(|i| (i * 3) as f64 + 10.).collect();
+        let high: Vec<_> = close.iter().map(|v| v + 1.).collect();
+        let low: Vec<_> = close.iter().map(|v| v - 1.).collect();
+        chart
+            .set_series_data(0, &times, &close, &high, &low, &close)
+            .unwrap();
+        let anchor = chart.add_fair_value_gaps(
+            0,
+            0.,
+            StructureMitigation::Full,
+            StructureMitigationPrice::Close,
+            1,
+            true,
+        )[0];
+        let before = chart.study_annotations(anchor).unwrap();
+        assert!(before.zones().len() > 4_096);
+        assert!(before.zones()[0].retired);
+        let large = chart.memory_usage().indicator_runtime_bytes;
+        assert!(
+            large
+                >= before.zones().len() * std::mem::size_of::<aeris_charts_indicators::StudyZone>()
+        );
+        assert!(chart.set_series_max_points(0, Some(128)));
+        let after = chart.study_annotations(anchor).unwrap();
+        assert!(after.zones().len() < 128);
+        assert!(after.zones().iter().all(|zone| zone.start_row < 128));
+        assert!(chart.memory_usage().indicator_runtime_bytes < large);
+    }
 
     #[test]
     fn structure_bindings_align_anchor_and_confirmed_swing_levels() {

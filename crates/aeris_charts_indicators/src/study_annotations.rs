@@ -1,9 +1,7 @@
-//! Bounded, chart-independent annotation output for structural studies.
+//! Chart-independent annotation output bounded by retained source rows.
 
 use std::collections::VecDeque;
 
-pub const MAX_STUDY_MARKERS: usize = 4_096;
-pub const MAX_STUDY_ZONES: usize = 4_096;
 pub const MAX_ACTIVE_ZONES_PER_SIDE: usize = 64;
 
 /// Host-supplied UTC interval: inclusive start, exclusive end.
@@ -69,18 +67,21 @@ pub struct StudyZone {
     pub bullish: bool,
     /// First row that mitigates the zone, if any.
     pub end_row: Option<usize>,
+    /// Retired by the active-zone limit, rather than mitigated by price.
+    pub retired: bool,
 }
 
-/// Annotations retained in confirmation order, with independently bounded histories.
-///
-/// A full history evicts the oldest annotation before append. Active zones have a separate
-/// per-side cap; when exceeded, the oldest still-active zone on that side is discarded.
+/// Confirmation-ordered history. Swing and structure emit at most two markers per
+/// confirmation row; FVG and order blocks emit at most two zones per row.
+/// History is removed only when its source rows are removed.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct StudyAnnotations {
     markers: VecDeque<StudyMarker>,
     zones: VecDeque<StudyZone>,
     #[serde(skip)]
-    active_zones: [usize; 2],
+    active_zones: [VecDeque<usize>; 2],
+    #[serde(skip)]
+    ends: Vec<(usize, usize)>,
 }
 
 impl StudyAnnotations {
@@ -96,6 +97,21 @@ impl StudyAnnotations {
         &self.zones
     }
 
+    pub fn capacity_bytes(&self) -> usize {
+        self.markers.capacity() * std::mem::size_of::<StudyMarker>()
+            + self.zones.capacity() * std::mem::size_of::<StudyZone>()
+            + self.ends.capacity() * std::mem::size_of::<(usize, usize)>()
+            + self
+                .active_zones
+                .iter()
+                .map(|side| side.capacity() * std::mem::size_of::<usize>())
+                .sum::<usize>()
+    }
+
+    pub(crate) fn active_snapshot(&self) -> [VecDeque<usize>; 2] {
+        self.active_zones.clone()
+    }
+
     pub fn push_marker(&mut self, marker: StudyMarker) {
         assert!(
             self.markers
@@ -103,13 +119,15 @@ impl StudyAnnotations {
                 .is_none_or(|last| last.confirm_row <= marker.confirm_row),
             "study markers must be appended in confirmation order"
         );
-        if self.markers.len() == MAX_STUDY_MARKERS {
-            self.markers.pop_front();
-        }
         self.markers.push_back(marker);
     }
 
     pub fn push_zone(&mut self, zone: StudyZone) {
+        self.push_zone_with_cap(zone, MAX_ACTIVE_ZONES_PER_SIDE);
+    }
+
+    pub fn push_zone_with_cap(&mut self, zone: StudyZone, cap: usize) {
+        assert!((1..=MAX_ACTIVE_ZONES_PER_SIDE).contains(&cap));
         assert!(
             self.zones
                 .back()
@@ -117,23 +135,14 @@ impl StudyAnnotations {
             "study zones must be appended in confirmation order"
         );
         let side = Self::side(zone.bullish);
-        if zone.end_row.is_none() && self.active_zones[side] == MAX_ACTIVE_ZONES_PER_SIDE {
-            let oldest = self
-                .zones
-                .iter()
-                .position(|prior| prior.bullish == zone.bullish && prior.end_row.is_none())
-                .expect("active side has an oldest zone");
-            self.zones.remove(oldest);
-            self.active_zones[side] -= 1;
-        }
-        if self.zones.len() == MAX_STUDY_ZONES
-            && let Some(evicted) = self.zones.pop_front()
-            && evicted.end_row.is_none()
-        {
-            self.active_zones[Self::side(evicted.bullish)] -= 1;
-        }
         if zone.end_row.is_none() {
-            self.active_zones[side] += 1;
+            if self.active_zones[side].len() == cap {
+                let oldest = self.active_zones[side].pop_front().expect("active zone");
+                self.zones[oldest].end_row = Some(zone.confirm_row);
+                self.zones[oldest].retired = true;
+                self.ends.push((zone.confirm_row, oldest));
+            }
+            self.active_zones[side].push_back(self.zones.len());
         }
         self.zones.push_back(zone);
     }
@@ -147,15 +156,49 @@ impl StudyAnnotations {
         if end_row < zone.confirm_row || zone.end_row.is_some() {
             return false;
         }
-        self.active_zones[Self::side(zone.bullish)] -= 1;
+        self.active_zones[Self::side(zone.bullish)].retain(|&active| active != index);
         zone.end_row = Some(end_row);
+        self.ends.push((end_row, index));
         true
+    }
+
+    /// Discard annotations anchored on evicted source rows, preserving all other history.
+    pub fn drop_before(&mut self, first_row: usize) {
+        self.markers.retain(|m| m.row >= first_row);
+        let mut mapping = vec![None; self.zones.len()];
+        let mut next = 0;
+        for (i, zone) in self.zones.iter().enumerate() {
+            if zone.start_row >= first_row {
+                mapping[i] = Some(next);
+                next += 1;
+            }
+        }
+        self.zones.retain(|z| z.start_row >= first_row);
+        for side in &mut self.active_zones {
+            *side = side.iter().filter_map(|&i| mapping[i]).collect();
+        }
+        self.ends = self
+            .ends
+            .iter()
+            .filter_map(|&(end, i)| mapping[i].map(|i| (end, i)))
+            .collect();
+        self.markers.shrink_to_fit();
+        self.zones.shrink_to_fit();
     }
 
     /// Discard confirmations in the repaired suffix and undo its mitigations.
     ///
     /// Confirmation order makes the retained prefix searchable without scanning the history.
     pub fn rebuild_from(&mut self, from: usize) {
+        self.rebuild_from_snapshot(from, None);
+    }
+
+    /// Restore a small checkpoint's active indices without inspecting old history.
+    pub(crate) fn rebuild_from_snapshot(
+        &mut self,
+        from: usize,
+        active: Option<[VecDeque<usize>; 2]>,
+    ) {
         fn first_at_or_after<T>(
             items: &VecDeque<T>,
             from: usize,
@@ -176,28 +219,28 @@ impl StudyAnnotations {
         self.markers.truncate(marker_end);
         let zone_end = first_at_or_after(&self.zones, from, |z| z.confirm_row);
         self.zones.truncate(zone_end);
-        self.active_zones = [0; 2];
-        for zone in &mut self.zones {
-            if zone.end_row.is_some_and(|end| end >= from) {
-                zone.end_row = None;
-            }
-            if zone.end_row.is_none() {
-                self.active_zones[Self::side(zone.bullish)] += 1;
+        while self.ends.last().is_some_and(|&(end, _)| end >= from) {
+            let (_, index) = self.ends.pop().expect("last end");
+            if index < self.zones.len() {
+                self.zones[index].end_row = None;
+                self.zones[index].retired = false;
             }
         }
-        // Repair can reactivate previously mitigated zones. Keep the newest 64 per side.
-        for bullish in [true, false] {
-            let side = Self::side(bullish);
-            while self.active_zones[side] > MAX_ACTIVE_ZONES_PER_SIDE {
-                let oldest = self
-                    .zones
-                    .iter()
-                    .position(|z| z.bullish == bullish && z.end_row.is_none())
-                    .expect("active side has an oldest zone");
-                self.zones.remove(oldest);
-                self.active_zones[side] -= 1;
+        self.active_zones = active.unwrap_or_else(|| {
+            let mut sides = [VecDeque::new(), VecDeque::new()];
+            for (i, z) in self.zones.iter().enumerate() {
+                if z.end_row.is_none() {
+                    sides[Self::side(z.bullish)].push_back(i);
+                }
             }
-        }
+            sides
+        });
+    }
+
+    pub(crate) fn active_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.active_zones
+            .iter()
+            .flat_map(|side| side.iter().copied())
     }
 }
 
@@ -223,64 +266,48 @@ mod tests {
             bottom: 100.0,
             bullish,
             end_row: None,
+            retired: false,
         }
     }
 
     #[test]
-    fn marker_cap_evicts_oldest_and_allows_equal_confirmation_rows() {
+    fn long_history_retains_every_annotation_and_drops_only_evicted_source_rows() {
         let mut annotations = StudyAnnotations::default();
-        for row in 0..=MAX_STUDY_MARKERS {
+        for row in 0..10_000 {
             annotations.push_marker(marker(row));
-        }
-        annotations.push_marker(marker(MAX_STUDY_MARKERS));
-        assert_eq!(annotations.markers().len(), MAX_STUDY_MARKERS);
-        assert_eq!(annotations.markers()[0].confirm_row, 2);
-        assert_eq!(
-            annotations.markers().back().unwrap().confirm_row,
-            MAX_STUDY_MARKERS
-        );
-    }
-
-    #[test]
-    fn zone_history_and_active_caps_are_independent() {
-        let mut annotations = StudyAnnotations::default();
-        for row in 0..=MAX_STUDY_ZONES {
             let mut finished = zone(row, row % 2 == 0);
             finished.end_row = Some(row);
             annotations.push_zone(finished);
         }
-        assert_eq!(annotations.zones().len(), MAX_STUDY_ZONES);
-        assert_eq!(annotations.zones()[0].confirm_row, 1);
-
-        for row in 0..MAX_ACTIVE_ZONES_PER_SIDE {
-            annotations.push_zone(zone(MAX_STUDY_ZONES + 1 + row, true));
-            annotations.push_zone(zone(MAX_STUDY_ZONES + 1 + row, false));
-        }
-        let first_bull = MAX_STUDY_ZONES + 1;
-        annotations.push_zone(zone(MAX_STUDY_ZONES + 1 + MAX_ACTIVE_ZONES_PER_SIDE, true));
+        assert_eq!(annotations.markers().len(), 10_000);
+        assert_eq!(annotations.zones().len(), 10_000);
+        let bytes = annotations.capacity_bytes();
         assert!(
-            !annotations
-                .zones()
-                .iter()
-                .any(|z| z.confirm_row == first_bull && z.bullish)
+            bytes
+                >= 10_000 * (std::mem::size_of::<StudyMarker>() + std::mem::size_of::<StudyZone>())
         );
-        assert_eq!(
-            annotations
-                .zones()
-                .iter()
-                .filter(|z| z.bullish && z.end_row.is_none())
-                .count(),
-            MAX_ACTIVE_ZONES_PER_SIDE
-        );
-        assert_eq!(
-            annotations
-                .zones()
-                .iter()
-                .filter(|z| !z.bullish && z.end_row.is_none())
-                .count(),
-            MAX_ACTIVE_ZONES_PER_SIDE
-        );
-        assert_eq!(annotations.zones().len(), MAX_STUDY_ZONES);
+        annotations.drop_before(5_000);
+        assert!(annotations.capacity_bytes() < bytes);
+        assert_eq!(annotations.markers().front().unwrap().row, 5_000);
+        assert_eq!(annotations.zones().front().unwrap().start_row, 5_000);
+        assert_eq!(annotations.markers().len(), 4_998);
+        assert_eq!(annotations.zones().len(), 4_999);
+    }
+
+    #[test]
+    fn over_cap_retires_oldest_without_deleting_history() {
+        let mut annotations = StudyAnnotations::default();
+        for row in 0..10_000 {
+            annotations.push_zone_with_cap(zone(row, true), 1);
+        }
+        assert_eq!(annotations.zones().len(), 10_000);
+        assert_eq!(annotations.zones()[0].end_row, Some(1));
+        assert!(annotations.zones()[0].retired);
+        assert_eq!(annotations.active_indices().count(), 1);
+        annotations.rebuild_from(9_999);
+        assert_eq!(annotations.zones().len(), 9_999);
+        assert!(!annotations.zones()[9_998].retired);
+        assert_eq!(annotations.active_indices().count(), 1);
     }
 
     #[test]
@@ -315,41 +342,17 @@ mod tests {
     #[test]
     fn repair_reactivation_preserves_per_side_cap() {
         let mut annotations = StudyAnnotations::default();
-        for row in 0..=MAX_ACTIVE_ZONES_PER_SIDE {
+        for row in 0..MAX_ACTIVE_ZONES_PER_SIDE {
             annotations.push_zone(zone(row, true));
             assert!(annotations.end_zone(row, 100));
         }
         annotations.rebuild_from(100);
         assert_eq!(annotations.zones().len(), MAX_ACTIVE_ZONES_PER_SIDE);
-        assert_eq!(annotations.zones()[0].confirm_row, 1);
+        assert_eq!(annotations.zones()[0].confirm_row, 0);
         assert!(annotations.zones().iter().all(|z| z.end_row.is_none()));
-        assert!(annotations.end_zone(0, 101));
         annotations.push_zone(zone(101, true));
         assert_eq!(annotations.zones().len(), MAX_ACTIVE_ZONES_PER_SIDE + 1);
-    }
-
-    #[test]
-    fn history_eviction_releases_an_active_slot() {
-        let mut annotations = StudyAnnotations::default();
-        annotations.push_zone(zone(0, true));
-        for row in 1..MAX_STUDY_ZONES {
-            let mut finished = zone(row, false);
-            finished.end_row = Some(row);
-            annotations.push_zone(finished);
-        }
-        annotations.push_zone(zone(MAX_STUDY_ZONES, false));
-        assert_eq!(annotations.zones().len(), MAX_STUDY_ZONES);
-        for row in 1..=MAX_ACTIVE_ZONES_PER_SIDE {
-            annotations.push_zone(zone(MAX_STUDY_ZONES + row, true));
-        }
-        assert_eq!(
-            annotations
-                .zones()
-                .iter()
-                .filter(|z| z.bullish && z.end_row.is_none())
-                .count(),
-            MAX_ACTIVE_ZONES_PER_SIDE
-        );
+        assert!(annotations.zones()[0].retired);
     }
 
     #[test]

@@ -2,13 +2,11 @@
 
 use crate::{
     IndicatorInput,
-    study_annotations::{
-        MAX_STUDY_MARKERS, MAX_STUDY_ZONES, StudyAnnotations, StudyMarker, StudyMarkerKind,
-        StudyZone,
-    },
+    study_annotations::{StudyAnnotations, StudyMarker, StudyMarkerKind, StudyZone},
 };
+use std::collections::VecDeque;
 
-const CHECKPOINT_ROWS: usize = 256;
+const CHECKPOINT_ROWS: usize = 1024;
 pub const MAX_ORDER_BLOCK_SEARCH_ROWS: usize = 500;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -145,14 +143,11 @@ struct ScanState {
     trend: i8,
 }
 
-/// State immediately before the latest row. The annotation copy is bounded by the
-/// marker/zone caps; output columns and source bars are deliberately not copied.
+/// Only scanner state and active indices are checkpointed, never annotation history.
 #[derive(Clone, Debug)]
-struct TipSnapshot {
-    row: usize,
+struct ScanCheckpoint {
     state: ScanState,
-    annotations: StudyAnnotations,
-    evicted: bool,
+    active: [VecDeque<usize>; 2],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -169,12 +164,8 @@ pub struct StructureStudy {
     kind: StructureStudyKind,
     result: StructureStudyResult,
     state: ScanState,
-    checkpoints: Vec<ScanState>,
+    checkpoints: Vec<ScanCheckpoint>,
     len: usize,
-    // If an annotation was evicted, rebuilding from a checkpoint alone cannot
-    // recover it. An arbitrary older correction still replays from row zero.
-    evicted: bool,
-    tip_before: Option<TipSnapshot>,
     #[cfg(test)]
     processed_rows: usize,
 }
@@ -191,8 +182,6 @@ impl StructureStudy {
             state: ScanState::default(),
             checkpoints: Vec::new(),
             len: 0,
-            evicted: false,
-            tip_before: None,
             #[cfg(test)]
             processed_rows: 0,
         }
@@ -218,6 +207,27 @@ impl StructureStudy {
         self.len == 0
     }
 
+    pub fn capacity_bytes(&self) -> usize {
+        self.result.annotations.capacity_bytes()
+            + self.checkpoints.capacity() * std::mem::size_of::<ScanCheckpoint>()
+            + self
+                .checkpoints
+                .iter()
+                .map(|c| {
+                    c.active
+                        .iter()
+                        .map(|a| a.capacity() * std::mem::size_of::<usize>())
+                        .sum::<usize>()
+                })
+                .sum::<usize>()
+            + self
+                .result
+                .outputs
+                .iter()
+                .map(|v| v.capacity() * std::mem::size_of::<Option<f64>>())
+                .sum::<usize>()
+    }
+
     /// `from` is the earliest changed row, or the old length for an append.
     pub fn update(&mut self, input: IndicatorInput<'_>, from: usize) {
         let n = input
@@ -230,39 +240,23 @@ impl StructureStudy {
             from <= self.len && from <= n,
             "invalid structure repair row"
         );
-        if n == self.len
-            && from.checked_add(1) == Some(n)
-            && self.tip_before.as_ref().is_some_and(|tip| tip.row == from)
-        {
-            let tip = self.tip_before.take().expect("matching tip snapshot");
-            self.state = tip.state;
-            self.result.annotations = tip.annotations;
-            self.evicted = tip.evicted;
-            self.checkpoints.truncate(from / CHECKPOINT_ROWS);
-            for column in &mut self.result.outputs {
-                column.truncate(from);
-            }
-            self.process_rows(input, from, n);
-        } else if from < self.len {
-            let restart = if self.evicted {
-                0
+        if from < self.len {
+            let restart = from.min(n.saturating_sub(1)) / CHECKPOINT_ROWS * CHECKPOINT_ROWS;
+            let checkpoint = if restart == 0 {
+                ScanCheckpoint {
+                    state: ScanState::default(),
+                    active: [VecDeque::new(), VecDeque::new()],
+                }
             } else {
-                // If truncation lands exactly on a checkpoint, still evaluate
-                // the new final row to retain a valid pre-tip snapshot.
-                from.min(n.saturating_sub(1)) / CHECKPOINT_ROWS * CHECKPOINT_ROWS
+                self.checkpoints[restart / CHECKPOINT_ROWS - 1].clone()
             };
-            self.state = if restart == 0 {
-                ScanState::default()
-            } else {
-                self.checkpoints[restart / CHECKPOINT_ROWS - 1]
-            };
+            self.state = checkpoint.state;
             self.checkpoints.truncate(restart / CHECKPOINT_ROWS);
-            self.result.annotations.rebuild_from(restart);
+            self.result
+                .annotations
+                .rebuild_from_snapshot(restart, Some(checkpoint.active));
             for column in &mut self.result.outputs {
                 column.truncate(restart);
-            }
-            if restart == 0 {
-                self.evicted = false;
             }
             self.process_rows(input, restart, n);
         } else {
@@ -272,18 +266,7 @@ impl StructureStudy {
     }
 
     fn process_rows(&mut self, input: IndicatorInput<'_>, start: usize, end: usize) {
-        if start < end || end == 0 {
-            self.tip_before = None;
-        }
         for row in start..end {
-            if row + 1 == end {
-                self.tip_before = Some(TipSnapshot {
-                    row,
-                    state: self.state,
-                    annotations: self.result.annotations.clone(),
-                    evicted: self.evicted,
-                });
-            }
             self.advance(input, row);
         }
     }
@@ -315,6 +298,7 @@ impl StructureStudy {
                                 bottom: input.high[row - 2],
                                 bullish: true,
                                 end_row: None,
+                                retired: false,
                             },
                             max_active,
                         );
@@ -328,6 +312,7 @@ impl StructureStudy {
                                 bottom: input.high[row],
                                 bullish: false,
                                 end_row: None,
+                                retired: false,
                             },
                             max_active,
                         );
@@ -359,7 +344,10 @@ impl StructureStudy {
             }
         }
         if (row + 1).is_multiple_of(CHECKPOINT_ROWS) {
-            self.checkpoints.push(self.state);
+            self.checkpoints.push(ScanCheckpoint {
+                state: self.state,
+                active: self.result.annotations.active_snapshot(),
+            });
         }
     }
 
@@ -497,6 +485,7 @@ impl StructureStudy {
                                 bottom,
                                 bullish,
                                 end_row: None,
+                                retired: false,
                             },
                             max_active,
                         );
@@ -508,46 +497,11 @@ impl StructureStudy {
     }
 
     fn add_marker(&mut self, marker: StudyMarker) {
-        if self.result.annotations.markers().len() == MAX_STUDY_MARKERS {
-            self.evicted = true;
-        }
         self.result.annotations.push_marker(marker);
     }
 
     fn add_zone(&mut self, zone: StudyZone, max_active: usize) {
-        let prior = self.result.annotations.zones().len();
-        let active = self
-            .result
-            .annotations
-            .zones()
-            .iter()
-            .filter(|z| z.bullish == zone.bullish && z.end_row.is_none())
-            .count();
-        if prior == MAX_STUDY_ZONES || active == max_active {
-            self.evicted = true;
-        }
-        if active == max_active {
-            // StudyAnnotations owns private deques. Rebuild a bounded projection
-            // using its public insertion API, omitting the oldest active zone.
-            let oldest = self
-                .result
-                .annotations
-                .zones()
-                .iter()
-                .position(|z| z.bullish == zone.bullish && z.end_row.is_none())
-                .expect("active count has an oldest entry");
-            let mut next = StudyAnnotations::default();
-            for marker in self.result.annotations.markers() {
-                next.push_marker(*marker);
-            }
-            for (i, prior) in self.result.annotations.zones().iter().enumerate() {
-                if i != oldest {
-                    next.push_zone(*prior);
-                }
-            }
-            self.result.annotations = next;
-        }
-        self.result.annotations.push_zone(zone);
+        self.result.annotations.push_zone_with_cap(zone, max_active);
     }
 
     fn mitigate(
@@ -560,7 +514,8 @@ impl StructureStudy {
         if !valid(input, row) {
             return;
         }
-        for index in 0..self.result.annotations.zones().len() {
+        let active: Vec<_> = self.result.annotations.active_indices().collect();
+        for index in active {
             let z = self.result.annotations.zones()[index];
             if z.confirm_row >= row || z.end_row.is_some() {
                 continue;
@@ -841,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn capped_zone_repair_reconstructs_evicted_history() {
+    fn capped_zone_repair_preserves_retired_history() {
         let n = 800;
         let o: Vec<_> = (0..n).map(|i| (i * 3) as f64).collect();
         let h: Vec<_> = o.iter().map(|v| v + 1.).collect();
@@ -850,9 +805,12 @@ mod tests {
         let kind = fvg(Mitigation::Full, MitigationPrice::Close, 1);
         let mut study = StructureStudy::new(kind);
         study.update(input(&o, &h, &l, &c), 0);
-        assert!(study.evicted);
+        assert!(study.annotations().zones().len() > 64);
+        assert!(study.annotations().zones()[0].retired);
         l[600] = o[598] + 1.;
+        let before = study.processed_rows;
         study.update(input(&o, &h, &l, &c), 600);
+        assert!(study.processed_rows - before <= n - 600 + CHECKPOINT_ROWS);
         assert_eq!(
             *study.result(),
             structure_study(input(&o, &h, &l, &c), kind)
@@ -860,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_tip_replacement_after_marker_cap_processes_one_row() {
+    fn repeated_tip_replacement_preserves_all_markers() {
         // The tip is also the last row of a checkpoint block.
         let n = 8_192;
         let o = vec![100.; n];
@@ -872,13 +830,12 @@ mod tests {
             .collect();
         let mut study = StructureStudy::new(StructureStudyKind::swing_points(1, 1));
         study.update(input(&o, &h, &l, &o), 0);
-        assert_eq!(study.annotations().markers().len(), MAX_STUDY_MARKERS);
-        assert!(study.evicted);
+        assert!(study.annotations().markers().len() > 4_096);
         for i in 0_usize..12 {
             h[n - 1] = if i.is_multiple_of(2) { 104. } else { 101. };
             let before = study.processed_rows;
             study.update(input(&o, &h, &l, &o), n - 1);
-            assert_eq!(study.processed_rows - before, 1);
+            assert!(study.processed_rows - before <= CHECKPOINT_ROWS);
             assert_eq!(
                 *study.result(),
                 structure_study(
@@ -890,7 +847,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_tip_replacement_after_active_cap_restores_evicted_zone() {
+    fn repeated_tip_replacement_after_active_cap_restores_retired_zone() {
         let n = 4_200;
         let o: Vec<_> = (0..n).map(|i| (i * 3) as f64).collect();
         let h: Vec<_> = o.iter().map(|v| v + 1.).collect();
@@ -898,16 +855,88 @@ mod tests {
         let kind = fvg(Mitigation::Full, MitigationPrice::Close, 1);
         let mut study = StructureStudy::new(kind);
         study.update(input(&o, &h, &l, &o), 0);
-        assert!(study.evicted);
+        assert!(study.annotations().zones()[0].retired);
         for i in 0_usize..12 {
             l[n - 1] = o[n - 1] - if i.is_multiple_of(2) { 1. } else { 5. };
             let before = study.processed_rows;
             study.update(input(&o, &h, &l, &o), n - 1);
-            assert_eq!(study.processed_rows - before, 1);
+            assert!(study.processed_rows - before <= CHECKPOINT_ROWS);
             assert_eq!(
                 *study.result(),
                 structure_study(input(&o, &h, &l, &o), kind)
             );
+        }
+    }
+
+    #[test]
+    fn long_history_repairs_all_four_studies_from_one_checkpoint_not_from_zero() {
+        let n = 20_000;
+        let mut o: Vec<_> = (0..n).map(|i| (i / 4 * 4) as f64 + 10.).collect();
+        let mut h: Vec<_> = o.iter().map(|v| v + 2.).collect();
+        let l: Vec<_> = o.iter().map(|v| v - 2.).collect();
+        let mut c = o.clone();
+        for i in 0..n {
+            if i % 4 == 1 {
+                h[i] += 3.;
+                c[i] += 1.;
+            }
+            if i % 4 == 2 {
+                o[i] += 1.;
+                c[i] -= 1.;
+            }
+        }
+        let kinds = [
+            StructureStudyKind::swing_points(1, 1),
+            StructureStudyKind::market_structure(1, 1, BreakOn::Wick),
+            fvg(Mitigation::Full, MitigationPrice::Close, 2),
+            StructureStudyKind::OrderBlocks {
+                left: 1,
+                right: 1,
+                break_on: BreakOn::Wick,
+                zone: OrderBlockZone::Body,
+                mitigation: Mitigation::Full,
+                mitigation_price: MitigationPrice::Close,
+                max_active: 2,
+                show_mitigated: true,
+            },
+        ];
+        for kind in kinds {
+            let mut study = StructureStudy::new(kind);
+            study.update(input(&o, &h, &l, &c), 0);
+            for annotations in [
+                study
+                    .annotations()
+                    .markers()
+                    .iter()
+                    .map(|m| m.confirm_row)
+                    .collect::<Vec<_>>(),
+                study
+                    .annotations()
+                    .zones()
+                    .iter()
+                    .map(|z| z.confirm_row)
+                    .collect::<Vec<_>>(),
+            ] {
+                assert!(
+                    annotations.windows(3).all(|rows| rows[0] < rows[2]),
+                    "{kind:?} emitted more than two annotations at one confirmation"
+                );
+            }
+            for from in [17_123, 1_023, 1_024, 0] {
+                c[from] += 0.25;
+                let before = study.processed_rows;
+                study.update(input(&o, &h, &l, &c), from);
+                assert!(
+                    study.processed_rows - before <= n - from + CHECKPOINT_ROWS,
+                    "{kind:?} replayed {} rows",
+                    study.processed_rows - before
+                );
+                assert_eq!(
+                    *study.result(),
+                    structure_study(input(&o, &h, &l, &c), kind),
+                    "{kind:?}"
+                );
+            }
         }
     }
 

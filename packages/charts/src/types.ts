@@ -1136,6 +1136,8 @@ export interface study_zone {
   bottom: number;
   bullish: boolean;
   end_row: number | null;
+  /** True when max_active retired this zone rather than price mitigating it. */
+  retired: boolean;
 }
 export interface study_annotations {
   markers: study_marker[];

@@ -71,3 +71,26 @@ test("browser structure studies expose values, typed annotations and parameter v
   expect(result.plainError).toBe("unsupported_operation");
   expect(result.removedError).toBe("invalid_handle");
 });
+
+test("max active retires zones without deleting their browser history", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  const zones = await page.evaluate(() => {
+    const chart = window.__chart;
+    const source = chart.add_series("candlestick", { visible: false });
+    source.set_data(Array.from({ length: 30 }, (_, row) => ({
+      time: 1_700_100_000 + row * 60,
+      open: row * 3 + 10, high: row * 3 + 11,
+      low: row * 3 + 9, close: row * 3 + 10,
+    })));
+    const gap = chart.add_fair_value_gaps(source, {
+      max_active: 1, mitigation: "full", mitigation_price: "close", show_mitigated: true,
+    });
+    return chart.study_annotations(gap).zones;
+  });
+  expect(zones).toHaveLength(28);
+  expect(zones[0]).toMatchObject({
+    start_row: 1, confirm_row: 2, end_row: 3, retired: true,
+  });
+  expect(zones.at(-1)).toMatchObject({ end_row: null, retired: false });
+});
