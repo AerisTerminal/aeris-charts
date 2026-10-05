@@ -234,6 +234,23 @@ pub enum IndicatorKind {
         period: usize,
         signal: usize,
     },
+    Kst {
+        roc: [usize; 4],
+        smoothing: [usize; 4],
+        signal: usize,
+    },
+    Tsi {
+        long: usize,
+        short: usize,
+        signal: usize,
+    },
+    MassIndex {
+        ema_period: usize,
+        sum_period: usize,
+    },
+    Vortex {
+        period: usize,
+    },
     CoppockCurve {
         long: usize,
         short: usize,
@@ -396,6 +413,10 @@ pub struct IndicatorParameters {
     pub long_period: Option<usize>,
     pub short_period: Option<usize>,
     pub smoothing: Option<usize>,
+    pub roc: Option<[usize; 4]>,
+    pub smoothing_periods: Option<[usize; 4]>,
+    pub ema_period: Option<usize>,
+    pub sum_period: Option<usize>,
 }
 
 fn indicator_default_line_width(kind: &IndicatorKind) -> f64 {
@@ -1036,6 +1057,58 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::Kst {
+                            roc,
+                            smoothing,
+                            signal,
+                        } => (
+                            "kst",
+                            0,
+                            None,
+                            IndicatorParameters {
+                                roc: Some(roc),
+                                smoothing_periods: Some(smoothing),
+                                signal: Some(signal),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::Tsi {
+                            long,
+                            short,
+                            signal,
+                        } => (
+                            "tsi",
+                            long,
+                            None,
+                            IndicatorParameters {
+                                long_period: Some(long),
+                                short_period: Some(short),
+                                signal: Some(signal),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::MassIndex {
+                            ema_period,
+                            sum_period,
+                        } => (
+                            "mass_index",
+                            ema_period,
+                            None,
+                            IndicatorParameters {
+                                ema_period: Some(ema_period),
+                                sum_period: Some(sum_period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::Vortex { period } => (
+                            "vortex",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::CoppockCurve {
                             long,
                             short,
@@ -1624,6 +1697,64 @@ impl ChartEngine {
         self.add_indicator_kind(source, IndicatorKind::Trix { period, signal }, None)
     }
 
+    pub fn add_kst(
+        &mut self,
+        source: SeriesId,
+        roc: [usize; 4],
+        smoothing: [usize; 4],
+        signal: usize,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(
+            source,
+            IndicatorKind::Kst {
+                roc,
+                smoothing,
+                signal,
+            },
+            None,
+        )
+    }
+
+    pub fn add_tsi(
+        &mut self,
+        source: SeriesId,
+        long: usize,
+        short: usize,
+        signal: usize,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(
+            source,
+            IndicatorKind::Tsi {
+                long,
+                short,
+                signal,
+            },
+            None,
+        )
+    }
+
+    pub fn add_mass_index(
+        &mut self,
+        source: SeriesId,
+        ema_period: usize,
+        sum_period: usize,
+    ) -> Option<SeriesId> {
+        self.add_indicator_kind(
+            source,
+            IndicatorKind::MassIndex {
+                ema_period,
+                sum_period,
+            },
+            None,
+        )
+        .into_iter()
+        .next()
+    }
+
+    pub fn add_vortex(&mut self, source: SeriesId, period: usize) -> Vec<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Vortex { period }, None)
+    }
+
     pub fn add_coppock_curve(
         &mut self,
         source: SeriesId,
@@ -1852,7 +1983,11 @@ impl ChartEngine {
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
             }
-            IndicatorKind::Trix { .. } => {
+            IndicatorKind::Trix { .. }
+            | IndicatorKind::Kst { .. }
+            | IndicatorKind::Tsi { .. }
+            | IndicatorKind::MassIndex { .. }
+            | IndicatorKind::Vortex { .. } => {
                 if !ids.is_empty() {
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
@@ -2070,6 +2205,36 @@ impl ChartEngine {
                 parameters.push(integer("period", period));
                 parameters.push(integer("signal", signal));
             }
+            IndicatorKind::Kst {
+                roc,
+                smoothing,
+                signal,
+            } => {
+                for (index, period) in roc.into_iter().enumerate() {
+                    parameters.push(integer(&format!("roc_{}", index + 1), period));
+                }
+                for (index, period) in smoothing.into_iter().enumerate() {
+                    parameters.push(integer(&format!("smoothing_{}", index + 1), period));
+                }
+                parameters.push(integer("signal", signal));
+            }
+            IndicatorKind::Tsi {
+                long,
+                short,
+                signal,
+            } => {
+                parameters.push(integer("long", long));
+                parameters.push(integer("short", short));
+                parameters.push(integer("signal", signal));
+            }
+            IndicatorKind::MassIndex {
+                ema_period,
+                sum_period,
+            } => {
+                parameters.push(integer("ema_period", ema_period));
+                parameters.push(integer("sum_period", sum_period));
+            }
+            IndicatorKind::Vortex { period } => parameters.push(integer("period", period)),
             IndicatorKind::CoppockCurve {
                 long,
                 short,
@@ -2431,6 +2596,21 @@ impl ChartEngine {
                     annualization,
                 } => *period < 2 || !annualization.is_finite() || *annualization <= 0.0,
                 IndicatorKind::Trix { period, signal } => *period == 0 || *signal == 0,
+                IndicatorKind::Kst {
+                    roc,
+                    smoothing,
+                    signal,
+                } => roc.contains(&0) || smoothing.contains(&0) || *signal == 0,
+                IndicatorKind::Tsi {
+                    long,
+                    short,
+                    signal,
+                } => *long == 0 || *short == 0 || *signal == 0,
+                IndicatorKind::MassIndex {
+                    ema_period,
+                    sum_period,
+                } => *ema_period == 0 || *sum_period == 0,
+                IndicatorKind::Vortex { period } => *period == 0,
                 IndicatorKind::CoppockCurve {
                     long,
                     short,
@@ -2895,6 +3075,10 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::EaseOfMovement { .. } => "ease_of_movement",
         IndicatorKind::HistoricalVolatility { .. } => "historical_volatility",
         IndicatorKind::Trix { .. } => "trix",
+        IndicatorKind::Kst { .. } => "kst",
+        IndicatorKind::Tsi { .. } => "tsi",
+        IndicatorKind::MassIndex { .. } => "mass_index",
+        IndicatorKind::Vortex { .. } => "vortex",
         IndicatorKind::CoppockCurve { .. } => "coppock_curve",
         IndicatorKind::FisherTransform { .. } => "fisher_transform",
         IndicatorKind::UltimateOscillator { .. } => "ultimate_oscillator",
@@ -3024,6 +3208,23 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         }
         IndicatorKind::Trix { period, signal } => {
             aeris_charts_indicators::IncrementalState::trix(period, signal)
+        }
+        IndicatorKind::Kst {
+            roc,
+            smoothing,
+            signal,
+        } => aeris_charts_indicators::IncrementalState::kst(roc, smoothing, signal),
+        IndicatorKind::Tsi {
+            long,
+            short,
+            signal,
+        } => aeris_charts_indicators::IncrementalState::tsi(long, short, signal),
+        IndicatorKind::MassIndex {
+            ema_period,
+            sum_period,
+        } => aeris_charts_indicators::IncrementalState::mass_index(ema_period, sum_period),
+        IndicatorKind::Vortex { period } => {
+            aeris_charts_indicators::IncrementalState::vortex(period)
         }
         IndicatorKind::CoppockCurve {
             long,
@@ -3169,6 +3370,24 @@ fn indicator_title(kind: &IndicatorKind) -> String {
             annualization,
         } => format!("Historical Volatility {period} {}", params(*annualization)),
         IndicatorKind::Trix { period, signal } => format!("TRIX {period} {signal}"),
+        IndicatorKind::Kst {
+            roc,
+            smoothing,
+            signal,
+        } => format!(
+            "KST {} {} {} {} / {} {} {} {} / {signal}",
+            roc[0], roc[1], roc[2], roc[3], smoothing[0], smoothing[1], smoothing[2], smoothing[3]
+        ),
+        IndicatorKind::Tsi {
+            long,
+            short,
+            signal,
+        } => format!("TSI {long} {short} {signal}"),
+        IndicatorKind::MassIndex {
+            ema_period,
+            sum_period,
+        } => format!("Mass Index {ema_period} {sum_period}"),
+        IndicatorKind::Vortex { period } => format!("Vortex {period}"),
         IndicatorKind::CoppockCurve {
             long,
             short,
@@ -3273,6 +3492,10 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::EaseOfMovement { .. } => "EOM",
         IndicatorKind::HistoricalVolatility { .. } => "HV",
         IndicatorKind::Trix { .. } => ["TRIX", "Signal"][output_index],
+        IndicatorKind::Kst { .. } => ["KST", "Signal"][output_index],
+        IndicatorKind::Tsi { .. } => ["TSI", "Signal"][output_index],
+        IndicatorKind::MassIndex { .. } => "Mass Index",
+        IndicatorKind::Vortex { .. } => ["VI+", "VI-"][output_index],
         IndicatorKind::CoppockCurve { .. } => "Coppock Curve",
         IndicatorKind::FisherTransform { .. } => ["Fisher", "Trigger"][output_index],
         IndicatorKind::UltimateOscillator { .. } => "Ultimate Oscillator",

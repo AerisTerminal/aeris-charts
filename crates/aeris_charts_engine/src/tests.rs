@@ -1966,6 +1966,41 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 points.iter().map(|point| point.signal).collect(),
             ]
         }
+        IndicatorKind::Kst {
+            roc,
+            smoothing,
+            signal,
+        } => {
+            let points = aeris_charts_indicators::kst(source[3], roc, smoothing, signal);
+            vec![
+                points.iter().map(|point| point.line).collect(),
+                points.iter().map(|point| point.signal).collect(),
+            ]
+        }
+        IndicatorKind::Tsi {
+            long,
+            short,
+            signal,
+        } => {
+            let points = aeris_charts_indicators::tsi(source[3], long, short, signal);
+            vec![
+                points.iter().map(|point| point.line).collect(),
+                points.iter().map(|point| point.signal).collect(),
+            ]
+        }
+        IndicatorKind::MassIndex {
+            ema_period,
+            sum_period,
+        } => vec![aeris_charts_indicators::mass_index(
+            source[1], source[2], ema_period, sum_period,
+        )],
+        IndicatorKind::Vortex { period } => {
+            let points = aeris_charts_indicators::vortex(source[1], source[2], source[3], period);
+            vec![
+                points.iter().map(|point| point.plus).collect(),
+                points.iter().map(|point| point.minus).collect(),
+            ]
+        }
         IndicatorKind::CoppockCurve {
             long,
             short,
@@ -2452,6 +2487,21 @@ fn every_indicator_engine_path_matches_full_recomputation() {
             period: 3,
             signal: 4,
         },
+        IndicatorKind::Kst {
+            roc: [2, 3, 4, 5],
+            smoothing: [2, 3, 2, 3],
+            signal: 3,
+        },
+        IndicatorKind::Tsi {
+            long: 5,
+            short: 3,
+            signal: 4,
+        },
+        IndicatorKind::MassIndex {
+            ema_period: 3,
+            sum_period: 5,
+        },
+        IndicatorKind::Vortex { period: 5 },
         IndicatorKind::CoppockCurve {
             long: 7,
             short: 5,
@@ -2659,6 +2709,21 @@ fn batch_and_single_updates_are_semantically_identical_for_every_indicator() {
             period: 3,
             signal: 4,
         },
+        IndicatorKind::Kst {
+            roc: [2, 3, 4, 5],
+            smoothing: [2, 3, 2, 3],
+            signal: 3,
+        },
+        IndicatorKind::Tsi {
+            long: 5,
+            short: 3,
+            signal: 4,
+        },
+        IndicatorKind::MassIndex {
+            ema_period: 3,
+            sum_period: 5,
+        },
+        IndicatorKind::Vortex { period: 5 },
         IndicatorKind::CoppockCurve {
             long: 7,
             short: 5,
@@ -4023,6 +4088,49 @@ fn generic_indicator_creation_rejects_invalid_definitions_atomically() {
             .add_indicator_kind(0, IndicatorKind::Rsi { period: 2 }, Some(0))
             .is_empty()
     );
+    for kind in [
+        IndicatorKind::Kst {
+            roc: [2, 0, 4, 5],
+            smoothing: [2, 3, 4, 5],
+            signal: 2,
+        },
+        IndicatorKind::Kst {
+            roc: [2, 3, 4, 5],
+            smoothing: [2, 3, 0, 5],
+            signal: 2,
+        },
+        IndicatorKind::Kst {
+            roc: [2, 3, 4, 5],
+            smoothing: [2, 3, 4, 5],
+            signal: 0,
+        },
+        IndicatorKind::Tsi {
+            long: 0,
+            short: 3,
+            signal: 2,
+        },
+        IndicatorKind::Tsi {
+            long: 5,
+            short: 0,
+            signal: 2,
+        },
+        IndicatorKind::Tsi {
+            long: 5,
+            short: 3,
+            signal: 0,
+        },
+        IndicatorKind::MassIndex {
+            ema_period: 0,
+            sum_period: 5,
+        },
+        IndicatorKind::MassIndex {
+            ema_period: 3,
+            sum_period: 0,
+        },
+        IndicatorKind::Vortex { period: 0 },
+    ] {
+        assert!(chart.add_indicator_kind(0, kind, None).is_empty());
+    }
 
     assert_eq!(chart.series_order(), order);
     assert_eq!(chart.panes.len(), pane_count);
@@ -4152,6 +4260,82 @@ fn indicator_schema_exposes_typed_parameters_and_outputs() {
     assert_eq!(schema.outputs.len(), 3);
     assert_eq!(schema.outputs[0].name, "Upper");
     assert!(schema.outputs.iter().all(|output| output.supports_style));
+
+    for (kind, names, defaults, outputs) in [
+        (
+            IndicatorKind::Kst {
+                roc: [2, 3, 4, 5],
+                smoothing: [6, 7, 8, 9],
+                signal: 10,
+            },
+            vec![
+                "roc_1",
+                "roc_2",
+                "roc_3",
+                "roc_4",
+                "smoothing_1",
+                "smoothing_2",
+                "smoothing_3",
+                "smoothing_4",
+                "signal",
+            ],
+            vec![2, 3, 4, 5, 6, 7, 8, 9, 10],
+            vec!["KST", "Signal"],
+        ),
+        (
+            IndicatorKind::Tsi {
+                long: 11,
+                short: 12,
+                signal: 13,
+            },
+            vec!["long", "short", "signal"],
+            vec![11, 12, 13],
+            vec!["TSI", "Signal"],
+        ),
+        (
+            IndicatorKind::MassIndex {
+                ema_period: 14,
+                sum_period: 15,
+            },
+            vec!["ema_period", "sum_period"],
+            vec![14, 15],
+            vec!["Mass Index"],
+        ),
+        (
+            IndicatorKind::Vortex { period: 16 },
+            vec!["period"],
+            vec![16],
+            vec!["VI+", "VI-"],
+        ),
+    ] {
+        let schema = ChartEngine::indicator_schema(&kind);
+        assert_eq!(
+            schema
+                .parameters
+                .iter()
+                .skip(1)
+                .map(|parameter| parameter.name.as_str())
+                .collect::<Vec<_>>(),
+            names
+        );
+        assert_eq!(
+            schema
+                .parameters
+                .iter()
+                .skip(1)
+                .map(|parameter| parameter.default.as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            defaults
+        );
+        assert_eq!(
+            schema
+                .outputs
+                .iter()
+                .map(|output| output.name.as_str())
+                .collect::<Vec<_>>(),
+            outputs
+        );
+    }
 }
 
 #[test]

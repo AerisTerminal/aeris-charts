@@ -305,6 +305,21 @@ impl ChartInner {
                 annualization: 252.0,
             },
             "trix" => IndicatorKind::Trix { period, signal: 9 },
+            "kst" => IndicatorKind::Kst {
+                roc: [10, 15, 20, 30],
+                smoothing: [10, 10, 10, 15],
+                signal: 9,
+            },
+            "tsi" => IndicatorKind::Tsi {
+                long: 25,
+                short: 13,
+                signal: 13,
+            },
+            "mass_index" => IndicatorKind::MassIndex {
+                ema_period: 9,
+                sum_period: 25,
+            },
+            "vortex" => IndicatorKind::Vortex { period },
             "coppock_curve" => IndicatorKind::CoppockCurve {
                 long: 14,
                 short: 11,
@@ -786,6 +801,62 @@ impl ChartInner {
     pub fn add_trix(&mut self, source_id: u32, period: u32, signal: u32) -> Vec<u32> {
         self.engine
             .add_trix(source_id as SeriesId, period as usize, signal as usize)
+    }
+
+    pub fn add_kst(
+        &mut self,
+        source_id: u32,
+        roc: [u32; 4],
+        smoothing: [u32; 4],
+        signal: u32,
+    ) -> Vec<u32> {
+        if roc
+            .iter()
+            .chain(smoothing.iter())
+            .chain([&signal])
+            .any(|&p| p == 0)
+        {
+            return Vec::new();
+        }
+        self.engine.add_kst(
+            source_id as SeriesId,
+            roc.map(|p| p as usize),
+            smoothing.map(|p| p as usize),
+            signal as usize,
+        )
+    }
+
+    pub fn add_tsi(&mut self, source_id: u32, long: u32, short: u32, signal: u32) -> Vec<u32> {
+        if [long, short, signal].contains(&0) {
+            return Vec::new();
+        }
+        self.engine.add_tsi(
+            source_id as SeriesId,
+            long as usize,
+            short as usize,
+            signal as usize,
+        )
+    }
+
+    pub fn add_mass_index(&mut self, source_id: u32, ema_period: u32, sum_period: u32) -> u32 {
+        if [ema_period, sum_period].contains(&0) {
+            return u32::MAX;
+        }
+        self.engine
+            .add_mass_index(
+                source_id as SeriesId,
+                ema_period as usize,
+                sum_period as usize,
+            )
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_vortex(&mut self, source_id: u32, period: u32) -> Vec<u32> {
+        if period == 0 {
+            return Vec::new();
+        }
+        self.engine
+            .add_vortex(source_id as SeriesId, period as usize)
     }
 
     pub fn add_coppock_curve(

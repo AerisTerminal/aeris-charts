@@ -25,7 +25,7 @@ import type {
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   depth_event_columns, depth_event_layer_options, depth_heatmap_options, depth_ladder_row, depth_options, depth_snapshot_columns, depth_study_snapshot, depth_update_columns,
   drawing_point, drawing_tool_change_handler, drawing_interval, drawing_property_schema, drawing_kind_options, drawing_template,
-  ema_ribbon_options, ema_ribbon_periods,
+  ema_ribbon_options, ema_ribbon_periods, kst_periods,
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
   general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_snapshot, general_legend_snapshot, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
@@ -5330,6 +5330,47 @@ export class chart_impl implements chart_api {
     }
     const ids = this.wasm.add_trix(source.id, period, signal);
     if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid TRIX configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
+  }
+
+  add_kst(
+    source: series_api,
+    roc: kst_periods = [10, 15, 20, 30],
+    smoothing: kst_periods = [10, 10, 10, 15],
+    signal = 9,
+    options?: Partial<series_options>,
+  ): [series_api, series_api] {
+    if (roc.length !== 4 || smoothing.length !== 4 ||
+        ![...roc, ...smoothing, signal].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000)) {
+      throw new AerisChartsError("invalid_options", "KST periods must be integers from 1 to 1000000");
+    }
+    const ids = this.wasm.add_kst(source.id, Uint32Array.from(roc), Uint32Array.from(smoothing), signal);
+    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid KST configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
+  }
+
+  add_tsi(source: series_api, long = 25, short = 13, signal = 13, options?: Partial<series_options>): [series_api, series_api] {
+    if (![long, short, signal].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000)) {
+      throw new AerisChartsError("invalid_options", "TSI periods must be integers from 1 to 1000000");
+    }
+    const ids = this.wasm.add_tsi(source.id, long, short, signal);
+    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid TSI configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
+  }
+
+  add_mass_index(source: series_api, ema_period = 9, sum_period = 25, options?: Partial<series_options>): series_api {
+    if (![ema_period, sum_period].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000)) {
+      throw new AerisChartsError("invalid_options", "Mass Index periods must be integers from 1 to 1000000");
+    }
+    return this.indicator_series(this.wasm.add_mass_index(source.id, ema_period, sum_period), options);
+  }
+
+  add_vortex(source: series_api, period = 14, options?: Partial<series_options>): [series_api, series_api] {
+    if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
+      throw new AerisChartsError("invalid_options", "Vortex period must be an integer from 1 to 1000000");
+    }
+    const ids = this.wasm.add_vortex(source.id, period);
+    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid Vortex configuration");
     return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
   }
 

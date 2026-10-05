@@ -1089,7 +1089,7 @@ export interface comparison_legend_entry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "aroon" | "awesome_oscillator" | "dpo" | "chande_momentum" | "bollinger_metrics" | "envelopes" | "alma" | "accumulation_distribution" | "price_volume_trend" | "chaikin_oscillator" | "relative_volume" | "volume_oscillator" | "elder_force" | "ease_of_movement" | "historical_volatility" | "trix" | "coppock_curve" | "fisher_transform" | "ultimate_oscillator" | "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "zigzag" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
+export type indicator_kind = "aroon" | "awesome_oscillator" | "dpo" | "chande_momentum" | "bollinger_metrics" | "envelopes" | "alma" | "accumulation_distribution" | "price_volume_trend" | "chaikin_oscillator" | "relative_volume" | "volume_oscillator" | "elder_force" | "ease_of_movement" | "historical_volatility" | "trix" | "kst" | "tsi" | "mass_index" | "vortex" | "coppock_curve" | "fisher_transform" | "ultimate_oscillator" | "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "zigzag" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
 export type pivot_kind = "standard" | "fibonacci" | "camarilla" | "woodie" | "demark";
 export type vwap_reset = "session" | "weekly" | "monthly";
 export type indicator_parameter_type = "integer" | "number" | "boolean" | "source" | "series";
@@ -1157,6 +1157,10 @@ export interface indicator_info {
     long_period: number | null;
     short_period: number | null;
     smoothing: number | null;
+    roc: [number, number, number, number] | null;
+    smoothing_periods: [number, number, number, number] | null;
+    ema_period: number | null;
+    sum_period: number | null;
   };
   period: number;
   /** Second parameter when the kind has one: Bollinger deviation, MACD signal period,
@@ -1180,6 +1184,7 @@ export interface indicator_info {
 
 /** Five EMA periods in fastest-to-slowest output order. */
 export type ema_ribbon_periods = readonly [number, number, number, number, number];
+export type kst_periods = readonly [number, number, number, number];
 
 /** Per-output style overrides in the same order as {@link ema_ribbon_periods}. */
 export type ema_ribbon_options = readonly [
@@ -3558,6 +3563,10 @@ export interface chart_api {
   add_ease_of_movement(source: series_api, period: number, volume_source: series_api, divisor?: number, options?: Partial<series_options>): series_api;
   add_historical_volatility(source: series_api, period: number, annualization?: number, options?: Partial<series_options>): series_api;
   add_trix(source: series_api, period: number, signal?: number, options?: Partial<series_options>): [series_api, series_api];
+  add_kst(source: series_api, roc?: kst_periods, smoothing?: kst_periods, signal?: number, options?: Partial<series_options>): [series_api, series_api];
+  add_tsi(source: series_api, long?: number, short?: number, signal?: number, options?: Partial<series_options>): [series_api, series_api];
+  add_mass_index(source: series_api, ema_period?: number, sum_period?: number, options?: Partial<series_options>): series_api;
+  add_vortex(source: series_api, period?: number, options?: Partial<series_options>): [series_api, series_api];
   add_coppock_curve(source: series_api, long_period?: number, short_period?: number, smoothing?: number, options?: Partial<series_options>): series_api;
   add_fisher_transform(source: series_api, period?: number, options?: Partial<series_options>): [series_api, series_api];
   add_ultimate_oscillator(source: series_api, short_period?: number, medium_period?: number, long_period?: number, options?: Partial<series_options>): series_api;

@@ -421,13 +421,18 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::ElderForce { .. }
         | IndicatorKind::EaseOfMovement { .. }
         | IndicatorKind::HistoricalVolatility { .. }
+        | IndicatorKind::MassIndex { .. }
         | IndicatorKind::CoppockCurve { .. }
         | IndicatorKind::UltimateOscillator { .. }
         | IndicatorKind::Cmf { .. }
         | IndicatorKind::Mfi { .. }
         | IndicatorKind::Wma { .. } => 1,
         IndicatorKind::VolumeOscillator { .. } => 3,
-        IndicatorKind::Trix { .. } | IndicatorKind::FisherTransform { .. } => 2,
+        IndicatorKind::Trix { .. }
+        | IndicatorKind::Kst { .. }
+        | IndicatorKind::Tsi { .. }
+        | IndicatorKind::Vortex { .. }
+        | IndicatorKind::FisherTransform { .. } => 2,
         IndicatorKind::Volume { .. } => 2,
         IndicatorKind::Donchian { .. }
         | IndicatorKind::Keltner { .. }
@@ -547,6 +552,25 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
             annualization,
         } => *period >= 2 && annualization.is_finite() && *annualization > 0.0,
         IndicatorKind::Trix { period, signal } => *period > 0 && *signal > 0,
+        IndicatorKind::Kst {
+            roc,
+            smoothing,
+            signal,
+        } => {
+            roc.iter().all(|&period| period > 0)
+                && smoothing.iter().all(|&period| period > 0)
+                && *signal > 0
+        }
+        IndicatorKind::Tsi {
+            long,
+            short,
+            signal,
+        } => *long > 0 && *short > 0 && *signal > 0,
+        IndicatorKind::MassIndex {
+            ema_period,
+            sum_period,
+        } => *ema_period > 0 && *sum_period > 0,
+        IndicatorKind::Vortex { period } => *period > 0,
         IndicatorKind::CoppockCurve {
             long,
             short,
@@ -2364,6 +2388,106 @@ mod tests {
             }
         );
         assert_eq!(binding.outputs, outputs);
+    }
+
+    #[test]
+    fn momentum_studies_v3_round_trip_parameters_outputs_and_styles() {
+        let mut chart = settled_chart();
+        let cases = [
+            (
+                crate::IndicatorKind::Kst {
+                    roc: [2, 3, 4, 5],
+                    smoothing: [3, 2, 4, 2],
+                    signal: 3,
+                },
+                chart.add_kst(0, [2, 3, 4, 5], [3, 2, 4, 2], 3),
+            ),
+            (
+                crate::IndicatorKind::Tsi {
+                    long: 4,
+                    short: 2,
+                    signal: 3,
+                },
+                chart.add_tsi(0, 4, 2, 3),
+            ),
+            (
+                crate::IndicatorKind::MassIndex {
+                    ema_period: 2,
+                    sum_period: 3,
+                },
+                vec![chart.add_mass_index(0, 2, 3).unwrap()],
+            ),
+            (
+                crate::IndicatorKind::Vortex { period: 4 },
+                chart.add_vortex(0, 4),
+            ),
+        ];
+        for (index, (kind, outputs)) in cases.iter().enumerate() {
+            let expected = incremental_output_count(kind);
+            assert_eq!(outputs.len(), expected);
+            for (slot, &output) in outputs.iter().enumerate() {
+                let style = crate::IndicatorOutputStyle {
+                    visible: (index + slot) % 2 == 0,
+                    line_color: Some(format!("#{:06x}", 0x224466 + index * 0x1100 + slot)),
+                    line_width: Some(1.25 + index as f64 + slot as f64),
+                    line_style: (index + slot) as u8 % 5,
+                    point_markers: slot == 1,
+                    ..crate::IndicatorOutputStyle::default()
+                };
+                assert!(chart.set_indicator_output_style(output, style));
+            }
+        }
+        let expected = chart.indicator_bindings();
+        let document = chart.export_state_json().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(parsed["schema_version"], PERSISTENCE_SCHEMA_VERSION_STUDIES);
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        let actual = restored.indicator_bindings();
+        assert_eq!(actual.len(), cases.len());
+        for (before, after) in expected.iter().zip(&actual) {
+            assert_eq!(after.kind, before.kind);
+            assert_eq!(after.outputs.len(), before.outputs.len());
+            assert_eq!(after.styles, before.styles);
+            for (&old, &new) in before.outputs.iter().zip(&after.outputs) {
+                let original = chart.data.series_data(old).unwrap();
+                let round_trip = restored.data.series_data(new).unwrap();
+                assert_eq!(original.0, round_trip.0);
+                for (left, right) in original.1.into_iter().zip(round_trip.1) {
+                    assert_eq!(left.len(), right.len());
+                    for (&left, &right) in left.iter().zip(right) {
+                        assert!(left == right || left.is_nan() && right.is_nan());
+                    }
+                }
+            }
+        }
+        for (study, field) in [
+            (0, "roc"),
+            (0, "smoothing"),
+            (0, "signal"),
+            (1, "long"),
+            (1, "short"),
+            (1, "signal"),
+            (2, "ema_period"),
+            (2, "sum_period"),
+            (3, "period"),
+        ] {
+            let mut invalid: serde_json::Value = serde_json::from_str(&document).unwrap();
+            if matches!(field, "roc" | "smoothing") {
+                invalid["indicators"][study]["kind"][field][2] = serde_json::json!(0);
+            } else {
+                invalid["indicators"][study]["kind"][field] = serde_json::json!(0);
+            }
+            let mut untouched = settled_chart();
+            let baseline = untouched.export_state_json().unwrap();
+            assert!(
+                untouched
+                    .import_state_json(&serde_json::to_string(&invalid).unwrap())
+                    .is_err(),
+                "study {study} {field}"
+            );
+            assert_eq!(untouched.export_state_json().unwrap(), baseline);
+        }
     }
 
     #[test]

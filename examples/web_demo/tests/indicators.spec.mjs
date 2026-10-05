@@ -228,6 +228,95 @@ test("TRIX returns ordered line and signal outputs after historical repair", asy
   expect(result.after[1]).not.toBe(result.before[1]);
 });
 
+test("KST, TSI, Mass Index, and Vortex expose exact browser values and repair history", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const start = 1_701_000_000;
+    const source = chart.add_series("candlestick", { visible: false });
+    const bars = [1, 2, 4, 3, 5].map((value, i) => ({
+      time: start + i * 60, open: value, high: value, low: 0, close: value,
+    }));
+    source.set_data(bars);
+    const kst = chart.add_kst(source, [1, 1, 1, 1], [1, 1, 1, 1], 2);
+    const tsi = chart.add_tsi(source, 2, 2, 2);
+    const mass = chart.add_mass_index(source, 2, 2);
+    const vortexSource = chart.add_series("candlestick", { visible: false });
+    vortexSource.set_data([1, 3, 5].map((close, i) => ({
+      time: start + i * 60, open: close, high: close + 1, low: close - 1, close,
+    })));
+    const vortex = chart.add_vortex(vortexSource, 2);
+    const groups = [kst, tsi, [mass], vortex];
+    const before = groups.map((group) => group.map((s) => s.data().at(-1)?.value));
+    const metadata = groups.map((group) => group.map((s) => ({
+      kind: s.indicator_info().kind,
+      params: s.indicator_info().parameters,
+      index: s.indicator_info().output_index,
+      count: s.indicator_info().output_count,
+      pane: s.pane_index(),
+    })));
+    const schemas = ["kst", "tsi", "mass_index", "vortex"].map((kind) =>
+      chart.indicator_schema(kind).parameters.map(({ name, default: value }) => [name, value]));
+    const panesBefore = chart.panes().length;
+    const invalid = [
+      () => chart.add_kst(source, [1, 1, 0, 1], [1, 1, 1, 1], 2),
+      () => chart.add_kst(source, [1, 1, 1, 1], [1, 1, 1, 1], 1.5),
+      () => chart.add_tsi(source, 2, -1, 2),
+      () => chart.add_mass_index(source, 2, Infinity),
+      () => chart.add_vortex(vortexSource, 0),
+    ].map((add) => { try { add(); return false; } catch (error) { return error.code === "invalid_options"; } });
+    const panesAfter = chart.panes().length;
+    source.update({ ...bars[3], close: 2, high: 2, open: 2 });
+    vortexSource.update({ time: start + 60, open: 4, high: 5, low: 2, close: 4 });
+    const after = groups.map((group) => group.map((s) => s.data().at(-1)?.value));
+    // A fresh binding over the corrected history must agree with each live repaired binding.
+    const recreated = [
+      chart.add_kst(source, [1, 1, 1, 1], [1, 1, 1, 1], 2),
+      chart.add_tsi(source, 2, 2, 2),
+      [chart.add_mass_index(source, 2, 2)],
+      chart.add_vortex(vortexSource, 2),
+    ].map((group) => group.map((s) => s.data().at(-1)?.value));
+    return { before, after, recreated, metadata, schemas, invalid, panesBefore, panesAfter };
+  });
+  expect(result.before[0][0]).toBeCloseTo(2000 / 3, 8);
+  expect(result.before[0][1]).toBeCloseTo(625 / 3, 8); // mean of -250 and 2000/3
+  expect(result.before[1][0]).toBeCloseTo(2900 / 43, 8);
+  expect(result.before[1][1]).toBeCloseTo(2525 / 43, 8);
+  expect(result.before[2][0]).toBeCloseTo(165 / 152 + 705 / 622, 8);
+  expect(result.before[3][0]).toBeCloseTo(4 / 3, 8);
+  expect(result.before[3][1]).toBe(0);
+  expect(result.invalid).toEqual([true, true, true, true, true]);
+  expect(result.panesAfter).toBe(result.panesBefore);
+  expect(new Set(result.metadata.map((group) => group[0].pane)).size).toBe(4);
+  expect(result.after[0][0]).toBeCloseTo(1500, 8);
+  expect(result.after[0][1]).toBeCloseTo(500, 8);
+  expect(result.after[1][0]).not.toBe(result.before[1][0]);
+  expect(result.after[2][0]).not.toBe(result.before[2][0]);
+  expect(result.after[3][0]).not.toBe(result.before[3][0]);
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < result.after[i].length; j++) {
+      expect(result.after[i][j]).toBeCloseTo(result.recreated[i][j], 8);
+    }
+    expect(result.metadata[i].map(({ index }) => index)).toEqual([...result.metadata[i].keys()]);
+    expect(new Set(result.metadata[i].map(({ pane }) => pane)).size).toBe(1);
+  }
+  expect(result.metadata.map((group) => group.map(({ kind }) => kind))).toEqual([
+    ["kst", "kst"], ["tsi", "tsi"], ["mass_index"], ["vortex", "vortex"],
+  ]);
+  expect(result.metadata[0][0].params).toMatchObject({ roc: [1, 1, 1, 1], smoothing_periods: [1, 1, 1, 1], signal: 2 });
+  expect(result.metadata[1][0].params).toMatchObject({ long_period: 2, short_period: 2, signal: 2 });
+  expect(result.metadata[2][0].params).toMatchObject({ ema_period: 2, sum_period: 2 });
+  expect(result.metadata[3][0].params).toMatchObject({ period: 2 });
+  expect(result.schemas).toEqual([
+    [["source", "close"], ["roc_1", 10], ["roc_2", 15], ["roc_3", 20], ["roc_4", 30],
+      ["smoothing_1", 10], ["smoothing_2", 10], ["smoothing_3", 10], ["smoothing_4", 15], ["signal", 9]],
+    [["source", "close"], ["long", 25], ["short", 13], ["signal", 13]],
+    [["source", "close"], ["ema_period", 9], ["sum_period", 25]],
+    [["source", "close"], ["period", 14]],
+  ]);
+});
+
 test("Coppock Curve weights two rates of change and repairs historical prices", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);

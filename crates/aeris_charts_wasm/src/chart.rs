@@ -2956,6 +2956,37 @@ impl AerisChart {
         self.inner.borrow_mut().add_trix(source_id, period, signal)
     }
 
+    pub fn add_kst(
+        &mut self,
+        source_id: u32,
+        roc: Vec<u32>,
+        smoothing: Vec<u32>,
+        signal: u32,
+    ) -> Vec<u32> {
+        let (Ok(roc), Ok(smoothing)) = (roc.try_into(), smoothing.try_into()) else {
+            return Vec::new();
+        };
+        self.inner
+            .borrow_mut()
+            .add_kst(source_id, roc, smoothing, signal)
+    }
+
+    pub fn add_tsi(&mut self, source_id: u32, long: u32, short: u32, signal: u32) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_tsi(source_id, long, short, signal)
+    }
+
+    pub fn add_mass_index(&mut self, source_id: u32, ema_period: u32, sum_period: u32) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_mass_index(source_id, ema_period, sum_period)
+    }
+
+    pub fn add_vortex(&mut self, source_id: u32, period: u32) -> Vec<u32> {
+        self.inner.borrow_mut().add_vortex(source_id, period)
+    }
+
     pub fn add_coppock_curve(
         &mut self,
         source_id: u32,
