@@ -2011,6 +2011,21 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 points.iter().map(|point| point.lower).collect(),
             ]
         }
+        IndicatorKind::Choppiness { period } => {
+            vec![aeris_charts_indicators::choppiness(
+                source[1], source[2], source[3], period,
+            )]
+        }
+        IndicatorKind::AtrBands { period, multiplier } => {
+            let points = aeris_charts_indicators::atr_bands(
+                source[1], source[2], source[3], period, multiplier,
+            );
+            vec![
+                points.iter().map(|point| point.upper).collect(),
+                points.iter().map(|point| point.basis).collect(),
+                points.iter().map(|point| point.lower).collect(),
+            ]
+        }
         IndicatorKind::Tsi {
             long,
             short,
@@ -2531,6 +2546,11 @@ fn every_indicator_engine_path_matches_full_recomputation() {
             period: 5,
             deviation: 2.0,
         },
+        IndicatorKind::Choppiness { period: 5 },
+        IndicatorKind::AtrBands {
+            period: 5,
+            multiplier: 2.0,
+        },
         IndicatorKind::RelativeVolume { period: 5 },
         IndicatorKind::ElderForce { period: 5 },
         IndicatorKind::EaseOfMovement {
@@ -2767,6 +2787,11 @@ fn batch_and_single_updates_are_semantically_identical_for_every_indicator() {
         IndicatorKind::LinearRegression {
             period: 5,
             deviation: 2.0,
+        },
+        IndicatorKind::Choppiness { period: 5 },
+        IndicatorKind::AtrBands {
+            period: 5,
+            multiplier: 2.0,
         },
         IndicatorKind::RelativeVolume { period: 5 },
         IndicatorKind::ElderForce { period: 5 },

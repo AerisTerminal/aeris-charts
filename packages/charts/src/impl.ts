@@ -5322,6 +5322,22 @@ export class chart_impl implements chart_api {
     return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
   }
 
+  add_choppiness(source: series_api, period = 14, options?: Partial<series_options>): series_api {
+    if (!Number.isInteger(period) || period < 2 || period > 1_000_000) {
+      throw new AerisChartsError("invalid_options", "Choppiness period must be an integer from 2 to 1000000");
+    }
+    return this.indicator_series(this.wasm.add_choppiness(source.id, period), options);
+  }
+
+  add_atr_bands(source: series_api, period = 14, multiplier = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
+    if (!Number.isInteger(period) || period < 1 || period > 1_000_000 || !Number.isFinite(multiplier) || multiplier < 0) {
+      throw new AerisChartsError("invalid_options", "ATR Bands require a period from 1 to 1000000 and a nonnegative finite multiplier");
+    }
+    const ids = this.wasm.add_atr_bands(source.id, period, multiplier);
+    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid ATR Bands configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
+  }
+
   add_relative_volume(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api {
     if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
       throw new AerisChartsError("invalid_options", "Relative Volume period must be an integer from 1 to 1000000");

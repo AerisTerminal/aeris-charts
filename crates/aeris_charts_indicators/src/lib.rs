@@ -920,6 +920,161 @@ pub fn linear_regression(
     out
 }
 
+/// Choppiness Index on the last `period` true ranges, requiring a prior close
+/// for the first range. A zero high/low span or a broken OHLC window is whitespace.
+pub fn choppiness(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Vec<Option<f64>> {
+    let n = highs.len().min(lows.len()).min(closes.len());
+    let mut out = vec![None; n];
+    if period < 2 {
+        return out;
+    }
+    for (row, slot) in out.iter_mut().enumerate().skip(period) {
+        *slot = Some(choppiness_at(highs, lows, closes, row, period));
+    }
+    out
+}
+
+fn choppiness_at(highs: &[f64], lows: &[f64], closes: &[f64], row: usize, period: usize) -> f64 {
+    let start = row + 1 - period;
+    let mut highest = f64::NEG_INFINITY;
+    let mut lowest = f64::INFINITY;
+    let mut sum_tr = 0.0;
+    for index in start..=row {
+        let (high, low, close, previous) =
+            (highs[index], lows[index], closes[index], closes[index - 1]);
+        if !high.is_finite()
+            || !low.is_finite()
+            || !close.is_finite()
+            || !previous.is_finite()
+            || high < low
+        {
+            return f64::NAN;
+        }
+        highest = highest.max(high);
+        lowest = lowest.min(low);
+        sum_tr += (high - low)
+            .max((high - previous).abs())
+            .max((low - previous).abs());
+    }
+    let span = highest - lowest;
+    if span <= 0.0 || !span.is_finite() || !sum_tr.is_finite() || sum_tr <= 0.0 {
+        f64::NAN
+    } else {
+        (100.0 * (sum_tr / span).log10() / (period as f64).log10()).clamp(0.0, 100.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AtrBandsPoint {
+    pub basis: Option<f64>,
+    pub upper: Option<f64>,
+    pub lower: Option<f64>,
+}
+
+/// Close-centered bands at `close ± multiplier × Wilder ATR`. Invalid OHLC
+/// breaks the ATR seed and the next valid run must warm up again.
+pub fn atr_bands(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    period: usize,
+    multiplier: f64,
+) -> Vec<AtrBandsPoint> {
+    let n = highs.len().min(lows.len()).min(closes.len());
+    let mut out = vec![
+        AtrBandsPoint {
+            basis: None,
+            upper: None,
+            lower: None
+        };
+        n
+    ];
+    if period == 0 || !multiplier.is_finite() || multiplier < 0.0 {
+        return out;
+    }
+    let mut state = AtrState::default();
+    for (row, slot) in out.iter_mut().enumerate() {
+        let atr = atr_bands_step(&mut state, highs[row], lows[row], closes[row], period);
+        if row >= period {
+            *slot = atr_bands_point(closes[row], atr, multiplier);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod choppiness_atr_bands_tests {
+    use super::*;
+
+    #[test]
+    fn empty_single_warmup_flat_and_gapped_ohlc() {
+        assert!(choppiness(&[], &[], &[], 3).is_empty());
+        assert!(atr_bands(&[], &[], &[], 3, 2.0).is_empty());
+        assert_eq!(choppiness(&[2.0], &[1.0], &[1.5], 2), [None]);
+        assert_eq!(atr_bands(&[2.0], &[1.0], &[1.5], 2, 2.0)[0].basis, None);
+
+        let highs = [2.0, 2.0, 2.0, 2.0];
+        let lows = [0.0; 4];
+        let closes = [1.0; 4];
+        // Each TR = 2, range = 2: 100 * log10(2) / log10(2).
+        assert_eq!(
+            choppiness(&highs, &lows, &closes, 2),
+            [None, None, Some(100.0), Some(100.0)]
+        );
+        let bands = atr_bands(&highs, &lows, &closes, 2, 1.5);
+        assert_eq!(bands[2].basis, Some(1.0));
+        assert_eq!(bands[2].upper, Some(4.0));
+        assert_eq!(bands[2].lower, Some(-2.0));
+        assert!(
+            choppiness(&[1.0; 4], &[1.0; 4], &[1.0; 4], 2)[2]
+                .unwrap()
+                .is_nan()
+        );
+
+        let highs = [2.0, 2.0, f64::NAN, 2.0, 2.0, 2.0, 2.0];
+        let chop = choppiness(&highs, &[0.0; 7], &[1.0; 7], 2);
+        assert!(chop[2..4].iter().all(|value| value.unwrap().is_nan()));
+        assert_eq!(chop[4], Some(100.0));
+        assert_eq!(chop[5], Some(100.0));
+        let bands = atr_bands(&highs, &[0.0; 7], &[1.0; 7], 2, 1.5);
+        assert!(
+            bands[2..5]
+                .iter()
+                .all(|point| point.upper.unwrap().is_nan())
+        );
+        assert_eq!(bands[5].upper, Some(4.0));
+    }
+}
+
+fn atr_bands_step(
+    state: &mut AtrState,
+    high: f64,
+    low: f64,
+    close: f64,
+    period: usize,
+) -> Option<f64> {
+    if !high.is_finite() || !low.is_finite() || !close.is_finite() || high < low {
+        *state = AtrState::default();
+        return None;
+    }
+    atr_step(state, AtrSample { high, low, close }, period)
+}
+
+fn atr_bands_point(close: f64, atr: Option<f64>, multiplier: f64) -> AtrBandsPoint {
+    let (basis, upper, lower) = match atr {
+        Some(atr) if atr.is_finite() => {
+            let spread = atr * multiplier;
+            (Some(close), Some(close + spread), Some(close - spread))
+        }
+        _ => (Some(f64::NAN), Some(f64::NAN), Some(f64::NAN)),
+    };
+    AtrBandsPoint {
+        basis,
+        upper,
+        lower,
+    }
+}
+
 fn linear_regression_at(
     values: &[f64],
     row: usize,
@@ -4468,6 +4623,14 @@ enum IncrementalKind {
         period: usize,
         deviation: f64,
     },
+    Choppiness {
+        period: usize,
+    },
+    AtrBands {
+        period: usize,
+        multiplier: f64,
+        state: RecursiveHistory<AtrState>,
+    },
     CoppockCurve {
         long_period: usize,
         short_period: usize,
@@ -4948,6 +5111,21 @@ impl IncrementalState {
         Self::new(IncrementalKind::LinearRegression { period, deviation }, 3)
     }
 
+    pub fn choppiness(period: usize) -> Self {
+        Self::new(IncrementalKind::Choppiness { period }, 1)
+    }
+
+    pub fn atr_bands(period: usize, multiplier: f64) -> Self {
+        Self::new(
+            IncrementalKind::AtrBands {
+                period,
+                multiplier,
+                state: RecursiveHistory::new(),
+            },
+            3,
+        )
+    }
+
     pub fn coppock_curve(long_period: usize, short_period: usize, smoothing: usize) -> Self {
         Self::new(
             IncrementalKind::CoppockCurve {
@@ -5102,6 +5280,8 @@ impl IncrementalState {
             IncrementalKind::Kama { state, .. } => state.bytes(),
             IncrementalKind::McGinley { state, .. } => state.bytes(),
             IncrementalKind::LinearRegression { .. } => 0,
+            IncrementalKind::Choppiness { .. } => 0,
+            IncrementalKind::AtrBands { state, .. } => state.bytes(),
             IncrementalKind::CoppockCurve { .. } => 0,
             IncrementalKind::FisherTransform { state, window, .. } => {
                 state.bytes() + window.bytes()
@@ -6404,6 +6584,51 @@ impl IncrementalState {
                     self.outputs[2].push(lower);
                 }
             }
+            IncrementalKind::Choppiness { period } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                for row in start..n {
+                    self.outputs[0].push(choppiness_at(
+                        input.high,
+                        input.low,
+                        input.close,
+                        row,
+                        *period,
+                    ));
+                }
+            }
+            IncrementalKind::AtrBands {
+                period,
+                multiplier,
+                state,
+            } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let atr = atr_bands_step(
+                        &mut accumulator,
+                        input.high[row],
+                        input.low[row],
+                        input.close[row],
+                        *period,
+                    );
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        let point = atr_bands_point(input.close[row], atr, *multiplier);
+                        self.outputs[0].push(point.upper.unwrap_or(f64::NAN));
+                        self.outputs[1].push(point.basis.unwrap_or(f64::NAN));
+                        self.outputs[2].push(point.lower.unwrap_or(f64::NAN));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
             IncrementalKind::CoppockCurve {
                 long_period,
                 short_period,
@@ -6725,6 +6950,8 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             let start = period.saturating_sub(1);
             [start, start, start, 0, 0]
         }
+        IncrementalKind::Choppiness { period } => [*period, 0, 0, 0, 0],
+        IncrementalKind::AtrBands { period, .. } => [*period, *period, *period, 0, 0],
         IncrementalKind::CoppockCurve {
             long_period,
             short_period,
@@ -7948,6 +8175,8 @@ mod tests {
         Kama,
         McGinley,
         LinearRegression,
+        Choppiness,
+        AtrBands,
         CoppockCurve,
         FisherTransform,
         UltimateOscillator,
@@ -8185,6 +8414,15 @@ mod tests {
                     points.iter().map(|point| point.lower).collect(),
                 ]
             }
+            TestKind::Choppiness => vec![choppiness(input.high, input.low, input.close, 5)],
+            TestKind::AtrBands => {
+                let points = atr_bands(input.high, input.low, input.close, 5, 2.0);
+                vec![
+                    points.iter().map(|point| point.upper).collect(),
+                    points.iter().map(|point| point.basis).collect(),
+                    points.iter().map(|point| point.lower).collect(),
+                ]
+            }
             TestKind::CoppockCurve => vec![coppock_curve(input.close, 7, 5, 3)],
             TestKind::FisherTransform => {
                 let points = fisher_transform(input.high, input.low, 5);
@@ -8366,6 +8604,8 @@ mod tests {
                 TestKind::LinearRegression,
                 IncrementalState::linear_regression(5, 2.0),
             ),
+            (TestKind::Choppiness, IncrementalState::choppiness(5)),
+            (TestKind::AtrBands, IncrementalState::atr_bands(5, 2.0)),
             (
                 TestKind::CoppockCurve,
                 IncrementalState::coppock_curve(7, 5, 3),
@@ -8493,6 +8733,8 @@ mod tests {
                 TestKind::LinearRegression,
                 IncrementalState::linear_regression(5, 2.0),
             ),
+            (TestKind::Choppiness, IncrementalState::choppiness(5)),
+            (TestKind::AtrBands, IncrementalState::atr_bands(5, 2.0)),
             (TestKind::Vortex, IncrementalState::vortex(5)),
         ];
         let times = (0..1100).map(i64::from).collect::<Vec<_>>();
@@ -8536,7 +8778,120 @@ mod tests {
     }
 
     #[test]
-    fn i1_reference_fixture_covers_catalog_outputs() {
+    fn new_studies_handle_empty_short_gap_and_historical_correction() {
+        let mut states = [
+            (
+                TestKind::Kst,
+                IncrementalState::kst([2, 3, 4, 5], [2, 2, 2, 3], 3),
+            ),
+            (TestKind::Klinger, IncrementalState::klinger(3, 7, 4)),
+            (
+                TestKind::LinearRegression,
+                IncrementalState::linear_regression(5, 2.0),
+            ),
+            (TestKind::MassIndex, IncrementalState::mass_index(3, 5)),
+            (TestKind::Tsi, IncrementalState::tsi(5, 3, 3)),
+            (TestKind::Vortex, IncrementalState::vortex(5)),
+            (TestKind::Kama, IncrementalState::kama(5, 2, 10)),
+            (TestKind::McGinley, IncrementalState::mcginley(5)),
+            (TestKind::Choppiness, IncrementalState::choppiness(5)),
+            (TestKind::AtrBands, IncrementalState::atr_bands(5, 2.0)),
+        ];
+        let times = (0..48).map(i64::from).collect::<Vec<_>>();
+        let mut close = (0..48)
+            .map(|row| 100.0 + (row as f64 * 0.41).sin() * 3.0 + row as f64 * 0.1)
+            .collect::<Vec<_>>();
+        let mut high = close.iter().map(|value| value + 2.0).collect::<Vec<_>>();
+        let mut low = close.iter().map(|value| value - 1.5).collect::<Vec<_>>();
+        let mut volume = (0..48).map(|row| (row % 7 + 1) as f64).collect::<Vec<_>>();
+        let check = |states: &mut [(TestKind, IncrementalState)],
+                     len: usize,
+                     close: &[f64],
+                     high: &[f64],
+                     low: &[f64],
+                     volume: &[f64],
+                     from: usize| {
+            assert_incremental_matches_full(
+                states,
+                IndicatorInput {
+                    times: &times[..len],
+                    open: &close[..len],
+                    high: &high[..len],
+                    low: &low[..len],
+                    close: &close[..len],
+                    volume: &volume[..len],
+                },
+                from,
+            );
+        };
+
+        check(&mut states, 0, &close, &high, &low, &volume, 0);
+        for (_, state) in &states {
+            for output in 0..state.output_count() {
+                assert!(state.output(output).is_empty());
+            }
+        }
+
+        check(&mut states, 1, &close, &high, &low, &volume, 0);
+        for (kind, state) in &states {
+            for output in 0..state.output_count() {
+                if matches!(kind, TestKind::McGinley) {
+                    assert!(
+                        state.output(output)[0].is_finite(),
+                        "McGinley seeds at the first close"
+                    );
+                } else {
+                    assert!(
+                        state.output(output).iter().all(|value| value.is_nan()),
+                        "one-bar warmup must be blank"
+                    );
+                }
+            }
+        }
+
+        check(&mut states, 4, &close, &high, &low, &volume, 1);
+        for (kind, state) in &states {
+            for output in 0..state.output_count() {
+                if matches!(kind, TestKind::McGinley) {
+                    assert!(state.output(output).iter().all(|value| value.is_finite()));
+                } else {
+                    assert!(state.output(output).iter().all(|value| value.is_nan()));
+                }
+            }
+        }
+
+        check(&mut states, 48, &close, &high, &low, &volume, 4);
+        let gap = 24;
+        close[gap] = f64::NAN;
+        high[gap] = f64::NAN;
+        low[gap] = f64::NAN;
+        volume[gap] = f64::NAN;
+        check(&mut states, 48, &close, &high, &low, &volume, gap);
+        for (_, state) in &states {
+            for output in 0..state.output_count() {
+                let from = state.output_from(output);
+                assert!(
+                    state.output(output)[gap - from].is_nan(),
+                    "gap row must be blank"
+                );
+            }
+        }
+
+        close[7] += 5.0;
+        high[7] = close[7] + 2.0;
+        low[7] = close[7] - 1.5;
+        volume[7] += 4.0;
+        check(&mut states, 48, &close, &high, &low, &volume, 7);
+
+        close[gap] = 102.0;
+        high[gap] = 104.0;
+        low[gap] = 100.5;
+        volume[gap] = 6.0;
+        check(&mut states, 48, &close, &high, &low, &volume, gap);
+    }
+
+    #[test]
+    fn i1_and_i2_reference_fixture_covers_catalog_outputs() {
         // These values are a fixed external reference fixture. The assertions intentionally do
         // not call the dense formula functions, so a shared implementation defect cannot make
         // the incremental and reference paths agree by construction.
@@ -8574,6 +8929,277 @@ mod tests {
                     "{label}: {actual} != {expected}"
                 );
             };
+
+        // Independently calculated from the fixture OHLCV rows (not from dense indicator
+        // implementations). Short KST windows keep both its line and signal within 60 rows.
+        assert_final("Aroon up", IncrementalState::aroon(5), 0, 0.0);
+        assert_final("Aroon down", IncrementalState::aroon(5), 1, 60.0);
+        assert_final(
+            "Awesome Oscillator",
+            IncrementalState::awesome_oscillator(),
+            0,
+            -1.536797362138088,
+        );
+        assert_final(
+            "Chande Momentum",
+            IncrementalState::chande_momentum(5),
+            0,
+            -48.19370754205317,
+        );
+        assert_final(
+            "Chaikin Oscillator",
+            IncrementalState::chaikin_oscillator(3, 6),
+            0,
+            -8.099183009038654,
+        );
+        assert_final(
+            "Coppock Curve",
+            IncrementalState::coppock_curve(6, 3, 4),
+            0,
+            -9.41909313330223,
+        );
+        assert_final("DPO", IncrementalState::dpo(5), 0, -0.2351633003471107);
+        assert_final(
+            "Elder Force",
+            IncrementalState::elder_force(5),
+            0,
+            31.96442399619355,
+        );
+        assert_final(
+            "Ease of Movement",
+            IncrementalState::ease_of_movement(5, 1.0),
+            0,
+            -0.1166970104225895,
+        );
+        assert_final(
+            "Fisher line",
+            IncrementalState::fisher_transform(5),
+            0,
+            -0.6891408918939269,
+        );
+        assert_final(
+            "Fisher trigger",
+            IncrementalState::fisher_transform(5),
+            1,
+            -0.7700306869497627,
+        );
+        assert_final(
+            "Historical Volatility",
+            IncrementalState::historical_volatility(5, 252.0),
+            0,
+            33.55558767101923,
+        );
+        assert_final(
+            "KST line",
+            IncrementalState::kst([2, 3, 4, 5], [2, 3, 4, 5], 3),
+            0,
+            -45.15601171260293,
+        );
+        assert_final(
+            "KST signal",
+            IncrementalState::kst([2, 3, 4, 5], [2, 3, 4, 5], 3),
+            1,
+            -40.42890476968924,
+        );
+        assert_final(
+            "Klinger line",
+            IncrementalState::klinger(3, 6, 4),
+            0,
+            376.5561190129093,
+        );
+        assert_final(
+            "Klinger signal",
+            IncrementalState::klinger(3, 6, 4),
+            1,
+            -185.2666012083956,
+        );
+        assert_final(
+            "Regression curve",
+            IncrementalState::linear_regression(5, 2.0),
+            0,
+            100.4888887275999,
+        );
+        assert_final(
+            "Regression upper",
+            IncrementalState::linear_regression(5, 2.0),
+            1,
+            103.2854271400926,
+        );
+        assert_final(
+            "Regression lower",
+            IncrementalState::linear_regression(5, 2.0),
+            2,
+            97.69235031510719,
+        );
+        assert_final("Mass Index", IncrementalState::mass_index(5, 5), 0, 5.0);
+        assert_final(
+            "Ultimate Oscillator",
+            IncrementalState::ultimate_oscillator(3, 5, 7),
+            0,
+            45.65847840650458,
+        );
+        assert_final(
+            "TRIX line",
+            IncrementalState::trix(5, 3),
+            0,
+            -0.409962754833737,
+        );
+        assert_final(
+            "TRIX signal",
+            IncrementalState::trix(5, 3),
+            1,
+            -0.280666792016231,
+        );
+        assert_final(
+            "TSI line",
+            IncrementalState::tsi(5, 3, 3),
+            0,
+            -26.580720443143,
+        );
+        assert_final(
+            "TSI signal",
+            IncrementalState::tsi(5, 3, 3),
+            1,
+            -36.46784062557349,
+        );
+        assert_final(
+            "Vortex +VI",
+            IncrementalState::vortex(5),
+            0,
+            0.5579692505882866,
+        );
+        assert_final(
+            "Vortex -VI",
+            IncrementalState::vortex(5),
+            1,
+            1.038943112552389,
+        );
+        assert_final(
+            "Envelope SMA upper",
+            IncrementalState::envelopes(5, 2.0, false),
+            0,
+            103.4371031507486,
+        );
+        assert_final(
+            "Envelope SMA basis",
+            IncrementalState::envelopes(5, 2.0, false),
+            1,
+            101.4089246575966,
+        );
+        assert_final(
+            "Envelope SMA lower",
+            IncrementalState::envelopes(5, 2.0, false),
+            2,
+            99.38074616444469,
+        );
+        assert_final(
+            "Envelope EMA upper",
+            IncrementalState::envelopes(5, 2.0, true),
+            0,
+            104.0025555497179,
+        );
+        assert_final(
+            "Envelope EMA basis",
+            IncrementalState::envelopes(5, 2.0, true),
+            1,
+            101.9632897546254,
+        );
+        assert_final(
+            "Envelope EMA lower",
+            IncrementalState::envelopes(5, 2.0, true),
+            2,
+            99.92402395953289,
+        );
+        assert_final(
+            "ALMA",
+            IncrementalState::alma(5, 0.85, 6.0),
+            0,
+            100.8775648482768,
+        );
+        assert_final(
+            "KAMA",
+            IncrementalState::kama(5, 2, 30),
+            0,
+            101.9160311331937,
+        );
+        assert_final(
+            "McGinley",
+            IncrementalState::mcginley(5),
+            0,
+            102.2960315743182,
+        );
+        assert_final(
+            "Choppiness",
+            IncrementalState::choppiness(5),
+            0,
+            55.5975026457025,
+        );
+        assert_final(
+            "Bollinger %B",
+            IncrementalState::bollinger_metrics(5, 2.0),
+            0,
+            0.6276163411758227,
+        );
+        assert_final(
+            "Bollinger BandWidth",
+            IncrementalState::bollinger_metrics(5, 2.0),
+            1,
+            6.083105287510145,
+        );
+        assert_final(
+            "ATR bands upper",
+            IncrementalState::atr_bands(5, 2.0),
+            0,
+            108.6787277996608,
+        );
+        assert_final(
+            "ATR bands basis",
+            IncrementalState::atr_bands(5, 2.0),
+            1,
+            102.19616583077465,
+        );
+        assert_final(
+            "ATR bands lower",
+            IncrementalState::atr_bands(5, 2.0),
+            2,
+            95.71360386188844,
+        );
+        assert_final(
+            "Accumulation/Distribution",
+            IncrementalState::accumulation_distribution(),
+            0,
+            -349.2000000000132,
+        );
+        assert_final(
+            "Price Volume Trend",
+            IncrementalState::price_volume_trend(),
+            0,
+            -4.062813009843773,
+        );
+        assert_final(
+            "Volume Oscillator line",
+            IncrementalState::volume_oscillator(3, 6, 4),
+            0,
+            8.09094542282349,
+        );
+        assert_final(
+            "Volume Oscillator signal",
+            IncrementalState::volume_oscillator(3, 6, 4),
+            1,
+            -1.079470318694398,
+        );
+        assert_final(
+            "Volume Oscillator histogram",
+            IncrementalState::volume_oscillator(3, 6, 4),
+            2,
+            9.170415741517887,
+        );
+        assert_final(
+            "Relative Volume",
+            IncrementalState::relative_volume(5),
+            0,
+            2.0,
+        );
 
         assert_final("SMA", IncrementalState::sma(5), 0, 101.40892465759661);
         assert_final("EMA", IncrementalState::ema(5), 0, 101.96328975462541);

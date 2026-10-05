@@ -419,6 +419,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::ChaikinOscillator { .. }
         | IndicatorKind::Kama { .. }
         | IndicatorKind::McGinley { .. }
+        | IndicatorKind::Choppiness { .. }
         | IndicatorKind::RelativeVolume { .. }
         | IndicatorKind::ElderForce { .. }
         | IndicatorKind::EaseOfMovement { .. }
@@ -448,6 +449,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         IndicatorKind::EmaRibbon { .. } => aeris_charts_indicators::MAX_OUTPUTS,
         IndicatorKind::Bollinger { .. } => 3,
         IndicatorKind::LinearRegression { .. } => 3,
+        IndicatorKind::AtrBands { .. } => 3,
         IndicatorKind::BollingerMetrics { .. } => 2,
         IndicatorKind::Envelopes { .. } => 3,
         IndicatorKind::Alma { .. } => 1,
@@ -551,6 +553,10 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         IndicatorKind::McGinley { period } => *period > 0,
         IndicatorKind::LinearRegression { period, deviation } => {
             *period > 0 && deviation.is_finite() && *deviation >= 0.0
+        }
+        IndicatorKind::Choppiness { period } => *period >= 2,
+        IndicatorKind::AtrBands { period, multiplier } => {
+            *period > 0 && multiplier.is_finite() && *multiplier >= 0.0
         }
         IndicatorKind::RelativeVolume { period } => *period > 0,
         IndicatorKind::ElderForce { period } => *period > 0,
@@ -2398,6 +2404,77 @@ mod tests {
             }
         );
         assert_eq!(binding.outputs, outputs);
+    }
+
+    #[test]
+    fn choppiness_and_atr_bands_v3_round_trip_and_old_layout() {
+        let mut chart = settled_chart();
+        let chop = chart.add_choppiness(0, 3).unwrap();
+        let bands = chart.add_atr_bands(0, 4, 2.75);
+        assert_eq!(bands.len(), 3);
+        assert!(chart.set_indicator_output_style(
+            bands[1],
+            crate::IndicatorOutputStyle {
+                visible: false,
+                line_color: Some("#123456".into()),
+                ..Default::default()
+            },
+        ));
+        let document = chart.export_state_json().unwrap();
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        let bindings = restored.indicator_bindings();
+        assert_eq!(
+            bindings[0].kind,
+            crate::IndicatorKind::Choppiness { period: 3 }
+        );
+        assert_eq!(bindings[0].outputs, [chop]);
+        assert_eq!(
+            bindings[1].kind,
+            crate::IndicatorKind::AtrBands {
+                period: 4,
+                multiplier: 2.75
+            }
+        );
+        assert_eq!(bindings[1].outputs, bands);
+        assert_eq!(bindings[1].styles[1].line_color.as_deref(), Some("#123456"));
+        for output in [chop].into_iter().chain(bands) {
+            let before = chart.data.series_data(output).unwrap();
+            let after = restored.data.series_data(output).unwrap();
+            assert_eq!(before.0, after.0);
+            for (left, right) in before.1.into_iter().zip(after.1) {
+                assert!(
+                    left.iter()
+                        .zip(right)
+                        .all(|(a, b)| a == b || a.is_nan() && b.is_nan())
+                );
+            }
+        }
+        for (index, field, value) in [
+            (0, "period", serde_json::json!(1)),
+            (1, "multiplier", serde_json::json!(-1.0)),
+            (1, "period", serde_json::json!(0)),
+        ] {
+            let mut invalid: serde_json::Value = serde_json::from_str(&document).unwrap();
+            invalid["indicators"][index]["kind"][field] = value;
+            assert!(
+                settled_chart()
+                    .import_state_json(&invalid.to_string())
+                    .is_err()
+            );
+        }
+
+        // An earlier V3 document with only legacy kind tags still imports unchanged.
+        let mut legacy = settled_chart();
+        let sma = legacy.add_sma(0, 3).unwrap();
+        let old_document = legacy.export_state_json().unwrap();
+        let mut target = settled_chart();
+        target.import_state_json(&old_document).unwrap();
+        assert_eq!(
+            target.indicator_bindings()[0].kind,
+            crate::IndicatorKind::Sma { period: 3 }
+        );
+        assert_eq!(target.indicator_bindings()[0].outputs, [sma]);
     }
 
     #[test]

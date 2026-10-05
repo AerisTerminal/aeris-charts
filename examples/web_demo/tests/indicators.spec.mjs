@@ -950,3 +950,186 @@ test("stochastic, atr, vwap, and wma register with lineage and placement", async
   const stoch_pane = out.stoch_same_pane.findIndex(Boolean);
   expect(stoch_pane).toBeGreaterThan(0);
 });
+
+test("Choppiness computes short true-range windows in an oscillator pane", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const source = chart.add_series("candlestick", { visible: false });
+    const bars = [
+      [12, 8, 10], [14, 9, 12], [13, 10, 11], [16, 11, 14], [15, 12, 13],
+    ];
+    source.set_data(bars.map(([high, low, close], index) => ({
+      time: 1_705_000_000 + index * 60, open: close, high, low, close,
+    })));
+    const panes_before = chart.panes().length;
+    const output = chart.add_choppiness(source, 2);
+    return {
+      data: output.data(),
+      info: {
+        ...output.indicator_info(),
+        source: { id: output.indicator_info().source.id },
+      },
+      source_id: source.id,
+      panes_before,
+      panes_after: chart.panes().length,
+      pane: output.pane_index(),
+      pane_has_output: chart.panes()[output.pane_index()].get_series().some((series) => series.id === output.id),
+    };
+  });
+  expect(result.data.map(({ value }) => value)).toHaveLength(3);
+  // At rows 2–4: TR pairs (5,3), (3,5), (5,3), and high-low spans 5, 6, 5.
+  expect(result.data.map(({ time }) => time)).toEqual([1_705_000_120, 1_705_000_180, 1_705_000_240]);
+  for (const [index, expected] of [8 / 5, 8 / 6, 8 / 5].entries()) {
+    expect(result.data[index].value).toBeCloseTo(100 * Math.log(expected) / Math.log(2), 8);
+  }
+  expect(result.panes_after).toBe(result.panes_before + 1);
+  expect(result.pane).toBeGreaterThan(0);
+  expect(result.pane_has_output).toBe(true);
+  expect(result.info).toMatchObject({
+    kind: "choppiness", period: 2, output_index: 0, source: { id: result.source_id },
+    parameters: { period: 2 },
+  });
+});
+
+test("ATR bands follow close plus or minus Wilder ATR on the price pane", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const source = chart.add_series("candlestick", { visible: false });
+    const bars = [
+      [12, 8, 10], [14, 9, 12], [13, 10, 11], [16, 11, 14], [15, 12, 13],
+    ];
+    source.set_data(bars.map(([high, low, close], index) => ({
+      time: 1_705_100_000 + index * 60, open: close, high, low, close,
+    })));
+    const panes_before = chart.panes().length;
+    const outputs = chart.add_atr_bands(source, 2, 1.5);
+    return {
+      values: outputs.map((series) => series.data().map(({ value }) => value)),
+      info: outputs.map((series) => ({
+        ...series.indicator_info(),
+        source: { id: series.indicator_info().source.id },
+      })),
+      panes_before,
+      panes_after: chart.panes().length,
+      pane_indices: outputs.map((series) => series.pane_index()),
+      on_price_pane: outputs.map((series) =>
+        chart.panes()[0].get_series().some((candidate) => candidate.id === series.id)),
+      source_id: source.id,
+      output_ids: outputs.map((series) => series.id),
+    };
+  });
+  // First ATR = (TR[1] + TR[2]) / 2 = (5 + 3) / 2 = 4;
+  // subsequent Wilder ATRs are (4 + 5) / 2 = 4.5, (4.5 + 3) / 2 = 3.75.
+  const closes = [11, 14, 13];
+  const atrs = [4, 4.5, 3.75];
+  expect(result.values).toHaveLength(3);
+  for (const [slot, sign] of [[0, 1], [1, 0], [2, -1]]) {
+    expect(result.values[slot]).toHaveLength(3);
+    for (let row = 0; row < 3; row += 1) {
+      expect(result.values[slot][row]).toBeCloseTo(closes[row] + sign * 1.5 * atrs[row], 8);
+    }
+  }
+  expect(result.panes_after).toBe(result.panes_before);
+  expect(result.pane_indices).toEqual([0, 0, 0]);
+  expect(result.on_price_pane).toEqual([true, true, true]);
+  expect(result.info.map(({ kind, output_index, output_name }) => ({ kind, output_index, output_name }))).toEqual([
+    { kind: "atr_bands", output_index: 0, output_name: "Upper" },
+    { kind: "atr_bands", output_index: 1, output_name: "Basis" },
+    { kind: "atr_bands", output_index: 2, output_name: "Lower" },
+  ]);
+  for (const info of result.info) {
+    expect(info).toMatchObject({
+      period: 2, deviation: 1.5, source: { id: result.source_id },
+      parameters: { period: 2, multiplier: 1.5 },
+    });
+    expect(info.binding_id).toBe(result.output_ids[0]);
+  }
+});
+
+test("invalid Choppiness and ATR bands parameters reject without allocating outputs or panes", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const source = chart.add_series("candlestick", { visible: false });
+    source.set_data([10, 11, 12].map((close, index) => ({
+      time: 1_705_200_000 + index * 60, open: close, high: close + 2, low: close - 2, close,
+    })));
+    const snapshot = () => chart.panes().map((pane) => pane.get_series().map((series) => series.id));
+    const before = snapshot();
+    const attempts = [
+      () => chart.add_choppiness(source, 1),
+      () => chart.add_choppiness(source, 2.5),
+      () => chart.add_atr_bands(source, 0, 1.5),
+      () => chart.add_atr_bands(source, 2, -1),
+      () => chart.add_atr_bands(source, 2, Number.NaN),
+    ];
+    return attempts.map((attempt) => {
+      let code;
+      try { attempt(); } catch (error) { code = error.code; }
+      return { code, panes: snapshot(), unchanged: JSON.stringify(snapshot()) === JSON.stringify(before) };
+    });
+  });
+  expect(result.map(({ code }) => code)).toEqual(Array(5).fill("invalid_options"));
+  expect(result.every(({ unchanged }) => unchanged)).toBe(true);
+});
+
+test("browser schemas retain every multi-parameter Rust canonical default", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  // Explicit browser contract, independent of the engine's schema builder and indicator functions.
+  // Includes volume-source descriptors when they are the second parameter.
+  const defaults = {
+    stochastic_rsi: { rsi_period: 14, stochastic_period: 14 },
+    bollinger_metrics: { period: 14, deviation: 2 },
+    envelopes: { period: 14, percent: 2, exponential: false },
+    alma: { period: 14, offset: 0.85, sigma: 6 },
+    keltner: { period: 14, multiplier: 2 },
+    supertrend: { period: 14, multiplier: 3 },
+    ema_ribbon: { period_1: 5, period_2: 10, period_3: 20, period_4: 50, period_5: 200 },
+    bollinger: { period: 14, deviation: 2 },
+    macd: { fast: 12, slow: 26, signal: 9 },
+    stochastic: { k_period: 14, d_period: 3 },
+    chaikin_oscillator: { fast: 3, slow: 10, volume_source: null },
+    klinger: { fast: 34, slow: 55, signal: 13, volume_source: null },
+    kama: { period: 10, fast: 2, slow: 30 },
+    linear_regression: { period: 20, deviation: 2 },
+    atr_bands: { period: 14, multiplier: 2 },
+    relative_volume: { period: 14, volume_source: null },
+    elder_force: { period: 14, volume_source: null },
+    ease_of_movement: { period: 14, divisor: 100_000_000, volume_source: null },
+    historical_volatility: { period: 14, annualization: 252 },
+    trix: { period: 14, signal: 9 },
+    kst: {
+      roc_1: 10, roc_2: 15, roc_3: 20, roc_4: 30,
+      smoothing_1: 10, smoothing_2: 10, smoothing_3: 10, smoothing_4: 15, signal: 9,
+    },
+    tsi: { long: 25, short: 13, signal: 13 },
+    mass_index: { ema_period: 9, sum_period: 25 },
+    coppock_curve: { long_period: 14, short_period: 11, smoothing: 10 },
+    ultimate_oscillator: { short_period: 7, medium_period: 14, long_period: 28 },
+    volume_oscillator: { fast: 12, slow: 26, signal: 9, volume_source: null },
+    cmf: { period: 14, volume_source: null },
+    mfi: { period: 14, volume_source: null },
+    volume: { period: 14, volume_source: null },
+    vwma: { period: 14, volume_source: null },
+    vwap_bands: { reset: "session", standard_deviation: 1, percent: 10, volume_source: null },
+  };
+  const actual = await page.evaluate((names) => Object.fromEntries(names.map((name) => {
+    const schema = window.__chart.indicator_schema(name);
+    return [name, {
+      kind: schema.kind,
+      parameters: Object.fromEntries(schema.parameters
+        .filter(({ name: parameter }) => parameter !== "source")
+        .map(({ name: parameter, default: value }) => [parameter, value])),
+    }];
+  })), Object.keys(defaults));
+  for (const [kind, expected] of Object.entries(defaults)) {
+    expect(actual[kind].kind, kind).toBe(kind);
+    expect(actual[kind].parameters, kind).toEqual(expected);
+  }
+});

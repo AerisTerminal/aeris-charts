@@ -229,6 +229,13 @@ pub enum IndicatorKind {
         period: usize,
         deviation: f64,
     },
+    Choppiness {
+        period: usize,
+    },
+    AtrBands {
+        period: usize,
+        multiplier: f64,
+    },
     RelativeVolume {
         period: usize,
     },
@@ -299,6 +306,176 @@ pub enum IndicatorKind {
     Wma {
         period: usize,
     },
+}
+
+impl IndicatorKind {
+    /// Resolve the browser's legacy name/period/deviation schema query to an engine definition.
+    /// The implicit (14, 2) query uses each study's canonical defaults; a different
+    /// period retains the legacy query's period substitution for multi-period studies.
+    pub fn schema_definition(kind: &str, period: usize, deviation: f64) -> Option<Self> {
+        use aeris_charts_indicators::{PivotKind, VwapReset};
+        Some(match kind {
+            "aroon" => Self::Aroon { period },
+            "awesome_oscillator" => Self::AwesomeOscillator,
+            "dpo" => Self::Dpo { period },
+            "chande_momentum" => Self::ChandeMomentum { period },
+            "bollinger_metrics" => Self::BollingerMetrics { period, deviation },
+            "envelopes" => Self::Envelopes {
+                period,
+                percent: deviation,
+                exponential: false,
+            },
+            "alma" => Self::Alma {
+                period,
+                offset: 0.85,
+                sigma: 6.0,
+            },
+            "sma" => Self::Sma { period },
+            "ema" => Self::Ema { period },
+            "dema" => Self::Dema { period },
+            "tema" => Self::Tema { period },
+            "smma" | "rma" => Self::Smma { period },
+            "hma" => Self::Hma { period },
+            "vwma" => Self::Vwma { period },
+            "standard_deviation" => Self::StandardDeviation { period },
+            "cci" => Self::Cci { period },
+            "williams_r" => Self::WilliamsR { period },
+            "stochastic_rsi" => Self::StochasticRsi {
+                rsi_period: period,
+                stochastic_period: period,
+            },
+            "momentum" => Self::Momentum { period },
+            "roc" => Self::RateOfChange { period },
+            "donchian" => Self::Donchian { period },
+            "pivot_points" => Self::PivotPoints {
+                variant: match period {
+                    1 => PivotKind::Standard,
+                    2 => PivotKind::Fibonacci,
+                    3 => PivotKind::Camarilla,
+                    4 => PivotKind::Woodie,
+                    5 => PivotKind::DeMark,
+                    _ => return None,
+                },
+            },
+            "zigzag" => Self::ZigZag {
+                deviation_percent: deviation,
+            },
+            "keltner" => Self::Keltner {
+                period,
+                multiplier: deviation,
+            },
+            "adx_dmi" => Self::AdxDmi { period },
+            "parabolic_sar" => Self::ParabolicSar,
+            "supertrend" => Self::SuperTrend {
+                period,
+                // The legacy query's implicit 2.0 is not SuperTrend's own 3.0 default.
+                multiplier: if deviation == 2.0 { 3.0 } else { deviation },
+            },
+            "ichimoku" => Self::Ichimoku,
+            "ema_ribbon" => Self::EmaRibbon {
+                periods: if period == 14 {
+                    [5, 10, 20, 50, 200]
+                } else {
+                    [period; 5]
+                },
+            },
+            "bollinger" => Self::Bollinger { period, deviation },
+            "rsi" => Self::Rsi { period },
+            "macd" => Self::Macd {
+                fast: if period == 14 { 12 } else { period },
+                slow: if period == 14 {
+                    26
+                } else {
+                    period.saturating_mul(2)
+                },
+                signal: if period == 14 { 9 } else { period },
+            },
+            "stochastic" => Self::Stochastic {
+                k_period: period,
+                d_period: if period == 14 { 3 } else { period },
+            },
+            "atr" => Self::Atr { period },
+            "vwap" => Self::Vwap,
+            "obv" => Self::Obv,
+            "accumulation_distribution" => Self::AccumulationDistribution,
+            "price_volume_trend" => Self::PriceVolumeTrend,
+            "chaikin_oscillator" => Self::ChaikinOscillator { fast: 3, slow: 10 },
+            "klinger" => Self::Klinger {
+                fast: 34,
+                slow: 55,
+                signal: 13,
+            },
+            "kama" => Self::Kama {
+                period: 10,
+                fast: 2,
+                slow: 30,
+            },
+            "mcginley" => Self::McGinley { period },
+            "linear_regression" => Self::LinearRegression {
+                period: 20,
+                deviation: 2.0,
+            },
+            "choppiness" => Self::Choppiness { period },
+            "atr_bands" => Self::AtrBands {
+                period,
+                multiplier: deviation,
+            },
+            "relative_volume" => Self::RelativeVolume { period },
+            "elder_force" => Self::ElderForce { period },
+            "ease_of_movement" => Self::EaseOfMovement {
+                period,
+                divisor: 100_000_000.0,
+            },
+            "historical_volatility" => Self::HistoricalVolatility {
+                period,
+                annualization: 252.0,
+            },
+            "trix" => Self::Trix { period, signal: 9 },
+            "kst" => Self::Kst {
+                roc: [10, 15, 20, 30],
+                smoothing: [10, 10, 10, 15],
+                signal: 9,
+            },
+            "tsi" => Self::Tsi {
+                long: 25,
+                short: 13,
+                signal: 13,
+            },
+            "mass_index" => Self::MassIndex {
+                ema_period: 9,
+                sum_period: 25,
+            },
+            "vortex" => Self::Vortex { period },
+            "coppock_curve" => Self::CoppockCurve {
+                long: 14,
+                short: 11,
+                smoothing: 10,
+            },
+            "fisher_transform" => Self::FisherTransform { period },
+            "ultimate_oscillator" => Self::UltimateOscillator {
+                short: 7,
+                medium: 14,
+                long: 28,
+            },
+            "volume_oscillator" => Self::VolumeOscillator {
+                fast: 12,
+                slow: 26,
+                signal: 9,
+            },
+            "cmf" => Self::Cmf { period },
+            "mfi" => Self::Mfi { period },
+            "volume" => Self::Volume { period },
+            "vwap_bands" => Self::VwapBands {
+                reset: VwapReset::Session,
+                // The legacy TS query supplies 2.0 even with no arguments, whereas the
+                // study's own default is 1.0. Other values remain explicit overrides.
+                standard_deviation: if deviation == 2.0 { 1.0 } else { deviation },
+                percent: 10.0,
+            },
+            "wma" => Self::Wma { period },
+            _ => return None,
+        })
+    }
 }
 
 /// One live indicator producer's typed, runtime-independent definition.
@@ -415,6 +592,7 @@ pub struct IndicatorParameters {
     pub pivot_kind: Option<aeris_charts_indicators::PivotKind>,
     pub deviation_percent: Option<f64>,
     pub deviation: Option<f64>,
+    pub multiplier: Option<f64>,
     pub fast: Option<usize>,
     pub slow: Option<usize>,
     pub signal: Option<usize>,
@@ -1051,6 +1229,25 @@ impl ChartEngine {
                             IndicatorParameters {
                                 period: Some(period),
                                 deviation: Some(deviation),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::Choppiness { period } => (
+                            "choppiness",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::AtrBands { period, multiplier } => (
+                            "atr_bands",
+                            period,
+                            Some(multiplier),
+                            IndicatorParameters {
+                                period: Some(period),
+                                multiplier: Some(multiplier),
                                 ..IndicatorParameters::default()
                             },
                         ),
@@ -1719,6 +1916,21 @@ impl ChartEngine {
         )
     }
 
+    pub fn add_choppiness(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Choppiness { period }, None)
+            .into_iter()
+            .next()
+    }
+
+    pub fn add_atr_bands(
+        &mut self,
+        source: SeriesId,
+        period: usize,
+        multiplier: f64,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::AtrBands { period, multiplier }, None)
+    }
+
     pub fn add_relative_volume(
         &mut self,
         source: SeriesId,
@@ -2093,7 +2305,8 @@ impl ChartEngine {
             | IndicatorKind::Kst { .. }
             | IndicatorKind::Tsi { .. }
             | IndicatorKind::MassIndex { .. }
-            | IndicatorKind::Vortex { .. } => {
+            | IndicatorKind::Vortex { .. }
+            | IndicatorKind::Choppiness { .. } => {
                 if !ids.is_empty() {
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
@@ -2153,6 +2366,7 @@ impl ChartEngine {
             | IndicatorKind::Kama { .. }
             | IndicatorKind::McGinley { .. }
             | IndicatorKind::LinearRegression { .. }
+            | IndicatorKind::AtrBands { .. }
             | IndicatorKind::Wma { .. } => {}
         }
         ids
@@ -2293,6 +2507,15 @@ impl ChartEngine {
             IndicatorKind::LinearRegression { period, deviation } => {
                 parameters.push(integer("period", period));
                 parameters.push(number("deviation", deviation));
+            }
+            IndicatorKind::Choppiness { period } => {
+                let mut descriptor = integer("period", period);
+                descriptor.min = Some(2.0);
+                parameters.push(descriptor);
+            }
+            IndicatorKind::AtrBands { period, multiplier } => {
+                parameters.push(integer("period", period));
+                parameters.push(number("multiplier", multiplier));
             }
             IndicatorKind::RelativeVolume { period } => {
                 parameters.push(integer("period", period));
@@ -2724,6 +2947,10 @@ impl ChartEngine {
                 IndicatorKind::McGinley { period } => *period == 0,
                 IndicatorKind::LinearRegression { period, deviation } => {
                     *period == 0 || !deviation.is_finite() || *deviation < 0.0
+                }
+                IndicatorKind::Choppiness { period } => *period < 2,
+                IndicatorKind::AtrBands { period, multiplier } => {
+                    *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
                 }
                 IndicatorKind::RelativeVolume { period } => *period == 0,
                 IndicatorKind::VolumeOscillator { fast, slow, signal } => {
@@ -3216,6 +3443,8 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Kama { .. } => "kama",
         IndicatorKind::McGinley { .. } => "mcginley",
         IndicatorKind::LinearRegression { .. } => "linear_regression",
+        IndicatorKind::Choppiness { .. } => "choppiness",
+        IndicatorKind::AtrBands { .. } => "atr_bands",
         IndicatorKind::RelativeVolume { .. } => "relative_volume",
         IndicatorKind::VolumeOscillator { .. } => "volume_oscillator",
         IndicatorKind::ElderForce { .. } => "elder_force",
@@ -3346,6 +3575,12 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         }
         IndicatorKind::LinearRegression { period, deviation } => {
             aeris_charts_indicators::IncrementalState::linear_regression(period, deviation)
+        }
+        IndicatorKind::Choppiness { period } => {
+            aeris_charts_indicators::IncrementalState::choppiness(period)
+        }
+        IndicatorKind::AtrBands { period, multiplier } => {
+            aeris_charts_indicators::IncrementalState::atr_bands(period, multiplier)
         }
         IndicatorKind::RelativeVolume { period } => {
             aeris_charts_indicators::IncrementalState::relative_volume(period)
@@ -3524,6 +3759,10 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::LinearRegression { period, deviation } => {
             format!("Linear Regression {period} {}", params(*deviation))
         }
+        IndicatorKind::Choppiness { period } => format!("Choppiness {period}"),
+        IndicatorKind::AtrBands { period, multiplier } => {
+            format!("ATR Bands {period} {}", params(*multiplier))
+        }
         IndicatorKind::RelativeVolume { period } => format!("Relative Volume {period}"),
         IndicatorKind::VolumeOscillator { fast, slow, signal } => {
             format!("Volume Oscillator {fast} {slow} {signal}")
@@ -3657,6 +3896,8 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Kama { .. } => "KAMA",
         IndicatorKind::McGinley { .. } => "McGinley",
         IndicatorKind::LinearRegression { .. } => ["Curve", "Upper", "Lower"][output_index],
+        IndicatorKind::Choppiness { .. } => "Choppiness",
+        IndicatorKind::AtrBands { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::RelativeVolume { .. } => "Relative Volume",
         IndicatorKind::VolumeOscillator { .. } => ["PVO", "Signal", "Histogram"][output_index],
         IndicatorKind::ElderForce { .. } => "Elder Force",
@@ -3677,5 +3918,134 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
             ["Basis", "Std Upper", "Std Lower", "% Upper", "% Lower"][output_index]
         }
         IndicatorKind::Wma { .. } => "WMA",
+    }
+}
+
+#[cfg(test)]
+mod schema_mapping_tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn named_schema_uses_canonical_multi_parameter_defaults() {
+        // These are the public TS query's implicit (period=14, deviation=2) arguments.
+        // Every independent parameter must match the Rust study definition, not a
+        // repetition or arithmetic derivation of the query's one period argument.
+        for (name, expected) in [
+            (
+                "stochastic_rsi",
+                json!({"rsi_period":14,"stochastic_period":14}),
+            ),
+            ("bollinger_metrics", json!({"period":14,"deviation":2.0})),
+            (
+                "envelopes",
+                json!({"period":14,"percent":2.0,"exponential":false}),
+            ),
+            ("alma", json!({"period":14,"offset":0.85,"sigma":6.0})),
+            ("keltner", json!({"period":14,"multiplier":2.0})),
+            ("supertrend", json!({"period":14,"multiplier":3.0})),
+            (
+                "ema_ribbon",
+                json!({"period_1":5,"period_2":10,"period_3":20,"period_4":50,"period_5":200}),
+            ),
+            ("bollinger", json!({"period":14,"deviation":2.0})),
+            ("macd", json!({"fast":12,"slow":26,"signal":9})),
+            ("stochastic", json!({"k_period":14,"d_period":3})),
+            (
+                "chaikin_oscillator",
+                json!({"fast":3,"slow":10,"volume_source":null}),
+            ),
+            (
+                "klinger",
+                json!({"fast":34,"slow":55,"signal":13,"volume_source":null}),
+            ),
+            ("kama", json!({"period":10,"fast":2,"slow":30})),
+            ("linear_regression", json!({"period":20,"deviation":2.0})),
+            ("atr_bands", json!({"period":14,"multiplier":2.0})),
+            (
+                "ease_of_movement",
+                json!({"period":14,"divisor":100_000_000.0,"volume_source":null}),
+            ),
+            (
+                "historical_volatility",
+                json!({"period":14,"annualization":252.0}),
+            ),
+            ("trix", json!({"period":14,"signal":9})),
+            (
+                "kst",
+                json!({"roc_1":10,"roc_2":15,"roc_3":20,"roc_4":30,"smoothing_1":10,"smoothing_2":10,"smoothing_3":10,"smoothing_4":15,"signal":9}),
+            ),
+            ("tsi", json!({"long":25,"short":13,"signal":13})),
+            ("mass_index", json!({"ema_period":9,"sum_period":25})),
+            (
+                "coppock_curve",
+                json!({"long_period":14,"short_period":11,"smoothing":10}),
+            ),
+            (
+                "ultimate_oscillator",
+                json!({"short_period":7,"medium_period":14,"long_period":28}),
+            ),
+            (
+                "volume_oscillator",
+                json!({"fast":12,"slow":26,"signal":9,"volume_source":null}),
+            ),
+            (
+                "vwap_bands",
+                json!({"standard_deviation":1.0,"percent":10.0,"volume_source":null}),
+            ),
+        ] {
+            let definition = IndicatorKind::schema_definition(name, 14, 2.0).unwrap();
+            let schema = ChartEngine::indicator_schema(&definition);
+            assert_eq!(schema.kind, name);
+            let actual: serde_json::Map<String, Value> = schema
+                .parameters
+                .into_iter()
+                .filter(|parameter| parameter.name != "source")
+                .map(|parameter| (parameter.name, parameter.default))
+                .collect();
+            let expected = expected.as_object().unwrap();
+            for (parameter, default) in expected {
+                assert_eq!(actual.get(parameter), Some(default), "{name}.{parameter}");
+            }
+            // No unexpected parameters other than the reset enum descriptor, if present.
+            assert_eq!(
+                actual.len(),
+                expected.len() + usize::from(name == "vwap_bands"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn named_schema_retains_legacy_overrides_and_unknowns() {
+        fn schema(name: &str, period: usize, deviation: f64) -> IndicatorSchema {
+            ChartEngine::indicator_schema(
+                &IndicatorKind::schema_definition(name, period, deviation).unwrap(),
+            )
+        }
+        fn default(name: &str, period: usize, deviation: f64, parameter: &str) -> Value {
+            schema(name, period, deviation)
+                .parameters
+                .into_iter()
+                .find(|item| item.name == parameter)
+                .unwrap()
+                .default
+        }
+        assert_eq!(default("trix", 21, 2.0, "period"), json!(21));
+        assert_eq!(default("trix", 21, 2.0, "signal"), json!(9));
+        assert_eq!(default("stochastic", 21, 2.0, "k_period"), json!(21));
+        assert_eq!(default("stochastic", 21, 2.0, "d_period"), json!(21));
+        assert_eq!(default("macd", 21, 2.0, "fast"), json!(21));
+        assert_eq!(default("macd", 21, 2.0, "slow"), json!(42));
+        assert_eq!(default("macd", 21, 2.0, "signal"), json!(21));
+        assert_eq!(default("ema_ribbon", 21, 2.0, "period_5"), json!(21));
+        assert_eq!(default("bollinger", 21, 2.5, "deviation"), json!(2.5));
+        assert_eq!(
+            default("vwap_bands", 14, 2.5, "standard_deviation"),
+            json!(2.5)
+        );
+        assert_eq!(schema("rma", 21, 2.0).kind, "smma");
+        assert!(IndicatorKind::schema_definition("unknown", 14, 2.0).is_none());
+        assert!(IndicatorKind::schema_definition("pivot_points", 14, 2.0).is_none());
     }
 }
