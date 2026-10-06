@@ -39,6 +39,8 @@ pub struct PersistenceRestoreResult {
     pub panes: usize,
     pub drawings: usize,
     pub points: usize,
+    /// Binding identities whose custom implementation was not registered at restore time.
+    pub unresolved_custom_studies: Vec<SeriesId>,
 }
 
 /// Release-benchmark evidence for the bounded restore stages. This is not a stable product API.
@@ -393,6 +395,7 @@ fn validate_positive_number(value: f64, field: &str) -> Result<(), ChartError> {
 
 fn incremental_output_count(kind: &IndicatorKind) -> usize {
     match kind {
+        IndicatorKind::Custom { output_count, .. } => *output_count,
         IndicatorKind::SwingPoints { .. } | IndicatorKind::SessionLevels { .. } => 2,
         IndicatorKind::PreviousPeriodLevels { .. } | IndicatorKind::OpeningRange { .. } => 3,
         IndicatorKind::MarketStructure { .. }
@@ -492,6 +495,21 @@ fn validate_indicator_style(style: &IndicatorOutputStyle) -> Result<(), &'static
 
 fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
     match kind {
+        IndicatorKind::Custom {
+            type_id,
+            version,
+            parameters,
+            output_count,
+        } => {
+            crate::custom_studies::valid_custom_type_id(type_id)
+                && *version > 0
+                && (1..=5).contains(output_count)
+                && parameters.len() <= 64
+                && parameters.keys().all(|key| {
+                    !key.is_empty() && key.len() <= 128 && !key.chars().any(char::is_control)
+                })
+                && serde_json::to_vec(parameters).is_ok_and(|bytes| bytes.len() <= 65_536)
+        }
         IndicatorKind::SwingPoints { .. }
         | IndicatorKind::MarketStructure { .. }
         | IndicatorKind::FairValueGaps { .. }
@@ -2011,6 +2029,7 @@ impl ChartEngine {
             panes: self.panes.len(),
             drawings: drawing_count,
             points,
+            unresolved_custom_studies: Vec::new(),
         })
     }
 
@@ -2107,6 +2126,15 @@ impl ChartEngine {
         })?;
         let mut resolved = Vec::with_capacity(state.indicators.len());
         let mut expected_outputs = Vec::with_capacity(state.indicators.len());
+        if state
+            .indicators
+            .iter()
+            .filter(|indicator| matches!(indicator.kind, IndicatorKind::Custom { .. }))
+            .count()
+            > crate::MAX_CUSTOM_STUDY_BINDINGS
+        {
+            return Err(resource("custom study binding limit"));
+        }
         for (study, indicator) in state.indicators.iter().enumerate() {
             if !indicator_kind_is_valid(&indicator.kind)
                 || matches!(
@@ -2122,6 +2150,26 @@ impl ChartEngine {
             if indicator.styles.len() > aeris_charts_indicators::MAX_OUTPUTS {
                 return Err(resource(format!(
                     "indicator {study} has too many output styles"
+                )));
+            }
+            if let IndicatorKind::Custom {
+                type_id,
+                version,
+                parameters,
+                output_count,
+            } = &indicator.kind
+                && let Some(definition) = self
+                    .custom_studies
+                    .get(type_id)
+                    .filter(|registered| registered.definition.version == *version)
+                    .map(|registered| &registered.definition)
+                && (definition.outputs.len() != *output_count
+                    || indicator.volume_source.is_some() && !definition.uses_volume
+                    || crate::custom_studies::normalize_params(definition, parameters)
+                        .map_or(true, |normalized| normalized != *parameters))
+            {
+                return Err(invalid(format!(
+                    "indicator {study} has invalid custom parameters"
                 )));
             }
             let source =
@@ -2185,10 +2233,18 @@ impl ChartEngine {
                         volume_source.unwrap_or_default(),
                     )
                 });
-            let outputs =
-                self.add_indicator_kind_with_input(source, source_input, kind, volume_source);
+            let outputs = if matches!(kind, IndicatorKind::Custom { .. }) {
+                self.restore_custom_study(source, source_input, kind, volume_source)?
+            } else {
+                self.add_indicator_kind_with_input(source, source_input, kind, volume_source)
+            };
             if outputs.len() != styles.len() {
                 return Err(invalid(format!("indicator {study} could not be restored")));
+            }
+            if matches!(state.indicators[study].kind, IndicatorKind::Custom { .. })
+                && !self.custom_study_is_resolved(outputs[0])
+            {
+                result.unresolved_custom_studies.push(outputs[0]);
             }
             for (&output, style) in outputs.iter().zip(styles) {
                 if !self.set_indicator_output_style(output, style) {
@@ -2425,6 +2481,67 @@ mod tests {
             }
         );
         assert_eq!(binding.outputs, outputs);
+    }
+
+    #[test]
+    fn unknown_custom_study_restores_pending_with_ordered_output_references() {
+        let mut original = settled_chart();
+        let scalar = original.add_sma(0, 2).unwrap();
+        let custom_outputs = original.add_trix(scalar, 2, 3);
+        assert_eq!(custom_outputs.len(), 2);
+        assert!(original.add_sma(custom_outputs[0], 2).is_some());
+        let mut document: serde_json::Value =
+            serde_json::from_str(&original.export_state_json().unwrap()).unwrap();
+        document["indicators"][1]["kind"] = serde_json::json!({
+            "kind": "custom",
+            "type_id": "example.oscillator",
+            "version": 1,
+            "parameters": {"period": 3},
+            "output_count": 2
+        });
+        let json = serde_json::to_string(&document).unwrap();
+        let mut restored = settled_chart();
+        let result = restored.import_state_json(&json).unwrap();
+        let bindings = restored.indicator_bindings();
+        assert_eq!(result.schema_version, PERSISTENCE_SCHEMA_VERSION_STUDIES);
+        assert_eq!(
+            result.unresolved_custom_studies,
+            vec![bindings[1].outputs[0]]
+        );
+        assert!(!restored.custom_study_is_resolved(bindings[1].outputs[0]));
+        assert_eq!(bindings[1].outputs.len(), 2);
+        assert_eq!(bindings[1].source, bindings[0].outputs[0]);
+        assert_eq!(bindings[2].source, bindings[1].outputs[0]);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&restored.export_state_json().unwrap())
+                .unwrap()["indicators"][1]["kind"],
+            document["indicators"][1]["kind"]
+        );
+    }
+
+    #[test]
+    fn custom_study_persistence_rejects_invalid_contract_before_install() {
+        let mut original = settled_chart();
+        assert_eq!(original.add_trix(0, 2, 3).len(), 2);
+        let mut document: serde_json::Value =
+            serde_json::from_str(&original.export_state_json().unwrap()).unwrap();
+        for kind in [
+            serde_json::json!({"kind": "custom", "type_id": "", "version": 1, "parameters": {}, "output_count": 2}),
+            serde_json::json!({"kind": "custom", "type_id": "valid", "version": 0, "parameters": {}, "output_count": 2}),
+            serde_json::json!({"kind": "custom", "type_id": "valid", "version": 1, "parameters": {}, "output_count": 0}),
+            serde_json::json!({"kind": "custom", "type_id": "valid", "version": 1, "parameters": {}, "output_count": 6}),
+            serde_json::json!({"kind": "custom", "type_id": "valid", "version": 1, "parameters": {"oversized": "x".repeat(65_536)}, "output_count": 2}),
+        ] {
+            document["indicators"][0]["kind"] = kind;
+            let mut target = settled_chart();
+            let before = target.export_state_json().unwrap();
+            assert!(
+                target
+                    .import_state_json(&serde_json::to_string(&document).unwrap())
+                    .is_err()
+            );
+            assert_eq!(target.export_state_json().unwrap(), before);
+        }
     }
 
     #[test]

@@ -10,6 +10,7 @@ mod axis_metrics;
 mod axis_primitives;
 mod big_trades;
 mod chart_input;
+mod custom_studies;
 mod depth;
 mod domains;
 mod drawing_contract;
@@ -77,6 +78,12 @@ pub use chart_input::{
     CLICK_SLOP_MANHATTAN, ChartContextMenu, ChartCursor, ChartFocusTarget, ChartHover,
     ChartInputEvent, ChartKey, ChartRegion, HostPrimitiveHit, HostPrimitiveLayer,
     InteractionOptions, PANE_SEPARATOR_HIT, PointerInput, TRADING_TOOLTIP_DWELL_MS,
+};
+pub use custom_studies::{
+    CustomStudyDefinition, CustomStudyFactory, CustomStudyFault, CustomStudyFaultEvent,
+    CustomStudyInput, CustomStudyOutput, CustomStudyPane, CustomStudyParams, CustomStudyPlot,
+    CustomStudyRuntime, CustomStudyStats, MAX_CUSTOM_STUDY_BINDINGS, MAX_CUSTOM_STUDY_FAULTS,
+    MAX_CUSTOM_STUDY_OUTPUTS, MAX_CUSTOM_STUDY_TYPES,
 };
 pub use depth::{
     DepthBook, DepthBucket, DepthError, DepthEventCluster, DepthEventKind, DepthEventLayerOptions,
@@ -1831,6 +1838,8 @@ pub struct ChartEngine {
     pub(crate) left_builtin_axis_w: f64,
     pub(crate) right_builtin_axis_w: f64,
     indicators: Vec<IndicatorBinding>,
+    custom_studies: BTreeMap<String, custom_studies::RegisteredCustomStudy>,
+    custom_study_faults: VecDeque<CustomStudyFaultEvent>,
     indicator_chrome: IndicatorChromeOptions,
     external_study_outputs: BTreeMap<(u64, usize), external_studies::ExternalStudyOutputState>,
     external_study_panes: BTreeMap<(u64, u8), PaneId>,
@@ -2071,6 +2080,8 @@ impl ChartEngine {
             left_builtin_axis_w: 0.0,
             right_builtin_axis_w: 0.0,
             indicators: Vec::new(),
+            custom_studies: BTreeMap::new(),
+            custom_study_faults: VecDeque::new(),
             indicator_chrome: IndicatorChromeOptions::default(),
             external_study_outputs: BTreeMap::new(),
             external_study_panes: BTreeMap::new(),

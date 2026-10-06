@@ -4,6 +4,7 @@
 //! ordinary engine series (`aeris_charts_indicators` holds the pure math). Extracted from `lib.rs`.
 
 use super::*;
+use crate::custom_studies::{CustomBinding, CustomBindingState};
 use aeris_charts_indicators::structure_studies::{
     BreakOn, Mitigation, MitigationPrice, OrderBlockZone as CalculationOrderBlockZone,
     StructureStudy, StructureStudyKind,
@@ -419,6 +420,12 @@ pub enum IndicatorKind {
         duration_seconds: u32,
         calendar: StudyCalendarPolicy,
     },
+    Custom {
+        type_id: String,
+        version: u32,
+        parameters: BTreeMap<String, serde_json::Value>,
+        output_count: usize,
+    },
 }
 
 impl IndicatorKind {
@@ -646,7 +653,6 @@ pub struct IndicatorBindingInfo {
     pub styles: Vec<IndicatorOutputStyle>,
 }
 
-#[derive(Clone, Debug)]
 pub(crate) struct IndicatorBinding {
     pub(crate) source: SeriesId,
     pub(crate) source_input: IndicatorInputSource,
@@ -660,9 +666,37 @@ pub(crate) struct IndicatorBinding {
     pub(crate) structure: Option<StructureStudy>,
     pub(crate) session: Option<SessionStudyState>,
     pub(crate) calendar: Option<StudyCalendarPolicy>,
-    runtime: aeris_charts_indicators::IncrementalState,
-    source_generation: u64,
-    volume_generation: Option<u64>,
+    pub(crate) runtime: BindingRuntime,
+    pub(crate) source_generation: u64,
+    pub(crate) volume_generation: Option<u64>,
+}
+
+pub(crate) enum BindingRuntime {
+    BuiltIn(Box<aeris_charts_indicators::IncrementalState>),
+    Custom(CustomBinding),
+}
+
+impl BindingRuntime {
+    pub(crate) fn custom(&self) -> Option<&CustomBinding> {
+        match self {
+            Self::Custom(custom) => Some(custom),
+            Self::BuiltIn(_) => None,
+        }
+    }
+
+    pub(crate) fn custom_mut(&mut self) -> Option<&mut CustomBinding> {
+        match self {
+            Self::Custom(custom) => Some(custom),
+            Self::BuiltIn(_) => None,
+        }
+    }
+
+    fn built_in(&mut self) -> &mut aeris_charts_indicators::IncrementalState {
+        match self {
+            Self::BuiltIn(runtime) => runtime.as_mut(),
+            Self::Custom(_) => unreachable!("custom bindings are dispatched before built-in work"),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -725,7 +759,7 @@ pub struct IndicatorInfo {
     /// Stable identity shared by every output of this binding. The first output's opaque series
     /// identity is safe because output identities are monotonic and the binding owns all outputs.
     pub binding_id: SeriesId,
-    pub kind: &'static str,
+    pub kind: Cow<'static, str>,
     pub parameters: IndicatorParameters,
     pub period: usize,
     pub deviation: Option<f64>,
@@ -734,7 +768,7 @@ pub struct IndicatorInfo {
     pub volume_source: Option<SeriesId>,
     /// Current engine-owned presentation state for this output.
     pub style: IndicatorOutputStyle,
-    pub output_name: &'static str,
+    pub output_name: Cow<'static, str>,
     pub output_index: usize,
     pub output_count: usize,
 }
@@ -779,6 +813,7 @@ pub struct IndicatorParameters {
     pub smoothing_periods: Option<[usize; 4]>,
     pub ema_period: Option<usize>,
     pub sum_period: Option<usize>,
+    pub custom: Option<BTreeMap<String, serde_json::Value>>,
 }
 
 fn indicator_default_line_width(kind: &IndicatorKind) -> f64 {
@@ -920,6 +955,17 @@ impl ChartEngine {
             .collect::<Vec<_>>();
         for (kind, ids) in outputs {
             for (output_index, id) in ids.into_iter().enumerate() {
+                let custom_style = match &kind {
+                    IndicatorKind::Custom {
+                        type_id, version, ..
+                    } => self
+                        .custom_studies
+                        .get(type_id)
+                        .filter(|registration| registration.definition.version == *version)
+                        .and_then(|registration| registration.definition.outputs.get(output_index))
+                        .map(|output| output.default_style.clone()),
+                    _ => None,
+                };
                 let Some(series) = self.series_entry_mut(id) else {
                     continue;
                 };
@@ -927,6 +973,17 @@ impl ChartEngine {
                 series.title_visible = true;
                 series.line_width = Some(indicator_default_line_width(&kind));
                 series.line_color = indicator_output_color(&kind, output_index).map(str::to_string);
+                if let Some(style) = custom_style {
+                    series.visible = style.visible;
+                    series.line_width = style.line_width;
+                    series.line_color = style.line_color;
+                    series.line_style = style.line_style;
+                    series.point_markers = style.point_markers;
+                    series.up_color = style.up_color;
+                    series.down_color = style.down_color;
+                    series.area_top_color = style.area_top_color;
+                    series.area_bottom_color = style.area_bottom_color;
+                }
                 if matches!(
                     kind,
                     IndicatorKind::MarketStructure { .. } | IndicatorKind::OrderBlocks { .. }
@@ -962,7 +1019,10 @@ impl ChartEngine {
         self.indicators.iter().fold((0, 0), |usage, binding| {
             (
                 usage.0
-                    + binding.runtime.runtime_bytes()
+                    + match &binding.runtime {
+                        BindingRuntime::BuiltIn(runtime) => runtime.runtime_bytes(),
+                        BindingRuntime::Custom(_) => 0,
+                    }
                     + binding
                         .structure
                         .as_ref()
@@ -975,7 +1035,11 @@ impl ChartEngine {
                         .annotations
                         .as_ref()
                         .map_or(0, StudyAnnotations::capacity_bytes),
-                usage.1 + binding.runtime.transfer_capacity_bytes(),
+                usage.1
+                    + match &binding.runtime {
+                        BindingRuntime::BuiltIn(runtime) => runtime.transfer_capacity_bytes(),
+                        BindingRuntime::Custom(_) => 0,
+                    },
             )
         })
     }
@@ -983,7 +1047,10 @@ impl ChartEngine {
     pub fn last_indicator_work_rows(&self) -> usize {
         self.indicators
             .iter()
-            .map(|binding| binding.runtime.last_work_rows())
+            .map(|binding| match &binding.runtime {
+                BindingRuntime::BuiltIn(runtime) => runtime.last_work_rows(),
+                BindingRuntime::Custom(_) => 0,
+            })
             .sum()
     }
 
@@ -1201,6 +1268,15 @@ impl ChartEngine {
                 .position(|&output| output == id)
                 .map(|output_index| {
                     let (kind, period, deviation, parameters) = match binding.kind {
+                        IndicatorKind::Custom { ref parameters, .. } => (
+                            "custom",
+                            0,
+                            None,
+                            IndicatorParameters {
+                                custom: Some(parameters.clone()),
+                                ..Default::default()
+                            },
+                        ),
                         IndicatorKind::SwingPoints { left, right } => (
                             "swing_points",
                             0,
@@ -1908,7 +1984,11 @@ impl ChartEngine {
                     };
                     IndicatorInfo {
                         binding_id: binding.outputs[0],
-                        kind,
+                        kind: if let IndicatorKind::Custom { ref type_id, .. } = binding.kind {
+                            Cow::Owned(type_id.clone())
+                        } else {
+                            Cow::Borrowed(kind)
+                        },
                         parameters,
                         period,
                         deviation,
@@ -1919,7 +1999,25 @@ impl ChartEngine {
                             .series_entry(binding.outputs[output_index])
                             .map(indicator_output_style)
                             .unwrap_or_default(),
-                        output_name: indicator_output_name(&binding.kind, output_index),
+                        output_name: if let IndicatorKind::Custom {
+                            ref type_id,
+                            ref version,
+                            ..
+                        } = binding.kind
+                        {
+                            Cow::Owned(
+                                self.custom_studies
+                                    .get(type_id)
+                                    .filter(|d| d.definition.version == *version)
+                                    .and_then(|d| d.definition.outputs.get(output_index))
+                                    .map_or_else(
+                                        || format!("Output {}", output_index + 1),
+                                        |o| o.name.clone(),
+                                    ),
+                            )
+                        } else {
+                            Cow::Borrowed(indicator_output_name(&binding.kind, output_index))
+                        },
                         output_index,
                         output_count: binding.outputs.len(),
                     }
@@ -2147,7 +2245,8 @@ impl ChartEngine {
         }
         let kind = IndicatorKind::EmaRibbon { periods };
         self.indicators[index].kind = kind.clone();
-        self.indicators[index].runtime = incremental_state(&kind);
+        self.indicators[index].runtime =
+            BindingRuntime::BuiltIn(Box::new(incremental_state(&kind)));
         let changes = self.rebuild_indicator(index, 0, true);
         self.indicator_changes.clear();
         self.indicator_changes.extend(changes.into_iter().flatten());
@@ -2829,7 +2928,8 @@ impl ChartEngine {
             | IndicatorKind::SessionLevels { .. }
             | IndicatorKind::PreviousPeriodLevels { .. }
             | IndicatorKind::OpeningRange { .. }
-            | IndicatorKind::Wma { .. } => {}
+            | IndicatorKind::Wma { .. }
+            | IndicatorKind::Custom { .. } => {}
         }
         ids
     }
@@ -2856,7 +2956,12 @@ impl ChartEngine {
         }
         let kind = self.indicators[index].kind.clone();
         self.indicators[index].source_input = source_input;
-        self.indicators[index].runtime = incremental_state(&kind);
+        match &mut self.indicators[index].runtime {
+            BindingRuntime::Custom(custom) => custom.state = CustomBindingState::Pending,
+            runtime @ BindingRuntime::BuiltIn(_) => {
+                *runtime = BindingRuntime::BuiltIn(Box::new(incremental_state(&kind)));
+            }
+        }
         self.indicator_changes.clear();
         let changes = self.rebuild_indicator(index, 0, true);
         self.indicator_changes.extend(changes.into_iter().flatten());
@@ -2867,6 +2972,36 @@ impl ChartEngine {
 
     /// Return the bounded typed editor schema for an indicator definition.
     pub fn indicator_schema(kind: &IndicatorKind) -> IndicatorSchema {
+        if let IndicatorKind::Custom {
+            type_id,
+            parameters,
+            output_count,
+            ..
+        } = kind
+        {
+            return IndicatorSchema {
+                revision: INDICATOR_SCHEMA_REVISION,
+                kind: type_id.clone(),
+                parameters: parameters
+                    .iter()
+                    .map(|(name, default)| IndicatorParameterDescriptor {
+                        name: name.clone(),
+                        parameter_type: IndicatorParameterType::Number,
+                        default: default.clone(),
+                        min: None,
+                        max: None,
+                        options: None,
+                    })
+                    .collect(),
+                outputs: (0..*output_count)
+                    .map(|index| IndicatorOutputDescriptor {
+                        name: format!("Output {}", index + 1),
+                        index,
+                        supports_style: true,
+                    })
+                    .collect(),
+            };
+        }
         let mut parameters = vec![IndicatorParameterDescriptor {
             name: "source".into(),
             parameter_type: IndicatorParameterType::Source,
@@ -3411,6 +3546,7 @@ impl ChartEngine {
                     options: None,
                 });
             }
+            IndicatorKind::Custom { .. } => unreachable!("custom schema handled above"),
         }
         let output_count = session_output_count(kind)
             .or_else(|| structure_output_count(kind))
@@ -3431,7 +3567,7 @@ impl ChartEngine {
 
     /// Move output series into a fresh oscillator pane below everything (the public reference
     /// separate-pane default, reduced stretch).
-    fn place_outputs_in_oscillator_pane(&mut self, ids: &[SeriesId]) {
+    pub(crate) fn place_outputs_in_oscillator_pane(&mut self, ids: &[SeriesId]) {
         let restored_pane = self.study_restore_pane_cursor.take().and_then(|index| {
             if index > 0 && index < self.panes.len() {
                 self.study_restore_pane_cursor = Some(index + 1);
@@ -3674,6 +3810,7 @@ impl ChartEngine {
                 IndicatorKind::OpeningRange {
                     duration_seconds, ..
                 } => *duration_seconds == 0,
+                IndicatorKind::Custom { .. } => true,
             }
         {
             return Vec::new();
@@ -3779,7 +3916,7 @@ impl ChartEngine {
         self.indicators.push(IndicatorBinding {
             source,
             source_input,
-            runtime,
+            runtime: BindingRuntime::BuiltIn(Box::new(runtime)),
             kind,
             outputs: ids.clone(),
             volume_source,
@@ -4049,6 +4186,9 @@ impl ChartEngine {
         if session_output_count(&self.indicators[index].kind).is_some() {
             return self.rebuild_session_indicator(index, from, full_replace, outputs);
         }
+        if matches!(self.indicators[index].runtime, BindingRuntime::Custom(_)) {
+            return self.rebuild_custom_indicator(index, from, full_replace, outputs);
+        }
         if (full_replace || self.indicators[index].source_generation != source_generation)
             && let Some(annotations) = self.indicators[index].annotations.as_mut()
         {
@@ -4090,7 +4230,7 @@ impl ChartEngine {
                     }
                 });
             let binding = &mut self.indicators[index];
-            binding.runtime.rebuild_from(
+            binding.runtime.built_in().rebuild_from(
                 aeris_charts_indicators::IndicatorInput {
                     times,
                     open: values[0],
@@ -4109,10 +4249,16 @@ impl ChartEngine {
         let mut full_histogram_colors = None;
         for (output_index, output) in outputs.iter().flatten().copied().enumerate() {
             let previous_generation = self.data.series_generation(output).unwrap_or(0);
-            let source_from = self.indicators[index].runtime.output_from(output_index);
+            let source_from = self.indicators[index]
+                .runtime
+                .built_in()
+                .output_from(output_index);
 
             let output_from = if full_replace {
-                let values = self.indicators[index].runtime.take_output(output_index);
+                let values = self.indicators[index]
+                    .runtime
+                    .built_in()
+                    .take_output(output_index);
                 if (output_index == 2
                     && matches!(
                         self.indicators[index].kind,
@@ -4130,7 +4276,10 @@ impl ChartEngine {
                     .set_single_data_aligned(output, source, source_from, values);
                 0
             } else {
-                let values = self.indicators[index].runtime.output(output_index);
+                let values = self.indicators[index]
+                    .runtime
+                    .built_in()
+                    .output(output_index);
                 self.data
                     .update_single_aligned(output, source, source_from, values)
                     .expect("indicator output remains aligned to its source")
@@ -4162,8 +4311,9 @@ impl ChartEngine {
                 self.data
                     .set_point_colors(histogram_id, [Some(colors), None, None]);
             } else {
-                let histogram = self.indicators[index].runtime.output(output_index);
-                let source_from = self.indicators[index].runtime.output_from(output_index);
+                let runtime = self.indicators[index].runtime.built_in();
+                let histogram = runtime.output(output_index);
+                let source_from = runtime.output_from(output_index);
                 let output_start = source_from.saturating_sub(first_histogram);
                 let mut previous = output_start.checked_sub(1).and_then(|row| {
                     self.data
@@ -4182,7 +4332,10 @@ impl ChartEngine {
                 }
             }
         }
-        self.indicators[index].runtime.release_transfer_capacity();
+        self.indicators[index]
+            .runtime
+            .built_in()
+            .release_transfer_capacity();
         changes
     }
 }
@@ -4202,7 +4355,10 @@ fn momentum_histogram_colors(values: &[f64]) -> Vec<u32> {
     colors
 }
 
-fn selected_input<'a>(source: IndicatorInputSource, values: [&'a [f64]; 4]) -> Cow<'a, [f64]> {
+pub(crate) fn selected_input<'a>(
+    source: IndicatorInputSource,
+    values: [&'a [f64]; 4],
+) -> Cow<'a, [f64]> {
     match source {
         IndicatorInputSource::Open => Cow::Borrowed(values[0]),
         IndicatorInputSource::High => Cow::Borrowed(values[1]),
@@ -4245,7 +4401,7 @@ fn selected_input<'a>(source: IndicatorInputSource, values: [&'a [f64]; 4]) -> C
 
 /// Align an optional volume input to the source timeline without retaining a second canonical
 /// timeline. Missing timestamps intentionally use the indicator layer's unit-weight fallback.
-fn align_volume_to_source_times(
+pub(crate) fn align_volume_to_source_times(
     source_times: &[i64],
     volume_times: &[i64],
     values: &[f64],
@@ -4338,6 +4494,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Volume { .. } => "volume",
         IndicatorKind::VwapBands { .. } => "vwap_bands",
         IndicatorKind::Wma { .. } => "wma",
+        IndicatorKind::Custom { .. } => "custom",
     }
 }
 
@@ -4458,7 +4615,7 @@ fn pivot_kind_index(kind: aeris_charts_indicators::PivotKind) -> usize {
     }
 }
 
-fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::IncrementalState {
+pub(crate) fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::IncrementalState {
     match *kind {
         // Structural bindings execute their own OHLC scanner, not this scalar placeholder.
         IndicatorKind::SwingPoints { .. } => aeris_charts_indicators::IncrementalState::aroon(1),
@@ -4644,6 +4801,7 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
             aeris_charts_indicators::IncrementalState::rate_of_change(period)
         }
         IndicatorKind::Wma { period } => aeris_charts_indicators::IncrementalState::wma(period),
+        IndicatorKind::Custom { .. } => unreachable!("custom runtime is dispatched separately"),
     }
 }
 
@@ -4811,6 +4969,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Volume { .. } => "Volume".to_string(),
         IndicatorKind::VwapBands { .. } => "VWAP Bands".to_string(),
         IndicatorKind::Wma { period } => format!("WMA {period}"),
+        IndicatorKind::Custom { type_id, .. } => type_id.clone(),
     }
 }
 
@@ -4926,6 +5085,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
             ["Basis", "Std Upper", "Std Lower", "% Upper", "% Lower"][output_index]
         }
         IndicatorKind::Wma { .. } => "WMA",
+        IndicatorKind::Custom { .. } => "Custom",
     }
 }
 

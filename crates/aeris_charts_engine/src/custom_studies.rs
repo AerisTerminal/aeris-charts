@@ -1,0 +1,1313 @@
+//! Chart-local, engine-scheduled custom study definitions and runtimes.
+
+use crate::*;
+use aeris_charts_core::model::data_validation::MAX_SAFE_VALUE;
+use std::borrow::Cow;
+
+pub const MAX_CUSTOM_STUDY_TYPES: usize = 64;
+pub const MAX_CUSTOM_STUDY_BINDINGS: usize = 32;
+pub const MAX_CUSTOM_STUDY_OUTPUTS: usize = 5;
+pub const MAX_CUSTOM_STUDY_FAULTS: usize = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustomStudyPlot {
+    Line,
+    Histogram,
+    Area,
+    Marker,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustomStudyPane {
+    Price,
+    Dedicated,
+}
+
+#[derive(Clone, Debug)]
+pub struct CustomStudyOutput {
+    pub name: String,
+    pub plot: CustomStudyPlot,
+    pub pane: CustomStudyPane,
+    pub default_style: IndicatorOutputStyle,
+}
+
+#[derive(Clone, Debug)]
+pub struct CustomStudyDefinition {
+    pub type_id: String,
+    pub version: u32,
+    pub title: String,
+    pub parameters: Vec<IndicatorParameterDescriptor>,
+    pub outputs: Vec<CustomStudyOutput>,
+    pub uses_volume: bool,
+}
+
+pub type CustomStudyParams = BTreeMap<String, serde_json::Value>;
+
+pub struct CustomStudyInput<'a> {
+    pub times: &'a [i64],
+    pub open: &'a [f64],
+    pub high: &'a [f64],
+    pub low: &'a [f64],
+    pub close: &'a [f64],
+    pub volume: &'a [f64],
+    pub from: usize,
+    pub tail: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CustomStudyFault {
+    pub message: String,
+}
+
+impl From<&str> for CustomStudyFault {
+    fn from(message: &str) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CustomStudyFaultEvent {
+    pub binding: SeriesId,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CustomStudyStats {
+    pub calls: u64,
+    pub rows: u64,
+}
+
+pub trait CustomStudyRuntime {
+    fn compute(
+        &mut self,
+        input: CustomStudyInput<'_>,
+        out: &mut [Vec<f64>],
+    ) -> Result<(), CustomStudyFault>;
+}
+
+pub type CustomStudyFactory =
+    Box<dyn Fn(&CustomStudyParams) -> Result<Box<dyn CustomStudyRuntime>, CustomStudyFault>>;
+
+pub(crate) struct RegisteredCustomStudy {
+    pub definition: CustomStudyDefinition,
+    pub factory: CustomStudyFactory,
+}
+
+pub(crate) enum CustomBindingState {
+    Pending,
+    Active {
+        runtime: Box<dyn CustomStudyRuntime>,
+        covered: usize,
+    },
+    Faulted(String),
+}
+
+pub(crate) struct CustomBinding {
+    pub state: CustomBindingState,
+    pub stats: CustomStudyStats,
+}
+
+fn valid_value(descriptor: &IndicatorParameterDescriptor, value: &serde_json::Value) -> bool {
+    let number = match descriptor.parameter_type {
+        IndicatorParameterType::Integer => {
+            let Some(n) = value.as_f64() else {
+                return false;
+            };
+            if n.fract() != 0.0 || n.abs() > MAX_SAFE_VALUE {
+                return false;
+            }
+            Some(n)
+        }
+        IndicatorParameterType::Number => value.as_f64(),
+        IndicatorParameterType::Boolean => return value.is_boolean(),
+        IndicatorParameterType::Choice => {
+            return value.as_str().is_some_and(|s| {
+                descriptor
+                    .options
+                    .as_ref()
+                    .is_some_and(|options| options.iter().any(|o| o == s))
+            });
+        }
+        _ => return false,
+    };
+    number.is_some_and(|n| {
+        n.is_finite()
+            && descriptor.min.is_none_or(|min| n >= min)
+            && descriptor.max.is_none_or(|max| n <= max)
+    })
+}
+
+pub(crate) fn normalize_params(
+    definition: &CustomStudyDefinition,
+    supplied: &CustomStudyParams,
+) -> Result<CustomStudyParams, ChartError> {
+    if supplied
+        .keys()
+        .any(|key| !definition.parameters.iter().any(|p| &p.name == key))
+    {
+        return Err(ChartError::new(
+            ErrorCode::InvalidOptions,
+            "unknown custom study parameter",
+        ));
+    }
+    let mut params = CustomStudyParams::new();
+    for p in &definition.parameters {
+        let value = supplied.get(&p.name).unwrap_or(&p.default);
+        if !valid_value(p, value) {
+            return Err(ChartError::new(
+                ErrorCode::InvalidOptions,
+                "invalid custom study parameter",
+            ));
+        }
+        params.insert(p.name.clone(), value.clone());
+    }
+    Ok(params)
+}
+
+fn validate_definition(def: &CustomStudyDefinition) -> Result<(), ChartError> {
+    let invalid = || ChartError::new(ErrorCode::InvalidOptions, "invalid custom study definition");
+    if !valid_custom_type_id(&def.type_id)
+        || def.version == 0
+        || def.title.is_empty()
+        || def.title.len() > 256
+        || !(1..=MAX_CUSTOM_STUDY_OUTPUTS).contains(&def.outputs.len())
+        || def.outputs.iter().any(|o| {
+            o.name.is_empty()
+                || o.name.len() > 128
+                || !o
+                    .default_style
+                    .line_width
+                    .is_none_or(|w| w.is_finite() && w > 0.0)
+                || o.default_style.line_style > 4
+                || [
+                    &o.default_style.line_color,
+                    &o.default_style.up_color,
+                    &o.default_style.down_color,
+                    &o.default_style.area_top_color,
+                    &o.default_style.area_bottom_color,
+                ]
+                .iter()
+                .any(|color| {
+                    color.as_ref().is_some_and(|c| {
+                        c.len() > 256 || aeris_charts_render::color::Color::parse_css(c).is_none()
+                    })
+                })
+        })
+        || def.parameters.len() > 64
+    {
+        return Err(invalid());
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for p in &def.parameters {
+        if p.name.is_empty()
+            || p.name.len() > 64
+            || !names.insert(&p.name)
+            || p.min.is_some_and(|n| !n.is_finite())
+            || p.max.is_some_and(|n| !n.is_finite())
+            || matches!((p.min, p.max), (Some(a), Some(b)) if a > b)
+            || (p.parameter_type == IndicatorParameterType::Choice) != p.options.is_some()
+            || p.options.as_ref().is_some_and(|options| {
+                options.is_empty()
+                    || options.len() > 64
+                    || options.iter().any(|o| o.is_empty() || o.len() > 128)
+                    || options
+                        .iter()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        != options.len()
+            })
+            || (p.parameter_type != IndicatorParameterType::Choice && p.options.is_some())
+            || (matches!(
+                p.parameter_type,
+                IndicatorParameterType::Boolean | IndicatorParameterType::Choice
+            ) && (p.min.is_some() || p.max.is_some()))
+            || !valid_value(p, &p.default)
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn valid_custom_type_id(type_id: &str) -> bool {
+    !type_id.is_empty()
+        && type_id.len() <= 64
+        && type_id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
+}
+
+impl ChartEngine {
+    pub fn custom_study_schema(&self, type_id: &str) -> Option<IndicatorSchema> {
+        let definition = &self.custom_studies.get(type_id)?.definition;
+        Some(IndicatorSchema {
+            revision: INDICATOR_SCHEMA_REVISION,
+            kind: type_id.to_string(),
+            parameters: definition.parameters.clone(),
+            outputs: definition
+                .outputs
+                .iter()
+                .enumerate()
+                .map(|(index, output)| IndicatorOutputDescriptor {
+                    name: output.name.clone(),
+                    index,
+                    supports_style: true,
+                })
+                .collect(),
+        })
+    }
+
+    pub fn register_custom_study(
+        &mut self,
+        definition: CustomStudyDefinition,
+        factory: CustomStudyFactory,
+    ) -> Result<(), ChartError> {
+        validate_definition(&definition)?;
+        if self.custom_studies.contains_key(&definition.type_id) {
+            return Err(ChartError::new(
+                ErrorCode::InvalidOptions,
+                "custom study type already registered",
+            ));
+        }
+        if self.custom_studies.len() == MAX_CUSTOM_STUDY_TYPES {
+            return Err(ChartError::new(
+                ErrorCode::ResourceLimit,
+                "custom study type limit",
+            ));
+        }
+        let type_id = definition.type_id.clone();
+        let version = definition.version;
+        self.custom_studies.insert(
+            type_id.clone(),
+            RegisteredCustomStudy {
+                definition,
+                factory,
+            },
+        );
+        let pending = self.indicators.iter().filter(|b| matches!(
+            &b.kind, IndicatorKind::Custom { type_id: id, version: v, .. } if id == &type_id && *v == version
+        ) && matches!(b.runtime.custom().map(|c| &c.state), Some(CustomBindingState::Pending)))
+            .map(|b| b.outputs[0]).collect::<Vec<_>>();
+        for binding in pending {
+            if let Some(outputs) = self
+                .indicators
+                .iter()
+                .find(|b| b.outputs.first() == Some(&binding))
+                .map(|b| b.outputs.clone())
+            {
+                let plots = self.custom_studies[&type_id]
+                    .definition
+                    .outputs
+                    .iter()
+                    .map(|o| o.plot)
+                    .collect::<Vec<_>>();
+                for (&output, plot) in outputs.iter().zip(plots) {
+                    match plot {
+                        CustomStudyPlot::Histogram => {
+                            self.convert_series_kind(output, SeriesKind::Histogram);
+                        }
+                        CustomStudyPlot::Area => {
+                            self.convert_series_kind(output, SeriesKind::Area);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let _ = self.retry_custom_study(binding);
+        }
+        Ok(())
+    }
+
+    pub fn add_custom_study(
+        &mut self,
+        type_id: &str,
+        source: SeriesId,
+        source_input: IndicatorInputSource,
+        volume: Option<SeriesId>,
+        params: CustomStudyParams,
+    ) -> Result<Vec<SeriesId>, ChartError> {
+        let def = &self
+            .custom_studies
+            .get(type_id)
+            .ok_or_else(|| ChartError::new(ErrorCode::InvalidOptions, "unknown custom study type"))?
+            .definition;
+        let params = normalize_params(def, &params)?;
+        let kind = IndicatorKind::Custom {
+            type_id: type_id.into(),
+            version: def.version,
+            parameters: params,
+            output_count: def.outputs.len(),
+        };
+        self.create_custom_binding(source, source_input, kind, volume, false)
+    }
+
+    pub fn restore_custom_study(
+        &mut self,
+        source: SeriesId,
+        source_input: IndicatorInputSource,
+        kind: IndicatorKind,
+        volume_source: Option<SeriesId>,
+    ) -> Result<Vec<SeriesId>, ChartError> {
+        self.create_custom_binding(source, source_input, kind, volume_source, true)
+    }
+
+    fn create_custom_binding(
+        &mut self,
+        source: SeriesId,
+        source_input: IndicatorInputSource,
+        kind: IndicatorKind,
+        volume: Option<SeriesId>,
+        restore: bool,
+    ) -> Result<Vec<SeriesId>, ChartError> {
+        let IndicatorKind::Custom {
+            type_id,
+            version,
+            parameters,
+            output_count,
+        } = &kind
+        else {
+            return Err(ChartError::new(
+                ErrorCode::InvalidOptions,
+                "not a custom study",
+            ));
+        };
+        if self
+            .indicators
+            .iter()
+            .filter(|b| b.runtime.custom().is_some())
+            .count()
+            >= MAX_CUSTOM_STUDY_BINDINGS
+        {
+            return Err(ChartError::new(
+                ErrorCode::ResourceLimit,
+                "custom study binding limit",
+            ));
+        }
+        if !(1..=MAX_CUSTOM_STUDY_OUTPUTS).contains(output_count)
+            || self.series_entry(source).is_none()
+            || volume.is_some_and(|id| {
+                id == source
+                    || self
+                        .series_entry(id)
+                        .is_none_or(|s| !s.kind.stores_scalar_values())
+            })
+        {
+            return Err(ChartError::new(
+                ErrorCode::InvalidOptions,
+                "invalid custom study source or outputs",
+            ));
+        }
+        let def = self
+            .custom_studies
+            .get(type_id)
+            .filter(|d| d.definition.version == *version)
+            .map(|d| d.definition.clone());
+        if let Some(ref def) = def {
+            if def.outputs.len() != *output_count || (volume.is_some() && !def.uses_volume) {
+                return Err(ChartError::new(
+                    ErrorCode::InvalidOptions,
+                    "custom study output or volume mismatch",
+                ));
+            }
+            if normalize_params(def, parameters)? != *parameters {
+                return Err(ChartError::new(
+                    ErrorCode::InvalidOptions,
+                    "custom study parameters are not normalized",
+                ));
+            }
+        } else if !restore {
+            return Err(ChartError::new(
+                ErrorCode::InvalidOptions,
+                "unknown custom study version",
+            ));
+        }
+        let ids = (0..*output_count)
+            .map(|_| self.add_series(SeriesKind::Line))
+            .collect::<Vec<_>>();
+        let placement = self
+            .series_entry(source)
+            .map(|s| (s.pane_index, s.price_scale_target));
+        let mut dedicated = Vec::new();
+        for (i, &id) in ids.iter().enumerate() {
+            let descriptor = def.as_ref().and_then(|d| d.outputs.get(i));
+            let title = descriptor.map_or_else(
+                || format!("{type_id} {}", i + 1),
+                |o| format!("{} {}", def.as_ref().unwrap().title, o.name),
+            );
+            if let Some(s) = self.series_entry_mut(id) {
+                s.title = title;
+                s.countdown_visible = false;
+                s.last_price_animation = false;
+                if let Some((pane, scale)) = placement {
+                    s.pane_index = pane;
+                    s.price_scale_target = scale;
+                }
+            }
+            if let Some(o) = descriptor {
+                match o.plot {
+                    CustomStudyPlot::Histogram => {
+                        self.convert_series_kind(id, SeriesKind::Histogram);
+                    }
+                    CustomStudyPlot::Area => {
+                        self.convert_series_kind(id, SeriesKind::Area);
+                    }
+                    _ => {}
+                }
+                let _ = self.set_custom_output_style_before_binding(id, &o.default_style);
+                if o.pane == CustomStudyPane::Dedicated {
+                    dedicated.push(id);
+                }
+            }
+        }
+        if !dedicated.is_empty() {
+            self.place_outputs_in_oscillator_pane(&dedicated);
+        }
+        self.indicators.push(IndicatorBinding {
+            source,
+            source_input,
+            kind,
+            outputs: ids.clone(),
+            volume_source: volume,
+            annotations: None,
+            structure: None,
+            session: None,
+            calendar: None,
+            runtime: super::indicators::BindingRuntime::Custom(CustomBinding {
+                state: CustomBindingState::Pending,
+                stats: CustomStudyStats::default(),
+            }),
+            source_generation: 0,
+            volume_generation: None,
+        });
+        let changes = self.rebuild_indicator(self.indicators.len() - 1, 0, true);
+        self.indicator_changes.clear();
+        self.indicator_changes.extend(changes.into_iter().flatten());
+        self.propagate_indicator_changes();
+        self.sync_time_points();
+        Ok(ids)
+    }
+
+    fn set_custom_output_style_before_binding(
+        &mut self,
+        id: SeriesId,
+        style: &IndicatorOutputStyle,
+    ) -> bool {
+        if let Some(s) = self.series_entry_mut(id) {
+            s.visible = style.visible;
+            s.line_color = style.line_color.clone();
+            s.line_width = style.line_width;
+            s.line_style = style.line_style;
+            s.point_markers = style.point_markers;
+            s.up_color = style.up_color.clone();
+            s.down_color = style.down_color.clone();
+            s.area_top_color = style.area_top_color.clone();
+            s.area_bottom_color = style.area_bottom_color.clone();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn custom_study_is_resolved(&self, binding: SeriesId) -> bool {
+        self.indicators
+            .iter()
+            .find(|b| b.outputs.first() == Some(&binding))
+            .and_then(|b| b.runtime.custom())
+            .is_some_and(|c| !matches!(c.state, CustomBindingState::Pending))
+    }
+
+    pub fn custom_study_stats(&self, binding: SeriesId) -> Option<CustomStudyStats> {
+        self.indicators
+            .iter()
+            .find(|b| b.outputs.first() == Some(&binding))
+            .and_then(|b| b.runtime.custom())
+            .map(|c| c.stats)
+    }
+
+    pub fn take_custom_study_faults(&mut self) -> Vec<CustomStudyFaultEvent> {
+        self.custom_study_faults.drain(..).collect()
+    }
+
+    pub fn retry_custom_study(&mut self, binding: SeriesId) -> Result<(), ChartError> {
+        let index = self
+            .indicators
+            .iter()
+            .position(|b| b.outputs.first() == Some(&binding) && b.runtime.custom().is_some())
+            .ok_or_else(|| {
+                ChartError::new(ErrorCode::InvalidHandle, "unknown custom study binding")
+            })?;
+        self.indicators[index].runtime.custom_mut().unwrap().state = CustomBindingState::Pending;
+        self.indicator_changes.clear();
+        let changes = self.rebuild_indicator(index, 0, true);
+        self.indicator_changes.extend(changes.into_iter().flatten());
+        self.propagate_indicator_changes();
+        self.sync_time_points();
+        Ok(())
+    }
+
+    pub fn set_custom_study_parameters(
+        &mut self,
+        binding: SeriesId,
+        supplied: CustomStudyParams,
+    ) -> Result<(), ChartError> {
+        let index = self
+            .indicators
+            .iter()
+            .position(|b| b.outputs.first() == Some(&binding) && b.runtime.custom().is_some())
+            .ok_or_else(|| {
+                ChartError::new(ErrorCode::InvalidHandle, "unknown custom study binding")
+            })?;
+        let IndicatorKind::Custom {
+            type_id, version, ..
+        } = &self.indicators[index].kind
+        else {
+            unreachable!()
+        };
+        let def = self
+            .custom_studies
+            .get(type_id)
+            .filter(|d| d.definition.version == *version)
+            .ok_or_else(|| {
+                ChartError::new(
+                    ErrorCode::InvalidOptions,
+                    "unregistered custom study version",
+                )
+            })?;
+        let params = normalize_params(&def.definition, &supplied)?;
+        if let IndicatorKind::Custom { parameters, .. } = &mut self.indicators[index].kind {
+            *parameters = params;
+        }
+        self.retry_custom_study(binding)
+    }
+
+    /// Rebind a custom study without changing its output identities or dependency order.
+    pub fn set_custom_study_source(
+        &mut self,
+        binding: SeriesId,
+        source: SeriesId,
+        source_input: IndicatorInputSource,
+        volume: Option<SeriesId>,
+    ) -> Result<(), ChartError> {
+        let index = self
+            .indicators
+            .iter()
+            .position(|b| b.outputs.first() == Some(&binding) && b.runtime.custom().is_some())
+            .ok_or_else(|| {
+                ChartError::new(ErrorCode::InvalidHandle, "unknown custom study binding")
+            })?;
+        let usable = |id| {
+            self.series_entry(id).is_some()
+                && !self
+                    .indicators
+                    .iter()
+                    .skip(index)
+                    .any(|b| b.outputs.contains(&id))
+        };
+        let type_id = match &self.indicators[index].kind {
+            IndicatorKind::Custom { type_id, .. } => type_id,
+            _ => unreachable!(),
+        };
+        if !usable(source)
+            || volume.is_some_and(|id| {
+                id == source
+                    || !usable(id)
+                    || self
+                        .series_entry(id)
+                        .is_none_or(|s| !s.kind.stores_scalar_values())
+            })
+            || (volume.is_some()
+                && self
+                    .custom_studies
+                    .get(type_id)
+                    .is_some_and(|d| !d.definition.uses_volume))
+        {
+            return Err(ChartError::new(
+                ErrorCode::InvalidOptions,
+                "invalid custom study dependency",
+            ));
+        }
+        self.indicators[index].source = source;
+        self.indicators[index].source_input = source_input;
+        self.indicators[index].volume_source = volume;
+        self.retry_custom_study(binding)
+    }
+
+    pub fn custom_marker_plot(&self, output: SeriesId) -> bool {
+        self.indicators
+            .iter()
+            .find_map(|b| {
+                let index = b.outputs.iter().position(|id| *id == output)?;
+                let IndicatorKind::Custom {
+                    type_id, version, ..
+                } = &b.kind
+                else {
+                    return None;
+                };
+                Some(
+                    self.custom_studies
+                        .get(type_id)
+                        .filter(|d| d.definition.version == *version)
+                        .and_then(|d| d.definition.outputs.get(index))
+                        .is_some_and(|o| o.plot == CustomStudyPlot::Marker),
+                )
+            })
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn rebuild_custom_indicator(
+        &mut self,
+        index: usize,
+        from: usize,
+        full_replace: bool,
+        outputs: [Option<SeriesId>; aeris_charts_indicators::MAX_OUTPUTS],
+    ) -> [Option<(SeriesId, IndicatorChange)>; aeris_charts_indicators::MAX_OUTPUTS] {
+        let mut changes = [None; aeris_charts_indicators::MAX_OUTPUTS];
+        let binding = &self.indicators[index];
+        let IndicatorKind::Custom {
+            type_id,
+            version,
+            parameters,
+            ..
+        } = &binding.kind
+        else {
+            unreachable!()
+        };
+        let def = self
+            .custom_studies
+            .get(type_id)
+            .filter(|d| d.definition.version == *version);
+        let parameters = parameters.clone();
+        let source = binding.source;
+        let volume_source = binding.volume_source;
+        let source_input = binding.source_input;
+        let count = binding.outputs.len();
+        let source_generation = self.data.series_generation(source).unwrap_or(0);
+        let volume_generation = volume_source.and_then(|id| self.data.series_generation(id));
+        let Some((times, values)) = self.data.series_data(source) else {
+            return changes;
+        };
+        let n = times.len();
+        let close = super::indicators::selected_input(source_input, values);
+        let volume = volume_source
+            .and_then(|id| self.data.series_data(id))
+            .map_or(Cow::Borrowed(&[][..]), |(vt, vv)| {
+                if vt == times {
+                    Cow::Borrowed(vv[3])
+                } else {
+                    Cow::Owned(super::indicators::align_volume_to_source_times(
+                        times,
+                        vt,
+                        vv[3],
+                        f64::NAN,
+                    ))
+                }
+            });
+        let custom = self.indicators[index].runtime.custom_mut().unwrap();
+        let was_faulted = matches!(custom.state, CustomBindingState::Faulted(_));
+        if matches!(&custom.state, CustomBindingState::Active { covered, .. }
+            if (*covered > 0 && full_replace) || from > *covered || *covered > n)
+        {
+            custom.state = CustomBindingState::Pending;
+        }
+        if matches!(custom.state, CustomBindingState::Pending)
+            && let Some(def) = def
+            && let Ok(normalized) = normalize_params(&def.definition, &parameters)
+            && normalized == parameters
+            && def.definition.outputs.len() == count
+        {
+            match (def.factory)(&parameters) {
+                Ok(runtime) => {
+                    custom.state = CustomBindingState::Active {
+                        runtime,
+                        covered: 0,
+                    }
+                }
+                Err(fault) => custom.state = CustomBindingState::Faulted(fault.message),
+            }
+        }
+        let mut start = if full_replace { 0 } else { from.min(n) };
+        let mut result = (0..count).map(|_| Vec::new()).collect::<Vec<_>>();
+        if let CustomBindingState::Active { runtime, covered } = &mut custom.state {
+            if start > *covered || *covered > n || full_replace {
+                start = 0;
+            }
+            let tail = (start == *covered && start > 0) || (start + 1 == *covered && n == *covered);
+            custom.stats.calls += 1;
+            custom.stats.rows += (n - start) as u64;
+            match runtime.compute(
+                CustomStudyInput {
+                    times,
+                    open: values[0],
+                    high: values[1],
+                    low: values[2],
+                    close: close.as_ref(),
+                    volume: volume.as_ref(),
+                    from: start,
+                    tail,
+                },
+                &mut result,
+            ) {
+                Ok(())
+                    if result.iter().all(|v| {
+                        v.len() == n - start
+                            && v.iter()
+                                .all(|x| x.is_nan() || (x.is_finite() && x.abs() <= MAX_SAFE_VALUE))
+                    }) =>
+                {
+                    *covered = n;
+                }
+                Ok(()) => {
+                    custom.state = CustomBindingState::Faulted("invalid custom study output".into())
+                }
+                Err(fault) => custom.state = CustomBindingState::Faulted(fault.message),
+            }
+        }
+        let fault = if let CustomBindingState::Faulted(message) = &custom.state {
+            let mut message = message.clone();
+            if message.len() > 256 {
+                let mut end = 256;
+                while !message.is_char_boundary(end) {
+                    end -= 1;
+                }
+                message.truncate(end);
+            }
+            custom.state = CustomBindingState::Faulted(message.clone());
+            Some(message)
+        } else {
+            None
+        };
+        if fault.is_some() {
+            result = (0..count).map(|_| vec![f64::NAN; n]).collect();
+            start = 0;
+        } else if matches!(custom.state, CustomBindingState::Pending) {
+            result = (0..count).map(|_| vec![f64::NAN; n]).collect();
+            start = 0;
+        }
+        let newly_faulted = fault.is_some() && !was_faulted;
+        self.indicators[index].source_generation = source_generation;
+        self.indicators[index].volume_generation = volume_generation;
+        if newly_faulted && let Some(message) = fault {
+            if self.custom_study_faults.len() == MAX_CUSTOM_STUDY_FAULTS {
+                self.custom_study_faults.pop_front();
+            }
+            self.custom_study_faults.push_back(CustomStudyFaultEvent {
+                binding: outputs[0].unwrap(),
+                message,
+            });
+        }
+        for (slot, output) in outputs.iter().flatten().enumerate() {
+            let old = self.data.series_generation(*output).unwrap_or(0);
+            let output_from = if start == 0 {
+                self.data.set_single_data_aligned(
+                    *output,
+                    source,
+                    0,
+                    std::mem::take(&mut result[slot]),
+                );
+                0
+            } else {
+                self.data
+                    .update_single_aligned(*output, source, start, &result[slot])
+                    .expect("custom output remains aligned")
+            };
+            if self.data.series_generation(*output).unwrap_or(0) != old {
+                changes[slot] = Some((
+                    *output,
+                    IndicatorChange {
+                        from: output_from,
+                        previous_generation: old,
+                        full_replace: start == 0,
+                    },
+                ));
+            }
+        }
+        changes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn definition(id: &str) -> CustomStudyDefinition {
+        CustomStudyDefinition {
+            type_id: id.into(),
+            version: 1,
+            title: "Custom".into(),
+            parameters: vec![IndicatorParameterDescriptor {
+                name: "period".into(),
+                parameter_type: IndicatorParameterType::Integer,
+                default: serde_json::json!(2),
+                min: Some(1.0),
+                max: Some(10.0),
+                options: None,
+            }],
+            outputs: vec![CustomStudyOutput {
+                name: "Average".into(),
+                plot: CustomStudyPlot::Line,
+                pane: CustomStudyPane::Price,
+                default_style: IndicatorOutputStyle {
+                    visible: true,
+                    ..Default::default()
+                },
+            }],
+            uses_volume: false,
+        }
+    }
+
+    struct Average {
+        period: usize,
+        calls: Arc<Mutex<Vec<(usize, bool)>>>,
+    }
+
+    impl CustomStudyRuntime for Average {
+        fn compute(
+            &mut self,
+            input: CustomStudyInput<'_>,
+            out: &mut [Vec<f64>],
+        ) -> Result<(), CustomStudyFault> {
+            self.calls.lock().unwrap().push((input.from, input.tail));
+            for row in input.from..input.times.len() {
+                out[0].push(if row + 1 < self.period {
+                    f64::NAN
+                } else {
+                    input.close[row + 1 - self.period..=row].iter().sum::<f64>()
+                        / self.period as f64
+                });
+            }
+            Ok(())
+        }
+    }
+
+    fn factory(calls: Arc<Mutex<Vec<(usize, bool)>>>) -> CustomStudyFactory {
+        Box::new(move |params| {
+            Ok(Box::new(Average {
+                period: params["period"].as_u64().unwrap() as usize,
+                calls: Arc::clone(&calls),
+            }))
+        })
+    }
+
+    #[test]
+    fn invalid_definition_is_rejected_before_registration() {
+        let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+        let definition = CustomStudyDefinition {
+            type_id: "Bad id".into(),
+            version: 1,
+            title: "Bad".into(),
+            parameters: vec![],
+            outputs: vec![],
+            uses_volume: false,
+        };
+        assert_eq!(
+            chart
+                .register_custom_study(definition, Box::new(|_| unreachable!()))
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidOptions
+        );
+        assert!(chart.custom_studies.is_empty());
+    }
+
+    #[test]
+    fn custom_sma_schedules_repairs_and_chains() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+        chart
+            .register_custom_study(definition("average"), factory(Arc::clone(&calls)))
+            .unwrap();
+        let values = [10.0, 12.0, 14.0, 16.0];
+        chart
+            .set_series_data(0, &[1.0, 2.0, 3.0, 4.0], &values, &values, &values, &values)
+            .unwrap();
+        let custom = chart
+            .add_custom_study(
+                "average",
+                0,
+                IndicatorInputSource::Close,
+                None,
+                BTreeMap::new(),
+            )
+            .unwrap()[0];
+        let built_in = chart.add_sma(0, 2).unwrap();
+        let chained = chart.add_sma(custom, 2).unwrap();
+        let (custom_times, custom_values) = chart.data.series_data(custom).unwrap();
+        let (built_times, built_values) = chart.data.series_data(built_in).unwrap();
+        assert_eq!(&custom_times[1..], built_times);
+        assert_eq!(&custom_values[3][1..], built_values[3]);
+        assert_eq!(
+            chart
+                .indicator_info(custom)
+                .unwrap()
+                .parameters
+                .custom
+                .unwrap()["period"],
+            2
+        );
+        assert_eq!(chart.indicator_info(custom).unwrap().output_name, "Average");
+        assert!(chart.data.series_data(chained).is_some());
+        assert!(chart.update_series_bar(0, 5.0, [18.0; 4]));
+        assert!(chart.update_series_bar(0, 5.0, [20.0; 4]));
+        let (custom_times, custom_values) = chart.data.series_data(custom).unwrap();
+        let (built_times, built_values) = chart.data.series_data(built_in).unwrap();
+        assert_eq!(&custom_times[1..], built_times);
+        assert_eq!(&custom_values[3][1..], built_values[3]);
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[(0, false), (4, true), (4, true)]
+        );
+        assert_eq!(chart.custom_study_stats(custom).unwrap().calls, 3);
+        assert!(chart.update_series_bar(0, 3.0, [30.0; 4]));
+        assert_eq!(calls.lock().unwrap().last(), Some(&(2, false)));
+        let (custom_times, custom_values) = chart.data.series_data(custom).unwrap();
+        let (built_times, built_values) = chart.data.series_data(built_in).unwrap();
+        assert_eq!(&custom_times[1..], built_times);
+        assert_eq!(&custom_values[3][1..], built_values[3]);
+        chart
+            .set_series_data(
+                0,
+                &[10.0, 11.0],
+                &[3.0, 5.0],
+                &[3.0, 5.0],
+                &[3.0, 5.0],
+                &[3.0, 5.0],
+            )
+            .unwrap();
+        assert_eq!(calls.lock().unwrap().last(), Some(&(0, false)));
+        let (_, values) = chart.data.series_data(custom).unwrap();
+        assert_eq!(values[3][1], 4.0);
+        assert!(chart.data.series_data(chained).is_some());
+    }
+
+    #[test]
+    fn pending_binding_activates_and_invalid_parameters_do_not_mutate() {
+        let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+        let values = [1.0, 2.0, 3.0];
+        chart
+            .set_series_data(0, &[1.0, 2.0, 3.0], &values, &values, &values, &values)
+            .unwrap();
+        let kind = IndicatorKind::Custom {
+            type_id: "late".into(),
+            version: 1,
+            parameters: BTreeMap::from([("period".into(), serde_json::json!(2))]),
+            output_count: 1,
+        };
+        let output = chart
+            .restore_custom_study(0, IndicatorInputSource::Close, kind.clone(), None)
+            .unwrap()[0];
+        assert!(!chart.custom_study_is_resolved(output));
+        assert!(
+            chart.data.series_data(output).unwrap().1[3]
+                .iter()
+                .all(|x| x.is_nan())
+        );
+        assert_eq!(chart.indicator_bindings()[0].kind, kind);
+        chart
+            .register_custom_study(
+                definition("late"),
+                factory(Arc::new(Mutex::new(Vec::new()))),
+            )
+            .unwrap();
+        assert!(chart.custom_study_is_resolved(output));
+        assert_eq!(chart.data.series_data(output).unwrap().1[3][2], 2.5);
+        let before = chart.indicator_bindings().len();
+        assert_eq!(
+            chart
+                .add_custom_study(
+                    "late",
+                    0,
+                    IndicatorInputSource::Close,
+                    None,
+                    BTreeMap::from([("period".into(), serde_json::json!(11))])
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidOptions
+        );
+        assert_eq!(chart.indicator_bindings().len(), before);
+    }
+
+    struct Bad;
+    impl CustomStudyRuntime for Bad {
+        fn compute(
+            &mut self,
+            _: CustomStudyInput<'_>,
+            out: &mut [Vec<f64>],
+        ) -> Result<(), CustomStudyFault> {
+            out[0].push(f64::INFINITY);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn invalid_output_faults_once_and_retry_requeues() {
+        let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+        chart
+            .register_custom_study(definition("bad"), Box::new(|_| Ok(Box::new(Bad))))
+            .unwrap();
+        let values = [1.0, 2.0];
+        chart
+            .set_series_data(0, &[1.0, 2.0], &values, &values, &values, &values)
+            .unwrap();
+        let output = chart
+            .add_custom_study("bad", 0, IndicatorInputSource::Close, None, BTreeMap::new())
+            .unwrap()[0];
+        assert_eq!(chart.take_custom_study_faults().len(), 1);
+        assert!(
+            chart.data.series_data(output).unwrap().1[3]
+                .iter()
+                .all(|x| x.is_nan())
+        );
+        assert!(chart.update_series_bar(0, 3.0, [3.0; 4]));
+        assert_eq!(chart.custom_study_stats(output).unwrap().calls, 1);
+        assert!(chart.take_custom_study_faults().is_empty());
+        chart.retry_custom_study(output).unwrap();
+        assert_eq!(chart.custom_study_stats(output).unwrap().calls, 2);
+        assert_eq!(chart.take_custom_study_faults().len(), 1);
+    }
+
+    #[test]
+    fn registration_binding_and_fault_queues_have_hard_caps() {
+        let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+        for i in 0..MAX_CUSTOM_STUDY_TYPES {
+            chart
+                .register_custom_study(
+                    definition(&format!("study.{i}")),
+                    factory(Arc::new(Mutex::new(Vec::new()))),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            chart
+                .register_custom_study(
+                    definition("overflow"),
+                    factory(Arc::new(Mutex::new(Vec::new())))
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::ResourceLimit
+        );
+        let mut outputs = Vec::new();
+        for _ in 0..MAX_CUSTOM_STUDY_BINDINGS {
+            outputs.push(
+                chart
+                    .add_custom_study(
+                        "study.0",
+                        0,
+                        IndicatorInputSource::Close,
+                        None,
+                        BTreeMap::new(),
+                    )
+                    .unwrap()[0],
+            );
+        }
+        assert_eq!(
+            chart
+                .add_custom_study(
+                    "study.0",
+                    0,
+                    IndicatorInputSource::Close,
+                    None,
+                    BTreeMap::new()
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::ResourceLimit
+        );
+        assert!(chart.remove_indicator_binding(outputs[0]));
+        assert!(
+            chart
+                .add_custom_study(
+                    "study.0",
+                    0,
+                    IndicatorInputSource::Close,
+                    None,
+                    BTreeMap::new()
+                )
+                .is_ok()
+        );
+        for i in 0..MAX_CUSTOM_STUDY_FAULTS + 5 {
+            chart.custom_study_faults.push_back(CustomStudyFaultEvent {
+                binding: i as SeriesId,
+                message: "fault".into(),
+            });
+            if chart.custom_study_faults.len() > MAX_CUSTOM_STUDY_FAULTS {
+                chart.custom_study_faults.pop_front();
+            }
+        }
+        let events = chart.take_custom_study_faults();
+        assert_eq!(events.len(), MAX_CUSTOM_STUDY_FAULTS);
+        assert_eq!(events[0].binding, 5);
+        assert!(chart.take_custom_study_faults().is_empty());
+    }
+
+    #[test]
+    fn active_persistence_and_version_mismatch_preserve_custom_definition() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut original = ChartEngine::new(800.0, 600.0, 1.0);
+        original
+            .register_custom_study(definition("persisted"), factory(Arc::clone(&calls)))
+            .unwrap();
+        let values = [4.0, 6.0, 8.0, 10.0];
+        original
+            .set_series_data(0, &[1.0, 2.0, 3.0, 4.0], &values, &values, &values, &values)
+            .unwrap();
+        let output = original
+            .add_custom_study(
+                "persisted",
+                0,
+                IndicatorInputSource::Close,
+                None,
+                BTreeMap::new(),
+            )
+            .unwrap()[0];
+        let style = IndicatorOutputStyle {
+            visible: true,
+            line_color: Some("#ff0000".into()),
+            ..Default::default()
+        };
+        assert!(original.set_indicator_output_style(output, style.clone()));
+        let document = original.export_state_json().unwrap();
+
+        let restore = |version: u32| {
+            let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+            let mut def = definition("persisted");
+            def.version = version;
+            chart
+                .register_custom_study(def, factory(Arc::new(Mutex::new(Vec::new()))))
+                .unwrap();
+            chart
+                .set_series_data(0, &[1.0, 2.0, 3.0, 4.0], &values, &values, &values, &values)
+                .unwrap();
+            let result = chart.import_state_json(&document).unwrap();
+            (chart, result)
+        };
+        let (active, result) = restore(1);
+        assert!(result.unresolved_custom_studies.is_empty());
+        let binding = active.indicator_bindings()[0].clone();
+        assert_eq!(binding.kind, original.indicator_bindings()[0].kind);
+        assert_eq!(binding.styles, vec![style.clone()]);
+        assert_eq!(
+            &active.data.series_data(binding.outputs[0]).unwrap().1[3][1..],
+            &original.data.series_data(output).unwrap().1[3][1..]
+        );
+        let (pending, result) = restore(2);
+        assert_eq!(result.unresolved_custom_studies.len(), 1);
+        assert!(
+            pending
+                .data
+                .series_data(pending.indicator_bindings()[0].outputs[0])
+                .unwrap()
+                .1[3]
+                .iter()
+                .all(|v| v.is_nan())
+        );
+        let pending_json: serde_json::Value =
+            serde_json::from_str(&pending.export_state_json().unwrap()).unwrap();
+        let original_json: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(
+            pending_json["indicators"][0]["kind"],
+            original_json["indicators"][0]["kind"]
+        );
+        let mut invalid_document = original_json.clone();
+        invalid_document["indicators"][0]["kind"]["parameters"]["period"] = serde_json::json!(999);
+        let mut rejected = ChartEngine::new(800.0, 600.0, 1.0);
+        rejected
+            .register_custom_study(
+                definition("persisted"),
+                factory(Arc::new(Mutex::new(Vec::new()))),
+            )
+            .unwrap();
+        let rejected_before = rejected.series.len();
+        assert!(
+            rejected
+                .import_state_json(&invalid_document.to_string())
+                .is_err()
+        );
+        assert_eq!(rejected.series.len(), rejected_before);
+        assert!(rejected.indicator_bindings().is_empty());
+    }
+
+    #[test]
+    fn fault_clears_dependent_and_retry_recovers_without_stale_values() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Toggle {
+            broken: Arc<AtomicBool>,
+        }
+        impl CustomStudyRuntime for Toggle {
+            fn compute(
+                &mut self,
+                input: CustomStudyInput<'_>,
+                out: &mut [Vec<f64>],
+            ) -> Result<(), CustomStudyFault> {
+                if self.broken.load(Ordering::Relaxed) {
+                    return Err(CustomStudyFault::from("upstream failed"));
+                }
+                out[0].extend_from_slice(&input.close[input.from..]);
+                Ok(())
+            }
+        }
+        let broken = Arc::new(AtomicBool::new(false));
+        let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+        let state = Arc::clone(&broken);
+        chart
+            .register_custom_study(
+                definition("toggle"),
+                Box::new(move |_| {
+                    Ok(Box::new(Toggle {
+                        broken: Arc::clone(&state),
+                    }))
+                }),
+            )
+            .unwrap();
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0],
+                &[1.0, 2.0],
+                &[1.0, 2.0],
+                &[1.0, 2.0],
+                &[1.0, 2.0],
+            )
+            .unwrap();
+        let output = chart
+            .add_custom_study(
+                "toggle",
+                0,
+                IndicatorInputSource::Close,
+                None,
+                BTreeMap::new(),
+            )
+            .unwrap()[0];
+        let dependent = chart.add_sma(output, 2).unwrap();
+        assert_eq!(chart.data.series_data(dependent).unwrap().1[3], [1.5]);
+        broken.store(true, Ordering::Relaxed);
+        assert!(chart.update_series_bar(0, 3.0, [3.0; 4]));
+        assert_eq!(chart.take_custom_study_faults().len(), 1);
+        assert!(
+            chart.data.series_data(output).unwrap().1[3]
+                .iter()
+                .all(|v| v.is_nan())
+        );
+        assert!(
+            chart.data.series_data(dependent).unwrap().1[3]
+                .iter()
+                .all(|v| v.is_nan())
+        );
+        assert!(chart.update_series_bar(0, 4.0, [4.0; 4]));
+        assert_eq!(chart.custom_study_stats(output).unwrap().calls, 2);
+        broken.store(false, Ordering::Relaxed);
+        chart.retry_custom_study(output).unwrap();
+        assert_eq!(
+            chart.data.series_data(output).unwrap().1[3],
+            [1.0, 2.0, 3.0, 4.0]
+        );
+        assert_eq!(
+            chart.data.series_data(dependent).unwrap().1[3],
+            [1.5, 2.5, 3.5]
+        );
+    }
+}

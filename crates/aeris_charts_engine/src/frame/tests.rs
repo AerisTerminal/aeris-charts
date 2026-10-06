@@ -21,6 +21,117 @@ const LIVE_TEXT: Color = Color::rgb(0xff, 0xff, 0xff);
 const LIVE_COUNTDOWN: Color = Color::rgba(0xff, 0xff, 0xff, 0xb3);
 
 #[test]
+fn custom_marker_plot_uses_exact_visible_prices_without_line_or_whitespace_marks() {
+    use crate::custom_studies::{
+        CustomStudyDefinition, CustomStudyFault, CustomStudyInput, CustomStudyOutput,
+        CustomStudyPane, CustomStudyPlot, CustomStudyRuntime,
+    };
+
+    struct Marks;
+    impl CustomStudyRuntime for Marks {
+        fn compute(
+            &mut self,
+            input: CustomStudyInput<'_>,
+            out: &mut [Vec<f64>],
+        ) -> Result<(), CustomStudyFault> {
+            for row in input.from..input.times.len() {
+                out[0].push(if row == 1 {
+                    f64::NAN
+                } else {
+                    input.close[row] + 5.0
+                });
+            }
+            Ok(())
+        }
+    }
+
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let prices = [100.0, 110.0, 120.0, 130.0];
+    chart
+        .set_series_data(0, &[1.0, 2.0, 3.0, 4.0], &prices, &prices, &prices, &prices)
+        .unwrap();
+    chart
+        .register_custom_study(
+            CustomStudyDefinition {
+                type_id: "frame_marks".into(),
+                version: 1,
+                title: "Marks".into(),
+                parameters: vec![],
+                outputs: vec![CustomStudyOutput {
+                    name: "Events".into(),
+                    plot: CustomStudyPlot::Marker,
+                    pane: CustomStudyPane::Price,
+                    default_style: crate::IndicatorOutputStyle {
+                        visible: true,
+                        line_color: Some("#123456".into()),
+                        point_markers: true,
+                        ..Default::default()
+                    },
+                }],
+                uses_volume: false,
+            },
+            Box::new(|_| Ok(Box::new(Marks))),
+        )
+        .unwrap();
+    let output = chart
+        .add_custom_study(
+            "frame_marks",
+            0,
+            crate::IndicatorInputSource::Close,
+            None,
+            Default::default(),
+        )
+        .unwrap()[0];
+    assert!(chart.custom_marker_plot(output));
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let color = Color::rgb(0x12, 0x34, 0x56);
+    let frame = chart.build_frame();
+    let marks: Vec<_> = frame.panes[0]
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Circle { cx, cy, fill, .. } if *fill == color => Some((*cx, *cy)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(marks.len(), 3);
+    let scale = pane_scale(
+        &chart.panes[0],
+        series_scale_target(chart.series_entry(output).unwrap()),
+    );
+    let base = chart.series_base_value(output, 0).unwrap();
+    for (mark, row) in marks.iter().zip([0, 2, 3]) {
+        let logical = chart.data.plot(output).index_at(row).unwrap();
+        assert_eq!(
+            mark.0,
+            chart.time_scale.index_to_coordinate(logical).round() as f32
+        );
+        assert_eq!(
+            mark.1,
+            scale.price_to_coordinate(prices[row] + 5.0, base).round() as f32
+        );
+    }
+    assert!(
+        !frame.panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::Polyline { color: stroke, .. } if *stroke == color))
+    );
+
+    chart.set_visible_logical_range(2.0, 3.0);
+    let visible = chart.build_frame();
+    assert_eq!(
+        visible.panes[0]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::Circle { fill, .. } if *fill == color))
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn study_binding_paints_inside_its_output_layer_without_host_markers() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
     let output = chart.add_sma(0, 2).unwrap();
