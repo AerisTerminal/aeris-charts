@@ -768,7 +768,7 @@ pub struct FootprintAggregator {
     history_truncated: bool,
     /// Raw trades released by sealing since the tape was last replaced.
     released_trades: u64,
-    /// Origin of bar position zero: grows as bars are evicted, shrinks as history is prepended.
+    /// Bar-zero position offset: grows as bars are evicted, shrinks as history is prepended.
     bar_origin: i64,
     /// Incremented whenever the whole tape is replaced.
     tape_epoch: u64,
