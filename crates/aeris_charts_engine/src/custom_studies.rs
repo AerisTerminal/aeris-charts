@@ -297,14 +297,19 @@ impl ChartEngine {
                 .find(|b| b.outputs.first() == Some(&binding))
                 .map(|b| b.outputs.clone())
             {
-                let plots = self.custom_studies[&type_id]
-                    .definition
-                    .outputs
+                let definition = self.custom_studies[&type_id].definition.clone();
+                let source_pane = self
+                    .indicators
                     .iter()
-                    .map(|o| o.plot)
-                    .collect::<Vec<_>>();
-                for (&output, plot) in outputs.iter().zip(plots) {
-                    match plot {
+                    .find(|b| b.outputs[0] == binding)
+                    .and_then(|b| self.series_entry(b.source))
+                    .map(|s| s.pane_index);
+                let mut dedicated = Vec::new();
+                for (&output, descriptor) in outputs.iter().zip(&definition.outputs) {
+                    if let Some(series) = self.series_entry_mut(output) {
+                        series.title = format!("{} {}", definition.title, descriptor.name);
+                    }
+                    match descriptor.plot {
                         CustomStudyPlot::Histogram => {
                             self.convert_series_kind(output, SeriesKind::Histogram);
                         }
@@ -313,6 +318,14 @@ impl ChartEngine {
                         }
                         _ => {}
                     }
+                    if descriptor.pane == CustomStudyPane::Dedicated
+                        && source_pane == self.series_entry(output).map(|s| s.pane_index)
+                    {
+                        dedicated.push(output);
+                    }
+                }
+                if !dedicated.is_empty() {
+                    self.place_outputs_in_oscillator_pane(&dedicated);
                 }
             }
             let _ = self.retry_custom_study(binding);
@@ -340,7 +353,7 @@ impl ChartEngine {
             parameters: params,
             output_count: def.outputs.len(),
         };
-        self.create_custom_binding(source, source_input, kind, volume, false)
+        self.create_custom_binding(source, source_input, kind, volume, false, &[])
     }
 
     pub fn restore_custom_study(
@@ -350,7 +363,25 @@ impl ChartEngine {
         kind: IndicatorKind,
         volume_source: Option<SeriesId>,
     ) -> Result<Vec<SeriesId>, ChartError> {
-        self.create_custom_binding(source, source_input, kind, volume_source, true)
+        self.restore_custom_study_with_panes(source, source_input, kind, volume_source, &[])
+    }
+
+    pub(crate) fn restore_custom_study_with_panes(
+        &mut self,
+        source: SeriesId,
+        source_input: IndicatorInputSource,
+        kind: IndicatorKind,
+        volume_source: Option<SeriesId>,
+        dedicated_outputs: &[bool],
+    ) -> Result<Vec<SeriesId>, ChartError> {
+        self.create_custom_binding(
+            source,
+            source_input,
+            kind,
+            volume_source,
+            true,
+            dedicated_outputs,
+        )
     }
 
     fn create_custom_binding(
@@ -360,6 +391,7 @@ impl ChartEngine {
         kind: IndicatorKind,
         volume: Option<SeriesId>,
         restore: bool,
+        dedicated_outputs: &[bool],
     ) -> Result<Vec<SeriesId>, ChartError> {
         let IndicatorKind::Custom {
             type_id,
@@ -456,9 +488,13 @@ impl ChartEngine {
                     _ => {}
                 }
                 let _ = self.set_custom_output_style_before_binding(id, &o.default_style);
-                if o.pane == CustomStudyPane::Dedicated {
-                    dedicated.push(id);
-                }
+            }
+            if dedicated_outputs
+                .get(i)
+                .copied()
+                .unwrap_or_else(|| descriptor.is_some_and(|o| o.pane == CustomStudyPane::Dedicated))
+            {
+                dedicated.push(id);
             }
         }
         if !dedicated.is_empty() {
@@ -778,12 +814,13 @@ impl ChartEngine {
         } else {
             None
         };
-        if fault.is_some() {
-            result = (0..count).map(|_| vec![f64::NAN; n]).collect();
-            start = 0;
-        } else if matches!(custom.state, CustomBindingState::Pending) {
-            result = (0..count).map(|_| vec![f64::NAN; n]).collect();
-            start = 0;
+        if fault.is_some() || matches!(custom.state, CustomBindingState::Pending) {
+            // A new fault invalidates previously computed values; an already blank
+            // binding only needs the source's changed suffix.
+            if fault.is_some() && !was_faulted {
+                start = 0;
+            }
+            result = (0..count).map(|_| vec![f64::NAN; n - start]).collect();
         }
         let newly_faulted = fault.is_some() && !was_faulted;
         self.indicators[index].source_generation = source_generation;
@@ -1028,6 +1065,135 @@ mod tests {
             ErrorCode::InvalidOptions
         );
         assert_eq!(chart.indicator_bindings().len(), before);
+    }
+
+    #[test]
+    fn pending_import_preserves_dedicated_pane_order_and_activation_presentation() {
+        let values = [1.0, 2.0, 3.0, 4.0];
+        let mut original = ChartEngine::new(800.0, 600.0, 1.0);
+        original
+            .set_series_data(0, &[1.0, 2.0, 3.0, 4.0], &values, &values, &values, &values)
+            .unwrap();
+        let mut def = definition("late.pane");
+        def.title = "Late Study".into();
+        def.outputs[0].name = "Signal".into();
+        def.outputs[0].pane = CustomStudyPane::Dedicated;
+        def.outputs[0].plot = CustomStudyPlot::Histogram;
+        original
+            .register_custom_study(def.clone(), factory(Arc::new(Mutex::new(Vec::new()))))
+            .unwrap();
+        let first = original
+            .add_custom_study(
+                "late.pane",
+                0,
+                IndicatorInputSource::Close,
+                None,
+                BTreeMap::new(),
+            )
+            .unwrap()[0];
+        let style = IndicatorOutputStyle {
+            visible: true,
+            line_color: Some("#abcdef".into()),
+            ..Default::default()
+        };
+        assert!(original.set_indicator_output_style(first, style.clone()));
+        let later = original.add_rsi(0, 2).unwrap();
+        let expected_panes = [
+            original.series_entry(first).unwrap().pane_index,
+            original.series_entry(later).unwrap().pane_index,
+        ];
+        let document = original.export_state_json().unwrap();
+
+        let mut restored = ChartEngine::new(800.0, 600.0, 1.0);
+        restored
+            .set_series_data(0, &[1.0, 2.0, 3.0, 4.0], &values, &values, &values, &values)
+            .unwrap();
+        let result = restored.import_state_json(&document).unwrap();
+        assert_eq!(result.unresolved_custom_studies.len(), 1);
+        let pending = restored.indicator_bindings()[0].outputs[0];
+        let later = restored.indicator_bindings()[1].outputs[0];
+        assert_eq!(
+            [
+                restored.series_entry(pending).unwrap().pane_index,
+                restored.series_entry(later).unwrap().pane_index,
+            ],
+            expected_panes
+        );
+        assert_eq!(restored.export_state_json().unwrap(), document);
+        restored
+            .register_custom_study(def, factory(Arc::new(Mutex::new(Vec::new()))))
+            .unwrap();
+        assert_eq!(
+            restored.series_entry(pending).unwrap().pane_index,
+            expected_panes[0]
+        );
+        assert_eq!(
+            restored.series_entry(pending).unwrap().title,
+            "Late Study Signal"
+        );
+        assert_eq!(
+            restored
+                .comparison_legend_snapshot()
+                .iter()
+                .find(|entry| entry.series_id == pending)
+                .unwrap()
+                .title,
+            "Late Study Signal"
+        );
+        assert_eq!(
+            restored.series_entry(pending).unwrap().kind,
+            SeriesKind::Histogram
+        );
+        assert_eq!(restored.indicator_info(pending).unwrap().style, style);
+        assert_eq!(
+            restored.series_entry(later).unwrap().pane_index,
+            expected_panes[1]
+        );
+    }
+
+    #[test]
+    fn pending_and_faulted_tail_updates_leave_chained_sma_work_bounded() {
+        let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+        let n = 10_000;
+        let times = (1..=n).map(|row| row as f64).collect::<Vec<_>>();
+        let values = times.clone();
+        chart
+            .set_series_data(0, &times, &values, &values, &values, &values)
+            .unwrap();
+        let kind = IndicatorKind::Custom {
+            type_id: "missing".into(),
+            version: 1,
+            parameters: BTreeMap::new(),
+            output_count: 1,
+        };
+        let pending = chart
+            .restore_custom_study(0, IndicatorInputSource::Close, kind, None)
+            .unwrap()[0];
+        let chained = chart.add_sma(pending, 2).unwrap();
+        assert!(chart.update_series_bar(0, (n + 1) as f64, [(n + 1) as f64; 4]));
+        assert!(chart.last_indicator_work_rows() < 100);
+        assert_eq!(chart.indicator_changes[0].1.from, n);
+        assert!(
+            chart.data.series_data(chained).unwrap().1[3]
+                .iter()
+                .all(|v| v.is_nan())
+        );
+
+        chart
+            .register_custom_study(definition("bad"), Box::new(|_| Ok(Box::new(Bad))))
+            .unwrap();
+        let faulted = chart
+            .add_custom_study("bad", 0, IndicatorInputSource::Close, None, BTreeMap::new())
+            .unwrap()[0];
+        let chained_fault = chart.add_sma(faulted, 2).unwrap();
+        assert!(chart.update_series_bar(0, (n + 2) as f64, [(n + 2) as f64; 4]));
+        assert!(chart.last_indicator_work_rows() < 100);
+        assert_eq!(chart.indicator_changes[0].1.from, n + 1);
+        assert!(
+            chart.data.series_data(chained_fault).unwrap().1[3]
+                .iter()
+                .all(|v| v.is_nan())
+        );
     }
 
     struct Bad;

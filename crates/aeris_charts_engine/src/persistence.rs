@@ -129,6 +129,9 @@ struct IndicatorV3 {
     #[serde(default)]
     volume_source: Option<IndicatorSourceV3>,
     styles: Vec<IndicatorOutputStyle>,
+    /// Custom output placement survives an import without its runtime definition.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dedicated_outputs: Vec<bool>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -780,6 +783,16 @@ impl ChartEngine {
                     source_input: binding.source_input,
                     volume_source,
                     styles,
+                    dedicated_outputs: if matches!(binding.kind, IndicatorKind::Custom { .. }) {
+                        let source_pane = self.series_entry(binding.source).unwrap().pane_index;
+                        binding
+                            .outputs
+                            .iter()
+                            .map(|&id| self.series_entry(id).unwrap().pane_index != source_pane)
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
                 })
             })
             .collect::<Result<Vec<_>, ChartError>>()?;
@@ -2201,6 +2214,14 @@ impl ChartEngine {
                     "indicator {study} style count does not match its output count"
                 )));
             }
+            if !indicator.dedicated_outputs.is_empty()
+                && (!matches!(indicator.kind, IndicatorKind::Custom { .. })
+                    || indicator.dedicated_outputs.len() != expected)
+            {
+                return Err(invalid(format!(
+                    "indicator {study} has invalid output placement"
+                )));
+            }
             for (output, style) in indicator.styles.iter().enumerate() {
                 validate_indicator_style(style).map_err(|message| {
                     invalid(format!("indicator {study} output {output}: {message}"))
@@ -2234,7 +2255,13 @@ impl ChartEngine {
                     )
                 });
             let outputs = if matches!(kind, IndicatorKind::Custom { .. }) {
-                self.restore_custom_study(source, source_input, kind, volume_source)?
+                self.restore_custom_study_with_panes(
+                    source,
+                    source_input,
+                    kind,
+                    volume_source,
+                    &state.indicators[study].dedicated_outputs,
+                )?
             } else {
                 self.add_indicator_kind_with_input(source, source_input, kind, volume_source)
             };

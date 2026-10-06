@@ -127,6 +127,76 @@ test("callback errors fault once; re-entrant chart calls return a typed error", 
   expect(result.usable).toBe("canvas2d");
 });
 
+test("series pop delivers a custom study fault after the wasm call", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const source = chart.add_series("line");
+    source.set_data([{ time: 1701000000, value: 1 }, { time: 1701000060, value: 2 }]);
+    const faults = [];
+    chart.subscribe_custom_study_fault((event) => faults.push(event));
+    chart.register_custom_study({
+      type: "test.pop-fault", version: 1, title: "Pop",
+      parameters: [], outputs: [{ name: "signal", plot: "line", pane: "price" }],
+      init: () => null,
+      rebuild: (_state, ctx) => {
+        if (ctx.length === 1) throw new Error("pop failed");
+        ctx.outputs[0].fill(1);
+      },
+    });
+    const output = chart.add_custom_study("test.pop-fault", source)[0];
+    source.pop();
+    return { faults, binding: output.id, values: output.data() };
+  });
+  expect(result.faults).toEqual([{ binding: result.binding, message: "pop failed" }]);
+  expect(result.values).toEqual([{ time: 1701000000 }]);
+});
+
+test("ring drain delivers a custom study fault within the same frame", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  const result = await page.evaluate(async () => {
+    const chart = window.__chart;
+    const source = chart.add_series("line");
+    source.set_data([{ time: 4_000_000_000, value: 1 }]);
+    const faults = [];
+    chart.subscribe_custom_study_fault((event) => faults.push(event));
+    chart.register_custom_study({
+      type: "test.ring-fault", version: 1, title: "Ring",
+      parameters: [], outputs: [{ name: "signal", plot: "line", pane: "price" }],
+      init: () => null,
+      rebuild: (_state, ctx) => {
+        if (ctx.length > 1) throw new Error("ring failed");
+        ctx.outputs[0].fill(1);
+      },
+    });
+    const output = chart.add_custom_study("test.ring-fault", source)[0];
+    const layout = {
+      data_offset: 64, row_stride: 48, capacity: 8, time_offset: 0,
+      open_offset: 8, high_offset: 16, low_offset: 24, close_offset: 32,
+      sequence_offset: 40, write_cursor_offset: 0,
+    };
+    const buffer = new SharedArrayBuffer(64 + 48 * layout.capacity);
+    source.set_ring_source(buffer, layout);
+    const bytes = new DataView(buffer);
+    for (const [offset, value] of [[0, 4_000_000_060], [8, 2], [16, 2], [24, 2], [32, 2]]) {
+      bytes.setFloat64(64 + offset, value, true);
+    }
+    Atomics.store(new Int32Array(buffer), (64 + 40) / 4, 1);
+    Atomics.store(new Int32Array(buffer), 0, 1);
+    for (let i = 0; i < 10 && source.data().length < 2; i++) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    const observed = { faults, binding: output.id, sourceRows: source.data().length, values: output.data() };
+    source.set_ring_source(null);
+    return observed;
+  });
+  expect(result.sourceRows).toBe(2);
+  expect(result.faults).toEqual([{ binding: result.binding, message: "ring failed" }]);
+  expect(result.values.every(({ value }) => value === undefined)).toBe(true);
+});
+
 test("definitions, parameters, and worker API reject invalid input", async ({ page }) => {
   await page.goto("/?backend=canvas2d");
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);

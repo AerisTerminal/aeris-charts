@@ -5173,7 +5173,8 @@ export class chart_impl implements chart_api {
           const cached = methods.get(key);
           if (cached) return cached;
           const mutatesStudies = typeof key === "string" &&
-            /^(add_|set_|update_|remove_|import_|retry_|clear_|append_|batch_|seek_)/.test(key);
+            (/^(add_|set_|update_|remove_|import_|retry_|clear_|append_|batch_|seek_)/.test(key) ||
+              key === "drain_ring_sources" || key === "series_pop");
           const invoke = (...args: unknown[]) => {
             if (this.in_custom_study_callback) {
               throw new AerisChartsError("reentrant_call", "chart API called during a custom study callback");
