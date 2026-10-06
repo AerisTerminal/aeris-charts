@@ -275,9 +275,11 @@ pub fn parabolic_sar(highs: &[f64], lows: &[f64]) -> Vec<Option<f64>> {
     let mut out = vec![None; n];
     let mut state = ParabolicSarState::default();
     for row in 0..n {
-        out[row] = Some(parabolic_sar_step(
-            &mut state, highs[row], lows[row], 0.02, 0.20,
-        ));
+        if valid_range(highs[row], lows[row]) {
+            out[row] = Some(parabolic_sar_step(
+                &mut state, highs[row], lows[row], 0.02, 0.20,
+            ));
+        }
     }
     out
 }
@@ -297,6 +299,9 @@ pub fn supertrend(
     }
     let mut state = SuperTrendState::default();
     for row in 0..n {
+        if !valid_bar(highs[row], lows[row], closes[row]) {
+            continue;
+        }
         out[row] = supertrend_step(
             &mut state,
             DirectionalSample {
@@ -986,8 +991,8 @@ pub struct AtrBandsPoint {
     pub lower: Option<f64>,
 }
 
-/// Close-centered bands at `close ± multiplier × Wilder ATR`. Invalid OHLC
-/// breaks the ATR seed and the next valid run must warm up again.
+/// Close-centered bands at `close ± multiplier × Wilder ATR`. Whitespace
+/// leaves the ATR seed unchanged and has no output.
 pub fn atr_bands(
     highs: &[f64],
     lows: &[f64],
@@ -1010,7 +1015,7 @@ pub fn atr_bands(
     let mut state = AtrState::default();
     for (row, slot) in out.iter_mut().enumerate() {
         let atr = atr_bands_step(&mut state, highs[row], lows[row], closes[row], period);
-        if row >= period {
+        if atr.is_some() {
             *slot = atr_bands_point(closes[row], atr, multiplier);
         }
     }
@@ -1052,11 +1057,9 @@ mod choppiness_atr_bands_tests {
         assert_eq!(chop[4], Some(100.0));
         assert_eq!(chop[5], Some(100.0));
         let bands = atr_bands(&highs, &[0.0; 7], &[1.0; 7], 2, 1.5);
-        assert!(
-            bands[2..5]
-                .iter()
-                .all(|point| point.upper.unwrap().is_nan())
-        );
+        assert_eq!(bands[2].upper, None);
+        assert_eq!(bands[3].upper, Some(4.0));
+        assert_eq!(bands[4].upper, Some(4.0));
         assert_eq!(bands[5].upper, Some(4.0));
     }
 }
@@ -1068,8 +1071,7 @@ fn atr_bands_step(
     close: f64,
     period: usize,
 ) -> Option<f64> {
-    if !high.is_finite() || !low.is_finite() || !close.is_finite() || high < low {
-        *state = AtrState::default();
+    if !valid_bar(high, low, close) {
         return None;
     }
     atr_step(state, AtrSample { high, low, close }, period)
@@ -1135,17 +1137,9 @@ pub fn ema(values: &[f64], period: usize) -> Vec<Option<f64>> {
         return vec![None; values.len()];
     }
     let mut out = vec![None; values.len()];
-    let alpha = 2.0 / (period as f64 + 1.0);
-    let mut current = None;
+    let mut state = EmaState::default();
     for (i, &value) in values.iter().enumerate() {
-        current = match current {
-            Some(previous) => Some(alpha * value + (1.0 - alpha) * previous),
-            None if i + 1 >= period => {
-                Some(values[i + 1 - period..=i].iter().sum::<f64>() / period as f64)
-            }
-            None => None,
-        };
-        out[i] = current;
+        out[i] = ema_step(&mut state, value, period);
     }
     out
 }
@@ -1205,16 +1199,9 @@ pub fn smma(values: &[f64], period: usize) -> Vec<Option<f64>> {
         return vec![None; values.len()];
     }
     let mut out = vec![None; values.len()];
-    let mut current = None;
+    let mut state = SmmaState::default();
     for (index, &value) in values.iter().enumerate() {
-        current = match current {
-            Some(previous) => Some((previous * (period as f64 - 1.0) + value) / period as f64),
-            None if index + 1 >= period => {
-                Some(values[index + 1 - period..=index].iter().sum::<f64>() / period as f64)
-            }
-            None => None,
-        };
-        out[index] = current;
+        out[index] = smma_step(&mut state, value, period);
     }
     out
 }
@@ -1331,6 +1318,9 @@ pub fn keltner(
     let range = atr(&highs[..n], &lows[..n], &closes[..n], period);
     let factor = multiplier.max(0.0);
     for row in 0..n {
+        if !valid_bar(highs[row], lows[row], closes[row]) {
+            continue;
+        }
         if let (Some(middle), Some(range)) = (middle[row], range[row]) {
             let spread = range * factor;
             out[row] = KeltnerPoint {
@@ -1360,15 +1350,17 @@ pub fn adx_dmi(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Ve
     }
     let mut state = AdxDmiState::default();
     for row in 0..n {
-        out[row] = adx_dmi_step(
-            &mut state,
-            DirectionalSample {
-                high: highs[row],
-                low: lows[row],
-                close: closes[row],
-            },
-            period,
-        );
+        if valid_bar(highs[row], lows[row], closes[row]) {
+            out[row] = adx_dmi_step(
+                &mut state,
+                DirectionalSample {
+                    high: highs[row],
+                    low: lows[row],
+                    close: closes[row],
+                },
+                period,
+            );
+        }
     }
     out
 }
@@ -1436,23 +1428,20 @@ pub fn stochastic_rsi(
         return out;
     }
     let rsi_values = rsi(values, rsi_period);
-    let first = rsi_period
-        .saturating_add(stochastic_period)
-        .saturating_sub(1);
-    for (row, output) in out.iter_mut().enumerate().skip(first) {
-        let start = row + 1 - stochastic_period;
-        let window = &rsi_values[start..=row];
-        let current = rsi_values[row].expect("RSI after stochastic warmup");
-        let low = window
-            .iter()
-            .copied()
-            .map(Option::unwrap)
-            .fold(f64::INFINITY, f64::min);
-        let high = window
-            .iter()
-            .copied()
-            .map(Option::unwrap)
-            .fold(f64::NEG_INFINITY, f64::max);
+    let mut window = VecDeque::with_capacity(stochastic_period.min(values.len()));
+    for (row, output) in out.iter_mut().enumerate() {
+        let Some(current) = rsi_values[row] else {
+            continue;
+        };
+        window.push_back(current);
+        if window.len() > stochastic_period {
+            window.pop_front();
+        }
+        if window.len() < stochastic_period {
+            continue;
+        }
+        let low = window.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = window.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         *output = Some(if high > low {
             100.0 * (current - low) / (high - low)
         } else {
@@ -1698,24 +1687,9 @@ pub fn rsi(values: &[f64], period: usize) -> Vec<Option<f64>> {
     if period == 0 || n <= period {
         return out;
     }
-    let mut avg_gain = 0.0;
-    let mut avg_loss = 0.0;
-    for i in 1..=period {
-        let change = values[i] - values[i - 1];
-        if change > 0.0 {
-            avg_gain += change;
-        } else {
-            avg_loss -= change;
-        }
-    }
-    avg_gain /= period as f64;
-    avg_loss /= period as f64;
-    out[period] = Some(rsi_value(avg_gain, avg_loss));
-    for i in (period + 1)..n {
-        let change = values[i] - values[i - 1];
-        avg_gain = (avg_gain * (period as f64 - 1.0) + change.max(0.0)) / period as f64;
-        avg_loss = (avg_loss * (period as f64 - 1.0) + (-change).max(0.0)) / period as f64;
-        out[i] = Some(rsi_value(avg_gain, avg_loss));
+    let mut state = IndexedRsiState::default();
+    for (row, &value) in values.iter().enumerate() {
+        out[row] = indexed_rsi_step(&mut state, value, period);
     }
     out
 }
@@ -1750,40 +1724,9 @@ pub fn macd(values: &[f64], fast: usize, slow: usize, signal: usize) -> Vec<Macd
     if fast == 0 || slow == 0 || signal == 0 {
         return out;
     }
-    let fast_ema = ema(values, fast);
-    let slow_ema = ema(values, slow);
-    let alpha = 2.0 / (signal as f64 + 1.0);
-    let mut sig: Option<f64> = None;
-    let mut seen = 0usize;
-    let mut seed_sum = 0.0;
+    let mut state = MacdState::default();
     for i in 0..n {
-        let line = match (fast_ema[i], slow_ema[i]) {
-            (Some(f), Some(s)) => Some(f - s),
-            _ => None,
-        };
-        if let Some(m) = line {
-            seen += 1;
-            sig = match sig {
-                Some(previous) => Some(alpha * m + (1.0 - alpha) * previous),
-                None => {
-                    seed_sum += m;
-                    if seen == signal {
-                        Some(seed_sum / signal as f64)
-                    } else {
-                        None
-                    }
-                }
-            };
-        }
-        let (sig_out, hist) = match (line, sig) {
-            (Some(m), Some(s)) => (Some(s), Some(m - s)),
-            _ => (None, None),
-        };
-        out[i] = MacdPoint {
-            macd: line,
-            signal: sig_out,
-            histogram: hist,
-        };
+        out[i] = macd_step(&mut state, values[i], fast, slow, signal);
     }
     out
 }
@@ -1849,20 +1792,19 @@ pub fn atr(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Vec<Op
     if period == 0 || n <= period {
         return out;
     }
-    let tr = |i: usize| {
-        (highs[i] - lows[i])
-            .max((highs[i] - closes[i - 1]).abs())
-            .max((lows[i] - closes[i - 1]).abs())
-    };
-    let mut atr = 0.0;
-    for i in 1..=period {
-        atr += tr(i);
-    }
-    atr /= period as f64;
-    out[period] = Some(atr);
-    for (i, slot) in out.iter_mut().enumerate().skip(period + 1) {
-        atr = (atr * (period as f64 - 1.0) + tr(i)) / period as f64;
-        *slot = Some(atr);
+    let mut state = AtrState::default();
+    for (i, slot) in out.iter_mut().enumerate() {
+        if valid_bar(highs[i], lows[i], closes[i]) {
+            *slot = atr_step(
+                &mut state,
+                AtrSample {
+                    high: highs[i],
+                    low: lows[i],
+                    close: closes[i],
+                },
+                period,
+            );
+        }
     }
     out
 }
@@ -2125,9 +2067,17 @@ pub fn elder_force(closes: &[f64], volumes: &[f64], period: usize) -> Vec<Option
         return out;
     }
     let mut ema_state = EmaState::default();
-    for row in 1..n {
-        let force = (closes[row] - closes[row - 1]) * volumes[row].max(0.0);
-        out[row] = ema_step(&mut ema_state, force, period);
+    let mut previous = None;
+    for row in 0..n {
+        let close = closes[row];
+        if !close.is_finite() {
+            continue;
+        }
+        if let Some(last) = previous {
+            let force = (close - last) * volumes[row].max(0.0);
+            out[row] = ema_step(&mut ema_state, force, period);
+        }
+        previous = Some(close);
     }
     out
 }
@@ -2210,17 +2160,11 @@ pub fn trix(values: &[f64], period: usize, signal_period: usize) -> Vec<TrixPoin
     if period == 0 || signal_period == 0 {
         return out;
     }
-    let line_start = trix_line_start(period);
-    let signal_start = line_start.saturating_add(signal_period.saturating_sub(1));
     let mut state = TrixState::default();
-    for (row, (&value, point)) in values.iter().zip(out.iter_mut()).enumerate() {
+    for (&value, point) in values.iter().zip(out.iter_mut()) {
         let (line, signal) = trix_step(&mut state, value, period, signal_period);
-        if row >= line_start {
-            point.line = Some(line.unwrap_or(f64::NAN));
-        }
-        if row >= signal_start {
-            point.signal = Some(signal.unwrap_or(f64::NAN));
-        }
+        point.line = line;
+        point.signal = signal;
     }
     out
 }
@@ -2656,6 +2600,9 @@ fn trix_step(
     period: usize,
     signal_period: usize,
 ) -> (Option<f64>, Option<f64>) {
+    if !sample.is_finite() {
+        return (None, None);
+    }
     let triple = ema_step(&mut state.first, sample, period)
         .and_then(|value| ema_step(&mut state.second, value, period))
         .and_then(|value| ema_step(&mut state.third, value, period));
@@ -3249,6 +3196,9 @@ fn tema_step(state: &mut TemaState, sample: f64, period: usize) -> Option<f64> {
 }
 
 fn smma_step(state: &mut SmmaState, sample: f64, period: usize) -> Option<f64> {
+    if !sample.is_finite() {
+        return None;
+    }
     state.seen += 1;
     if state.seen <= period {
         state.seed_sum += sample;
@@ -3265,6 +3215,9 @@ fn smma_step(state: &mut SmmaState, sample: f64, period: usize) -> Option<f64> {
 }
 
 fn ema_step(state: &mut EmaState, sample: f64, period: usize) -> Option<f64> {
+    if !sample.is_finite() {
+        return None;
+    }
     state.seen += 1;
     if state.seen <= period {
         state.seed_sum += sample;
@@ -3943,6 +3896,9 @@ struct DirectionalSample {
 }
 
 fn indexed_rsi_step(state: &mut IndexedRsiState, sample: f64, period: usize) -> Option<f64> {
+    if !sample.is_finite() {
+        return None;
+    }
     let previous_close = state.previous_close.replace(sample)?;
     let change = sample - previous_close;
     state.seen_changes = state.seen_changes.saturating_add(1);
@@ -4039,8 +3995,17 @@ struct ChaikinState {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct ElderForceState {
-    previous_close: f64,
+    previous_close: Option<f64>,
     ema: EmaState,
+}
+
+// A missing source price is not an observation. Volume whitespace has a separate policy.
+fn valid_range(high: f64, low: f64) -> bool {
+    high.is_finite() && low.is_finite() && high >= low
+}
+
+fn valid_bar(high: f64, low: f64, close: f64) -> bool {
+    valid_range(high, low) && close.is_finite()
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -4062,6 +4027,9 @@ struct VwapBandsSample {
 }
 
 fn atr_step(state: &mut AtrState, sample: AtrSample, period: usize) -> Option<f64> {
+    if !valid_bar(sample.high, sample.low, sample.close) {
+        return None;
+    }
     let previous_close = state.previous_close.replace(sample.close)?;
     let tr = (sample.high - sample.low)
         .max((sample.high - previous_close).abs())
@@ -4087,6 +4055,13 @@ fn keltner_step(
     period: usize,
     multiplier: f64,
 ) -> KeltnerPoint {
+    if !valid_bar(sample.high, sample.low, sample.close) {
+        return KeltnerPoint {
+            upper: None,
+            middle: None,
+            lower: None,
+        };
+    }
     let middle = ema_step(&mut state.middle, sample.close, period);
     let range = atr_step(&mut state.atr, sample, period);
     match (middle, range) {
@@ -4107,6 +4082,13 @@ fn keltner_step(
 }
 
 fn adx_dmi_step(state: &mut AdxDmiState, sample: DirectionalSample, period: usize) -> AdxDmiPoint {
+    if !valid_bar(sample.high, sample.low, sample.close) {
+        return AdxDmiPoint {
+            plus_di: None,
+            minus_di: None,
+            adx: None,
+        };
+    }
     let Some(previous_high) = state.previous_high.replace(sample.high) else {
         state.previous_low = Some(sample.low);
         state.previous_close = Some(sample.close);
@@ -4247,6 +4229,9 @@ fn supertrend_step(
     period: usize,
     multiplier: f64,
 ) -> Option<f64> {
+    if !valid_bar(sample.high, sample.low, sample.close) {
+        return None;
+    }
     let atr = atr_step(
         &mut state.atr,
         AtrSample {
@@ -4539,7 +4524,7 @@ enum IncrementalKind {
     },
     Rsi {
         period: usize,
-        state: RecursiveHistory<RsiState>,
+        state: RecursiveHistory<IndexedRsiState>,
     },
     Macd {
         fast_period: usize,
@@ -5551,7 +5536,7 @@ impl IncrementalState {
                     let value = ema_step(&mut accumulator, input.close[row], *period);
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(value.expect("EMA after warmup"));
+                        self.outputs[0].push(value.unwrap_or(f64::NAN));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -5570,7 +5555,7 @@ impl IncrementalState {
                     let value = dema_step(&mut accumulator, input.close[row], *period);
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(value.expect("DEMA after warmup"));
+                        self.outputs[0].push(value.unwrap_or(f64::NAN));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -5589,7 +5574,7 @@ impl IncrementalState {
                     let value = tema_step(&mut accumulator, input.close[row], *period);
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(value.expect("TEMA after warmup"));
+                        self.outputs[0].push(value.unwrap_or(f64::NAN));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -5608,7 +5593,7 @@ impl IncrementalState {
                     let value = smma_step(&mut accumulator, input.close[row], *period);
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(value.expect("SMMA after warmup"));
+                        self.outputs[0].push(value.unwrap_or(f64::NAN));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -5660,7 +5645,12 @@ impl IncrementalState {
                 let start = self.output_from[0];
                 self.last_work_rows = n - start;
                 let values = stochastic_rsi(input.close, *rsi_period, *stochastic_period);
-                self.outputs[0].extend(values.into_iter().skip(start).flatten());
+                self.outputs[0].extend(
+                    values
+                        .into_iter()
+                        .skip(start)
+                        .map(|value| value.unwrap_or(f64::NAN)),
+                );
             }
             IncrementalKind::Momentum { period } => {
                 let start = self.output_from[0];
@@ -5758,9 +5748,9 @@ impl IncrementalState {
                     );
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(point.upper.expect("Keltner upper after warmup"));
-                        self.outputs[1].push(point.middle.expect("Keltner middle after warmup"));
-                        self.outputs[2].push(point.lower.expect("Keltner lower after warmup"));
+                        self.outputs[0].push(point.upper.unwrap_or(f64::NAN));
+                        self.outputs[1].push(point.middle.unwrap_or(f64::NAN));
+                        self.outputs[2].push(point.lower.unwrap_or(f64::NAN));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -5787,11 +5777,11 @@ impl IncrementalState {
                     );
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(point.plus_di.expect("+DI after warmup"));
-                        self.outputs[1].push(point.minus_di.expect("-DI after warmup"));
+                        self.outputs[0].push(point.plus_di.unwrap_or(f64::NAN));
+                        self.outputs[1].push(point.minus_di.unwrap_or(f64::NAN));
                     }
                     if row >= self.output_from[2] {
-                        self.outputs[2].push(point.adx.expect("ADX after warmup"));
+                        self.outputs[2].push(point.adx.unwrap_or(f64::NAN));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -5807,16 +5797,18 @@ impl IncrementalState {
                 let mut before_tail = None;
                 for row in start..n {
                     let previous = accumulator;
-                    let value = parabolic_sar_step(
-                        &mut accumulator,
-                        input.high[row],
-                        input.low[row],
-                        0.02,
-                        0.20,
-                    );
+                    let value = valid_range(input.high[row], input.low[row]).then(|| {
+                        parabolic_sar_step(
+                            &mut accumulator,
+                            input.high[row],
+                            input.low[row],
+                            0.02,
+                            0.20,
+                        )
+                    });
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(value);
+                        self.outputs[0].push(value.unwrap_or(f64::NAN));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -5848,7 +5840,7 @@ impl IncrementalState {
                     );
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(value.expect("SuperTrend after warmup"));
+                        self.outputs[0].push(value.unwrap_or(f64::NAN));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -5870,8 +5862,7 @@ impl IncrementalState {
                         let value = ema_step(&mut accumulator, input.close[row], period);
                         state.checkpoint(row, accumulator);
                         if row >= self.output_from[output_index] {
-                            self.outputs[output_index]
-                                .push(value.expect("EMA ribbon output after warmup"));
+                            self.outputs[output_index].push(value.unwrap_or(f64::NAN));
                         }
                         if row + 1 == n {
                             tail = Some(accumulator);
@@ -5941,7 +5932,7 @@ impl IncrementalState {
                         let value = ema_step(&mut accumulator, input.close[row], *period);
                         state.checkpoint(row, accumulator);
                         if row >= self.output_from[0] {
-                            let basis = value.expect("EMA envelope after warmup");
+                            let basis = value.unwrap_or(f64::NAN);
                             self.outputs[0].push(basis * (1.0 + fraction));
                             self.outputs[1].push(basis);
                             self.outputs[2].push(basis * (1.0 - fraction));
@@ -5971,19 +5962,10 @@ impl IncrementalState {
                 let mut before_tail = None;
                 for row in start..n {
                     let previous = accumulator;
-                    let value = if row == 0 {
-                        None
-                    } else {
-                        rsi_change_step(
-                            &mut accumulator,
-                            input.close[row] - input.close[row - 1],
-                            *period,
-                            row,
-                        )
-                    };
+                    let value = indexed_rsi_step(&mut accumulator, input.close[row], *period);
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(value.expect("RSI after warmup"));
+                        self.outputs[0].push(value.unwrap_or(f64::NAN));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -6013,11 +5995,11 @@ impl IncrementalState {
                     );
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(point.macd.expect("MACD line after warmup"));
+                        self.outputs[0].push(point.macd.unwrap_or(f64::NAN));
                     }
                     if row >= self.output_from[1] {
-                        self.outputs[1].push(point.signal.expect("MACD signal after warmup"));
-                        self.outputs[2].push(point.histogram.expect("MACD histogram after warmup"));
+                        self.outputs[1].push(point.signal.unwrap_or(f64::NAN));
+                        self.outputs[2].push(point.histogram.unwrap_or(f64::NAN));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -6112,7 +6094,7 @@ impl IncrementalState {
                     );
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(value.expect("ATR after warmup"));
+                        self.outputs[0].push(value.unwrap_or(f64::NAN));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -6305,15 +6287,22 @@ impl IncrementalState {
                 let mut before_tail = None;
                 for row in start..n {
                     let previous = accumulator;
-                    if row > 0 {
-                        let force = (input.close[row] - accumulator.previous_close)
-                            * input.volume.get(row).copied().unwrap_or(0.0).max(0.0);
-                        let value = ema_step(&mut accumulator.ema, force, *period);
-                        if row >= self.output_from[0] {
-                            self.outputs[0].push(value.expect("Elder Force EMA after warmup"));
+                    let close = input.close[row];
+                    if close.is_finite() {
+                        if let Some(previous_close) = accumulator.previous_close {
+                            let force = (close - previous_close)
+                                * input.volume.get(row).copied().unwrap_or(0.0).max(0.0);
+                            let value = ema_step(&mut accumulator.ema, force, *period);
+                            if row >= self.output_from[0] {
+                                self.outputs[0].push(value.unwrap_or(f64::NAN));
+                            }
+                        } else if row >= self.output_from[0] {
+                            self.outputs[0].push(f64::NAN);
                         }
+                        accumulator.previous_close = Some(close);
+                    } else if row >= self.output_from[0] {
+                        self.outputs[0].push(f64::NAN);
                     }
-                    accumulator.previous_close = input.close[row];
                     state.checkpoint(row, accumulator);
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -6632,7 +6621,15 @@ impl IncrementalState {
                     );
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        let point = atr_bands_point(input.close[row], atr, *multiplier);
+                        let point = if atr.is_some() {
+                            atr_bands_point(input.close[row], atr, *multiplier)
+                        } else {
+                            AtrBandsPoint {
+                                basis: None,
+                                upper: None,
+                                lower: None,
+                            }
+                        };
                         self.outputs[0].push(point.upper.unwrap_or(f64::NAN));
                         self.outputs[1].push(point.basis.unwrap_or(f64::NAN));
                         self.outputs[2].push(point.lower.unwrap_or(f64::NAN));
@@ -8134,7 +8131,7 @@ mod tests {
         assert!((values[3].unwrap() - (100.0 - 100.0 / (1.0 + 36.0 / 44.0))).abs() < 1e-12);
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     enum TestKind {
         Aroon,
         AwesomeOscillator,
@@ -8502,6 +8499,197 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    // Deleting source whitespace is an independent metamorphic oracle: the compact run never
+    // sees a NaN, so it cannot inherit the gapped formula's accidentally reset/poisoned state.
+    fn assert_continues_across_gaps(
+        kind: TestKind,
+        state: &mut IncrementalState,
+        input: IndicatorInput<'_>,
+        from: usize,
+    ) {
+        let kept = (0..input.close.len())
+            .filter(|&row| input.close[row].is_finite())
+            .collect::<Vec<_>>();
+        let times = kept.iter().map(|&row| input.times[row]).collect::<Vec<_>>();
+        let open = kept.iter().map(|&row| input.open[row]).collect::<Vec<_>>();
+        let high = kept.iter().map(|&row| input.high[row]).collect::<Vec<_>>();
+        let low = kept.iter().map(|&row| input.low[row]).collect::<Vec<_>>();
+        let close = kept.iter().map(|&row| input.close[row]).collect::<Vec<_>>();
+        let volume = kept
+            .iter()
+            .map(|&row| input.volume[row])
+            .collect::<Vec<_>>();
+        let compact = expected(
+            kind,
+            IndicatorInput {
+                times: &times,
+                open: &open,
+                high: &high,
+                low: &low,
+                close: &close,
+                volume: &volume,
+            },
+        );
+        let actual = expected(kind, input);
+        state.rebuild_from(input, from);
+        assert_eq!(actual.len(), compact.len(), "{kind:?} output count");
+        for output in 0..actual.len() {
+            let mut compact_row = 0;
+            for (row, &observed) in actual[output].iter().enumerate() {
+                let want = if input.close[row].is_finite() {
+                    let value = compact[output][compact_row];
+                    compact_row += 1;
+                    value
+                } else {
+                    None
+                };
+                let compare = |found: Option<f64>, path: &str| match (
+                    want.filter(|v| v.is_finite()),
+                    found.filter(|v| v.is_finite()),
+                ) {
+                    (None, None) => {}
+                    (Some(a), Some(b)) if (a - b).abs() <= 1e-9 * a.abs().max(1.0) => {}
+                    _ => panic!("{kind:?} {path} output {output} row {row}: {found:?} != {want:?}"),
+                };
+                compare(observed, "batch");
+                let incremental = if row >= state.output_from(output) {
+                    Some(state.output(output)[row - state.output_from(output)])
+                } else {
+                    None
+                };
+                if row >= from {
+                    compare(incremental, "incremental");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ema_family_deleted_rows_oracle() {
+        gap_family_oracle(&[
+            (TestKind::Ema, IncrementalState::ema(5)),
+            (TestKind::Smma, IncrementalState::smma(5)),
+            (TestKind::Dema, IncrementalState::dema(5)),
+            (TestKind::Tema, IncrementalState::tema(5)),
+            (
+                TestKind::EmaRibbon,
+                IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
+            ),
+            (
+                TestKind::EnvelopesEma,
+                IncrementalState::envelopes(5, 10.0, true),
+            ),
+            (TestKind::Macd, IncrementalState::macd(3, 6, 4)),
+            (TestKind::Trix, IncrementalState::trix(3, 4)),
+            (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
+            (TestKind::ElderForce, IncrementalState::elder_force(5)),
+        ]);
+    }
+
+    #[test]
+    fn rsi_family_deleted_rows_oracle() {
+        gap_family_oracle(&[
+            (TestKind::Rsi, IncrementalState::rsi(5)),
+            (
+                TestKind::StochasticRsi,
+                IncrementalState::stochastic_rsi(5, 5),
+            ),
+        ]);
+    }
+
+    #[test]
+    fn atr_family_deleted_rows_oracle() {
+        gap_family_oracle(&[
+            (TestKind::Atr, IncrementalState::atr(5)),
+            (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),
+            (TestKind::SuperTrend, IncrementalState::supertrend(5, 3.0)),
+            (TestKind::ParabolicSar, IncrementalState::parabolic_sar()),
+            (TestKind::AtrBands, IncrementalState::atr_bands(5, 2.0)),
+        ]);
+    }
+
+    fn gap_family_oracle(kinds: &[(TestKind, IncrementalState)]) {
+        let n = 1100;
+        let times = (0..n as i64).collect::<Vec<_>>();
+        let mut close = (0..n)
+            .map(|row| 100.0 + (row as f64 * 0.43).sin() * 3.0 + row as f64 * 0.05)
+            .collect::<Vec<_>>();
+        let mut high = close.iter().map(|v| v + 1.4).collect::<Vec<_>>();
+        let mut low = close.iter().map(|v| v - 1.2).collect::<Vec<_>>();
+        let volume = (0..n).map(|row| (row % 13 + 1) as f64).collect::<Vec<_>>();
+        for &gap in &[3, 29, 70, 71, 72, 1023, 1024, 1025] {
+            close[gap] = f64::NAN;
+            high[gap] = f64::NAN;
+            low[gap] = f64::NAN;
+        }
+        for &(kind, ref fresh_state) in kinds {
+            let mut state = fresh_state.clone();
+            let check =
+                |state: &mut IncrementalState, close: &[f64], high: &[f64], low: &[f64], from| {
+                    assert_continues_across_gaps(
+                        kind,
+                        state,
+                        IndicatorInput {
+                            times: &times,
+                            open: close,
+                            high,
+                            low,
+                            close,
+                            volume: &volume,
+                        },
+                        from,
+                    );
+                };
+            // Each prefix is an append, including the whitespace tip and the first post-gap row.
+            for len in 1..=36 {
+                assert_continues_across_gaps(
+                    kind,
+                    &mut state,
+                    IndicatorInput {
+                        times: &times[..len],
+                        open: &close[..len],
+                        high: &high[..len],
+                        low: &low[..len],
+                        close: &close[..len],
+                        volume: &volume[..len],
+                    },
+                    len - 1,
+                );
+            }
+            check(&mut state, &close, &high, &low, 36);
+            close[1099] = f64::NAN;
+            high[1099] = f64::NAN;
+            low[1099] = f64::NAN;
+            check(&mut state, &close, &high, &low, 1099);
+            close[1099] = 151.0;
+            high[1099] = 153.0;
+            low[1099] = 149.0;
+            check(&mut state, &close, &high, &low, 1099);
+            close[1024] = 124.0;
+            high[1024] = 126.0;
+            low[1024] = 122.0;
+            check(&mut state, &close, &high, &low, 1024);
+            close[1010] = f64::NAN;
+            high[1010] = f64::NAN;
+            low[1010] = f64::NAN;
+            check(&mut state, &close, &high, &low, 1010);
+            close[1010] = 138.0;
+            high[1010] = 140.0;
+            low[1010] = 136.0;
+            check(&mut state, &close, &high, &low, 1010);
+            // Restore the shared fixture for the next kind.
+            close[1099] = 100.0 + (1099.0_f64 * 0.43).sin() * 3.0 + 1099.0 * 0.05;
+            high[1099] = close[1099] + 1.4;
+            low[1099] = close[1099] - 1.2;
+            close[1024] = f64::NAN;
+            high[1024] = f64::NAN;
+            low[1024] = f64::NAN;
+            close[1010] = 100.0 + (1010.0_f64 * 0.43).sin() * 3.0 + 1010.0 * 0.05;
+            high[1010] = close[1010] + 1.4;
+            low[1010] = close[1010] - 1.2;
         }
     }
 
@@ -9559,7 +9747,15 @@ mod tests {
         let canonical_output = state.take_output(0);
         assert_eq!(canonical_output.len(), rows - 14);
         state.release_transfer_capacity();
-        assert!(state.runtime_bytes() < 32 * 1024);
+        // Each 1,024-row checkpoint now also stores the previous valid close and the valid
+        // change count. This is necessary to repair across arbitrarily long gaps without a
+        // backwards history scan; retained bytes still scale with checkpoints, not rows.
+        assert!(state.runtime_bytes() < 64 * 1024);
+        assert!(
+            state.runtime_bytes()
+                <= 2 * rows.div_ceil(CHECKPOINT_INTERVAL)
+                    * std::mem::size_of::<Checkpoint<IndexedRsiState>>()
+        );
         assert_eq!(state.transfer_capacity_bytes(), 0);
 
         state.rebuild_from(input, rows - 1);
