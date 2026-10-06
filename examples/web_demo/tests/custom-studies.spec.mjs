@@ -185,16 +185,58 @@ test("ring drain delivers a custom study fault within the same frame", async ({ 
     }
     Atomics.store(new Int32Array(buffer), (64 + 40) / 4, 1);
     Atomics.store(new Int32Array(buffer), 0, 1);
+    // Isolate the ring drain from repaint's separate wasm calls.
+    const repaint = chart.repaint;
+    Object.defineProperty(chart, "repaint", { configurable: true, value: () => {} });
     for (let i = 0; i < 10 && source.data().length < 2; i++) {
       await new Promise((resolve) => requestAnimationFrame(resolve));
     }
-    const observed = { faults, binding: output.id, sourceRows: source.data().length, values: output.data() };
+    // Clearing the ring is another wasm mutation, so freeze the observation first.
+    const observed = { faults: [...faults], binding: output.id, sourceRows: source.data().length, values: output.data() };
+    Object.defineProperty(chart, "repaint", { configurable: true, value: repaint });
     source.set_ring_source(null);
     return observed;
   });
   expect(result.sourceRows).toBe(2);
   expect(result.faults).toEqual([{ binding: result.binding, message: "ring failed" }]);
   expect(result.values.every(({ value }) => value === undefined)).toBe(true);
+});
+
+test("configuring synthetic bars delivers faults before the next chart call", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const source = chart.add_series("candlestick");
+    const options = { kind: "renko_fixed", box_size: 1 };
+    chart.configure_synthetic_bar_series(source, options);
+    chart.set_synthetic_bar_source(source, [
+      { time: 1701000000, open: 100, high: 100, low: 100, close: 100 },
+      { time: 1701000060, open: 102, high: 102, low: 102, close: 102 },
+    ]);
+    const faults = [];
+    chart.subscribe_custom_study_fault((event) => faults.push(event));
+    chart.register_custom_study({
+      type: "test.synthetic-fault", version: 1, title: "Synthetic",
+      parameters: [], outputs: [{ name: "signal", plot: "line", pane: "price" }],
+      init: () => null,
+      rebuild: (_state, ctx) => {
+        if (ctx.length === 0) throw new Error("synthetic reconfiguration failed");
+        ctx.outputs[0].fill(1);
+      },
+    });
+    const output = chart.add_custom_study("test.synthetic-fault", source)[0];
+    const before = [...faults];
+    // Isolate the configuring wasm call from repaint's other wasm calls.
+    const repaint = chart.repaint;
+    Object.defineProperty(chart, "repaint", { configurable: true, value: () => {} });
+    chart.configure_synthetic_bar_series(source, options);
+    Object.defineProperty(chart, "repaint", { configurable: true, value: repaint });
+    // Do not call another wasm method (including output.data()) before snapshotting.
+    return { before, faults: [...faults], binding: output.id };
+  });
+  expect(result.before).toEqual([]);
+  expect(result.faults).toEqual([{ binding: result.binding, message: "synthetic reconfiguration failed" }]);
 });
 
 test("definitions, parameters, and worker API reject invalid input", async ({ page }) => {

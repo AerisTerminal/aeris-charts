@@ -5091,7 +5091,9 @@ export class chart_impl implements chart_api {
 
   private drain_custom_study_faults(): void {
     if (!this.wasm_instance || this.custom_study_fault_subs.size === 0) return;
-    const events = JSON.parse(this.wasm_instance.take_custom_study_faults_json()) as custom_study_fault_event[];
+    const json = this.wasm_instance.take_custom_study_faults_json();
+    if (json === "") return;
+    const events = JSON.parse(json) as custom_study_fault_event[];
     for (const event of events) {
       for (const callback of this.custom_study_fault_subs) {
         try { callback(event); } catch (error) { console.error("custom study fault subscriber threw", error); }
@@ -5166,21 +5168,26 @@ export class chart_impl implements chart_api {
     // Only charts with registered JS callbacks pay for this boundary guard.
     if (!this.guarded_wasm && this.wasm_instance) {
       const methods = new Map<PropertyKey, (...args: unknown[]) => unknown>();
+      // These calls only inspect or paint already-computed state. Everything else
+      // drains, including future wasm mutations that do not follow a name prefix.
+      const read_only = new Set([
+        "frame_pending", "frame_stats", "render", "ring_source_count",
+        "wants_animation", "time_scale_width", "time_scale_height",
+        "visible_logical_range", "visible_time_range",
+      ]);
       this.guarded_wasm = new Proxy(this.wasm_instance, {
         get: (target, key) => {
           const value = Reflect.get(target, key, target);
           if (typeof value !== "function") return value;
           const cached = methods.get(key);
           if (cached) return cached;
-          const mutatesStudies = typeof key === "string" &&
-            (/^(add_|set_|update_|remove_|import_|retry_|clear_|append_|batch_|seek_)/.test(key) ||
-              key === "drain_ring_sources" || key === "series_pop");
+          const may_mutate = typeof key !== "string" || !read_only.has(key);
           const invoke = (...args: unknown[]) => {
             if (this.in_custom_study_callback) {
               throw new AerisChartsError("reentrant_call", "chart API called during a custom study callback");
             }
             try { return value.apply(target, args) as unknown; }
-            finally { if (mutatesStudies) this.drain_custom_study_faults(); }
+            finally { if (may_mutate) this.drain_custom_study_faults(); }
           };
           methods.set(key, invoke);
           return invoke;

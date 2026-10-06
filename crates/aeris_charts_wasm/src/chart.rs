@@ -2471,6 +2471,10 @@ impl AerisChart {
 
     pub fn take_custom_study_faults_json(&mut self) -> String {
         let faults = self.inner.borrow_mut().engine.take_custom_study_faults();
+        // Empty drains happen after ordinary wasm calls; skip JSON allocation on that path.
+        if faults.is_empty() {
+            return String::new();
+        }
         serde_json::json!(
             faults
                 .iter()
