@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
-import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
+import { crop_png, count_different, max_channel_delta } from "./parity-pixels.mjs";
 
 test("custom SMA matches built-in values and dispatches tail updates", async ({ page }) => {
   await page.goto("/?backend=canvas2d");
@@ -447,8 +447,59 @@ test("structure zones and auction marks share Canvas2D and WebGPU geometry", asy
   expect(snapshots[0].geometry.customMarkerValues).toHaveLength(2);
   expect(snapshots[0].geometry.marks.length).toBeGreaterThan(0);
   const [canvas, gpu] = snapshots.map(({ image }) => image);
-  const changed = pixelmatch(canvas.data, gpu.data, null, canvas.width, canvas.height, {
-    threshold: 0.1, includeAA: false,
-  });
-  expect(changed, "existing backend parity tolerance for the combined scene").toBeLessThanOrEqual(2600);
+  const chart_canvas = crop_png(canvas, 75, 65, 665, 655);
+  const chart_gpu = crop_png(gpu, 75, 65, 665, 655);
+  const data_a = chart_canvas.data;
+  const data_b = chart_gpu.data;
+  let rounding_pixels = 0;
+  let coverage_pixels = 0;
+  let coverage_max = 0;
+  let interior_max = 0;
+  for (let y = 0; y < chart_canvas.height; y++) {
+    for (let x = 0; x < chart_canvas.width; x++) {
+      const i = 4 * (y * chart_canvas.width + x);
+      let delta = 0;
+      for (let c = 0; c < 4; c++) delta = Math.max(delta, Math.abs(data_a[i + c] - data_b[i + c]));
+      if (delta === 0) continue;
+      if (delta <= 2) {
+        rounding_pixels++;
+        interior_max = Math.max(interior_max, delta);
+        continue;
+      }
+      coverage_pixels++;
+      coverage_max = Math.max(coverage_max, delta);
+      // A difference larger than the two-channel-unit fill/blend allowance must be
+      // adjacent to an actual contour or glyph in at least one backend. This catches
+      // a shifted or differently blended *interior* even when the residual count fits.
+      let local_contrast = 0;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= chart_canvas.width || ny >= chart_canvas.height) continue;
+          const neighbor = 4 * (ny * chart_canvas.width + nx);
+          for (let c = 0; c < 3; c++) {
+            local_contrast = Math.max(local_contrast,
+              Math.abs(data_a[i + c] - data_a[neighbor + c]),
+              Math.abs(data_b[i + c] - data_b[neighbor + c]));
+          }
+        }
+      }
+      expect(local_contrast, `non-edge fill mismatch at chart pixel (${x}, ${y})`).toBeGreaterThanOrEqual(delta);
+    }
+  }
+  expect(rounding_pixels, "zone, overlapping fill and body rounding must be exercised").toBeGreaterThan(0);
+  expect(coverage_pixels, "primitive AA and text must be exercised").toBeGreaterThan(0);
+  expect(count_different(chart_canvas, chart_gpu)).toBe(rounding_pixels + coverage_pixels);
+  expect(interior_max, "all fill and alpha-blend interiors stay within two channel units").toBeLessThanOrEqual(2);
+  // Windows SwiftShader, 1100x720 DPR 1: 4,342 strict pixels: 4,060 are 1-2 unit
+  // rect/zone/overlap rounding (4,032 at 1, 28 at 2); 282 are localized contour/glyph
+  // coverage, max 84 on triangle/label edges. The 2,600/40 baseline from
+  // primitives.spec.mjs covers a different scene without this many translucent rects.
+  // backend-parity.spec.mjs also accepts marker AA up to 66 when paint order is exact.
+  // Require the actual non-rounding residual with ~13% count and 6-unit edge margin,
+  // rather than hiding a real fill/geometry divergence behind pixelmatch threshold 0.1.
+  expect(coverage_pixels, "whole-chart AA/text residual").toBeLessThanOrEqual(320);
+  expect(coverage_max, "whole-chart AA/text maximum channel delta").toBeLessThanOrEqual(90);
+  expect(max_channel_delta(chart_canvas, chart_gpu)).toBe(coverage_max);
 });
