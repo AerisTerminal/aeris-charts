@@ -563,7 +563,10 @@ impl ChartEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::footprint::{AggressorSide, FootprintLevel, FootprintTrade};
+    use crate::footprint::{
+        AggressorSide, FootprintImbalanceOptions, FootprintLevel, FootprintTrade,
+        merged_footprint_bar,
+    };
     use crate::{
         BigTradesFilter, BigTradesOptions, FootprintAggregationOptions, FootprintSeriesOptions,
     };
@@ -578,71 +581,230 @@ mod tests {
         }
     }
 
+    fn mark(kind: AuctionMarkKind, side: AuctionSide, price: f64, volume: f64) -> AuctionMark {
+        AuctionMark {
+            bar_time: 0,
+            kind,
+            side,
+            price,
+            volume,
+        }
+    }
+
     #[test]
-    fn canonical_extremes_and_strict_exhaustion() {
-        let bar = FootprintBar {
-            close: 103.0,
-            levels: vec![
-                level(100.0, 2.0, 2.0),
-                level(101.0, 5.0, 8.0),
-                level(102.0, 3.0, 4.0),
-                level(103.0, 2.0, 2.0),
-            ],
+    fn unfinished_auction_requires_both_sides_at_the_canonical_extreme() {
+        let mut bar = FootprintBar {
+            close: 101.0,
+            levels: vec![level(100.0, 0.0, 5.0), level(101.0, 5.0, 0.0)],
             ..FootprintBar::default()
         };
-        let marks = detect(&bar, &AuctionMarkerOptions::default());
-        assert!(
-            marks
-                .iter()
-                .any(|mark| mark.kind == AuctionMarkKind::UnfinishedAuction
-                    && mark.side == AuctionSide::High
-                    && mark.price == 103.0)
+        assert_eq!(detect(&bar, &AuctionMarkerOptions::default()), vec![]);
+        bar.levels = vec![level(100.0, 2.0, 3.0), level(101.0, 3.0, 2.0)];
+        assert_eq!(
+            detect(&bar, &AuctionMarkerOptions::default()),
+            vec![
+                mark(
+                    AuctionMarkKind::UnfinishedAuction,
+                    AuctionSide::Low,
+                    100.0,
+                    5.0
+                ),
+                mark(
+                    AuctionMarkKind::UnfinishedAuction,
+                    AuctionSide::High,
+                    101.0,
+                    5.0
+                ),
+            ]
         );
-        assert!(
-            marks
-                .iter()
-                .any(|mark| mark.kind == AuctionMarkKind::Exhaustion
-                    && mark.side == AuctionSide::High
-                    && mark.price == 103.0)
-        );
-        let mut tie = bar.clone();
-        tie.levels[2].ask_volume = 2.0;
-        assert!(
-            !detect(&tie, &AuctionMarkerOptions::default())
-                .iter()
-                .any(|mark| mark.kind == AuctionMarkKind::Exhaustion
-                    && mark.side == AuctionSide::High)
+        assert_eq!(
+            detect(
+                &bar,
+                &AuctionMarkerOptions {
+                    min_side_volume: 4.0,
+                    ..AuctionMarkerOptions::default()
+                }
+            ),
+            vec![]
         );
     }
 
     #[test]
-    fn absorption_prefers_volume_then_nearest_extreme() {
-        let bar = FootprintBar {
+    fn exhaustion_is_strict_on_both_sides_and_plateaus_do_not_qualify() {
+        let mut high = FootprintBar {
+            close: 103.0,
+            levels: vec![
+                level(100.0, 0.0, 0.0),
+                level(101.0, 0.0, 8.0),
+                level(102.0, 0.0, 4.0),
+                level(103.0, 0.0, 2.0),
+            ],
+            ..FootprintBar::default()
+        };
+        assert_eq!(
+            detect(&high, &AuctionMarkerOptions::default()),
+            vec![mark(
+                AuctionMarkKind::Exhaustion,
+                AuctionSide::High,
+                103.0,
+                2.0
+            )]
+        );
+        high.levels[2].ask_volume = 2.0;
+        assert_eq!(detect(&high, &AuctionMarkerOptions::default()), vec![]);
+
+        let low = FootprintBar {
+            close: 103.0,
+            levels: vec![
+                level(100.0, 2.0, 0.0),
+                level(101.0, 4.0, 0.0),
+                level(102.0, 8.0, 0.0),
+                level(103.0, 0.0, 0.0),
+            ],
+            ..FootprintBar::default()
+        };
+        assert_eq!(
+            detect(&low, &AuctionMarkerOptions::default()),
+            vec![mark(
+                AuctionMarkKind::Exhaustion,
+                AuctionSide::Low,
+                100.0,
+                2.0
+            )]
+        );
+    }
+
+    #[test]
+    fn absorption_chooses_largest_then_nearest_and_requires_rejection_rows() {
+        let low = FootprintBar {
             close: 103.0,
             levels: vec![
                 level(100.0, 120.0, 20.0),
                 level(101.0, 120.0, 20.0),
-                level(102.0, 2.0, 2.0),
-                level(103.0, 1.0, 1.0),
+                level(102.0, 0.0, 0.0),
+                level(103.0, 0.0, 0.0),
             ],
             ..FootprintBar::default()
         };
-        let marks = detect(&bar, &AuctionMarkerOptions::default());
         assert_eq!(
-            marks
-                .iter()
-                .filter(|mark| mark.kind == AuctionMarkKind::Absorption
-                    && mark.side == AuctionSide::Low)
-                .count(),
-            1
+            detect(&low, &AuctionMarkerOptions::default()),
+            vec![
+                mark(
+                    AuctionMarkKind::UnfinishedAuction,
+                    AuctionSide::Low,
+                    100.0,
+                    140.0
+                ),
+                mark(AuctionMarkKind::Absorption, AuctionSide::Low, 100.0, 120.0),
+            ]
         );
-        assert!(
-            marks
-                .iter()
-                .any(|mark| mark.kind == AuctionMarkKind::Absorption
-                    && mark.side == AuctionSide::Low
-                    && mark.price == 100.0)
+        let mut larger_low = low.clone();
+        larger_low.levels[1].bid_volume = 150.0;
+        assert_eq!(
+            detect(&larger_low, &AuctionMarkerOptions::default()),
+            vec![
+                mark(
+                    AuctionMarkKind::UnfinishedAuction,
+                    AuctionSide::Low,
+                    100.0,
+                    140.0
+                ),
+                mark(AuctionMarkKind::Absorption, AuctionSide::Low, 101.0, 150.0),
+            ]
         );
+        let high = FootprintBar {
+            close: 100.0,
+            levels: vec![
+                level(100.0, 0.0, 0.0),
+                level(101.0, 0.0, 0.0),
+                level(102.0, 20.0, 120.0),
+                level(103.0, 20.0, 120.0),
+            ],
+            ..FootprintBar::default()
+        };
+        assert_eq!(
+            detect(&high, &AuctionMarkerOptions::default()),
+            vec![
+                mark(
+                    AuctionMarkKind::UnfinishedAuction,
+                    AuctionSide::High,
+                    103.0,
+                    140.0
+                ),
+                mark(AuctionMarkKind::Absorption, AuctionSide::High, 103.0, 120.0),
+            ]
+        );
+        let mut larger_high = high.clone();
+        larger_high.levels[2].ask_volume = 150.0;
+        assert_eq!(
+            detect(&larger_high, &AuctionMarkerOptions::default()),
+            vec![
+                mark(
+                    AuctionMarkKind::UnfinishedAuction,
+                    AuctionSide::High,
+                    103.0,
+                    140.0
+                ),
+                mark(AuctionMarkKind::Absorption, AuctionSide::High, 102.0, 150.0),
+            ]
+        );
+        let mut not_rejected = high.clone();
+        not_rejected.close = 102.0;
+        assert_eq!(
+            detect(
+                &not_rejected,
+                &AuctionMarkerOptions {
+                    min_rejection_rows: 2,
+                    ..AuctionMarkerOptions::default()
+                }
+            ),
+            vec![mark(
+                AuctionMarkKind::UnfinishedAuction,
+                AuctionSide::High,
+                103.0,
+                140.0
+            )]
+        );
+    }
+
+    #[test]
+    fn auction_detection_ignores_display_row_merging() {
+        let (mut chart, stream) = setup();
+        chart
+            .set_trade_stream_trades(
+                stream,
+                vec![
+                    trade(1_000_000, 100.0, 5.0, AggressorSide::Buy),
+                    trade(1_000_001, 101.0, 5.0, AggressorSide::Sell),
+                    trade(61_000_000, 102.0, 1.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        let canonical = &chart.trade_stream(stream).unwrap().bars()[0];
+        assert_eq!(canonical.levels.len(), 2);
+        assert_eq!(detect(canonical, &AuctionMarkerOptions::default()), vec![]);
+        let merged = merged_footprint_bar(canonical, 2, FootprintImbalanceOptions::default(), 2.0);
+        assert_eq!(
+            detect(&merged, &AuctionMarkerOptions::default()),
+            vec![
+                mark(
+                    AuctionMarkKind::UnfinishedAuction,
+                    AuctionSide::Low,
+                    100.0,
+                    10.0
+                ),
+                mark(
+                    AuctionMarkKind::UnfinishedAuction,
+                    AuctionSide::High,
+                    100.0,
+                    10.0
+                ),
+            ]
+        );
+        let id = chart
+            .add_auction_markers(stream, 0, AuctionMarkerOptions::default())
+            .unwrap();
+        assert_eq!(chart.auction_markers_snapshot(id).unwrap(), vec![]);
     }
 
     fn trade(time: i64, price: f64, volume: f64, side: AggressorSide) -> FootprintTrade {
@@ -722,6 +884,105 @@ mod tests {
         chart
             .add_auction_markers(stream, 0, AuctionMarkerOptions::default())
             .unwrap();
+    }
+
+    #[test]
+    fn invalid_options_leave_prior_options_and_removed_ids_report_errors() {
+        let (mut chart, stream) = setup();
+        let original = AuctionMarkerOptions {
+            min_side_volume: 2.0,
+            include_forming_bar: true,
+            ..AuctionMarkerOptions::default()
+        };
+        let id = chart
+            .add_auction_markers(stream, 0, original.clone())
+            .unwrap();
+        let invalid = [
+            AuctionMarkerOptions {
+                exhaustion_levels: 9,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                extreme_levels: 0,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                min_side_volume: -1.0,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                min_side_volume: f64::INFINITY,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                min_side_volume: f64::NAN,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                exhaustion_max_volume: -1.0,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                exhaustion_max_volume: f64::NAN,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                exhaustion_max_volume: f64::INFINITY,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                absorption_min_volume: -1.0,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                absorption_min_volume: f64::NEG_INFINITY,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                absorption_min_volume: f64::NAN,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                absorption_ratio: -1.0,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                absorption_ratio: f64::NAN,
+                ..original.clone()
+            },
+            AuctionMarkerOptions {
+                absorption_ratio: f64::INFINITY,
+                ..original.clone()
+            },
+        ];
+        for candidate in invalid {
+            assert_eq!(
+                chart.set_auction_marker_options(id, candidate.clone()),
+                Err(FootprintError::InvalidAuctionMarkerOptions),
+                "{candidate:?}"
+            );
+            assert_eq!(chart.auction_marker_options(id), Some(&original));
+            assert_eq!(
+                chart.add_auction_markers(stream, 0, candidate.clone()),
+                Err(FootprintError::InvalidAuctionMarkerOptions),
+                "{candidate:?}"
+            );
+            assert_eq!(chart.auction_marker_options(id), Some(&original));
+        }
+        chart.remove_auction_markers(id).unwrap();
+        assert_eq!(chart.auction_marker_options(id), None);
+        assert_eq!(
+            chart.set_auction_marker_options(id, original),
+            Err(FootprintError::UnknownAuctionMarkers(id))
+        );
+        assert_eq!(
+            chart.auction_markers_snapshot(id),
+            Err(FootprintError::UnknownAuctionMarkers(id))
+        );
+        assert_eq!(
+            chart.remove_auction_markers(id),
+            Err(FootprintError::UnknownAuctionMarkers(id))
+        );
     }
 
     #[test]
@@ -906,6 +1167,133 @@ mod tests {
         prims.clear();
         chart.build_auction_markers_frame(0, 0, 0, 1.0, 1.0, &mut prims);
         assert!(prims.is_empty());
+    }
+
+    #[test]
+    fn unfinished_rays_end_on_first_revisiting_bar_and_disabled_option_emits_none() {
+        let (mut chart, stream) = setup();
+        chart
+            .set_trade_stream_trades(
+                stream,
+                vec![
+                    trade(1_000_000, 100.0, 2.0, AggressorSide::Buy),
+                    trade(1_000_001, 100.0, 3.0, AggressorSide::Sell),
+                    trade(61_000_000, 101.0, 1.0, AggressorSide::Buy),
+                    trade(121_000_000, 100.0, 1.0, AggressorSide::Buy),
+                    trade(181_000_000, 100.0, 1.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        let id = chart
+            .add_auction_markers(
+                stream,
+                0,
+                AuctionMarkerOptions {
+                    extend_until_revisited: true,
+                    ..AuctionMarkerOptions::default()
+                },
+            )
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.build_frame();
+        let mut prims = Vec::new();
+        chart.build_auction_markers_frame(0, 0, 3, 1.0, 1.0, &mut prims);
+        let start_x = (chart.time_scale.index_to_coordinate(0) + 6.0).round() as i32;
+        let revisit_x = chart.time_scale.index_to_coordinate(2).round() as i32;
+        let rays = prims
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::HLine {
+                    x0,
+                    x1,
+                    style: LineStyle::Dashed,
+                    ..
+                } => Some((*x0, *x1)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rays, vec![(start_x, revisit_x); 2]);
+        assert_eq!(
+            prims
+                .iter()
+                .filter(|prim| matches!(prim, Prim::Triangle { .. }))
+                .count(),
+            2
+        );
+        chart
+            .set_auction_marker_options(id, AuctionMarkerOptions::default())
+            .unwrap();
+        prims.clear();
+        chart.build_auction_markers_frame(0, 0, 3, 1.0, 1.0, &mut prims);
+        assert_eq!(
+            prims
+                .iter()
+                .filter(|prim| matches!(prim, Prim::Triangle { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(
+            prims
+                .iter()
+                .filter(|prim| matches!(prim, Prim::HLine { .. }))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn absorption_frame_suppresses_text_below_six_pixel_bar_spacing() {
+        let (mut chart, stream) = setup();
+        chart
+            .set_trade_stream_trades(
+                stream,
+                vec![
+                    trade(1_000_000, 100.0, 120.0, AggressorSide::Sell),
+                    trade(1_000_001, 100.0, 20.0, AggressorSide::Buy),
+                    trade(1_000_002, 101.0, 1.0, AggressorSide::Buy),
+                    trade(61_000_000, 102.0, 1.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        let id = chart
+            .add_auction_markers(stream, 0, AuctionMarkerOptions::default())
+            .unwrap();
+        assert_eq!(
+            chart.auction_markers_snapshot(id).unwrap(),
+            vec![
+                mark(
+                    AuctionMarkKind::UnfinishedAuction,
+                    AuctionSide::Low,
+                    100.0,
+                    140.0
+                ),
+                mark(AuctionMarkKind::Absorption, AuctionSide::Low, 100.0, 120.0),
+            ]
+        );
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        for (spacing, expected_text) in [(5.0, 0), (6.0, 1)] {
+            chart.set_bar_spacing(spacing);
+            chart.build_frame();
+            let mut prims = Vec::new();
+            chart.build_auction_markers_frame(0, 0, 0, 1.0, 1.0, &mut prims);
+            assert_eq!(
+                prims
+                    .iter()
+                    .filter(|prim| matches!(prim, Prim::RectFrame { .. }))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                prims
+                    .iter()
+                    .filter(|prim| matches!(prim, Prim::Text { text, .. } if text == "ABS"))
+                    .count(),
+                expected_text,
+                "bar spacing {spacing}"
+            );
+        }
     }
 
     #[test]
