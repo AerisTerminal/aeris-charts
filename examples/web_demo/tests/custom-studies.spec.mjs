@@ -55,6 +55,54 @@ test("custom SMA matches built-in values and dispatches tail updates", async ({ 
   expect(result.calls.every(([, , , , inputs, outputs]) => inputs && outputs)).toBe(true);
 });
 
+test("chained RSI, EMA and Bollinger respect custom warm-up and fault whitespace", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    let broken = false;
+    chart.register_custom_study({
+      type: "test.chained-whitespace", version: 1, title: "Chained",
+      parameters: [], outputs: [{ name: "sma", plot: "line", pane: "price" }],
+      init: () => null,
+      rebuild: (_state, ctx) => {
+        if (broken) throw new Error("source fault");
+        for (let i = ctx.from; i < ctx.length; i++) {
+          ctx.outputs[0][i - ctx.from] = i < 2 ? NaN
+            : (ctx.close[i - 2] + ctx.close[i - 1] + ctx.close[i]) / 3;
+        }
+      },
+    });
+    const source = chart.add_series("line");
+    const bars = Array.from({ length: 15 }, (_, i) => ({
+      time: 1701000000 + i * 60, value: [10, 13, 12, 15, 17, 16, 19, 21, 18, 20, 22, 19, 23, 24, 25][i],
+    }));
+    source.set_data(bars);
+    const custom = chart.add_custom_study("test.chained-whitespace", source)[0];
+    const builtin = chart.add_sma(source, 3);
+    const pairs = [
+      [chart.add_rsi(custom, 5), chart.add_rsi(builtin, 5)],
+      [chart.add_ema(custom, 4), chart.add_ema(builtin, 4)],
+      [chart.add_bollinger(custom, 4, 2)[0], chart.add_bollinger(builtin, 4, 2)[0]],
+    ];
+    const snapshot = () => pairs.map(([actual, expected]) => [actual.data(), expected.data()]);
+    const stages = [snapshot()];
+    source.update({ time: 1701000900, value: 26 });
+    stages.push(snapshot());
+    source.update({ time: 1701000900, value: 27 });
+    stages.push(snapshot());
+    source.update({ time: 1701000420, value: 28 });
+    stages.push(snapshot());
+    broken = true;
+    source.update({ time: 1701000960, value: 29 });
+    return { stages, fault: pairs[0][0].data() };
+  });
+  for (const stage of result.stages) {
+    for (const [actual, expected] of stage) expect(actual).toEqual(expected);
+  }
+  expect(result.fault.every(({ value }) => value === undefined)).toBe(true);
+});
+
 test("missing update rebuilds every tail and invalid outputs fault", async ({ page }) => {
   await page.goto("/?backend=canvas2d");
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
@@ -150,7 +198,7 @@ test("series pop delivers a custom study fault after the wasm call", async ({ pa
     return { faults, binding: output.id, values: output.data() };
   });
   expect(result.faults).toEqual([{ binding: result.binding, message: "pop failed" }]);
-  expect(result.values).toEqual([{ time: 1701000000 }]);
+  expect(result.values).toEqual([]);
 });
 
 test("ring drain delivers a custom study fault within the same frame", async ({ page }) => {

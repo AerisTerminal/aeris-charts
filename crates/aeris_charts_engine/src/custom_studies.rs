@@ -834,15 +834,30 @@ impl ChartEngine {
                 message,
             });
         }
+        let existing_starts: [usize; aeris_charts_indicators::MAX_OUTPUTS] =
+            std::array::from_fn(|slot| {
+                outputs[slot]
+                    .and_then(|output| self.data.series_data(output))
+                    .and_then(|(output_times, _)| output_times.first().copied())
+                    .and_then(|first| times.binary_search(&first).ok())
+                    .unwrap_or(n)
+            });
         for (slot, output) in outputs.iter().flatten().enumerate() {
             let old = self.data.series_generation(*output).unwrap_or(0);
-            let output_from = if start == 0 {
-                self.data.set_single_data_aligned(
-                    *output,
-                    source,
-                    0,
-                    std::mem::take(&mut result[slot]),
-                );
+            let existing_start = existing_starts[slot];
+            let output_from = if start <= existing_start {
+                // Aligned built-in outputs have no rows before their first value. Keep
+                // custom warm-up and wholly blank pending/faulted outputs identical:
+                // NaN is whitespace, not an input price for a dependent study.
+                let first_value = result[slot]
+                    .iter()
+                    .position(|value| !value.is_nan())
+                    .unwrap_or(result[slot].len());
+                let output_start = start + first_value;
+                let mut values = std::mem::take(&mut result[slot]);
+                values.drain(..first_value);
+                self.data
+                    .set_single_data_aligned(*output, source, output_start, values);
                 0
             } else {
                 self.data
@@ -855,7 +870,7 @@ impl ChartEngine {
                     IndicatorChange {
                         from: output_from,
                         previous_generation: old,
-                        full_replace: start == 0,
+                        full_replace: start <= existing_start,
                     },
                 ));
             }
@@ -928,6 +943,188 @@ mod tests {
         })
     }
 
+    fn assert_same_scalar(chart: &ChartEngine, actual: SeriesId, expected: SeriesId) {
+        let (actual_times, actual_values) = chart.data.series_data(actual).unwrap();
+        let (expected_times, expected_values) = chart.data.series_data(expected).unwrap();
+        assert_eq!(actual_times, expected_times);
+        assert_eq!(actual_values[3].len(), expected_values[3].len());
+        for (actual, expected) in actual_values[3].iter().zip(expected_values[3]) {
+            assert!(
+                actual == expected || (actual.is_nan() && expected.is_nan()),
+                "{actual} != {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn chained_studies_on_custom_sma_match_builtin_after_repairs() {
+        let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+        chart
+            .register_custom_study(
+                definition("warmup"),
+                Box::new(|_| {
+                    Ok(Box::new(Average {
+                        period: 3,
+                        calls: Arc::new(Mutex::new(Vec::new())),
+                    }))
+                }),
+            )
+            .unwrap();
+        let times = (1..=14).map(|i| i as f64 * 60.0).collect::<Vec<_>>();
+        let values = [
+            10., 13., 12., 15., 17., 16., 19., 21., 18., 20., 22., 19., 23., 24.,
+        ];
+        chart
+            .set_series_data(0, &times, &values, &values, &values, &values)
+            .unwrap();
+        let custom = chart
+            .add_custom_study(
+                "warmup",
+                0,
+                IndicatorInputSource::Close,
+                None,
+                BTreeMap::new(),
+            )
+            .unwrap()[0];
+        let built = chart.add_sma(0, 3).unwrap();
+        let paired = [
+            (
+                chart.add_rsi(custom, 5).unwrap(),
+                chart.add_rsi(built, 5).unwrap(),
+            ),
+            (
+                chart.add_ema(custom, 4).unwrap(),
+                chart.add_ema(built, 4).unwrap(),
+            ),
+            (
+                chart.add_bollinger(custom, 4, 2.0)[0],
+                chart.add_bollinger(built, 4, 2.0)[0],
+            ),
+        ];
+        let verify = |chart: &ChartEngine| {
+            assert_same_scalar(chart, custom, built);
+            for (actual, expected) in paired {
+                assert_same_scalar(chart, actual, expected);
+            }
+        };
+        verify(&chart);
+        assert!(chart.update_series_bar(0, 900.0, [25.0; 4]));
+        verify(&chart);
+        assert!(chart.update_series_bar(0, 900.0, [26.0; 4]));
+        verify(&chart);
+        assert!(chart.update_series_bar(0, 480.0, [27.0; 4]));
+        verify(&chart);
+    }
+
+    #[test]
+    fn faulted_and_pending_custom_sources_have_no_rsi_values() {
+        let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+        let times = (1..=12).map(|i| i as f64 * 60.0).collect::<Vec<_>>();
+        let values = times.clone();
+        chart
+            .set_series_data(0, &times, &values, &values, &values, &values)
+            .unwrap();
+        chart
+            .register_custom_study(definition("fault"), Box::new(|_| Ok(Box::new(Bad))))
+            .unwrap();
+        let fault = chart
+            .add_custom_study(
+                "fault",
+                0,
+                IndicatorInputSource::Close,
+                None,
+                BTreeMap::new(),
+            )
+            .unwrap()[0];
+        let pending = chart
+            .restore_custom_study(
+                0,
+                IndicatorInputSource::Close,
+                IndicatorKind::Custom {
+                    type_id: "pending.blank".into(),
+                    version: 1,
+                    parameters: BTreeMap::new(),
+                    output_count: 1,
+                },
+                None,
+            )
+            .unwrap()[0];
+        for source in [fault, pending] {
+            assert!(chart.data.series_data(source).unwrap().0.is_empty());
+            let rsi = chart.add_rsi(source, 3).unwrap();
+            assert!(chart.data.series_data(rsi).unwrap().0.is_empty());
+            assert!(chart.update_series_bar(0, 780.0, [780.0; 4]));
+            assert!(chart.data.series_data(rsi).unwrap().0.is_empty());
+        }
+    }
+
+    #[test]
+    fn multi_output_custom_study_preserves_independent_warmup_and_interior_whitespace() {
+        struct TwoOutputs;
+        impl CustomStudyRuntime for TwoOutputs {
+            fn compute(
+                &mut self,
+                input: CustomStudyInput<'_>,
+                out: &mut [Vec<f64>],
+            ) -> Result<(), CustomStudyFault> {
+                for row in input.from..input.times.len() {
+                    out[0].push(if row < 1 {
+                        f64::NAN
+                    } else {
+                        (input.close[row - 1] + input.close[row]) / 2.0
+                    });
+                    out[1].push(if row < 3 || row == 7 {
+                        f64::NAN
+                    } else {
+                        input.close[row]
+                    });
+                }
+                Ok(())
+            }
+        }
+        let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+        let mut def = definition("two.outputs");
+        def.outputs.push(def.outputs[0].clone());
+        chart
+            .register_custom_study(def, Box::new(|_| Ok(Box::new(TwoOutputs))))
+            .unwrap();
+        let times = (1..=13).map(|i| i as f64 * 60.0).collect::<Vec<_>>();
+        chart
+            .set_series_data(0, &times, &times, &times, &times, &times)
+            .unwrap();
+        let outputs = chart
+            .add_custom_study(
+                "two.outputs",
+                0,
+                IndicatorInputSource::Close,
+                None,
+                BTreeMap::new(),
+            )
+            .unwrap();
+        let reference = chart.add_sma(0, 2).unwrap();
+        let paired = (
+            chart.add_ema(outputs[0], 3).unwrap(),
+            chart.add_ema(reference, 3).unwrap(),
+        );
+        let band = chart.add_bollinger(outputs[1], 3, 2.0)[0];
+        let verify = |chart: &ChartEngine| {
+            assert_same_scalar(chart, outputs[0], reference);
+            assert_same_scalar(chart, paired.0, paired.1);
+            let (times, values) = chart.data.series_data(outputs[1]).unwrap();
+            assert_eq!(times[0], 240);
+            assert!(values[3][4].is_nan()); // row 7 is an interior whitespace row
+            let (band_times, band_values) = chart.data.series_data(band).unwrap();
+            assert!(
+                band_values[3][band_times.iter().position(|&time| time == 480).unwrap()].is_nan()
+            );
+        };
+        verify(&chart);
+        assert!(chart.update_series_bar(0, 840.0, [840.0; 4]));
+        verify(&chart);
+        assert!(chart.update_series_bar(0, 480.0, [480.0; 4]));
+        verify(&chart);
+    }
+
     #[test]
     fn invalid_definition_is_rejected_before_registration() {
         let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
@@ -973,8 +1170,8 @@ mod tests {
         let chained = chart.add_sma(custom, 2).unwrap();
         let (custom_times, custom_values) = chart.data.series_data(custom).unwrap();
         let (built_times, built_values) = chart.data.series_data(built_in).unwrap();
-        assert_eq!(&custom_times[1..], built_times);
-        assert_eq!(&custom_values[3][1..], built_values[3]);
+        assert_eq!(custom_times, built_times);
+        assert_eq!(custom_values[3], built_values[3]);
         assert_eq!(
             chart
                 .indicator_info(custom)
@@ -990,8 +1187,8 @@ mod tests {
         assert!(chart.update_series_bar(0, 5.0, [20.0; 4]));
         let (custom_times, custom_values) = chart.data.series_data(custom).unwrap();
         let (built_times, built_values) = chart.data.series_data(built_in).unwrap();
-        assert_eq!(&custom_times[1..], built_times);
-        assert_eq!(&custom_values[3][1..], built_values[3]);
+        assert_eq!(custom_times, built_times);
+        assert_eq!(custom_values[3], built_values[3]);
         assert_eq!(
             calls.lock().unwrap().as_slice(),
             &[(0, false), (4, true), (4, true)]
@@ -1001,8 +1198,8 @@ mod tests {
         assert_eq!(calls.lock().unwrap().last(), Some(&(2, false)));
         let (custom_times, custom_values) = chart.data.series_data(custom).unwrap();
         let (built_times, built_values) = chart.data.series_data(built_in).unwrap();
-        assert_eq!(&custom_times[1..], built_times);
-        assert_eq!(&custom_values[3][1..], built_values[3]);
+        assert_eq!(custom_times, built_times);
+        assert_eq!(custom_values[3], built_values[3]);
         chart
             .set_series_data(
                 0,
@@ -1015,7 +1212,7 @@ mod tests {
             .unwrap();
         assert_eq!(calls.lock().unwrap().last(), Some(&(0, false)));
         let (_, values) = chart.data.series_data(custom).unwrap();
-        assert_eq!(values[3][1], 4.0);
+        assert_eq!(values[3], [4.0]);
         assert!(chart.data.series_data(chained).is_some());
     }
 
@@ -1049,7 +1246,7 @@ mod tests {
             )
             .unwrap();
         assert!(chart.custom_study_is_resolved(output));
-        assert_eq!(chart.data.series_data(output).unwrap().1[3][2], 2.5);
+        assert_eq!(chart.data.series_data(output).unwrap().1[3], [1.5, 2.5]);
         let before = chart.indicator_bindings().len();
         assert_eq!(
             chart
@@ -1357,8 +1554,8 @@ mod tests {
         assert_eq!(binding.kind, original.indicator_bindings()[0].kind);
         assert_eq!(binding.styles, vec![style.clone()]);
         assert_eq!(
-            &active.data.series_data(binding.outputs[0]).unwrap().1[3][1..],
-            &original.data.series_data(output).unwrap().1[3][1..]
+            active.data.series_data(binding.outputs[0]).unwrap().1[3],
+            original.data.series_data(output).unwrap().1[3]
         );
         let (pending, result) = restore(2);
         assert_eq!(result.unresolved_custom_studies.len(), 1);

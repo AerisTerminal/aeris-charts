@@ -142,7 +142,7 @@ fn replay_seek_structure_auction_and_custom_study_match_fresh_prefix() {
             .is_empty()
     );
     assert!(!replay.auction_markers_snapshot(auction).unwrap().is_empty());
-    assert_eq!(output(&replay, custom).1[9], Some(21.25));
+    assert_eq!(output(&replay, custom).1[8], Some(21.25));
 
     for len in [10usize, 6, 9, 3, 8, 1, 7, 10] {
         let clock = times[len - 1] as i64 * 1_000_000 + 1;
@@ -171,7 +171,11 @@ fn replay_seek_structure_auction_and_custom_study_match_fresh_prefix() {
             output(&fresh, expected_custom),
             "custom prefix {len}"
         );
-        assert_eq!(output(&replay, custom).0.len(), len, "custom prefix {len}");
+        assert_eq!(
+            output(&replay, custom).0.len(),
+            len.saturating_sub(1),
+            "custom prefix {len}"
+        );
         assert_eq!(
             replay.auction_markers_snapshot(auction).unwrap().len(),
             len * 2,
