@@ -848,18 +848,19 @@ impl FootprintAggregator {
         &self.bars[..self.visible_bar_count()]
     }
 
-    /// A changed print can join the last bar that started no later than its timestamp, even
-    /// when that bar's previous last print was earlier. Non-time bar membership can also shift
-    /// across the preceding bar boundary.
+    /// Time bars restart at the bucket containing the changed timestamp. Non-time bars can
+    /// split equal-timestamp prints across many bars; the last bar starting strictly before
+    /// the change may also contain one, even when later bars start at that same timestamp.
+    /// Earlier bars cannot contain changed prints because trades are ordered by timestamp.
     fn auction_repair_from(&self, earliest_trade: i64) -> usize {
-        let from = self
-            .bars()
-            .partition_point(|bar| bar.start_timestamp_micros <= earliest_trade)
-            .saturating_sub(1);
         if matches!(self.options.bars, FootprintBarAggregation::Time { .. }) {
-            from
+            self.bars()
+                .partition_point(|bar| bar.start_timestamp_micros <= earliest_trade)
+                .saturating_sub(1)
         } else {
-            from.saturating_sub(1)
+            self.bars()
+                .partition_point(|bar| bar.start_timestamp_micros < earliest_trade)
+                .saturating_sub(1)
         }
     }
 

@@ -554,15 +554,17 @@ preventing stale sequence labels from affecting later time series.
 Auction markers (`auction_markers.rs`) are a separate runtime-only stream dependent capped at 16
 handles. Their per-bar marks use per-tick canonical footprint levels rather than grouped display
 rows, so changing row size or imbalance rules in place preserves the marks. Late prints and rewritten
-tape windows restart auction repair at the last bar whose start is no later than the earliest changed
-print (saturating at bar zero), and one additional bar earlier for non-time aggregation where bar
-membership can shift. This includes a bar whose old last print precedes the window start and remains
-suffix-only even when the ordinary bar projection must reinstall after a shrink; it avoids replaying
-the aggregator's earlier tape checkpoint. Prepending
-history or evicting front bars refreshes the full shifted index range; sealing alone leaves marks
-unchanged. Marks follow stream retention and replay, and paint visible-only triangles, circles, framed labels and
-dashed revisitation rays in the same pane chrome beside big trades. They do not add frame primitives
-or backend-specific rendering.
+tape windows restart auction repair at
+`partition_point(start_timestamp_micros <= earliest_changed).saturating_sub(1)` for time bars, or
+`partition_point(start_timestamp_micros < earliest_changed).saturating_sub(1)` for non-time
+bars (trade-count, volume, range). The strict comparison includes the bar preceding all
+equal-timestamp starts because it may also contain a changed print. Each mark depends only
+on its own canonical bar, so the suffix needs no earlier neighbour; this remains suffix-only
+even when the ordinary bar projection must reinstall after a shrink and avoids replaying the
+aggregator's earlier tape checkpoint. Prepending history or evicting front bars refreshes the full
+shifted index range; sealing alone leaves marks unchanged. Marks follow stream retention and replay,
+and paint visible-only triangles, circles, framed labels and dashed revisitation rays in the same
+pane chrome beside big trades. They do not add frame primitives or backend-specific rendering.
 
 Level-two depth uses the parallel chart-side projection boundary documented in `Depth.md`.
 `ChartEngine::add_depth_stream` owns one keyed, bounded book per host instrument publication. A
