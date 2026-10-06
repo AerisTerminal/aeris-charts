@@ -918,6 +918,142 @@ mod tests {
         );
     }
 
+    fn assert_window_auction_matches_fresh(
+        bars: FootprintBarAggregation,
+        mut tape: Vec<FootprintTrade>,
+        replacement: Vec<FootprintTrade>,
+        options: AuctionMarkerOptions,
+        changed_bar_time: i64,
+        expected_volume: f64,
+    ) {
+        let mut presentation_config = presentation_options(1, true);
+        presentation_config.aggregation.bars = bars;
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let presentation = chart
+            .add_order_flow_presentation("auction", 0, presentation_config.clone())
+            .unwrap();
+        chart
+            .update_order_flow_presentation(presentation, tape.clone(), false)
+            .unwrap();
+        let stream = presentation.trade_stream();
+        let id = chart
+            .add_auction_markers(stream, 0, options.clone())
+            .unwrap();
+        let from = replacement
+            .iter()
+            .map(|print| print.timestamp_micros)
+            .min()
+            .unwrap();
+        let changed_bar = chart
+            .trade_stream(stream)
+            .unwrap()
+            .bars()
+            .iter()
+            .find(|bar| {
+                bar_time(bar, !matches!(bars, FootprintBarAggregation::Time { .. }))
+                    == changed_bar_time
+            })
+            .unwrap();
+        assert!(changed_bar.start_timestamp_micros < from);
+        assert!(changed_bar.end_timestamp_micros < from);
+
+        chart
+            .replace_order_flow_window(presentation, replacement.clone())
+            .unwrap();
+        tape.retain(|print| print.timestamp_micros < from);
+        tape.extend(replacement);
+
+        let mut fresh = ChartEngine::new(800.0, 500.0, 1.0);
+        let fresh_presentation = fresh
+            .add_order_flow_presentation("auction", 0, presentation_config)
+            .unwrap();
+        fresh
+            .update_order_flow_presentation(fresh_presentation, tape, false)
+            .unwrap();
+        let fresh_id = fresh
+            .add_auction_markers(fresh_presentation.trade_stream(), 0, options)
+            .unwrap();
+        let fresh_marks = fresh.auction_markers_snapshot(fresh_id).unwrap();
+        assert!(fresh_marks.iter().any(|mark| {
+            mark.bar_time == changed_bar_time
+                && mark.kind == AuctionMarkKind::UnfinishedAuction
+                && mark.volume == expected_volume
+        }));
+        assert_eq!(chart.auction_markers_snapshot(id).unwrap(), fresh_marks);
+    }
+
+    #[test]
+    fn rewritten_window_inside_time_bar_after_last_print_repairs_auction_marks() {
+        let tape = [0, 60, 120]
+            .into_iter()
+            .flat_map(|second| {
+                [
+                    trade(second * 1_000_000 + 1, 100.0, 3.0, AggressorSide::Buy),
+                    trade(second * 1_000_000 + 2, 100.0, 4.0, AggressorSide::Sell),
+                ]
+            })
+            .collect();
+        assert_window_auction_matches_fresh(
+            FootprintBarAggregation::Time {
+                interval_micros: 60_000_000,
+                anchor_micros: 0,
+            },
+            tape,
+            vec![
+                trade(60_000_003, 100.0, 5.0, AggressorSide::Buy),
+                trade(120_000_001, 100.0, 3.0, AggressorSide::Buy),
+                trade(120_000_002, 100.0, 4.0, AggressorSide::Sell),
+            ],
+            AuctionMarkerOptions::default(),
+            60,
+            12.0,
+        );
+    }
+
+    #[test]
+    fn rewritten_window_inside_non_time_bar_after_last_print_repairs_auction_marks() {
+        assert_window_auction_matches_fresh(
+            FootprintBarAggregation::Trades { trades_per_bar: 3 },
+            vec![
+                trade(1, 100.0, 3.0, AggressorSide::Buy),
+                trade(2, 100.0, 4.0, AggressorSide::Sell),
+                trade(3, 100.0, 2.0, AggressorSide::Buy),
+                trade(11, 100.0, 3.0, AggressorSide::Buy),
+                trade(12, 100.0, 4.0, AggressorSide::Sell),
+            ],
+            vec![trade(13, 100.0, 5.0, AggressorSide::Buy)],
+            AuctionMarkerOptions {
+                include_forming_bar: true,
+                ..AuctionMarkerOptions::default()
+            },
+            1,
+            12.0,
+        );
+    }
+
+    #[test]
+    fn rewritten_window_inside_forming_bar_after_last_print_repairs_auction_marks() {
+        assert_window_auction_matches_fresh(
+            FootprintBarAggregation::Time {
+                interval_micros: 60_000_000,
+                anchor_micros: 0,
+            },
+            vec![
+                trade(1, 100.0, 3.0, AggressorSide::Buy),
+                trade(2, 100.0, 4.0, AggressorSide::Sell),
+                trade(60_000_001, 100.0, 3.0, AggressorSide::Buy),
+                trade(60_000_002, 100.0, 4.0, AggressorSide::Sell),
+            ],
+            vec![trade(60_000_003, 100.0, 5.0, AggressorSide::Buy)],
+            AuctionMarkerOptions {
+                include_forming_bar: true,
+                ..AuctionMarkerOptions::default()
+            },
+            60,
+            12.0,
+        );
+    }
+
     #[test]
     fn rewritten_window_repairs_only_auction_suffix_even_when_it_shrinks() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);

@@ -553,9 +553,12 @@ non-time footprint, candle/bar, or study dependent leaves the chart,
 preventing stale sequence labels from affecting later time series.
 Auction markers (`auction_markers.rs`) are a separate runtime-only stream dependent capped at 16
 handles. Their per-bar marks use per-tick canonical footprint levels rather than grouped display
-rows, so changing row size or imbalance rules in place preserves the marks. A rewritten tape window
-recomputes marks only from its first intersecting bar, even when the ordinary bar projection must
-reinstall after a shrink; this avoids replaying the aggregator's earlier tape checkpoint. Prepending
+rows, so changing row size or imbalance rules in place preserves the marks. Late prints and rewritten
+tape windows restart auction repair at the last bar whose start is no later than the earliest changed
+print (saturating at bar zero), and one additional bar earlier for non-time aggregation where bar
+membership can shift. This includes a bar whose old last print precedes the window start and remains
+suffix-only even when the ordinary bar projection must reinstall after a shrink; it avoids replaying
+the aggregator's earlier tape checkpoint. Prepending
 history or evicting front bars refreshes the full shifted index range; sealing alone leaves marks
 unchanged. Marks follow stream retention and replay, and paint visible-only triangles, circles, framed labels and
 dashed revisitation rays in the same pane chrome beside big trades. They do not add frame primitives

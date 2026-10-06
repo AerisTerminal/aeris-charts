@@ -134,9 +134,12 @@ aggregator levels**, not visually merged display cells: changing `ticks_per_row`
 rules in place leaves them unchanged. Each rule emits at most one mark per side and kind per
 bar. The last, still-forming bar is excluded unless `include_forming_bar` is true (default false).
 Replay shows only bars available at its clock; late prints repair the affected suffix and retention
-removes marks with their evicted bars. Rewritten host tape windows preserve earlier marks and
-recompute from the first bar intersecting the window, including when its suffix shrinks. Prepending
-history and front eviction rebase all marks; sealing raw trades leaves derived bars and marks intact.
+removes marks with their evicted bars. For late prints and rewritten host tape windows, repair starts
+at the last bar whose start is no later than the earliest changed print, or bar zero if none;
+non-time bars also include the preceding bar because membership can shift. This includes a bar
+whose last old print precedes the window start and keeps repair suffix-bounded even when the window
+shrinks. Prepending history and front eviction rebase all marks; sealing raw trades leaves derived
+bars and marks intact.
 The snapshot reports bar time, kind, high/low side, level
 price and qualifying volume. Marks are not clickable.
 

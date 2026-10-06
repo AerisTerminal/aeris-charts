@@ -848,6 +848,21 @@ impl FootprintAggregator {
         &self.bars[..self.visible_bar_count()]
     }
 
+    /// A changed print can join the last bar that started no later than its timestamp, even
+    /// when that bar's previous last print was earlier. Non-time bar membership can also shift
+    /// across the preceding bar boundary.
+    fn auction_repair_from(&self, earliest_trade: i64) -> usize {
+        let from = self
+            .bars()
+            .partition_point(|bar| bar.start_timestamp_micros <= earliest_trade)
+            .saturating_sub(1);
+        if matches!(self.options.bars, FootprintBarAggregation::Time { .. }) {
+            from
+        } else {
+            from.saturating_sub(1)
+        }
+    }
+
     /// One stored bar with its levels grouped into `ticks_per_row` display rows.
     pub fn presented_bar<'a>(&self, bar: &'a FootprintBar) -> std::borrow::Cow<'a, FootprintBar> {
         if self.options.ticks_per_row > 1 {
@@ -2562,17 +2577,13 @@ impl ChartEngine {
             .trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
         let previous_bar_count = stream.bars().len();
-        // The aggregator may resume at an earlier replay checkpoint. Auction detection reads
-        // finished bars, not tape state, so it only needs the first bar intersecting the window.
+        // Auction detection reads finished bars, not tape checkpoints. Include the bar whose
+        // start precedes the window even when its last old print precedes the window too.
         let auction_from = trades
             .iter()
             .map(|trade| trade.timestamp_micros)
             .min()
-            .map(|from| {
-                stream
-                    .bars()
-                    .partition_point(|bar| bar.end_timestamp_micros < from)
-            });
+            .map(|from| stream.auction_repair_from(from));
         let Some(first_bar) = self
             .trade_streams
             .get_mut(&stream_id)
@@ -2991,15 +3002,7 @@ impl ChartEngine {
                 })
                 .min()
                 .unwrap();
-            let auction_from = stream
-                .bars()
-                .partition_point(|bar| bar.start_timestamp_micros <= earliest_trade)
-                .saturating_sub(1);
-            let auction_from = if matches!(options.bars, FootprintBarAggregation::Time { .. }) {
-                auction_from
-            } else {
-                auction_from.saturating_sub(1)
-            };
+            let auction_from = stream.auction_repair_from(earliest_trade);
             // The batch is validated above, so the in-place merge cannot fail part-way.
             let (result, first_bar) = self
                 .trade_streams
