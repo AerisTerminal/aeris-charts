@@ -16,6 +16,7 @@
 //! series maps its data onto merged indices; a series absent at an index is whitespace there.
 
 mod custom_series;
+mod custom_studies;
 mod depth;
 mod feature_series;
 mod footprint;
@@ -29,6 +30,7 @@ mod ring;
 mod text_runs;
 
 use custom_series::CustomSeriesEntry;
+use custom_studies::register_custom_study;
 use ring::{BoundRing, RingLayoutInput};
 use text_runs::TextRunStore;
 
@@ -2440,6 +2442,44 @@ impl AerisChart {
         self.inner
             .borrow()
             .indicator_schema_json(kind, period, deviation)
+    }
+
+    /// Register synchronous JavaScript callbacks for a chart-local study.
+    pub fn register_custom_study_result_json(
+        &mut self,
+        definition: &str,
+        init: js_sys::Function,
+        update: Option<js_sys::Function>,
+        rebuild: js_sys::Function,
+    ) -> String {
+        let mut inner = self.inner.borrow_mut();
+        register_custom_study(&mut inner.engine, definition, init, update, rebuild)
+    }
+
+    pub fn add_custom_study_result_json(
+        &mut self,
+        type_id: &str,
+        source: u32,
+        input: &str,
+        volume: i64,
+        parameters: &str,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .add_custom_study_result_json(type_id, source, input, volume, parameters)
+    }
+
+    pub fn take_custom_study_faults_json(&mut self) -> String {
+        let faults = self.inner.borrow_mut().engine.take_custom_study_faults();
+        serde_json::json!(
+            faults
+                .iter()
+                .map(|fault| serde_json::json!({
+                    "binding": fault.binding, "message": fault.message
+                }))
+                .collect::<Vec<_>>()
+        )
+        .to_string()
     }
 
     pub fn study_annotations_json(&self, binding: u32) -> String {

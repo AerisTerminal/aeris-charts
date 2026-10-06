@@ -1165,9 +1165,52 @@ export interface indicator_output_style {
 }
 export interface indicator_schema {
   revision: number;
-  kind: indicator_kind;
+  kind: indicator_kind | (string & {});
   parameters: indicator_parameter_descriptor[];
   outputs: indicator_output_descriptor[];
+}
+
+/** The engine calls these functions synchronously. Output arrays cover only [from, length). */
+export interface custom_study_context {
+  from: number;
+  length: number;
+  tail: boolean;
+  time: Float64Array;
+  open: Float64Array;
+  high: Float64Array;
+  low: Float64Array;
+  close: Float64Array;
+  volume: Float64Array;
+  outputs: Float64Array[];
+}
+export interface custom_study_output {
+  name: string;
+  plot: "line" | "histogram" | "area" | "marker";
+  pane: "price" | "dedicated";
+  default_style?: Partial<indicator_output_style>;
+}
+export type custom_study_parameter_descriptor = Omit<indicator_parameter_descriptor, "min" | "max"> & {
+  min?: number | null;
+  max?: number | null;
+};
+export interface custom_study_definition<State = unknown> {
+  type: string;
+  version: number;
+  title: string;
+  parameters: custom_study_parameter_descriptor[];
+  outputs: custom_study_output[];
+  uses_volume?: boolean;
+  init(params: Record<string, unknown>): State;
+  update?(state: State, ctx: custom_study_context): void;
+  rebuild(state: State, ctx: custom_study_context): void;
+}
+export interface custom_study_fault_event {
+  binding: number;
+  message: string;
+}
+export interface custom_study_binding_options extends Partial<series_options> {
+  input_source?: indicator_input_source;
+  volume_source?: series_api | null;
 }
 
 /**
@@ -1180,7 +1223,7 @@ export interface indicator_schema {
 export interface indicator_info {
   /** Stable identity shared by all outputs in one indicator binding. */
   binding_id: number;
-  kind: indicator_kind;
+  kind: indicator_kind | (string & {});
   /** Complete structured parameters. Fields not used by this kind are `null`. */
   parameters: {
     calendar: study_calendar_policy | null;
@@ -1219,6 +1262,8 @@ export interface indicator_info {
     smoothing_periods: [number, number, number, number] | null;
     ema_period: number | null;
     sum_period: number | null;
+    /** Normalized registered custom-study parameters (null for built-in kinds). */
+    custom: Record<string, unknown> | null;
   };
   period: number;
   /** Second parameter when the kind has one: Bollinger deviation, MACD signal period,
@@ -2486,14 +2531,23 @@ export interface chart_state_v2 {
   chart_options: Record<string, unknown>;
 }
 
-export type chart_state = chart_state_v1 | chart_state_v2;
+export interface chart_state_v3 {
+  schema: "aeris_charts-state";
+  schema_version: 3;
+  panes: persisted_pane_v1[];
+  drawings: persisted_drawing_v1[];
+  indicators: unknown[];
+}
+export type chart_state = chart_state_v1 | chart_state_v2 | chart_state_v3;
 
 /** Counts returned after one validated, atomic state restore. */
 export interface persistence_restore_result {
-  schema_version: 1 | 2;
+  schema_version: 1 | 2 | 3;
   panes: number;
   drawings: number;
   points: number;
+  /** V3 pending binding identities; absent on legacy V1/V2 documents. */
+  unresolved_custom_studies?: number[];
 }
 
 /** A live handle to an engine-owned drawing. */
@@ -3600,6 +3654,10 @@ export interface chart_api {
   set_series_order(ordered: series_api[]): boolean;
   /** Add a Rust-native simple moving-average line derived from an existing series. */
   add_sma(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  /** Register a synchronous chart-local study implementation. Worker charts do not support callbacks. */
+  register_custom_study<State>(definition: custom_study_definition<State>): void;
+  add_custom_study(type: string, source: series_api, params?: Record<string, unknown>, options?: custom_study_binding_options): series_api[];
+  subscribe_custom_study_fault(callback: (event: custom_study_fault_event) => void): () => void;
   add_aroon(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api];
   /** Confirmed pivot levels and marker snapshots; levels begin at confirmation, never at the pivot. */
   add_swing_points(source: series_api, left?: number, right?: number, options?: Partial<series_options>): [series_api, series_api];

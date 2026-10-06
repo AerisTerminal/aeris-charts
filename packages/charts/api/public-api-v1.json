@@ -23,8 +23,8 @@
     },
     {
       "path": "errors.d.ts",
-      "bytes": 639,
-      "sha256": "206a717a3935a070ba85529082a6c986a4253168be27f3a466b5faffdba09b19"
+      "bytes": 674,
+      "sha256": "0a638ae6803f1e61ddf5092881537089cd10747dc92791d06cbc1d02caa11e0e"
     },
     {
       "path": "feature_series.d.ts",
@@ -43,8 +43,8 @@
     },
     {
       "path": "offscreen.d.ts",
-      "bytes": 7597,
-      "sha256": "98a75718bc186231708804b53888ca4ff257090675a1a819daa0262f24f6700a"
+      "bytes": 7664,
+      "sha256": "177eacedb2453f3dce7572fa6752f3548e3ee5560a60e91dc69293d1c3a1ee42"
     },
     {
       "path": "primitive_features.d.ts",
@@ -73,8 +73,8 @@
     },
     {
       "path": "types.d.ts",
-      "bytes": 180721,
-      "sha256": "accece20eab79ecf5b7744bed807db2eb951fb4577bae920b9dd8632fdd97204"
+      "bytes": 183035,
+      "sha256": "9113b1cbd96bb8cd7fd5caa208b590776a24346218828cb79055a431b9342aea"
     }
   ]
 }

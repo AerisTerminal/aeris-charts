@@ -132,6 +132,164 @@ fn custom_marker_plot_uses_exact_visible_prices_without_line_or_whitespace_marks
 }
 
 #[test]
+fn combined_structure_custom_marker_and_auction_frame_uses_existing_primitives() {
+    use crate::custom_studies::{
+        CustomStudyDefinition, CustomStudyFault, CustomStudyInput, CustomStudyOutput,
+        CustomStudyPane, CustomStudyPlot, CustomStudyRuntime,
+    };
+    use crate::{
+        AggressorSide, AuctionMarkerOptions, FootprintAggregationOptions, FootprintTrade,
+        IndicatorInputSource, IndicatorKind, IndicatorOutputStyle,
+    };
+
+    struct Marks;
+    impl CustomStudyRuntime for Marks {
+        fn compute(
+            &mut self,
+            input: CustomStudyInput<'_>,
+            out: &mut [Vec<f64>],
+        ) -> Result<(), CustomStudyFault> {
+            out[0].extend(
+                (input.from..input.times.len())
+                    .map(|row| if row == 3 { input.close[row] } else { f64::NAN }),
+            );
+            Ok(())
+        }
+    }
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = (0..7)
+        .map(|row| 1_700_000_000.0 + row as f64 * 60.0)
+        .collect::<Vec<_>>();
+    let open = [9., 12., 12., 16., 16., 18., 19.];
+    let high = [10., 14., 12., 18., 16., 20., 21.];
+    let low = [8., 9., 10., 15., 15., 8., 16.];
+    let close = [9., 13., 11., 17., 15., 19., 20.];
+    chart
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .unwrap();
+    chart.add_indicator_kind(0, IndicatorKind::SwingPoints { left: 1, right: 1 }, None);
+    chart.add_indicator_kind(
+        0,
+        IndicatorKind::MarketStructure {
+            left: 1,
+            right: 1,
+            break_on: crate::StructureBreakOn::Close,
+        },
+        None,
+    );
+    chart.add_indicator_kind(
+        0,
+        IndicatorKind::FairValueGaps {
+            min_size: 0.0,
+            mitigation: crate::StructureMitigation::Touch,
+            mitigation_price: crate::StructureMitigationPrice::Wick,
+            max_active: 20,
+            show_mitigated: true,
+        },
+        None,
+    );
+    chart
+        .register_custom_study(
+            CustomStudyDefinition {
+                type_id: "combined_marker".into(),
+                version: 1,
+                title: "Marker".into(),
+                parameters: vec![],
+                outputs: vec![CustomStudyOutput {
+                    name: "event".into(),
+                    plot: CustomStudyPlot::Marker,
+                    pane: CustomStudyPane::Price,
+                    default_style: IndicatorOutputStyle {
+                        visible: true,
+                        point_markers: true,
+                        line_color: Some("#ff00ff".into()),
+                        ..Default::default()
+                    },
+                }],
+                uses_volume: false,
+            },
+            Box::new(|_| Ok(Box::new(Marks))),
+        )
+        .unwrap();
+    let marker = chart
+        .add_custom_study(
+            "combined_marker",
+            0,
+            IndicatorInputSource::Close,
+            None,
+            Default::default(),
+        )
+        .unwrap()[0];
+    let stream = chart
+        .add_trade_stream(
+            "combined_frame",
+            FootprintAggregationOptions {
+                tick_size: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let trades = [(AggressorSide::Sell, 100.), (AggressorSide::Buy, 25.)]
+        .into_iter()
+        .enumerate()
+        .map(|(offset, (aggressor, volume))| FootprintTrade {
+            timestamp_micros: times[0] as i64 * 1_000_000 + offset as i64,
+            price: 10.0,
+            volume,
+            aggressor,
+            bid: None,
+            ask: None,
+            sequence: None,
+            trade_id: None,
+            conditions: 0,
+            session_id: Some(1),
+        })
+        .collect();
+    chart.set_trade_stream_trades(stream, trades).unwrap();
+    chart
+        .add_auction_markers(
+            stream,
+            0,
+            AuctionMarkerOptions {
+                include_forming_bar: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let frame = chart.build_frame();
+    let prims = &frame.panes[0].main;
+    assert!(chart.custom_marker_plot(marker));
+    assert!(
+        prims.iter().any(|p| matches!(p, Prim::Rect { .. })),
+        "zone fill"
+    );
+    assert!(
+        prims.iter().any(|p| matches!(p, Prim::RectFrame { .. })),
+        "zone border"
+    );
+    assert!(
+        prims.iter().any(|p| matches!(p, Prim::HLine { .. })),
+        "structure segment"
+    );
+    assert!(
+        prims.iter().any(|p| matches!(p, Prim::Text { .. })),
+        "structure label"
+    );
+    assert!(
+        prims
+            .iter()
+            .any(|p| matches!(p, Prim::Circle { fill, .. } if *fill == Color::rgb(0xff, 0, 0xff))),
+        "custom marker"
+    );
+    assert!(
+        prims.iter().any(|p| matches!(p, Prim::Triangle { .. })),
+        "auction mark"
+    );
+}
+
+#[test]
 fn study_binding_paints_inside_its_output_layer_without_host_markers() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
     let output = chart.add_sma(0, 2).unwrap();

@@ -53,6 +53,7 @@ import type {
   volume_profile_indicator_api, volume_profile_indicator_options, volume_profile_indicator_snapshot,
   big_trades_api, big_trades_options, big_trades_snapshot,
   auction_mark, auction_marker_options, auction_markers_api,
+  custom_study_definition, custom_study_fault_event, custom_study_binding_options,
 } from "./types.js";
 import {
   DRAWING_KIND_TO_U8, FEATURE_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8,
@@ -3724,6 +3725,10 @@ export class chart_impl implements chart_api {
   exportState(): chart_state { return this.export_state(); }
   importState(...args: Parameters<chart_api["import_state"]>): persistence_restore_result { return this.import_state(...args); }
   private wasm_instance: AerisChart | null;
+  private guarded_wasm: AerisChart | null = null;
+  private custom_study_chart_guard_installed = false;
+  private in_custom_study_callback = false;
+  private readonly custom_study_fault_subs = new Set<(event: custom_study_fault_event) => void>();
   private next_extra_series = false;
   private readonly gestures_cfg: resolved_gestures = {
     pan: true,
@@ -4076,10 +4081,13 @@ export class chart_impl implements chart_api {
 
   /** Internal package boundary. Every post-disposal operation fails with one stable error. */
   get wasm(): AerisChart {
+    if (this.in_custom_study_callback) {
+      throw new AerisChartsError("reentrant_call", "chart APIs cannot be called during a custom study callback");
+    }
     if (this.wasm_instance === null) {
       throw new AerisChartsError("disposed", "this chart has been disposed");
     }
-    return this.wasm_instance;
+    return this.guarded_wasm ?? this.wasm_instance;
   }
 
   /** Deterministic browser-test hook; intentionally absent from `chart_api`. */
@@ -5079,6 +5087,131 @@ export class chart_impl implements chart_api {
     // gets real bounds on this frame instead of waiting for the next incidental repaint.
     this.repaint();
     return series;
+  }
+
+  private drain_custom_study_faults(): void {
+    if (!this.wasm_instance || this.custom_study_fault_subs.size === 0) return;
+    const events = JSON.parse(this.wasm_instance.take_custom_study_faults_json()) as custom_study_fault_event[];
+    for (const event of events) {
+      for (const callback of this.custom_study_fault_subs) {
+        try { callback(event); } catch (error) { console.error("custom study fault subscriber threw", error); }
+      }
+    }
+  }
+
+  private protect_chart_calls_in_custom_callbacks(): void {
+    if (this.custom_study_chart_guard_installed) return;
+    this.custom_study_chart_guard_installed = true;
+    // Install on this chart only. Ordinary charts retain the direct prototype dispatch.
+    for (const name of Object.getOwnPropertyNames(chart_impl.prototype)) {
+      const descriptor = Object.getOwnPropertyDescriptor(chart_impl.prototype, name);
+      if (name === "constructor" || typeof descriptor?.value !== "function") continue;
+      const method = descriptor.value as (...args: unknown[]) => unknown;
+      Object.defineProperty(this, name, {
+        configurable: true,
+        value: (...args: unknown[]) => {
+          if (this.in_custom_study_callback) {
+            throw new AerisChartsError("reentrant_call", "chart API called during a custom study callback");
+          }
+          return method.apply(this, args);
+        },
+      });
+    }
+  }
+
+  register_custom_study<State>(definition: custom_study_definition<State>): void {
+    if (this.in_custom_study_callback) throw new AerisChartsError("reentrant_call", "chart API called during a custom study callback");
+    if (!definition || typeof definition.init !== "function" || typeof definition.rebuild !== "function" ||
+      (definition.update !== undefined && typeof definition.update !== "function") ||
+      !/^[a-z0-9._-]{1,64}$/.test(definition.type) || !Number.isSafeInteger(definition.version) ||
+      definition.version < 1 || !definition.title || !Array.isArray(definition.parameters) ||
+      !Array.isArray(definition.outputs) || definition.outputs.length < 1 || definition.outputs.length > 5 ||
+      definition.outputs.some((output) => !output || typeof output.name !== "string" ||
+        !["line", "histogram", "area", "marker"].includes(output.plot) ||
+        !["price", "dedicated"].includes(output.pane)) ||
+      definition.parameters.some((parameter) => !parameter || typeof parameter.name !== "string")) {
+      throw new AerisChartsError("invalid_options", "invalid custom study definition");
+    }
+    this.protect_chart_calls_in_custom_callbacks();
+    const guard = <Args extends unknown[], Result>(callback: (...args: Args) => Result) =>
+      (...args: Args): Result => {
+        this.in_custom_study_callback = true;
+        try { return callback(...args); } finally { this.in_custom_study_callback = false; }
+      };
+    const style = {
+      visible: true, line_color: null, line_width: null, line_style: 0,
+      point_markers: false, up_color: null, down_color: null,
+      area_top_color: null, area_bottom_color: null,
+    };
+    const wire = {
+      ...definition,
+      parameters: definition.parameters.map((parameter) => ({
+        ...parameter, min: parameter.min ?? null, max: parameter.max ?? null,
+      })),
+      outputs: definition.outputs.map((output) => ({
+        ...output, default_style: { ...style, ...output.default_style },
+      })),
+      init: undefined, update: undefined, rebuild: undefined,
+    };
+    let document: string;
+    try { document = JSON.stringify(wire); }
+    catch { throw new AerisChartsError("invalid_options", "custom study definition must be JSON-serializable"); }
+    const result = JSON.parse(this.wasm.register_custom_study_result_json(
+      document,
+      guard(definition.init),
+      definition.update ? guard(definition.update) : undefined,
+      guard(definition.rebuild),
+    )) as { ok: true } | persistence_error_result;
+    if (!result.ok) throw_persistence_error(result);
+    // Only charts with registered JS callbacks pay for this boundary guard.
+    if (!this.guarded_wasm && this.wasm_instance) {
+      const methods = new Map<PropertyKey, (...args: unknown[]) => unknown>();
+      this.guarded_wasm = new Proxy(this.wasm_instance, {
+        get: (target, key) => {
+          const value = Reflect.get(target, key, target);
+          if (typeof value !== "function") return value;
+          const cached = methods.get(key);
+          if (cached) return cached;
+          const mutatesStudies = typeof key === "string" &&
+            /^(add_|set_|update_|remove_|import_|retry_|clear_|append_|batch_|seek_)/.test(key);
+          const invoke = (...args: unknown[]) => {
+            if (this.in_custom_study_callback) {
+              throw new AerisChartsError("reentrant_call", "chart API called during a custom study callback");
+            }
+            try { return value.apply(target, args) as unknown; }
+            finally { if (mutatesStudies) this.drain_custom_study_faults(); }
+          };
+          methods.set(key, invoke);
+          return invoke;
+        },
+      });
+    }
+    this.drain_custom_study_faults();
+    this.repaint();
+  }
+
+  add_custom_study(type: string, source: series_api, params: Record<string, unknown> = {}, options?: custom_study_binding_options): series_api[] {
+    if (this.series_by_id.get(source.id) !== source) {
+      throw new AerisChartsError("invalid_handle", "custom study source must belong to this chart");
+    }
+    const { input_source = "close", volume_source = null, ...series_options } = options ?? {};
+    if (volume_source && this.series_by_id.get(volume_source.id) !== volume_source) {
+      throw new AerisChartsError("invalid_handle", "custom study volume source must belong to this chart");
+    }
+    let document: string;
+    try { document = JSON.stringify(params); }
+    catch { throw new AerisChartsError("invalid_options", "custom study parameters must be JSON-serializable"); }
+    const result = JSON.parse(this.wasm.add_custom_study_result_json(
+      type, source.id, input_source, volume_source ? BigInt(volume_source.id) : -1n, document,
+    )) as { ok: true; outputs: number[] } | persistence_error_result;
+    if (!result.ok) throw_persistence_error(result);
+    return result.outputs.map((id) => this.indicator_series(id, series_options));
+  }
+
+  subscribe_custom_study_fault(callback: (event: custom_study_fault_event) => void): () => void {
+    if (this.in_custom_study_callback) throw new AerisChartsError("reentrant_call", "chart API called during a custom study callback");
+    this.custom_study_fault_subs.add(callback);
+    return () => this.custom_study_fault_subs.delete(callback);
   }
 
   configure_resampled_series(
@@ -6293,6 +6426,13 @@ export class chart_impl implements chart_api {
             this,
           ),
         );
+      }
+    }
+    if (response.result.schema_version === 3) {
+      for (const id of JSON.parse(this.wasm.series_order_json()) as number[]) {
+        if (!this.series_by_id.has(id)) {
+          this.series_by_id.set(id, new series_impl(id, "line", this));
+        }
       }
     }
     this.repaint();
