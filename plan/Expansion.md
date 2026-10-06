@@ -981,7 +981,7 @@ candle-only approximation mode that is clearly labeled as such; tape items never
 | OF10 | Anchored VWAP drawing with bands | Candle or tape | F4, F5 | B7 | |
 | OF11 | Large-trade bubbles and volume dots: size by volume, color by side, threshold filters, aggregation of consecutive prints | Tape | F2 | B3 | New bounded marker primitive path |
 | OF12 | Footprint variants: profile-in-bar, volume ladder, horizontal imbalance mode, delta-only, bid/ask histogram cells | Tape | F2 | B3 | Extends existing footprint LOD |
-| OF13 | Unfinished auctions, absorption and exhaustion markers with explicit documented rules | Tape | OF12 | B9 | Rules must be deterministic and parameterized, never heuristic black boxes |
+| OF13 | Unfinished auctions, absorption and exhaustion markers with explicit documented rules | Tape | OF12 | B9 | Delivered in B9: deterministic, parameterized marks on the shared trade stream with replay and retention support; see `docs/Footprint.md`. |
 | OF14 | Tick, volume and range candles; footprint on the same bars | Tape | F1 | B5 | Trade-count and volume aggregators already exist |
 | OF15 | Liquidity heatmap (resting depth over time) with color scaling, thresholds, and trades overlaid | Depth + tape | F3, OF11 | B6 | Bounded by visible time buckets × visible price rows |
 | OF16 | DOM ladder data model: price ladder, bid/ask size, recent volume at price, own orders | Depth + trading | F3 | B6 | For non-Aeris hosts; chart-side panel primitive |
