@@ -12,6 +12,26 @@ dependencies; they are not published to crates.io. `aeris_charts_engine` owns ch
 interactions, drawings, indicators, and frame construction, and hosts pair it with a renderer such
 as `aeris_charts_render_wgpu` or `aeris_charts_native` (see [Repository layout](#repository-layout)).
 
+## Studies and order flow
+
+Built-in indicators share an engine-owned binding, typed schema, incremental calculation,
+rendering, and layout persistence path. The catalog includes trend, momentum, volatility and
+volume studies, the I2 breadth tier (including KST, Klinger, regression channels, TSI, Vortex,
+KAMA, Choppiness Index and ATR bands), and seven I3 structure/session studies: swing points,
+market structure, fair value gaps, order blocks, session highs/lows, previous period levels and
+opening range. Session studies use UTC boundaries or a runtime-only host-supplied study calendar.
+See [Studies.md](docs/Studies.md) and the [indicator catalog](plan/Expansion.md#indicator-catalog).
+
+Rust hosts can register typed custom studies with `ChartEngine::register_custom_study` and bind
+them with `add_custom_study`. The browser chart exposes `register_custom_study`,
+`add_custom_study` and `subscribe_custom_study_fault` in TypeScript (main-thread charts only).
+The engine owns scheduling, output validation, styles and persistence; callbacks supply the
+calculation. A separate external-study path accepts values calculated by the host.
+
+The shared trade stream also supports footprint series and runtime-only auction markers for
+unfinished auctions, exhaustion and absorption. Rules, options and snapshot semantics are in
+[Footprint.md](docs/Footprint.md).
+
 ## Browser package
 
 The browser SDK is published through GitHub Packages as `@aeristerminal/aeris-charts`. Configure
@@ -252,14 +272,29 @@ version policy.
 Prerequisites: rustup (it installs the Rust toolchain pinned in `rust-toolchain.toml`, including the `wasm32-unknown-unknown` target), `wasm-pack`, and Node.js 18 or newer.
 
 ```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p aeris_charts_wasm --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace
+cargo run -p aeris_charts_native --example perf_gate --release
 
 cd packages/charts
 npm ci
-npm run build
 npm run lint
+npm run build
 npm run typecheck
+npm run check:api
+npm run check:release-gates
 npm run test:pack
+
+cd ../../examples/web_demo
+npm ci
+npm run build
+npx playwright test --project=chromium
+
+cd ../..
+cargo test -p aeris_charts_render_gpui --features gpui-backend --all-targets
+cargo run -p aeris_charts_render_gpui --features gpui-backend --example pixel_parity
 ```
 
 The complete verification gates are documented in [AGENTS.md](AGENTS.md) and enforced by CI.
