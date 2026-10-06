@@ -233,6 +233,10 @@ struct RawSeries {
     /// time-scale base index (the reference's custom plot rows carry values, so they count in
     /// `_getBaseIndex`).
     rows_count_as_data: bool,
+    /// Series that never carry a data row by contract (the all-whitespace anchor output of a
+    /// structure study). [`DataLayer::base_index`] skips their backward whitespace scan, which
+    /// would otherwise walk the entire column on every sync.
+    whitespace_only: bool,
     /// Rebuilt against merged indices; keys are positions in `merged_times`.
     plot: PlotList,
     /// Compact endpoint and extrema source-row identities used only for dense viewport queries.
@@ -258,6 +262,7 @@ impl RawSeries {
             values: SeriesValues::Single(Vec::new()),
             point_colors: [vec![], vec![], vec![]],
             rows_count_as_data: false,
+            whitespace_only: false,
             plot: PlotList::new(),
             lod: LodPyramid::default(),
             last_lod_update_nodes: 0,
@@ -645,6 +650,19 @@ impl DataLayer {
         }
     }
 
+    /// Mark a series that never carries a data row by contract (the all-whitespace anchor
+    /// output of a structure study), so [`base_index`] skips it instead of scanning the whole
+    /// column for a non-whitespace row on every sync. Set at series creation by the engine,
+    /// which owns that contract; an unknown id is ignored.
+    pub fn set_whitespace_only(&mut self, id: SeriesId, flag: bool) {
+        if let Some(s) = self
+            .series_slot(id)
+            .and_then(|slot| self.series.get_mut(slot))
+        {
+            s.whitespace_only = flag;
+        }
+    }
+
     /// Raw series columns for platform-independent derived-data producers.
     pub fn series_data(&self, id: SeriesId) -> Option<(&[i64], [&[f64]; 4])> {
         let slot = self.series_slot(id)?;
@@ -685,6 +703,11 @@ impl DataLayer {
     }
 
     #[doc(hidden)]
+    pub fn series_is_whitespace_only(&self, id: SeriesId) -> Option<bool> {
+        Some(self.series.get(self.series_slot(id)?)?.whitespace_only)
+    }
+
+    #[doc(hidden)]
     pub fn last_lod_update_nodes(&self, id: SeriesId) -> Option<usize> {
         Some(
             self.series
@@ -705,6 +728,9 @@ impl DataLayer {
         let mut last_data_time: Option<i64> = None;
         for &slot in self.live_slots.values() {
             let s = &self.series[slot];
+            if s.whitespace_only {
+                continue;
+            }
             let Some(times) = self.series_times_by_slot(slot) else {
                 continue;
             };
@@ -2146,6 +2172,33 @@ mod tests {
         assert_eq!(dl.base_index(), Some(2));
         dl.set_rows_count_as_data(a, false);
         assert_eq!(dl.base_index(), Some(0));
+    }
+
+    #[test]
+    fn whitespace_only_series_are_skipped_by_the_base_index() {
+        let mut dl = DataLayer::new();
+        let a = dl.add_series();
+        set(&mut dl, a, &[1, 2], &[10.0, 20.0]);
+        // A structure-study anchor: aligned to its source and all-whitespace by contract, so it
+        // must not anchor the base index and must not change the answer a real series gives.
+        let anchor = dl.add_series();
+        let nan = f64::NAN;
+        dl.set_data(
+            anchor,
+            vec![1, 2, 3, 4],
+            vec![nan, nan, nan, nan],
+            vec![nan, nan, nan, nan],
+            vec![nan, nan, nan, nan],
+            vec![nan, nan, nan, nan],
+        );
+        dl.set_whitespace_only(anchor, true);
+        assert_eq!(dl.base_index(), Some(1));
+        // Clearing the flag restores the scan, which still finds no data rows in the anchor.
+        dl.set_whitespace_only(anchor, false);
+        assert_eq!(dl.base_index(), Some(1));
+        // An unknown id is ignored.
+        dl.set_whitespace_only(999, true);
+        assert_eq!(dl.base_index(), Some(1));
     }
 
     #[test]

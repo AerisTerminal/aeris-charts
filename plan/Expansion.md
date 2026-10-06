@@ -39,7 +39,7 @@ Updated 2026-10-04. Baseline source-confirmed 2026-09-24.
 | B6 | Depth: F3, OF15–OF18, PD8, PD9 | Liquidity heatmap, order-level markers, depth studies | **Complete** |
 | B7 | Profiles and resampling: F6, OF3–OF8, OF10, CT5 | Session/composite profiles, TPO, anchored VWAP, multi-timeframe studies | **Complete** |
 | B8 | Drawing catalog expansion | Full professional drawing toolset | **Complete** |
-| B9 | Breadth and extension: I2, I3, I4, OF13 | Remaining indicators, custom studies, auction markers | Open |
+| B9 | Breadth and extension: I2, I3, I4, OF13 | Remaining indicators, custom studies, auction markers | **Complete** |
 
 Ordering: B1–B3 serve the platform's first phase and are independent of each other. B4 must land
 before B7 (OF10 needs F4), B2 before B7 and B8 (they need F5), B3 before B5 and B6 (replay and the
@@ -469,19 +469,19 @@ every executor.
 
 ### B9 — Breadth and extension
 
-**Scope:** I2, I3, I4, OF13. **Depends on:** B3 and B4. **Status:** open.
+**Scope:** I2, I3, I4, OF13. **Depends on:** B3 and B4. **Status:** complete.
 
-- [ ] **I2** Breadth indicator tier (see Indicator catalog).
-- [ ] **I3** Structure tier: swing points, structure breaks, fair value gaps, order blocks,
+- [x] **I2** Breadth indicator tier (see Indicator catalog).
+- [x] **I3** Structure tier: swing points, structure breaks, fair value gaps, order blocks,
       session and previous-period levels, opening range.
-- [ ] **I4** Typed custom study API in Rust and TypeScript: inputs, parameters, outputs,
+- [x] **I4** Typed custom study API in Rust and TypeScript: inputs, parameters, outputs,
       incremental update and rebuild; the engine owns scheduling, bounds, styles, persistence and
       rendering.
-- [ ] **OF13** Unfinished auctions, absorption and exhaustion markers with documented,
+- [x] **OF13** Unfinished auctions, absorption and exhaustion markers with documented,
       parameterized, deterministic rules.
-- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
-- [ ] Milestone evidence: screenshots, accessibility review, competitor comparison and recorded
-      benchmarks for the whole plan.
+- [x] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [x] Milestone evidence: screenshots, accessibility review, competitor comparison and recorded
+      benchmarks for the whole plan. The evidence is recorded in `docs/Studies.md`.
 
 **Exit:** the Definition of completion below is met.
 

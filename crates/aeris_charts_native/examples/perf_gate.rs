@@ -14,6 +14,8 @@
 //!   Target K — 100x replay clock advance, shared projections, frame work, and flat retained memory
 //!   Target L — sustained depth updates, bounded heatmap frame work, and live-edge upload size
 //!   Target M — sustained live order-flow tape: per-batch update + frame, retention, late print
+//!   Target N — 1M-row structure studies: tail update p99 and one bounded historical correction
+//!   Target O — sustained live order-flow tape with auction markers enabled
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `AERIS_CHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -24,14 +26,15 @@
 use std::time::Instant;
 
 use aeris_charts_engine::{
-    AggressorSide, AxisDimension, BigTradesOptions, ChartEngine, ChartFrame, ContinuousScaleType,
-    DepthHeatmapOptions, DepthLevel, DepthOptions, DepthSide, DepthSnapshot, DepthUpdate,
-    FootprintAggregationOptions, FootprintBarAggregation, FootprintSeriesOptions, FootprintTrade,
-    FootprintVisualOptions, GeneralAxisOptions, GeneralHitMode, GeneralScaleType,
+    AggressorSide, AuctionMarkerOptions, AxisDimension, BigTradesOptions, ChartEngine, ChartFrame,
+    ContinuousScaleType, DepthHeatmapOptions, DepthLevel, DepthOptions, DepthSide, DepthSnapshot,
+    DepthUpdate, FootprintAggregationOptions, FootprintBarAggregation, FootprintSeriesOptions,
+    FootprintTrade, FootprintVisualOptions, GeneralAxisOptions, GeneralHitMode, GeneralScaleType,
     GeneralSeriesOptions, GeneralXyInput, GestureResolver, HorizontalDomain, InputDevice,
-    InputTarget, OrderFlowPresentationOptions, PeriodicProfilePresentationOptions,
-    PeriodicProfilePresentationRequest, PointerSample, ProfileSource, ResampleBoundary, SeriesKind,
-    TradeStudyOptions,
+    InputTarget, OrderBlockZone, OrderFlowPresentationOptions, PeriodicProfilePresentationOptions,
+    PeriodicProfilePresentationRequest, PointerSample, PreviousPeriod, ProfileSource,
+    ResampleBoundary, SeriesKind, StructureBreakOn, StructureMitigation, StructureMitigationPrice,
+    StudyCalendarPolicy, TradeStudyOptions,
 };
 use aeris_charts_render::draw_list::Prim;
 use aeris_charts_render_wgpu::{DrawGroup, TexQuadInstance, prims_to_group};
@@ -190,12 +193,15 @@ struct LiveTapeTimings {
     late_trade_ms: f64,
     late_rebuilt_ticks: usize,
     retained_trades_capped: bool,
+    auction_marks: usize,
 }
 
 /// One host-shaped order-flow presentation (time footprint + CVD + delta panes) fed the way a
 /// terminal feeds a live tape: small suffix batches, each followed by a frame. The history sits
 /// just under the retention ceiling so the loop crosses it, and one late print lands a bar back.
-fn sustained_order_flow_tape() -> LiveTapeTimings {
+/// With `with_auction_markers`, one auction-marker set (OF13, default options) is bound to the
+/// same stream before the live loop, so every batch and the late print also repair its marks.
+fn sustained_order_flow_tape(with_auction_markers: bool) -> LiveTapeTimings {
     const HISTORY_BARS: usize = 2_600;
     const TRADES_PER_BAR: usize = 100;
     const BAR_MICROS: i64 = 60_000_000;
@@ -256,6 +262,15 @@ fn sustained_order_flow_tape() -> LiveTapeTimings {
     chart
         .update_order_flow_presentation(presentation, history, false)
         .expect("valid order-flow history");
+    let auction_markers = with_auction_markers.then(|| {
+        chart
+            .add_auction_markers(
+                presentation.trade_stream(),
+                0,
+                AuctionMarkerOptions::default(),
+            )
+            .expect("valid auction markers")
+    });
     chart.time_scale.set_width(1600.0);
     chart.fit_footprint_viewport();
     let mut frame = ChartFrame::default();
@@ -299,6 +314,12 @@ fn sustained_order_flow_tape() -> LiveTapeTimings {
     let late_trade_ms = started.elapsed().as_secs_f64() * 1000.0;
     let after = chart.footprint_work_stats(footprint).expect("work stats");
 
+    let auction_marks = auction_markers.map_or(0, |id| {
+        chart
+            .auction_markers_snapshot(id)
+            .expect("auction markers snapshot")
+            .len()
+    });
     samples.sort_unstable_by(f64::total_cmp);
     let percentile =
         |fraction: f64| samples[((samples.len() - 1) as f64 * fraction).round() as usize];
@@ -309,6 +330,7 @@ fn sustained_order_flow_tape() -> LiveTapeTimings {
         late_trade_ms,
         late_rebuilt_ticks: after.rebuilt_ticks - before.rebuilt_ticks,
         retained_trades_capped,
+        auction_marks,
     }
 }
 
@@ -1279,7 +1301,7 @@ fn main() {
         depth_memory_second as f64 / (1024.0 * 1024.0),
     );
 
-    let live_tape = sustained_order_flow_tape();
+    let live_tape = sustained_order_flow_tape(false);
     println!(
         "Target M — sustained live order-flow tape (footprint + CVD + delta, 260k-trade history, 600 x 4-trade batches each followed by a frame):"
     );
@@ -1304,6 +1326,151 @@ fn main() {
     println!(
         "  [{}] retained tape stays within the order-flow ceiling",
         if live_tape.retained_trades_capped {
+            "PASS"
+        } else {
+            "FAIL"
+        }
+    );
+
+    // ---- Target N: structure studies over 1M rows -------------------------------------------
+    // All seven I3 studies bound to one 1M-row source. Tail updates replace the final row, so
+    // each binding repairs only its tip (rebuild_from(n-1)); the historical correction reopens a
+    // row STRUCTURE_CORRECTION_ROWS back, so repair is bounded by that suffix plus one checkpoint
+    // interval and bounded pivot/order-block lookback, never the full history.
+    const STRUCTURE_BARS: usize = 1_000_000;
+    const STRUCTURE_TIP_SAMPLES: usize = 200;
+    // The measured tip p99 (~3.3 ms) is dominated by the pre-existing per-update axis bookkeeping
+    // any 1M-row chart pays on every update; the seven structure bindings add ~0.5 ms on top.
+    const STRUCTURE_TIP_BUDGET_MS: f64 = 8.0;
+    const STRUCTURE_CORRECTION_ROWS: usize = 20_000;
+    const STRUCTURE_CORRECTION_BUDGET_MS: f64 = 100.0;
+    let (times, open, high, low, close) = {
+        let (times, mut open, mut high, mut low, mut close) = gen_series(STRUCTURE_BARS, 11.0);
+        // Periodic price jumps make the fixture produce real fair-value gaps and order blocks;
+        // a smooth sinusoid never gaps, so the zone studies would measure empty work.
+        let mut drift = 0.0;
+        for row in 0..STRUCTURE_BARS {
+            if row % 500 == 499 {
+                drift += if (row / 500) % 2 == 0 { 6.0 } else { -6.0 };
+            }
+            open[row] += drift;
+            high[row] += drift;
+            low[row] += drift;
+            close[row] += drift;
+        }
+        (times, open, high, low, close)
+    };
+    let mut structure = ChartEngine::new(1600.0, 800.0, 1.0);
+    structure
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .expect("valid structure fixture");
+    let started = Instant::now();
+    let swing = structure.add_swing_points(0, 5, 5);
+    structure.add_market_structure(0, 5, 5, StructureBreakOn::Close);
+    let fvg = structure.add_fair_value_gaps(
+        0,
+        0.0,
+        StructureMitigation::Touch,
+        StructureMitigationPrice::Wick,
+        20,
+        true,
+    );
+    let order_blocks = structure.add_order_blocks(
+        0,
+        5,
+        5,
+        StructureBreakOn::Close,
+        OrderBlockZone::Wick,
+        StructureMitigation::Touch,
+        StructureMitigationPrice::Wick,
+        20,
+        true,
+    );
+    structure.add_session_levels(0, StudyCalendarPolicy::Utc);
+    structure.add_previous_period_levels(0, PreviousPeriod::Day, StudyCalendarPolicy::Utc);
+    structure.add_opening_range(0, 3_600, StudyCalendarPolicy::Utc);
+    let structure_build_ms = started.elapsed().as_secs_f64() * 1000.0;
+    assert!(
+        !swing.is_empty() && !fvg.is_empty() && !order_blocks.is_empty(),
+        "structure bindings are created"
+    );
+    let last_row = STRUCTURE_BARS - 1;
+    let mut tip_samples = Vec::with_capacity(STRUCTURE_TIP_SAMPLES);
+    for sample in 0..STRUCTURE_TIP_SAMPLES {
+        let wobble = (sample as f64 * 0.37).sin() * 0.5;
+        let tip_close = close[last_row] + wobble;
+        let started = Instant::now();
+        structure.update_series_bar(
+            0,
+            times[last_row],
+            [tip_close - 0.2, tip_close + 0.4, tip_close - 0.4, tip_close],
+        );
+        tip_samples.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    tip_samples.sort_unstable_by(f64::total_cmp);
+    let tip_p99_ms = tip_samples[((tip_samples.len() - 1) as f64 * 0.99).round() as usize];
+    let correction_row = STRUCTURE_BARS - STRUCTURE_CORRECTION_ROWS;
+    let started = Instant::now();
+    structure.update_series_bar(
+        0,
+        times[correction_row],
+        [
+            open[correction_row] + 0.3,
+            high[correction_row] + 0.9,
+            low[correction_row] - 0.1,
+            close[correction_row] + 0.3,
+        ],
+    );
+    let structure_correction_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let fvg_annotations = structure
+        .study_annotations(fvg[0])
+        .expect("fvg annotations snapshot");
+    let order_block_annotations = structure
+        .study_annotations(order_blocks[0])
+        .expect("order block annotations snapshot");
+    println!(
+        "Target N — 7 structure studies x {STRUCTURE_BARS} rows (initial build {structure_build_ms:.2} ms; {} FVG zones, {} order-block zones retained):",
+        fvg_annotations.zones().len(),
+        order_block_annotations.zones().len(),
+    );
+    let n_tip = report(
+        "tail update p99 (tip replacement, all bindings)",
+        tip_p99_ms,
+        STRUCTURE_TIP_BUDGET_MS,
+    );
+    let n_correction = report(
+        &format!("historical correction {STRUCTURE_CORRECTION_ROWS} rows back"),
+        structure_correction_ms,
+        STRUCTURE_CORRECTION_BUDGET_MS,
+    );
+
+    // ---- Target O: the Target M tape with auction markers bound to the same stream -----------
+    let auction_tape = sustained_order_flow_tape(true);
+    println!(
+        "Target O — sustained live order-flow tape with auction markers ({} retained marks):",
+        auction_tape.auction_marks
+    );
+    println!(
+        "  update + frame p50 {:.3} ms, p99 {:.3} ms",
+        auction_tape.update_frame_p50_ms, auction_tape.update_frame_p99_ms
+    );
+    let o_p99 = report("update + frame p99", auction_tape.update_frame_p99_ms, 4.0);
+    let o_max = report(
+        "worst update + frame (crosses retention ceiling)",
+        auction_tape.update_frame_max_ms,
+        FRAME_BUDGET_MS,
+    );
+    let o_late = report(
+        &format!(
+            "late print one bar back + frame ({} rebuilt ticks)",
+            auction_tape.late_rebuilt_ticks
+        ),
+        auction_tape.late_trade_ms,
+        FRAME_BUDGET_MS,
+    );
+    println!(
+        "  [{}] retained tape stays within the order-flow ceiling",
+        if auction_tape.retained_trades_capped {
             "PASS"
         } else {
             "FAIL"
@@ -1338,7 +1505,13 @@ fn main() {
         && m_p99
         && m_max
         && m_late
-        && live_tape.retained_trades_capped;
+        && live_tape.retained_trades_capped
+        && n_tip
+        && n_correction
+        && o_p99
+        && o_max
+        && o_late
+        && auction_tape.retained_trades_capped;
     println!(
         "\n{}",
         if all_pass {

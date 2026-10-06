@@ -3905,6 +3905,17 @@ impl ChartEngine {
                     s.price_format.min_move = min_move;
                 }
             }
+            // The anchor output of the zone/structure studies is all-whitespace by contract.
+            // Flag it so `base_index` skips its backward whitespace scan instead of walking the
+            // full column on every time-point sync.
+            if matches!(
+                kind,
+                IndicatorKind::MarketStructure { .. }
+                    | IndicatorKind::FairValueGaps { .. }
+                    | IndicatorKind::OrderBlocks { .. }
+            ) {
+                self.data.set_whitespace_only(id, true);
+            }
         }
         let calendar = match &kind {
             IndicatorKind::SessionLevels { calendar }
@@ -5416,6 +5427,10 @@ mod structure_engine_tests {
         assert_eq!(times.len(), 5);
         assert!(values[3].iter().all(|value| value.is_nan()));
         assert!(chart.study_annotations(gaps[0]).is_ok());
+        // The anchor is all-whitespace by contract and flagged so the time-scale base index
+        // skips its full-column whitespace scan; valued swing outputs keep the normal scan.
+        assert_eq!(chart.data.series_is_whitespace_only(gaps[0]), Some(true));
+        assert_eq!(chart.data.series_is_whitespace_only(swings[0]), Some(false));
     }
 
     #[test]
