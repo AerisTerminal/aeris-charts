@@ -131,7 +131,7 @@ impl Default for BigTradesOptions {
 }
 
 impl BigTradesOptions {
-    fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         let valid_color =
             |color: &String| color.len() <= MAX_COLOR_BYTES && Color::parse_css(color).is_some();
         let valid_filter = match self.filter {
@@ -274,23 +274,171 @@ impl OpenOrder {
     }
 }
 
-/// Incremental order rebuild over the stream's visible tape. A tip append continues from the
-/// still-open order; any other tape change replays the whole tape so the result is identical to a
-/// rebuild from scratch.
+/// Order reconstruction after some prefix of the tape.
 #[derive(Clone, Debug, Default)]
-struct OrderBuilder {
-    consumed: usize,
-    first_print: Option<PrintKey>,
-    last_print: Option<PrintKey>,
+struct OrderState {
     open: Option<OpenOrder>,
-    sequence_axis: bool,
     recent_volumes: VecDeque<f64>,
     completed_orders: u64,
     threshold: Option<f64>,
     bubbles: VecDeque<BigTrade>,
 }
 
+/// Incremental order rebuild over the stream's raw tape. A tip append continues from the
+/// still-open order; any other tape change replays the raw tape from the state at its start, so
+/// the result is identical to a rebuild from scratch. Trades the stream is about to release by
+/// sealing bars are first folded into that start state, so bubbles in sealed history survive.
+#[derive(Clone, Debug)]
+struct OrderBuilder {
+    state: OrderState,
+    /// State after exactly the released trades: where every raw-tape replay starts.
+    sealed: OrderState,
+    consumed: usize,
+    last_print: Option<PrintKey>,
+    sequence_axis: bool,
+    tape_epoch: u64,
+    released_trades: u64,
+    bar_origin: i64,
+}
+
 impl OrderBuilder {
+    fn new(options: &BigTradesOptions, stream: &FootprintAggregator) -> Self {
+        let state = OrderState::new(options);
+        Self {
+            sealed: state.clone(),
+            state,
+            consumed: 0,
+            last_print: None,
+            sequence_axis: !matches!(stream.options().bars, FootprintBarAggregation::Time { .. }),
+            tape_epoch: stream.tape_epoch(),
+            released_trades: stream.released_trades(),
+            bar_origin: stream.bar_origin(),
+        }
+    }
+
+    fn refresh(&mut self, options: &BigTradesOptions, stream: &FootprintAggregator, tip: bool) {
+        self.follow(options, stream);
+        let count = stream.trades().len();
+        let continues = tip
+            && self.consumed > 0
+            && self.consumed <= count
+            && stream.trade_at(self.consumed - 1).map(PrintKey::of) == self.last_print;
+        if !continues {
+            self.state = self.sealed.clone();
+            self.consumed = 0;
+        }
+        let from = self.consumed;
+        if from >= count {
+            return;
+        }
+        let bars = stream.bars();
+        let positions = bar_positions_from(bars, count, from);
+        for ((trade, side), bar) in stream.classified_trades_from(from).zip(positions) {
+            let bar_time = order_bar_time(self.sequence_axis, bars, bar, trade);
+            self.state.push_print(options, trade, side, bar_time);
+        }
+        self.consumed = count;
+        self.last_print = stream.trade_at(count - 1).map(PrintKey::of);
+    }
+
+    /// Track a replaced tape, released trades and renumbered bars.
+    fn follow(&mut self, options: &BigTradesOptions, stream: &FootprintAggregator) {
+        if stream.tape_epoch() != self.tape_epoch {
+            *self = Self::new(options, stream);
+            return;
+        }
+        if stream.released_trades() != self.released_trades {
+            // Engine seals absorb the released trades first. Should one ever not, the orders of
+            // those trades are lost and the replay restarts at the new tape start.
+            self.released_trades = stream.released_trades();
+            self.consumed = 0;
+        }
+        let shift = stream.bar_origin() - self.bar_origin;
+        if shift != 0 {
+            let first_bar_time = stream
+                .bars()
+                .first()
+                .map(|bar| bar.start_timestamp_micros.div_euclid(MICROS_PER_SECOND));
+            for state in [&mut self.state, &mut self.sealed] {
+                state.rebase_bars(shift, self.sequence_axis, first_bar_time);
+            }
+            self.bar_origin = stream.bar_origin();
+        }
+    }
+
+    /// Fold the oldest `count` raw trades, about to be released by sealing, into the replay
+    /// start state.
+    fn absorb_sealed(
+        &mut self,
+        options: &BigTradesOptions,
+        stream: &FootprintAggregator,
+        count: usize,
+    ) {
+        self.refresh(options, stream, true);
+        let bars = stream.bars();
+        let mut bar = stream.sealed_bar_count();
+        let mut left = bars.get(bar).map_or(0, |bar| bar.trade_count as usize);
+        for (trade, side) in stream.classified_trades_from(0).take(count) {
+            while left == 0 && bar + 1 < bars.len() {
+                bar += 1;
+                left = bars[bar].trade_count as usize;
+            }
+            left = left.saturating_sub(1);
+            let bar_time = order_bar_time(self.sequence_axis, bars, bar, trade);
+            self.sealed.push_print(options, trade, side, bar_time);
+        }
+        self.consumed = self.consumed.saturating_sub(count);
+        self.released_trades = self.released_trades.saturating_add(count as u64);
+    }
+
+    /// Orders of an older page the stream just joined in front of its sealed history. The page
+    /// is reconstructed on its own, so an order spanning the join splits there.
+    fn prepend_page(
+        &mut self,
+        options: &BigTradesOptions,
+        stream: &FootprintAggregator,
+        page: &FootprintAggregator,
+    ) {
+        self.follow(options, stream);
+        let mut orders = OrderState::new(options);
+        // Page bars lead the joined history, so their positions are already final.
+        let bars = page.bars();
+        let count = page.trades().len();
+        for ((trade, side), bar) in page
+            .classified_trades_from(0)
+            .zip(bar_positions_from(bars, count, 0))
+        {
+            let bar_time = order_bar_time(self.sequence_axis, bars, bar, trade);
+            orders.push_print(options, trade, side, bar_time);
+        }
+        if let Some(open) = orders.open.take() {
+            orders.complete(options, open.order());
+        }
+        for state in [&mut self.state, &mut self.sealed] {
+            let room = MAX_BIG_TRADES_BUBBLES - state.bubbles.len();
+            for order in orders.bubbles.iter().rev().take(room) {
+                state.bubbles.push_front(*order);
+            }
+        }
+    }
+}
+
+fn order_bar_time(
+    sequence_axis: bool,
+    bars: &[FootprintBar],
+    bar: usize,
+    trade: &FootprintTrade,
+) -> i64 {
+    if sequence_axis {
+        bar as i64
+    } else {
+        bars.get(bar)
+            .map_or(trade.timestamp_micros, |bar| bar.start_timestamp_micros)
+            .div_euclid(MICROS_PER_SECOND)
+    }
+}
+
+impl OrderState {
     fn new(options: &BigTradesOptions) -> Self {
         Self {
             threshold: match options.filter {
@@ -309,36 +457,20 @@ impl OrderBuilder {
             })
     }
 
-    fn refresh(&mut self, options: &BigTradesOptions, stream: &FootprintAggregator, tip: bool) {
-        let count = stream.trades().len();
-        let continues = tip
-            && self.consumed > 0
-            && self.consumed <= count
-            && stream.trade_at(0).map(PrintKey::of) == self.first_print
-            && stream.trade_at(self.consumed - 1).map(PrintKey::of) == self.last_print;
-        if !continues {
-            *self = Self::new(options);
+    /// Follow bars renumbered by `shift` positions and drop orders whose bars were evicted.
+    fn rebase_bars(&mut self, shift: i64, sequence_axis: bool, first_bar_time: Option<i64>) {
+        if sequence_axis {
+            for order in self.bubbles.iter_mut() {
+                order.bar_time -= shift;
+            }
+            if let Some(open) = self.open.as_mut() {
+                open.bar_time -= shift;
+            }
+            self.bubbles.retain(|order| order.bar_time >= 0);
+        } else if shift > 0 {
+            self.bubbles
+                .retain(|order| first_bar_time.is_some_and(|first| order.bar_time >= first));
         }
-        self.sequence_axis = !matches!(stream.options().bars, FootprintBarAggregation::Time { .. });
-        let from = self.consumed;
-        if from >= count {
-            return;
-        }
-        let bars = stream.bars();
-        let positions = bar_positions_from(bars, count, from);
-        for ((trade, side), bar) in stream.classified_trades_from(from).zip(positions) {
-            let bar_time = if self.sequence_axis {
-                bar as i64
-            } else {
-                bars.get(bar)
-                    .map_or(trade.timestamp_micros, |bar| bar.start_timestamp_micros)
-                    .div_euclid(MICROS_PER_SECOND)
-            };
-            self.push_print(options, trade, side, bar_time);
-        }
-        self.consumed = count;
-        self.first_print = stream.trade_at(0).map(PrintKey::of);
-        self.last_print = stream.trade_at(count - 1).map(PrintKey::of);
     }
 
     fn push_print(
@@ -396,8 +528,8 @@ fn quantile(values: &VecDeque<f64>, quantile: f64) -> f64 {
     *sorted.select_nth_unstable_by(index, f64::total_cmp).1
 }
 
-/// Bar position of every print from `from` onward. Bars partition the visible tape in order, so
-/// a suffix is resolved by walking back from the newest bar.
+/// Bar position of every print from `from` onward. The bars after sealed history partition the
+/// visible raw tape in order, so a suffix is resolved by walking back from the newest bar.
 fn bar_positions_from(bars: &[FootprintBar], trade_count: usize, from: usize) -> Vec<usize> {
     let mut positions = vec![0; trade_count.saturating_sub(from)];
     let mut end = trade_count;
@@ -483,7 +615,7 @@ impl ChartEngine {
         let id = self.next_native_primitive_id;
         self.next_native_primitive_id =
             id.checked_add(1).ok_or(FootprintError::BigTradesCapacity)?;
-        let mut builder = OrderBuilder::new(&options);
+        let mut builder = OrderBuilder::new(&options, stream);
         builder.refresh(&options, stream, false);
         self.big_trades
             .entry(stream_id)
@@ -498,7 +630,8 @@ impl ChartEngine {
         Ok(id)
     }
 
-    /// Restyle in place; a filter or grouping change replays the tape once.
+    /// Restyle in place; a filter or grouping change replays the raw tape once. Sealed history
+    /// has released its trades, so its bubbles do not survive such a change.
     pub fn set_big_trades_options(
         &mut self,
         id: NativePrimitiveId,
@@ -522,7 +655,7 @@ impl ChartEngine {
                 .trade_streams
                 .get(&stream_id)
                 .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
-            indicator.builder = OrderBuilder::new(&options);
+            indicator.builder = OrderBuilder::new(&options, stream);
             indicator.builder.refresh(&options, stream, false);
         }
         indicator.options = options;
@@ -538,7 +671,7 @@ impl ChartEngine {
 
     pub fn big_trades_snapshot(&self, id: NativePrimitiveId) -> Option<BigTradesSnapshot> {
         let indicator = self.big_trades_indicator(id)?;
-        let builder = &indicator.builder;
+        let builder = &indicator.builder.state;
         Some(BigTradesSnapshot {
             threshold: builder.threshold,
             bubbles: builder
@@ -598,6 +731,53 @@ impl ChartEngine {
         }
     }
 
+    /// Move an indicator to another price series, keeping its orders.
+    pub(crate) fn rehost_big_trades(&mut self, id: NativePrimitiveId, series_id: SeriesId) {
+        let Some(indicator) = self
+            .big_trades
+            .values_mut()
+            .flatten()
+            .find(|indicator| indicator.id == id)
+        else {
+            return;
+        };
+        let previous = std::mem::replace(&mut indicator.series_id, series_id);
+        self.invalidate_frame_series(previous);
+        self.invalidate_frame_series(series_id);
+    }
+
+    /// Fold the trades of the oldest `bars` raw bars into every indicator's replay start state
+    /// before the stream seals those bars and releases their trades.
+    pub(crate) fn absorb_sealed_trades_into_big_trades(&mut self, stream_id: u64, bars: usize) {
+        let (Some(stream), Some(indicators)) = (
+            self.trade_streams.get(&stream_id),
+            self.big_trades.get_mut(&stream_id),
+        ) else {
+            return;
+        };
+        let count = stream.raw_trades_of_bars(bars);
+        for indicator in indicators {
+            indicator
+                .builder
+                .absorb_sealed(&indicator.options, stream, count);
+        }
+    }
+
+    /// Add the orders of an older page the stream just joined in front of its sealed history.
+    pub(crate) fn prepend_big_trades_page(&mut self, stream_id: u64, page: &FootprintAggregator) {
+        let (Some(stream), Some(indicators)) = (
+            self.trade_streams.get(&stream_id),
+            self.big_trades.get_mut(&stream_id),
+        ) else {
+            return;
+        };
+        for indicator in indicators {
+            indicator
+                .builder
+                .prepend_page(&indicator.options, stream, page);
+        }
+    }
+
     /// Bubbles for every visible indicator on `series_id`, largest first so smaller orders stay
     /// readable on top. Drawn above every series of the pane.
     pub(crate) fn build_big_trades_frame(
@@ -653,7 +833,8 @@ impl ChartEngine {
                 .text_color
                 .as_deref()
                 .map_or_else(|| self.primary_text_color(), parse);
-            let builder = &indicator.builder;
+            let sequence_axis = indicator.builder.sequence_axis;
+            let builder = &indicator.builder.state;
             let forming = builder.forming(options);
             let peak = builder
                 .bubbles
@@ -669,7 +850,7 @@ impl ChartEngine {
                 .iter()
                 .chain(forming.as_ref())
                 .filter_map(|order| {
-                    let index = if builder.sequence_axis {
+                    let index = if sequence_axis {
                         Some(order.bar_time)
                     } else {
                         self.time_to_index(order.bar_time as f64, true)

@@ -9419,6 +9419,114 @@ fn histogram_per_bar_color_overrides_the_updown_tint() {
 }
 
 #[test]
+fn updown_volume_takes_its_direction_from_a_footprint_over_a_whitespace_primary() {
+    let mut chart = ChartEngine::new(1200.0, 600.0, 1.0);
+    let times: Vec<f64> = (0..4).map(|minute| f64::from(minute) * 60.0).collect();
+    let nan = vec![f64::NAN; times.len()];
+    chart
+        .set_series_data(0, &times, &nan, &nan, &nan, &nan)
+        .unwrap();
+    let volume = chart.add_series(SeriesKind::Histogram);
+    let volumes = [10.0, 20.0, 30.0, 40.0];
+    chart
+        .set_series_data(volume, &times, &volumes, &volumes, &volumes, &volumes)
+        .unwrap();
+    chart.series_entry_mut(volume).unwrap().histogram_updown = true;
+    let presentation = chart
+        .add_order_flow_presentation(
+            "ES",
+            0,
+            crate::OrderFlowPresentationOptions {
+                aggregation: crate::FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    ticks_per_row: 1,
+                    ..crate::FootprintAggregationOptions::default()
+                },
+                visual: crate::FootprintVisualOptions::default(),
+                show_footprint: true,
+                show_cumulative_delta: false,
+                show_delta_histogram: false,
+                big_trades: None,
+            },
+        )
+        .unwrap();
+    let trade = |timestamp_micros: i64, price: f64| crate::FootprintTrade {
+        timestamp_micros,
+        price,
+        volume: 1.0,
+        aggressor: crate::AggressorSide::Buy,
+        bid: None,
+        ask: None,
+        sequence: None,
+        trade_id: None,
+        conditions: 0,
+        session_id: Some(1),
+    };
+    // The tape covers only the last two minutes: the third closes up, the fourth down.
+    let tape = vec![
+        trade(120_000_000, 100.0),
+        trade(130_000_000, 102.0),
+        trade(180_000_000, 105.0),
+        trade(190_000_000, 101.0),
+    ];
+    chart
+        .update_order_flow_presentation(presentation, tape, false)
+        .unwrap();
+    // Structure bindings keep a whitespace-only anchor for their zones. It must not
+    // displace the primary or hide the footprint fallback for volume tint.
+    let reference = chart.add_series(SeriesKind::Candlestick);
+    let prices = [100.0, 101.0, 105.0, 101.0];
+    chart
+        .set_series_data(reference, &times, &prices, &prices, &prices, &prices)
+        .unwrap();
+    let gaps = chart.add_fair_value_gaps(
+        reference,
+        0.0,
+        crate::StructureMitigation::Touch,
+        crate::StructureMitigationPrice::Wick,
+        20,
+        true,
+    );
+    assert_eq!(chart.data.series_is_whitespace_only(gaps[0]), Some(true));
+    chart.time_scale.set_width(1200.0);
+    chart.fit_content();
+
+    let frame = chart.build_frame();
+    let segment = chart
+        .frame_series_segments(0)
+        .iter()
+        .find(|segment| segment.series_id == Some(volume))
+        .unwrap();
+    let columns = frame.panes[0].main[segment.start..segment.end]
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Rect { color, .. } => Some(*color),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    // Uncovered slots have no presented bar and keep the series' solid color.
+    assert_eq!(columns, [HISTOGRAM, HISTOGRAM, VOLUME_UP, VOLUME_DOWN]);
+    chart.set_series_visible(presentation.footprint_series().unwrap(), false);
+    let frame = chart.build_frame();
+    let segment = chart
+        .frame_series_segments(0)
+        .iter()
+        .find(|segment| segment.series_id == Some(volume))
+        .unwrap();
+    let colors = frame.panes[0].main[segment.start..segment.end]
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Rect { color, .. } => Some(*color),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        colors, [HISTOGRAM; 4],
+        "anchors cannot tint uncovered volume"
+    );
+}
+
+#[test]
 fn line_per_point_colors_split_the_stroke_and_color_markers() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart.series[0].kind = SeriesKind::Line;

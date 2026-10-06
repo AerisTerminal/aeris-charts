@@ -569,6 +569,7 @@ mod tests {
     };
     use crate::{
         BigTradesFilter, BigTradesOptions, FootprintAggregationOptions, FootprintSeriesOptions,
+        FootprintVisualOptions, OrderFlowPresentationOptions,
     };
 
     fn level(price: f64, bid: f64, ask: f64) -> FootprintLevel {
@@ -838,6 +839,149 @@ mod tests {
             .unwrap();
         chart.bind_footprint_series_to_stream(0, stream).unwrap();
         (chart, stream)
+    }
+
+    fn presentation_options(rows: u32, footprint: bool) -> OrderFlowPresentationOptions {
+        OrderFlowPresentationOptions {
+            aggregation: FootprintAggregationOptions {
+                tick_size: 1.0,
+                ticks_per_row: rows,
+                ..FootprintAggregationOptions::default()
+            },
+            visual: FootprintVisualOptions::default(),
+            show_footprint: footprint,
+            show_cumulative_delta: false,
+            show_delta_histogram: false,
+            big_trades: None,
+        }
+    }
+
+    #[test]
+    fn reconfiguring_order_flow_keeps_canonical_auction_marks_and_history() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let mut presentation = chart
+            .add_order_flow_presentation("auction", 0, presentation_options(1, true))
+            .unwrap();
+        let stream = presentation.trade_stream();
+        let tape = (0..12)
+            .flat_map(|row| {
+                let time = row * 60_000_000 + 1;
+                [
+                    trade(time, 100.0, 3.0, AggressorSide::Buy),
+                    trade(time + 1, 100.0, 4.0, AggressorSide::Sell),
+                ]
+            })
+            .collect::<Vec<_>>();
+        chart
+            .update_order_flow_presentation(presentation, tape.clone(), false)
+            .unwrap();
+        let id = chart
+            .add_auction_markers(stream, 0, AuctionMarkerOptions::default())
+            .unwrap();
+        let initial = chart.auction_markers_snapshot(id).unwrap();
+        assert_eq!(initial.len(), 22);
+        chart
+            .reconfigure_order_flow_presentation(&mut presentation, presentation_options(4, false))
+            .unwrap();
+        assert_eq!(chart.auction_markers_snapshot(id).unwrap(), initial);
+        chart
+            .reconfigure_order_flow_presentation(&mut presentation, presentation_options(2, true))
+            .unwrap();
+        assert_eq!(
+            chart
+                .trade_stream(stream)
+                .unwrap()
+                .trades()
+                .cloned()
+                .collect::<Vec<_>>(),
+            tape
+        );
+        assert_eq!(chart.auction_markers_snapshot(id).unwrap(), initial);
+
+        let mut fresh = ChartEngine::new(800.0, 500.0, 1.0);
+        let fresh_presentation = fresh
+            .add_order_flow_presentation("auction", 0, presentation_options(2, true))
+            .unwrap();
+        fresh
+            .update_order_flow_presentation(fresh_presentation, tape, false)
+            .unwrap();
+        let fresh_id = fresh
+            .add_auction_markers(
+                fresh_presentation.trade_stream(),
+                0,
+                AuctionMarkerOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            chart.auction_markers_snapshot(id),
+            fresh.auction_markers_snapshot(fresh_id)
+        );
+    }
+
+    #[test]
+    fn rewritten_window_repairs_only_auction_suffix_even_when_it_shrinks() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let presentation = chart
+            .add_order_flow_presentation("auction", 0, presentation_options(1, true))
+            .unwrap();
+        let stream = presentation.trade_stream();
+        let mut tape = (0..80)
+            .flat_map(|row| {
+                let time = row * 60_000_000 + 1;
+                [
+                    trade(time, 100.0, 3.0, AggressorSide::Buy),
+                    trade(time + 1, 100.0, 4.0, AggressorSide::Sell),
+                ]
+            })
+            .collect::<Vec<_>>();
+        chart
+            .update_order_flow_presentation(presentation, tape.clone(), false)
+            .unwrap();
+        let id = chart
+            .add_auction_markers(stream, 0, AuctionMarkerOptions::default())
+            .unwrap();
+        let prefix = chart.auction_markers_snapshot(id).unwrap();
+        let replacement = vec![
+            trade(73 * 60_000_000 + 1, 100.0, 5.0, AggressorSide::Sell),
+            trade(74 * 60_000_000 + 1, 101.0, 8.0, AggressorSide::Buy),
+            trade(74 * 60_000_000 + 2, 101.0, 3.0, AggressorSide::Sell),
+            trade(75 * 60_000_000 + 1, 102.0, 2.0, AggressorSide::Buy),
+        ];
+        chart
+            .replace_order_flow_window(presentation, replacement.clone())
+            .unwrap();
+        tape.retain(|print| print.timestamp_micros < replacement[0].timestamp_micros);
+        tape.extend(replacement);
+        assert!(
+            chart.auction_markers[&stream][0].refreshed_bars <= 7,
+            "repair must not visit the preserved 73-bar prefix"
+        );
+        assert_eq!(
+            &chart.auction_markers_snapshot(id).unwrap()[..146],
+            &prefix[..146]
+        );
+        let mut fresh = ChartEngine::new(800.0, 500.0, 1.0);
+        let fresh_presentation = fresh
+            .add_order_flow_presentation("auction", 0, presentation_options(1, true))
+            .unwrap();
+        fresh
+            .update_order_flow_presentation(fresh_presentation, tape, false)
+            .unwrap();
+        let fresh_id = fresh
+            .add_auction_markers(
+                fresh_presentation.trade_stream(),
+                0,
+                AuctionMarkerOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            chart.auction_markers_snapshot(id),
+            fresh.auction_markers_snapshot(fresh_id)
+        );
+        assert_eq!(
+            chart.footprint_bars(presentation.footprint_series().unwrap()),
+            fresh.footprint_bars(fresh_presentation.footprint_series().unwrap())
+        );
     }
 
     #[test]

@@ -519,7 +519,15 @@ validated against its final session/bar projection, then merges in place into th
 only the tail from the earliest touched canonical position is re-sorted and re-indexed, and the
 derived bars reconstruct exactly once from the newest replay checkpoint preceding that position.
 Dependents re-project from the first rebuilt bar, so a late print near the tip costs at most one
-checkpoint interval of replay instead of the retained tape; tape-replaying big trades still replay.
+checkpoint interval of replay instead of the retained tape; big trades replay the raw tape from
+their sealed-history start state.
+Bars form two tiers. The leading sealed bars are final history whose raw trades were released;
+every later bar derives from the retained raw tape and can be rebuilt from it. Stored levels are
+per instrument tick, so `ticks_per_row` and the imbalance rules only group and flag rows for display
+(`FootprintAggregator::presented_bar`, `ChartEngine::footprint_bars`) and change in place without
+replaying a trade or losing sealed history. A late print or correction older than the raw tape would
+rewrite final history; it is skipped and counted in `FootprintWorkStats::skipped_sealed_trades`.
+Replay inside sealed history reveals whole sealed bars as the clock passes their close.
 Each derived bar also carries an engine-owned logical index plus its full-resolution open and close
 microsecond times. `FootprintAggregator::bar_sequence` exposes those bounds without collapsing them
 to whole-second labels, so several non-time bars in one second and long gaps remain distinct.
@@ -536,15 +544,20 @@ replace only the affected suffix (falling back to a full projection when retenti
 prefix), and derived delta studies and big-trades orders use the same logical row keys. Big-trades
 order grouping compares the original microsecond trade times. Big trades (`big_trades.rs`) rebuilds
 aggressive orders from the classified tape before filtering them (automatic rolling percentile or
-fixed minimum), advances incrementally on tip appends and replays on any other tape change, and
+fixed minimum), advances incrementally on tip appends and replays on any other tape change, folds
+trades about to be sealed into its replay start state so sealed bars keep their bubbles, and
 draws its bounded bubbles as pane chrome above every series of the host price series' pane; value snapshots and series queries resolve their time labels
 through the same sidecar. Trading executions, host events, and round-trip geometry resolve their
 timestamp anchors through the same index helper. The sidecar is retired when the last live
 non-time footprint, candle/bar, or study dependent leaves the chart,
 preventing stale sequence labels from affecting later time series.
 Auction markers (`auction_markers.rs`) are a separate runtime-only stream dependent capped at 16
-handles. Their per-bar marks use canonical footprint levels, update from the earliest changed bar,
-follow stream retention and replay, and paint visible-only triangles, circles, framed labels and
+handles. Their per-bar marks use per-tick canonical footprint levels rather than grouped display
+rows, so changing row size or imbalance rules in place preserves the marks. A rewritten tape window
+recomputes marks only from its first intersecting bar, even when the ordinary bar projection must
+reinstall after a shrink; this avoids replaying the aggregator's earlier tape checkpoint. Prepending
+history or evicting front bars refreshes the full shifted index range; sealing alone leaves marks
+unchanged. Marks follow stream retention and replay, and paint visible-only triangles, circles, framed labels and
 dashed revisitation rays in the same pane chrome beside big trades. They do not add frame primitives
 or backend-specific rendering.
 
@@ -584,16 +597,20 @@ suffix, and produce the same bars as a fresh load to that clock. Checkpoints are
 1,024 eligible trades and capped at 64 per stream; an older seek starts from the retained tape's
 rebuild seed. Depth uses the same 1,024-event interval and 64-checkpoint cap, restores the nearest
 book snapshot, and replays only the reported suffix; its ladder, studies, heatmap, and marker
-queries all read the replay projection. Retention evicts whole bars and the exact trades they
-counted without re-aggregating the survivors: retained bars are renumbered and surviving checkpoints
-are rebased onto the new tape start. Ingest wholly beyond
+queries all read the replay projection. Retention seals whole oldest bars, releasing the exact
+trades they counted without re-aggregating the survivors, and evicts sealed bars from the front:
+surviving checkpoints are rebased onto the new tape start and bar positions. Ingest wholly beyond
 the clock changes only source truth and performs no dependent work. The existing columnar
 `update_typed` path is the bulk ordered bar boundary, while trade batches cross as parallel typed
 arrays and update all stream dependents once. The release `perf_gate` advances a shared
 footprint/candle chart through 6,000 recorded seconds at 100×, builds every frame, and requires
 steady-state retained memory not to grow across complete passes. It also streams a sustained
 order-flow tape across the retention ceiling and injects a late print one bar behind the tip,
-requiring the per-update p99, the worst retention crossing, and the late print to fit a 60 Hz frame.
+requiring the per-update p99, the worst retention crossing, and the late print to fit a 60 Hz frame,
+and streams seven sessions of one-minute order flow, requiring every batch through sealing and
+session eviction to fit a frame and the stream to keep five sessions within its memory ceiling.
+Separate release targets measure seven structure bindings across one million rows and the
+sustained tape with auction markers, without replacing either order-flow history budget.
 
 Renko, Line Break, Kagi, and Point & Figure are engine-owned price-action transforms over one
 canonical host OHLC source. Fixed-box Renko requires a two-box reversal; ATR Renko uses Wilder true
@@ -617,14 +634,28 @@ pane-local price scale. Any series may carry a `render_before_time` cutoff: rows
 their data, scale participation, and last-value chrome but are not drawn. An order-flow
 presentation never hides its primary: a host showing a footprint installs the primary as
 whitespace (times only), so it supplies the bar grid and time axis while the footprint series owns
-autoscale, the last-value label, price line, and countdown. Bars the tape does not cover stay empty
-rather than falling back to OHLC. Automatic rows (`ticks_per_row == 0`) keep levels at the
+autoscale, the last-value label, price line, and countdown. Up/down volume histograms read each
+column's direction from the primary bar and, where that row is whitespace, from the visible
+footprint bar in the same slot. Bars the tape does not cover stay empty
+rather than falling back to OHLC, and their volume columns keep the series' solid color. Automatic rows (`ticks_per_row == 0`) keep levels at the
 instrument tick and merge them per frame in 1-2-5 steps into legible display rows, recomputing
 imbalances and POC on the merged rows; text stays at the configured size. `fit_footprint_viewport`
 opens the cluster zoom (`FOOTPRINT_BAR_SPACING`) at the real-time edge. Appended host suffixes accumulate on the
-presentation's tape, so footprint bars outlive a host's shorter sliding trade window; the tape is
-capped at `ORDER_FLOW_MAX_RETAINED_TRADES` by evicting whole oldest bars (with the shared retention
-hysteresis) from the footprint, its studies, and the stream together.
+presentation's tape, so footprint bars outlive a host's shorter sliding trade window. Past
+`ORDER_FLOW_MAX_RETAINED_TRADES` raw trades the oldest whole bars are sealed (with the shared
+retention hysteresis); sealed history keeps at most `ORDER_FLOW_MAX_RETAINED_SESSIONS` sessions and
+the stream at most `ORDER_FLOW_MAX_STREAM_BYTES`, evicting the oldest sealed bars from the
+footprint, its studies, big trades, and the stream together. `prepend_order_flow_history` joins an
+older backfill page in front: into the raw tape while nothing is sealed, otherwise as sealed bars
+aggregated on their own, joining a shared boundary time bar exactly and carrying the page's session
+delta forward. Once bars were evicted, older pages are refused (`history_full`).
+`replace_order_flow_window` installs a host's rewritten bounded window (corrections,
+cancellations, backfill, a restarted tape) as authoritative only from its earliest print onward,
+so bars older than the window, sealed history included, are kept.
+`reconfigure_order_flow_presentation` changes rows, imbalance rules, cell display, the shown
+footprint, CVD and delta series, and the big-trades indicator in place on the same stream, so a
+host never rebuilds history for a settings or chart-type change; only a different tick size or bar
+aggregation needs a new presentation.
 Footprint bars ultimately emit the same ordered `ChartFrame` as every other series, and no backend
 may infer order flow from OHLC or recalculate footprint math.
 
@@ -1125,7 +1156,8 @@ owns the shared trade-stream graph, footprint/CVD/delta series and panes, candle
 cutover, retained indicator chrome, an optional big-trades indicator on the primary series, and
 automatic 1-2-5 row-size policy. A product host supplies instrument/provider generation fencing, canonical bounded trades,
 bar aggregation intent, current price metadata, and presentation preferences; it does not assemble
-or tear down the dependent chart graph itself.
+or tear down the dependent chart graph itself. Preference changes reconfigure the installed graph
+in place, and older backfill pages join through the same presentation.
 Financial
 study persistence V3 stores binding definitions, dependency references, scalar inputs, volume inputs,
 and output styles while leaving market history and ordinary series data host-owned. Trade, quote, and

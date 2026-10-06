@@ -68,10 +68,10 @@ Incremental replay and release performance evidence remain part of the B5 perfor
 
 Each bar retains OHLC, bid/ask/unknown/total volume, trade count, final delta, delta percentage,
 session cumulative delta, and sorted price levels. Each level retains bid, ask, unknown, total, and delta. Trades are
-validated against the instrument `tick_size`; integer row identity is
-`floor(round(price / tick_size) / ticks_per_row)`, avoiding repeated floating-point price comparisons.
-`ticks_per_row` (default 1) groups adjacent ticks into one row so dense instruments stay legible; a
-level's `price` is the lowest tick of its row, and bar OHLC keeps exact trade prices.
+validated against the instrument `tick_size`; canonical level identity is
+`round(price / tick_size)`, avoiding repeated floating-point price comparisons.
+`ticks_per_row` (default 1) groups adjacent levels only for presentation; a displayed row's
+price is the lowest tick of its group, while canonical levels and bar OHLC keep exact tick prices.
 
 Running bar delta begins at zero. Each classified buy adds volume and each classified sell subtracts
 volume. Max Delta is the highest running value observed after each event (including initial zero);
@@ -114,9 +114,11 @@ the stream cannot classify never start an order. The filter then runs on the reb
 large order filled as many small prints still qualifies. The automatic filter keeps orders strictly
 above the weak (95th), medium (98th), or strong (99.5th) percentile of the last 4096 completed
 orders, refreshed every 128 orders; the fixed filter keeps orders of at least a minimum volume.
-Tip appends continue the still-open order incrementally; corrections, retention trims, and replay
-seeks replay the visible tape, and both paths produce identical results. The newest 4096 qualifying
-orders are retained.
+Tip appends continue the still-open order incrementally; corrections and replay seeks replay from
+the retained tape's sealed-history start state, preserving bubbles for released trades. Front
+eviction rebases or drops old bubbles. Changing grouping or filtering rebuilds from the available
+raw tape, so bubbles from sealed trades do not survive that options change. The newest 4096
+qualifying orders are retained.
 
 Each order draws one translucent circle with a side-colored outline at its volume-weighted price,
 area proportional to volume relative to the largest retained order, largest first so smaller orders
@@ -127,11 +129,15 @@ series. Stream telemetry counts big-trades indicators as dependents.
 ### Auction markers
 
 `add_auction_markers` binds a runtime-only marker set to the same canonical trade stream and a
-price series, with at most 16 marker sets per chart. Marks use ascending **canonical aggregator
-levels**, not visually merged display cells. Each rule emits at most one mark per side and kind per
+price series, with at most 16 marker sets per chart. Marks use ascending **per-tick canonical
+aggregator levels**, not visually merged display cells: changing `ticks_per_row` or imbalance
+rules in place leaves them unchanged. Each rule emits at most one mark per side and kind per
 bar. The last, still-forming bar is excluded unless `include_forming_bar` is true (default false).
 Replay shows only bars available at its clock; late prints repair the affected suffix and retention
-removes marks with their evicted bars. The snapshot reports bar time, kind, high/low side, level
+removes marks with their evicted bars. Rewritten host tape windows preserve earlier marks and
+recompute from the first bar intersecting the window, including when its suffix shrinks. Prepending
+history and front eviction rebase all marks; sealing raw trades leaves derived bars and marks intact.
+The snapshot reports bar time, kind, high/low side, level
 price and qualifying volume. Marks are not clickable.
 
 - **Unfinished auction**: the high (last level) or low (first level) has both bid and ask volumes
@@ -195,17 +201,20 @@ Every backend therefore receives exactly the same chosen LOD.
 One chart-level stream owns one canonical trade tape and one derived bar vector. A footprint series
 owns only visual options and a stream handle; CVD, delta, and big-trades dependents own no provider
 tape.
-A bar owns sorted price levels;
-there is no renderer-side cluster cache. Tip append mutates only the active bar or appends one bar,
+A bar owns sorted per-tick price levels; display grouping is applied only when presenting a bar.
+There is no renderer-side cluster cache. Tip append mutates only the active bar or appends one bar,
 updates its canonical scale projection, and invalidates that series. Closed bars are immutable on the
 live path. Historical insertion/correction reconstructs canonical state once after the final tape is
-known and replaces the projection once. The current reconstruction is intentionally full-series;
-work statistics expose that cost so suffix checkpoints can be added when measurements justify them.
+known and replaces the affected projection once, rebuilding from the newest eligible retained tape
+checkpoint. A rewritten bounded window replaces prints at or after its earliest timestamp, not
+earlier sealed or raw history. Empty windows change nothing.
 
-Vectors and the trade-ID index reuse their allocated capacity. Series retention evicts complete old
-bars and their source trades together while preserving the classification/session seed needed by the
-remaining tape; no orphan tape or derived history survives. Engine memory telemetry includes tape,
-levels, the ID index, and retained capacities.
+Vectors and the trade-ID index reuse their allocated capacity. Raw-tape retention seals complete
+old bars and releases their trades while retaining their levels, session accounting and big-trades
+bubbles. The five-session and stream-byte budgets eventually evict the oldest sealed bars and their
+dependent data together. Backfill can prepend older pages until history has been evicted, after
+which earlier pages are refused. Engine memory telemetry includes tape, levels, the ID index,
+sealed history and retained capacities.
 
 Device loss is irrelevant to this model: the headless tape and derived bars remain intact while the
 browser executor falls back. Renderer caches are rebuilt from the same frame contract.
@@ -227,8 +236,9 @@ removal, and stream methods query revision/telemetry. Data-change notifications 
 
 Options cover tick size, ticks per row, time-bar interval/anchor or trade-count/volume/range construction, imbalance
 ratio/minimum/consecutive count, visual cell modes, colors, text size, summaries, and generic series
-retention. Changing tick size, ticks per row, or time aggregation rebuilds from the tape atomically. Visual-only
-options invalidate only the series frame layer.
+retention. Reconfiguring an order-flow presentation in place changes row size, imbalance and
+display settings without replaying the tape; a different tick size or bar aggregation requires a
+new stream. Visual-only options invalidate only the series frame layer.
 
 Host callbacks receive derived snapshots only through ordinary chart query/event paths. Aeris Terminal
 and other hosts remain authoritative for feed subscription, exchange calendars, and choosing
