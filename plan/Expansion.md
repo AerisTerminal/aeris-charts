@@ -5,7 +5,7 @@ market depth, non-time bars, a professional indicator catalog, and a drawing sys
 tool is as configurable as the tools in mature trading platforms. The primary consumer is the
 Aeris Terminal GPUI platform; browser hosts consume the same engine through WASM.
 
-This is the **active program** (since 2026-09-25). [plan.md](plan.md) covers general
+This program ran from 2026-09-25 through 2026-10-06 and is **complete**. [plan.md](plan.md) covers general
 (non-financial) chart families and is paused. Both plans share one `ChartEngine` and one frame
 contract.
 
@@ -27,7 +27,7 @@ items; they do not renumber them.
 
 ## Status at a glance
 
-Updated 2026-10-04. Baseline source-confirmed 2026-09-24.
+Updated 2026-10-06. Baseline source-confirmed 2026-09-24.
 
 | Batch | Scope | Unblocks on the platform | Status |
 | --- | --- | --- | --- |
@@ -1001,9 +1001,16 @@ candle-only approximation mode that is clearly labeled as such; tape items never
 
 ### Indicator catalog
 
-Current: SMA, EMA, DEMA, TEMA, SMMA/RMA, HMA, VWMA, standard deviation, CCI, Williams %R, Stochastic RSI, ROC, Momentum, OBV, CMF, MFI, Volume/MA, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP. Each new indicator
-ships with incremental state, rebuild tests, typed schema, persistence and an independently
-computed reference-value fixture.
+Current: SMA, EMA, DEMA, TEMA, SMMA/RMA, HMA, VWMA, standard deviation, CCI, Williams %R, Stochastic RSI, ROC, Momentum, OBV, CMF, MFI, Volume/MA, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP.
+I2 breadth adds Aroon, Awesome Oscillator, Chande Momentum, Chaikin Oscillator, Coppock, DPO,
+Elder Force, Ease of Movement, Fisher Transform, Historical Volatility, KST, Klinger, Linear
+Regression, Mass Index, Ultimate Oscillator, TRIX, TSI, Vortex, Envelopes, ALMA, KAMA,
+McGinley Dynamic, Choppiness (Chop Zone thresholds), Bollinger %B and Bandwidth, ATR bands,
+Accumulation/Distribution, Price Volume Trend, Volume Oscillator, and Relative Volume.
+I3 structure adds swing points, market structure breaks, fair value gaps, order blocks,
+session high/low, previous day/week/month levels, and opening range.
+New scalar indicators ship with incremental state, rebuild tests, typed schema, persistence,
+and independently computed reference values; structure studies also expose deterministic annotations.
 
 | Tier | Batch | Indicators |
 | --- | --- | --- |
@@ -1062,10 +1069,13 @@ implementation code or assets (see the licensing rule in AGENTS.md).
 
 ## Definition of completion
 
+**Complete (2026-10-06):** B1–B9 are delivered. The B9 release gate covers the shared Rust,
+WASM, TypeScript, browser, GPUI, and release-performance paths; `docs/Studies.md` records the
+themed and overflow captures, accessibility review, competitor comparison, and benchmark evidence.
+
 Aeris Charts is a complete headless trading chart engine for this plan when a host can build a
 professional order-flow and technical-analysis workstation using only typed engine APIs. That means
 footprint, CVD, profiles, TPO, liquidity heatmap, DOM, non-time bars, the I1–I3 indicator catalog,
 the full drawing catalog with per-tool customization, and the platform contracts PD1–PD11, with
 identical results across every backend, bounded resources, deterministic persistence, and measured
-performance evidence. Until then, report delivered items and remaining gaps precisely against the
-batch checklists and catalog IDs above.
+performance evidence. The batch checklists and catalog IDs above record the delivered scope.

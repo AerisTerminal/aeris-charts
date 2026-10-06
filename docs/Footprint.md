@@ -156,7 +156,7 @@ price and qualifying volume. Marks are not clickable.
   `min_rejection_rows` canonical levels beyond the candidate toward the opposite side (default
   1). The greatest qualifying aggressor volume wins, then the level nearest its extreme.
 
-The snapshot's `volume` (and the tooltip volume) is always the volume of the bar level the mark
+The snapshot's `volume` is always the volume of the bar level the mark
 flags: an unfinished auction reports the sum of bid and ask volume at the unfilled extreme
 level; an exhaustion reports the aggressor-side volume of the exhausted extreme level (ask
 volume at the high, bid volume at the low); an absorption reports the aggressor-side volume of

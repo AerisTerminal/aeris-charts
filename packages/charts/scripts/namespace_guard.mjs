@@ -25,6 +25,8 @@ const generatedAllowed = [
   // React DOM's generated SVG property table contains standards-defined coordinate
   // attribute names that include the retired token; keep those web-platform spellings exempt.
   new RegExp(`(?:horiz|vert)-${retired}-[xy]`, "gi"),
+  // The generated CSS property table also spells the standard transform pivot property.
+  new RegExp(`transform-${retired}\\b`, "gi"),
   new RegExp(`${retired}:\\s*["']${retired}["']`, "gi"),
 ];
 const generated = ["packages/charts/pkg", "packages/charts/dist", "examples/web_demo/pkg", "examples/web_demo/dist"];
