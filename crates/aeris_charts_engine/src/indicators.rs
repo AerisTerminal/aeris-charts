@@ -4041,6 +4041,14 @@ impl ChartEngine {
             return changes;
         };
         let len = times.len();
+        let existing_starts: [usize; aeris_charts_indicators::MAX_OUTPUTS] =
+            std::array::from_fn(|slot| {
+                outputs[slot]
+                    .and_then(|output| self.data.series_data(output))
+                    .and_then(|(output_times, _)| output_times.first().copied())
+                    .and_then(|first| times.binary_search(&first).ok())
+                    .unwrap_or(len)
+            });
         let source_generation = self.data.series_generation(source).unwrap_or(0);
         let start = if full_replace { 0 } else { from.min(len) };
         let input = aeris_charts_indicators::IndicatorInput {
@@ -4064,12 +4072,29 @@ impl ChartEngine {
         binding.source_generation = source_generation;
         for (output_index, output) in outputs.iter().flatten().copied().enumerate() {
             let previous_generation = self.data.series_generation(output).unwrap_or(0);
-            let values = structure.outputs()[output_index][output_start..len]
+            let anchor = matches!(
+                binding.kind,
+                IndicatorKind::MarketStructure { .. }
+                    | IndicatorKind::FairValueGaps { .. }
+                    | IndicatorKind::OrderBlocks { .. }
+            );
+            let output_replace = replace || start <= existing_starts[output_index];
+            let mut values = structure.outputs()[output_index][output_start..len]
                 .iter()
                 .map(|value| value.unwrap_or(f64::NAN))
                 .collect::<Vec<_>>();
-            let output_from = if replace {
-                self.data.set_single_data_aligned(output, source, 0, values);
+            let output_from = if output_replace {
+                let first = if anchor {
+                    0
+                } else {
+                    values
+                        .iter()
+                        .position(|value| !value.is_nan())
+                        .unwrap_or(values.len())
+                };
+                values.drain(..first);
+                self.data
+                    .set_single_data_aligned(output, source, output_start + first, values);
                 0
             } else {
                 self.data
@@ -4082,7 +4107,7 @@ impl ChartEngine {
                     IndicatorChange {
                         from: output_from,
                         previous_generation,
-                        full_replace: replace,
+                        full_replace: output_replace,
                     },
                 ));
             }
@@ -4102,6 +4127,14 @@ impl ChartEngine {
         let Some((times, values)) = self.data.series_data(source) else {
             return changes;
         };
+        let existing_starts: [usize; aeris_charts_indicators::MAX_OUTPUTS] =
+            std::array::from_fn(|slot| {
+                outputs[slot]
+                    .and_then(|output| self.data.series_data(output))
+                    .and_then(|(output_times, _)| output_times.first().copied())
+                    .and_then(|first| times.binary_search(&first).ok())
+                    .unwrap_or(times.len())
+            });
         let session_source = if self.indicators[index].calendar == Some(StudyCalendarPolicy::Host) {
             SessionSource::Host(&self.study_calendar_spans)
         } else {
@@ -4136,7 +4169,8 @@ impl ChartEngine {
         };
         for (output_index, output) in outputs.iter().flatten().copied().enumerate() {
             let previous_generation = self.data.series_generation(output).unwrap_or(0);
-            let values = points[start..]
+            let output_replace = full_replace || start <= existing_starts[output_index];
+            let mut values = points[start..]
                 .iter()
                 .map(|p| {
                     match output_index {
@@ -4151,8 +4185,14 @@ impl ChartEngine {
                     .unwrap_or(f64::NAN)
                 })
                 .collect::<Vec<_>>();
-            let output_from = if full_replace {
-                self.data.set_single_data_aligned(output, source, 0, values);
+            let output_from = if output_replace {
+                let first = values
+                    .iter()
+                    .position(|value| !value.is_nan())
+                    .unwrap_or(values.len());
+                values.drain(..first);
+                self.data
+                    .set_single_data_aligned(output, source, start + first, values);
                 0
             } else {
                 self.data
@@ -4165,7 +4205,7 @@ impl ChartEngine {
                     IndicatorChange {
                         from: output_from,
                         previous_generation,
-                        full_replace,
+                        full_replace: output_replace,
                     },
                 ));
             }
@@ -4205,7 +4245,7 @@ impl ChartEngine {
         {
             annotations.rebuild_from(if full_replace { 0 } else { from });
         }
-        {
+        let leading_source = {
             let Some((times, values)) = self.data.series_data(source) else {
                 return changes;
             };
@@ -4241,18 +4281,30 @@ impl ChartEngine {
                     }
                 });
             let binding = &mut self.indicators[index];
+            // A leading source gap is not a sample, nor may it contribute a phantom
+            // previous bar to formulas with a prior-close reference.
+            let first_source = selected_close
+                .iter()
+                .position(|value| value.is_finite())
+                .unwrap_or(times.len());
+            let reset = full_replace || from <= first_source;
+            if reset {
+                binding.runtime =
+                    BindingRuntime::BuiltIn(Box::new(incremental_state(&binding.kind)));
+            }
             binding.runtime.built_in().rebuild_from(
                 aeris_charts_indicators::IndicatorInput {
-                    times,
-                    open: values[0],
-                    high: values[1],
-                    low: values[2],
-                    close: selected_close.as_ref(),
-                    volume: volume.as_ref(),
+                    times: &times[first_source..],
+                    open: &values[0][first_source..],
+                    high: &values[1][first_source..],
+                    low: &values[2][first_source..],
+                    close: &selected_close[first_source..],
+                    volume: volume.get(first_source..).unwrap_or(&[]),
                 },
-                if full_replace { 0 } else { from },
+                if reset { 0 } else { from - first_source },
             );
-        }
+            first_source
+        };
         self.indicators[index].source_generation = source_generation;
         self.indicators[index].volume_generation =
             volume_source.and_then(|id| self.data.series_generation(id));
@@ -4260,16 +4312,37 @@ impl ChartEngine {
         let mut full_histogram_colors = None;
         for (output_index, output) in outputs.iter().flatten().copied().enumerate() {
             let previous_generation = self.data.series_generation(output).unwrap_or(0);
-            let source_from = self.indicators[index]
-                .runtime
-                .built_in()
-                .output_from(output_index);
-
-            let output_from = if full_replace {
-                let values = self.indicators[index]
+            let source_from = leading_source
+                + self.indicators[index]
+                    .runtime
+                    .built_in()
+                    .output_from(output_index);
+            let existing_start = self
+                .data
+                .series_data(output)
+                .and_then(|(output_times, _)| output_times.first().copied())
+                .and_then(|first| {
+                    self.data
+                        .series_data(source)
+                        .and_then(|(times, _)| times.binary_search(&first).ok())
+                })
+                .unwrap_or_else(|| {
+                    self.data
+                        .series_data(source)
+                        .map_or(0, |(times, _)| times.len())
+                });
+            let output_replace =
+                full_replace || from <= existing_start || source_from <= existing_start;
+            let output_from = if output_replace {
+                let mut values = self.indicators[index]
                     .runtime
                     .built_in()
                     .take_output(output_index);
+                let first = values
+                    .iter()
+                    .position(|value| !value.is_nan())
+                    .unwrap_or(values.len());
+                values.drain(..first);
                 if (output_index == 2
                     && matches!(
                         self.indicators[index].kind,
@@ -4284,7 +4357,7 @@ impl ChartEngine {
                     full_histogram_colors = Some(momentum_histogram_colors(&values));
                 }
                 self.data
-                    .set_single_data_aligned(output, source, source_from, values);
+                    .set_single_data_aligned(output, source, source_from + first, values);
                 0
             } else {
                 let values = self.indicators[index]
@@ -4301,31 +4374,38 @@ impl ChartEngine {
                     IndicatorChange {
                         from: output_from,
                         previous_generation,
-                        full_replace,
+                        full_replace: output_replace,
                     },
                 ));
             }
         }
 
         let histogram = match self.indicators[index].kind {
-            IndicatorKind::Macd { slow, signal, .. }
-            | IndicatorKind::VolumeOscillator { slow, signal, .. } => Some((
-                outputs[2].unwrap(),
-                2,
-                slow.saturating_add(signal).saturating_sub(2),
-            )),
-            IndicatorKind::AwesomeOscillator => Some((outputs[0].unwrap(), 0, 33)),
+            IndicatorKind::Macd { .. } | IndicatorKind::VolumeOscillator { .. } => {
+                Some((outputs[2].unwrap(), 2))
+            }
+            IndicatorKind::AwesomeOscillator => Some((outputs[0].unwrap(), 0)),
             _ => None,
         };
-        if let Some((histogram_id, output_index, first_histogram)) = histogram {
+        if let Some((histogram_id, output_index)) = histogram {
             if let Some(colors) = full_histogram_colors {
                 self.data
                     .set_point_colors(histogram_id, [Some(colors), None, None]);
             } else {
                 let runtime = self.indicators[index].runtime.built_in();
                 let histogram = runtime.output(output_index);
-                let source_from = runtime.output_from(output_index);
-                let output_start = source_from.saturating_sub(first_histogram);
+                let source_from = leading_source + runtime.output_from(output_index);
+                let output_start = source_from.saturating_sub(
+                    self.data
+                        .series_data(histogram_id)
+                        .and_then(|(output_times, _)| output_times.first().copied())
+                        .and_then(|first| {
+                            self.data
+                                .series_data(source)
+                                .and_then(|(times, _)| times.binary_search(&first).ok())
+                        })
+                        .unwrap_or(source_from),
+                );
                 let mut previous = output_start.checked_sub(1).and_then(|row| {
                     self.data
                         .series_data(histogram_id)
@@ -5406,10 +5486,9 @@ mod structure_engine_tests {
                 .iter()
                 .all(|id| chart.series_entry(*id).unwrap().line_type == LineType::WithSteps)
         );
-        let high_values = chart.data.series_data(swings[0]).unwrap().1[3];
-        assert!(high_values[0].is_nan());
-        assert!(high_values[1].is_nan());
-        assert_eq!(high_values[2], 14.0);
+        let (high_times, high_values) = chart.data.series_data(swings[0]).unwrap();
+        assert_eq!(high_times[0], 3);
+        assert_eq!(high_values[3][0], 14.0);
         assert_eq!(
             chart.study_annotations(swings[0]).unwrap().markers()[0].row,
             1
@@ -5586,10 +5665,30 @@ mod structure_engine_tests {
                     "{kind:?}"
                 );
                 for (index, &id) in ids.iter().enumerate() {
-                    let actual = chart.data.series_data(id).unwrap().1[3];
-                    assert_eq!(actual.len(), len);
-                    for (row, (actual, expected)) in
-                        actual.iter().zip(&expected.outputs()[index]).enumerate()
+                    let (actual_times, actual) = chart.data.series_data(id).unwrap();
+                    let anchor = matches!(
+                        kind,
+                        IndicatorKind::MarketStructure { .. }
+                            | IndicatorKind::FairValueGaps { .. }
+                            | IndicatorKind::OrderBlocks { .. }
+                    );
+                    let from = if anchor {
+                        0
+                    } else {
+                        expected.outputs()[index]
+                            .iter()
+                            .position(Option::is_some)
+                            .unwrap_or(len)
+                    };
+                    assert_eq!(
+                        actual_times,
+                        &integer_times[from..],
+                        "{kind:?} output {index}"
+                    );
+                    for (row, (actual, expected)) in actual[3]
+                        .iter()
+                        .zip(&expected.outputs()[index][from..])
+                        .enumerate()
                     {
                         assert!(
                             expected.is_some_and(|value| *actual == value)

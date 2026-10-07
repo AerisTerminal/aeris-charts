@@ -25,6 +25,19 @@ reproduction commands below.
   deterministic parameterized rules and optional revisitation rays, as a bounded dependent of
   the chart-level trade stream (16 handles).
 
+## Whitespace and warm-up
+
+Built-in and custom scalar study outputs begin at their first valued row. Missing source
+rows before that row are not warm-up samples, and an output with no values is empty.
+An interior missing row stays in the output's time range with no value. Recursive and
+cumulative studies, including EMA and RSI, carry their state across it and resume using
+the last valid input; window studies stay blank while their source window contains the
+gap, then recover. A historical correction before an output's first row can move its
+start, so the engine replaces that aligned output rather than updating an absent row.
+These rules also apply when built-in and custom studies are chained in either order.
+Market structure, fair value gap, and order block anchors are the exception: each has
+one blank entry for every source time, including leading and interior gaps.
+
 ## Screenshots
 
 | File (under `%TEMP%\aeris-b9-evidence\`) | Scene |

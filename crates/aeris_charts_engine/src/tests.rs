@@ -2278,6 +2278,12 @@ fn add_test_indicator(
 fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usize) {
     let binding = &chart.indicators[binding_index];
     let (times, source) = chart.data.series_data(binding.source).unwrap();
+    let first_source = source[3]
+        .iter()
+        .position(|value| value.is_finite())
+        .unwrap_or(times.len());
+    let times = &times[first_source..];
+    let source = source.map(|column| &column[first_source..]);
     let expected = match binding.kind {
         IndicatorKind::Custom { .. } => return,
         IndicatorKind::Aroon { period } => {
@@ -2793,17 +2799,10 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
     };
 
     for (&output, expected) in binding.outputs.iter().zip(expected) {
-        let from = if matches!(
-            binding.kind,
-            IndicatorKind::PivotPoints { .. } | IndicatorKind::ZigZag { .. }
-        ) {
-            0
-        } else {
-            expected
-                .iter()
-                .position(Option::is_some)
-                .unwrap_or(times.len())
-        };
+        let from = expected
+            .iter()
+            .position(|value| value.is_some_and(|value| !value.is_nan()))
+            .unwrap_or(times.len());
         let expected = times
             .iter()
             .copied()
@@ -3102,6 +3101,352 @@ fn every_indicator_engine_path_matches_full_recomputation() {
         );
         assert!(chart.indicators.is_empty());
     }
+}
+
+#[test]
+fn every_scalar_indicator_trims_leading_whitespace_and_repairs_before_its_start() {
+    for kind in all_engine_indicator_kinds() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let volume = chart.add_series(SeriesKind::Histogram);
+        let times = (0..80).map(|i| i as f64 * 60.0).collect::<Vec<_>>();
+        let mut values = (0..80).map(|i| 100.0 + i as f64).collect::<Vec<_>>();
+        let volumes = (0..80).map(|i| 10.0 + i as f64).collect::<Vec<_>>();
+        values[..3].fill(f64::NAN);
+        values[35] = f64::NAN;
+        chart
+            .set_series_data(0, &times, &values, &values, &values, &values)
+            .unwrap();
+        chart
+            .set_series_data(volume, &times, &volumes, &volumes, &volumes, &volumes)
+            .unwrap();
+        let outputs = add_test_indicator(&mut chart, &kind, Some(volume));
+        let binding = chart.indicators.len() - 1;
+        let mut without_leading = ChartEngine::new(800.0, 500.0, 1.0);
+        let volume_without_leading = without_leading.add_series(SeriesKind::Histogram);
+        without_leading
+            .set_series_data(
+                0,
+                &times[3..],
+                &values[3..],
+                &values[3..],
+                &values[3..],
+                &values[3..],
+            )
+            .unwrap();
+        without_leading
+            .set_series_data(
+                volume_without_leading,
+                &times[3..],
+                &volumes[3..],
+                &volumes[3..],
+                &volumes[3..],
+                &volumes[3..],
+            )
+            .unwrap();
+        let oracle = add_test_indicator(&mut without_leading, &kind, Some(volume_without_leading));
+        for (&actual, &expected) in outputs.iter().zip(&oracle) {
+            let (actual_times, actual_values) = chart.data.series_data(actual).unwrap();
+            let (expected_times, expected_values) =
+                without_leading.data.series_data(expected).unwrap();
+            assert_eq!(actual_times, expected_times, "{kind:?}");
+            for (&a, &b) in actual_values[3].iter().zip(expected_values[3]) {
+                assert!(
+                    (a.is_nan() && b.is_nan()) || (a - b).abs() < 1e-9,
+                    "{kind:?}: {a} != {b}"
+                );
+            }
+        }
+        let check = |chart: &ChartEngine| {
+            assert_indicator_binding_matches_full(chart, binding);
+            for &id in &outputs {
+                let (_, columns) = chart.data.series_data(id).unwrap();
+                assert!(columns[3].first().is_none_or(|v| !v.is_nan()), "{kind:?}");
+            }
+        };
+        check(&chart);
+        for (row, value) in [(0, 101.0), (1, 102.0), (3, f64::NAN), (4, 105.0)] {
+            assert!(
+                chart.update_series_bar(0, times[row], [value; 4]),
+                "{kind:?}"
+            );
+            check(&chart);
+        }
+    }
+}
+
+#[test]
+fn structure_anchors_keep_every_source_time_when_scalar_outputs_trim() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = (0..40).map(|i| i as f64 * 60.0).collect::<Vec<_>>();
+    let mut values = (0..40).map(|i| 100.0 + i as f64).collect::<Vec<_>>();
+    values[..3].fill(f64::NAN);
+    values[20] = f64::NAN;
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    for name in ["market_structure", "fair_value_gaps", "order_blocks"] {
+        let kind = IndicatorKind::schema_definition(name, 14, 2.0).unwrap();
+        let output = chart.add_indicator_kind(0, kind.clone(), None)[0];
+        let (anchor_times, columns) = chart.data.series_data(output).unwrap();
+        assert_eq!(
+            anchor_times,
+            times.iter().map(|t| *t as i64).collect::<Vec<_>>(),
+            "{kind:?}"
+        );
+        assert!(columns[3].iter().all(|value| value.is_nan()));
+        assert!(chart.update_series_bar(0, times[0], [99.0; 4]));
+        assert_eq!(chart.data.series_data(output).unwrap().0.len(), times.len());
+    }
+}
+
+#[test]
+fn swing_and_session_outputs_trim_like_a_source_without_leading_gaps() {
+    let times = (0..100).map(|i| i as f64 * 1_800.0).collect::<Vec<_>>();
+    let mut values = (0..100)
+        .map(|i| 100.0 + i as f64 * 0.02 + (i as f64 * 0.9).sin() * 3.0)
+        .collect::<Vec<_>>();
+    values[..4].fill(f64::NAN);
+    values[27] = f64::NAN;
+    let kinds = [
+        IndicatorKind::SwingPoints { left: 1, right: 1 },
+        IndicatorKind::SessionLevels {
+            calendar: StudyCalendarPolicy::Utc,
+        },
+        IndicatorKind::PreviousPeriodLevels {
+            period: PreviousPeriod::Day,
+            calendar: StudyCalendarPolicy::Utc,
+        },
+        IndicatorKind::OpeningRange {
+            duration_seconds: 3_600,
+            calendar: StudyCalendarPolicy::Utc,
+        },
+    ];
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let mut fresh = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    fresh
+        .set_series_data(
+            0,
+            &times[4..],
+            &values[4..],
+            &values[4..],
+            &values[4..],
+            &values[4..],
+        )
+        .unwrap();
+    for kind in kinds {
+        let outputs = chart.add_indicator_kind(0, kind.clone(), None);
+        let oracle = fresh.add_indicator_kind(0, kind.clone(), None);
+        for (&output, &expected) in outputs.iter().zip(oracle.iter()) {
+            let (actual_times, actual_values) = chart.data.series_data(output).unwrap();
+            let (expected_times, expected_values) = fresh.data.series_data(expected).unwrap();
+            assert_eq!(actual_times, expected_times, "{kind:?}");
+            assert!(actual_values[3].first().is_none_or(|value| !value.is_nan()));
+            for (&a, &b) in actual_values[3].iter().zip(expected_values[3]) {
+                assert!(
+                    (a.is_nan() && b.is_nan()) || (a - b).abs() < 1e-9,
+                    "{kind:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn built_in_and_custom_studies_share_trim_gap_and_chained_repair_semantics() {
+    struct Formula(&'static str);
+    impl CustomStudyRuntime for Formula {
+        fn compute(
+            &mut self,
+            input: CustomStudyInput<'_>,
+            out: &mut [Vec<f64>],
+        ) -> Result<(), CustomStudyFault> {
+            const PERIOD: usize = 3;
+            for row in input.from..input.times.len() {
+                let valid = input.close[..=row]
+                    .iter()
+                    .copied()
+                    .filter(|value| value.is_finite())
+                    .collect::<Vec<_>>();
+                let value = match self.0 {
+                    "sma"
+                        if row + 1 >= PERIOD
+                            && input.close[row + 1 - PERIOD..=row]
+                                .iter()
+                                .all(|value| value.is_finite()) =>
+                    {
+                        valid[valid.len() - PERIOD..].iter().sum::<f64>() / PERIOD as f64
+                    }
+                    "ema" if input.close[row].is_finite() && valid.len() >= PERIOD => {
+                        let mut average = valid[..PERIOD].iter().sum::<f64>() / PERIOD as f64;
+                        for &price in &valid[PERIOD..] {
+                            average += (price - average) * (2.0 / (PERIOD as f64 + 1.0));
+                        }
+                        average
+                    }
+                    "rsi" if input.close[row].is_finite() && valid.len() > PERIOD => {
+                        let changes = valid
+                            .windows(2)
+                            .map(|pair| pair[1] - pair[0])
+                            .collect::<Vec<_>>();
+                        let mut gain = changes[..PERIOD]
+                            .iter()
+                            .map(|change| change.max(0.0))
+                            .sum::<f64>()
+                            / PERIOD as f64;
+                        let mut loss = changes[..PERIOD]
+                            .iter()
+                            .map(|change| (-change).max(0.0))
+                            .sum::<f64>()
+                            / PERIOD as f64;
+                        for &change in &changes[PERIOD..] {
+                            gain = (gain * (PERIOD - 1) as f64 + change.max(0.0)) / PERIOD as f64;
+                            loss =
+                                (loss * (PERIOD - 1) as f64 + (-change).max(0.0)) / PERIOD as f64;
+                        }
+                        if loss == 0.0 {
+                            if gain == 0.0 { 50.0 } else { 100.0 }
+                        } else {
+                            100.0 - 100.0 / (1.0 + gain / loss)
+                        }
+                    }
+                    _ => f64::NAN,
+                };
+                out[0].push(value);
+            }
+            Ok(())
+        }
+    }
+
+    fn build(times: &[f64], values: &[f64]) -> (ChartEngine, Vec<SeriesId>) {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        for formula in ["sma", "ema", "rsi"] {
+            chart
+                .register_custom_study(
+                    CustomStudyDefinition {
+                        type_id: format!("trim.{formula}"),
+                        version: 1,
+                        title: formula.into(),
+                        parameters: vec![],
+                        outputs: vec![CustomStudyOutput {
+                            name: formula.into(),
+                            plot: CustomStudyPlot::Line,
+                            pane: CustomStudyPane::Price,
+                            default_style: IndicatorOutputStyle::default(),
+                        }],
+                        uses_volume: false,
+                    },
+                    Box::new(move |_| Ok(Box::new(Formula(formula)))),
+                )
+                .unwrap();
+        }
+        chart
+            .set_series_data(0, times, values, values, values, values)
+            .unwrap();
+        let built = [
+            chart.add_sma(0, 3).unwrap(),
+            chart.add_ema(0, 3).unwrap(),
+            chart.add_rsi(0, 3).unwrap(),
+        ];
+        let custom = ["sma", "ema", "rsi"].map(|name| {
+            chart
+                .add_custom_study(
+                    &format!("trim.{name}"),
+                    0,
+                    IndicatorInputSource::Close,
+                    None,
+                    CustomStudyParams::new(),
+                )
+                .unwrap()[0]
+        });
+        let mut outputs = built.into_iter().chain(custom).collect::<Vec<_>>();
+        for (upstream, downstream) in [(1, 2), (2, 0), (0, 1)] {
+            let mut chains = Vec::new();
+            for source in [built[upstream], custom[upstream]] {
+                chains.push(match downstream {
+                    0 => chart.add_sma(source, 3).unwrap(),
+                    1 => chart.add_ema(source, 3).unwrap(),
+                    _ => chart.add_rsi(source, 3).unwrap(),
+                });
+                chains.push(
+                    chart
+                        .add_custom_study(
+                            &format!("trim.{}", ["sma", "ema", "rsi"][downstream]),
+                            source,
+                            IndicatorInputSource::Close,
+                            None,
+                            CustomStudyParams::new(),
+                        )
+                        .unwrap()[0],
+                );
+            }
+            outputs.extend(chains);
+        }
+        (chart, outputs)
+    }
+
+    fn verify(chart: &ChartEngine, outputs: &[SeriesId]) {
+        let (times, columns) = chart.data.series_data(0).unwrap();
+        let input_times = times.iter().map(|&time| time as f64).collect::<Vec<_>>();
+        let (fresh, fresh_outputs) = build(&input_times, columns[3]);
+        for (&output, &reference) in outputs.iter().zip(&fresh_outputs) {
+            let (actual_times, actual_values) = chart.data.series_data(output).unwrap();
+            let (fresh_times, fresh_values) = fresh.data.series_data(reference).unwrap();
+            assert_eq!(actual_times, fresh_times, "stale times on {output}");
+            assert_eq!(actual_values[3].len(), fresh_values[3].len());
+            assert!(actual_values[3].first().is_none_or(|value| !value.is_nan()));
+            for (&actual, &expected) in actual_values[3].iter().zip(fresh_values[3]) {
+                assert!(
+                    (actual.is_nan() && expected.is_nan()) || (actual - expected).abs() < 1e-9,
+                    "{output}: {actual} != {expected}"
+                );
+            }
+        }
+        for i in 0..3 {
+            let (built_times, built_values) = chart.data.series_data(outputs[i]).unwrap();
+            let (custom_times, custom_values) = chart.data.series_data(outputs[i + 3]).unwrap();
+            assert_eq!(built_times, custom_times);
+            for (&a, &b) in built_values[3].iter().zip(custom_values[3]) {
+                assert!((a.is_nan() && b.is_nan()) || (a - b).abs() < 1e-9);
+            }
+        }
+        for chains in outputs[6..].as_chunks::<4>().0 {
+            let (reference_times, reference_values) = chart.data.series_data(chains[0]).unwrap();
+            assert!(!reference_times.is_empty(), "chain unexpectedly blank");
+            for &id in &chains[1..] {
+                let (times, values) = chart.data.series_data(id).unwrap();
+                assert_eq!(times, reference_times, "chain {id} times");
+                for (&a, &b) in values[3].iter().zip(reference_values[3]) {
+                    assert!((a.is_nan() && b.is_nan()) || (a - b).abs() < 1e-9);
+                }
+            }
+        }
+    }
+
+    let times = (0..60).map(|i| i as f64 * 60.0).collect::<Vec<_>>();
+    let mut values = (0..60)
+        .map(|i| 100.0 + i as f64 * 0.2 + (i as f64 * 0.53).sin())
+        .collect::<Vec<_>>();
+    values[..3].fill(f64::NAN);
+    values[23] = f64::NAN;
+    let (mut chart, outputs) = build(&times, &values);
+    verify(&chart, &outputs);
+    assert!(chart.update_series_bar(0, 3600.0, [125.0; 4]));
+    verify(&chart, &outputs);
+    assert!(chart.update_series_bar(0, 3600.0, [126.0; 4]));
+    verify(&chart, &outputs);
+    for (row, value) in [(0, 100.0), (2, 102.0), (3, f64::NAN), (3, 103.0)] {
+        assert!(chart.update_series_bar(0, times[row], [value; 4]));
+        verify(&chart, &outputs);
+    }
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    verify(&chart, &outputs);
+    assert!(chart.set_series_max_points(0, Some(30)));
+    verify(&chart, &outputs);
 }
 
 #[test]
@@ -4700,7 +5045,7 @@ fn pivot_points_align_previous_session_levels_and_expose_all_outputs() {
     );
     for (output_index, output) in outputs.iter().enumerate() {
         let (output_times, values) = chart.data.series_data(*output).unwrap();
-        assert_eq!(output_times, &[0, 3_600, 86_400, 90_000]);
+        assert_eq!(output_times, &[86_400, 90_000]);
         let expected = [
             expected[2].pivot,
             expected[2].resistance_1,
@@ -4709,10 +5054,9 @@ fn pivot_points_align_previous_session_levels_and_expose_all_outputs() {
             expected[2].support_2,
         ][output_index]
             .unwrap();
-        assert!(values[3][0].is_nan(), "output {output_index}");
-        let actual = values[3][2];
+        let actual = values[3][0];
         assert!((actual - expected).abs() < 1e-12, "output {output_index}");
-        assert_eq!(values[3][3], values[3][2]);
+        assert_eq!(values[3][1], values[3][0]);
     }
 }
 
@@ -9211,9 +9555,23 @@ mod session_study_regressions {
     }
 
     fn values(chart: &ChartEngine, id: SeriesId) -> Vec<Option<f64>> {
-        chart.data.series_data(id).unwrap().1[3]
+        let (times, columns) = chart.data.series_data(id).unwrap();
+        let mut row = 0;
+        chart
+            .data
+            .series_data(0)
+            .unwrap()
+            .0
             .iter()
-            .map(|value| value.is_finite().then_some(*value))
+            .map(|source_time| {
+                if times.get(row) == Some(source_time) {
+                    let value = columns[3][row];
+                    row += 1;
+                    value.is_finite().then_some(value)
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
