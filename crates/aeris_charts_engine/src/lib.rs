@@ -264,7 +264,8 @@ use aeris_charts_core::scale::price_scale_core::{
 };
 use aeris_charts_core::scale::time_scale_core::{TimeScaleCore, TimeScaleOptions};
 use aeris_charts_core::scale::time_tick_marks::{
-    TimeTickMarks, fill_weights_for_points_in_time_zone, weight_by_time_in_time_zone,
+    TimeTickMarks, fill_weights_for_points_in_time_zone, inferred_first_weight,
+    weight_by_time_in_time_zone,
 };
 pub use aeris_charts_core::time_zone::{ChartTimeZone, DEFAULT_TIME_ZONE, TRADINGVIEW_TIME_ZONES};
 use aeris_charts_render::color::Color;
@@ -5239,6 +5240,15 @@ impl ChartEngine {
                     ) as u8;
                     self.tick_marks.push_weight(index as i64, weight);
                 }
+                // The first point is inferred from the average cadence across the entire
+                // timeline, which telescopes to (last - first) / (len - 1). Tail appends
+                // change that inference even though every other existing weight is stable.
+                self.tick_marks.set_first_weight(inferred_first_weight(
+                    tick_times[0],
+                    *tick_times.last().unwrap(),
+                    tick_times.len(),
+                    self.time_zone,
+                ));
             } else if time_points_changed {
                 let mut weights = vec![0u8; tick_times.len()];
                 fill_weights_for_points_in_time_zone(tick_times, &mut weights, 0, self.time_zone);

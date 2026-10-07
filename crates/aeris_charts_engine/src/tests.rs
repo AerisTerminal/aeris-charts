@@ -943,6 +943,176 @@ fn axis_sync_snapshot(chart: &mut ChartEngine) -> AxisSyncSnapshot {
 }
 
 #[test]
+fn irregular_append_reclassifies_first_tick_like_fresh_install() {
+    let mut chart = ChartEngine::new(900.0, 400.0, 1.0);
+    chart.time_scale.set_width(800.0);
+    let initial = [86_280.0, 86_340.0, 86_400.0, 86_460.0];
+    chart
+        .set_series_data(0, &initial, &initial, &initial, &initial, &initial)
+        .unwrap();
+    assert!(chart.update_series_bar(0, 172_800.0, [172_800.0; 4]));
+
+    let final_times = [86_280.0, 86_340.0, 86_400.0, 86_460.0, 172_800.0];
+    let mut fresh = ChartEngine::new(900.0, 400.0, 1.0);
+    fresh.time_scale.set_width(800.0);
+    fresh
+        .set_series_data(
+            0,
+            &final_times,
+            &final_times,
+            &final_times,
+            &final_times,
+            &final_times,
+        )
+        .unwrap();
+    fresh.set_right_offset(chart.right_offset());
+    assert_eq!(installed_tick_weights(&mut fresh), [32, 20, 50, 20, 50]);
+    assert_eq!(
+        axis_sync_snapshot(&mut chart),
+        axis_sync_snapshot(&mut fresh)
+    );
+}
+
+#[test]
+fn seeded_irregular_axis_mutations_match_fresh_install() {
+    // Fixed xorshift seed; spacings span near-duplicates, minute/day boundaries and weeks.
+    let mut seed = 0x7ac3_19d2_4e86_502bu64;
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let cadences = [1, 2, 59, 60, 61, 299, 300, 3_600, 43_200, 86_400, 604_800];
+    for projection in [0, 1, -1] {
+        let mut times = vec![86_280.0, 86_340.0, 86_400.0, 86_460.0];
+        let mut values = times.clone();
+        let mut chart = ChartEngine::new(900.0, 400.0, 1.0);
+        chart.time_scale.set_width(800.0);
+        if projection > 0 {
+            chart.set_future_time_projection(Some(60), 3);
+        } else if projection < 0 {
+            chart.set_past_time_projection(Some(60), 3);
+        }
+        chart
+            .set_series_data(0, &times, &values, &values, &values, &values)
+            .unwrap();
+        let compare = |chart: &mut ChartEngine, times: &[f64], values: &[f64], step: &str| {
+            let mut fresh = ChartEngine::new(900.0, 400.0, 1.0);
+            fresh.time_scale.set_width(800.0);
+            if projection > 0 {
+                fresh.set_future_time_projection(Some(60), 3);
+            } else if projection < 0 {
+                fresh.set_past_time_projection(Some(60), 3);
+            }
+            fresh
+                .set_series_data(0, times, values, values, values, values)
+                .unwrap();
+            fresh.set_right_offset(chart.right_offset());
+            assert_eq!(
+                axis_sync_snapshot(chart),
+                axis_sync_snapshot(&mut fresh),
+                "{step}, projection {projection}, times {times:?}"
+            );
+        };
+        compare(&mut chart, &times, &values, "initial");
+        for round in 0..40 {
+            let cadence = cadences[next() as usize % cadences.len()] as f64;
+            let last = times.last().copied().unwrap();
+            times.push(last + cadence);
+            values.push(last + cadence);
+            assert!(chart.update_series_bar(0, last + cadence, [last + cadence; 4]));
+            compare(&mut chart, &times, &values, &format!("{round} append"));
+
+            let tip = times.len() - 1;
+            values[tip] += (next() % 3 + 1) as f64;
+            assert!(chart.update_series_bar(0, times[tip], [values[tip]; 4]));
+            compare(&mut chart, &times, &values, &format!("{round} tip"));
+
+            let middle = 1 + next() as usize % (times.len() - 2);
+            values[middle] += 1.0;
+            assert!(chart.update_series_bar(0, times[middle], [values[middle]; 4]));
+            compare(&mut chart, &times, &values, &format!("{round} correction"));
+
+            if let Some((index, window)) = times
+                .windows(2)
+                .enumerate()
+                .find(|(_, pair)| pair[1] - pair[0] >= 2.0)
+            {
+                let inserted = window[0] + ((window[1] - window[0]) / 2.0).floor();
+                times.insert(index + 1, inserted);
+                values.insert(index + 1, inserted);
+                assert!(chart.update_series_bar(0, inserted, [inserted; 4]));
+                compare(&mut chart, &times, &values, &format!("{round} mid insert"));
+            }
+
+            assert_eq!(chart.series_pop(0, 1), Some(times.len() - 1));
+            times.pop();
+            values.pop();
+            compare(&mut chart, &times, &values, &format!("{round} pop"));
+
+            if times.len() > 8 {
+                let limit = 4 + next() as usize % 5;
+                assert!(chart.set_series_max_points(0, Some(limit)));
+                times.drain(..times.len() - limit);
+                values.drain(..values.len() - limit);
+                compare(&mut chart, &times, &values, &format!("{round} trim"));
+                assert!(chart.set_series_max_points(0, None));
+            }
+        }
+    }
+}
+
+#[test]
+fn irregular_second_series_union_reclassifies_first_tick_on_add_and_remove() {
+    let base = [86_280.0, 86_340.0, 86_400.0, 86_460.0];
+    let other = [86_280.0, 172_800.0];
+    for projection in [0, 1, -1] {
+        let mut chart = ChartEngine::new(900.0, 400.0, 1.0);
+        chart.time_scale.set_width(800.0);
+        if projection > 0 {
+            chart.set_future_time_projection(Some(60), 3);
+        } else if projection < 0 {
+            chart.set_past_time_projection(Some(60), 3);
+        }
+        chart
+            .set_series_data(0, &base, &base, &base, &base, &base)
+            .unwrap();
+        let second = chart.add_series(SeriesKind::Line);
+        chart
+            .set_series_data(second, &other, &other, &other, &other, &other)
+            .unwrap();
+        let mut fresh = ChartEngine::new(900.0, 400.0, 1.0);
+        fresh.time_scale.set_width(800.0);
+        if projection > 0 {
+            fresh.set_future_time_projection(Some(60), 3);
+        } else if projection < 0 {
+            fresh.set_past_time_projection(Some(60), 3);
+        }
+        fresh
+            .set_series_data(0, &base, &base, &base, &base, &base)
+            .unwrap();
+        let fresh_second = fresh.add_series(SeriesKind::Line);
+        fresh
+            .set_series_data(fresh_second, &other, &other, &other, &other, &other)
+            .unwrap();
+        fresh.set_right_offset(chart.right_offset());
+        assert_eq!(
+            axis_sync_snapshot(&mut chart),
+            axis_sync_snapshot(&mut fresh),
+            "add {projection}"
+        );
+        assert!(chart.remove_series(second));
+        assert!(fresh.remove_series(fresh_second));
+        assert_eq!(
+            axis_sync_snapshot(&mut chart),
+            axis_sync_snapshot(&mut fresh),
+            "remove {projection}"
+        );
+    }
+}
+
+#[test]
 fn incremental_axis_matches_fresh_install_across_mutations_and_projections() {
     let base = [86_160.0, 86_220.0, 86_280.0, 86_340.0];
     let mut times = base.to_vec();
