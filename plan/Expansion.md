@@ -78,7 +78,7 @@ TypeScript, and the GPUI host), not when engine unit tests alone pass.
 ### B1 — Platform chart contracts
 
 **Scope:** PD11, PD1, PD3, PD4, PD5, PD6, PD7. **Depends on:** the existing trading layer,
-workspace and series paths. **Status:** next.
+workspace and series paths. **Status:** complete.
 
 These extend existing layers without new foundations, and the platform needs them first. The
 trading layer (`trading.rs`, `frame/trading_geometry.rs`) already renders positions, working
