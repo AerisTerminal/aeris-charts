@@ -974,6 +974,43 @@ fn irregular_append_reclassifies_first_tick_like_fresh_install() {
 }
 
 #[test]
+fn capped_batch_append_rebuilds_shifted_tick_weights() {
+    let mut chart = ChartEngine::new(900.0, 400.0, 1.0);
+    chart.time_scale.set_width(800.0);
+    let initial = (0..10)
+        .map(|i| 86_280.0 + i as f64 * 61.0)
+        .collect::<Vec<_>>();
+    chart
+        .set_series_data(0, &initial, &initial, &initial, &initial, &initial)
+        .unwrap();
+    assert!(chart.set_series_max_points(0, Some(64)));
+    let rows = (0..60)
+        .map(|i| {
+            let time = 172_800.0 + i as f64 * 3_600.0;
+            (time, [time; 4])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(chart.update_series_bars(0, rows), 60);
+    let retained = chart
+        .data
+        .merged_times()
+        .iter()
+        .map(|&t| t as f64)
+        .collect::<Vec<_>>();
+    assert_eq!(retained.len(), 62);
+    let mut fresh = ChartEngine::new(900.0, 400.0, 1.0);
+    fresh.time_scale.set_width(800.0);
+    fresh
+        .set_series_data(0, &retained, &retained, &retained, &retained, &retained)
+        .unwrap();
+    fresh.set_right_offset(chart.right_offset());
+    assert_eq!(
+        axis_sync_snapshot(&mut chart),
+        axis_sync_snapshot(&mut fresh)
+    );
+}
+
+#[test]
 fn seeded_irregular_axis_mutations_match_fresh_install() {
     // Fixed xorshift seed; spacings span near-duplicates, minute/day boundaries and weeks.
     let mut seed = 0x7ac3_19d2_4e86_502bu64;
@@ -1057,6 +1094,30 @@ fn seeded_irregular_axis_mutations_match_fresh_install() {
                 times.drain(..times.len() - limit);
                 values.drain(..values.len() - limit);
                 compare(&mut chart, &times, &values, &format!("{round} trim"));
+                assert!(chart.set_series_max_points(0, None));
+            }
+            // An append batch can grow the retained series while trimming its front
+            // in the same transaction, unlike an explicit set_series_max_points trim.
+            if round % 8 == 0 && times.len() < 60 {
+                assert!(chart.set_series_max_points(0, Some(64)));
+                let count = 70 - times.len();
+                let mut rows = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let cadence = cadences[next() as usize % cadences.len()] as f64;
+                    let time = times.last().unwrap() + cadence;
+                    times.push(time);
+                    values.push(time);
+                    rows.push((time, [time; 4]));
+                }
+                assert_eq!(chart.update_series_bars(0, rows), count);
+                times.drain(..times.len() - 62);
+                values.drain(..values.len() - 62);
+                compare(
+                    &mut chart,
+                    &times,
+                    &values,
+                    &format!("{round} capped batch"),
+                );
                 assert!(chart.set_series_max_points(0, None));
             }
         }

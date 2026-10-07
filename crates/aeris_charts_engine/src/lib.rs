@@ -5226,6 +5226,7 @@ impl ChartEngine {
                 && time_points_changed
                 && tick_times.len() > self.synced_points_len
                 && self.synced_points_len > 0
+                && self.synced_first_time == tick_times.first().copied()
                 && self.synced_last_time.is_some_and(|last| {
                     tick_times
                         .get(self.synced_points_len)

@@ -1333,21 +1333,18 @@ pub fn keltner(
     if period == 0 {
         return out;
     }
-    let middle = ema(&closes[..n], period);
-    let range = atr(&highs[..n], &lows[..n], &closes[..n], period);
-    let factor = multiplier.max(0.0);
+    let mut state = KeltnerState::default();
     for row in 0..n {
-        if !valid_bar(highs[row], lows[row], closes[row]) {
-            continue;
-        }
-        if let (Some(middle), Some(range)) = (middle[row], range[row]) {
-            let spread = range * factor;
-            out[row] = KeltnerPoint {
-                upper: Some(middle + spread),
-                middle: Some(middle),
-                lower: Some(middle - spread),
-            };
-        }
+        out[row] = keltner_step(
+            &mut state,
+            AtrSample {
+                high: highs[row],
+                low: lows[row],
+                close: closes[row],
+            },
+            period,
+            multiplier,
+        );
     }
     out
 }
@@ -4065,7 +4062,7 @@ struct ElderForceState {
 
 // A missing source price is not an observation. Volume whitespace has a separate policy.
 fn valid_range(high: f64, low: f64) -> bool {
-    high.is_finite() && low.is_finite() && high >= low
+    high.is_finite() && low.is_finite()
 }
 
 fn valid_bar(high: f64, low: f64, close: f64) -> bool {
@@ -8667,7 +8664,25 @@ mod tests {
         from: usize,
     ) {
         let kept = (0..input.close.len())
-            .filter(|&row| input.close[row].is_finite())
+            .filter(|&row| {
+                let range = input.high[row].is_finite() && input.low[row].is_finite();
+                match kind {
+                    TestKind::MassIndex | TestKind::FisherTransform | TestKind::ParabolicSar => {
+                        range
+                    }
+                    TestKind::Atr
+                    | TestKind::AdxDmi
+                    | TestKind::SuperTrend
+                    | TestKind::AtrBands
+                    | TestKind::Keltner
+                    | TestKind::Klinger
+                    | TestKind::Vwap
+                    | TestKind::VwapBands
+                    | TestKind::AccumulationDistribution
+                    | TestKind::ChaikinOscillator => range && input.close[row].is_finite(),
+                    _ => input.close[row].is_finite(),
+                }
+            })
             .collect::<Vec<_>>();
         let times = kept.iter().map(|&row| input.times[row]).collect::<Vec<_>>();
         let open = kept.iter().map(|&row| input.open[row]).collect::<Vec<_>>();
@@ -8695,7 +8710,7 @@ mod tests {
         for output in 0..actual.len() {
             let mut compact_row = 0;
             for (row, &observed) in actual[output].iter().enumerate() {
-                let want = if input.close[row].is_finite() {
+                let want = if kept.binary_search(&row).is_ok() {
                     let value = compact[output][compact_row];
                     compact_row += 1;
                     value
@@ -8760,6 +8775,7 @@ mod tests {
     fn atr_family_deleted_rows_oracle() {
         gap_family_oracle(&[
             (TestKind::Atr, IncrementalState::atr(5)),
+            (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
             (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),
             (TestKind::SuperTrend, IncrementalState::supertrend(5, 3.0)),
             (TestKind::ParabolicSar, IncrementalState::parabolic_sar()),
@@ -9051,6 +9067,11 @@ mod tests {
             high[gap] = f64::NAN;
             low[gap] = f64::NAN;
         }
+        // Inverted but finite ranges are observations; a missing required field is not.
+        high[8] = low[8] - 0.5;
+        high[31] = f64::NAN;
+        low[37] = f64::NAN;
+        close[43] = f64::NAN;
         for &(kind, ref fresh_state) in kinds {
             let mut state = fresh_state.clone();
             let check =
@@ -9116,6 +9137,165 @@ mod tests {
             close[1010] = 100.0 + (1010.0_f64 * 0.43).sin() * 3.0 + 1010.0 * 0.05;
             high[1010] = close[1010] + 1.4;
             low[1010] = close[1010] - 1.2;
+        }
+    }
+
+    #[test]
+    fn ohlc_batch_matches_incremental_with_inverted_and_partial_whitespace_bars() {
+        let mut states = all_test_states();
+        let n = 120;
+        let times = (0..n as i64).map(|row| row * 3_600).collect::<Vec<_>>();
+        let mut close = (0..n)
+            .map(|row| 100.0 + row as f64 * 0.3)
+            .collect::<Vec<_>>();
+        let mut high = close.iter().map(|v| v + 1.4).collect::<Vec<_>>();
+        let mut low = close.iter().map(|v| v - 1.2).collect::<Vec<_>>();
+        let volume = vec![10.0; n];
+        high[8] = low[8] - 0.5;
+        high[31] = f64::NAN;
+        low[37] = f64::NAN;
+        close[43] = f64::NAN;
+        let kinds = [
+            TestKind::Atr,
+            TestKind::Keltner,
+            TestKind::AdxDmi,
+            TestKind::SuperTrend,
+            TestKind::ParabolicSar,
+            TestKind::AtrBands,
+            TestKind::Cci,
+            TestKind::WilliamsR,
+            TestKind::Stochastic,
+            TestKind::Donchian,
+            TestKind::Vwap,
+            TestKind::VwapBands,
+            TestKind::AccumulationDistribution,
+            TestKind::ChaikinOscillator,
+            TestKind::Klinger,
+            TestKind::MassIndex,
+            TestKind::FisherTransform,
+            TestKind::UltimateOscillator,
+            TestKind::Vortex,
+            TestKind::Mfi,
+            TestKind::Cmf,
+            TestKind::Choppiness,
+            TestKind::EaseOfMovement,
+            TestKind::Aroon,
+            TestKind::ZigZag,
+            TestKind::PivotPoints,
+            TestKind::Ichimoku,
+            TestKind::AwesomeOscillator,
+        ];
+        states.retain(|(kind, _)| {
+            kinds
+                .iter()
+                .any(|candidate| std::mem::discriminant(candidate) == std::mem::discriminant(kind))
+        });
+        let input = IndicatorInput {
+            times: &times,
+            open: &close,
+            high: &high,
+            low: &low,
+            close: &close,
+            volume: &volume,
+        };
+        assert_incremental_matches_full(&mut states, input, 0);
+        for kind in [
+            TestKind::Atr,
+            TestKind::Keltner,
+            TestKind::AdxDmi,
+            TestKind::SuperTrend,
+            TestKind::ParabolicSar,
+            TestKind::AtrBands,
+        ] {
+            assert!(
+                expected(kind, input)[0][8].is_some_and(f64::is_finite),
+                "{kind:?} must process the finite inverted range"
+            );
+        }
+    }
+
+    #[test]
+    fn ohlc_windows_match_deleted_required_fields_after_recovery() {
+        let kinds = [
+            TestKind::Aroon,
+            TestKind::AwesomeOscillator,
+            TestKind::Cci,
+            TestKind::WilliamsR,
+            TestKind::Stochastic,
+            TestKind::Donchian,
+            TestKind::Choppiness,
+            TestKind::UltimateOscillator,
+            TestKind::Vortex,
+            TestKind::Cmf,
+            TestKind::Mfi,
+            TestKind::EaseOfMovement,
+            TestKind::PivotPoints,
+            TestKind::Ichimoku,
+            TestKind::ZigZag,
+        ];
+        let n = 160;
+        let times = (0..n as i64).map(|row| row * 3_600).collect::<Vec<_>>();
+        let mut close = (0..n)
+            .map(|row| 100.0 + (row as f64 * 0.43).sin() * 3.0 + row as f64 * 0.05)
+            .collect::<Vec<_>>();
+        let mut high = close.iter().map(|v| v + 1.4).collect::<Vec<_>>();
+        let mut low = close.iter().map(|v| v - 1.2).collect::<Vec<_>>();
+        let volume = (0..n).map(|row| (row % 13 + 1) as f64).collect::<Vec<_>>();
+        high[8] = low[8] - 0.5;
+        high[31] = f64::NAN;
+        low[37] = f64::NAN;
+        close[43] = f64::NAN;
+        let input = IndicatorInput {
+            times: &times,
+            open: &close,
+            high: &high,
+            low: &low,
+            close: &close,
+            volume: &volume,
+        };
+        for kind in kinds {
+            let needs_close = !matches!(
+                kind,
+                TestKind::Aroon
+                    | TestKind::AwesomeOscillator
+                    | TestKind::Donchian
+                    | TestKind::EaseOfMovement
+                    | TestKind::ZigZag
+            );
+            let kept = (0..n)
+                .filter(|&row| {
+                    high[row].is_finite()
+                        && low[row].is_finite()
+                        && (!needs_close || close[row].is_finite())
+                })
+                .collect::<Vec<_>>();
+            let compact_times = kept.iter().map(|&row| times[row]).collect::<Vec<_>>();
+            let compact_close = kept.iter().map(|&row| close[row]).collect::<Vec<_>>();
+            let compact_high = kept.iter().map(|&row| high[row]).collect::<Vec<_>>();
+            let compact_low = kept.iter().map(|&row| low[row]).collect::<Vec<_>>();
+            let compact_volume = kept.iter().map(|&row| volume[row]).collect::<Vec<_>>();
+            let compact = IndicatorInput {
+                times: &compact_times,
+                open: &compact_close,
+                high: &compact_high,
+                low: &compact_low,
+                close: &compact_close,
+                volume: &compact_volume,
+            };
+            let actual = expected(kind, input);
+            let deleted = expected(kind, compact);
+            for (output, values) in actual.iter().enumerate() {
+                for (row, &value) in values.iter().enumerate().skip(100) {
+                    let compact_row = kept.binary_search(&row).expect("recovered row");
+                    let observed = value.filter(|v| v.is_finite());
+                    let want = deleted[output][compact_row].filter(|v| v.is_finite());
+                    match (observed, want) {
+                        (None, None) => {}
+                        (Some(a), Some(b)) if (a - b).abs() <= 1e-9 * b.abs().max(1.0) => {}
+                        _ => panic!("{kind:?} output {output} row {row}: {observed:?} != {want:?}"),
+                    }
+                }
+            }
         }
     }
 
