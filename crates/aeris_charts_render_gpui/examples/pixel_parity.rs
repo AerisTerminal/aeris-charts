@@ -372,7 +372,7 @@ impl Harness {
         );
         assert!(
             scaled.max_delta <= 1,
-            "scaled GPUI image differs beyond one-channel opacity rounding: {}",
+            "scaled GPUI image differs beyond one-channel sampling/alpha rounding: {}",
             scaled.max_delta
         );
         println!(
@@ -584,7 +584,10 @@ fn main() {
             },
             |window, cx| {
                 let scale = window.scale_factor();
-                println!("harness: window scale factor {scale}");
+                println!(
+                    "harness: window scale factor {scale}; GPU specs {:?}",
+                    window.gpu_specs()
+                );
                 cx.new(|_| Harness::new(scale, out_dir.clone(), tolerance))
             },
         )

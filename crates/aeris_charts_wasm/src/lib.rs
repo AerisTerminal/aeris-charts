@@ -28,6 +28,10 @@ mod telemetry;
 // target too, because wrap, overrun and cursor-overflow are the cases worth testing off-browser.
 #[cfg(any(target_arch = "wasm32", test))]
 mod ring_source;
+// Image-run admission is pure; exercise its zero-opacity skip on the host without a GPU device.
+#[cfg(test)]
+#[path = "chart/image_runs.rs"]
+mod image_runs;
 
 #[cfg(target_arch = "wasm32")]
 mod canvas2d_target;
