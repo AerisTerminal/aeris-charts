@@ -1476,13 +1476,22 @@ pub fn stochastic_rsi(
 }
 
 /// Momentum as the current value minus the value `period` rows earlier.
+/// A missing row anywhere in the lag window leaves the result blank.
 pub fn momentum(values: &[f64], period: usize) -> Vec<Option<f64>> {
     let mut out = vec![None; values.len()];
     if period == 0 {
         return out;
     }
-    for (row, output) in out.iter_mut().enumerate().skip(period) {
-        *output = Some(values[row] - values[row - period]);
+    let mut valid_run = 0;
+    for (row, output) in out.iter_mut().enumerate() {
+        valid_run = if values[row].is_finite() {
+            valid_run + 1
+        } else {
+            0
+        };
+        if row >= period && valid_run > period {
+            *output = Some(values[row] - values[row - period]);
+        }
     }
     out
 }
@@ -1494,7 +1503,16 @@ pub fn rate_of_change(values: &[f64], period: usize) -> Vec<Option<f64>> {
     if period == 0 {
         return out;
     }
-    for (row, output) in out.iter_mut().enumerate().skip(period) {
+    let mut valid_run = 0;
+    for (row, output) in out.iter_mut().enumerate() {
+        valid_run = if values[row].is_finite() {
+            valid_run + 1
+        } else {
+            0
+        };
+        if row < period || valid_run <= period {
+            continue;
+        }
         let previous = values[row - period];
         *output = Some(if previous != 0.0 {
             (values[row] / previous - 1.0) * 100.0
@@ -2563,6 +2581,12 @@ fn coppock_at(
     smoothing: usize,
 ) -> f64 {
     let first = row + 1 - smoothing;
+    if !closes[first - long_period.max(short_period)..=row]
+        .iter()
+        .all(|close| close.is_finite())
+    {
+        return f64::NAN;
+    }
     let weighted = (first..=row)
         .enumerate()
         .map(|(index, current)| {
@@ -5745,13 +5769,23 @@ impl IncrementalState {
                 let start = self.output_from[0];
                 self.last_work_rows = n - start;
                 let values = momentum(input.close, *period);
-                self.outputs[0].extend(values.into_iter().skip(start).flatten());
+                self.outputs[0].extend(
+                    values
+                        .into_iter()
+                        .skip(start)
+                        .map(|value| value.unwrap_or(f64::NAN)),
+                );
             }
             IncrementalKind::RateOfChange { period } => {
                 let start = self.output_from[0];
                 self.last_work_rows = n - start;
                 let values = rate_of_change(input.close, *period);
-                self.outputs[0].extend(values.into_iter().skip(start).flatten());
+                self.outputs[0].extend(
+                    values
+                        .into_iter()
+                        .skip(start)
+                        .map(|value| value.unwrap_or(f64::NAN)),
+                );
             }
             IncrementalKind::Donchian { period } => {
                 let start = self.output_from[0];
@@ -8246,7 +8280,7 @@ mod tests {
         assert!((values[3].unwrap() - (100.0 - 100.0 / (1.0 + 36.0 / 44.0))).abs() < 1e-12);
     }
 
-    #[derive(Clone, Copy, Debug)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum TestKind {
         Aroon,
         AwesomeOscillator,
@@ -8890,76 +8924,136 @@ mod tests {
             TestKind::Vwma,
             TestKind::ZigZag,
         ];
-        let n = 220;
-        let times = (0..n as i64).collect::<Vec<_>>();
-        let mut close = (0..n)
-            .map(|row| 100.0 + (row as f64 * 0.33).sin() * 2.0 + row as f64 * 0.13)
-            .collect::<Vec<_>>();
-        let mut high = close.iter().map(|v| v + 1.0).collect::<Vec<_>>();
-        let mut low = close.iter().map(|v| v - 1.0).collect::<Vec<_>>();
-        let volume = (0..n).map(|row| (row % 11 + 2) as f64).collect::<Vec<_>>();
-        for row in 75..77 {
-            close[row] = f64::NAN;
-            high[row] = f64::NAN;
-            low[row] = f64::NAN;
-        }
-        let input = IndicatorInput {
-            times: &times,
-            open: &close,
-            high: &high,
-            low: &low,
-            close: &close,
-            volume: &volume,
+        // Lookback is the greatest number of preceding physical rows a formula reads,
+        // including nested ROC/smoothing and preceding-close references. In particular
+        // Coppock uses a 7-row ROC followed by a 3-row WMA (7 + 3 - 1).
+        let lookback = |kind, output| match kind {
+            TestKind::Momentum | TestKind::RateOfChange | TestKind::ChandeMomentum => 5,
+            TestKind::CoppockCurve => 9,
+            TestKind::Kst if output == 0 => 7, // ROC 5 + smoothing 3 - 1
+            TestKind::Kst => 9,                // plus signal 3 - 1
+            TestKind::Stochastic if output == 0 => 4,
+            TestKind::Stochastic => 6,
+            TestKind::UltimateOscillator => 7,
+            TestKind::HistoricalVolatility
+            | TestKind::Hma
+            | TestKind::EaseOfMovement
+            | TestKind::Vortex
+            | TestKind::Choppiness
+            | TestKind::Aroon => 5,
+            _ => 4,
         };
-        let kept = (0..n)
-            .filter(|&row| close[row].is_finite())
-            .collect::<Vec<_>>();
-        let compact_times = kept.iter().map(|&row| times[row]).collect::<Vec<_>>();
-        let compact_close = kept.iter().map(|&row| close[row]).collect::<Vec<_>>();
-        let compact_high = kept.iter().map(|&row| high[row]).collect::<Vec<_>>();
-        let compact_low = kept.iter().map(|&row| low[row]).collect::<Vec<_>>();
-        let compact_volume = kept.iter().map(|&row| volume[row]).collect::<Vec<_>>();
-        let compact = IndicatorInput {
-            times: &compact_times,
-            open: &compact_close,
-            high: &compact_high,
-            low: &compact_low,
-            close: &compact_close,
-            volume: &compact_volume,
-        };
-        for kind in kinds {
-            let full = expected(kind, input);
-            let deleted = expected(kind, compact);
-            for (output, values) in full.iter().enumerate() {
-                // A window read within a gap is not permitted to invent a value.
-                if !matches!(kind, TestKind::ZigZag) {
+        for (n, gap) in [
+            (220, 75..76),      // single interior row
+            (220, 75..77),      // consecutive rows
+            (220, 75..80),      // exactly the five-row lag
+            (220, 75..83),      // longer than the lag
+            (220, 75..109),     // exactly the largest 34-row moving window
+            (220, 75..111),     // longer than the largest moving window
+            (220, 3..5),        // warm-up
+            (1100, 1023..1026), // across a checkpoint
+        ] {
+            let times = (0..n as i64).collect::<Vec<_>>();
+            let mut close = (0..n)
+                .map(|row| 100.0 + (row as f64 * 0.33).sin() * 2.0 + row as f64 * 0.13)
+                .collect::<Vec<_>>();
+            let mut high = close.iter().map(|v| v + 1.0).collect::<Vec<_>>();
+            let mut low = close.iter().map(|v| v - 1.0).collect::<Vec<_>>();
+            let volume = (0..n).map(|row| (row % 11 + 2) as f64).collect::<Vec<_>>();
+            for row in gap.clone() {
+                close[row] = f64::NAN;
+                high[row] = f64::NAN;
+                low[row] = f64::NAN;
+            }
+            let input = IndicatorInput {
+                times: &times,
+                open: &close,
+                high: &high,
+                low: &low,
+                close: &close,
+                volume: &volume,
+            };
+            let kept = (0..n)
+                .filter(|&row| close[row].is_finite())
+                .collect::<Vec<_>>();
+            let compact_times = kept.iter().map(|&row| times[row]).collect::<Vec<_>>();
+            let compact_close = kept.iter().map(|&row| close[row]).collect::<Vec<_>>();
+            let compact_high = kept.iter().map(|&row| high[row]).collect::<Vec<_>>();
+            let compact_low = kept.iter().map(|&row| low[row]).collect::<Vec<_>>();
+            let compact_volume = kept.iter().map(|&row| volume[row]).collect::<Vec<_>>();
+            let compact = IndicatorInput {
+                times: &compact_times,
+                open: &compact_close,
+                high: &compact_high,
+                low: &compact_low,
+                close: &compact_close,
+                volume: &compact_volume,
+            };
+            for kind in kinds {
+                let full = expected(kind, input);
+                let deleted = expected(kind, compact);
+                let mut states = all_test_states();
+                let state = &mut states
+                    .iter_mut()
+                    .find(|(candidate, _)| *candidate == kind)
+                    .expect("window kind has an incremental state")
+                    .1;
+                state.rebuild_from(input, 0);
+                for (output, values) in full.iter().enumerate() {
                     assert!(
-                        (75..77).all(|row| !values[row].is_some_and(f64::is_finite)),
-                        "{kind:?} output {output} emits at a gap"
+                        gap.clone()
+                            .all(|row| !values[row].is_some_and(f64::is_finite)),
+                        "{kind:?} output {output} emits in {gap:?}"
                     );
-                    let affected = if matches!(kind, TestKind::Momentum | TestKind::RateOfChange) {
-                        80 // the period-5 lag points to the first gap row
-                    } else {
-                        77 // the current window or its nested input still contains the gap
-                    };
-                    assert!(
-                        !values[affected].is_some_and(f64::is_finite),
-                        "{kind:?} output {output} reads a gap at row {affected}"
-                    );
-                }
-                // Every fixed window has cleared by row 120. Values then equal
-                // the deleted-rows calculation, not a stale or poisoned fold.
-                if !matches!(kind, TestKind::ZigZag) {
-                    for row in 120..n {
-                        let observed = values[row].filter(|v| v.is_finite());
-                        let want = deleted[output][row - 2].filter(|v| v.is_finite());
+                    for row in gap.clone() {
+                        if row >= state.output_from(output) {
+                            assert!(
+                                state.output(output)[row - state.output_from(output)].is_nan(),
+                                "{kind:?} incremental output {output} emits in {gap:?} at {row}"
+                            );
+                        }
+                    }
+                    if matches!(kind, TestKind::ZigZag) {
+                        continue; // historical confirmations have no fixed window
+                    }
+                    let lag = lookback(kind, output);
+                    for (row, value) in values
+                        .iter()
+                        .enumerate()
+                        .take((gap.end + lag).min(n))
+                        .skip(gap.end)
+                    {
+                        assert!(
+                            !value.is_some_and(f64::is_finite),
+                            "{kind:?} output {output} reads {gap:?} at row {row}"
+                        );
+                        if row >= state.output_from(output) {
+                            assert!(
+                                state.output(output)[row - state.output_from(output)].is_nan(),
+                                "{kind:?} incremental output {output} reads {gap:?} at row {row}"
+                            );
+                        }
+                    }
+                    // Check the FIRST cleared row and EVERY subsequent row, rather
+                    // than sampling a late row that hides positional lag errors.
+                    for (row, value) in values.iter().enumerate().skip(gap.end + lag) {
+                        let observed = value.filter(|v| v.is_finite());
+                        let compact_row = row - (gap.end - gap.start);
+                        let want = deleted[output][compact_row].filter(|v| v.is_finite());
                         match (observed, want) {
                             (None, None) => {}
                             (Some(a), Some(b)) if (a - b).abs() <= 1e-9 * b.abs().max(1.0) => {}
                             _ => panic!(
-                                "{kind:?} output {output} row {row}: {observed:?} != {want:?}"
+                                "{kind:?} output {output} gap {gap:?} row {row}: {observed:?} != {want:?}"
                             ),
                         }
+                        let actual = state.output(output)[row - state.output_from(output)];
+                        assert!(
+                            (actual.is_nan() && want.is_none())
+                                || want
+                                    .is_some_and(|v| (actual - v).abs() <= 1e-9 * v.abs().max(1.0)),
+                            "{kind:?} incremental gap {gap:?} row {row}: {actual:?} != {want:?}"
+                        );
                     }
                 }
             }
@@ -9624,24 +9718,7 @@ mod tests {
 
     #[test]
     fn new_studies_repair_gaps_across_sparse_checkpoints() {
-        let mut states = [
-            (
-                TestKind::Kst,
-                IncrementalState::kst([2, 3, 4, 5], [2, 2, 2, 3], 3),
-            ),
-            (TestKind::Tsi, IncrementalState::tsi(5, 3, 3)),
-            (TestKind::MassIndex, IncrementalState::mass_index(3, 5)),
-            (TestKind::Klinger, IncrementalState::klinger(3, 7, 4)),
-            (TestKind::Kama, IncrementalState::kama(5, 2, 10)),
-            (TestKind::McGinley, IncrementalState::mcginley(5)),
-            (
-                TestKind::LinearRegression,
-                IncrementalState::linear_regression(5, 2.0),
-            ),
-            (TestKind::Choppiness, IncrementalState::choppiness(5)),
-            (TestKind::AtrBands, IncrementalState::atr_bands(5, 2.0)),
-            (TestKind::Vortex, IncrementalState::vortex(5)),
-        ];
+        let mut states = all_test_states();
         let times = (0..1100).map(i64::from).collect::<Vec<_>>();
         let mut close = (0..1100)
             .map(|row| 100.0 + (row as f64 / 7.0).sin() * 4.0)
@@ -9793,6 +9870,73 @@ mod tests {
         low[gap] = 100.5;
         volume[gap] = 6.0;
         check(&mut states, 48, &close, &high, &low, &volume, gap);
+    }
+
+    #[test]
+    fn every_study_handles_short_inputs_and_gap_repair() {
+        let mut states = all_test_states();
+        let times = (0..80).map(i64::from).collect::<Vec<_>>();
+        let mut close = (0..80)
+            .map(|row| 100.0 + row as f64 * 0.1 + (row as f64 * 0.37).sin())
+            .collect::<Vec<_>>();
+        let mut high = close.iter().map(|value| value + 1.0).collect::<Vec<_>>();
+        let mut low = close.iter().map(|value| value - 1.0).collect::<Vec<_>>();
+        let volume = vec![5.0; 80];
+        let check = |states: &mut [(TestKind, IncrementalState)],
+                     n: usize,
+                     close: &[f64],
+                     high: &[f64],
+                     low: &[f64],
+                     from: usize| {
+            assert_incremental_matches_full(
+                states,
+                IndicatorInput {
+                    times: &times[..n],
+                    open: &close[..n],
+                    high: &high[..n],
+                    low: &low[..n],
+                    close: &close[..n],
+                    volume: &volume[..n],
+                },
+                from,
+            );
+        };
+        for len in [0, 1, 4, 80] {
+            check(&mut states, len, &close, &high, &low, 0);
+        }
+        for (row, value) in [
+            (24, f64::NAN), // create a historical gap
+            (32, f64::NAN), // create another gap inside the short windows
+            (79, f64::NAN), // replace the tip with whitespace
+            (79, 119.0),    // fill the tip
+            (24, 112.0),    // fill the historical gap
+            (32, 114.0),
+        ] {
+            close[row] = value;
+            high[row] = if value.is_finite() {
+                value + 1.0
+            } else {
+                f64::NAN
+            };
+            low[row] = if value.is_finite() {
+                value - 1.0
+            } else {
+                f64::NAN
+            };
+            check(&mut states, 80, &close, &high, &low, row);
+            if !value.is_finite() {
+                for (kind, state) in &states {
+                    for output in 0..state.output_count() {
+                        if row >= state.output_from(output) {
+                            assert!(
+                                state.output(output)[row - state.output_from(output)].is_nan(),
+                                "{kind:?} output {output} emits at gap row {row}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

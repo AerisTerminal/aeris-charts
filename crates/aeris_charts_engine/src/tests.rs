@@ -3667,6 +3667,126 @@ fn every_indicator_engine_path_matches_full_recomputation() {
 }
 
 #[test]
+fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
+    let mut kinds = all_engine_indicator_kinds();
+    kinds.extend(
+        [
+            "swing_points",
+            "market_structure",
+            "fair_value_gaps",
+            "order_blocks",
+            "session_levels",
+            "previous_period_levels",
+            "opening_range",
+        ]
+        .into_iter()
+        .map(|name| IndicatorKind::schema_definition(name, 5, 2.0).unwrap()),
+    );
+    assert_eq!(kinds.len(), 71, "70 variants with both Envelopes modes");
+    // Rebuild each kind in a *different* engine, not merely via the dense
+    // formula used by assert_indicator_binding_matches_full.
+    for kind in kinds {
+        let mut times = (0..1050)
+            .map(|row| row as f64 * 3_600.0)
+            .collect::<Vec<_>>();
+        let mut close = (0..1050)
+            .map(|row| 90.0 + row as f64 * 0.05 + (row as f64 * 0.37).sin() * 2.0)
+            .collect::<Vec<_>>();
+        for row in [30, 75, 76, 1023, 1024, 1025] {
+            close[row] = f64::NAN;
+        }
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let volume = chart.add_series(SeriesKind::Histogram);
+        let volumes = (0..1053)
+            .map(|row| (row % 7 + 1) as f64)
+            .collect::<Vec<_>>();
+        chart
+            .set_series_data(0, &times, &close, &close, &close, &close)
+            .unwrap();
+        chart
+            .set_series_data(
+                volume,
+                &times,
+                &volumes[..times.len()],
+                &volumes[..times.len()],
+                &volumes[..times.len()],
+                &volumes[..times.len()],
+            )
+            .unwrap();
+        let outputs = add_test_indicator(&mut chart, &kind, Some(volume));
+        assert!(!outputs.is_empty(), "{kind:?}");
+        let verify = |chart: &ChartEngine, times: &[f64], close: &[f64], stage: &str| {
+            let mut fresh = ChartEngine::new(800.0, 500.0, 1.0);
+            let fresh_volume = fresh.add_series(SeriesKind::Histogram);
+            fresh
+                .set_series_data(0, times, close, close, close, close)
+                .unwrap();
+            fresh
+                .set_series_data(
+                    fresh_volume,
+                    times,
+                    &volumes[..times.len()],
+                    &volumes[..times.len()],
+                    &volumes[..times.len()],
+                    &volumes[..times.len()],
+                )
+                .unwrap();
+            let expected = add_test_indicator(&mut fresh, &kind, Some(fresh_volume));
+            assert_eq!(outputs.len(), expected.len(), "{kind:?} {stage}");
+            for (&id, &reference) in outputs.iter().zip(&expected) {
+                let (actual_times, actual) = chart.data.series_data(id).unwrap();
+                let (expected_times, expected_values) = fresh.data.series_data(reference).unwrap();
+                assert_eq!(actual_times, expected_times, "{kind:?} {stage}");
+                assert_eq!(
+                    actual[3].len(),
+                    expected_values[3].len(),
+                    "{kind:?} {stage}"
+                );
+                for (row, (&a, &b)) in actual[3].iter().zip(expected_values[3]).enumerate() {
+                    assert!(
+                        (a.is_nan() && b.is_nan()) || (a - b).abs() <= 1e-9 * b.abs().max(1.0),
+                        "{kind:?} {stage} output {id} row {row}: {a:?} != {b:?}"
+                    );
+                }
+            }
+        };
+        verify(&chart, &times, &close, "initial");
+        for (row, value) in [
+            (1050, 139.0),    // one-row append
+            (1051, f64::NAN), // append a gap
+            (1052, 140.0),    // cross the gap one row at a time
+        ] {
+            times.push(row as f64 * 3_600.0);
+            close.push(value);
+            assert!(
+                chart.update_series_bar(0, times[row], [value; 4]),
+                "{kind:?} append row {row}"
+            );
+            assert!(
+                chart.update_series_bar(volume, times[row], [volumes[row]; 4]),
+                "{kind:?} volume append row {row}"
+            );
+            verify(&chart, &times, &close, "single append");
+        }
+        for (row, value, stage) in [
+            (1052, f64::NAN, "tip becomes whitespace"),
+            (1052, 140.0, "tip filled"),
+            (1030, f64::NAN, "historical gap created"),
+            (1030, 145.0, "historical gap filled"),
+            (1024, 143.0, "checkpoint gap filled"),
+            (1024, f64::NAN, "checkpoint gap restored"),
+        ] {
+            close[row] = value;
+            assert!(
+                chart.update_series_bar(0, times[row], [value; 4]),
+                "{kind:?} {stage}"
+            );
+            verify(&chart, &times, &close, stage);
+        }
+    }
+}
+
+#[test]
 fn every_scalar_indicator_trims_leading_whitespace_and_repairs_before_its_start() {
     for kind in all_engine_indicator_kinds() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
