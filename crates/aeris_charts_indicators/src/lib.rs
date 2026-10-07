@@ -2182,30 +2182,10 @@ pub fn ease_of_movement(
     if period == 0 || !divisor.is_finite() || divisor <= 0.0 {
         return out;
     }
-    let mut sum = 0.0;
-    let mut missing = 0;
-    for (row, slot) in out.iter_mut().enumerate().skip(1) {
-        let raw = ease_of_movement_raw(highs, lows, volumes, row, divisor);
-        if raw.is_finite() {
-            sum += raw;
-        } else {
-            missing += 1;
-        }
-        if row > period {
-            let outgoing = ease_of_movement_raw(highs, lows, volumes, row - period, divisor);
-            if outgoing.is_finite() {
-                sum -= outgoing;
-            } else {
-                missing -= 1;
-            }
-        }
-        if row >= period {
-            *slot = Some(if missing == 0 {
-                sum / period as f64
-            } else {
-                f64::NAN
-            });
-        }
+    for (row, slot) in out.iter_mut().enumerate().skip(period) {
+        *slot = Some(ease_of_movement_at(
+            highs, lows, volumes, row, period, divisor,
+        ));
     }
     out
 }
@@ -2221,9 +2201,12 @@ pub fn historical_volatility(
     if period < 2 || !annualization.is_finite() || annualization <= 0.0 {
         return out;
     }
-    let mut window = HistoricalVolatilityState::default();
-    for (row, slot) in out.iter_mut().enumerate() {
-        *slot = historical_volatility_step(&mut window, closes, row, period, annualization);
+    let mut window = VecDeque::with_capacity(period + 1);
+    for (row, slot) in out.iter_mut().enumerate().skip(1) {
+        push_log_return(&mut window, closes, row, period);
+        if row >= period {
+            *slot = Some(historical_volatility_window(&window, annualization));
+        }
     }
     out
 }
@@ -2943,12 +2926,6 @@ fn mass_index_step(
     }
     (state.ratios.len() == sum_period).then(|| state.ratios.iter().sum())
 }
-#[derive(Clone, Copy, Debug, Default)]
-struct HistoricalVolatilityState {
-    sum: f64,
-    sum_squares: f64,
-    invalid: usize,
-}
 
 fn log_return(closes: &[f64], row: usize) -> f64 {
     let previous = closes[row - 1];
@@ -2960,55 +2937,27 @@ fn log_return(closes: &[f64], row: usize) -> f64 {
     }
 }
 
-fn historical_volatility_step(
-    state: &mut HistoricalVolatilityState,
-    closes: &[f64],
-    row: usize,
-    period: usize,
-    annualization: f64,
-) -> Option<f64> {
-    if row == 0 {
-        return None;
+fn push_log_return(window: &mut VecDeque<f64>, closes: &[f64], row: usize, period: usize) {
+    window.push_back(log_return(closes, row));
+    if window.len() > period {
+        window.pop_front();
     }
-    let incoming = log_return(closes, row);
-    if incoming.is_finite() {
-        state.sum += incoming;
-        state.sum_squares += incoming * incoming;
-    } else {
-        state.invalid += 1;
+}
+
+/// Annualized sample deviation of the log returns in `window`, centered on the window's own
+/// mean. Running sums of returns and squares cancel catastrophically when small moves follow
+/// large ones, and keep that residue after the large moves leave the window.
+fn historical_volatility_window(window: &VecDeque<f64>, annualization: f64) -> f64 {
+    if window.iter().any(|value| !value.is_finite()) {
+        return f64::NAN;
     }
-    if row > period {
-        let outgoing = log_return(closes, row - period);
-        if outgoing.is_finite() {
-            state.sum -= outgoing;
-            state.sum_squares -= outgoing * outgoing;
-        } else {
-            state.invalid -= 1;
-        }
-    }
-    if row < period {
-        return None;
-    }
-    if state.invalid > 0 {
-        return Some(f64::NAN);
-    }
-    let count = period as f64;
-    let numerator = state.sum_squares - state.sum * state.sum / count;
-    // Sliding sums lose all significant digits on a constant-close plateau.
-    // Recenter only those nearly constant windows using the bounded period;
-    // this also prevents old rounding noise from leaking past a gap.
-    let variance = if numerator.abs() <= (1.0 + state.sum_squares) * 1e-12 {
-        let first = log_return(closes, row + 1 - period);
-        let (sum, squares) = (row + 1 - period..=row).fold((0.0, 0.0), |(sum, squares), index| {
-            let diff = log_return(closes, index) - first;
-            (sum + diff, squares + diff * diff)
-        });
-        (squares - sum * sum / count) / (count - 1.0)
-    } else {
-        numerator / (count - 1.0)
-    }
-    .max(0.0);
-    Some(variance.sqrt() * annualization.sqrt() * 100.0)
+    let count = window.len() as f64;
+    let mean = window.iter().sum::<f64>() / count;
+    let squares = window
+        .iter()
+        .map(|value| (value - mean) * (value - mean))
+        .sum::<f64>();
+    (squares / (count - 1.0)).sqrt() * annualization.sqrt() * 100.0
 }
 
 fn ease_of_movement_raw(
@@ -3025,6 +2974,28 @@ fn ease_of_movement_raw(
     let prior_midpoint = (highs[row - 1] + lows[row - 1]) * 0.5;
     let midpoint = (highs[row] + lows[row]) * 0.5;
     (midpoint - prior_midpoint) * (highs[row] - lows[row]) * divisor / volume
+}
+
+/// Mean of the `period` raw values ending at `row`, summed afresh for each window. A running
+/// sum keeps cancellation residue from moves that already left the window, which is visible on a
+/// flat window after large moves.
+fn ease_of_movement_at(
+    highs: &[f64],
+    lows: &[f64],
+    volumes: &[f64],
+    row: usize,
+    period: usize,
+    divisor: f64,
+) -> f64 {
+    let mut sum = 0.0;
+    for index in row + 1 - period..=row {
+        let raw = ease_of_movement_raw(highs, lows, volumes, index, divisor);
+        if !raw.is_finite() {
+            return f64::NAN;
+        }
+        sum += raw;
+    }
+    sum / period as f64
 }
 
 /// Chaikin money flow over a rolling window. Each bar contributes its close location value times
@@ -4758,7 +4729,7 @@ enum IncrementalKind {
     HistoricalVolatility {
         period: usize,
         annualization: f64,
-        state: RecursiveHistory<HistoricalVolatilityState>,
+        window: VecDeque<f64>,
     },
     Trix {
         period: usize,
@@ -5200,7 +5171,7 @@ impl IncrementalState {
             IncrementalKind::HistoricalVolatility {
                 period,
                 annualization,
-                state: RecursiveHistory::new(),
+                window: VecDeque::new(),
             },
             1,
         )
@@ -5450,7 +5421,9 @@ impl IncrementalState {
             IncrementalKind::VolumeOscillator { state, .. } => state.bytes(),
             IncrementalKind::ElderForce { state, .. } => state.bytes(),
             IncrementalKind::EaseOfMovement { .. } => 0,
-            IncrementalKind::HistoricalVolatility { state, .. } => state.bytes(),
+            IncrementalKind::HistoricalVolatility { window, .. } => {
+                window.capacity() * std::mem::size_of::<f64>()
+            }
             IncrementalKind::Trix { state, .. } => state.bytes(),
             IncrementalKind::Kst { .. } => 0,
             IncrementalKind::Tsi { state, .. } => state.bytes(),
@@ -6488,67 +6461,32 @@ impl IncrementalState {
                     .saturating_sub(period.saturating_sub(1))
                     .max(1);
                 self.last_work_rows = n.saturating_sub(start);
-                let mut sum = 0.0;
-                let mut missing = 0;
-                for row in start..n {
-                    let raw =
-                        ease_of_movement_raw(input.high, input.low, input.volume, row, *divisor);
-                    if raw.is_finite() {
-                        sum += raw;
-                    } else {
-                        missing += 1;
-                    }
-                    if row >= start.saturating_add(*period) {
-                        let outgoing = ease_of_movement_raw(
-                            input.high,
-                            input.low,
-                            input.volume,
-                            row - *period,
-                            *divisor,
-                        );
-                        if outgoing.is_finite() {
-                            sum -= outgoing;
-                        } else {
-                            missing -= 1;
-                        }
-                    }
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(if missing == 0 {
-                            sum / *period as f64
-                        } else {
-                            f64::NAN
-                        });
-                    }
+                for row in self.output_from[0]..n {
+                    self.outputs[0].push(ease_of_movement_at(
+                        input.high,
+                        input.low,
+                        input.volume,
+                        row,
+                        *period,
+                        *divisor,
+                    ));
                 }
             }
             IncrementalKind::HistoricalVolatility {
                 period,
                 annualization,
-                state,
+                window,
             } => {
-                let (start, mut accumulator) = state.begin(n, requested);
+                let from = self.output_from[0];
+                let start = if from < n { from + 1 - *period } else { n };
                 self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
+                window.clear();
                 for row in start..n {
-                    let previous = accumulator;
-                    let value = historical_volatility_step(
-                        &mut accumulator,
-                        input.close,
-                        row,
-                        *period,
-                        *annualization,
-                    );
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(value.expect("historical volatility after warmup"));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
+                    push_log_return(window, input.close, row, *period);
+                    if row >= from {
+                        self.outputs[0].push(historical_volatility_window(window, *annualization));
                     }
                 }
-                state.finish(n, tail, before_tail);
             }
             IncrementalKind::Trix {
                 period,
@@ -7202,6 +7140,8 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod window_exactness;
 
     #[test]
     fn sma_has_a_warmup_window() {

@@ -3806,6 +3806,102 @@ fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
 }
 
 #[test]
+fn every_indicator_binding_matches_fresh_engine_on_flat_runs_after_large_moves() {
+    // Large $1M and $100 moves followed by exact flat runs (one straddling the 1,024-row
+    // checkpoint), $1M prices with 1e-7 moves, near-flat and alternating runs, single- and
+    // multi-row gaps. Half-ranges are dyadic so flat closes keep exactly flat midpoints while
+    // the range and volume change on every row; a running window sum leaves residue here.
+    const N: usize = 1_100;
+    let mut seed = 0x9e37_79b9_u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut close = 1e6;
+    let mut bars = Vec::with_capacity(N + 3);
+    let mut volumes = Vec::with_capacity(N + 3);
+    for row in 0..N + 3 {
+        let unit = (next() >> 11) as f64 / (1_u64 << 53) as f64 * 2.0 - 1.0;
+        let tick = (next() % 11) as f64 - 5.0;
+        close = match row {
+            0..150 => close + unit * 5_000.0,
+            300..450 => 1e6 + tick * 1e-7,
+            450..600 => (if row == 450 { 100.0 } else { close } + unit * 5.0).max(25.0),
+            600..750 => 100.0 + tick * 1e-8,
+            750..900 => 100.0 + if row % 2 == 0 { 1.0 } else { -1.0 },
+            900..960 => (if row == 900 { 1e6 } else { close }) + unit * 5_000.0,
+            _ => close,
+        };
+        let half = 0.25
+            * (1 + next()
+                % match row {
+                    0..150 | 900..960 => 3_600,
+                    450..600 => 40,
+                    _ => 8,
+                }) as f64;
+        bars.push([close, close + half, close - half, close]);
+        volumes.push(if row % 29 == 0 {
+            0.0
+        } else if next() % 50 == 0 {
+            1e6
+        } else {
+            (1 + next() % 1_000) as f64
+        });
+    }
+    for row in [200, 640, 641, 1_019, 1_020, 1_021, 1_022, 1_023, 1_060] {
+        bars[row] = [f64::NAN; 4];
+    }
+    let times = (0..N + 3)
+        .map(|row| row as f64 * 3_600.0)
+        .collect::<Vec<_>>();
+    let column = |rows: usize, index: usize| bars[..rows].iter().map(|bar| bar[index]).collect();
+    let install = |rows: usize, kind: &IndicatorKind| {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let volume = chart.add_series(SeriesKind::Histogram);
+        let [open, high, low, close]: [Vec<f64>; 4] =
+            std::array::from_fn(|index| column(rows, index));
+        chart
+            .set_series_data(0, &times[..rows], &open, &high, &low, &close)
+            .unwrap();
+        let v = &volumes[..rows];
+        chart
+            .set_series_data(volume, &times[..rows], v, v, v, v)
+            .unwrap();
+        let outputs = add_test_indicator(&mut chart, kind, Some(volume));
+        (chart, volume, outputs)
+    };
+    for kind in all_engine_indicator_kinds() {
+        let (mut chart, volume, outputs) = install(N, &kind);
+        for rows in N + 1..=N + 3 {
+            let row = rows - 1;
+            assert!(
+                chart.update_series_bar(0, times[row], bars[row]),
+                "{kind:?}"
+            );
+            assert!(
+                chart.update_series_bar(volume, times[row], [volumes[row]; 4]),
+                "{kind:?}"
+            );
+            let (fresh, _, expected) = install(rows, &kind);
+            for (&id, &reference) in outputs.iter().zip(&expected) {
+                let (_, actual) = chart.data.series_data(id).unwrap();
+                let (_, wanted) = fresh.data.series_data(reference).unwrap();
+                assert_eq!(actual[3].len(), wanted[3].len(), "{kind:?} rows {rows}");
+                for (index, (&a, &b)) in actual[3].iter().zip(wanted[3]).enumerate() {
+                    assert!(
+                        (a.is_nan() && b.is_nan())
+                            || (a - b).abs() <= 1e-12_f64.max(1e-9 * b.abs()),
+                        "{kind:?} rows {rows} output {id} point {index}: binding {a:e} != fresh {b:e}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn every_scalar_indicator_trims_leading_whitespace_and_repairs_before_its_start() {
     for kind in all_engine_indicator_kinds() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
