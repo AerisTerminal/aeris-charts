@@ -1779,6 +1779,56 @@ pub struct StochasticPoint {
     pub d: Option<f64>,
 }
 
+// Keep the last k valid bars' extrema, not the last k physical rows' extrema. In a
+// flat window after whitespace, the compacted series can have already computed a
+// different %K from windows that spanned the gap. Monotone queues make the carry
+// update amortized O(1) per valid bar, including across arbitrarily long gaps.
+#[derive(Clone, Debug, Default)]
+struct StochasticCarry {
+    previous_k: f64,
+    valid_count: usize,
+    highs: std::collections::VecDeque<(usize, f64)>,
+    lows: std::collections::VecDeque<(usize, f64)>,
+}
+
+impl StochasticCarry {
+    fn advance(&mut self, high: f64, low: f64, close: f64, period: usize) -> f64 {
+        self.valid_count += 1;
+        let index = self.valid_count;
+        while self.highs.back().is_some_and(|&(_, value)| value <= high) {
+            self.highs.pop_back();
+        }
+        self.highs.push_back((index, high));
+        while self.lows.back().is_some_and(|&(_, value)| value >= low) {
+            self.lows.pop_back();
+        }
+        self.lows.push_back((index, low));
+        let oldest = index.saturating_sub(period);
+        while self.highs.front().is_some_and(|&(row, _)| row <= oldest) {
+            self.highs.pop_front();
+        }
+        while self.lows.front().is_some_and(|&(row, _)| row <= oldest) {
+            self.lows.pop_front();
+        }
+        if index >= period {
+            let hh = self.highs.front().unwrap().1;
+            let ll = self.lows.front().unwrap().1;
+            self.previous_k = if hh > ll {
+                100.0 * (close - ll) / (hh - ll)
+            } else if index == period {
+                50.0
+            } else {
+                self.previous_k
+            };
+        }
+        self.previous_k
+    }
+
+    fn bytes(&self) -> usize {
+        (self.highs.capacity() + self.lows.capacity()) * std::mem::size_of::<(usize, f64)>()
+    }
+}
+
 /// Stochastic %K = `100 * (C - LL(k)) / (HH(k) - LL(k))`, %D = SMA(%K, d). A zero-range
 /// window carries the previous %K (50 for the first), matching the reference's flat-window
 /// behavior. Columns are parallel high/low/close slices.
@@ -1795,26 +1845,19 @@ pub fn stochastic(
         return out;
     }
     let mut raw_k = vec![None; n];
-    let mut previous_k: Option<f64> = None;
-    for i in k_period.saturating_sub(1)..n {
+    let mut carry = StochasticCarry::default();
+    for i in 0..n {
+        if valid_bar(highs[i], lows[i], closes[i]) {
+            carry.advance(highs[i], lows[i], closes[i], k_period);
+        }
+        if i + 1 < k_period {
+            continue;
+        }
         if !(i + 1 - k_period..=i).all(|row| valid_bar(highs[row], lows[row], closes[row])) {
             raw_k[i] = Some(f64::NAN);
             continue;
         }
-        let hh = highs[i + 1 - k_period..=i]
-            .iter()
-            .fold(f64::NEG_INFINITY, |a, &v| a.max(v));
-        let ll = lows[i + 1 - k_period..=i]
-            .iter()
-            .fold(f64::INFINITY, |a, &v| a.min(v));
-        let range = hh - ll;
-        let k = if range > 0.0 {
-            100.0 * (closes[i] - ll) / range
-        } else {
-            previous_k.unwrap_or(50.0)
-        };
-        previous_k = Some(k);
-        raw_k[i] = Some(k);
+        raw_k[i] = Some(carry.previous_k);
     }
     for i in 0..n {
         // %D is the simple mean of the trailing `d_period` %K values, valid once that window
@@ -2950,7 +2993,21 @@ fn historical_volatility_step(
         return Some(f64::NAN);
     }
     let count = period as f64;
-    let variance = ((state.sum_squares - state.sum * state.sum / count) / (count - 1.0)).max(0.0);
+    let numerator = state.sum_squares - state.sum * state.sum / count;
+    // Sliding sums lose all significant digits on a constant-close plateau.
+    // Recenter only those nearly constant windows using the bounded period;
+    // this also prevents old rounding noise from leaking past a gap.
+    let variance = if numerator.abs() <= (1.0 + state.sum_squares) * 1e-12 {
+        let first = log_return(closes, row + 1 - period);
+        let (sum, squares) = (row + 1 - period..=row).fold((0.0, 0.0), |(sum, squares), index| {
+            let diff = log_return(closes, index) - first;
+            (sum + diff, squares + diff * diff)
+        });
+        (squares - sum * sum / count) / (count - 1.0)
+    } else {
+        numerator / (count - 1.0)
+    }
+    .max(0.0);
     Some(variance.sqrt() * annualization.sqrt() * 100.0)
 }
 
@@ -2990,6 +3047,10 @@ pub fn cmf(
     }
     for (row, slot) in out.iter_mut().enumerate().skip(period.saturating_sub(1)) {
         let start = row + 1 - period;
+        if !(start..=row).all(|index| valid_bar(highs[index], lows[index], closes[index])) {
+            *slot = Some(f64::NAN);
+            continue;
+        }
         let mut flow = 0.0;
         let mut volume = 0.0;
         for index in start..=row {
@@ -4652,7 +4713,7 @@ enum IncrementalKind {
     Stochastic {
         k_period: usize,
         d_period: usize,
-        state: RecursiveHistory<f64>,
+        state: RecursiveHistory<StochasticCarry>,
         tail_k: Vec<f64>,
         source_len: usize,
     },
@@ -5371,7 +5432,8 @@ impl IncrementalState {
             IncrementalKind::Rsi { state, .. } => state.bytes(),
             IncrementalKind::Macd { state, .. } => state.bytes(),
             IncrementalKind::Stochastic { state, tail_k, .. } => {
-                state.bytes() + tail_k.capacity() * std::mem::size_of::<f64>()
+                state.bytes_with(StochasticCarry::bytes)
+                    + tail_k.capacity() * std::mem::size_of::<f64>()
             }
             IncrementalKind::Atr { state, .. } => state.bytes(),
             IncrementalKind::Keltner { state, .. } => state.bytes(),
@@ -6152,7 +6214,7 @@ impl IncrementalState {
                 } else {
                     requested.saturating_sub(d_period.saturating_sub(1))
                 };
-                let (start, mut previous_k) = state.begin(n, state_from);
+                let (start, mut carry) = state.begin(n, state_from);
                 self.last_work_rows = n - start;
                 let mut recent = std::collections::VecDeque::with_capacity(*d_period);
                 if realtime {
@@ -6164,32 +6226,29 @@ impl IncrementalState {
                 let mut tail = None;
                 let mut before_tail = None;
                 for row in start..n {
-                    let previous = previous_k;
+                    let previous = if row + 1 == n {
+                        Some(carry.clone())
+                    } else {
+                        None
+                    };
+                    let valid = valid_bar(input.high[row], input.low[row], input.close[row]);
+                    if valid {
+                        carry.advance(input.high[row], input.low[row], input.close[row], *k_period);
+                    }
                     let k = if row + 1 < *k_period {
                         50.0
-                    } else if !(row + 1 - *k_period..=row).all(|index| {
-                        valid_bar(input.high[index], input.low[index], input.close[index])
-                    }) {
+                    } else if !valid
+                        || !(row + 1 - *k_period..=row).all(|index| {
+                            valid_bar(input.high[index], input.low[index], input.close[index])
+                        })
+                    {
                         f64::NAN
                     } else {
-                        let high = input.high[row + 1 - *k_period..=row]
-                            .iter()
-                            .fold(f64::NEG_INFINITY, |acc, &value| acc.max(value));
-                        let low = input.low[row + 1 - *k_period..=row]
-                            .iter()
-                            .fold(f64::INFINITY, |acc, &value| acc.min(value));
-                        if high > low {
-                            100.0 * (input.close[row] - low) / (high - low)
-                        } else if row + 1 == *k_period {
-                            50.0
-                        } else {
-                            previous_k
-                        }
+                        carry.previous_k
                     };
-                    if k.is_finite() {
-                        previous_k = k;
+                    if (row + 1).is_multiple_of(CHECKPOINT_INTERVAL) {
+                        state.checkpoint(row, carry.clone());
                     }
-                    state.checkpoint(row, previous_k);
                     if row + 1 >= *k_period {
                         recent.push_back(k);
                         if recent.len() > *d_period {
@@ -6204,8 +6263,8 @@ impl IncrementalState {
                         self.outputs[1].push(recent.iter().sum::<f64>() / *d_period as f64);
                     }
                     if row + 1 == n {
-                        tail = Some(k);
-                        before_tail = (row > 0).then_some(previous);
+                        tail = Some(carry.clone());
+                        before_tail = if row > 0 { previous } else { None };
                     }
                 }
                 state.finish(n, tail, before_tail);
@@ -9148,6 +9207,168 @@ mod tests {
     }
 
     #[test]
+    fn stochastic_flat_run_after_gap_carries_compacted_k() {
+        for (period, previous, flat, carried) in [(5, 75.0, 8.0, 0.0), (14, 48.633, 12.0, 100.0)] {
+            let len = period * 3 + 6;
+            let mut high = vec![flat; len];
+            let mut low = vec![flat; len];
+            let mut close = vec![flat; len];
+            for row in 0..period + 2 {
+                high[row] = 12.0;
+                low[row] = 8.0;
+                close[row] = if row == period + 1 {
+                    8.0 + previous * 0.04
+                } else {
+                    10.0
+                };
+            }
+            let gap = period + 2;
+            high[gap] = f64::NAN;
+            low[gap] = f64::NAN;
+            close[gap] = f64::NAN;
+            let kept = (0..len).filter(|&row| row != gap).collect::<Vec<_>>();
+            let compact_high = kept.iter().map(|&row| high[row]).collect::<Vec<_>>();
+            let compact_low = kept.iter().map(|&row| low[row]).collect::<Vec<_>>();
+            let compact_close = kept.iter().map(|&row| close[row]).collect::<Vec<_>>();
+            let oracle = stochastic(&compact_high, &compact_low, &compact_close, period, 3);
+            let dense = stochastic(&high, &low, &close, period, 3);
+            let times = (0..len as i64).collect::<Vec<_>>();
+            let volume = vec![1.0; len];
+            let input = IndicatorInput {
+                times: &times,
+                open: &close,
+                high: &high,
+                low: &low,
+                close: &close,
+                volume: &volume,
+            };
+            let mut state = IncrementalState::stochastic(period, 3);
+            state.rebuild_from(input, 0);
+            let mut repaired = IncrementalState::stochastic(period, 3);
+            let mut uninterrupted_high = high.clone();
+            let mut uninterrupted_low = low.clone();
+            let mut uninterrupted_close = close.clone();
+            uninterrupted_high[gap] = 10.0;
+            uninterrupted_low[gap] = 10.0;
+            uninterrupted_close[gap] = 10.0;
+            repaired.rebuild_from(
+                IndicatorInput {
+                    times: &times,
+                    open: &uninterrupted_close,
+                    high: &uninterrupted_high,
+                    low: &uninterrupted_low,
+                    close: &uninterrupted_close,
+                    volume: &volume,
+                },
+                0,
+            );
+            repaired.rebuild_from(input, gap);
+            for row in gap + period..len {
+                let expected = oracle[row - 1];
+                assert_eq!(expected.k, Some(carried));
+                for (output, want, got) in [
+                    (0, expected.k, dense[row].k),
+                    (
+                        1,
+                        (row >= gap + period + 2).then_some(expected.d).flatten(),
+                        dense[row].d,
+                    ),
+                ] {
+                    assert!(
+                        matches!((got.filter(|v| v.is_finite()), want), (None, None))
+                            || got
+                                .filter(|v| v.is_finite())
+                                .zip(want)
+                                .is_some_and(|(a, b)| (a - b).abs() < 1e-9),
+                        "dense period {period} row {row} output {output}: {got:?} != {want:?}"
+                    );
+                    let actual = state.output(output)[row - state.output_from(output)];
+                    assert!(
+                        want.is_some_and(|expected| (actual - expected).abs() < 1e-9)
+                            || (want.is_none() && actual.is_nan()),
+                        "incremental period {period} row {row} output {output}: {actual} != {want:?}"
+                    );
+                    let corrected = repaired.output(output)[row - repaired.output_from(output)];
+                    assert!(
+                        want.is_some_and(|expected| (corrected - expected).abs() < 1e-9)
+                            || (want.is_none() && corrected.is_nan()),
+                        "correction period {period} row {row} output {output}: {corrected} != {want:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zero_volume_cmf_gap_and_flat_historical_volatility_recover() {
+        let high = [12.0, 12.0, f64::NAN, 12.0, 12.0, 12.0, 12.0];
+        let low = [8.0, 8.0, f64::NAN, 8.0, 8.0, 8.0, 8.0];
+        let close = [10.0, 10.0, f64::NAN, 10.0, 10.0, 10.0, 10.0];
+        let volume = [0.0; 7];
+        let cmf_values = cmf(&high, &low, &close, &volume, 3);
+        assert!(cmf_values[3].unwrap().is_nan());
+        assert!(cmf_values[4].unwrap().is_nan());
+        assert_eq!(cmf_values[5], Some(0.0));
+        let hv = historical_volatility(&close, 3, 252.0);
+        assert!(hv[4].unwrap().is_nan());
+        assert_eq!(hv[6], Some(0.0));
+    }
+
+    #[test]
+    fn stochastic_flat_carry_survives_sparse_checkpoint_repair() {
+        let n = 2200;
+        let period = 14;
+        let gap = 1090;
+        let mut high = vec![12.0; n];
+        let mut low = vec![8.0; n];
+        let mut close = vec![11.0; n];
+        for row in gap + 1..n {
+            high[row] = 10.0;
+            low[row] = 10.0;
+            close[row] = 10.0;
+        }
+        high[gap] = f64::NAN;
+        low[gap] = f64::NAN;
+        close[gap] = f64::NAN;
+        let times = (0..n as i64).collect::<Vec<_>>();
+        let volume = vec![1.0; n];
+        let input = IndicatorInput {
+            times: &times,
+            open: &close,
+            high: &high,
+            low: &low,
+            close: &close,
+            volume: &volume,
+        };
+        let mut state = IncrementalState::stochastic(period, 3);
+        state.rebuild_from(input, 0);
+        state.rebuild_from(input, gap);
+        assert!(state.last_work_rows() <= n - gap + CHECKPOINT_INTERVAL);
+        let without_gap = |values: &[f64]| {
+            values[..gap]
+                .iter()
+                .chain(&values[gap + 1..])
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        let oracle = stochastic(
+            &without_gap(&high),
+            &without_gap(&low),
+            &without_gap(&close),
+            period,
+            3,
+        );
+        for row in gap + period + 2..n {
+            let k = state.output(0)[row - state.output_from(0)];
+            let d = state.output(1)[row - state.output_from(1)];
+            assert_eq!(
+                (k, d),
+                (oracle[row - 1].k.unwrap(), oracle[row - 1].d.unwrap())
+            );
+        }
+    }
+
+    #[test]
     fn seeded_parameterized_gap_oracle_covers_window_and_continue_kinds() {
         // A compact (gap rows deleted) run is independent of whitespace handling.
         // Fixed seeds and small bounded series keep the complete catalog inexpensive.
@@ -9170,7 +9391,7 @@ mod tests {
                 };
                 let second = 2 + next() as usize % 6;
                 let third = 2 + next() as usize % 5;
-                for shape in 0..5 {
+                for shape in 0..10 {
                     let n = 155;
                     let mut close = (0..n)
                         .map(|row| {
@@ -9181,20 +9402,63 @@ mod tests {
                         .collect::<Vec<_>>();
                     let mut high = close.iter().map(|v| v + 1.4).collect::<Vec<_>>();
                     let mut low = close.iter().map(|v| v - 1.1).collect::<Vec<_>>();
-                    let initial_close = close.clone();
-                    let initial_high = high.clone();
-                    let initial_low = low.clone();
-                    let volume = (0..n)
+                    let mut volume = (0..n)
                         .map(|row| 3.0 + (row * 7 % 19) as f64)
                         .collect::<Vec<_>>();
                     let times = (0..n as i64).map(|row| row * 3_600).collect::<Vec<_>>();
                     let middle = 64 + next() as usize % 16;
+                    // Retain real candles for the baseline repair, including degenerate
+                    // candles; the only difference in that path is the introduced gaps.
+                    match shape {
+                        5 => {
+                            for row in middle - 40..middle + 42 {
+                                high[row] = 100.0;
+                                low[row] = 100.0;
+                                close[row] = 100.0;
+                            }
+                        }
+                        6 => {
+                            for row in middle - 40..middle {
+                                high[row] = 102.0;
+                                low[row] = 98.0;
+                                close[row] = 101.0;
+                            }
+                            for row in middle + 1..middle + 42 {
+                                high[row] = 100.0;
+                                low[row] = 100.0;
+                                close[row] = 100.0;
+                            }
+                        }
+                        7 => {
+                            close.fill(100.0);
+                            for row in middle - 38..middle + 40 {
+                                high[row] = 100.0;
+                                low[row] = 100.0;
+                            }
+                        }
+                        8 => {
+                            volume[middle - 42..middle + 42].fill(0.0);
+                        }
+                        9 => {
+                            for row in middle - 38..middle + 40 {
+                                close[row] = 100.0;
+                                high[row] = 100.0;
+                                low[row] = 100.0;
+                                volume[row] = 0.0;
+                            }
+                        }
+                        _ => {}
+                    }
+                    let initial_close = close.clone();
+                    let initial_high = high.clone();
+                    let initial_low = low.clone();
                     let gaps: Vec<usize> = match shape {
                         0 => vec![middle],
                         1 => vec![middle, middle + 1],
                         2 => vec![1, 2, 3],
                         3 => vec![middle, middle + 1, middle + 4, middle + 5],
-                        _ => vec![n - 4, n - 3],
+                        4 => vec![n - 4, n - 3],
+                        _ => vec![middle],
                     };
                     for &row in &gaps {
                         close[row] = f64::NAN;
