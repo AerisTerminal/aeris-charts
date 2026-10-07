@@ -5204,52 +5204,61 @@ impl ChartEngine {
         }
 
         let data_times_len = self.data.merged_times().len();
-        let (tick_start_index, tick_times) = self.axis_tick_times();
         let time_points_changed = self.data.time_points_generation()
             != self.synced_time_points_generation
             || self.future_time_projection_revision != self.synced_future_time_projection_revision
             || self.past_time_projection_revision != self.synced_past_time_projection_revision;
         let has_projected_axis =
             self.future_time_projection.is_some() || self.past_time_projection.is_some();
-        let appended = !has_projected_axis
-            && tick_start_index == 0
-            && time_points_changed
-            && tick_times.len() > self.synced_points_len
-            && self.synced_points_len > 0
-            && self.synced_last_time.is_some_and(|last| {
-                tick_times
-                    .get(self.synced_points_len)
-                    .is_some_and(|&time| time > last)
-            });
-        if appended {
-            for index in self.synced_points_len..tick_times.len() {
-                let weight = weight_by_time_in_time_zone(
-                    tick_times[index],
-                    tick_times[index - 1],
-                    self.time_zone,
-                ) as u8;
-                self.tick_marks.push_weight(index as i64, weight);
+        let has_sequence_axis = self.sequence_points().is_some();
+        if has_sequence_axis || !has_projected_axis || time_points_changed {
+            // The canonical axis borrows the merged timeline. Only sequence axes and changing
+            // projections need a materialized set of tick timestamps.
+            let materialized =
+                (has_sequence_axis || has_projected_axis).then(|| self.axis_tick_times());
+            let (tick_start_index, tick_times): (i64, &[i64]) = match materialized.as_ref() {
+                Some((start, times)) => (*start, times),
+                None => (0, self.data.merged_times()),
+            };
+            let appended = !has_projected_axis
+                && tick_start_index == 0
+                && time_points_changed
+                && tick_times.len() > self.synced_points_len
+                && self.synced_points_len > 0
+                && self.synced_last_time.is_some_and(|last| {
+                    tick_times
+                        .get(self.synced_points_len)
+                        .is_some_and(|&time| time > last)
+                });
+            if appended {
+                for index in self.synced_points_len..tick_times.len() {
+                    let weight = weight_by_time_in_time_zone(
+                        tick_times[index],
+                        tick_times[index - 1],
+                        self.time_zone,
+                    ) as u8;
+                    self.tick_marks.push_weight(index as i64, weight);
+                }
+            } else if time_points_changed {
+                let mut weights = vec![0u8; tick_times.len()];
+                fill_weights_for_points_in_time_zone(tick_times, &mut weights, 0, self.time_zone);
+                self.tick_marks.set_weights_from(tick_start_index, &weights);
             }
-        } else if time_points_changed {
-            let mut weights = vec![0u8; tick_times.len()];
-            fill_weights_for_points_in_time_zone(&tick_times, &mut weights, 0, self.time_zone);
-            self.tick_marks.set_weights_from(tick_start_index, &weights);
+            self.synced_points_len = tick_times.len();
+            self.synced_time_points_generation = self.data.time_points_generation();
+            self.synced_future_time_projection_revision = self.future_time_projection_revision;
+            self.synced_past_time_projection_revision = self.past_time_projection_revision;
+            self.synced_last_time = tick_times.last().copied();
+            self.synced_first_time = tick_times.first().copied();
         }
-        self.synced_points_len = tick_times.len();
-        self.synced_time_points_generation = self.data.time_points_generation();
-        self.synced_future_time_projection_revision = self.future_time_projection_revision;
-        self.synced_past_time_projection_revision = self.past_time_projection_revision;
-        self.synced_last_time = tick_times.last().copied();
-        self.synced_first_time = tick_times.first().copied();
         // Future projection points are labels only. Keeping the core point count at canonical data
         // length preserves fit-content, scrolling clamps, base-index semantics and whitespace data.
-        self.time_scale
-            .set_points_len(if self.sequence_points().is_some() {
-                tick_times.len()
-            } else {
-                data_times_len
-            });
-        self.time_scale.set_base_index(self.data.base_index());
+        self.time_scale.set_points_len(if has_sequence_axis {
+            self.synced_points_len
+        } else {
+            data_times_len
+        });
+        self.time_scale.set_base_index(new_base_index);
         if merged_time_mapping.is_some() {
             self.refresh_drawing_pixel_baselines();
             self.drawing_baselines_need_frame_refresh = true;

@@ -900,6 +900,338 @@ fn timestamp_replacement_rebuilds_weights_for_every_sequence_change() {
     );
 }
 
+// Compare installed tick weights, not only the visible subset selected by the time-axis layout.
+#[derive(Debug, PartialEq)]
+struct AxisSyncSnapshot {
+    marks: Vec<(i64, u8)>,
+    points_len: usize,
+    base_index: i64,
+    first: Option<i64>,
+    last: Option<i64>,
+    labels: Vec<AxisLabel>,
+}
+
+fn axis_sync_snapshot(chart: &mut ChartEngine) -> AxisSyncSnapshot {
+    let marks = chart
+        .tick_marks
+        .build(1.0, 0.0)
+        .iter()
+        .map(|mark| (mark.index, mark.weight))
+        .collect();
+    let points_len = chart.time_scale.points_len();
+    let base_index = chart.time_scale.base_index();
+    let first = chart.synced_first_time;
+    let last = chart.synced_last_time;
+    let labels = chart
+        .build_axis_frame(
+            80.0,
+            |text, _| text.len() as f64 * 7.0,
+            |text, _| text.len() as f64 * 6.0,
+        )
+        .labels
+        .into_iter()
+        .filter(|label| label.y >= chart.css_height - chart.time_axis_height())
+        .collect();
+    AxisSyncSnapshot {
+        marks,
+        points_len,
+        base_index,
+        first,
+        last,
+        labels,
+    }
+}
+
+#[test]
+fn incremental_axis_matches_fresh_install_across_mutations_and_projections() {
+    let base = [86_160.0, 86_220.0, 86_280.0, 86_340.0];
+    let mut times = base.to_vec();
+    let mut values = vec![10.0, 11.0, 12.0, 13.0];
+    for projection in [0, 1, -1] {
+        let mut chart = ChartEngine::new(900.0, 400.0, 1.0);
+        chart.time_scale.set_width(800.0);
+        if projection > 0 {
+            chart.set_future_time_projection(Some(60), 4);
+        } else if projection < 0 {
+            chart.set_past_time_projection(Some(60), 4);
+        }
+        chart
+            .set_series_data(0, &times, &values, &values, &values, &values)
+            .unwrap();
+        let compare = |chart: &mut ChartEngine, times: &[f64], values: &[f64], case: &str| {
+            let mut fresh = ChartEngine::new(900.0, 400.0, 1.0);
+            fresh.time_scale.set_width(800.0);
+            if projection > 0 {
+                fresh.set_future_time_projection(Some(60), 4);
+            } else if projection < 0 {
+                fresh.set_past_time_projection(Some(60), 4);
+            }
+            fresh
+                .set_series_data(0, times, values, values, values, values)
+                .unwrap();
+            fresh.set_right_offset(chart.right_offset());
+            assert_eq!(
+                axis_sync_snapshot(chart),
+                axis_sync_snapshot(&mut fresh),
+                "{case}, projection {projection}"
+            );
+            assert_eq!(chart.data.merged_times().len(), times.len());
+            for &time in times {
+                let x = chart.time_to_coordinate(time).unwrap();
+                assert_eq!(chart.coordinate_to_time(x), Some(time));
+                let logical = chart.time_to_index(time, false).unwrap() as f64;
+                let x = chart.logical_to_coordinate(logical).unwrap();
+                assert_eq!(chart.coordinate_to_time(x), Some(time));
+            }
+            for logical in -4..(times.len() as i64 + 4) {
+                let label_time = chart.axis_time_key_at_logical(logical);
+                assert_eq!(
+                    label_time,
+                    fresh.axis_time_key_at_logical(logical),
+                    "{case}: projected label at {logical}"
+                );
+                if let Some(time) = label_time {
+                    let x = chart.logical_to_coordinate(logical as f64).unwrap();
+                    assert_eq!(chart.coordinate_to_logical(x), Some(logical as f64));
+                    assert_eq!(chart.coordinate_to_time(x), Some(time as f64));
+                    if logical < 0 || logical >= times.len() as i64 {
+                        assert_eq!(chart.time_to_index(time as f64, false), None);
+                    }
+                }
+            }
+        };
+        compare(&mut chart, &times, &values, "initial");
+        values[3] = 14.0;
+        assert!(chart.update_series_bar(0, times[3], [14.0; 4]));
+        compare(&mut chart, &times, &values, "tip replacement");
+        times.push(86_400.0);
+        values.push(15.0);
+        assert!(chart.update_series_bar(0, 86_400.0, [15.0; 4]));
+        compare(&mut chart, &times, &values, "day-boundary append");
+        values[1] = 16.0;
+        assert!(chart.update_series_bar(0, times[1], [16.0; 4]));
+        compare(&mut chart, &times, &values, "mid correction");
+        times.insert(3, 86_310.0);
+        values.insert(3, 17.0);
+        assert!(chart.update_series_bar(0, 86_310.0, [17.0; 4]));
+        compare(&mut chart, &times, &values, "mid insert");
+        times.push(86_460.0);
+        values.push(f64::NAN);
+        assert!(chart.update_series_bar(0, 86_460.0, [f64::NAN; 4]));
+        // NaN is whitespace in the source; compare with a separately installed blank row.
+        // The equality helper compares the stored source state and the derived axis.
+        compare(&mut chart, &times, &values, "trailing whitespace");
+        *values.last_mut().unwrap() = 18.0;
+        assert!(chart.update_series_bar(0, 86_460.0, [18.0; 4]));
+        compare(&mut chart, &times, &values, "whitespace replaced");
+        assert_eq!(chart.series_pop(0, 1), Some(times.len() - 1));
+        times.pop();
+        values.pop();
+        compare(&mut chart, &times, &values, "pop");
+        assert!(chart.set_series_max_points(0, Some(4)));
+        times.drain(..times.len() - 4);
+        values.drain(..values.len() - 4);
+        compare(&mut chart, &times, &values, "retention trim");
+        times = base.to_vec();
+        values = vec![10.0, 11.0, 12.0, 13.0];
+    }
+}
+
+#[test]
+fn axis_sync_tracks_second_series_indicator_and_projection_revision() {
+    let base = [86_160.0, 86_220.0, 86_280.0, 86_340.0];
+    let other = [86_220.0, 86_250.0, 86_400.0];
+    for projection in [0, 1, -1] {
+        let mut chart = ChartEngine::new(900.0, 400.0, 1.0);
+        chart.time_scale.set_width(800.0);
+        if projection == 1 {
+            chart.set_future_time_projection(Some(60), 4);
+        } else if projection == -1 {
+            chart.set_past_time_projection(Some(60), 4);
+        }
+        chart
+            .set_series_data(0, &base, &base, &base, &base, &base)
+            .unwrap();
+        let second = chart.add_series(SeriesKind::Line);
+        chart
+            .set_series_data(second, &other, &other, &other, &other, &other)
+            .unwrap();
+        let mut fresh = ChartEngine::new(900.0, 400.0, 1.0);
+        fresh.time_scale.set_width(800.0);
+        if projection == 1 {
+            fresh.set_future_time_projection(Some(60), 4);
+        } else if projection == -1 {
+            fresh.set_past_time_projection(Some(60), 4);
+        }
+        fresh
+            .set_series_data(0, &base, &base, &base, &base, &base)
+            .unwrap();
+        let fresh_second = fresh.add_series(SeriesKind::Line);
+        fresh
+            .set_series_data(fresh_second, &other, &other, &other, &other, &other)
+            .unwrap();
+        fresh.set_right_offset(chart.right_offset());
+        assert_eq!(
+            axis_sync_snapshot(&mut chart),
+            axis_sync_snapshot(&mut fresh),
+            "second series added with projection {projection}"
+        );
+        let reinstall = |second_values: Option<Vec<f64>>| {
+            let mut installed = ChartEngine::new(900.0, 400.0, 1.0);
+            installed.time_scale.set_width(800.0);
+            if projection == 1 {
+                installed.set_future_time_projection(Some(60), 4);
+            } else if projection == -1 {
+                installed.set_past_time_projection(Some(60), 4);
+            }
+            installed
+                .set_series_data(0, &base, &base, &base, &base, &base)
+                .unwrap();
+            if let Some(values) = second_values {
+                let series = installed.add_series(SeriesKind::Line);
+                installed
+                    .set_series_data(series, &other, &values, &values, &values, &values)
+                    .unwrap();
+            }
+            installed
+        };
+        let mut installed = reinstall(Some(other.to_vec()));
+        installed.set_right_offset(chart.right_offset());
+        assert_eq!(
+            axis_sync_snapshot(&mut chart),
+            axis_sync_snapshot(&mut installed)
+        );
+        let generation = chart.synced_time_points_generation;
+        assert!(chart.update_series_bar(second, 86_400.0, [86_401.0; 4]));
+        assert_eq!(chart.synced_time_points_generation, generation);
+        assert!(fresh.update_series_bar(fresh_second, 86_400.0, [86_401.0; 4]));
+        assert_eq!(
+            axis_sync_snapshot(&mut chart),
+            axis_sync_snapshot(&mut fresh),
+            "data-only tip with unchanged projection {projection}"
+        );
+        let mut changed_other = other.to_vec();
+        changed_other[2] = 86_401.0;
+        let mut installed = reinstall(Some(changed_other));
+        installed.set_right_offset(chart.right_offset());
+        assert_eq!(
+            axis_sync_snapshot(&mut chart),
+            axis_sync_snapshot(&mut installed)
+        );
+        assert!(chart.remove_series(second));
+        assert!(fresh.remove_series(fresh_second));
+        assert_eq!(
+            axis_sync_snapshot(&mut chart),
+            axis_sync_snapshot(&mut fresh),
+            "second series removed with projection {projection}"
+        );
+        let mut installed = reinstall(None);
+        installed.set_right_offset(chart.right_offset());
+        assert_eq!(
+            axis_sync_snapshot(&mut chart),
+            axis_sync_snapshot(&mut installed)
+        );
+        // A dependent output has a separate synchronization after source mutation. Its
+        // trimming and base-index moves must leave the same axis as a fresh install.
+        let output = chart.add_sma(0, 2).unwrap();
+        assert!(chart.update_series_bar(0, 86_400.0, [86_400.0; 4]));
+        let fresh_output = fresh.add_sma(0, 2).unwrap();
+        assert!(fresh.update_series_bar(0, 86_400.0, [86_400.0; 4]));
+        assert_eq!(
+            axis_sync_snapshot(&mut chart),
+            axis_sync_snapshot(&mut fresh),
+            "indicator propagation {projection}"
+        );
+        assert!(chart.remove_series(output));
+        assert!(fresh.remove_series(fresh_output));
+        if projection == 1 {
+            assert!(chart.set_future_time_projection(Some(120), 3));
+            assert!(fresh.set_future_time_projection(Some(120), 3));
+            assert!(chart.update_series_bar(0, 86_400.0, [86_401.0; 4]));
+            assert!(fresh.update_series_bar(0, 86_400.0, [86_401.0; 4]));
+            assert_eq!(
+                axis_sync_snapshot(&mut chart),
+                axis_sync_snapshot(&mut fresh)
+            );
+            assert!(chart.set_future_time_projection(None, 0));
+            assert!(fresh.set_future_time_projection(None, 0));
+        } else if projection == -1 {
+            assert!(chart.set_past_time_projection(Some(120), 3));
+            assert!(fresh.set_past_time_projection(Some(120), 3));
+            assert!(chart.update_series_bar(0, 86_400.0, [86_401.0; 4]));
+            assert!(fresh.update_series_bar(0, 86_400.0, [86_401.0; 4]));
+            assert_eq!(
+                axis_sync_snapshot(&mut chart),
+                axis_sync_snapshot(&mut fresh)
+            );
+            assert!(chart.set_past_time_projection(None, 0));
+            assert!(fresh.set_past_time_projection(None, 0));
+        }
+        assert!(chart.update_series_bar(0, 86_400.0, [86_402.0; 4]));
+        assert!(fresh.update_series_bar(0, 86_400.0, [86_402.0; 4]));
+        assert_eq!(
+            axis_sync_snapshot(&mut chart),
+            axis_sync_snapshot(&mut fresh),
+            "projection cleared {projection}"
+        );
+    }
+}
+
+#[test]
+fn sequence_axis_round_trip_and_clear_match_fresh_install() {
+    let points = |middle| {
+        [86_160, middle, 86_400]
+            .into_iter()
+            .enumerate()
+            .map(|(index, time)| BarSequencePoint {
+                logical_index: index as u64,
+                open_timestamp_micros: time * 1_000_000,
+                close_timestamp_micros: (time + 30) * 1_000_000,
+            })
+            .collect()
+    };
+    let install = |chart: &mut ChartEngine, middle| {
+        let values = vec![10.0, 11.0, 12.0];
+        assert!(chart.install_trade_bar_sequence_projection(
+            0,
+            points(middle),
+            values.clone(),
+            values.clone(),
+            values.clone(),
+            values
+        ));
+    };
+    let mut chart = ChartEngine::new(900.0, 400.0, 1.0);
+    chart.time_scale.set_width(800.0);
+    install(&mut chart, 86_220);
+    install(&mut chart, 86_280);
+    let mut fresh = ChartEngine::new(900.0, 400.0, 1.0);
+    fresh.time_scale.set_width(800.0);
+    install(&mut fresh, 86_280);
+    assert_eq!(
+        axis_sync_snapshot(&mut chart),
+        axis_sync_snapshot(&mut fresh)
+    );
+    for time in [86_160.0, 86_280.0, 86_400.0] {
+        let x = chart.time_to_coordinate(time).unwrap();
+        assert_eq!(chart.coordinate_to_time(x), Some(time));
+        let index = chart.time_to_index(time, false).unwrap();
+        assert_eq!(
+            chart.coordinate_to_time(chart.logical_to_coordinate(index as f64).unwrap()),
+            Some(time)
+        );
+    }
+    chart.clear_sequence_axis_if_unused();
+    fresh.clear_sequence_axis_if_unused();
+    assert!(chart.sequence_points().is_none());
+    assert_eq!(
+        axis_sync_snapshot(&mut chart),
+        axis_sync_snapshot(&mut fresh)
+    );
+    assert_eq!(chart.synced_first_time, Some(0));
+    assert_eq!(chart.synced_last_time, Some(2));
+}
+
 #[test]
 fn series_primitive_autoscale_contribution_expands_the_owning_scale() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);

@@ -122,8 +122,9 @@ Public-doc URLs: `tradingview.com/pine-script-reference/v6/`,
 
 ## Recorded release benchmarks
 
-`cargo run -p aeris_charts_native --example perf_gate --release` on the closure tree, 2026-10-06:
-**ALL TARGETS PASS**. Measured values (budget in parentheses):
+`cargo run -p aeris_charts_native --example perf_gate --release` on the closure tree, 2026-10-06,
+with Target N remeasured after the axis fix on 2026-10-07: **ALL TARGETS PASS** on both runs.
+Measured values (budget in parentheses):
 
 | Target | Result |
 | --- | --- |
@@ -140,15 +141,14 @@ Public-doc URLs: `tradingview.com/pine-script-reference/v6/`,
 | K — 100× replay, 6,000 s / 60 frames | 0.58 ms (16.67); memory flat 5.65 MiB |
 | L — two 1.2M-update depth soaks | worst batch 10.10 ms (150); frame 0.31 ms (16.67); live-edge image 0.00 MiB (0.02); memory flat 66.03 MiB |
 | M — sustained order-flow tape (600 × 4-trade batches + frame) | p50 0.054 ms, p99 0.09 ms (4.00); worst 5.25 ms (16.67); late print 0.31 ms (16.67); ceiling pass |
-| N — **new:** 7 structure studies × 1M rows | initial build 357 ms; tip-replacement p99 3.19 ms (8.00); one historical correction 20k rows back 14.83 ms (100); 3,999 FVG + 2,108 order-block zones retained |
+| N — 7 structure studies × 1M rows | initial build 356.18 ms; tip-replacement p99 0.16 ms (8.00); one historical correction 20k rows back 9.89 ms (100); 3,999 FVG + 2,108 order-block zones retained |
 | O — **new:** sustained tape with auction markers | p50 0.057 ms, p99 0.17 ms (4.00); worst 7.57 ms (16.67); late print 0.55 ms (16.67); 5,084 retained marks; ceiling pass |
 
-Target N tip-update cost is dominated by the pre-existing per-update axis bookkeeping any
-1M-row chart pays (measured baseline ≈ 2.2 ms without structure bindings); the structure
-studies themselves add ≈ 1 ms incremental (probe: all-seven `StructureStudy::update` tip p50
-2.73 ms / p99 3.30 ms engine-side). A data-layer fix landed with this milestone: structure
-anchor outputs are flagged whitespace-only so the time-scale base index no longer performs a
-full-column backward scan per update (tip p99 14.5 ms → 3.2 ms on this machine).
+Target N tip-replacement p99 is now 0.16 ms on this machine with all seven structure bindings.
+The axis reads the 1M-row merged timeline in place on both synchronization passes rather than
+copying it per update. Tick-time copies remain necessary for sequence axes and changing time
+projections. The earlier whitespace-only structure-anchor optimization also avoids a
+full-column backward base-index scan.
 
 Supporting gates on the same tree: `cargo fmt --all -- --check` clean; `cargo clippy -p
 aeris_charts_core -p aeris_charts_engine -p aeris_charts_native --all-targets -- -D warnings`

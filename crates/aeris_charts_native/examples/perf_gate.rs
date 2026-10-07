@@ -1452,8 +1452,8 @@ fn main() {
     // interval and bounded pivot/order-block lookback, never the full history.
     const STRUCTURE_BARS: usize = 1_000_000;
     const STRUCTURE_TIP_SAMPLES: usize = 200;
-    // The measured tip p99 (~3.3 ms) is dominated by the pre-existing per-update axis bookkeeping
-    // any 1M-row chart pays on every update; the seven structure bindings add ~0.5 ms on top.
+    // Measured tip p99 is ~0.16 ms with all seven bindings: the canonical axis reads merged times
+    // in place, without copying the 1M-row timeline on either synchronization pass.
     const STRUCTURE_TIP_BUDGET_MS: f64 = 8.0;
     const STRUCTURE_CORRECTION_ROWS: usize = 20_000;
     const STRUCTURE_CORRECTION_BUDGET_MS: f64 = 100.0;
