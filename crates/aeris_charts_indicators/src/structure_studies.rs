@@ -335,7 +335,7 @@ impl StructureStudy {
                     StructureStudyKind::FairValueGaps { .. } => unreachable!(),
                 };
                 self.confirm_pivots(input, row, left, right);
-                if matches!(kind, StructureStudyKind::SwingPoints { .. }) {
+                if matches!(kind, StructureStudyKind::SwingPoints { .. }) && valid(input, row) {
                     self.result.outputs[0][row] = self.state.high.map(|p| p.price);
                     self.result.outputs[1][row] = self.state.low.map(|p| p.price);
                 } else if valid(input, row) {

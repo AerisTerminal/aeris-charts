@@ -2608,8 +2608,13 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 })
                 .unwrap_or_default();
             if let IndicatorKind::VolumeOscillator { fast, slow, signal } = binding.kind {
+                let masked = volume
+                    .iter()
+                    .zip(source[3])
+                    .map(|(&v, &c)| if c.is_finite() { v } else { f64::NAN })
+                    .collect::<Vec<_>>();
                 let points =
-                    aeris_charts_indicators::volume_oscillator(&volume, fast, slow, signal);
+                    aeris_charts_indicators::volume_oscillator(&masked, fast, slow, signal);
                 vec![
                     points.iter().map(|point| point.line).collect(),
                     points.iter().map(|point| point.signal).collect(),
@@ -2648,7 +2653,12 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                         )
                     }
                     IndicatorKind::RelativeVolume { period } => {
-                        aeris_charts_indicators::relative_volume(&volume, period)
+                        let masked = volume
+                            .iter()
+                            .zip(source[3])
+                            .map(|(&v, &c)| if c.is_finite() { v } else { f64::NAN })
+                            .collect::<Vec<_>>();
+                        aeris_charts_indicators::relative_volume(&masked, period)
                     }
                     _ => unreachable!(),
                 }]
@@ -2716,9 +2726,14 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                     aligned
                 })
                 .unwrap_or_default();
+            let masked = volume
+                .iter()
+                .zip(source[3])
+                .map(|(&v, &c)| if c.is_finite() { v } else { f64::NAN })
+                .collect::<Vec<_>>();
             vec![
-                volume.iter().copied().map(Some).collect(),
-                aeris_charts_indicators::sma(&volume, period),
+                masked.iter().copied().map(Some).collect(),
+                aeris_charts_indicators::sma(&masked, period),
             ]
         }
         IndicatorKind::VwapBands {
@@ -2778,25 +2793,32 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
     };
 
     for (&output, expected) in binding.outputs.iter().zip(expected) {
-        let expected = if matches!(
+        let from = if matches!(
             binding.kind,
             IndicatorKind::PivotPoints { .. } | IndicatorKind::ZigZag { .. }
         ) {
-            times
-                .iter()
-                .copied()
-                .zip(expected)
-                .map(|(time, value)| (time, value.unwrap_or(f64::NAN)))
-                .collect::<Vec<_>>()
+            0
         } else {
-            times
+            expected
                 .iter()
-                .copied()
-                .zip(expected)
-                .filter_map(|(time, value)| value.map(|value| (time, value)))
-                .collect::<Vec<_>>()
+                .position(Option::is_some)
+                .unwrap_or(times.len())
         };
+        let expected = times
+            .iter()
+            .copied()
+            .zip(expected)
+            .skip(from)
+            .map(|(time, value)| (time, value.unwrap_or(f64::NAN)))
+            .collect::<Vec<_>>();
         let (actual_times, actual) = chart.data.series_data(output).unwrap();
+        assert_eq!(
+            actual_times.len(),
+            expected.len(),
+            "{:?} output {output:?} times count, source {}, from {from}",
+            binding.kind,
+            times.len()
+        );
         assert_eq!(
             actual_times,
             expected.iter().map(|(time, _)| *time).collect::<Vec<_>>(),
@@ -2823,15 +2845,21 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
     }
 }
 
-#[test]
-fn every_indicator_engine_path_matches_full_recomputation() {
-    let kinds = [
+fn all_engine_indicator_kinds() -> Vec<IndicatorKind> {
+    vec![
         IndicatorKind::Aroon { period: 5 },
         IndicatorKind::AwesomeOscillator,
         IndicatorKind::Dpo { period: 5 },
         IndicatorKind::ChandeMomentum { period: 5 },
         IndicatorKind::Sma { period: 5 },
         IndicatorKind::Ema { period: 5 },
+        IndicatorKind::Dema { period: 5 },
+        IndicatorKind::Tema { period: 5 },
+        IndicatorKind::Smma { period: 5 },
+        IndicatorKind::Hma { period: 5 },
+        IndicatorKind::Vwma { period: 5 },
+        IndicatorKind::StandardDeviation { period: 5 },
+        IndicatorKind::Donchian { period: 5 },
         IndicatorKind::EmaRibbon {
             periods: [3, 5, 8, 13, 21],
         },
@@ -2973,7 +3001,12 @@ fn every_indicator_engine_path_matches_full_recomputation() {
         },
         IndicatorKind::Momentum { period: 5 },
         IndicatorKind::RateOfChange { period: 5 },
-    ];
+    ]
+}
+
+#[test]
+fn every_indicator_engine_path_matches_full_recomputation() {
+    let kinds = all_engine_indicator_kinds();
     for kind in kinds {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         let volume = chart.add_series(SeriesKind::Histogram);
@@ -3072,122 +3105,112 @@ fn every_indicator_engine_path_matches_full_recomputation() {
 }
 
 #[test]
+fn every_scalar_engine_binding_keeps_gap_rows_blank_after_repair() {
+    for kind in all_engine_indicator_kinds() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let volume_id = chart.add_series(SeriesKind::Histogram);
+        let n = 1100;
+        let times = (0..n).map(|row| row as f64 * 3_600.0).collect::<Vec<_>>();
+        let mut close = (0..n)
+            .map(|row| 100.0 + row as f64 * 0.04 + (row as f64 * 0.43).sin() * 2.0)
+            .collect::<Vec<_>>();
+        let mut high = close.iter().map(|v| v + 1.0).collect::<Vec<_>>();
+        let mut low = close.iter().map(|v| v - 1.0).collect::<Vec<_>>();
+        let volumes = (0..n).map(|row| (row % 11 + 1) as f64).collect::<Vec<_>>();
+        for row in (70..72).chain(1023..1026) {
+            close[row] = f64::NAN;
+            high[row] = f64::NAN;
+            low[row] = f64::NAN;
+        }
+        chart
+            .set_series_data(0, &times, &close, &high, &low, &close)
+            .unwrap();
+        chart
+            .set_series_data(volume_id, &times, &volumes, &volumes, &volumes, &volumes)
+            .unwrap();
+        let outputs = add_test_indicator(&mut chart, &kind, Some(volume_id));
+        assert!(!outputs.is_empty(), "{kind:?}");
+        let binding = chart.indicators.len() - 1;
+        let check = |chart: &ChartEngine, gaps: &[usize]| {
+            assert_indicator_binding_matches_full(chart, binding);
+            for &output in &outputs {
+                let (output_times, values) = chart.data.series_data(output).unwrap();
+                for &row in gaps {
+                    let pos = output_times
+                        .iter()
+                        .position(|&time| time == times[row] as i64)
+                        .expect("interior gap time remains aligned");
+                    assert!(values[3][pos].is_nan(), "{kind:?} gap row {row}");
+                }
+            }
+        };
+        check(&chart, &[70, 71, 1023, 1024, 1025]);
+        chart.update_series_bar(0, times[1024], [149.0, 150.0, 148.0, 149.0]);
+        check(&chart, &[70, 71, 1023, 1025]);
+        chart.update_series_bar(0, times[1010], [f64::NAN; 4]);
+        check(&chart, &[70, 71, 1010, 1023, 1025]);
+        chart.update_series_bar(0, times[1010], [148.0, 149.0, 147.0, 148.0]);
+        check(&chart, &[70, 71, 1023, 1025]);
+    }
+}
+
+#[test]
+fn every_structure_and_session_binding_preserves_gap_whitespace() {
+    // The I3 scanners keep their own session and annotation rules; this
+    // checks the shared source-row whitespace contract for all seven kinds.
+    for name in [
+        "swing_points",
+        "market_structure",
+        "fair_value_gaps",
+        "order_blocks",
+        "session_levels",
+        "previous_period_levels",
+        "opening_range",
+    ] {
+        let kind = IndicatorKind::schema_definition(name, 14, 2.0).unwrap();
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let times = (0..1100)
+            .map(|row| row as f64 * 3_600.0)
+            .collect::<Vec<_>>();
+        let mut close = (0..1100)
+            .map(|row| 100.0 + (row as f64 * 0.13).sin())
+            .collect::<Vec<_>>();
+        let mut high = close.iter().map(|v| v + 2.0).collect::<Vec<_>>();
+        let mut low = close.iter().map(|v| v - 2.0).collect::<Vec<_>>();
+        for row in [70, 1023, 1024] {
+            close[row] = f64::NAN;
+            high[row] = f64::NAN;
+            low[row] = f64::NAN;
+        }
+        chart
+            .set_series_data(0, &times, &close, &high, &low, &close)
+            .unwrap();
+        let outputs = chart.add_indicator_kind(0, kind, None);
+        assert!(!outputs.is_empty(), "{name}");
+        let check = |chart: &ChartEngine, rows: &[usize]| {
+            for &output in &outputs {
+                let (aligned, values) = chart.data.series_data(output).unwrap();
+                for &row in rows {
+                    let offset = aligned
+                        .iter()
+                        .position(|&time| time == times[row] as i64)
+                        .expect("gap row aligned");
+                    assert!(
+                        values[3][offset].is_nan(),
+                        "{name} output {output} row {row}"
+                    );
+                }
+            }
+        };
+        check(&chart, &[70, 1023, 1024]);
+        chart.update_series_bar(0, times[1024], [101.0, 103.0, 99.0, 101.0]);
+        check(&chart, &[70, 1023]);
+    }
+}
+
+#[test]
 fn batch_and_single_updates_are_semantically_identical_for_every_indicator() {
-    let kinds = [
-        IndicatorKind::Aroon { period: 5 },
-        IndicatorKind::AwesomeOscillator,
-        IndicatorKind::Dpo { period: 5 },
-        IndicatorKind::ChandeMomentum { period: 5 },
-        IndicatorKind::Sma { period: 5 },
-        IndicatorKind::Ema { period: 5 },
-        IndicatorKind::EmaRibbon {
-            periods: [3, 5, 8, 13, 21],
-        },
-        IndicatorKind::Bollinger {
-            period: 5,
-            deviation: 2.0,
-        },
-        IndicatorKind::BollingerMetrics {
-            period: 5,
-            deviation: 2.0,
-        },
-        IndicatorKind::Envelopes {
-            period: 5,
-            percent: 10.0,
-            exponential: false,
-        },
-        IndicatorKind::Envelopes {
-            period: 5,
-            percent: 10.0,
-            exponential: true,
-        },
-        IndicatorKind::Alma {
-            period: 5,
-            offset: 0.85,
-            sigma: 6.0,
-        },
-        IndicatorKind::Rsi { period: 5 },
-        IndicatorKind::Macd {
-            fast: 3,
-            slow: 6,
-            signal: 4,
-        },
-        IndicatorKind::Stochastic {
-            k_period: 5,
-            d_period: 3,
-        },
-        IndicatorKind::Atr { period: 5 },
-        IndicatorKind::Vwap,
-        IndicatorKind::AccumulationDistribution,
-        IndicatorKind::PriceVolumeTrend,
-        IndicatorKind::ChaikinOscillator { fast: 3, slow: 7 },
-        IndicatorKind::Klinger {
-            fast: 3,
-            slow: 7,
-            signal: 4,
-        },
-        IndicatorKind::Kama {
-            period: 5,
-            fast: 2,
-            slow: 10,
-        },
-        IndicatorKind::McGinley { period: 5 },
-        IndicatorKind::LinearRegression {
-            period: 5,
-            deviation: 2.0,
-        },
-        IndicatorKind::Choppiness { period: 5 },
-        IndicatorKind::AtrBands {
-            period: 5,
-            multiplier: 2.0,
-        },
-        IndicatorKind::RelativeVolume { period: 5 },
-        IndicatorKind::ElderForce { period: 5 },
-        IndicatorKind::EaseOfMovement {
-            period: 5,
-            divisor: 100.0,
-        },
-        IndicatorKind::HistoricalVolatility {
-            period: 5,
-            annualization: 252.0,
-        },
-        IndicatorKind::Trix {
-            period: 3,
-            signal: 4,
-        },
-        IndicatorKind::Kst {
-            roc: [2, 3, 4, 5],
-            smoothing: [2, 3, 2, 3],
-            signal: 3,
-        },
-        IndicatorKind::Tsi {
-            long: 5,
-            short: 3,
-            signal: 4,
-        },
-        IndicatorKind::MassIndex {
-            ema_period: 3,
-            sum_period: 5,
-        },
-        IndicatorKind::Vortex { period: 5 },
-        IndicatorKind::CoppockCurve {
-            long: 7,
-            short: 5,
-            smoothing: 3,
-        },
-        IndicatorKind::FisherTransform { period: 5 },
-        IndicatorKind::UltimateOscillator {
-            short: 3,
-            medium: 5,
-            long: 7,
-        },
-        IndicatorKind::VolumeOscillator {
-            fast: 3,
-            slow: 7,
-            signal: 4,
-        },
-        IndicatorKind::Wma { period: 5 },
-    ];
+    let kinds = all_engine_indicator_kinds();
     for kind in kinds {
         let setup = || {
             let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
@@ -3195,11 +3218,14 @@ fn batch_and_single_updates_are_semantically_identical_for_every_indicator() {
             let times = (0..40)
                 .map(|index| index as f64 * 3_600.0)
                 .collect::<Vec<_>>();
-            let close = (0..40)
+            let mut close = (0..40)
                 .map(|index| 90.0 + index as f64 * 0.4)
                 .collect::<Vec<_>>();
-            let high = close.iter().map(|value| value + 2.0).collect::<Vec<_>>();
-            let low = close.iter().map(|value| value - 1.0).collect::<Vec<_>>();
+            let mut high = close.iter().map(|value| value + 2.0).collect::<Vec<_>>();
+            let mut low = close.iter().map(|value| value - 1.0).collect::<Vec<_>>();
+            close[20] = f64::NAN;
+            high[20] = f64::NAN;
+            low[20] = f64::NAN;
             let volumes = (0..40).map(|index| (index % 7) as f64).collect::<Vec<_>>();
             chart
                 .set_series_data(0, &times, &close, &high, &low, &close)
@@ -3217,12 +3243,13 @@ fn batch_and_single_updates_are_semantically_identical_for_every_indicator() {
             (10.0 * 3_600.0, [95.0, 99.0, 94.0, 98.0]),
             (f64::NAN, [1.0; 4]),
             (10.0 * 3_600.0, [96.0, 100.0, 95.0, 99.0]),
-            (42.0 * 3_600.0, [107.0, 109.0, 106.0, 108.0]),
+            (42.0 * 3_600.0, [f64::NAN; 4]),
+            (43.0 * 3_600.0, [107.0, 109.0, 106.0, 108.0]),
         ];
         for (time, values) in rows {
             singles.update_series_bar(0, time, values);
         }
-        assert_eq!(batch.update_series_bars(0, rows), 4);
+        assert_eq!(batch.update_series_bars(0, rows), 5);
 
         assert_eq!(
             singles.data.time_points_generation(),
