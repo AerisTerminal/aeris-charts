@@ -82,18 +82,17 @@ combined Canvas2D/WebGPU parity scene for structure studies and auction markers.
 
 ## Accessibility review
 
-axe-core 4.12.1 audit of the demo host page (`agent-browser a11y`), 2026-10-06:
-
-- **Light theme:** 2 violations, 2 incomplete, 36 passes. Violations: `color-contrast` on four
-  demo-shell elements (`#demo_mode_financial`, `#market_price`, and two Feature lab buttons)
-  and `meta-viewport` (zoom disabled by the demo page). Incomplete, needing manual review:
-  `aria-prohibited-attr` on four demo panels and `color-contrast` on `#legend`.
-- **Dark theme:** 1 violation (`meta-viewport` only; the contrast findings pass in dark), the
-  same 2 incomplete, 36 passes.
-
-All findings are in the example demo's own page chrome, not in the engine or the published
-package; they are recorded here as known demo-harness issues. The chart surface itself is
-canvas-rendered, so axe cannot audit chart internals. Chart keyboard interaction is
+The `examples/web_demo/tests/accessibility.spec.mjs` audit injects dev-only axe-core 4.12.1
+and checks the full page with the `wcag2a`, `wcag2aa`, `wcag21a`, and `wcag21aa` tags.
+Financial, General, split grid, chart-focused shortcuts panel, and 390px mobile layouts
+each have zero violations in both light and dark (10 states). It also checks that
+multiple charts' `aria-describedby` targets are distinct, resolved, and owned by their
+respective charts. The previous demo `color-contrast`, `meta-viewport`, and
+`aria-prohibited-attr` findings were fixed with demo-scoped contrast text tokens
+(without changing shared brand tokens), a zoom-permitting viewport, explicit group/region
+roles, globally unique pane description IDs, and a visible mobile heading. The chart
+surface itself is canvas-rendered, so axe cannot audit its pixels or all manual contrast
+questions. Chart keyboard interaction is
 engine-owned (`aeris_charts_engine` `chart_input.rs`): arrow keys pan, `+`/`-` zoom around the
 plot center, Escape cancels hover/drag state, and `ChartEngine::input_target_key_down` exposes
 named focus targets (panes, trading objects) that accessibility hosts can surface as focusable
