@@ -299,6 +299,8 @@ Momentum and Rate of Change also require every source row from the lagged row th
 
 Visible-range volume profiles use a pure two-pass OHLCV bin calculation in this crate: uniform high/low overlap, bullish/bearish volume split by candle direction, deterministic point of control and contiguous value area, `O(visible bars + rows)` work and at most 512 rows. It does not claim tick-at-price accuracy.
 
+For previous-period levels, valid rows are the only observed period data. A wholly whitespace UTC day, week, month, or host session publishes no new aggregate; the next valid period retains the last observed period's levels just as if those rows were absent. Whitespace rows themselves emit no levels. Session high/low and opening range instead develop only from their current session's valid rows. Bounded-window calculations such as CMO and DPO recompute their period window on each affected row so expired values cannot leave floating-point residue; Bollinger metrics use the same rounded band endpoints as the dense formula.
+
 ### `aeris_charts_engine`
 
 The headless owner of chart behavior and mutable chart state. It owns series, panes, scales, workspace layout, drawings, hit testing, interaction models, indicator bindings, price lines, and frame construction.
