@@ -2667,11 +2667,19 @@ fn kst_line_start(roc: [usize; 4], smooth: [usize; 4]) -> usize {
 fn kst_at(closes: &[f64], row: usize, roc: [usize; 4], smooth: [usize; 4]) -> f64 {
     let mut line = 0.0;
     for (component, (lag, period)) in roc.into_iter().zip(smooth).enumerate() {
+        // Every ROC sample depends on the entire lag interval, even when
+        // smoothing is shorter than the lag and no endpoint lands on a gap.
+        if !closes[row + 1 - period - lag..=row]
+            .iter()
+            .all(|close| close.is_finite())
+        {
+            return f64::NAN;
+        }
         let mut sum = 0.0;
         for index in row + 1 - period..=row {
             let current = closes[index];
             let previous = closes[index - lag];
-            if !current.is_finite() || !previous.is_finite() || previous == 0.0 {
+            if previous == 0.0 {
                 return f64::NAN;
             }
             sum += 100.0 * (current / previous - 1.0);
@@ -9056,6 +9064,613 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn kst_noncontiguous_lag_windows_follow_deleted_rows_oracle() {
+        let roc = [10, 15, 20, 30];
+        let smooth = [2; 4];
+        let signal = 3;
+        for gap in [3..5, 75..77] {
+            let mut close = (0..130)
+                .map(|row| 100.0 + row as f64 * 0.13 + (row as f64 * 0.33).sin() * 2.0)
+                .collect::<Vec<_>>();
+            for row in gap.clone() {
+                close[row] = f64::NAN;
+            }
+            let compact = close
+                .iter()
+                .copied()
+                .filter(|v| v.is_finite())
+                .collect::<Vec<_>>();
+            let oracle = kst(&compact, roc, smooth, signal);
+            let dense = kst(&close, roc, smooth, signal);
+            let times = (0..close.len() as i64).collect::<Vec<_>>();
+            let volume = vec![1.0; close.len()];
+            let mut incremental = IncrementalState::kst(roc, smooth, signal);
+            incremental.rebuild_from(
+                IndicatorInput {
+                    times: &times,
+                    open: &close,
+                    high: &close,
+                    low: &close,
+                    close: &close,
+                    volume: &volume,
+                },
+                0,
+            );
+            for (row, point) in dense.iter().enumerate() {
+                let compact_row = row - (gap.end - gap.start).min(row.saturating_sub(gap.start));
+                for (output, actual) in [point.line, point.signal].into_iter().enumerate() {
+                    let want = if gap.contains(&row) {
+                        None
+                    } else {
+                        let lookback = roc
+                            .into_iter()
+                            .zip(smooth)
+                            .map(|(lag, width)| lag + width - 1)
+                            .max()
+                            .unwrap()
+                            + if output == 1 { signal - 1 } else { 0 };
+                        if row >= gap.end && row - gap.end < lookback {
+                            None
+                        } else {
+                            let point = oracle[compact_row];
+                            if output == 0 {
+                                point.line
+                            } else {
+                                point.signal
+                            }
+                        }
+                    };
+                    let check = |value: Option<f64>, path: &str| {
+                        let observed = value.filter(|v| v.is_finite());
+                        let expected = want.filter(|v| v.is_finite());
+                        assert!(
+                            matches!((observed, expected), (None, None) | (Some(_), Some(_)))
+                                && observed
+                                    .zip(expected)
+                                    .is_none_or(|(a, b)| (a - b).abs() <= 1e-9 * b.abs().max(1.0)),
+                            "KST {path} gap {gap:?} row {row} output {output}: {observed:?} != {expected:?}"
+                        );
+                    };
+                    check(actual, "dense");
+                    let from = incremental.output_from(output);
+                    check(
+                        (row >= from).then(|| incremental.output(output)[row - from]),
+                        "incremental",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn seeded_parameterized_gap_oracle_covers_window_and_continue_kinds() {
+        // A compact (gap rows deleted) run is independent of whitespace handling.
+        // Fixed seeds and small bounded series keep the complete catalog inexpensive.
+        let kinds = all_test_states();
+        assert_eq!(kinds.len(), 64, "update the oracle when a kind is added");
+        for seed in [0x4b53_5421_u64, 0x8acd_2026] {
+            let mut random = seed;
+            let mut next = || {
+                random ^= random << 13;
+                random ^= random >> 7;
+                random ^= random << 17;
+                random
+            };
+            for (kind, _) in &kinds {
+                // Valid short and long periods, plus independent multi-term settings.
+                let period = if next() & 1 == 0 {
+                    3 + next() as usize % 8
+                } else {
+                    18 + next() as usize % 15
+                };
+                let second = 2 + next() as usize % 6;
+                let third = 2 + next() as usize % 5;
+                for shape in 0..5 {
+                    let n = 155;
+                    let mut close = (0..n)
+                        .map(|row| {
+                            100.0
+                                + row as f64 * 0.09
+                                + (row as f64 * 0.29 + seed as f64 * 1e-9).sin() * 2.0
+                        })
+                        .collect::<Vec<_>>();
+                    let mut high = close.iter().map(|v| v + 1.4).collect::<Vec<_>>();
+                    let mut low = close.iter().map(|v| v - 1.1).collect::<Vec<_>>();
+                    let initial_close = close.clone();
+                    let initial_high = high.clone();
+                    let initial_low = low.clone();
+                    let volume = (0..n)
+                        .map(|row| 3.0 + (row * 7 % 19) as f64)
+                        .collect::<Vec<_>>();
+                    let times = (0..n as i64).map(|row| row * 3_600).collect::<Vec<_>>();
+                    let middle = 64 + next() as usize % 16;
+                    let gaps: Vec<usize> = match shape {
+                        0 => vec![middle],
+                        1 => vec![middle, middle + 1],
+                        2 => vec![1, 2, 3],
+                        3 => vec![middle, middle + 1, middle + 4, middle + 5],
+                        _ => vec![n - 4, n - 3],
+                    };
+                    for &row in &gaps {
+                        close[row] = f64::NAN;
+                        high[row] = f64::NAN;
+                        low[row] = f64::NAN;
+                    }
+                    let input = IndicatorInput {
+                        times: &times,
+                        open: &close,
+                        high: &high,
+                        low: &low,
+                        close: &close,
+                        volume: &volume,
+                    };
+                    let kept = (0..n).filter(|row| !gaps.contains(row)).collect::<Vec<_>>();
+                    let compact_times = kept.iter().map(|&row| times[row]).collect::<Vec<_>>();
+                    let compact_close = kept.iter().map(|&row| close[row]).collect::<Vec<_>>();
+                    let compact_high = kept.iter().map(|&row| high[row]).collect::<Vec<_>>();
+                    let compact_low = kept.iter().map(|&row| low[row]).collect::<Vec<_>>();
+                    let compact_volume = kept.iter().map(|&row| volume[row]).collect::<Vec<_>>();
+                    let compact = IndicatorInput {
+                        times: &compact_times,
+                        open: &compact_close,
+                        high: &compact_high,
+                        low: &compact_low,
+                        close: &compact_close,
+                        volume: &compact_volume,
+                    };
+                    let (full, mut state) =
+                        parameterized_gap_case(*kind, period, second, third, input);
+                    let (deleted, _) =
+                        parameterized_gap_case(*kind, period, second, third, compact);
+                    let mut repaired = state.clone();
+                    state.rebuild_from(input, 0);
+                    repaired.rebuild_from(
+                        IndicatorInput {
+                            times: &times,
+                            open: &initial_close,
+                            high: &initial_high,
+                            low: &initial_low,
+                            close: &initial_close,
+                            volume: &volume,
+                        },
+                        0,
+                    );
+                    repaired.rebuild_from(input, gaps[0]);
+                    for (output, values) in full.iter().enumerate() {
+                        let width = gap_window_width(*kind, output, period, second, third);
+                        let mut compact_row = 0;
+                        for (row, &value) in values.iter().enumerate() {
+                            let is_gap = gaps.contains(&row);
+                            let window_has_gap = width.is_some_and(|width| {
+                                row + 1 >= width
+                                    && gaps.iter().any(|&gap| gap <= row && row - gap < width)
+                            });
+                            let want = if is_gap || window_has_gap {
+                                None
+                            } else {
+                                deleted[output][compact_row].filter(|v| v.is_finite())
+                            };
+                            if !is_gap {
+                                compact_row += 1;
+                            }
+                            let check = |found: Option<f64>, path: &str| {
+                                let found = found.filter(|v| v.is_finite());
+                                assert!(
+                                    matches!((found, want), (None, None) | (Some(_), Some(_)))
+                                        && found.zip(want).is_none_or(|(a, b)| {
+                                            (a - b).abs() <= 1e-9 * b.abs().max(1.0)
+                                        }),
+                                    "{kind:?} {path} seed {seed:#x} params ({period},{second},{third}) shape {shape} output {output} row {row}: {found:?} != {want:?}, width {width:?}"
+                                );
+                            };
+                            check(value, "dense");
+                            let from = state.output_from(output);
+                            check(
+                                (row >= from).then(|| state.output(output)[row - from]),
+                                "incremental",
+                            );
+                            if row >= gaps[0] {
+                                let from = repaired.output_from(output);
+                                check(
+                                    (row >= from).then(|| repaired.output(output)[row - from]),
+                                    "incremental repair",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn gap_window_width(
+        kind: TestKind,
+        output: usize,
+        period: usize,
+        second: usize,
+        third: usize,
+    ) -> Option<usize> {
+        Some(match kind {
+            TestKind::AwesomeOscillator => 34,
+            TestKind::Ichimoku => [9, 26, 26, 52, 1][output],
+            TestKind::Volume => {
+                if output == 0 {
+                    1
+                } else {
+                    period
+                }
+            }
+            TestKind::RelativeVolume
+            | TestKind::Aroon
+            | TestKind::ChandeMomentum
+            | TestKind::Momentum
+            | TestKind::RateOfChange
+            | TestKind::HistoricalVolatility
+            | TestKind::Vortex
+            | TestKind::Choppiness
+            | TestKind::EaseOfMovement => period + 1,
+            TestKind::UltimateOscillator => period + second + third + 1,
+            TestKind::CoppockCurve => period + second + third,
+            TestKind::Kst => period + 12 + (2 + second % 3) + if output == 1 { third } else { 0 },
+            TestKind::Dpo => period,
+            TestKind::Hma => period + (period as f64).sqrt() as usize - 1,
+            TestKind::Stochastic if output == 1 => period + second - 1,
+            TestKind::PivotPoints | TestKind::ZigZag => return None,
+            TestKind::Sma
+            | TestKind::Wma
+            | TestKind::Vwma
+            | TestKind::StandardDeviation
+            | TestKind::Cci
+            | TestKind::WilliamsR
+            | TestKind::Donchian
+            | TestKind::Bollinger
+            | TestKind::BollingerMetrics
+            | TestKind::EnvelopesSma
+            | TestKind::Alma
+            | TestKind::Stochastic
+            | TestKind::LinearRegression
+            | TestKind::Cmf
+            | TestKind::Mfi => period,
+            _ => return None, // Recursive/cumulative kinds use every compact row.
+        })
+    }
+
+    fn parameterized_gap_case(
+        kind: TestKind,
+        period: usize,
+        second: usize,
+        third: usize,
+        input: IndicatorInput<'_>,
+    ) -> (Vec<Vec<Option<f64>>>, IncrementalState) {
+        let c = input.close;
+        let h = input.high;
+        let l = input.low;
+        let v = input.volume;
+        let p = period;
+        let q = second;
+        let s = third;
+        macro_rules! single {
+            ($dense:expr, $incremental:expr) => {
+                (vec![$dense], $incremental)
+            };
+        }
+        match kind {
+            TestKind::Sma => single!(sma(c, p), IncrementalState::sma(p)),
+            TestKind::Wma => single!(wma(c, p), IncrementalState::wma(p)),
+            TestKind::Vwma => single!(vwma(c, v, p), IncrementalState::vwma(p)),
+            TestKind::Ema => single!(ema(c, p), IncrementalState::ema(p)),
+            TestKind::Smma => single!(smma(c, p), IncrementalState::smma(p)),
+            TestKind::Dema => single!(dema(c, p), IncrementalState::dema(p)),
+            TestKind::Tema => single!(tema(c, p), IncrementalState::tema(p)),
+            TestKind::Hma => single!(hma(c, p), IncrementalState::hma(p)),
+            TestKind::Dpo => single!(dpo(c, p), IncrementalState::dpo(p)),
+            TestKind::ChandeMomentum => {
+                single!(chande_momentum(c, p), IncrementalState::chande_momentum(p))
+            }
+            TestKind::Momentum => single!(momentum(c, p), IncrementalState::momentum(p)),
+            TestKind::RateOfChange => {
+                single!(rate_of_change(c, p), IncrementalState::rate_of_change(p))
+            }
+            TestKind::StandardDeviation => single!(
+                standard_deviation(c, p),
+                IncrementalState::standard_deviation(p)
+            ),
+            TestKind::Cci => single!(cci(h, l, c, p), IncrementalState::cci(p)),
+            TestKind::WilliamsR => single!(williams_r(h, l, c, p), IncrementalState::williams_r(p)),
+            TestKind::Rsi => single!(rsi(c, p), IncrementalState::rsi(p)),
+            TestKind::StochasticRsi => single!(
+                stochastic_rsi(c, p, q),
+                IncrementalState::stochastic_rsi(p, q)
+            ),
+            TestKind::Atr => single!(atr(h, l, c, p), IncrementalState::atr(p)),
+            TestKind::AdxDmi => {
+                let points = adx_dmi(h, l, c, p);
+                (
+                    vec![
+                        points.iter().map(|point| point.plus_di).collect(),
+                        points.iter().map(|point| point.minus_di).collect(),
+                        points.iter().map(|point| point.adx).collect(),
+                    ],
+                    IncrementalState::adx_dmi(p),
+                )
+            }
+            TestKind::SuperTrend => single!(
+                supertrend(h, l, c, p, 3.0),
+                IncrementalState::supertrend(p, 3.0)
+            ),
+            TestKind::AtrBands => {
+                let points = atr_bands(h, l, c, p, 2.0);
+                (
+                    vec![
+                        points.iter().map(|point| point.upper).collect(),
+                        points.iter().map(|point| point.basis).collect(),
+                        points.iter().map(|point| point.lower).collect(),
+                    ],
+                    IncrementalState::atr_bands(p, 2.0),
+                )
+            }
+            TestKind::Keltner => {
+                let points = keltner(h, l, c, p, 2.0);
+                (
+                    vec![
+                        points.iter().map(|point| point.upper).collect(),
+                        points.iter().map(|point| point.middle).collect(),
+                        points.iter().map(|point| point.lower).collect(),
+                    ],
+                    IncrementalState::keltner(p, 2.0),
+                )
+            }
+            TestKind::Donchian => {
+                let points = donchian(h, l, p);
+                (
+                    vec![
+                        points.iter().map(|point| point.upper).collect(),
+                        points.iter().map(|point| point.middle).collect(),
+                        points.iter().map(|point| point.lower).collect(),
+                    ],
+                    IncrementalState::donchian(p),
+                )
+            }
+            TestKind::Bollinger | TestKind::BollingerMetrics => {
+                let points = if kind == TestKind::Bollinger {
+                    bollinger(c, p, 2.0)
+                        .iter()
+                        .map(|point| [point.upper, point.middle, point.lower])
+                        .collect::<Vec<_>>()
+                } else {
+                    bollinger_metrics(c, p, 2.0)
+                        .iter()
+                        .map(|point| [point.0, point.1, None])
+                        .collect::<Vec<_>>()
+                };
+                let count = if kind == TestKind::Bollinger { 3 } else { 2 };
+                (
+                    (0..count)
+                        .map(|output| points.iter().map(|point| point[output]).collect())
+                        .collect(),
+                    if count == 3 {
+                        IncrementalState::bollinger(p, 2.0)
+                    } else {
+                        IncrementalState::bollinger_metrics(p, 2.0)
+                    },
+                )
+            }
+            TestKind::EnvelopesSma | TestKind::EnvelopesEma => {
+                let exponential = kind == TestKind::EnvelopesEma;
+                let points = envelopes(c, p, 10.0, exponential);
+                (
+                    vec![
+                        points.iter().map(|point| point.0).collect(),
+                        points.iter().map(|point| point.1).collect(),
+                        points.iter().map(|point| point.2).collect(),
+                    ],
+                    IncrementalState::envelopes(p, 10.0, exponential),
+                )
+            }
+            TestKind::EmaRibbon => {
+                let periods = [q, q + 2, q + 4, q + 7, p + q + 8];
+                (
+                    periods.iter().map(|&width| ema(c, width)).collect(),
+                    IncrementalState::ema_ribbon(periods),
+                )
+            }
+            TestKind::Alma => single!(alma(c, p, 0.85, 6.0), IncrementalState::alma(p, 0.85, 6.0)),
+            TestKind::Macd => {
+                let points = macd(c, q, p + q, s);
+                (
+                    vec![
+                        points.iter().map(|point| point.macd).collect(),
+                        points.iter().map(|point| point.signal).collect(),
+                        points.iter().map(|point| point.histogram).collect(),
+                    ],
+                    IncrementalState::macd(q, p + q, s),
+                )
+            }
+            TestKind::Stochastic => {
+                let points = stochastic(h, l, c, p, q);
+                (
+                    vec![
+                        points.iter().map(|point| point.k).collect(),
+                        points.iter().map(|point| point.d).collect(),
+                    ],
+                    IncrementalState::stochastic(p, q),
+                )
+            }
+            TestKind::Aroon => {
+                let points = aroon(h, l, p);
+                (
+                    vec![
+                        points.iter().map(|point| point.0).collect(),
+                        points.iter().map(|point| point.1).collect(),
+                    ],
+                    IncrementalState::aroon(p),
+                )
+            }
+            TestKind::RelativeVolume => {
+                let masked = v
+                    .iter()
+                    .zip(c)
+                    .map(|(&volume, &close)| if close.is_finite() { volume } else { f64::NAN })
+                    .collect::<Vec<_>>();
+                single!(
+                    relative_volume(&masked, p),
+                    IncrementalState::relative_volume(p)
+                )
+            }
+            TestKind::Volume => {
+                let values = v
+                    .iter()
+                    .zip(c)
+                    .map(|(&volume, &close)| close.is_finite().then_some(volume.max(0.0)))
+                    .collect::<Vec<_>>();
+                let average = (0..c.len())
+                    .map(|row| {
+                        if row + 1 < p {
+                            None
+                        } else {
+                            let window = &values[row + 1 - p..=row];
+                            Some(if window.iter().all(Option::is_some) {
+                                window.iter().map(|item| item.unwrap()).sum::<f64>() / p as f64
+                            } else {
+                                f64::NAN
+                            })
+                        }
+                    })
+                    .collect();
+                (vec![values, average], IncrementalState::volume(p))
+            }
+            TestKind::ElderForce => single!(elder_force(c, v, p), IncrementalState::elder_force(p)),
+            TestKind::ChaikinOscillator => single!(
+                chaikin_oscillator(h, l, c, v, q, p + q),
+                IncrementalState::chaikin_oscillator(q, p + q)
+            ),
+            TestKind::VolumeOscillator => {
+                let masked = v
+                    .iter()
+                    .zip(c)
+                    .map(|(&volume, &close)| if close.is_finite() { volume } else { f64::NAN })
+                    .collect::<Vec<_>>();
+                let points = volume_oscillator(&masked, q, p + q, s);
+                (
+                    vec![
+                        points.iter().map(|point| point.line).collect(),
+                        points.iter().map(|point| point.signal).collect(),
+                        points.iter().map(|point| point.histogram).collect(),
+                    ],
+                    IncrementalState::volume_oscillator(q, p + q, s),
+                )
+            }
+            TestKind::EaseOfMovement => single!(
+                ease_of_movement(h, l, v, p, 100.0),
+                IncrementalState::ease_of_movement(p, 100.0)
+            ),
+            TestKind::HistoricalVolatility => single!(
+                historical_volatility(c, p, 252.0),
+                IncrementalState::historical_volatility(p, 252.0)
+            ),
+            TestKind::MassIndex => {
+                single!(mass_index(h, l, q, p), IncrementalState::mass_index(q, p))
+            }
+            TestKind::Trix => {
+                let points = trix(c, q, s);
+                (
+                    vec![
+                        points.iter().map(|point| point.line).collect(),
+                        points.iter().map(|point| point.signal).collect(),
+                    ],
+                    IncrementalState::trix(q, s),
+                )
+            }
+            TestKind::Tsi => {
+                let points = tsi(c, p, q, s);
+                (
+                    vec![
+                        points.iter().map(|point| point.line).collect(),
+                        points.iter().map(|point| point.signal).collect(),
+                    ],
+                    IncrementalState::tsi(p, q, s),
+                )
+            }
+            TestKind::Klinger => {
+                let points = klinger(h, l, c, v, q, p + q, s);
+                (
+                    vec![
+                        points.iter().map(|point| point.line).collect(),
+                        points.iter().map(|point| point.signal).collect(),
+                    ],
+                    IncrementalState::klinger(q, p + q, s),
+                )
+            }
+            TestKind::FisherTransform => {
+                let points = fisher_transform(h, l, p);
+                (
+                    vec![
+                        points.iter().map(|point| point.line).collect(),
+                        points.iter().map(|point| point.trigger).collect(),
+                    ],
+                    IncrementalState::fisher_transform(p),
+                )
+            }
+            TestKind::Kama => single!(kama(c, p, 2, p + q), IncrementalState::kama(p, 2, p + q)),
+            TestKind::McGinley => single!(mcginley(c, p), IncrementalState::mcginley(p)),
+            TestKind::LinearRegression => {
+                let points = linear_regression(c, p, 2.0);
+                (
+                    vec![
+                        points.iter().map(|point| point.curve).collect(),
+                        points.iter().map(|point| point.upper).collect(),
+                        points.iter().map(|point| point.lower).collect(),
+                    ],
+                    IncrementalState::linear_regression(p, 2.0),
+                )
+            }
+            TestKind::Choppiness => {
+                single!(choppiness(h, l, c, p), IncrementalState::choppiness(p))
+            }
+            TestKind::Cmf => single!(cmf(h, l, c, v, p), IncrementalState::cmf(p)),
+            TestKind::Mfi => single!(mfi(h, l, c, v, p), IncrementalState::mfi(p)),
+            TestKind::Vortex => {
+                let points = vortex(h, l, c, p);
+                (
+                    vec![
+                        points.iter().map(|point| point.plus).collect(),
+                        points.iter().map(|point| point.minus).collect(),
+                    ],
+                    IncrementalState::vortex(p),
+                )
+            }
+            TestKind::UltimateOscillator => single!(
+                ultimate_oscillator(h, l, c, q, q + s, p + q + s),
+                IncrementalState::ultimate_oscillator(q, q + s, p + q + s)
+            ),
+            TestKind::CoppockCurve => single!(
+                coppock_curve(c, p + q, p, s),
+                IncrementalState::coppock_curve(p + q, p, s)
+            ),
+            TestKind::Kst => {
+                let roc = [p, p + 4, p + 8, p + 12];
+                let smooth = [2 + q % 3; 4];
+                let points = kst(c, roc, smooth, s + 1);
+                (
+                    vec![
+                        points.iter().map(|point| point.line).collect(),
+                        points.iter().map(|point| point.signal).collect(),
+                    ],
+                    IncrementalState::kst(roc, smooth, s + 1),
+                )
+            }
+            _ => {
+                let state = all_test_states()
+                    .into_iter()
+                    .find(|(candidate, _)| *candidate == kind)
+                    .unwrap()
+                    .1;
+                (expected(kind, input), state)
             }
         }
     }

@@ -3695,13 +3695,23 @@ fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
         for row in [30, 75, 76, 1023, 1024, 1025] {
             close[row] = f64::NAN;
         }
+        let ohlc = |value: f64| {
+            if value.is_finite() {
+                [value - 0.35, value + 1.4, value - 1.2, value]
+            } else {
+                [f64::NAN; 4]
+            }
+        };
+        let open = close.iter().map(|&v| ohlc(v)[0]).collect::<Vec<_>>();
+        let high = close.iter().map(|&v| ohlc(v)[1]).collect::<Vec<_>>();
+        let low = close.iter().map(|&v| ohlc(v)[2]).collect::<Vec<_>>();
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         let volume = chart.add_series(SeriesKind::Histogram);
         let volumes = (0..1053)
             .map(|row| (row % 7 + 1) as f64)
             .collect::<Vec<_>>();
         chart
-            .set_series_data(0, &times, &close, &close, &close, &close)
+            .set_series_data(0, &times, &open, &high, &low, &close)
             .unwrap();
         chart
             .set_series_data(
@@ -3716,10 +3726,13 @@ fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
         let outputs = add_test_indicator(&mut chart, &kind, Some(volume));
         assert!(!outputs.is_empty(), "{kind:?}");
         let verify = |chart: &ChartEngine, times: &[f64], close: &[f64], stage: &str| {
+            let open = close.iter().map(|&v| ohlc(v)[0]).collect::<Vec<_>>();
+            let high = close.iter().map(|&v| ohlc(v)[1]).collect::<Vec<_>>();
+            let low = close.iter().map(|&v| ohlc(v)[2]).collect::<Vec<_>>();
             let mut fresh = ChartEngine::new(800.0, 500.0, 1.0);
             let fresh_volume = fresh.add_series(SeriesKind::Histogram);
             fresh
-                .set_series_data(0, times, close, close, close, close)
+                .set_series_data(0, times, &open, &high, &low, close)
                 .unwrap();
             fresh
                 .set_series_data(
@@ -3736,6 +3749,12 @@ fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
             for (&id, &reference) in outputs.iter().zip(&expected) {
                 let (actual_times, actual) = chart.data.series_data(id).unwrap();
                 let (expected_times, expected_values) = fresh.data.series_data(reference).unwrap();
+                if matches!(kind, IndicatorKind::MassIndex { .. }) {
+                    assert!(
+                        actual[3].iter().any(|v| v.is_finite()),
+                        "MassIndex must have nonempty range output at {stage}"
+                    );
+                }
                 assert_eq!(actual_times, expected_times, "{kind:?} {stage}");
                 assert_eq!(
                     actual[3].len(),
@@ -3759,7 +3778,7 @@ fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
             times.push(row as f64 * 3_600.0);
             close.push(value);
             assert!(
-                chart.update_series_bar(0, times[row], [value; 4]),
+                chart.update_series_bar(0, times[row], ohlc(value)),
                 "{kind:?} append row {row}"
             );
             assert!(
@@ -3778,7 +3797,7 @@ fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
         ] {
             close[row] = value;
             assert!(
-                chart.update_series_bar(0, times[row], [value; 4]),
+                chart.update_series_bar(0, times[row], ohlc(value)),
                 "{kind:?} {stage}"
             );
             verify(&chart, &times, &close, stage);
