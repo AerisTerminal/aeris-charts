@@ -1,8 +1,9 @@
 //! Sliding-window exactness on every computation path.
 //!
-//! Each sliding-window kind is computed four ways (dense batch, incremental full rebuild, one-row
-//! live appends, and a historical repair from the 1,021-row checkpoint neighbourhood) and every
-//! path is compared with two references built here:
+//! Each sliding-window kind is computed five ways (dense batch, incremental full rebuild, one-row
+//! live appends, live appends that each replace a provisional tip, and a historical repair from
+//! the 1,021-row checkpoint neighbourhood) and every path is compared with two references built
+//! here:
 //!
 //! - a hand-written per-window formula using compensated (Neumaier) summation, for the summation
 //!   kinds. It shares no code with production. Its tolerance adds the forward error bound of a
@@ -696,12 +697,51 @@ fn paths(kind: TestKind, bars: &Bars) -> Vec<(&'static str, Path)> {
         live_state.rebuild_from(bars.input(0..=row), row);
         record(&live_state, &mut live, row..row + 1);
     }
+
+    // Every row first arrives as a provisional tip (a different bar, or whitespace) and is then
+    // replaced by its final value, so each append follows a tip replacement.
+    let mut tip_state = fresh_state(kind);
+    let mut tip = empty();
+    let mut scratch = with_gaps(bars, &[]);
+    for row in 0..N {
+        set_provisional_tip(&mut scratch, bars, row);
+        tip_state.rebuild_from(scratch.input(0..=row), row);
+        scratch.close[row] = bars.close[row];
+        scratch.high[row] = bars.high[row];
+        scratch.low[row] = bars.low[row];
+        scratch.volume[row] = bars.volume[row];
+        tip_state.rebuild_from(scratch.input(0..=row), row);
+        record(&tip_state, &mut tip, row..row + 1);
+    }
     vec![
         ("dense", dense),
         ("incremental rebuild", rebuild),
         ("historical repair", repair),
         ("live append", live),
+        ("live tip replace", tip),
     ]
+}
+
+/// A provisional bar that differs from the final one: whitespace on every third row, otherwise a
+/// wider bar around a moved close based on the latest finite close.
+fn set_provisional_tip(scratch: &mut Bars, bars: &Bars, row: usize) {
+    if row.is_multiple_of(3) {
+        scratch.close[row] = f64::NAN;
+        scratch.high[row] = f64::NAN;
+        scratch.low[row] = f64::NAN;
+        return;
+    }
+    let base = bars.close[..=row]
+        .iter()
+        .rev()
+        .copied()
+        .find(|value| value.is_finite())
+        .unwrap_or(1.0);
+    let close = base * 1.015_625;
+    scratch.close[row] = close;
+    scratch.high[row] = close * 1.031_25;
+    scratch.low[row] = close * 0.968_75;
+    scratch.volume[row] = bars.volume[row] * 2.0 + 7.0;
 }
 
 fn within(actual: f64, expected: f64, extra: f64) -> bool {
