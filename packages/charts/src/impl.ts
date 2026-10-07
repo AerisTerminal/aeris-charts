@@ -3811,8 +3811,8 @@ export class chart_impl implements chart_api {
    */
   private text_editor_reposition: (() => void) | null = null;
   private anim_frame: number | null = null;
-  /** The 1s candle-close countdown interval; `null` while no countdown is visible. */
-  private countdown_timer: ReturnType<typeof setInterval> | null = null;
+  /** The pending second-aligned countdown tick; `null` while no countdown is visible. */
+  private countdown_timer: ReturnType<typeof setTimeout> | null = null;
   /** True while any pointer/touch is down — pauses the countdown tick so it can't repaint mid-gesture. */
   private interacting = false;
   /** Pending rAF handle for a coalesced repaint; `null` when no repaint is scheduled. */
@@ -4339,7 +4339,7 @@ export class chart_impl implements chart_api {
   }
 
   /**
-   * Start or stop the 1s candle-close countdown interval to match whether any live series has
+   * Start or stop the 1s candle-close countdown timer to match whether any live series has
    * `countdown_visible` and data (industry-standard countdown row in the last-value cluster).
    * Central rebuild point: called from the series apply-options/set-data/remove paths and on
    * chart teardown. Ticks pin the engine clock and repaint; ticks are skipped while the
@@ -4361,22 +4361,33 @@ export class chart_impl implements chart_api {
     if (countdown_timer_needed(candidates)) {
       if (this.countdown_timer === null) {
         this.wasm.set_now_seconds(Date.now() / 1000);
-        this.countdown_timer = setInterval(() => {
-          // Skip while hidden or while the user is mid-gesture — a mid-drag repaint is the
-          // visible lag/flicker when moving the chart.
-          if (document.hidden || this.interacting) return;
-          this.wasm.set_now_seconds(Date.now() / 1000);
-          this.repaint();
-        }, 1000);
+        this.schedule_countdown_tick();
       }
-    } else if (this.countdown_timer !== null) {
-      clearInterval(this.countdown_timer);
-      this.countdown_timer = null;
+    } else {
+      this.stop_countdown_timer();
     }
+  }
+  /**
+   * Arm the next countdown tick 1 ms past the next wall-clock second. The label shows the floor
+   * of the remaining seconds, so it changes exactly when `now` crosses a whole second; a free
+   * running `setInterval` with an arbitrary phase lets jitter land two ticks in one second,
+   * holding a value for two seconds and then skipping one.
+   */
+  private schedule_countdown_tick(): void {
+    this.countdown_timer = setTimeout(() => {
+      this.countdown_timer = null;
+      if (this.removed) return;
+      this.schedule_countdown_tick();
+      // Skip while hidden or while the user is mid-gesture — a mid-drag repaint is the
+      // visible lag/flicker when moving the chart.
+      if (document.hidden || this.interacting) return;
+      this.wasm.set_now_seconds(Date.now() / 1000);
+      this.repaint();
+    }, 1001 - (Date.now() % 1000));
   }
   private stop_countdown_timer(): void {
     if (this.countdown_timer !== null) {
-      clearInterval(this.countdown_timer);
+      clearTimeout(this.countdown_timer);
       this.countdown_timer = null;
     }
   }
