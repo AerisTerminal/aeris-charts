@@ -92,41 +92,54 @@ pub fn pivot_points(
         .min(highs.len())
         .min(lows.len())
         .min(closes.len());
-    let mut out = vec![PivotPoint::default(); n];
-    if n == 0 {
-        return out;
-    }
+    let mut state = PivotState::default();
+    (0..n)
+        .map(|row| {
+            pivot_step(
+                &mut state,
+                times[row],
+                [opens[row], highs[row], lows[row], closes[row]],
+                kind,
+            )
+        })
+        .collect()
+}
 
-    let mut current_day = None;
-    let mut current: Option<Session> = None;
-    let mut previous = None;
-    for row in 0..n {
-        let day = times[row].div_euclid(86_400);
-        if current_day != Some(day) {
-            if let Some(session) = current.take() {
-                previous = Some(session);
-            }
-            current_day = Some(day);
+/// The current UTC day's running OHLC and the last completed day that had a valid bar.
+#[derive(Clone, Copy, Debug, Default)]
+struct PivotState {
+    day: Option<i64>,
+    current: Option<Session>,
+    previous: Option<Session>,
+}
+
+fn pivot_step(state: &mut PivotState, time: i64, bar: [f64; 4], kind: PivotKind) -> PivotPoint {
+    let [open, high, low, close] = bar;
+    let day = time.div_euclid(86_400);
+    if state.day != Some(day) {
+        if let Some(session) = state.current.take() {
+            state.previous = Some(session);
         }
-        if valid_bar(highs[row], lows[row], closes[row]) && opens[row].is_finite() {
-            if let Some(session) = current.as_mut() {
-                session.high = session.high.max(highs[row]);
-                session.low = session.low.min(lows[row]);
-                session.close = closes[row];
-            } else {
-                current = Some(Session {
-                    open: opens[row],
-                    high: highs[row],
-                    low: lows[row],
-                    close: closes[row],
-                });
-            }
-            if let Some(session) = previous {
-                out[row] = pivot_levels(session, kind);
-            }
-        }
+        state.day = Some(day);
     }
-    out
+    if !valid_bar(high, low, close) || !open.is_finite() {
+        return PivotPoint::default();
+    }
+    if let Some(session) = state.current.as_mut() {
+        session.high = session.high.max(high);
+        session.low = session.low.min(low);
+        session.close = close;
+    } else {
+        state.current = Some(Session {
+            open,
+            high,
+            low,
+            close,
+        });
+    }
+    state
+        .previous
+        .map_or_else(PivotPoint::default, |session| pivot_levels(session, kind))
 }
 
 /// Compute confirmed ZigZag turning points from high/low bars.
@@ -141,54 +154,95 @@ pub fn zigzag(highs: &[f64], lows: &[f64], deviation_percent: f64) -> Vec<Option
         return out;
     }
     let threshold = deviation_percent / 100.0;
-    let mut direction = 0_i8;
-    let mut extreme_index = 0_usize;
-    let mut extreme = (highs[0] + lows[0]) / 2.0;
-    for index in 1..n {
-        if direction == 0 {
-            if high_at_least(highs[index], lows[0], threshold) {
-                direction = 1;
-                extreme_index = index;
-                extreme = highs[index];
-                out[0] = Some(lows[0]);
-            } else if low_at_most(lows[index], highs[0], threshold) {
-                direction = -1;
-                extreme_index = index;
-                extreme = lows[index];
-                out[0] = Some(highs[0]);
-            } else if highs[index] > extreme {
-                extreme = highs[index];
-                extreme_index = index;
-            } else if lows[index] < extreme {
-                extreme = lows[index];
-                extreme_index = index;
-            }
-            continue;
-        }
-        if direction > 0 {
-            if highs[index] >= extreme {
-                extreme = highs[index];
-                extreme_index = index;
-            } else if low_at_most(lows[index], extreme, threshold) {
-                out[extreme_index] = Some(extreme);
-                direction = -1;
-                extreme_index = index;
-                extreme = lows[index];
-            }
-        } else if lows[index] <= extreme {
-            extreme = lows[index];
-            extreme_index = index;
-        } else if high_at_least(highs[index], extreme, threshold) {
-            out[extreme_index] = Some(extreme);
-            direction = 1;
-            extreme_index = index;
-            extreme = highs[index];
-        }
+    let mut state = ZigZagState::default();
+    for index in 0..n {
+        zigzag_step(
+            &mut state,
+            index,
+            highs[index],
+            lows[index],
+            threshold,
+            |row, value| out[row] = Some(value),
+        );
     }
-    if direction != 0 {
-        out[extreme_index] = Some(extreme);
+    if state.direction != 0 {
+        out[state.extreme_index] = Some(state.extreme);
     }
     out
+}
+
+/// ZigZag scan position: the first bar, the leg direction (0 until the first reversal), and the
+/// leg's provisional extreme. Every row before `extreme_index` is final; only that extreme and
+/// later rows can still change.
+#[derive(Clone, Copy, Debug, Default)]
+struct ZigZagState {
+    started: bool,
+    first_high: f64,
+    first_low: f64,
+    direction: i8,
+    extreme_index: usize,
+    extreme: f64,
+}
+
+/// Advance one bar. `confirm(row, value)` receives each turning point the bar confirms.
+fn zigzag_step(
+    state: &mut ZigZagState,
+    index: usize,
+    high: f64,
+    low: f64,
+    threshold: f64,
+    mut confirm: impl FnMut(usize, f64),
+) {
+    if !state.started {
+        *state = ZigZagState {
+            started: true,
+            first_high: high,
+            first_low: low,
+            direction: 0,
+            extreme_index: index,
+            extreme: (high + low) / 2.0,
+        };
+        return;
+    }
+    if state.direction == 0 {
+        if high_at_least(high, state.first_low, threshold) {
+            state.direction = 1;
+            state.extreme_index = index;
+            state.extreme = high;
+            confirm(0, state.first_low);
+        } else if low_at_most(low, state.first_high, threshold) {
+            state.direction = -1;
+            state.extreme_index = index;
+            state.extreme = low;
+            confirm(0, state.first_high);
+        } else if high > state.extreme {
+            state.extreme = high;
+            state.extreme_index = index;
+        } else if low < state.extreme {
+            state.extreme = low;
+            state.extreme_index = index;
+        }
+        return;
+    }
+    if state.direction > 0 {
+        if high >= state.extreme {
+            state.extreme = high;
+            state.extreme_index = index;
+        } else if low_at_most(low, state.extreme, threshold) {
+            confirm(state.extreme_index, state.extreme);
+            state.direction = -1;
+            state.extreme_index = index;
+            state.extreme = low;
+        }
+    } else if low <= state.extreme {
+        state.extreme = low;
+        state.extreme_index = index;
+    } else if high_at_least(high, state.extreme, threshold) {
+        confirm(state.extreme_index, state.extreme);
+        state.direction = 1;
+        state.extreme_index = index;
+        state.extreme = high;
+    }
 }
 
 fn high_at_least(high: f64, reference: f64, threshold: f64) -> bool {
@@ -199,7 +253,7 @@ fn low_at_most(low: f64, reference: f64, threshold: f64) -> bool {
     low <= reference * (1.0 - threshold)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Session {
     open: f64,
     high: f64,
@@ -2549,6 +2603,14 @@ struct FisherState {
     valid: bool,
 }
 
+/// Fisher recurrence plus its window of row indices, both carried in checkpoints so a resume never
+/// walks back across whitespace to rediscover the last `period` valid rows.
+#[derive(Clone, Debug, Default)]
+struct FisherCarry {
+    state: FisherState,
+    window: FisherWindow,
+}
+
 #[derive(Clone, Debug, Default)]
 struct FisherWindow {
     high_deque: VecDeque<usize>,
@@ -2557,12 +2619,6 @@ struct FisherWindow {
 }
 
 impl FisherWindow {
-    fn clear(&mut self) {
-        self.high_deque.clear();
-        self.low_deque.clear();
-        self.valid_rows.clear();
-    }
-
     fn bytes(&self) -> usize {
         (self.high_deque.capacity() + self.low_deque.capacity() + self.valid_rows.capacity())
             * std::mem::size_of::<usize>()
@@ -4721,9 +4777,11 @@ enum IncrementalKind {
     },
     PivotPoints {
         kind: PivotKind,
+        state: RecursiveHistory<PivotState>,
     },
     ZigZag {
         deviation_percent: f64,
+        state: RecursiveHistory<ZigZagState>,
     },
     Keltner {
         period: usize,
@@ -4881,8 +4939,7 @@ enum IncrementalKind {
     },
     FisherTransform {
         period: usize,
-        state: RecursiveHistory<FisherState>,
-        window: FisherWindow,
+        state: RecursiveHistory<FisherCarry>,
     },
     UltimateOscillator {
         short: usize,
@@ -5047,11 +5104,23 @@ impl IncrementalState {
     }
 
     pub fn pivot_points(kind: PivotKind) -> Self {
-        Self::new(IncrementalKind::PivotPoints { kind }, 5)
+        Self::new(
+            IncrementalKind::PivotPoints {
+                kind,
+                state: RecursiveHistory::new(),
+            },
+            5,
+        )
     }
 
     pub fn zigzag(deviation_percent: f64) -> Self {
-        Self::new(IncrementalKind::ZigZag { deviation_percent }, 1)
+        Self::new(
+            IncrementalKind::ZigZag {
+                deviation_percent,
+                state: RecursiveHistory::new(),
+            },
+            1,
+        )
     }
 
     pub fn keltner(period: usize, multiplier: f64) -> Self {
@@ -5387,7 +5456,6 @@ impl IncrementalState {
             IncrementalKind::FisherTransform {
                 period,
                 state: RecursiveHistory::new(),
-                window: FisherWindow::default(),
             },
             2,
         )
@@ -5541,8 +5609,8 @@ impl IncrementalState {
             IncrementalKind::Choppiness { .. } => 0,
             IncrementalKind::AtrBands { state, .. } => state.bytes(),
             IncrementalKind::CoppockCurve { .. } => 0,
-            IncrementalKind::FisherTransform { state, window, .. } => {
-                state.bytes() + window.bytes()
+            IncrementalKind::FisherTransform { state, .. } => {
+                state.bytes_with(|saved| saved.window.bytes())
             }
             IncrementalKind::UltimateOscillator { .. } => 0,
             IncrementalKind::Vortex { .. } => 0,
@@ -5566,8 +5634,8 @@ impl IncrementalState {
             }
             IncrementalKind::Momentum { .. } | IncrementalKind::RateOfChange { .. } => 0,
             IncrementalKind::Donchian { .. } => 0,
-            IncrementalKind::PivotPoints { .. } => 0,
-            IncrementalKind::ZigZag { .. } => 0,
+            IncrementalKind::PivotPoints { state, .. } => state.bytes(),
+            IncrementalKind::ZigZag { state, .. } => state.bytes(),
         }
     }
 
@@ -5929,36 +5997,100 @@ impl IncrementalState {
                     self.outputs[2].push(lower);
                 }
             }
-            IncrementalKind::PivotPoints { kind } => {
-                let start = self.output_from[0];
+            IncrementalKind::PivotPoints { kind, state } => {
+                let (start, mut accumulator) = state.begin(n, requested);
                 self.last_work_rows = n - start;
-                let points = pivot_points(
-                    input.times,
-                    input.open,
-                    input.high,
-                    input.low,
-                    input.close,
-                    *kind,
-                );
-                for point in points.into_iter().skip(start) {
-                    self.outputs[0].push(point.pivot.unwrap_or(f64::NAN));
-                    self.outputs[1].push(point.resistance_1.unwrap_or(f64::NAN));
-                    self.outputs[2].push(point.support_1.unwrap_or(f64::NAN));
-                    self.outputs[3].push(point.resistance_2.unwrap_or(f64::NAN));
-                    self.outputs[4].push(point.support_2.unwrap_or(f64::NAN));
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let point = pivot_step(
+                        &mut accumulator,
+                        input.times[row],
+                        [
+                            input.open.get(row).copied().unwrap_or(f64::NAN),
+                            input.high[row],
+                            input.low[row],
+                            input.close[row],
+                        ],
+                        *kind,
+                    );
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(point.pivot.unwrap_or(f64::NAN));
+                        self.outputs[1].push(point.resistance_1.unwrap_or(f64::NAN));
+                        self.outputs[2].push(point.support_1.unwrap_or(f64::NAN));
+                        self.outputs[3].push(point.resistance_2.unwrap_or(f64::NAN));
+                        self.outputs[4].push(point.support_2.unwrap_or(f64::NAN));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
                 }
+                state.finish(n, tail, before_tail);
             }
-            IncrementalKind::ZigZag { deviation_percent } => {
-                // A new bar can move the provisional endpoint, and a historical correction can
-                // alter every later confirmation. Recompute the bounded source window so the
-                // sparse turning-point stream never leaves a stale endpoint behind.
-                self.output_from[0] = 0;
-                self.last_work_rows = n;
-                self.outputs[0].extend(
-                    zigzag(input.high, input.low, *deviation_percent)
-                        .into_iter()
-                        .map(|value| value.unwrap_or(f64::NAN)),
-                );
+            IncrementalKind::ZigZag {
+                deviation_percent,
+                state,
+            } => {
+                let threshold = if deviation_percent.is_finite() && *deviation_percent > 0.0 {
+                    *deviation_percent / 100.0
+                } else {
+                    // `high_at_least`/`low_at_most` never hold, matching dense's empty output.
+                    f64::NAN
+                };
+                let emitted_reversal = state.tail.is_some_and(|tail| tail.direction != 0);
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut confirmed = Vec::new();
+                let mut tail = None;
+                let mut before_tail = None;
+                let mut before_requested = None;
+                for row in start..n {
+                    if row == requested {
+                        before_requested = Some(accumulator);
+                    }
+                    let previous = accumulator;
+                    zigzag_step(
+                        &mut accumulator,
+                        row,
+                        input.high[row],
+                        input.low[row],
+                        threshold,
+                        |index, value| {
+                            if row >= requested {
+                                confirmed.push((index, value));
+                            }
+                        },
+                    );
+                    state.checkpoint(row, accumulator);
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+                let before_requested = before_requested.unwrap_or(accumulator);
+                if accumulator.direction != 0 {
+                    confirmed.push((accumulator.extreme_index, accumulator.extreme));
+                }
+                // Rows before the provisional extreme of the scan just before `requested` are
+                // final. Before the first reversal every row is empty, so row 0 changes only when
+                // this update makes that reversal or undoes one the previous update emitted.
+                let from = if before_requested.direction != 0 {
+                    before_requested.extreme_index
+                } else if accumulator.direction != 0 || emitted_reversal {
+                    0
+                } else {
+                    requested
+                };
+                self.output_from[0] = from;
+                self.outputs[0].clear();
+                self.outputs[0].resize(n - from, f64::NAN);
+                for (index, value) in confirmed {
+                    self.outputs[0][index - from] = value;
+                }
             }
             IncrementalKind::Ichimoku => {
                 let start = self.output_from[..self.output_count]
@@ -6887,40 +7019,28 @@ impl IncrementalState {
                     ));
                 }
             }
-            IncrementalKind::FisherTransform {
-                period,
-                state,
-                window,
-            } => {
+            IncrementalKind::FisherTransform { period, state } => {
                 let (start, mut accumulator) = state.begin(n, requested);
-                // Recover the valid-price window preceding the EMA checkpoint, not merely
-                // the previous physical rows: whitespace does not consume a sample.
-                let mut repair = start;
-                let mut needed = period.saturating_sub(1);
-                while repair > 0 && needed > 0 {
-                    repair -= 1;
-                    if valid_range(input.high[repair], input.low[repair]) {
-                        needed -= 1;
-                    }
-                }
-                self.last_work_rows = n - repair;
-                window.clear();
-                for row in repair..start {
-                    window.advance(input.high, input.low, row, *period);
-                }
+                self.last_work_rows = n - start;
                 let mut tail = None;
                 let mut before_tail = None;
                 for row in start..n {
-                    let previous = accumulator;
+                    let previous = (row + 1 == n && row > 0).then(|| accumulator.clone());
+                    let FisherCarry {
+                        state: fisher,
+                        window,
+                    } = &mut accumulator;
                     window.advance(input.high, input.low, row, *period);
                     let (line, trigger) = if window.valid_rows.len() == *period
                         && valid_range(input.high[row], input.low[row])
                     {
-                        fisher_step(&mut accumulator, window, input.high, input.low, row)
+                        fisher_step(fisher, window, input.high, input.low, row)
                     } else {
                         (f64::NAN, f64::NAN)
                     };
-                    state.checkpoint(row, accumulator);
+                    if (row + 1).is_multiple_of(CHECKPOINT_INTERVAL) {
+                        state.checkpoint(row, accumulator.clone());
+                    }
                     if row >= self.output_from[0] {
                         self.outputs[0].push(line);
                     }
@@ -6928,8 +7048,8 @@ impl IncrementalState {
                         self.outputs[1].push(trigger);
                     }
                     if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
+                        tail = Some(accumulator.clone());
+                        before_tail = previous;
                     }
                 }
                 state.finish(n, tail, before_tail);

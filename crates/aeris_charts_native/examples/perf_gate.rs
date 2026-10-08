@@ -18,6 +18,9 @@
 //!   Target O — sustained live order-flow tape with auction markers enabled
 //!   Target P — seven sessions of order flow: batch cost through sealing and session eviction,
 //!              stream memory, and the session budget
+//!   Target Q — live indicator updates for every `IndicatorKind`: tip append and tip replacement
+//!              p99 at 10k and 1M rows per binding and with all attached, history-length scaling,
+//!              and fresh-engine equality (`perf_gate/indicator_live.rs`)
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `AERIS_CHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -41,6 +44,9 @@ use aeris_charts_engine::{
 };
 use aeris_charts_render::draw_list::Prim;
 use aeris_charts_render_wgpu::{DrawGroup, TexQuadInstance, prims_to_group};
+
+#[path = "perf_gate/indicator_live.rs"]
+mod indicator_live;
 
 /// Parallel `(times, open, high, low, close)` columns.
 type OhlcColumns = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
@@ -1618,6 +1624,9 @@ fn main() {
         if p_retention { "PASS" } else { "FAIL" }
     );
 
+    // ---- Target Q: live indicator updates for every IndicatorKind ---------------------------
+    let q_pass = indicator_live::run();
+
     let all_pass = a_pass
         && b_pass
         && c_pass
@@ -1656,7 +1665,8 @@ fn main() {
         && p_p99
         && p_max
         && p_memory
-        && p_retention;
+        && p_retention
+        && q_pass;
     println!(
         "\n{}",
         if all_pass {

@@ -2,7 +2,6 @@
 
 use crate::*;
 use aeris_charts_core::model::data_validation::MAX_SAFE_VALUE;
-use std::borrow::Cow;
 
 pub const MAX_CUSTOM_STUDY_TYPES: usize = 64;
 pub const MAX_CUSTOM_STUDY_BINDINGS: usize = 32;
@@ -516,6 +515,7 @@ impl ChartEngine {
             }),
             source_generation: 0,
             volume_generation: None,
+            inputs: Default::default(),
         });
         let changes = self.rebuild_indicator(self.indicators.len() - 1, 0, true);
         self.indicator_changes.clear();
@@ -725,22 +725,20 @@ impl ChartEngine {
             return changes;
         };
         let n = times.len();
-        let close = super::indicators::selected_input(source_input, values);
-        let volume = volume_source
-            .and_then(|id| self.data.series_data(id))
-            .map_or(Cow::Borrowed(&[][..]), |(vt, vv)| {
-                if vt == times {
-                    Cow::Borrowed(vv[3])
-                } else {
-                    Cow::Owned(super::indicators::align_volume_to_source_times(
-                        times,
-                        vt,
-                        vv[3],
-                        f64::NAN,
-                    ))
-                }
-            });
-        let custom = self.indicators[index].runtime.custom_mut().unwrap();
+        let binding = &mut self.indicators[index];
+        binding.inputs.refresh(
+            if full_replace { 0 } else { from },
+            source_input,
+            times,
+            values,
+            volume_source
+                .and_then(|id| self.data.series_data(id))
+                .map(|(volume_times, volume)| (volume_times, volume[3])),
+            f64::NAN,
+        );
+        let close = binding.inputs.close(source_input, values);
+        let volume = binding.inputs.volume();
+        let custom = binding.runtime.custom_mut().unwrap();
         let was_faulted = matches!(custom.state, CustomBindingState::Faulted(_));
         if matches!(&custom.state, CustomBindingState::Active { covered, .. }
             if (*covered > 0 && full_replace) || from > *covered || *covered > n)
@@ -778,8 +776,8 @@ impl ChartEngine {
                     open: values[0],
                     high: values[1],
                     low: values[2],
-                    close: close.as_ref(),
-                    volume: volume.as_ref(),
+                    close,
+                    volume,
                     from: start,
                     tail,
                 },

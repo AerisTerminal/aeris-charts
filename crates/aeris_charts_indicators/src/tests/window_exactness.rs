@@ -744,6 +744,120 @@ fn set_provisional_tip(scratch: &mut Bars, bars: &Bars, row: usize) {
     scratch.volume[row] = bars.volume[row] * 2.0 + 7.0;
 }
 
+/// Kinds whose update may rewrite rows before the changed one: ZigZag repaints its unconfirmed
+/// leg, and PivotPoints carries the current UTC day and the last completed day across rows.
+const REPAINT_KINDS: [TestKind; 2] = [TestKind::PivotPoints, TestKind::ZigZag];
+
+/// Apply one update's emitted suffix to engine-style output columns: rows before `output_from`
+/// are kept, later rows are replaced.
+fn apply(state: &IncrementalState, columns: &mut [Vec<f64>], rows: usize) {
+    for (column, values) in columns.iter_mut().enumerate() {
+        let from = state.output_from(column);
+        values.truncate(from);
+        values.extend_from_slice(state.output(column));
+        assert_eq!(
+            values.len(),
+            rows,
+            "column {column} emitted through row {rows}"
+        );
+    }
+}
+
+/// Every update path, applied to maintained columns, must equal dense on the current prefix after
+/// each step. ZigZag must never re-emit a row before its last confirmed turning point.
+fn repaint_audit(kind: TestKind, bars: &Bars, fail: &mut dyn FnMut(&str, String)) {
+    let dense_prefix = |rows: usize, bars: &Bars| -> Vec<Vec<f64>> {
+        expected(kind, bars.input(0..=rows - 1))
+            .into_iter()
+            .map(|column| column.into_iter().map(|v| v.unwrap_or(f64::NAN)).collect())
+            .collect()
+    };
+    let compare = |step: usize, actual: &[Vec<f64>], bars: &Bars| -> Option<String> {
+        let rows = actual[0].len();
+        for (column, (actual, expected)) in actual.iter().zip(dense_prefix(rows, bars)).enumerate()
+        {
+            for (row, (&actual, &expected)) in actual.iter().zip(&expected).enumerate() {
+                let same = if kind == TestKind::ZigZag {
+                    actual.to_bits() == expected.to_bits()
+                } else {
+                    within(actual, expected, 0.0)
+                };
+                if !same {
+                    return Some(format!(
+                        "after row {step}: col {column} row {row}: {actual:e} != {expected:e}"
+                    ));
+                }
+            }
+        }
+        None
+    };
+    let check = |fail: &mut dyn FnMut(&str, String),
+                 path: &str,
+                 step: usize,
+                 actual: &[Vec<f64>],
+                 bars: &Bars| {
+        if let Some(detail) = compare(step, actual, bars) {
+            fail(path, detail);
+        }
+    };
+    let last_confirmed = |columns: &[Vec<f64>]| {
+        let mut turns = columns[0]
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| value.is_finite())
+            .map(|(row, _)| row);
+        let provisional = turns.next_back();
+        provisional.and(turns.next_back())
+    };
+    let empty = || vec![Vec::new(); dense_prefix(N, bars).len()];
+
+    let mut state = fresh_state(kind);
+    let mut rebuilt = empty();
+    state.rebuild_from(bars.input(0..=N - 1), 0);
+    apply(&state, &mut rebuilt, N);
+    check(fail, "incremental rebuild", N - 1, &rebuilt, bars);
+    state.rebuild_from(bars.input(0..=N - 1), REPAIR_FROM);
+    apply(&state, &mut rebuilt, N);
+    check(fail, "historical repair", N - 1, &rebuilt, bars);
+
+    let mut live_state = fresh_state(kind);
+    let mut live = empty();
+    let mut tip_state = fresh_state(kind);
+    let mut tip = empty();
+    let mut scratch = with_gaps(bars, &[]);
+    for row in 0..N {
+        let confirmed = last_confirmed(&live);
+        live_state.rebuild_from(bars.input(0..=row), row);
+        if kind == TestKind::ZigZag && confirmed.is_some_and(|c| live_state.output_from(0) < c) {
+            fail(
+                "live append",
+                format!("row {row} re-emitted before {confirmed:?}"),
+            );
+        }
+        apply(&live_state, &mut live, row + 1);
+        check(fail, "live append", row, &live, bars);
+
+        set_provisional_tip(&mut scratch, bars, row);
+        tip_state.rebuild_from(scratch.input(0..=row), row);
+        apply(&tip_state, &mut tip, row + 1);
+        check(fail, "live provisional tip", row, &tip, &scratch);
+        scratch.close[row] = bars.close[row];
+        scratch.high[row] = bars.high[row];
+        scratch.low[row] = bars.low[row];
+        scratch.volume[row] = bars.volume[row];
+        let confirmed = last_confirmed(&tip);
+        tip_state.rebuild_from(scratch.input(0..=row), row);
+        if kind == TestKind::ZigZag && confirmed.is_some_and(|c| tip_state.output_from(0) < c) {
+            fail(
+                "live tip replace",
+                format!("row {row} re-emitted before {confirmed:?}"),
+            );
+        }
+        apply(&tip_state, &mut tip, row + 1);
+        check(fail, "live tip replace", row, &tip, bars);
+    }
+}
+
 fn within(actual: f64, expected: f64, extra: f64) -> bool {
     if expected.is_nan() {
         return actual.is_nan();
@@ -821,6 +935,14 @@ fn audit(shape: usize) {
                         }
                     }
                 }
+            }
+            for kind in REPAINT_KINDS {
+                repaint_audit(kind, &bars, &mut |path, detail| {
+                    fail(
+                        format!("{kind:?} {path}"),
+                        format!("[{shape}, {gaps}] {detail}"),
+                    );
+                });
             }
         }
     }

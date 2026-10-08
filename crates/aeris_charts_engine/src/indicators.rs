@@ -669,6 +669,131 @@ pub(crate) struct IndicatorBinding {
     pub(crate) runtime: BindingRuntime,
     pub(crate) source_generation: u64,
     pub(crate) volume_generation: Option<u64>,
+    pub(crate) inputs: BindingInputs,
+}
+
+/// A binding's derived price input (HL2 and the other averages) and its volume aligned to the
+/// source timestamps. Both persist between updates and are rewritten from the first changed source
+/// row, so a live tick never rebuilds a full-length column.
+#[derive(Default)]
+pub(crate) struct BindingInputs {
+    derived: Vec<f64>,
+    volume: Vec<f64>,
+    /// First source row with a finite selected input, when one exists.
+    leading: Option<usize>,
+    last_rows: usize,
+}
+
+impl BindingInputs {
+    /// Rewrite rows from source row `from` on. Source and volume rows before `from` must be
+    /// unchanged since the previous refresh. Source rows without a volume sample at their
+    /// timestamp take `missing_volume`.
+    pub(crate) fn refresh(
+        &mut self,
+        from: usize,
+        source_input: IndicatorInputSource,
+        times: &[i64],
+        values: [&[f64]; 4],
+        volume: Option<(&[i64], &[f64])>,
+        missing_volume: f64,
+    ) {
+        let n = times.len();
+        let from = from.min(n);
+        self.last_rows = 0;
+        if let Some(price) = derived_price(source_input) {
+            self.derived.truncate(from);
+            let start = self.derived.len();
+            self.last_rows += n - start;
+            self.derived.extend((start..n).map(|row| {
+                price([
+                    values[0][row],
+                    values[1][row],
+                    values[2][row],
+                    values[3][row],
+                ])
+            }));
+        } else if self.derived.capacity() > 0 {
+            self.derived = Vec::new();
+        }
+        if let Some((volume_times, volume_values)) = volume {
+            self.volume.truncate(from);
+            let start = self.volume.len();
+            self.last_rows += n - start;
+            let mut volume_row = times.get(start).map_or(volume_times.len(), |&time| {
+                volume_times.partition_point(|&volume_time| volume_time < time)
+            });
+            for &time in &times[start..] {
+                while volume_times.get(volume_row).is_some_and(|&t| t < time) {
+                    volume_row += 1;
+                }
+                let value = if volume_times.get(volume_row) == Some(&time) {
+                    volume_values.get(volume_row).copied()
+                } else {
+                    None
+                };
+                self.volume.push(value.unwrap_or(missing_volume));
+            }
+        } else if self.volume.capacity() > 0 {
+            self.volume = Vec::new();
+        }
+        if !self.leading.is_some_and(|leading| leading < from) {
+            let close = self.close(source_input, values);
+            self.leading = close.iter().position(|value| value.is_finite());
+        }
+    }
+
+    pub(crate) fn close<'a>(
+        &'a self,
+        source_input: IndicatorInputSource,
+        values: [&'a [f64]; 4],
+    ) -> &'a [f64] {
+        match source_input {
+            IndicatorInputSource::Open => values[0],
+            IndicatorInputSource::High => values[1],
+            IndicatorInputSource::Low => values[2],
+            IndicatorInputSource::Close => values[3],
+            IndicatorInputSource::Hl2
+            | IndicatorInputSource::Hlc3
+            | IndicatorInputSource::Ohlc4
+            | IndicatorInputSource::Hlcc4 => &self.derived,
+        }
+    }
+
+    /// Volume per source row, or empty when the binding has no volume source.
+    pub(crate) fn volume(&self) -> &[f64] {
+        &self.volume
+    }
+
+    /// First source row with a finite selected input, or `None` when every row is a gap.
+    pub(crate) fn leading(&self) -> Option<usize> {
+        self.leading
+    }
+
+    /// Rows rewritten by the last refresh.
+    pub(crate) fn last_rows(&self) -> usize {
+        self.last_rows
+    }
+
+    pub(crate) fn capacity_bytes(&self) -> usize {
+        (self.derived.capacity() + self.volume.capacity()) * std::mem::size_of::<f64>()
+    }
+}
+
+fn derived_price(source: IndicatorInputSource) -> Option<fn([f64; 4]) -> f64> {
+    match source {
+        IndicatorInputSource::Open
+        | IndicatorInputSource::High
+        | IndicatorInputSource::Low
+        | IndicatorInputSource::Close => None,
+        IndicatorInputSource::Hl2 => Some(|[_, high, low, _]| (high + low) * 0.5),
+        IndicatorInputSource::Hlc3 => Some(|[_, high, low, close]| (high + low + close) / 3.0),
+        IndicatorInputSource::Ohlc4 => {
+            Some(|[open, high, low, close]| (open + high + low + close) * 0.25)
+        }
+        IndicatorInputSource::Hlcc4 => {
+            Some(|[_, high, low, close]| (high + low + 2.0 * close) * 0.25)
+        }
+    }
 }
 
 pub(crate) enum BindingRuntime {
@@ -1034,7 +1159,8 @@ impl ChartEngine {
                     + binding
                         .annotations
                         .as_ref()
-                        .map_or(0, StudyAnnotations::capacity_bytes),
+                        .map_or(0, StudyAnnotations::capacity_bytes)
+                    + binding.inputs.capacity_bytes(),
                 usage.1
                     + match &binding.runtime {
                         BindingRuntime::BuiltIn(runtime) => runtime.transfer_capacity_bytes(),
@@ -1044,12 +1170,17 @@ impl ChartEngine {
         })
     }
 
+    /// Source rows read by each binding's last update, including derived-input and aligned-volume
+    /// rows it rewrote, summed over bindings.
     pub fn last_indicator_work_rows(&self) -> usize {
         self.indicators
             .iter()
-            .map(|binding| match &binding.runtime {
-                BindingRuntime::BuiltIn(runtime) => runtime.last_work_rows(),
-                BindingRuntime::Custom(_) => 0,
+            .map(|binding| {
+                binding.inputs.last_rows()
+                    + match &binding.runtime {
+                        BindingRuntime::BuiltIn(runtime) => runtime.last_work_rows(),
+                        BindingRuntime::Custom(_) => 0,
+                    }
             })
             .sum()
     }
@@ -3937,6 +4068,7 @@ impl ChartEngine {
             calendar,
             source_generation: 0,
             volume_generation: None,
+            inputs: BindingInputs::default(),
         });
         self.rebuild_indicator(self.indicators.len() - 1, 0, true);
         ids
@@ -4006,18 +4138,22 @@ impl ChartEngine {
                 self.indicator_changes
                     .iter()
                     .filter_map(|&(dependency, change)| {
-                        let tracked = if binding.source == dependency {
-                            binding.source_generation
+                        let (tracked, from) = if binding.source == dependency {
+                            (binding.source_generation, change.from)
                         } else if binding.volume_source == Some(dependency) {
-                            binding.volume_generation.unwrap_or(0)
+                            (
+                                binding.volume_generation.unwrap_or(0),
+                                self.volume_change_source_row(
+                                    binding.source,
+                                    dependency,
+                                    change.from,
+                                ),
+                            )
                         } else {
                             return None;
                         };
                         let stale = tracked != change.previous_generation;
-                        Some((
-                            if stale { 0 } else { change.from },
-                            change.full_replace || stale,
-                        ))
+                        Some((if stale { 0 } else { from }, change.full_replace || stale))
                     })
                     .reduce(|left, right| (left.0.min(right.0), left.1 || right.1))
             };
@@ -4026,6 +4162,27 @@ impl ChartEngine {
                 self.indicator_changes.extend(changes.into_iter().flatten());
             }
         }
+    }
+
+    /// First source row whose aligned volume may differ after the volume series changed from its
+    /// own row `volume_from`. Volume rows keep their own timeline, so the row numbers differ when
+    /// the two series do not share every timestamp.
+    fn volume_change_source_row(
+        &self,
+        source: SeriesId,
+        volume: SeriesId,
+        volume_from: usize,
+    ) -> usize {
+        let (Some((source_times, _)), Some((volume_times, _))) =
+            (self.data.series_data(source), self.data.series_data(volume))
+        else {
+            return 0;
+        };
+        volume_times[..volume_from.min(volume_times.len())]
+            .last()
+            .map_or(0, |&unchanged| {
+                source_times.partition_point(|&time| time <= unchanged)
+            })
     }
 
     fn rebuild_structure_indicator(
@@ -4101,6 +4258,7 @@ impl ChartEngine {
                     .update_single_aligned(output, source, output_start, &values)
                     .expect("structure output remains aligned to source")
             };
+
             if self.data.series_generation(output).unwrap_or(0) != previous_generation {
                 changes[output_index] = Some((
                     output,
@@ -4249,44 +4407,43 @@ impl ChartEngine {
             let Some((times, values)) = self.data.series_data(source) else {
                 return changes;
             };
-            let selected_close = selected_input(source_input, values);
-            let volume = volume_source
-                .and_then(|id| self.data.series_data(id))
-                .map_or(Cow::Borrowed(&[][..]), |(volume_times, values)| {
-                    if volume_times == times {
-                        Cow::Borrowed(values[3])
-                    } else {
-                        Cow::Owned(align_volume_to_source_times(
-                            times,
-                            volume_times,
-                            values[3],
-                            matches!(
-                                &self.indicators[index].kind,
-                                IndicatorKind::Obv
-                                    | IndicatorKind::AccumulationDistribution
-                                    | IndicatorKind::PriceVolumeTrend
-                                    | IndicatorKind::ChaikinOscillator { .. }
-                                    | IndicatorKind::Klinger { .. }
-                                    | IndicatorKind::RelativeVolume { .. }
-                                    | IndicatorKind::VolumeOscillator { .. }
-                                    | IndicatorKind::ElderForce { .. }
-                                    | IndicatorKind::EaseOfMovement { .. }
-                                    | IndicatorKind::Cmf { .. }
-                                    | IndicatorKind::Mfi { .. }
-                                    | IndicatorKind::Volume { .. }
-                            )
-                            .then_some(0.0)
-                            .unwrap_or(1.0),
-                        ))
-                    }
-                });
             let binding = &mut self.indicators[index];
+            // Missing volume counts as no volume for the volume studies and as unit weight for
+            // the volume-weighted averages.
+            let missing_volume = if matches!(
+                &binding.kind,
+                IndicatorKind::Obv
+                    | IndicatorKind::AccumulationDistribution
+                    | IndicatorKind::PriceVolumeTrend
+                    | IndicatorKind::ChaikinOscillator { .. }
+                    | IndicatorKind::Klinger { .. }
+                    | IndicatorKind::RelativeVolume { .. }
+                    | IndicatorKind::VolumeOscillator { .. }
+                    | IndicatorKind::ElderForce { .. }
+                    | IndicatorKind::EaseOfMovement { .. }
+                    | IndicatorKind::Cmf { .. }
+                    | IndicatorKind::Mfi { .. }
+                    | IndicatorKind::Volume { .. }
+            ) {
+                0.0
+            } else {
+                1.0
+            };
+            binding.inputs.refresh(
+                if full_replace { 0 } else { from },
+                source_input,
+                times,
+                values,
+                volume_source
+                    .and_then(|id| self.data.series_data(id))
+                    .map(|(volume_times, volume)| (volume_times, volume[3])),
+                missing_volume,
+            );
+            let selected_close = binding.inputs.close(source_input, values);
+            let volume = binding.inputs.volume();
             // A leading source gap is not a sample, nor may it contribute a phantom
             // previous bar to formulas with a prior-close reference.
-            let first_source = selected_close
-                .iter()
-                .position(|value| value.is_finite())
-                .unwrap_or(times.len());
+            let first_source = binding.inputs.leading().unwrap_or(times.len());
             let reset = full_replace || from <= first_source;
             if reset {
                 binding.runtime =
@@ -4444,73 +4601,6 @@ fn momentum_histogram_colors(values: &[f64]) -> Vec<u32> {
         }
     }
     colors
-}
-
-pub(crate) fn selected_input<'a>(
-    source: IndicatorInputSource,
-    values: [&'a [f64]; 4],
-) -> Cow<'a, [f64]> {
-    match source {
-        IndicatorInputSource::Open => Cow::Borrowed(values[0]),
-        IndicatorInputSource::High => Cow::Borrowed(values[1]),
-        IndicatorInputSource::Low => Cow::Borrowed(values[2]),
-        IndicatorInputSource::Close => Cow::Borrowed(values[3]),
-        IndicatorInputSource::Hl2 => Cow::Owned(
-            values[1]
-                .iter()
-                .zip(values[2])
-                .map(|(&high, &low)| (high + low) * 0.5)
-                .collect(),
-        ),
-        IndicatorInputSource::Hlc3 => Cow::Owned(
-            values[1]
-                .iter()
-                .zip(values[2])
-                .zip(values[3])
-                .map(|((&high, &low), &close)| (high + low + close) / 3.0)
-                .collect(),
-        ),
-        IndicatorInputSource::Ohlc4 => Cow::Owned(
-            values[0]
-                .iter()
-                .zip(values[1])
-                .zip(values[2])
-                .zip(values[3])
-                .map(|(((&open, &high), &low), &close)| (open + high + low + close) * 0.25)
-                .collect(),
-        ),
-        IndicatorInputSource::Hlcc4 => Cow::Owned(
-            values[1]
-                .iter()
-                .zip(values[2])
-                .zip(values[3])
-                .map(|((&high, &low), &close)| (high + low + 2.0 * close) * 0.25)
-                .collect(),
-        ),
-    }
-}
-
-/// Align an optional volume input to the source timeline without retaining a second canonical
-/// timeline. Missing timestamps intentionally use the indicator layer's unit-weight fallback.
-pub(crate) fn align_volume_to_source_times(
-    source_times: &[i64],
-    volume_times: &[i64],
-    values: &[f64],
-    default: f64,
-) -> Vec<f64> {
-    let mut aligned = vec![default; source_times.len()];
-    let mut volume_row = 0;
-    for (source_row, &source_time) in source_times.iter().enumerate() {
-        while volume_row < volume_times.len() && volume_times[volume_row] < source_time {
-            volume_row += 1;
-        }
-        if volume_times.get(volume_row) == Some(&source_time)
-            && let Some(&volume) = values.get(volume_row)
-        {
-            aligned[source_row] = volume;
-        }
-    }
-    aligned
 }
 
 fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {

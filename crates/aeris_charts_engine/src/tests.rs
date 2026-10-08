@@ -3805,6 +3805,250 @@ fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
     }
 }
 
+/// Source bars, a volume series on the same timestamps, and a volume series that skips every
+/// tenth history row, kept alongside the engine so a fresh engine can be loaded with the same data.
+struct LiveIndicatorFixture {
+    chart: ChartEngine,
+    aligned_volume: SeriesId,
+    sparse_volume: SeriesId,
+    times: Vec<f64>,
+    bars: Vec<[f64; 4]>,
+    volumes: Vec<f64>,
+    sparse_rows: Vec<usize>,
+    outputs: Vec<Vec<SeriesId>>,
+}
+
+impl LiveIndicatorFixture {
+    fn bar(row: usize) -> [f64; 4] {
+        let x = row as f64;
+        if row % 97 == 41 {
+            return [f64::NAN; 4];
+        }
+        let close = 100.0 + (x * 0.0031).sin() * 25.0 + (x * 0.17).sin() * 1.5;
+        let open = close - (x * 0.53).sin() * 0.6;
+        [open, close.max(open) + 0.4, close.min(open) - 0.4, close]
+    }
+
+    fn new(rows: usize) -> Self {
+        let times = (0..rows)
+            .map(|row| row as f64 * 3_600.0)
+            .collect::<Vec<_>>();
+        let bars = (0..rows).map(Self::bar).collect::<Vec<_>>();
+        let volumes = (0..rows)
+            .map(|row| 100.0 + (row % 37) as f64 * 7.0)
+            .collect::<Vec<_>>();
+        let sparse_rows = (0..rows).filter(|row| row % 10 != 9).collect();
+        let mut fixture = Self {
+            chart: ChartEngine::new(800.0, 500.0, 1.0),
+            aligned_volume: 0,
+            sparse_volume: 0,
+            times,
+            bars,
+            volumes,
+            sparse_rows,
+            outputs: Vec::new(),
+        };
+        fixture.load();
+        fixture.attach();
+        fixture
+    }
+
+    fn load(&mut self) {
+        let column = |index: usize| self.bars.iter().map(|bar| bar[index]).collect::<Vec<_>>();
+        let chart = &mut self.chart;
+        self.aligned_volume = chart.add_series(SeriesKind::Histogram);
+        self.sparse_volume = chart.add_series(SeriesKind::Histogram);
+        chart
+            .set_series_data(
+                0,
+                &self.times,
+                &column(0),
+                &column(1),
+                &column(2),
+                &column(3),
+            )
+            .unwrap();
+        let volumes = &self.volumes;
+        chart
+            .set_series_data(
+                self.aligned_volume,
+                &self.times,
+                volumes,
+                volumes,
+                volumes,
+                volumes,
+            )
+            .unwrap();
+        let sparse_times = self
+            .sparse_rows
+            .iter()
+            .map(|&row| self.times[row])
+            .collect::<Vec<_>>();
+        let sparse = self
+            .sparse_rows
+            .iter()
+            .map(|&row| self.volumes[row])
+            .collect::<Vec<_>>();
+        chart
+            .set_series_data(
+                self.sparse_volume,
+                &sparse_times,
+                &sparse,
+                &sparse,
+                &sparse,
+                &sparse,
+            )
+            .unwrap();
+    }
+
+    /// Every kind at once, plus each derived price input and volume on its own timeline.
+    fn attach(&mut self) {
+        let mut kinds = all_engine_indicator_kinds();
+        kinds.extend(
+            [
+                "swing_points",
+                "market_structure",
+                "fair_value_gaps",
+                "order_blocks",
+                "session_levels",
+                "previous_period_levels",
+                "opening_range",
+            ]
+            .into_iter()
+            .map(|name| IndicatorKind::schema_definition(name, 5, 2.0).unwrap()),
+        );
+        let chart = &mut self.chart;
+        let mut outputs = kinds
+            .iter()
+            .map(|kind| add_test_indicator(chart, kind, Some(self.aligned_volume)))
+            .collect::<Vec<_>>();
+        for input in [
+            IndicatorInputSource::Hl2,
+            IndicatorInputSource::Hlc3,
+            IndicatorInputSource::Ohlc4,
+            IndicatorInputSource::Hlcc4,
+        ] {
+            outputs.push(chart.add_indicator_kind_with_input(
+                0,
+                input,
+                IndicatorKind::Sma { period: 5 },
+                None,
+            ));
+        }
+        outputs.push(chart.add_indicator_kind(0, IndicatorKind::Obv, Some(self.sparse_volume)));
+        outputs.push(chart.add_indicator_kind_with_input(
+            0,
+            IndicatorInputSource::Hlc3,
+            IndicatorKind::Vwap,
+            Some(self.sparse_volume),
+        ));
+        assert!(outputs.iter().all(|outputs| !outputs.is_empty()));
+        self.outputs = outputs;
+    }
+
+    /// Write one row to the source and then to both volume series, as a host feeding one
+    /// stream does.
+    fn write(&mut self, row: usize, bar: [f64; 4], volume: f64) {
+        let time = row as f64 * 3_600.0;
+        if row == self.times.len() {
+            self.times.push(time);
+            self.bars.push(bar);
+            self.volumes.push(volume);
+            self.sparse_rows.push(row);
+        } else {
+            self.bars[row] = bar;
+            self.volumes[row] = volume;
+            if let Err(position) = self.sparse_rows.binary_search(&row) {
+                self.sparse_rows.insert(position, row);
+            }
+        }
+        assert!(self.chart.update_series_bar(0, time, bar));
+        for series in [self.aligned_volume, self.sparse_volume] {
+            assert!(self.chart.update_series_bar(series, time, [volume; 4]));
+        }
+    }
+
+    fn assert_matches_fresh_engine(&self, stage: &str) {
+        let mut fresh = Self {
+            chart: ChartEngine::new(800.0, 500.0, 1.0),
+            aligned_volume: 0,
+            sparse_volume: 0,
+            times: self.times.clone(),
+            bars: self.bars.clone(),
+            volumes: self.volumes.clone(),
+            sparse_rows: self.sparse_rows.clone(),
+            outputs: Vec::new(),
+        };
+        fresh.load();
+        fresh.attach();
+        for (live, expected) in self.outputs.iter().zip(&fresh.outputs) {
+            for (&id, &reference) in live.iter().zip(expected) {
+                let kind = &self
+                    .chart
+                    .indicators
+                    .iter()
+                    .find(|binding| binding.outputs.contains(&id))
+                    .unwrap()
+                    .kind;
+                let (actual_times, actual) = self.chart.data.series_data(id).unwrap();
+                let (expected_times, values) = fresh.chart.data.series_data(reference).unwrap();
+                assert_eq!(actual_times, expected_times, "{kind:?} {stage} output {id}");
+                for (row, (&a, &b)) in actual[3].iter().zip(values[3]).enumerate() {
+                    assert!(
+                        (a.is_nan() && b.is_nan()) || (a - b).abs() <= 1e-9 * b.abs().max(1.0),
+                        "{kind:?} {stage} output {id} row {row}: {a:?} != {b:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Indicator source rows read and the largest output LOD rewrite of the last update.
+    fn work(&self) -> (usize, usize) {
+        let lod_nodes = self
+            .outputs
+            .iter()
+            .flatten()
+            .map(|&id| self.chart.data.last_lod_update_nodes(id).unwrap())
+            .max()
+            .unwrap();
+        (self.chart.last_indicator_work_rows(), lod_nodes)
+    }
+}
+
+#[test]
+fn engine_live_updates_with_every_kind_attached_do_bounded_work_and_match_a_fresh_engine() {
+    let mut work = Vec::new();
+    for rows in [4_096, 65_536] {
+        let mut fixture = LiveIndicatorFixture::new(rows);
+        let row = rows;
+        fixture.write(row, LiveIndicatorFixture::bar(row), 333.0);
+        let append = fixture.work();
+        let [open, high, low, close] = LiveIndicatorFixture::bar(row);
+        fixture.write(row, [open, high + 0.75, low - 0.5, close + 0.25], 444.0);
+        let replace = fixture.work();
+        work.push((rows, append, replace));
+        if rows == 4_096 {
+            fixture.assert_matches_fresh_engine("live tip");
+            // A historical volume sample at a timestamp the sparse series did not have shifts
+            // every later sparse volume row; the aligned rows before it must stay unchanged.
+            fixture.write(rows - 7, LiveIndicatorFixture::bar(rows - 7), 555.0);
+            fixture.assert_matches_fresh_engine("historical sparse volume insert");
+        }
+    }
+    let (_, small_append, small_replace) = work[0];
+    let (_, large_append, large_replace) = work[1];
+    assert_eq!(
+        (small_append.0, small_replace.0),
+        (large_append.0, large_replace.0),
+        "indicator source rows read per live update grow with history: {work:?}"
+    );
+    assert!(
+        large_append.1 <= 16 && large_replace.1 <= 16,
+        "an output series was rewritten beyond its tail: {work:?}"
+    );
+}
+
 #[test]
 fn every_indicator_binding_matches_fresh_engine_on_flat_runs_after_large_moves() {
     // Large $1M and $100 moves followed by exact flat runs (one straddling the 1,024-row

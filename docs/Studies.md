@@ -142,6 +142,12 @@ Measured values (budget in parentheses):
 | M — sustained order-flow tape (600 × 4-trade batches + frame) | p50 0.054 ms, p99 0.09 ms (4.00); worst 5.25 ms (16.67); late print 0.31 ms (16.67); ceiling pass |
 | N — 7 structure studies × 1M rows | initial build 356.18 ms; tip-replacement p99 0.16 ms (8.00); one historical correction 20k rows back 9.89 ms (100); 3,999 FVG + 2,108 order-block zones retained |
 | O — **new:** sustained tape with auction markers | p50 0.057 ms, p99 0.17 ms (4.00); worst 7.57 ms (16.67); late print 0.55 ms (16.67); 5,084 retained marks; ceiling pass |
+| Q — **new:** live indicator updates, 76 cases covering all 71 `IndicatorKind` variants | slowest tip-append p99 0.028 ms (0.50); steepest append growth 10k to 1M rows ×2.7 (×10); slowest tip-replace p99 0.144 ms (0.50); steepest replace growth ×2.6 (×10); all cases together append p99 0.515 ms and replace p99 0.595 ms (4.00); every case matches a fresh engine at 1M rows |
+
+Target Q was recorded on 2026-10-08 with 1,000 tip appends and 1,000 tip replacements per case at
+10,000 and 1,000,000 rows. Per-binding and all-attached p99 budgets of 0.5 ms and 4.0 ms sit an
+order of magnitude above the measured worst cases, and the ×10 growth limit over the 10k-row p99
+(floored at 0.01 ms) catches any per-tick cost linear in history, which shows as about ×100.
 
 Target N tip-replacement p99 is now 0.16 ms on this machine with all seven structure bindings.
 The axis reads the 1M-row merged timeline in place on both synchronization passes rather than
