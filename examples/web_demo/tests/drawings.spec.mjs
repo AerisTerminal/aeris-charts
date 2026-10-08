@@ -542,7 +542,8 @@ test("a drawing's own magnet mode snaps unmodified anchor drags", async ({ page 
       expect(point.logical).toBe(target);
       expect(point.price).toBeCloseTo(expected.nearest, 9);
     } else {
-      expect(point.logical).not.toBe(target);
+      // Every drawing lands on the bar under the cursor; only the magnet snaps the price.
+      expect(point.logical).toBe(target);
       // Browser pointer coordinates are quantized, so the raw price is exact only to ~1e-6.
       expect(point.price).toBeCloseTo(expected.raw, 4);
       expect(point.price).not.toBe(expected.nearest);
@@ -1185,7 +1186,7 @@ test("Ctrl magnet snaps placement to the nearest bar's OHLC", async ({ page }) =
   await page.keyboard.down("Control");
   await page.mouse.click(probe.x, probe.y);
   await page.keyboard.up("Control");
-  // Second click WITHOUT Ctrl: stays raw (fractional logical).
+  // Second click WITHOUT Ctrl: lands on the bar slot under the cursor, at the raw price.
   const free = await page.evaluate(() => {
     const range = window.__chart.time_scale().get_visible_logical_range();
     const index = Math.floor(range.from + (range.to - range.from) * 0.75);
@@ -1202,7 +1203,7 @@ test("Ctrl magnet snaps placement to the nearest bar's OHLC", async ({ page }) =
   const [first, second] = list[0].points;
   expect(first.logical).toBeCloseTo(probe.index + 1, 6);
   expect(probe.prices).toContainEqual(first.price);
-  expect(Number.isInteger(second.logical)).toBe(false);
+  expect(Number.isInteger(second.logical)).toBe(true);
   expect(probe.prices).not.toContainEqual(second.price);
 });
 

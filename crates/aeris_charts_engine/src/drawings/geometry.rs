@@ -205,13 +205,39 @@ impl FibonacciArcGeometry {
         )
     }
 
-    pub(crate) fn segments(self) -> u32 {
+    /// Chords for every level up to `value` (the largest visible one), so level bands pair
+    /// their boundaries point for point.
+    pub(crate) fn segments(self, value: f64) -> u32 {
+        let segments = arc_segments(self.radius * value, self.sweep);
         if self.kind == DrawingKind::FibonacciSpiral {
-            96
+            segments.max(96)
         } else {
-            32
+            segments
         }
     }
+}
+
+/// The largest distance between a tessellated curve and its chords, in px. A tenth of a pixel
+/// keeps circles, ellipses, arcs, and curves round at every size instead of showing facets.
+const CURVE_TOLERANCE_PX: f64 = 0.1;
+const MIN_CURVE_SEGMENTS: u32 = 8;
+/// Bounds per-curve frame work; at the tolerance this covers radii past 100,000 px.
+const MAX_CURVE_SEGMENTS: u32 = 2048;
+
+/// Chords for an arc of `radius` px sweeping `sweep` radians within `CURVE_TOLERANCE_PX`.
+/// A parametric ellipse sampled at uniform angles stays within tolerance with its larger radius.
+pub(crate) fn arc_segments(radius: f64, sweep: f64) -> u32 {
+    let radius = radius.abs();
+    if !radius.is_finite() || !sweep.is_finite() || radius <= CURVE_TOLERANCE_PX {
+        return MIN_CURVE_SEGMENTS;
+    }
+    let step = 2.0 * (1.0 - CURVE_TOLERANCE_PX / radius).acos();
+    ((sweep.abs() / step).ceil() as u32).clamp(MIN_CURVE_SEGMENTS, MAX_CURVE_SEGMENTS)
+}
+
+/// Even chords for a full ellipse, so its fill splits into matching upper and lower halves.
+pub(crate) fn ellipse_segments(rx: f64, ry: f64) -> u32 {
+    arc_segments(rx.max(ry), std::f64::consts::TAU).next_multiple_of(2)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -384,6 +410,10 @@ impl ArcGeometry {
             self.center.1 + self.radius * angle.sin(),
         )
     }
+
+    pub(crate) fn segments(self) -> u32 {
+        arc_segments(self.radius, self.sweep)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -407,6 +437,26 @@ impl CurveGeometry {
             y += point.1 * weight;
         }
         (x, y)
+    }
+
+    /// Uniform chords of a Bezier whose second derivative is bounded by `m` deviate from it by
+    /// at most `m / (8 n²)`, so `n` follows the control polygon's bend.
+    pub(crate) fn segments(self) -> u32 {
+        let [p0, p1, p2, p3] = self.points;
+        let bend = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {
+            (a.0 - 2.0 * b.0 + c.0).hypot(a.1 - 2.0 * b.1 + c.1)
+        };
+        let m = if self.cubic {
+            6.0 * bend(p0, p1, p2).max(bend(p1, p2, p3))
+        } else {
+            2.0 * bend(p0, p1, p2)
+        };
+        let segments = (m / (8.0 * CURVE_TOLERANCE_PX)).sqrt().ceil();
+        if segments.is_finite() {
+            (segments as u32).clamp(MIN_CURVE_SEGMENTS, MAX_CURVE_SEGMENTS)
+        } else {
+            MIN_CURVE_SEGMENTS
+        }
     }
 }
 
@@ -552,6 +602,14 @@ impl GannGridGeometry {
         )
     }
 
+    /// Chords for the quarter arc of `radius` (a fraction of the grid).
+    pub(crate) fn arc_segments(self, radius: f64) -> u32 {
+        let extent = (self.end.0 - self.start.0)
+            .abs()
+            .max((self.end.1 - self.start.1).abs());
+        arc_segments(extent * radius, std::f64::consts::FRAC_PI_2)
+    }
+
     pub(crate) fn bounds(self) -> TextBox {
         TextBox {
             left: self.start.0.min(self.end.0),
@@ -609,10 +667,101 @@ impl PositionGeometry {
     }
 }
 
+/// A construction segment that ties defining anchors to a body they do not lie on (a trend-based
+/// Fibonacci tool's trend, a pitchfork's tine base, a shifted pitchfork origin). Guides render
+/// and hit-test with the body so every anchor handle stays visibly attached to the drawing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GuideSegment {
+    pub(crate) a: (f64, f64),
+    pub(crate) b: (f64, f64),
+    pub(crate) dashed: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ResolvedDrawingGeometry<'a> {
     pub(crate) body: DrawingBodyGeometry<'a>,
+    pub(crate) guides: [Option<GuideSegment>; 2],
     pub(crate) text_box: TextBox,
+}
+
+fn midpoint(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0)
+}
+
+/// Selection handle centers for the first `anchor_count` semantic anchors, in the same px basis
+/// as `px` (semantic anchors followed by any derived points). Anchors that only parameterize a
+/// shape are projected onto the stroke they control: a channel's width control onto the
+/// opposite boundary, a regression window's anchors onto the fitted center line, a rotated
+/// rectangle's depth control onto the far edge, a fixed Gann square's free corner onto the
+/// square. The generic anchor drag applies the pointer delta to the semantic anchor, which
+/// moves each projected handle with its stroke.
+pub(crate) fn anchor_handle_points(
+    kind: DrawingKind,
+    px: &[(f64, f64)],
+    anchor_count: usize,
+    body: &DrawingBodyGeometry,
+) -> Vec<(f64, f64)> {
+    let mut handles = px[..anchor_count.min(px.len())].to_vec();
+    match (kind, body, handles.len()) {
+        (DrawingKind::RegressionTrend, DrawingBodyGeometry::Regression { center, .. }, 2) => {
+            handles.copy_from_slice(center);
+        }
+        (
+            DrawingKind::ParallelChannel
+            | DrawingKind::FlatTopChannel
+            | DrawingKind::FlatBottomChannel,
+            DrawingBodyGeometry::Channel { second, .. },
+            3,
+        ) => handles[2] = midpoint(second[0], second[1]),
+        (DrawingKind::FibonacciChannel, DrawingBodyGeometry::Fibonacci(fib), 3) => {
+            let (a, b) = fib.segment(1.0);
+            handles[2] = midpoint(a, b);
+        }
+        (DrawingKind::RotatedRectangle, DrawingBodyGeometry::Quad { corners }, 3) => {
+            handles[2] = midpoint(corners[2], corners[3]);
+        }
+        (DrawingKind::GannSquareFixed, DrawingBodyGeometry::GannGrid(grid), 2) => {
+            handles[1] = grid.end;
+        }
+        _ => {}
+    }
+    handles
+}
+
+/// Bezier controls for a curve that passes through every anchor: a quadratic through its middle
+/// anchor at t = 1/2, a cubic through its inner anchors at t = 1/3 and t = 2/3.
+fn interpolating_curve(px: &[(f64, f64)], cubic: bool) -> Option<CurveGeometry> {
+    let start = *px.first()?;
+    if cubic {
+        let (q1, q2, end) = (*px.get(1)?, *px.get(2)?, *px.get(3)?);
+        let a = (
+            27.0 * q1.0 - 8.0 * start.0 - end.0,
+            27.0 * q1.1 - 8.0 * start.1 - end.1,
+        );
+        let b = (
+            27.0 * q2.0 - start.0 - 8.0 * end.0,
+            27.0 * q2.1 - start.1 - 8.0 * end.1,
+        );
+        Some(CurveGeometry {
+            points: [
+                start,
+                ((2.0 * a.0 - b.0) / 18.0, (2.0 * a.1 - b.1) / 18.0),
+                ((2.0 * b.0 - a.0) / 18.0, (2.0 * b.1 - a.1) / 18.0),
+                end,
+            ],
+            cubic,
+        })
+    } else {
+        let (through, end) = (*px.get(1)?, *px.get(2)?);
+        let control = (
+            2.0 * through.0 - (start.0 + end.0) / 2.0,
+            2.0 * through.1 - (start.1 + end.1) / 2.0,
+        );
+        Some(CurveGeometry {
+            points: [start, control, end, end],
+            cubic,
+        })
+    }
 }
 
 fn points_box(px: &[(f64, f64)]) -> Option<TextBox> {
@@ -951,16 +1100,7 @@ pub(crate) fn resolve_drawing_geometry<'a>(
             )
         }
         DrawingKind::Curve | DrawingKind::DoubleCurve => {
-            let cubic = kind == DrawingKind::DoubleCurve;
-            DrawingBodyGeometry::Curve(CurveGeometry {
-                points: [
-                    *px.first()?,
-                    *px.get(1)?,
-                    *px.get(2)?,
-                    if cubic { *px.get(3)? } else { *px.get(2)? },
-                ],
-                cubic,
-            })
+            DrawingBodyGeometry::Curve(interpolating_curve(px, kind == DrawingKind::DoubleCurve)?)
         }
         DrawingKind::Rectangle | DrawingKind::BarsPattern => {
             let (a, b) = (*px.first()?, *px.get(1)?);
@@ -985,7 +1125,7 @@ pub(crate) fn resolve_drawing_geometry<'a>(
             x1: pane_w,
         },
         DrawingKind::PriceLabel => DrawingBodyGeometry::PriceLabel {
-            x: pane_w,
+            x: px[0].0,
             y: px[0].1,
         },
         DrawingKind::GannBox | DrawingKind::GannSquare | DrawingKind::GannSquareFixed => {
@@ -1231,7 +1371,29 @@ pub(crate) fn resolve_drawing_geometry<'a>(
             },
         }
     };
-    Some(ResolvedDrawingGeometry { body, text_box })
+    let guide = |a: (f64, f64), b: (f64, f64), dashed: bool| {
+        ((a.0 - b.0).abs() > f64::EPSILON || (a.1 - b.1).abs() > f64::EPSILON)
+            .then_some(GuideSegment { a, b, dashed })
+    };
+    let guides = match body {
+        DrawingBodyGeometry::Fibonacci(fib) if kind == DrawingKind::FibonacciExtension => {
+            let pivot = fib.pivot.unwrap_or(fib.end);
+            [guide(fib.start, fib.end, true), guide(fib.end, pivot, true)]
+        }
+        DrawingBodyGeometry::TimeLevels(_) if kind == DrawingKind::FibonacciTrendTime => {
+            [guide(px[0], px[1], true), guide(px[1], px[2], true)]
+        }
+        DrawingBodyGeometry::Pitchfork(fork) => [
+            guide(fork.anchor(0.0), fork.anchor(1.0), false),
+            guide(px[0], fork.pivot, true),
+        ],
+        _ => [None, None],
+    };
+    Some(ResolvedDrawingGeometry {
+        body,
+        guides,
+        text_box,
+    })
 }
 
 #[cfg(test)]
@@ -1378,9 +1540,203 @@ mod tests {
         let DrawingBodyGeometry::Curve(curve) = quadratic.body else {
             panic!("curve should resolve to shared sampled geometry");
         };
+        // Every anchor lies on the curve, so its handle sits on the stroke.
         assert_eq!(curve.point(0.0), (0.0, 0.0));
-        assert_eq!(curve.point(0.5), (10.0, 10.0));
+        assert_eq!(curve.point(0.5), (10.0, 20.0));
         assert_eq!(curve.point(1.0), (20.0, 0.0));
+
+        let anchors = [(0.0, 0.0), (10.0, 30.0), (20.0, -10.0), (30.0, 0.0)];
+        let cubic = resolve_drawing_geometry(
+            DrawingKind::DoubleCurve,
+            &anchors,
+            100.0,
+            0.0,
+            100.0,
+            options,
+        )
+        .unwrap();
+        let DrawingBodyGeometry::Curve(curve) = cubic.body else {
+            panic!("double curve should resolve to shared sampled geometry");
+        };
+        for (t, expected) in [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0].into_iter().zip(anchors) {
+            let point = curve.point(t);
+            assert!(
+                (point.0 - expected.0).abs() < 1e-9 && (point.1 - expected.1).abs() < 1e-9,
+                "t={t}: {point:?} != {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parameterizing_anchors_project_their_handles_onto_the_stroke_they_control() {
+        let options = DrawingGeometryOptions::default();
+        let handles = |kind: DrawingKind, px: &[(f64, f64)], anchors: usize| {
+            let geometry = resolve_drawing_geometry(kind, px, 200.0, 0.0, 200.0, options).unwrap();
+            anchor_handle_points(kind, px, anchors, &geometry.body)
+        };
+        let line = [(10.0, 20.0), (30.0, 40.0)];
+        assert_eq!(
+            handles(
+                DrawingKind::ParallelChannel,
+                &[line[0], line[1], (80.0, 60.0)],
+                3
+            )[2],
+            (20.0, 0.0)
+        );
+        assert_eq!(
+            handles(
+                DrawingKind::FlatTopChannel,
+                &[line[0], line[1], (90.0, 5.0)],
+                3
+            )[2],
+            (20.0, 5.0)
+        );
+        assert_eq!(
+            handles(
+                DrawingKind::FlatBottomChannel,
+                &[line[0], line[1], (90.0, 70.0)],
+                3
+            )[2],
+            (20.0, 70.0)
+        );
+        assert_eq!(
+            handles(
+                DrawingKind::FibonacciChannel,
+                &[line[0], line[1], (80.0, 60.0)],
+                3
+            )[2],
+            (20.0, 0.0)
+        );
+        assert_eq!(
+            handles(
+                DrawingKind::RotatedRectangle,
+                &[(10.0, 10.0), (30.0, 10.0), (50.0, 25.0)],
+                3
+            )[2],
+            (20.0, 25.0)
+        );
+        assert_eq!(
+            handles(
+                DrawingKind::GannSquareFixed,
+                &[(10.0, 10.0), (30.0, 60.0)],
+                2
+            )[1],
+            (30.0, 30.0)
+        );
+        // A regression window's handles follow its fitted center line, not the raw clicks.
+        let regression = [
+            (10.0, 5.0),
+            (50.0, 90.0),
+            (10.0, 40.0),
+            (50.0, 60.0),
+            (10.0, 30.0),
+            (50.0, 50.0),
+            (10.0, 50.0),
+            (50.0, 70.0),
+        ];
+        assert_eq!(
+            handles(DrawingKind::RegressionTrend, &regression, 2),
+            vec![(10.0, 40.0), (50.0, 60.0)]
+        );
+        // Anchors already on their stroke keep their position.
+        let triangle = [(10.0, 10.0), (30.0, 10.0), (20.0, 25.0)];
+        assert_eq!(
+            handles(DrawingKind::Triangle, &triangle, 3),
+            triangle.to_vec()
+        );
+    }
+
+    #[test]
+    fn curve_tessellation_stays_round_at_every_size() {
+        // The worst chord of an arc deviates from it by the sagitta r(1 - cos(step / 2)).
+        for radius in [1.0, 12.0, 60.0, 400.0, 3_000.0, 40_000.0] {
+            for sweep in [std::f64::consts::FRAC_PI_2, std::f64::consts::TAU] {
+                let segments = arc_segments(radius, sweep);
+                assert!((MIN_CURVE_SEGMENTS..=MAX_CURVE_SEGMENTS).contains(&segments));
+                let sagitta = radius * (1.0 - (sweep / f64::from(segments) / 2.0).cos());
+                assert!(
+                    sagitta <= CURVE_TOLERANCE_PX + 1e-9,
+                    "r={radius} sweep={sweep}: {segments} chords leave {sagitta}px"
+                );
+            }
+        }
+        assert_eq!(arc_segments(f64::NAN, 1.0), MIN_CURVE_SEGMENTS);
+        assert_eq!(
+            arc_segments(1e12, std::f64::consts::TAU),
+            MAX_CURVE_SEGMENTS
+        );
+        assert_eq!(ellipse_segments(300.0, 40.0) % 2, 0);
+        assert!(ellipse_segments(300.0, 40.0) >= arc_segments(300.0, std::f64::consts::TAU));
+
+        // A tight, looping cubic: every chord midpoint stays within tolerance of the curve.
+        let curve = CurveGeometry {
+            points: [(0.0, 0.0), (900.0, -700.0), (-300.0, -700.0), (600.0, 0.0)],
+            cubic: true,
+        };
+        let segments = curve.segments();
+        for step in 0..segments {
+            let (t0, t1) = (
+                f64::from(step) / f64::from(segments),
+                f64::from(step + 1) / f64::from(segments),
+            );
+            let (a, b, mid) = (
+                curve.point(t0),
+                curve.point(t1),
+                curve.point((t0 + t1) / 2.0),
+            );
+            let chord = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+            let deviation = (chord.0 - mid.0).hypot(chord.1 - mid.1);
+            assert!(
+                deviation <= CURVE_TOLERANCE_PX,
+                "chord {step}: {deviation}px"
+            );
+        }
+    }
+
+    #[test]
+    fn construction_guides_tie_off_body_anchors_to_their_drawing() {
+        let options = DrawingGeometryOptions::default();
+        let guides = |kind: DrawingKind, px: &[(f64, f64)]| {
+            resolve_drawing_geometry(kind, px, 200.0, 0.0, 200.0, options)
+                .unwrap()
+                .guides
+        };
+        let anchors = [(10.0, 80.0), (40.0, 20.0), (70.0, 60.0)];
+        let dashed = |a, b| Some(GuideSegment { a, b, dashed: true });
+        for kind in [
+            DrawingKind::FibonacciExtension,
+            DrawingKind::FibonacciTrendTime,
+        ] {
+            assert_eq!(
+                guides(kind, &anchors),
+                [
+                    dashed(anchors[0], anchors[1]),
+                    dashed(anchors[1], anchors[2])
+                ],
+                "{kind:?}"
+            );
+        }
+        let base = Some(GuideSegment {
+            a: anchors[1],
+            b: anchors[2],
+            dashed: false,
+        });
+        assert_eq!(
+            guides(DrawingKind::AndrewsPitchfork, &anchors),
+            [base, None]
+        );
+        assert_eq!(
+            guides(DrawingKind::SchiffPitchfork, &anchors),
+            [base, dashed(anchors[0], (10.0, 50.0))]
+        );
+        assert_eq!(
+            guides(DrawingKind::ModifiedSchiffPitchfork, &anchors)[1],
+            dashed(anchors[0], (25.0, 50.0))
+        );
+        assert_eq!(
+            guides(DrawingKind::FibonacciRetracement, &anchors),
+            [None, None]
+        );
     }
 
     #[test]

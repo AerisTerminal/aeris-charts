@@ -61,7 +61,21 @@ pub(crate) enum DrawingHandleMode {
     Anchors,
     Endpoints,
     RectangleBounds,
+    /// A shape inscribed in its two-corner bounds (the ellipse): only the four edge midpoints,
+    /// which lie on the shape, are handles; each resizes one edge like the rectangle's.
+    BoundsEdges,
     Position,
+}
+
+impl DrawingHandleMode {
+    /// The `rectangle_anchors` slots a bounds-driven mode exposes as handles.
+    pub(crate) const fn bounds_slots(self) -> Option<&'static [usize]> {
+        match self {
+            Self::RectangleBounds => Some(&[0, 1, 2, 3, 4, 5, 6, 7]),
+            Self::BoundsEdges => Some(&[1, 3, 5, 7]),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,9 +133,10 @@ pub(crate) struct DrawingToolSpec {
     /// Placement commits directly into a platform text-edit session.  The editor itself remains a
     /// host concern, but the decision that this tool requests one is canonical engine metadata.
     pub(crate) requests_text_editor: bool,
-    /// Anchors land on the crosshair's time slot and the instrument/scale price tick during
-    /// creation, anchor drags, and body moves, so derived statistics read whole bars and ticks.
-    pub(crate) grid_snap: bool,
+    /// Every tool's anchors land on the crosshair's time slot during creation, anchor drags, and
+    /// body moves. These tools also land prices on the instrument/scale tick, so derived
+    /// statistics read whole ticks.
+    pub(crate) price_tick_snap: bool,
 }
 
 const TREND_LINE: DrawingToolSpec = DrawingToolSpec {
@@ -135,9 +150,9 @@ const TREND_LINE: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Finite,
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
-    default_width: 2.0,
+    default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: false,
+    price_tick_snap: false,
 };
 
 const HORIZONTAL_LINE: DrawingToolSpec = DrawingToolSpec {
@@ -151,9 +166,9 @@ const HORIZONTAL_LINE: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Full,
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
-    default_width: 2.0,
+    default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: false,
+    price_tick_snap: false,
 };
 
 const HORIZONTAL_RAY: DrawingToolSpec = DrawingToolSpec {
@@ -167,9 +182,9 @@ const HORIZONTAL_RAY: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::FromFirst,
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
-    default_width: 2.0,
+    default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: false,
+    price_tick_snap: false,
 };
 
 const VERTICAL_LINE: DrawingToolSpec = DrawingToolSpec {
@@ -183,9 +198,9 @@ const VERTICAL_LINE: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Finite,
     price_extent: DrawingPriceExtent::Full,
     bounds_padding_ratio: 0.0,
-    default_width: 2.0,
+    default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: false,
+    price_tick_snap: false,
 };
 
 const RECTANGLE: DrawingToolSpec = DrawingToolSpec {
@@ -201,7 +216,7 @@ const RECTANGLE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: false,
+    price_tick_snap: false,
 };
 
 const TEXT: DrawingToolSpec = DrawingToolSpec {
@@ -215,9 +230,9 @@ const TEXT: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Finite,
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
-    default_width: 2.0,
+    default_width: 1.0,
     requests_text_editor: true,
-    grid_snap: false,
+    price_tick_snap: false,
 };
 
 const BRUSH: DrawingToolSpec = DrawingToolSpec {
@@ -231,9 +246,9 @@ const BRUSH: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Finite,
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.25,
-    default_width: 2.0,
+    default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: false,
+    price_tick_snap: false,
 };
 
 const PATH: DrawingToolSpec = DrawingToolSpec {
@@ -247,9 +262,9 @@ const PATH: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Finite,
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
-    default_width: 2.0,
+    default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: false,
+    price_tick_snap: false,
 };
 
 const LONG_POSITION: DrawingToolSpec = DrawingToolSpec {
@@ -265,7 +280,7 @@ const LONG_POSITION: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: true,
+    price_tick_snap: true,
 };
 
 const SHORT_POSITION: DrawingToolSpec = DrawingToolSpec {
@@ -281,7 +296,7 @@ const SHORT_POSITION: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: true,
+    price_tick_snap: true,
 };
 
 const FIXED_RANGE_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
@@ -297,7 +312,7 @@ const FIXED_RANGE_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: false,
+    price_tick_snap: false,
 };
 
 const ANCHORED_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
@@ -313,7 +328,7 @@ const ANCHORED_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: false,
+    price_tick_snap: false,
 };
 
 const ANCHORED_VWAP: DrawingToolSpec = DrawingToolSpec {
@@ -327,9 +342,9 @@ const ANCHORED_VWAP: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::FromFirst,
     price_extent: DrawingPriceExtent::Full,
     bounds_padding_ratio: 0.0,
-    default_width: 2.0,
+    default_width: 1.0,
     requests_text_editor: false,
-    grid_snap: false,
+    price_tick_snap: false,
 };
 
 /// Measuring tools share one placement contract: two clicks (or a Shift press-drag for the
@@ -348,7 +363,7 @@ const fn measure_spec(kind: DrawingKind, wire_id: u8, name: &'static str) -> Dra
         bounds_padding_ratio: 0.0,
         default_width: 1.0,
         requests_text_editor: false,
-        grid_snap: true,
+        price_tick_snap: true,
     }
 }
 
@@ -456,7 +471,10 @@ const ROTATED_RECTANGLE: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Full,
     ..shape_spec(DrawingKind::RotatedRectangle, 27, "rotated_rectangle", 3)
 };
-const ELLIPSE: DrawingToolSpec = shape_spec(DrawingKind::Ellipse, 28, "ellipse", 2);
+const ELLIPSE: DrawingToolSpec = DrawingToolSpec {
+    handles: DrawingHandleMode::BoundsEdges,
+    ..shape_spec(DrawingKind::Ellipse, 28, "ellipse", 2)
+};
 const CIRCLE: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Full,
     price_extent: DrawingPriceExtent::Full,

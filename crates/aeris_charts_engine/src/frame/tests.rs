@@ -8005,7 +8005,7 @@ fn position_drawings_paint_information_and_entry_target_stop_axis_prices() {
     use crate::drawings::{DrawingKind, DrawingPoint};
 
     let mut chart = countdown_chart();
-    chart
+    let id = chart
         .add_drawing(
             DrawingKind::LongPosition,
             0,
@@ -8026,6 +8026,7 @@ fn position_drawings_paint_information_and_entry_target_stop_axis_prices() {
             None,
         )
         .unwrap();
+    chart.set_selected_drawing(Some(id));
 
     let frame = chart.build_frame();
     let entry = Color::rgb(0x78, 0x7b, 0x86);
@@ -8089,6 +8090,98 @@ fn position_drawings_paint_information_and_entry_target_stop_axis_prices() {
             .iter()
             .any(|(text, color)| text.as_str() == "11.00" && *color == risk)
     );
+}
+
+#[test]
+fn position_stats_show_only_while_the_position_is_selected() {
+    use crate::chart_input::PointerInput;
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    fn stat_texts(chart: &mut ChartEngine) -> Vec<String> {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Text { text, .. }
+                    if text.starts_with("Target: ")
+                        || text.starts_with("Stop: ")
+                        || text.contains("P&L: ")
+                        || text.starts_with("Risk/reward ratio: ") =>
+                {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+    fn click(chart: &mut ChartEngine, x: f64, y: f64, timestamp_ms: f64) {
+        let input = PointerInput {
+            x,
+            y,
+            timestamp_ms,
+            ..PointerInput::default()
+        };
+        chart.input_pointer_down(input, 1);
+        chart.input_pointer_up(input);
+    }
+
+    let mut chart = countdown_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 12.0,
+                },
+                DrawingPoint {
+                    logical: 3.0,
+                    price: 13.0,
+                },
+                DrawingPoint {
+                    logical: 3.0,
+                    price: 11.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    assert!(
+        stat_texts(&mut chart).is_empty(),
+        "an idle position shows its zones without statistic labels"
+    );
+    assert!(
+        boxed_labels(&mut chart)
+            .iter()
+            .any(|label| label.text == "13.00"),
+        "idle positions keep their target axis tag"
+    );
+
+    let x = chart.logical_to_coordinate(2.0).unwrap();
+    let y = chart.series_price_to_coordinate(0, 12.5).unwrap();
+    click(&mut chart, x, y, 1_000.0);
+    assert_eq!(chart.selected_drawing(), Some(id));
+    let selected = stat_texts(&mut chart);
+    assert!(selected.iter().any(|text| text.starts_with("Target: ")));
+    assert!(selected.iter().any(|text| text.starts_with("Stop: ")));
+    assert!(selected.iter().any(|text| text.starts_with("Open P&L: ")));
+    assert!(
+        selected
+            .iter()
+            .any(|text| text.starts_with("Risk/reward ratio: "))
+    );
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    let empty_x = chart.logical_to_coordinate(4.0).unwrap();
+    let empty_y = chart.series_price_to_coordinate(0, 10.0).unwrap();
+    click(&mut chart, empty_x, empty_y, 3_000.0);
+    assert_eq!(chart.selected_drawing(), None);
+    assert!(stat_texts(&mut chart).is_empty());
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    chart.set_selected_drawing(Some(id));
+    assert!(!stat_texts(&mut chart).is_empty());
 }
 
 #[test]
@@ -8173,7 +8266,7 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
     use crate::drawings::{DrawingKind, DrawingPoint};
 
     let mut chart = countdown_chart();
-    chart
+    let id = chart
         .add_drawing(
             DrawingKind::LongPosition,
             0,
@@ -8194,6 +8287,7 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
             None,
         )
         .unwrap();
+    chart.set_selected_drawing(Some(id));
 
     // countdown_chart's latest close is 12.5: inside the long reward zone.
     let frame = chart.build_frame();
@@ -13678,7 +13772,7 @@ fn position_stats_have_opaque_rounded_borderless_fills() {
                     r##"{{"layout":{{"background":{{"color":"{surface}"}}}}}}"##
                 ))
                 .unwrap();
-            chart
+            let id = chart
                 .add_drawing(
                     DrawingKind::LongPosition,
                     0,
@@ -13699,6 +13793,7 @@ fn position_stats_have_opaque_rounded_borderless_fills() {
                     None,
                 )
                 .unwrap();
+            chart.set_selected_drawing(Some(id));
             let frame = chart.build_frame();
             let stats = frame.panes[0]
                 .main
@@ -13757,7 +13852,7 @@ fn position_stats_follow_open_and_frozen_exit_prices_for_both_sides() {
                 .unwrap();
             // Keep an open run's right edge at candle 1. Closed runs must freeze there even
             // though candle 2 returns to entry.
-            chart
+            let id = chart
                 .add_drawing(
                     kind,
                     0,
@@ -13778,6 +13873,7 @@ fn position_stats_follow_open_and_frozen_exit_prices_for_both_sides() {
                     None,
                 )
                 .unwrap();
+            chart.set_selected_drawing(Some(id));
             let frame = chart.build_frame();
             let pnl = if !closed {
                 (terminal - 100.0) * direction
@@ -13847,6 +13943,7 @@ fn position_stats_refresh_instrument_metadata_and_handle_future_zero_risk_and_vi
             None,
         )
         .unwrap();
+    chart.set_selected_drawing(Some(id));
     assert!(
         texts(&mut chart)
             .iter()

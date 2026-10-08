@@ -1636,9 +1636,11 @@ impl ChartEngine {
                 if editing =>
             {
                 let step = if modifiers.shift { 10.0 } else { 1.0 };
+                // Horizontal steps are bars (drawings move bar by bar); vertical steps are px.
+                let bar_step = step * self.time_scale.bar_spacing();
                 let (dx, dy) = match key {
-                    ChartKey::ArrowLeft => (-step, 0.0),
-                    ChartKey::ArrowRight => (step, 0.0),
+                    ChartKey::ArrowLeft => (-bar_step, 0.0),
+                    ChartKey::ArrowRight => (bar_step, 0.0),
                     ChartKey::ArrowUp => (0.0, -step),
                     _ => (0.0, step),
                 };

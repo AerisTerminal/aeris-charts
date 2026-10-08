@@ -19,7 +19,7 @@ use crate::drawings::{
     Drawing, DrawingBodyGeometry, DrawingGeometryOptions, DrawingHandleMode, DrawingId,
     DrawingKind, DrawingPoint, DrawingTextHAlign, MEASURE_LABEL_GAP, MeasureAxes, MeasureGeometry,
     PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD, TREND_TEXT_PLACEHOLDER,
-    resolve_drawing_geometry,
+    arc_segments, ellipse_segments, gann_arc_segments, resolve_drawing_geometry,
 };
 use aeris_charts_core::model::plot_list::PlotValueIndex;
 
@@ -67,6 +67,33 @@ fn push_segment(
         line_type: LineType::Simple,
         color,
     });
+}
+
+/// A crisp dashed axis-aligned outline through two opposite corners.
+fn push_dashed_outline(a: (f64, f64), b: (f64, f64), color: Color, vpr: f64, out: &mut Vec<Prim>) {
+    let width = vpr.round().max(1.0) as i32;
+    let (left, right) = (a.0.min(b.0).round() as i32, a.0.max(b.0).round() as i32);
+    let (top, bottom) = (a.1.min(b.1).round() as i32, a.1.max(b.1).round() as i32);
+    for y in [top, bottom] {
+        out.push(Prim::HLine {
+            y,
+            x0: left,
+            x1: right,
+            width,
+            style: LineStyle::Dashed,
+            color,
+        });
+    }
+    for x in [left, right] {
+        out.push(Prim::VLine {
+            x,
+            y0: top,
+            y1: bottom,
+            width,
+            style: LineStyle::Dashed,
+            color,
+        });
+    }
 }
 
 fn push_drawing_cap(
@@ -477,21 +504,61 @@ impl ChartEngine {
                         px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
                     // Semantic statistics (measure direction, labels) read the full
                     // placed-plus-preview anchor set, exactly as the commit will store it.
-                    if preview_drawing.kind.spec().handles == DrawingHandleMode::RectangleBounds
+                    let handles = pending.drawing.kind.spec().handles;
+                    if handles == DrawingHandleMode::RectangleBounds
                         && let Some(fill) = preview_drawing.preview_fill_color.clone()
                     {
                         preview_drawing.fill_color = Some(fill);
                     }
                     self.build_drawing_prims(&preview_drawing, &px, pane_w_px, vpr, out, points);
-                    if pending.drawing.kind.spec().handles == DrawingHandleMode::RectangleBounds {
-                        // the public reference shows all eight anchors while the rectangle is being
+                    if handles.bounds_slots().is_some() && px.len() == 2 {
+                        // the public reference shows all bounds anchors while the shape is being
                         // drawn (committed corner + live preview corner), not only after
                         // the commit.
-                        build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
+                        build_rectangle_handles(&px, handles, vpr, self.anchor_fill(), out);
                     } else {
                         let committed = pending.drawing.points.len();
-                        build_anchor_handles(&px[..committed], vpr, self.anchor_fill(), out);
+                        let handles = self.drawing_anchor_handles(&preview_drawing, &px, hpr, vpr);
+                        build_anchor_handles(
+                            &handles[..committed.min(handles.len())],
+                            vpr,
+                            self.anchor_fill(),
+                            out,
+                        );
                     }
+                }
+            } else if anchors.len() >= 2 {
+                // A multi-anchor kind between clicks: its legs so far (placed anchors plus the
+                // cursor) paint live in the drawing's own stroke, so the user sees the shape
+                // build up; the full geometry takes over once every anchor is known. The bars
+                // pattern's first two anchors bound its source window, which shows as the same
+                // dashed outline the selection uses.
+                let px: Option<Vec<(f64, f64)>> = anchors
+                    .iter()
+                    .map(|&point| {
+                        self.drawing_to_px_for(pane_index, pending.drawing.price_scale, point)
+                            .map(|(x, y)| (x * hpr, y * vpr))
+                    })
+                    .collect();
+                if let Some(px) = px {
+                    let drawing = &pending.drawing;
+                    let color = Color::parse_css(&drawing.color).unwrap_or(PRIMARY);
+                    if drawing.kind == DrawingKind::BarsPattern {
+                        push_dashed_outline(px[0], px[1], color, vpr, out);
+                    } else {
+                        let first_point = points.len() as u32;
+                        points.extend(px.iter().map(|&(x, y)| [x as f32, y as f32]));
+                        out.push(Prim::Polyline {
+                            first_point,
+                            point_count: px.len() as u32,
+                            width: (drawing.width * vpr) as f32,
+                            style: drawing.style,
+                            line_type: LineType::Simple,
+                            color,
+                        });
+                    }
+                    let committed = drawing.points.len().min(px.len());
+                    build_anchor_handles(&px[..committed], vpr, self.anchor_fill(), out);
                 }
             } else if anchors.len() == 1 {
                 // A one-anchor kind awaiting its click, or a two-anchor kind before the
@@ -514,8 +581,8 @@ impl ChartEngine {
         }
     }
 
-    /// The selected/hovered drawing's converted bitmap-px anchor points, or `None` when the
-    /// id is stale, on another pane, or off-screen.
+    /// The selected/hovered drawing's converted bitmap-px render points (semantic anchors, then
+    /// derived points), or `None` when the id is stale, on another pane, or off-screen.
     fn overlay_drawing_px(
         &self,
         pane_index: usize,
@@ -535,7 +602,6 @@ impl ChartEngine {
         let px = self.drawing_px_cached(drawing, &mut runtime, key)?;
         Some(
             px.iter()
-                .take(drawing.points.len())
                 .map(|&(x, y)| (x * hpr, y * vpr))
                 .collect::<Vec<_>>(),
         )
@@ -571,10 +637,21 @@ impl ChartEngine {
         let Some(px) = self.overlay_drawing_px(pane_index, id, hpr, vpr) else {
             return;
         };
+        if drawing.kind == DrawingKind::BarsPattern
+            && !drawing.bars_pattern.is_empty()
+            && px.len() >= 2
+        {
+            // The copied bars paint at the target; the source window the two range handles
+            // edit only exists as this selection outline, so the handles sit on its corners.
+            let color = Color::parse_css(&drawing.color).unwrap_or(PRIMARY);
+            push_dashed_outline(px[0], px[1], color, vpr, out);
+        }
         match drawing.kind.spec().handles {
             DrawingHandleMode::None => {}
-            DrawingHandleMode::RectangleBounds if px.len() == 2 => {
-                build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
+            mode @ (DrawingHandleMode::RectangleBounds | DrawingHandleMode::BoundsEdges)
+                if px.len() == 2 =>
+            {
+                build_rectangle_handles(&px, mode, vpr, self.anchor_fill(), out);
             }
             DrawingHandleMode::Position if px.len() == 3 => {
                 build_position_handles(&px, vpr, self.anchor_fill(), out);
@@ -583,9 +660,12 @@ impl ChartEngine {
                 build_anchor_handles(&[px[0], px[px.len() - 1]], vpr, self.anchor_fill(), out);
             }
             DrawingHandleMode::Anchors | DrawingHandleMode::Endpoints => {
-                build_anchor_handles(&px, vpr, self.anchor_fill(), out);
+                let handles = self.drawing_anchor_handles(drawing, &px, hpr, vpr);
+                build_anchor_handles(&handles, vpr, self.anchor_fill(), out);
             }
-            DrawingHandleMode::RectangleBounds | DrawingHandleMode::Position => {}
+            DrawingHandleMode::RectangleBounds
+            | DrawingHandleMode::BoundsEdges
+            | DrawingHandleMode::Position => {}
         }
     }
 
@@ -663,6 +743,25 @@ impl ChartEngine {
         ) else {
             return;
         };
+        for guide in geometry.guides.into_iter().flatten() {
+            let first_point = points.len() as u32;
+            points.extend([
+                [guide.a.0 as f32, guide.a.1 as f32],
+                [guide.b.0 as f32, guide.b.1 as f32],
+            ]);
+            out.push(Prim::Polyline {
+                first_point,
+                point_count: 2,
+                width: (drawing.width * vpr) as f32,
+                style: if guide.dashed {
+                    LineStyle::Dashed
+                } else {
+                    drawing.style
+                },
+                line_type: LineType::Simple,
+                color,
+            });
+        }
         match geometry.body {
             DrawingBodyGeometry::Segment { a, b } => {
                 let label_gap = self
@@ -725,6 +824,15 @@ impl ChartEngine {
                 }
                 push_drawing_cap(drawing.stroke_start, a, b, drawing.width * vpr, color, out);
                 push_drawing_cap(drawing.stroke_end, b, a, drawing.width * vpr, color, out);
+                match drawing.kind {
+                    DrawingKind::TrendAngle => {
+                        self.build_trend_angle_prims(drawing, px, color, vpr, out, points);
+                    }
+                    DrawingKind::InfoLine => {
+                        self.build_info_line_prims(drawing, px, pane_w_px, vpr, out, points);
+                    }
+                    _ => {}
+                }
             }
             DrawingBodyGeometry::Horizontal { y, x0, x1 } => {
                 let x0 = (x0.round() as i32).clamp(0, pane_w_px);
@@ -1041,7 +1149,14 @@ impl ChartEngine {
                         push_segment(px[0], side, drawing, color, vpr, out, points);
                     }
                 }
-                let segments = arcs.segments();
+                let segments = arcs.segments(
+                    drawing
+                        .levels
+                        .iter()
+                        .filter(|level| level.visible)
+                        .map(|level| drawing.level_value(level.value))
+                        .fold(0.0, f64::max),
+                );
                 let mut previous = None;
                 for level in &drawing.levels {
                     if !level.visible || drawing.level_value(level.value) <= 0.0 {
@@ -1293,42 +1408,39 @@ impl ChartEngine {
                 });
             }
             DrawingBodyGeometry::PriceLabel { x, y } => {
-                let label = if drawing.text.is_empty() {
-                    self.format_drawing_price(drawing, drawing.points[0].price)
-                } else {
-                    drawing.text.clone()
-                };
-                let layout = &self.options.get().layout;
-                let size = drawing.resolved_text_size(layout.font_size) * vpr;
-                let width = self.measure_text_run(
-                    &label,
-                    size,
-                    &layout.font_family,
-                    drawing.text_weight.unwrap_or(400),
-                    drawing.text_italic,
-                );
-                let padding = 4.0 * vpr;
-                out.push(Prim::Rect {
-                    rect: IRect {
-                        x: (x - width - 2.0 * padding).round() as i32,
-                        y: (y - size * 0.6 - padding).round() as i32,
-                        w: (width + 2.0 * padding).round().max(1.0) as i32,
-                        h: (size * 1.2 + 2.0 * padding).round().max(1.0) as i32,
-                    },
+                let label = self.price_label_layout(drawing, (x, y), vpr);
+                let [left, top, width, height] = label.rect;
+                let bottom = top + height;
+                let radius = (3.0 * vpr).round().max(1.0) as f32;
+                out.push(Prim::RoundRect {
+                    x: left as f32,
+                    y: top as f32,
+                    w: width as f32,
+                    h: height as f32,
+                    radii: [radius, radius, radius, 0.0],
+                    fill: color,
+                    border_width: 0.0,
+                    border_color: color,
+                });
+                out.push(Prim::Triangle {
+                    a: [x as f32, y as f32],
+                    b: [left as f32, bottom as f32],
+                    c: [(left + label.tail * 1.5) as f32, bottom as f32],
                     color,
                 });
+                let layout = &self.options.get().layout;
                 out.push(Prim::Text {
-                    x: (x - padding) as f32,
-                    y: y as f32,
-                    text: label,
+                    x: (left + label.padding) as f32,
+                    y: (top + height / 2.0) as f32,
+                    text: label.text,
                     color: drawing
                         .text_color
                         .as_deref()
                         .and_then(Color::parse_css)
-                        .unwrap_or(Color::rgb(255, 255, 255)),
-                    size: size as f32,
+                        .unwrap_or_else(|| color.contrast_text()),
+                    size: label.size as f32,
                     family: layout.font_family.clone(),
-                    align: TextAlign::Right,
+                    align: TextAlign::Left,
                     weight: drawing.text_weight.unwrap_or(400),
                     italic: drawing.text_italic,
                 });
@@ -1417,25 +1529,26 @@ impl ChartEngine {
                         }
                         prior_fan = Some(end);
                     }
+                    let gann_segments = gann_arc_segments(grid, drawing);
                     let mut prior_arc: Option<f64> = None;
                     for level in drawing.gann_arcs.iter().filter(|level| level.visible) {
                         if level.fill_between
                             && let Some(previous) = prior_arc
                         {
                             let upper_first = points.len() as u32;
-                            for step in 0..=32 {
+                            for step in 0..=gann_segments {
                                 let p = grid.arc_point(
                                     previous,
-                                    f64::from(step) / 32.0,
+                                    f64::from(step) / f64::from(gann_segments),
                                     drawing.level_reverse,
                                 );
                                 points.push([p.0 as f32, p.1 as f32]);
                             }
                             let lower_first = points.len() as u32;
-                            for step in 0..=32 {
+                            for step in 0..=gann_segments {
                                 let p = grid.arc_point(
                                     level.value,
-                                    f64::from(step) / 32.0,
+                                    f64::from(step) / f64::from(gann_segments),
                                     drawing.level_reverse,
                                 );
                                 points.push([p.0 as f32, p.1 as f32]);
@@ -1443,7 +1556,7 @@ impl ChartEngine {
                             out.push(Prim::BandFill {
                                 upper_first,
                                 lower_first,
-                                point_count: 33,
+                                point_count: gann_segments + 1,
                                 line_type: LineType::Simple,
                                 fill: Self::drawing_level_fill(level, color),
                             });
@@ -1533,20 +1646,21 @@ impl ChartEngine {
                             color: level_color,
                         });
                     }
+                    let gann_segments = gann_arc_segments(grid, drawing);
                     for level in drawing.gann_arcs.iter().filter(|level| level.visible) {
                         let level_color = Color::parse_css(&level.color).unwrap_or(color);
                         let first_point = points.len() as u32;
-                        for step in 0..=32 {
+                        for step in 0..=gann_segments {
                             let point = grid.arc_point(
                                 level.value,
-                                f64::from(step) / 32.0,
+                                f64::from(step) / f64::from(gann_segments),
                                 drawing.level_reverse,
                             );
                             points.push([point.0 as f32, point.1 as f32]);
                         }
                         out.push(Prim::Polyline {
                             first_point,
-                            point_count: 33,
+                            point_count: gann_segments + 1,
                             width: (drawing.width * vpr) as f32,
                             style: Self::drawing_level_style(&level.style),
                             line_type: LineType::Simple,
@@ -1593,6 +1707,10 @@ impl ChartEngine {
             }
             DrawingBodyGeometry::Ellipse { center, rx, ry } => {
                 if rx > 0.0 && ry > 0.0 {
+                    // The fill halves and the outline share one tessellation, so the fill edge
+                    // runs exactly under the stroke.
+                    let segments = ellipse_segments(rx, ry);
+                    let half = segments / 2;
                     if drawing.fill_enabled {
                         let fill = drawing
                             .fill_color
@@ -1600,16 +1718,16 @@ impl ChartEngine {
                             .and_then(Color::parse_css)
                             .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
                         let upper_first = points.len() as u32;
-                        for step in 0..=32 {
-                            let theta = std::f64::consts::PI * step as f64 / 32.0;
+                        for step in 0..=half {
+                            let theta = std::f64::consts::PI * f64::from(step) / f64::from(half);
                             points.push([
                                 (center.0 - rx * theta.cos()) as f32,
                                 (center.1 - ry * theta.sin()) as f32,
                             ]);
                         }
                         let lower_first = points.len() as u32;
-                        for step in 0..=32 {
-                            let theta = std::f64::consts::PI * step as f64 / 32.0;
+                        for step in 0..=half {
+                            let theta = std::f64::consts::PI * f64::from(step) / f64::from(half);
                             points.push([
                                 (center.0 - rx * theta.cos()) as f32,
                                 (center.1 + ry * theta.sin()) as f32,
@@ -1618,14 +1736,14 @@ impl ChartEngine {
                         out.push(Prim::BandFill {
                             upper_first,
                             lower_first,
-                            point_count: 33,
+                            point_count: half + 1,
                             line_type: LineType::Simple,
                             fill,
                         });
                     }
                     let first_point = points.len() as u32;
-                    for step in 0..=64 {
-                        let theta = std::f64::consts::TAU * step as f64 / 64.0;
+                    for step in 0..=segments {
+                        let theta = std::f64::consts::TAU * f64::from(step) / f64::from(segments);
                         points.push([
                             (center.0 + rx * theta.cos()) as f32,
                             (center.1 + ry * theta.sin()) as f32,
@@ -1633,7 +1751,7 @@ impl ChartEngine {
                     }
                     out.push(Prim::Polyline {
                         first_point,
-                        point_count: 65,
+                        point_count: segments + 1,
                         width: (drawing.width * vpr) as f32,
                         style: drawing.style,
                         line_type: LineType::Simple,
@@ -1661,9 +1779,10 @@ impl ChartEngine {
                         stroke: color,
                     });
                 }
+                let segments = arc_segments(radius, std::f64::consts::TAU);
                 let first_point = points.len() as u32;
-                for step in 0..=64 {
-                    let theta = std::f64::consts::TAU * step as f64 / 64.0;
+                for step in 0..=segments {
+                    let theta = std::f64::consts::TAU * f64::from(step) / f64::from(segments);
                     points.push([
                         (center.0 + radius * theta.cos()) as f32,
                         (center.1 + radius * theta.sin()) as f32,
@@ -1671,7 +1790,7 @@ impl ChartEngine {
                 }
                 out.push(Prim::Polyline {
                     first_point,
-                    point_count: 65,
+                    point_count: segments + 1,
                     width: (drawing.width * vpr) as f32,
                     style: drawing.style,
                     line_type: LineType::Simple,
@@ -1705,14 +1824,15 @@ impl ChartEngine {
                 }
             }
             DrawingBodyGeometry::Arc(arc) => {
+                let segments = arc.segments();
                 let first_point = points.len() as u32;
-                for step in 0..=64 {
-                    let (x, y) = arc.point(step as f64 / 64.0);
+                for step in 0..=segments {
+                    let (x, y) = arc.point(f64::from(step) / f64::from(segments));
                     points.push([x as f32, y as f32]);
                 }
                 out.push(Prim::Polyline {
                     first_point,
-                    point_count: 65,
+                    point_count: segments + 1,
                     width: (drawing.width * vpr) as f32,
                     style: drawing.style,
                     line_type: LineType::Simple,
@@ -1720,14 +1840,15 @@ impl ChartEngine {
                 });
             }
             DrawingBodyGeometry::Curve(curve) => {
+                let segments = curve.segments();
                 let first_point = points.len() as u32;
-                for step in 0..=64 {
-                    let (x, y) = curve.point(step as f64 / 64.0);
+                for step in 0..=segments {
+                    let (x, y) = curve.point(f64::from(step) / f64::from(segments));
                     points.push([x as f32, y as f32]);
                 }
                 out.push(Prim::Polyline {
                     first_point,
-                    point_count: 65,
+                    point_count: segments + 1,
                     width: (drawing.width * vpr) as f32,
                     style: drawing.style,
                     line_type: LineType::Simple,
@@ -2485,7 +2606,13 @@ impl ChartEngine {
         let Some(anchor) = px.first().copied() else {
             return;
         };
-        if drawing.labels.is_empty() {
+        // These kinds lay their metric labels out with their geometry (build_drawing_prims).
+        if drawing.labels.is_empty()
+            || matches!(
+                drawing.kind,
+                DrawingKind::TrendAngle | DrawingKind::InfoLine
+            )
+        {
             return;
         }
         let color = drawing
@@ -2659,6 +2786,276 @@ impl ChartEngine {
         lines
     }
 
+    /// The visible label of `metric`: `Some(custom text)` when shown, `None` when hidden/absent.
+    fn visible_label(
+        drawing: &Drawing,
+        metric: crate::DrawingLabelMetric,
+    ) -> Option<Option<String>> {
+        drawing
+            .labels
+            .iter()
+            .find(|label| label.metric == metric && label.visible)
+            .map(|label| label.text.clone())
+    }
+
+    /// Trend Angle: a dotted horizontal reference from the first anchor, a dotted arc sweeping
+    /// from it to the line, and the signed angle (counter-clockwise positive, as on a y-up
+    /// chart) beside the reference's end.
+    fn build_trend_angle_prims(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        color: Color,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+    ) {
+        let (Some(&start), Some(&end)) = (px.first(), px.get(1)) else {
+            return;
+        };
+        let (dx, dy) = (end.0 - start.0, end.1 - start.1);
+        if dx.hypot(dy) <= f64::EPSILON {
+            return;
+        }
+        let radius = TREND_ANGLE_RADIUS_CSS * vpr;
+        let width = vpr.round().max(1.0) as f32;
+        let sweep = dy.atan2(dx);
+        let first_point = points.len() as u32;
+        points.extend([
+            [start.0 as f32, start.1 as f32],
+            [(start.0 + radius) as f32, start.1 as f32],
+        ]);
+        out.push(Prim::Polyline {
+            first_point,
+            point_count: 2,
+            width,
+            style: LineStyle::Dotted,
+            line_type: LineType::Simple,
+            color,
+        });
+        let steps = arc_segments(radius, sweep);
+        let first_point = points.len() as u32;
+        for step in 0..=steps {
+            let angle = sweep * f64::from(step) / f64::from(steps);
+            points.push([
+                (start.0 + radius * angle.cos()) as f32,
+                (start.1 + radius * angle.sin()) as f32,
+            ]);
+        }
+        out.push(Prim::Polyline {
+            first_point,
+            point_count: steps + 1,
+            width,
+            style: LineStyle::Dotted,
+            line_type: LineType::Simple,
+            color,
+        });
+        let Some(custom) = Self::visible_label(drawing, crate::DrawingLabelMetric::Angle) else {
+            return;
+        };
+        let layout = &self.options.get().layout;
+        out.push(Prim::Text {
+            x: (start.0 + radius + TREND_ANGLE_LABEL_GAP_CSS * vpr) as f32,
+            y: start.1 as f32,
+            text: custom.unwrap_or_else(|| line_angle_text(-sweep.to_degrees())),
+            color,
+            size: (stat_label_size(layout.font_size) * vpr) as f32,
+            family: layout.font_family.clone(),
+            align: TextAlign::Left,
+            weight: drawing.text_weight.unwrap_or(400),
+            italic: drawing.text_italic,
+        });
+    }
+
+    /// The Info Line's statistics card rows: price change / percent / ticks, bars / elapsed
+    /// time / pixel distance, and angle. Each row lists only its visible metrics.
+    fn info_line_rows(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        hpr: f64,
+        vpr: f64,
+    ) -> Vec<(InfoLineIcon, String)> {
+        use crate::DrawingLabelMetric as Metric;
+        let (Some(&start), Some(&end)) = (drawing.points.first(), drawing.points.get(1)) else {
+            return Vec::new();
+        };
+        let (Some(&a), Some(&b)) = (px.first(), px.get(1)) else {
+            return Vec::new();
+        };
+        let stats = self.measure_stats(drawing, start, end);
+        let mut rows = Vec::with_capacity(3);
+
+        let mut price = String::new();
+        if let Some(custom) = Self::visible_label(drawing, Metric::PriceChange) {
+            price =
+                custom.unwrap_or_else(|| self.format_drawing_price(drawing, stats.price_change));
+        }
+        if let Some(custom) = Self::visible_label(drawing, Metric::PercentChange) {
+            let percent = custom.unwrap_or_else(|| {
+                stats.percent.map_or_else(
+                    || "—".to_string(),
+                    |value| format!("{}%", signed_stat(value, 2)),
+                )
+            });
+            price = if price.is_empty() {
+                percent
+            } else {
+                format!("{price} ({percent})")
+            };
+        }
+        if let Some(custom) = Self::visible_label(drawing, Metric::Ticks) {
+            let ticks = custom.unwrap_or_else(|| {
+                stats
+                    .ticks
+                    .map_or_else(|| "—".to_string(), |value| signed_stat(value, 0))
+            });
+            price = if price.is_empty() {
+                ticks
+            } else {
+                format!("{price}, {ticks}")
+            };
+        }
+        if !price.is_empty() {
+            rows.push((InfoLineIcon::Price, price));
+        }
+
+        let mut time = String::new();
+        if let Some(custom) = Self::visible_label(drawing, Metric::BarCount) {
+            time = custom.unwrap_or_else(|| format!("{} bars", signed_stat(stats.bars as f64, 0)));
+        }
+        let duration = Self::visible_label(drawing, Metric::Duration)
+            .or_else(|| Self::visible_label(drawing, Metric::DateTimeRange));
+        if let Some(custom) = duration
+            && let Some(elapsed) = custom.or_else(|| stats.seconds.map(format_measure_duration))
+        {
+            time = if time.is_empty() {
+                elapsed
+            } else {
+                format!("{time} ({elapsed})")
+            };
+        }
+        if let Some(custom) = Self::visible_label(drawing, Metric::Distance) {
+            let distance = custom.unwrap_or_else(|| {
+                let css = ((b.0 - a.0) / hpr).hypot((b.1 - a.1) / vpr);
+                format!("distance: {} px", css.round() as i64)
+            });
+            time = if time.is_empty() {
+                distance
+            } else {
+                format!("{time}, {distance}")
+            };
+        }
+        if !time.is_empty() {
+            rows.push((InfoLineIcon::Time, time));
+        }
+
+        if let Some(custom) = Self::visible_label(drawing, Metric::Angle) {
+            rows.push((
+                InfoLineIcon::Angle,
+                custom.unwrap_or_else(|| {
+                    let degrees = (-(b.1 - a.1) / vpr).atan2((b.0 - a.0) / hpr).to_degrees();
+                    line_angle_text(degrees)
+                }),
+            ));
+        }
+        rows
+    }
+
+    /// The Info Line's statistics card: a rounded panel beside the segment's midpoint, on the
+    /// side the line leaves free (above-right of a falling line, below-right of a rising one),
+    /// kept inside the pane.
+    fn build_info_line_prims(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        pane_w_px: i32,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+    ) {
+        let (Some(&a), Some(&b)) = (px.first(), px.get(1)) else {
+            return;
+        };
+        let Some(pane) = self.panes.get(drawing.pane_index) else {
+            return;
+        };
+        let hpr = f64::from(pane_w_px) / self.pane_w.max(1.0);
+        let rows = self.info_line_rows(drawing, px, hpr, vpr);
+        if rows.is_empty() {
+            return;
+        }
+        let layout = &self.options.get().layout;
+        let card = InfoLineCard::for_theme(self.surface_theme());
+        let size = INFO_LINE_FONT_CSS * vpr;
+        let line_height = INFO_LINE_LINE_HEIGHT_CSS * vpr;
+        let row_gap = INFO_LINE_ROW_GAP_CSS * vpr;
+        let pad_x = INFO_LINE_PAD_X_CSS * vpr;
+        let (pad_top, pad_bottom) = (INFO_LINE_PAD_TOP_CSS * vpr, INFO_LINE_PAD_BOTTOM_CSS * vpr);
+        let icon = INFO_LINE_ICON_CSS * vpr;
+        let text_inset = pad_x + icon + INFO_LINE_ICON_GAP_CSS * vpr;
+        let text_width = rows
+            .iter()
+            .map(|(_, text)| self.measure_text_run(text, size, &layout.font_family, 400, false))
+            .fold(0.0_f64, f64::max);
+        let width = (text_inset + text_width + pad_x).round();
+        let height = (pad_top
+            + rows.len() as f64 * line_height
+            + (rows.len() - 1) as f64 * row_gap
+            + pad_bottom)
+            .round();
+        let mid = point_on_segment(a, b, 0.5);
+        let gap_x = 12.0 * vpr;
+        let gap_y = 16.0 * vpr;
+        let pane_top = pane.top * vpr;
+        let pane_bottom = (pane.top + pane.height) * vpr;
+        let left = (mid.0 + gap_x)
+            .min(f64::from(pane_w_px) - width)
+            .max(0.0)
+            .round();
+        let top = if (b.0 - a.0) * (b.1 - a.1) >= 0.0 {
+            mid.1 - gap_y - height
+        } else {
+            mid.1 + gap_y
+        }
+        .min(pane_bottom - height)
+        .max(pane_top)
+        .round();
+        out.push(Prim::RoundRect {
+            x: left as f32,
+            y: top as f32,
+            w: width as f32,
+            h: height as f32,
+            radii: [(aeris_charts_core::style::RADIUS_DEFAULT * vpr).round() as f32; 4],
+            fill: card.surface,
+            border_width: aeris_charts_core::style::border_width_device_px(vpr) as f32,
+            border_color: card.border,
+        });
+        for (index, (kind, text)) in rows.into_iter().enumerate() {
+            let center_y =
+                top + pad_top + (line_height + row_gap) * index as f64 + line_height / 2.0;
+            push_info_line_icon(
+                kind,
+                (left + pad_x + icon / 2.0, center_y),
+                card.muted,
+                vpr,
+                out,
+                points,
+            );
+            out.push(Prim::Text {
+                x: (left + text_inset) as f32,
+                y: center_y as f32,
+                text,
+                color: card.foreground,
+                size: size as f32,
+                family: layout.font_family.clone(),
+                align: TextAlign::Left,
+                weight: 400,
+                italic: false,
+            });
+        }
+    }
+
     /// One measuring tool: translucent measured area, crisp boundary rules, start→end arrows,
     /// and a solid statistics label beyond the end (below for the date tool). Every edge snaps to
     /// whole device pixels and arrow tips sit on the shaft's pixel center, so all executors
@@ -2794,6 +3191,46 @@ impl ChartEngine {
             crate::DrawingPriceScale::Overlay => crate::PriceScaleTarget::Overlay,
         };
         self.format_scale_price(drawing.pane_index, scale_target, value)
+    }
+
+    /// The price label's bubble in the anchor's px basis (`scale` is the bitmap/media ratio;
+    /// 1.0 at hit-test). The bubble rises above-right of the anchor and its tail's tip touches
+    /// the anchor, so the label and its handle are one attached shape.
+    pub(crate) fn price_label_layout(
+        &self,
+        drawing: &Drawing,
+        anchor: (f64, f64),
+        scale: f64,
+    ) -> PriceLabelLayout {
+        let text = if drawing.text.is_empty() {
+            self.format_drawing_price(drawing, drawing.points[0].price)
+        } else {
+            drawing.text.clone()
+        };
+        let layout = &self.options.get().layout;
+        let size = drawing.resolved_text_size(layout.font_size) * scale;
+        let text_width = self.measure_text_run(
+            &text,
+            size,
+            &layout.font_family,
+            drawing.text_weight.unwrap_or(400),
+            drawing.text_italic,
+        );
+        let padding = 6.0 * scale;
+        let tail = 6.0 * scale;
+        let height = size * 1.2 + 8.0 * scale;
+        PriceLabelLayout {
+            rect: [
+                anchor.0,
+                anchor.1 - tail - height,
+                text_width + 2.0 * padding,
+                height,
+            ],
+            text,
+            size,
+            padding,
+            tail,
+        }
     }
 
     fn build_position_labels(
@@ -3277,8 +3714,10 @@ impl ChartEngine {
             .unwrap_or(Color::rgb(8, 153, 129));
         let risk = Color::parse_css(aeris_charts_core::style::MARKET_DOWN_CSS)
             .unwrap_or(Color::rgb(247, 82, 95));
+        // Statistic labels belong to the active position only; idle positions show their zones.
         for drawing in self.drawings.iter().filter(|drawing| {
-            drawing.pane_index == pane_index
+            self.selected_drawing == Some(drawing.id)
+                && drawing.pane_index == pane_index
                 && drawing.visible
                 && drawing.interval_visibility.allows(self.drawing_interval)
                 && matches!(
@@ -3377,15 +3816,34 @@ impl ChartEngine {
     /// The anchor-handle fill for the current theme (white on light backgrounds, black on dark —
     /// the series selection anchors' luminance rule, series_geometry.rs).
     fn anchor_fill(&self) -> Color {
+        match self.surface_theme() {
+            crate::ChartTheme::Light => Color::rgb(0xff, 0xff, 0xff),
+            crate::ChartTheme::Dark => Color::rgb(0, 0, 0),
+        }
+    }
+
+    /// The token theme matching the painted chart background, so in-chart chrome follows the
+    /// surface hosts actually show even when they restyle `layout` without `set_theme`.
+    fn surface_theme(&self) -> crate::ChartTheme {
         let fallback = aeris_charts_core::style::DEFAULT_SURFACE_RGB;
         let background = Color::parse_css(&self.options.get().layout.background.color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
         if background.luminance() > 160.0 {
-            Color::rgb(0xff, 0xff, 0xff)
+            crate::ChartTheme::Light
         } else {
-            Color::rgb(0, 0, 0)
+            crate::ChartTheme::Dark
         }
     }
+}
+
+/// `ChartEngine::price_label_layout`: bubble `[left, top, width, height]`, label text and
+/// glyph size, the text inset, and the tail height below the bubble.
+pub(crate) struct PriceLabelLayout {
+    pub(crate) rect: [f64; 4],
+    pub(crate) text: String,
+    pub(crate) size: f64,
+    pub(crate) padding: f64,
+    pub(crate) tail: f64,
 }
 
 /// Measured quantities between a measuring tool's anchors (`ChartEngine::measure_stats`).
@@ -3430,6 +3888,139 @@ fn push_measure_arrowhead(
         line_type: LineType::Simple,
         color,
     });
+}
+
+/// Trend Angle reference/arc radius and the gap before its angle label, in CSS px.
+const TREND_ANGLE_RADIUS_CSS: f64 = 60.0;
+const TREND_ANGLE_LABEL_GAP_CSS: f64 = 10.0;
+/// Info Line card metrics in CSS px, following the package's `.aeris_charts-tooltip` panel
+/// (12/16 px type, 10 px side and 6/7 px vertical padding, 12 px column gap). Rows get a little
+/// more spacing than the tooltip's 2 px so the 14 px icons do not touch.
+const INFO_LINE_FONT_CSS: f64 = 12.0;
+const INFO_LINE_LINE_HEIGHT_CSS: f64 = 16.0;
+const INFO_LINE_ROW_GAP_CSS: f64 = 4.0;
+const INFO_LINE_PAD_X_CSS: f64 = 10.0;
+const INFO_LINE_PAD_TOP_CSS: f64 = 6.0;
+const INFO_LINE_PAD_BOTTOM_CSS: f64 = 7.0;
+const INFO_LINE_ICON_CSS: f64 = 16.0;
+const INFO_LINE_ICON_GAP_CSS: f64 = 12.0;
+
+/// The Info Line card's theme colors: the tooltip panel's `--surface` fill, `--border` outline,
+/// `--text-primary` values, and `--text-secondary` (muted) icons.
+struct InfoLineCard {
+    surface: Color,
+    border: Color,
+    foreground: Color,
+    muted: Color,
+}
+
+impl InfoLineCard {
+    fn for_theme(theme: crate::ChartTheme) -> Self {
+        use aeris_charts_core::style::*;
+        let (surface, border, foreground, muted) = match theme {
+            crate::ChartTheme::Light => (
+                LIGHT_SURFACE_RGB,
+                LIGHT_BORDER_RGB,
+                LIGHT_FOREGROUND_RGB,
+                LIGHT_MUTED_FOREGROUND_RGB,
+            ),
+            crate::ChartTheme::Dark => (
+                DARK_SURFACE_RGB,
+                DARK_BORDER_RGB,
+                DARK_FOREGROUND_RGB,
+                DARK_MUTED_FOREGROUND_RGB,
+            ),
+        };
+        let rgb = |(r, g, b): (u8, u8, u8)| Color::rgb(r, g, b);
+        Self {
+            surface: rgb(surface),
+            border: rgb(border),
+            foreground: rgb(foreground),
+            muted: rgb(muted),
+        }
+    }
+}
+
+/// A segment angle in degrees, at most two decimals and without trailing zeros (`-43.73°`).
+fn line_angle_text(degrees: f64) -> String {
+    format!("{}°", position_stat_number(degrees, 2))
+}
+
+/// The glyph leading each Info Line card row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InfoLineIcon {
+    /// Price range: a double arrow between two horizontal bars.
+    Price,
+    /// Time range: a double arrow between two candles.
+    Time,
+    /// Angle: a ray rising from a baseline with its arc.
+    Angle,
+}
+
+/// Strokes `kind`'s glyph centered at `center`, drawn on a 16 CSS px grid.
+fn push_info_line_icon(
+    kind: InfoLineIcon,
+    center: (f64, f64),
+    color: Color,
+    vpr: f64,
+    out: &mut Vec<Prim>,
+    points: &mut Vec<[f32; 2]>,
+) {
+    let (cx, cy) = center;
+    let at = |x: f64, y: f64| [(cx + x * vpr) as f32, (cy + y * vpr) as f32];
+    let mut stroke = |path: &[[f32; 2]]| {
+        let first_point = points.len() as u32;
+        points.extend_from_slice(path);
+        out.push(Prim::Polyline {
+            first_point,
+            point_count: path.len() as u32,
+            width: vpr.round().max(1.0) as f32,
+            style: LineStyle::Solid,
+            line_type: LineType::Simple,
+            color,
+        });
+    };
+    match kind {
+        InfoLineIcon::Price => {
+            stroke(&[at(-5.0, -7.0), at(5.0, -7.0)]);
+            stroke(&[at(-5.0, 7.0), at(5.0, 7.0)]);
+            stroke(&[at(0.0, -5.0), at(0.0, 5.0)]);
+            stroke(&[at(-3.0, -2.0), at(0.0, -5.0), at(3.0, -2.0)]);
+            stroke(&[at(-3.0, 2.0), at(0.0, 5.0), at(3.0, 2.0)]);
+        }
+        InfoLineIcon::Time => {
+            for side in [-1.0, 1.0] {
+                let x = 7.0 * side;
+                stroke(&[at(x, -7.0), at(x, -3.0)]);
+                stroke(&[at(x, 3.0), at(x, 7.0)]);
+                stroke(&[
+                    at(x - 1.5, -3.0),
+                    at(x + 1.5, -3.0),
+                    at(x + 1.5, 3.0),
+                    at(x - 1.5, 3.0),
+                    at(x - 1.5, -3.0),
+                ]);
+                stroke(&[
+                    at(-1.5 * side, -2.0),
+                    at(-3.5 * side, 0.0),
+                    at(-1.5 * side, 2.0),
+                ]);
+            }
+            stroke(&[at(-3.5, 0.0), at(3.5, 0.0)]);
+        }
+        InfoLineIcon::Angle => {
+            stroke(&[at(-7.0, 6.0), at(7.0, 6.0)]);
+            stroke(&[at(-7.0, 6.0), at(2.0, -7.0)]);
+            let ray = (-13.0_f64).atan2(9.0);
+            let arc: Vec<[f32; 2]> = (0..=8)
+                .map(|step| {
+                    let angle = ray * f64::from(step) / 8.0;
+                    at(-7.0 + 8.0 * angle.cos(), 6.0 + 8.0 * angle.sin())
+                })
+                .collect();
+            stroke(&arc);
+        }
+    }
 }
 
 /// A signed statistic with the typographic minus used by price formatting; zero is unsigned.
@@ -3613,12 +4204,19 @@ fn build_position_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Ve
     }
 }
 
-/// The rectangle's eight reference-informed handles: fully-rounded discs on the four corners and
-/// slightly-rounded square handles on the four edge midpoints (the midpoint drags resize one
-/// edge independently).
-fn build_rectangle_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Vec<Prim>) {
+/// The bounds handles of `mode` (`DrawingHandleMode::bounds_slots`): fully-rounded discs on the
+/// corners and slightly-rounded square handles on the edge midpoints (the midpoint drags resize
+/// one edge independently).
+fn build_rectangle_handles(
+    px: &[(f64, f64)],
+    mode: DrawingHandleMode,
+    vpr: f64,
+    fill: Color,
+    out: &mut Vec<Prim>,
+) {
     let anchors = ChartEngine::rectangle_anchors(px);
-    for (index, &(cx, cy)) in anchors.iter().enumerate() {
+    for &index in mode.bounds_slots().unwrap_or_default() {
+        let (cx, cy) = anchors[index];
         if index % 2 == 0 {
             // Corners: the standard disc handles.
             out.push(Prim::Circle {

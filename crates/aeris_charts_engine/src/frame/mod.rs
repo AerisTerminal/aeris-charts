@@ -413,6 +413,10 @@ impl FrameInvalidation {
         self.axis = self.tick();
     }
 
+    fn chrome(&mut self) {
+        self.chrome = self.tick();
+    }
+
     fn layout_and_axis(&mut self) {
         let generation = self.tick();
         self.layout = generation;
@@ -494,6 +498,9 @@ pub(crate) struct RetainedFrame {
     last_price_scale_revisions: Vec<Vec<u64>>,
     /// Timestamp union and display-projection identity read by measuring-tool elapsed time.
     last_time_label_key: [u64; 3],
+    /// Primary drawing selection observed by the last frame. Position statistic labels live in
+    /// the retained chrome layer but only paint for the selected position.
+    last_selected_drawing: Option<crate::DrawingId>,
     /// Invalidation clock observed by the last prepared host frame.
     prepared_clock: u64,
 }
@@ -1366,6 +1373,26 @@ impl ChartEngine {
                     .any(|drawing| drawing.kind.is_measure())
             {
                 self.frame_invalidation.drawings();
+            }
+        }
+        if self.retained_frame.last_selected_drawing != self.selected_drawing {
+            let previous = std::mem::replace(
+                &mut self.retained_frame.last_selected_drawing,
+                self.selected_drawing,
+            );
+            if [previous, self.selected_drawing]
+                .into_iter()
+                .flatten()
+                .any(|id| {
+                    self.drawing(id).is_some_and(|drawing| {
+                        matches!(
+                            drawing.kind,
+                            crate::DrawingKind::LongPosition | crate::DrawingKind::ShortPosition
+                        )
+                    })
+                })
+            {
+                self.frame_invalidation.chrome();
             }
         }
         self.retained_frame.last_layout_key = Some(layout_key);

@@ -29,12 +29,26 @@ mod tools;
 
 pub(crate) use geometry::{
     DrawingBodyGeometry, DrawingGeometryOptions, FibonacciGeometry, MeasureAxes, MeasureGeometry,
-    PositionGeometry, PositionZone, resolve_drawing_geometry,
+    PositionGeometry, PositionZone, anchor_handle_points, arc_segments, ellipse_segments,
+    resolve_drawing_geometry,
 };
 pub(crate) use tools::{
     DRAWING_TOOL_SPECS, DrawingHandleMode, DrawingLogicalExtent, DrawingMovementAxis,
     DrawingPlacement, DrawingPriceExtent, DrawingStraightenMode,
 };
+
+/// Chords for a Gann grid's visible quarter arcs, sized by the largest one so fill bands pair
+/// their boundaries point for point. Frame output and hit testing share it.
+pub(crate) fn gann_arc_segments(grid: geometry::GannGridGeometry, drawing: &Drawing) -> u32 {
+    grid.arc_segments(
+        drawing
+            .gann_arcs
+            .iter()
+            .filter(|level| level.visible)
+            .map(|level| level.value.abs())
+            .fold(0.0, f64::max),
+    )
+}
 
 /// Chart-unique drawing id (never reused within a chart; 0 is the "no drawing" sentinel).
 pub type DrawingId = u32;
@@ -1214,7 +1228,10 @@ impl Drawing {
                 DrawingKind::InfoLine => [
                     crate::DrawingLabelMetric::PriceChange,
                     crate::DrawingLabelMetric::PercentChange,
+                    crate::DrawingLabelMetric::Ticks,
                     crate::DrawingLabelMetric::BarCount,
+                    crate::DrawingLabelMetric::Duration,
+                    crate::DrawingLabelMetric::Distance,
                     crate::DrawingLabelMetric::Angle,
                 ]
                 .into_iter()
@@ -2846,8 +2863,8 @@ impl ChartEngine {
         if snapped.is_finite() { snapped } else { price }
     }
 
-    /// Grid-snapped tools place anchors on the crosshair's time slot under `x` (unless the magnet
-    /// already chose a bar) and on the price tick grid.
+    /// Anchors land on the crosshair's time slot under `x` (unless the magnet already chose a
+    /// bar), so drawings step bar by bar horizontally; price-tick tools also land on the tick grid.
     fn grid_snap_point(
         &self,
         kind: DrawingKind,
@@ -2857,13 +2874,13 @@ impl ChartEngine {
         mut point: DrawingPoint,
         magnet: bool,
     ) -> DrawingPoint {
-        if !kind.spec().grid_snap {
-            return point;
-        }
-        if !magnet {
+        // Anchored text pins to a pane-relative screen position, not a bar.
+        if !magnet && kind != DrawingKind::AnchoredText {
             point.logical = self.snapped_crosshair_index(x) as f64;
         }
-        point.price = self.snap_position_price(pane_index, price_scale, point.price);
+        if kind.spec().price_tick_snap {
+            point.price = self.snap_position_price(pane_index, price_scale, point.price);
+        }
         point
     }
 
@@ -3691,6 +3708,42 @@ impl ChartEngine {
             (l, bo),
             (l, my),
         ]
+    }
+
+    /// Anchor-handle centers for an `Anchors`/`Endpoints` drawing in the basis of `px` (its
+    /// render px: semantic anchors, then derived points), which is media px scaled by
+    /// `hpr`/`vpr`. Painting and hit-testing share this, so a handle is grabbable exactly where
+    /// it is drawn.
+    pub(crate) fn drawing_anchor_handles(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        hpr: f64,
+        vpr: f64,
+    ) -> Vec<(f64, f64)> {
+        let anchors = drawing.points.len().min(px.len());
+        self.panes
+            .get(drawing.pane_index)
+            .and_then(|pane| {
+                resolve_drawing_geometry(
+                    drawing.kind,
+                    px,
+                    self.pane_w * hpr,
+                    pane.top * vpr,
+                    pane.height * vpr,
+                    DrawingGeometryOptions {
+                        line_width: drawing.width,
+                        device_scale: vpr,
+                        extend_left: drawing.extend_left,
+                        icon_size: drawing.icon_size,
+                        extend_right: drawing.extend_right,
+                    },
+                )
+            })
+            .map_or_else(
+                || px[..anchors].to_vec(),
+                |geometry| anchor_handle_points(drawing.kind, px, anchors, &geometry.body),
+            )
     }
 
     /// The directional resize cursor for a rectangle anchor (reference-informed behavior): diagonal
@@ -4875,14 +4928,15 @@ impl ChartEngine {
         let pane = self.pane_at_y(y)?;
         // The selected drawing's anchor handles win over every body (they paint above all).
         // The brush shows handles at its two ENDS only; the rectangle shows its eight
-        // Eight conventional anchors (four corners + four edge midpoints); the rest show one per
-        // defining anchor.
+        // conventional anchors (four corners + four edge midpoints), the ellipse the four edge
+        // midpoints on its outline; the rest show one per defining anchor, placed on the stroke
+        // it controls (`anchor_handle_points`).
         if let Some(selected) = self.selected_drawing
             && let Some(drawing) = self.drawing(selected)
             && drawing.pane_index == pane
             && drawing.visible
             && drawing.interval_visibility.allows(self.drawing_interval)
-            && let Some(px) = self.drawing_px(drawing)
+            && let Some(px) = self.drawing_render_px(drawing)
         {
             match drawing.kind.spec().handles {
                 DrawingHandleMode::None => {}
@@ -4899,9 +4953,12 @@ impl ChartEngine {
                         }
                     }
                 }
-                DrawingHandleMode::RectangleBounds if px.len() == 2 => {
+                mode @ (DrawingHandleMode::RectangleBounds | DrawingHandleMode::BoundsEdges)
+                    if px.len() == 2 =>
+                {
                     let anchors = Self::rectangle_anchors(&px);
-                    for (index, &(ax, ay)) in anchors.iter().enumerate() {
+                    for &index in mode.bounds_slots().unwrap_or_default() {
+                        let (ax, ay) = anchors[index];
                         if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
                             return Some(DrawingHit {
                                 id: selected,
@@ -4932,7 +4989,8 @@ impl ChartEngine {
                     }
                 }
                 DrawingHandleMode::Anchors | DrawingHandleMode::Endpoints => {
-                    for (index, &(ax, ay)) in px.iter().enumerate() {
+                    let handles = self.drawing_anchor_handles(drawing, &px, 1.0, 1.0);
+                    for (index, &(ax, ay)) in handles.iter().enumerate() {
                         if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
                             return Some(DrawingHit {
                                 id: selected,
@@ -4942,7 +5000,9 @@ impl ChartEngine {
                         }
                     }
                 }
-                DrawingHandleMode::RectangleBounds | DrawingHandleMode::Position => {}
+                DrawingHandleMode::RectangleBounds
+                | DrawingHandleMode::BoundsEdges
+                | DrawingHandleMode::Position => {}
             }
         }
         if !indexed {
@@ -5094,6 +5154,11 @@ impl ChartEngine {
         ) else {
             return false;
         };
+        if geometry.guides.into_iter().flatten().any(|guide| {
+            distance_to_segment(x, y, guide.a.0, guide.a.1, guide.b.0, guide.b.1) <= tolerance
+        }) {
+            return true;
+        }
         match geometry.body {
             DrawingBodyGeometry::Segment { a, b } => {
                 distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
@@ -5163,8 +5228,9 @@ impl ChartEngine {
                     || drawing.levels.iter().any(|level| {
                         level.visible
                             && drawing.level_value(level.value) > 0.0
-                            && (0..arcs.segments()).any(|step| {
-                                let segments = f64::from(arcs.segments());
+                            && (0..arcs.segments(drawing.level_value(level.value))).any(|step| {
+                                let segments =
+                                    f64::from(arcs.segments(drawing.level_value(level.value)));
                                 let a = arcs.point(
                                     drawing.level_value(level.value),
                                     f64::from(step) / segments,
@@ -5225,24 +5291,14 @@ impl ChartEngine {
                 x: label_x,
                 y: label_y,
             } => {
-                let label = if drawing.text.is_empty() {
-                    self.format_drawing_price(drawing, drawing.points[0].price)
-                } else {
-                    drawing.text.clone()
-                };
-                let layout = &self.options.get().layout;
-                let size = drawing.resolved_text_size(layout.font_size);
-                let width = self.measure_text_run(
-                    &label,
-                    size,
-                    &layout.font_family,
-                    drawing.text_weight.unwrap_or(400),
-                    drawing.text_italic,
-                );
-                x >= label_x - width - 8.0 - hit_tolerance
-                    && x <= label_x + hit_tolerance
-                    && y >= label_y - size * 0.6 - 4.0 - hit_tolerance
-                    && y <= label_y + size * 0.6 + 4.0 + hit_tolerance
+                // The bubble plus its tail, which ends at the anchor.
+                let [left, top, width, _] = self
+                    .price_label_layout(drawing, (label_x, label_y), 1.0)
+                    .rect;
+                x >= left - hit_tolerance
+                    && x <= left + width + hit_tolerance
+                    && y >= top - hit_tolerance
+                    && y <= label_y + hit_tolerance
             }
             DrawingBodyGeometry::IconStamp { center, size } => {
                 (x - center.0).abs() <= size / 2.0 + hit_tolerance
@@ -5291,15 +5347,16 @@ impl ChartEngine {
                         .iter()
                         .filter(|level| level.visible)
                         .any(|level| {
-                            (0..32).any(|step| {
+                            let gann_segments = gann_arc_segments(grid, drawing);
+                            (0..gann_segments).any(|step| {
                                 let a = grid.arc_point(
                                     level.value,
-                                    f64::from(step) / 32.0,
+                                    f64::from(step) / f64::from(gann_segments),
                                     drawing.level_reverse,
                                 );
                                 let b = grid.arc_point(
                                     level.value,
-                                    f64::from(step + 1) / 32.0,
+                                    f64::from(step + 1) / f64::from(gann_segments),
                                     drawing.level_reverse,
                                 );
                                 distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
@@ -5325,9 +5382,11 @@ impl ChartEngine {
                 {
                     true
                 } else {
-                    (0..64).any(|step| {
-                        let theta0 = std::f64::consts::TAU * step as f64 / 64.0;
-                        let theta1 = std::f64::consts::TAU * (step + 1) as f64 / 64.0;
+                    let segments = ellipse_segments(rx, ry);
+                    (0..segments).any(|step| {
+                        let theta0 = std::f64::consts::TAU * f64::from(step) / f64::from(segments);
+                        let theta1 =
+                            std::f64::consts::TAU * f64::from(step + 1) / f64::from(segments);
                         let a = (center.0 + rx * theta0.cos(), center.1 + ry * theta0.sin());
                         let b = (center.0 + rx * theta1.cos(), center.1 + ry * theta1.sin());
                         distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
@@ -5351,14 +5410,14 @@ impl ChartEngine {
                         distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
                     })
             }
-            DrawingBodyGeometry::Arc(arc) => (0..64).any(|step| {
-                let a = arc.point(step as f64 / 64.0);
-                let b = arc.point((step + 1) as f64 / 64.0);
+            DrawingBodyGeometry::Arc(arc) => (0..arc.segments()).any(|step| {
+                let a = arc.point(f64::from(step) / f64::from(arc.segments()));
+                let b = arc.point(f64::from(step + 1) / f64::from(arc.segments()));
                 distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
             }),
-            DrawingBodyGeometry::Curve(curve) => (0..64).any(|step| {
-                let a = curve.point(step as f64 / 64.0);
-                let b = curve.point((step + 1) as f64 / 64.0);
+            DrawingBodyGeometry::Curve(curve) => (0..curve.segments()).any(|step| {
+                let a = curve.point(f64::from(step) / f64::from(curve.segments()));
+                let b = curve.point(f64::from(step + 1) / f64::from(curve.segments()));
                 distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
             }),
             DrawingBodyGeometry::Rectangle {
@@ -5628,9 +5687,12 @@ impl ChartEngine {
                     self.update_drawing_runtime(id);
                     return;
                 }
-                if kind.spec().handles == DrawingHandleMode::RectangleBounds
+                if kind
+                    .spec()
+                    .handles
+                    .bounds_slots()
+                    .is_some_and(|slots| slots.contains(&index))
                     && points.len() == 2
-                    && index < 8
                 {
                     // Rectangle anchors (drawings.rs `rectangle_anchors` clock order): a corner
                     // drag moves that corner (Shift squares against the fixed opposite corner),
@@ -5648,9 +5710,11 @@ impl ChartEngine {
                         };
                         cursor_pt = snapped;
                     }
-                    cursor_pt = self
-                        .drawing_magnet_point(magnet, pane, price_scale, x, y, cursor_pt)
-                        .0;
+                    let magnet_engaged;
+                    (cursor_pt, magnet_engaged) =
+                        self.drawing_magnet_point(magnet, pane, price_scale, x, y, cursor_pt);
+                    cursor_pt =
+                        self.grid_snap_point(kind, pane, price_scale, x, cursor_pt, magnet_engaged);
                     let Some((mx, my)) = self.drawing_to_px_for(pane, price_scale, cursor_pt)
                     else {
                         return;
@@ -5752,6 +5816,11 @@ impl ChartEngine {
                         DrawingMovementAxis::Both => snapped,
                     };
                 }
+                let anchor_x = start_px.get(index).map_or(x, |&(px, _)| px + dx);
+                point =
+                    self.grid_snap_point(kind, pane, price_scale, anchor_x, point, magnet_engaged);
+                // Shift-straightening is an explicit geometric constraint, so it runs after the
+                // bar snap and keeps its exact angle/square.
                 if modifiers.straighten && points.len() == 2 {
                     // The other anchor is the fixed one (only the dragged anchor moves).
                     let fixed = points[1 - index];
@@ -5761,9 +5830,6 @@ impl ChartEngine {
                         point = snapped;
                     }
                 }
-                let anchor_x = start_px.get(index).map_or(x, |&(px, _)| px + dx);
-                point =
-                    self.grid_snap_point(kind, pane, price_scale, anchor_x, point, magnet_engaged);
                 points[index] = point;
             }
             DrawingDragPart::Body => {
@@ -5778,23 +5844,17 @@ impl ChartEngine {
                     (dx, dy)
                 };
                 let single_anchor = points.len() == 1;
-                let grid = kind.spec().grid_snap;
+                let (dx, dy) = kind.spec().movement_axis.constrain(dx, dy);
                 // Follow the crosshair's slot changes from the grabbed point. One shared
-                // logical delta moves the body rigidly and preserves the grab offset/width.
-                let time_steps = if grid {
-                    (self.snapped_crosshair_index(start_x + dx)
-                        - self.snapped_crosshair_index(start_x)) as f64
-                } else {
-                    0.0
-                };
+                // whole-bar logical delta moves the body rigidly and preserves its shape.
+                let time_steps = (self.snapped_crosshair_index(start_x + dx)
+                    - self.snapped_crosshair_index(start_x))
+                    as f64;
                 for (index, slot) in points.iter_mut().enumerate() {
-                    let (dx, dy) = kind.spec().movement_axis.constrain(dx, dy);
                     let Some(mut point) = convert(index, dx, dy) else {
                         return;
                     };
-                    if grid {
-                        point.logical = slot.logical + time_steps;
-                    }
+                    point.logical = slot.logical + time_steps;
                     if snap_time_to_data {
                         let Some(snapped) = self.snap_drawing_time_to_data(point) else {
                             return;
@@ -5822,7 +5882,7 @@ impl ChartEngine {
                             DrawingMovementAxis::Both => snapped,
                         };
                     }
-                    if grid {
+                    if kind.spec().price_tick_snap {
                         point.price = self.snap_position_price(pane, price_scale, point.price);
                     }
                     *slot = point;
@@ -5938,20 +5998,37 @@ impl ChartEngine {
         let Some(start_px) = self.drawing_px(drawing) else {
             return false;
         };
+        // Drawings move horizontally in whole bars, so a horizontal nudge steps at least one bar.
+        let dx_css = if dx_css == 0.0 {
+            0.0
+        } else {
+            let spacing = self.time_scale.bar_spacing().max(f64::EPSILON);
+            dx_css.signum() * (dx_css.abs() / spacing).round().max(1.0) * spacing
+        };
+        // The virtual pointer starts on the moved anchor (or mid-pane for a body move) so bar
+        // stepping resolves inside the visible slot range.
+        let origin = anchor.map_or(
+            (self.pane_w / 2.0, start_px.first().map_or(0.0, |&(_, y)| y)),
+            |index| start_px[index],
+        );
         self.drawing_drag = Some(DrawingDrag {
             id,
             part: anchor.map_or(DrawingDragPart::Body, DrawingDragPart::Anchor),
-            start_x: 0.0,
-            start_y: 0.0,
-            current_x: 0.0,
-            current_y: 0.0,
+            start_x: origin.0,
+            start_y: origin.1,
+            current_x: origin.0,
+            current_y: origin.1,
             history_points: start_points.clone(),
             history_screen_position: screen_position,
             history_bars_pattern: drawing.bars_pattern.clone(),
             start_points,
             start_px,
         });
-        self.drawing_drag_to(dx_css, dy_css, DrawingModifiers::default());
+        self.drawing_drag_to(
+            origin.0 + dx_css,
+            origin.1 + dy_css,
+            DrawingModifiers::default(),
+        );
         if record {
             self.drawing_drag_end();
         } else if let Some(drag) = self.drawing_drag.take() {
@@ -6649,13 +6726,13 @@ impl ChartEngine {
         }
         let magnet_engaged;
         (point, magnet_engaged) = self.drawing_magnet_point(magnet, pane, price_scale, x, y, point);
+        point = self.grid_snap_point(kind, pane, price_scale, x, point, magnet_engaged);
         if modifiers.straighten
             && let Some(fixed) = fixed
             && let Some(snapped) = self.straighten_point(pane, price_scale, kind, fixed, point)
         {
             point = snapped;
         }
-        point = self.grid_snap_point(kind, pane, price_scale, x, point, magnet_engaged);
         let preset_points = if matches!(
             kind.spec().placement,
             DrawingPlacement::SingleClickPreset { .. }
@@ -6809,14 +6886,6 @@ impl ChartEngine {
         }
         let magnet_engaged;
         (point, magnet_engaged) = self.drawing_magnet_point(magnet, pane, price_scale, x, y, point);
-        if modifiers.straighten
-            && let Some(pending) = &self.drawing_controller.pending
-            && let Some(&fixed) = pending.drawing.points.last()
-            && let Some(snapped) =
-                self.straighten_point(pane, price_scale, pending.drawing.kind, fixed, point)
-        {
-            point = snapped;
-        }
         if let Some(kind) = self
             .drawing_controller
             .pending
@@ -6824,6 +6893,14 @@ impl ChartEngine {
             .map(|pending| pending.drawing.kind)
         {
             point = self.grid_snap_point(kind, pane, price_scale, x, point, magnet_engaged);
+        }
+        if modifiers.straighten
+            && let Some(pending) = &self.drawing_controller.pending
+            && let Some(&fixed) = pending.drawing.points.last()
+            && let Some(snapped) =
+                self.straighten_point(pane, price_scale, pending.drawing.kind, fixed, point)
+        {
+            point = snapped;
         }
         if let Some(pending) = self.drawing_controller.pending.as_mut() {
             pending.drawing.pane_index = pane;

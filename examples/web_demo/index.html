@@ -92,6 +92,9 @@
   #controls_strip { min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 0 20px; scrollbar-width: thin; scrollbar-color: var(--border-secondary) transparent; }
   #inspector .group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0; padding: 20px 0; border-bottom: var(--border-width) solid var(--border); scroll-margin-top: 0; }
   #inspector .group[hidden] { display: none; }
+  #drawing_catalog { flex-basis: 100%; }
+  #drawing_catalog .drawing_catalog_row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+  #drawing_catalog .drawing_catalog_row > span { min-width: 84px; font-size: 12px; opacity: 0.7; }
   #inspector .group h2 { flex-basis: 100%; margin: 0 0 6px; font-size: 13px; font-weight: 600; line-height: 1.4; }
   #inspector label { display: flex; flex: 1 1 100%; gap: 8px; align-items: center; min-width: 0; min-height: 40px; color: var(--text-secondary); font-size: 12px; }
   #inspector label[hidden] { display: none; }
@@ -359,6 +362,105 @@
       <button type="button" data-tool="price_range" title="Price range: click start and end; shows the signed price change, percentage, and ticks">price range</button>
       <button type="button" data-tool="date_range" title="Date range: click start and end; shows the signed bar count and elapsed time">date range</button>
       <button type="button" data-tool="date_price_range" title="Date and price range: click start and end; shows price and time statistics. Shift+click (or Shift+drag) anywhere measures without a tool; click again to finish, then click or Escape to dismiss">date &amp; price range</button>
+      <details id="drawing_catalog" open title="Every remaining engine catalog tool, grouped like a professional drawing toolbar">
+        <summary>all tools</summary>
+        <div class="drawing_catalog_row"><span>lines</span>
+          <button type="button" data-tool="ray">ray</button>
+          <button type="button" data-tool="extended_line">extended line</button>
+          <button type="button" data-tool="info_line">info line</button>
+          <button type="button" data-tool="trend_angle">trend angle</button>
+          <button type="button" data-tool="cross_line">cross line</button>
+          <button type="button" data-tool="arrow_line">arrow line</button>
+        </div>
+        <div class="drawing_catalog_row"><span>channels</span>
+          <button type="button" data-tool="parallel_channel">parallel channel</button>
+          <button type="button" data-tool="regression_trend">regression trend</button>
+          <button type="button" data-tool="flat_top_channel">flat top channel</button>
+          <button type="button" data-tool="flat_bottom_channel">flat bottom channel</button>
+          <button type="button" data-tool="disjoint_channel">disjoint channel</button>
+        </div>
+        <div class="drawing_catalog_row"><span>shapes</span>
+          <button type="button" data-tool="polyline">polyline</button>
+          <button type="button" data-tool="highlighter">highlighter</button>
+          <button type="button" data-tool="rotated_rectangle">rotated rectangle</button>
+          <button type="button" data-tool="ellipse">ellipse</button>
+          <button type="button" data-tool="circle">circle</button>
+          <button type="button" data-tool="triangle">triangle</button>
+          <button type="button" data-tool="arc">arc</button>
+          <button type="button" data-tool="curve">curve</button>
+          <button type="button" data-tool="double_curve">double curve</button>
+        </div>
+        <div class="drawing_catalog_row"><span>fibonacci</span>
+          <button type="button" data-tool="fibonacci_retracement">retracement</button>
+          <button type="button" data-tool="fibonacci_extension">extension</button>
+          <button type="button" data-tool="fibonacci_channel">channel</button>
+          <button type="button" data-tool="fibonacci_time_zones">time zones</button>
+          <button type="button" data-tool="fibonacci_trend_time">trend time</button>
+          <button type="button" data-tool="fibonacci_speed_fan">speed fan</button>
+          <button type="button" data-tool="fibonacci_speed_arcs">speed arcs</button>
+          <button type="button" data-tool="fibonacci_circles">circles</button>
+          <button type="button" data-tool="fibonacci_spiral">spiral</button>
+          <button type="button" data-tool="fibonacci_wedge">wedge</button>
+        </div>
+        <div class="drawing_catalog_row"><span>pitchforks</span>
+          <button type="button" data-tool="andrews_pitchfork">andrews</button>
+          <button type="button" data-tool="schiff_pitchfork">schiff</button>
+          <button type="button" data-tool="modified_schiff_pitchfork">modified schiff</button>
+          <button type="button" data-tool="inside_pitchfork">inside</button>
+          <button type="button" data-tool="pitchfan">pitchfan</button>
+        </div>
+        <div class="drawing_catalog_row"><span>gann</span>
+          <button type="button" data-tool="gann_box">gann box</button>
+          <button type="button" data-tool="gann_square">gann square</button>
+          <button type="button" data-tool="gann_square_fixed">gann square fixed</button>
+          <button type="button" data-tool="gann_fan">gann fan</button>
+        </div>
+        <div class="drawing_catalog_row"><span>patterns</span>
+          <button type="button" data-tool="pattern_xabcd">xabcd</button>
+          <button type="button" data-tool="pattern_cypher">cypher</button>
+          <button type="button" data-tool="pattern_abcd">abcd</button>
+          <button type="button" data-tool="pattern_head_shoulders">head &amp; shoulders</button>
+          <button type="button" data-tool="pattern_triangle">triangle pattern</button>
+          <button type="button" data-tool="pattern_three_drives">three drives</button>
+        </div>
+        <div class="drawing_catalog_row"><span>elliott</span>
+          <button type="button" data-tool="elliott_impulse">impulse</button>
+          <button type="button" data-tool="elliott_correction">correction</button>
+          <button type="button" data-tool="elliott_triangle">triangle wave</button>
+          <button type="button" data-tool="elliott_double_combination">double combo</button>
+          <button type="button" data-tool="elliott_triple_combination">triple combo</button>
+        </div>
+        <div class="drawing_catalog_row"><span>cycles</span>
+          <button type="button" data-tool="cyclic_lines">cyclic lines</button>
+          <button type="button" data-tool="time_cycles">time cycles</button>
+          <button type="button" data-tool="sine_line">sine line</button>
+        </div>
+        <div class="drawing_catalog_row"><span>projection</span>
+          <button type="button" data-tool="projection">projection</button>
+          <button type="button" data-tool="forecast">forecast</button>
+          <button type="button" data-tool="bars_pattern">bars pattern</button>
+        </div>
+        <div class="drawing_catalog_row"><span>volume</span>
+          <button type="button" data-tool="fixed_range_volume_profile">fixed range VP</button>
+          <button type="button" data-tool="anchored_volume_profile">anchored VP</button>
+          <button type="button" data-tool="anchored_vwap">anchored VWAP</button>
+        </div>
+        <div class="drawing_catalog_row"><span>annotations</span>
+          <button type="button" data-tool="note">note</button>
+          <button type="button" data-tool="comment">comment</button>
+          <button type="button" data-tool="callout">callout</button>
+          <button type="button" data-tool="price_note">price note</button>
+          <button type="button" data-tool="price_label">price label</button>
+          <button type="button" data-tool="anchored_text">anchored text</button>
+          <button type="button" data-tool="icon_stamp">icon</button>
+          <button type="button" data-tool="arrow_marker_up">arrow up</button>
+          <button type="button" data-tool="arrow_marker_down">arrow down</button>
+          <button type="button" data-tool="arrow_marker_left">arrow left</button>
+          <button type="button" data-tool="arrow_marker_right">arrow right</button>
+          <button type="button" data-tool="flag_mark">flag</button>
+          <button type="button" data-tool="signpost">signpost</button>
+        </div>
+      </details>
       <label title="Hypothetical balance used by position drawing statistics">balance <input type="number" id="position_account_size" min="0.01" max="1000000000000000" step="any" value="1000"></label>
       <label title="Percentage of the hypothetical balance risked at the stop">risk % <input type="number" id="position_risk_percent" min="0" max="100" step="any" value="25"></label>
       <label title="Host-supplied quantity for placing the selected Long/Short Position drawing">order qty <input type="number" id="position_order_quantity" min="0.00000001" step="any" value="1"></label>
@@ -371,7 +473,7 @@
           <option value="dashed">dashed</option>
         </select>
       </label>
-      <label title="Stroke width in CSS px — templates new drawings and applies live to the selected one">w <input type="range" id="drawing_width" min="1" max="8" step="1" value="2"><span id="drawing_width_val">2</span></label>
+      <label title="Stroke width in CSS px — templates new drawings and applies live to the selected one">w <input type="range" id="drawing_width" min="1" max="8" step="1" value="1"><span id="drawing_width_val">1</span></label>
       <label title="Standalone Text tool content; trend-line labels are edited in place">text tool <input type="text" id="drawing_text" size="8"></label>
       <label title="Label text color — templates new drawings and applies live to the selected one">text <input type="color" id="drawing_text_color" value="#f0f0f0"></label>
       <label title="Label font size in CSS px — templates new drawings and applies live to the selected one">size <input type="number" id="drawing_text_size" min="8" max="72" step="1" value="14"></label>
@@ -1149,13 +1251,15 @@ function sync_drawing_tool_buttons(tool) {
 // A false value means trend-label ink follows the line color. The color input still displays the
 // resolved color, but it is serialized only after the user explicitly changes that control.
 let drawing_text_color_explicit = false;
+// Width likewise templates new drawings only after the user moves the slider, so each tool keeps
+// its engine catalog default (1 px lines, the wide highlighter) until then.
+let drawing_width_explicit = false;
 function drawing_options_from_inputs(kind = null) {
   const options = {
     position_account_size: Number(document.getElementById("position_account_size").value),
     position_risk_percent: Number(document.getElementById("position_risk_percent").value),
     color: document.getElementById("drawing_color").value,
     style: document.getElementById("drawing_style").value,
-    width: Number(document.getElementById("drawing_width").value),
     text_size: Number(document.getElementById("drawing_text_size").value),
     text_weight: Number(document.getElementById("drawing_weight").value),
     text_italic: document.getElementById("drawing_italic").checked,
@@ -1164,6 +1268,9 @@ function drawing_options_from_inputs(kind = null) {
   };
   if (drawing_text_color_explicit) {
     options.text_color = document.getElementById("drawing_text_color").value;
+  }
+  if (drawing_width_explicit) {
+    options.width = Number(document.getElementById("drawing_width").value);
   }
   if (kind === "text") options.text = document.getElementById("drawing_text").value;
   return options;
@@ -1220,6 +1327,7 @@ document.getElementById("chart_container").addEventListener("pointerup", () => s
 for (const id of ["position_account_size", "position_risk_percent", "drawing_color", "drawing_style", "drawing_width", "drawing_text_color", "drawing_text_size", "drawing_weight", "drawing_italic", "drawing_text_h_align", "drawing_text_v_align"]) {
   document.getElementById(id).addEventListener("change", () => {
     if (id === "drawing_text_color") drawing_text_color_explicit = true;
+    if (id === "drawing_width") drawing_width_explicit = true;
     if (id === "drawing_color" && !drawing_text_color_explicit) {
       document.getElementById("drawing_text_color").value = document.getElementById("drawing_color").value;
     }
