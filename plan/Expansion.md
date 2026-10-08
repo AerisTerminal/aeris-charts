@@ -5,7 +5,8 @@ market depth, non-time bars, a professional indicator catalog, and a drawing sys
 tool is as configurable as the tools in mature trading platforms. The primary consumer is the
 Aeris Terminal GPUI platform; browser hosts consume the same engine through WASM.
 
-This program ran from 2026-09-25 through 2026-10-06 and is **complete**. [plan.md](plan.md) covers general
+This program ran from 2026-09-25 through 2026-10-06 and is **complete**; a source audit on
+2026-10-08 reopened and closed two gaps (see **Completion audit**). [plan.md](plan.md) covers general
 (non-financial) chart families and is paused. Both plans share one `ChartEngine` and one frame
 contract.
 
@@ -27,7 +28,7 @@ items; they do not renumber them.
 
 ## Status at a glance
 
-Updated 2026-10-06. Baseline source-confirmed 2026-09-24.
+Updated 2026-10-08. Baseline source-confirmed 2026-09-24.
 
 | Batch | Scope | Unblocks on the platform | Status |
 | --- | --- | --- | --- |
@@ -45,6 +46,34 @@ Ordering: B1–B3 serve the platform's first phase and are independent of each o
 before B7 (OF10 needs F4), B2 before B7 and B8 (they need F5), B3 before B5 and B6 (replay and the
 heatmap reuse the shared tape), and B5 before B6 (depth extends the replay checkpoints). Change the
 order only when platform priorities change, and record it here.
+
+### Completion audit (2026-10-08)
+
+Every batch's checklist was re-traced against the source, the Rust/WASM/TypeScript API surface
+and the test suites. Two ticked items were only partly implemented. Both were reopened and are now
+delivered:
+
+| Item | Gap found | Delivered |
+| --- | --- | --- |
+| B2 / F5 magnet modes | Each drawing stored and persisted `off`/`weak`/`strong`, but snapping ignored it; only the held Ctrl/Cmd modifier snapped. | The engine resolves each drawing's effective magnet (held modifier ⇒ strong) for creation clicks, creation previews, anchor drags and single-anchor body drags. `strong` always snaps to the nearest rendered OHLC field, `weak` only within 10 px, `off` only with the modifier. The Normal-mode crosshair follows the same magnet so it agrees with the placed anchor. |
+| B3 / OF12 footprint variants | Profile-in-bar and volume ladder painted like Total, and horizontal imbalance and bid/ask histogram painted like Bid×Ask. | Each mode now has its own shared-frame row geometry: profile-in-bar draws bid/ask/unclassified segments of one total bar, volume ladder raises the bid column half a row so each bid sits beside the ask it is compared with diagonally, horizontal imbalance compares bid and ask at the same price (display only; stored diagonal imbalances are unchanged), and the bid/ask histogram stacks ask over bid on one shared scale. Every executor inherits them unchanged. |
+
+Items that looked thin and were confirmed or covered by new tests:
+
+- PD5: `linked_charts_on_different_timeframes_converge_without_oscillation` drives two charts on
+  different timeframes through a host coordinator and proves one round of events converges.
+- OF1: `cvd_session_continuous_and_anchored_resets_share_one_tape` checks all three reset modes on
+  one shared tape.
+- F5 one-patch-one-undo and V1 migration: covered by the existing
+  `drawing_history_reverses_create_delete_points_and_style` and
+  `all_ten_kinds_and_multi_pane_associations_restore`.
+- PD6, PD7, typed parameter schemas and the volume/MA study were already present; their earlier
+  evidence stands.
+
+New coverage for the reopened items: `drawing_magnet_mode_snaps_without_the_modifier_by_strength`,
+`footprint_cell_variants_paint_distinct_geometry_from_one_tape`, and the browser tests
+"a drawing's own magnet mode snaps unmodified anchor drags" and "every footprint cell mode paints
+distinct pixels from one tape" (Canvas2D and WebGPU). The full gate was rerun for the audit commit.
 
 ## How work is delivered
 
@@ -135,6 +164,7 @@ model.
       every tool; the existing trend-line text becomes one instance of it.
 - [x] Toggleable labels and statistics per tool, with label positions.
 - [x] Numeric anchor read/write, scale and pane binding, and magnet modes (off, weak, strong).
+      Magnet modes were reopened by the 2026-10-08 audit and now drive snapping.
 - [x] Level-list contract (values, colors, visibility, styles, fills between levels) ready for B8
       level tools.
 - [x] Atomic property patches validated against the schema; each property change is one undo/redo
@@ -173,7 +203,8 @@ builds a generic property panel from schemas alone, and old layouts migrate.
       orders from consecutive prints, filters them (rolling percentile or fixed minimum), and draws
       bounded side-colored volume bubbles with in-bubble volume labels and sweep ranges.
 - [x] **OF12** Footprint variants: profile-in-bar, volume ladder, horizontal imbalance, delta-only
-      and bid/ask histogram cells.
+      and bid/ask histogram cells. Reopened by the 2026-10-08 audit; each mode now paints its own
+      geometry.
 - [x] **PD10** Release benchmarks for dense footprint text on GPUI and WebGPU; shared caching of
       repeated numeric runs where measurement shows shaping dominates; budgets added to `perf_gate`.
 - [x] Early F1 design note in `docs/Architecture.md` so later work does not assume the second-based
@@ -1072,6 +1103,7 @@ implementation code or assets (see the licensing rule in AGENTS.md).
 **Complete (2026-10-06):** B1–B9 are delivered. The B9 release gate covers the shared Rust,
 WASM, TypeScript, browser, GPUI, and release-performance paths; `docs/Studies.md` records the
 themed and overflow captures, accessibility review, competitor comparison, and benchmark evidence.
+The 2026-10-08 completion audit closed the F5 magnet-mode and OF12 variant gaps it found.
 
 Aeris Charts is a complete headless trading chart engine for this plan when a host can build a
 professional order-flow and technical-analysis workstation using only typed engine APIs. That means

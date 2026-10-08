@@ -1912,6 +1912,7 @@ export interface footprint_series_options {
   imbalance_ratio: number;
   imbalance_minimum_volume: number;
   stacked_imbalance_levels: number;
+  /** Row presentation; every mode paints the same stored bars (see docs/Footprint.md). */
   cell_mode: "bid_ask" | "total" | "delta" | "profile_in_bar" | "volume_ladder" | "horizontal_imbalance" | "bid_ask_histogram";
   font_size: number;
   bid_color: string;
@@ -2248,6 +2249,10 @@ export type drawing_text_h_align = "left" | "center" | "right";
 /** Vertical label alignment: above / inline with / below the tool at the selected horizontal slot. */
 export type drawing_text_v_align = "top" | "middle" | "bottom";
 export type drawing_line_cap = "none" | "arrow" | "circle";
+/**
+ * Per-drawing anchor magnet. `off` snaps only while the magnet modifier is held, `strong` always
+ * snaps to the nearest rendered OHLC price, and `weak` snaps only within 10 CSS px of it.
+ */
 export type drawing_magnet_mode = "off" | "weak" | "strong";
 export type drawing_interval_unit = "seconds" | "minutes" | "hours" | "days" | "weeks" | "months" | "ticks" | "ranges";
 export interface drawing_interval { unit: drawing_interval_unit; value: number }

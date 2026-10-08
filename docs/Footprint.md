@@ -94,7 +94,21 @@ bid/ask truth.
 
 The visual aggregation mode is independent of bar construction: hosts can request Bid × Ask, Total,
 Delta, profile-in-bar, volume-ladder, horizontal-imbalance, or bid/ask-histogram cells from the same
-data without rebuilding the tape.
+data without rebuilding the tape. Every mode is painted by the shared frame (`cell_mode`):
+
+| Mode | Row presentation |
+| --- | --- |
+| `bid_ask` | Bid and ask halves; volume bars grow outward from the center divider over a faint side track. |
+| `total` | One full-width total-volume bar from the left, tinted by the dominant side. |
+| `delta` | One full-width row diverging from the center by signed delta. |
+| `profile_in_bar` | A volume profile inside the bar: one total-volume bar per row from the left, split into bid, ask, and unclassified segments, with no wash on empty space. |
+| `volume_ladder` | Staggered Bid × Ask: the bid half is raised half a row, so each bid straddles the boundary with the ask one price above that the diagonal rule compares it with. |
+| `horizontal_imbalance` | Bid × Ask whose highlights compare bid and ask at the same price, using the configured ratio, minimum, and stack length. |
+| `bid_ask_histogram` | Ask (upper half) and bid (lower half) histogram bars on one left baseline and one shared scale, labeled `bid x ask`. |
+
+All modes keep the same POC outline, range line, LOD rules, and bar summary. The horizontal
+imbalance projection is computed per visible bar at frame time; it never rewrites the stored
+diagonal flags, which remain the values returned by `footprint_bar`.
 
 ### Shared chart tape and derived studies
 

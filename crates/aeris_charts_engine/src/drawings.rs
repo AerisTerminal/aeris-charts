@@ -1603,6 +1603,23 @@ pub struct DrawingModifiers {
     pub straighten: bool,
 }
 
+/// Distance in CSS px from the pointer within which a `Weak` drawing magnet snaps an anchor to
+/// the nearest rendered price; farther away the anchor follows the pointer freely.
+pub(crate) const WEAK_MAGNET_RADIUS_PX: f64 = 10.0;
+
+/// The magnet one anchor placement or drag uses: the held modifier is a temporary `Strong`
+/// magnet, otherwise the drawing's own [`DrawingMagnetMode`] applies.
+fn effective_drawing_magnet(
+    modifiers: DrawingModifiers,
+    configured: DrawingMagnetMode,
+) -> DrawingMagnetMode {
+    if modifiers.magnet {
+        DrawingMagnetMode::Strong
+    } else {
+        configured
+    }
+}
+
 /// Host text-measure callback for drawing-label hit boxes (the formatter-hook pattern: the
 /// engine stays headless; hosts inject a plain boxed closure measuring `text` at
 /// `{italic} {weight} {size}px {family}` and returning the width in the same px units as
@@ -2879,6 +2896,67 @@ impl ChartEngine {
         };
         snapped.logical = logical as f64;
         snapped
+    }
+
+    /// Resolve one anchor through the drawing's effective magnet (see [`effective_drawing_magnet`]):
+    /// `Strong` always snaps like the held modifier, `Weak` snaps only when the nearest rendered
+    /// price lies within [`WEAK_MAGNET_RADIUS_PX`] of the pointer, and `Off` keeps the raw point.
+    /// The flag reports whether the magnet engaged, so grid snapping keeps the magnet's bar.
+    #[allow(clippy::too_many_arguments)]
+    fn drawing_magnet_point(
+        &self,
+        magnet: DrawingMagnetMode,
+        pane_index: usize,
+        price_scale: DrawingPriceScale,
+        x: f64,
+        y: f64,
+        point: DrawingPoint,
+    ) -> (DrawingPoint, bool) {
+        match magnet {
+            DrawingMagnetMode::Off => (point, false),
+            DrawingMagnetMode::Strong => (
+                self.magnet_snap_point_at(pane_index, price_scale, x, y, point),
+                true,
+            ),
+            DrawingMagnetMode::Weak => {
+                let Some((logical, snapped_y)) =
+                    self.magnet_snap_coordinate(pane_index, x, y, true)
+                else {
+                    return (point, false);
+                };
+                if (snapped_y - y).abs() > WEAK_MAGNET_RADIUS_PX {
+                    return (point, false);
+                }
+                match self.drawing_from_px_for(pane_index, price_scale, x, snapped_y) {
+                    Some(mut snapped) => {
+                        snapped.logical = logical as f64;
+                        (snapped, true)
+                    }
+                    None => (point, false),
+                }
+            }
+        }
+    }
+
+    /// The magnet of the drawing the pointer is currently creating or dragging, which the
+    /// crosshair follows so its snapped price matches the anchor being placed. The held
+    /// Ctrl/Cmd OHLC magnet upgrades any drawing work to `Strong`.
+    pub(crate) fn drawing_work_magnet(&self) -> DrawingMagnetMode {
+        let configured = if let Some(pending) = &self.drawing_controller.pending {
+            pending.drawing.magnet
+        } else if let Some(armed) = &self.drawing_controller.armed {
+            armed.template.magnet
+        } else if let Some(drag) = &self.drawing_drag {
+            self.drawing(drag.id)
+                .map_or(DrawingMagnetMode::Off, |drawing| drawing.magnet)
+        } else {
+            return DrawingMagnetMode::Off;
+        };
+        if self.crosshair_ohlc_magnet {
+            DrawingMagnetMode::Strong
+        } else {
+            configured
+        }
     }
 
     /// Reference-informed straighten behavior (Shift held): recompute the dragged anchor of a two-anchor tool
@@ -5457,6 +5535,7 @@ impl ChartEngine {
             drawing.price_scale,
             drawing.snap_time_to_data,
         );
+        let magnet = effective_drawing_magnet(modifiers, drawing.magnet);
         if kind == DrawingKind::AnchoredText {
             let (dx, dy) = if modifiers.straighten && part == DrawingDragPart::Body {
                 if dx.abs() >= dy.abs() {
@@ -5502,8 +5581,10 @@ impl ChartEngine {
                     else {
                         return;
                     };
-                    if modifiers.magnet && index != 2 {
-                        cursor_pt = self.magnet_snap_point_at(pane, price_scale, x, y, cursor_pt);
+                    if index != 2 {
+                        cursor_pt = self
+                            .drawing_magnet_point(magnet, pane, price_scale, x, y, cursor_pt)
+                            .0;
                     }
                     if matches!(index, 1 | 2) {
                         cursor_pt.logical = self.snapped_crosshair_index(x) as f64;
@@ -5567,9 +5648,9 @@ impl ChartEngine {
                         };
                         cursor_pt = snapped;
                     }
-                    if modifiers.magnet {
-                        cursor_pt = self.magnet_snap_point_at(pane, price_scale, x, y, cursor_pt);
-                    }
+                    cursor_pt = self
+                        .drawing_magnet_point(magnet, pane, price_scale, x, y, cursor_pt)
+                        .0;
                     let Some((mx, my)) = self.drawing_to_px_for(pane, price_scale, cursor_pt)
                     else {
                         return;
@@ -5656,8 +5737,9 @@ impl ChartEngine {
                     };
                     point = snapped;
                 }
-                if modifiers.magnet {
-                    let snapped = self.magnet_snap_point_at(pane, price_scale, x, y, point);
+                let (snapped, magnet_engaged) =
+                    self.drawing_magnet_point(magnet, pane, price_scale, x, y, point);
+                if magnet_engaged {
                     point = match kind.spec().movement_axis {
                         DrawingMovementAxis::VerticalOnly => DrawingPoint {
                             price: snapped.price,
@@ -5680,14 +5762,8 @@ impl ChartEngine {
                     }
                 }
                 let anchor_x = start_px.get(index).map_or(x, |&(px, _)| px + dx);
-                point = self.grid_snap_point(
-                    kind,
-                    pane,
-                    price_scale,
-                    anchor_x,
-                    point,
-                    modifiers.magnet,
-                );
+                point =
+                    self.grid_snap_point(kind, pane, price_scale, anchor_x, point, magnet_engaged);
                 points[index] = point;
             }
             DrawingDragPart::Body => {
@@ -5728,8 +5804,12 @@ impl ChartEngine {
                     // Single-anchor kinds drag by their line, not a handle — the body drag IS
                     // the anchor drag, so the magnet applies here too (a Ctrl-dragged vertical
                     // line snaps to bar centers, a horizontal one to the nearest rendered price).
-                    if modifiers.magnet && single_anchor {
-                        let snapped = self.magnet_snap_point_at(pane, price_scale, x, y, point);
+                    let (snapped, magnet_engaged) = if single_anchor {
+                        self.drawing_magnet_point(magnet, pane, price_scale, x, y, point)
+                    } else {
+                        (point, false)
+                    };
+                    if magnet_engaged {
                         point = match kind.spec().movement_axis {
                             DrawingMovementAxis::VerticalOnly => DrawingPoint {
                                 price: snapped.price,
@@ -6549,7 +6629,7 @@ impl ChartEngine {
         let Some(mut point) = self.drawing_from_px_for(pane, price_scale, x, y) else {
             return -1;
         };
-        let (anchor_count, kind, fixed, snap_time_to_data) = {
+        let (anchor_count, kind, fixed, snap_time_to_data, magnet) = {
             let Some(pending) = &self.drawing_controller.pending else {
                 return 0;
             };
@@ -6558,6 +6638,7 @@ impl ChartEngine {
                 pending.drawing.kind,
                 pending.drawing.points.last().copied(),
                 pending.drawing.snap_time_to_data,
+                effective_drawing_magnet(modifiers, pending.drawing.magnet),
             )
         };
         if snap_time_to_data {
@@ -6566,16 +6647,15 @@ impl ChartEngine {
             };
             point = snapped;
         }
-        if modifiers.magnet {
-            point = self.magnet_snap_point_at(pane, price_scale, x, y, point);
-        }
+        let magnet_engaged;
+        (point, magnet_engaged) = self.drawing_magnet_point(magnet, pane, price_scale, x, y, point);
         if modifiers.straighten
             && let Some(fixed) = fixed
             && let Some(snapped) = self.straighten_point(pane, price_scale, kind, fixed, point)
         {
             point = snapped;
         }
-        point = self.grid_snap_point(kind, pane, price_scale, x, point, modifiers.magnet);
+        point = self.grid_snap_point(kind, pane, price_scale, x, point, magnet_engaged);
         let preset_points = if matches!(
             kind.spec().placement,
             DrawingPlacement::SingleClickPreset { .. }
@@ -6720,15 +6800,15 @@ impl ChartEngine {
         let Some(mut point) = self.drawing_from_px_for(pane, price_scale, x, y) else {
             return;
         };
+        let magnet = effective_drawing_magnet(modifiers, pending.drawing.magnet);
         if pending.drawing.snap_time_to_data {
             let Some(snapped) = self.snap_drawing_time_to_data(point) else {
                 return;
             };
             point = snapped;
         }
-        if modifiers.magnet {
-            point = self.magnet_snap_point_at(pane, price_scale, x, y, point);
-        }
+        let magnet_engaged;
+        (point, magnet_engaged) = self.drawing_magnet_point(magnet, pane, price_scale, x, y, point);
         if modifiers.straighten
             && let Some(pending) = &self.drawing_controller.pending
             && let Some(&fixed) = pending.drawing.points.last()
@@ -6743,7 +6823,7 @@ impl ChartEngine {
             .as_ref()
             .map(|pending| pending.drawing.kind)
         {
-            point = self.grid_snap_point(kind, pane, price_scale, x, point, modifiers.magnet);
+            point = self.grid_snap_point(kind, pane, price_scale, x, point, magnet_engaged);
         }
         if let Some(pending) = self.drawing_controller.pending.as_mut() {
             pending.drawing.pane_index = pane;

@@ -479,6 +479,14 @@ The temporary Ctrl/Cmd OHLC magnet affects a Normal-mode crosshair only while a 
 armed, a drawing is being created, or an existing drawing is being dragged. Free browsing retains
 the raw cursor price even if a host has not yet cleared the modifier flag; explicitly configured
 Magnet and MagnetOhlc crosshair modes remain independent of this drawing interaction.
+Each drawing also carries its own persisted magnet mode, applied by the engine to every anchor
+placement, creation preview, and anchor or single-anchor body drag of that drawing: `off` snaps
+only while the modifier is held, `strong` always snaps to the nearest rendered OHLC candidate, and
+`weak` snaps only when that candidate lies within 10 CSS px of the pointer. The held modifier
+upgrades any mode to `strong`. While a drawing is armed, created, or dragged, a Normal-mode
+crosshair follows that drawing's effective magnet, so the crosshair and the placed anchor agree.
+Hosts select a mode through the creation patch, a per-tool template, or a property patch; they
+never run snapping themselves.
 
 Native financial-frame preparation is also one engine operation. A host supplies the viewport and
 native glyph measurement callbacks; the engine installs CSS dimensions and DPR, decides whether
