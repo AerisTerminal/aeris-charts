@@ -38,16 +38,17 @@ Created 2026-10-02. **Status: proposed. No batch may start until D1–D4 are dec
 
 ### Maintainer decisions required
 
-- **D1 — Priority.** Expansion B7–B9 are open. Recommendation: finish B7 (P3 needs its resampling
-  and profiles), then run P1–P2 before B8 and B9. Fold Expansion's I3 structure tier (swing
-  points, structure breaks, fair value gaps, order blocks, period levels, opening range) into
-  P1–P3 so that structure is built once, as perception facts that also render as studies, rather
-  than twice.
-- **D2 — Typed strategy rules.** Expansion lists "a Pine-style scripting language" as out of scope,
-  and says alert conditions on study outputs are host-evaluated. P4 adds a typed, bounded rule
+- **D1 — Priority.** Overtaken by events: the trading expansion plan completed B7–B9 on
+  2026-10-06, and its I3 structure tier (swing points, structure breaks, fair value gaps, order
+  blocks, period levels, opening range) shipped as studies in B9. Recommendation: P1–P3 turn those
+  studies into views of perception facts (see **One owner per fact**) so that structure has one
+  implementation, not two.
+- **D2 — Typed strategy rules.** The completed expansion plan kept "a Pine-style scripting
+  language" out of scope, and [Architecture.md](../docs/Architecture.md) states that the engine does
+  not evaluate alert conditions. P4 adds a typed, bounded rule
   specification that the engine evaluates. It is data (a validated tree of conditions over named
   facts), not a language: no loops, variables, functions or interpreter. Recommendation: accept
-  it and amend those two Expansion lines in the same commit that starts P4. Without engine-side
+  it and amend the Architecture.md alert boundary in the same commit that starts P4. Without engine-side
   evaluation, each host re-implements rule semantics and the discipline guarantee disappears.
 - **D3 — Where evidence lives.** Recommendation: single-chart evidence (every occurrence of a setup
   on the retained history of one chart, with outcomes and summary statistics) is engine work,
@@ -58,7 +59,8 @@ Created 2026-10-02. **Status: proposed. No batch may start until D1–D4 are dec
   prompts and broker execution belong to Aeris Terminal. The engine never calls a model.
 
 When D1–D4 are accepted: set this file's status to active, add the P batches to **Work cadence**
-in [AGENTS.md](../AGENTS.md), and record the D1 and D2 amendments in [Expansion.md](Expansion.md).
+in [AGENTS.md](../AGENTS.md), and record the D2 amendment in
+[Architecture.md](../docs/Architecture.md).
 
 ## Why this program
 

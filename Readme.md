@@ -20,7 +20,7 @@ volume studies, the I2 breadth tier (including KST, Klinger, regression channels
 KAMA, Choppiness Index and ATR bands), and seven I3 structure/session studies: swing points,
 market structure, fair value gaps, order blocks, session highs/lows, previous period levels and
 opening range. Session studies use UTC boundaries or a runtime-only host-supplied study calendar.
-See [Studies.md](docs/Studies.md) and the [indicator catalog](plan/Expansion.md#indicator-catalog).
+See [Studies.md](docs/Studies.md) and the indicator sections of [Architecture.md](docs/Architecture.md).
 
 Rust hosts can register typed custom studies with `ChartEngine::register_custom_study` and bind
 them with `add_custom_study`. The browser chart exposes `register_custom_study`,
@@ -261,7 +261,7 @@ for crosshair-label surfaces. Crosshair lines use the theme-independent `crossha
 - `packages/charts` — TypeScript browser package.
 - `examples/web_demo` — browser integration and parity test host; it is not a published package.
 - `docs` — architecture, public API, domain-model, and contribution documentation.
-- `plan` — active product and expansion plans.
+- `plan` — active and proposed product plans.
 
 See [Architecture.md](docs/Architecture.md) for ownership, data flow, and backend boundaries.
 See [Public_api.md](docs/Public_api.md) for supported/experimental surfaces, persistence, errors, and

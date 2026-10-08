@@ -3,8 +3,10 @@
 Aeris will be a complete financial and general visualization library. Lightweight Charts is the
 financial competitive reference; Recharts is the general charting competitive reference. This plan
 covers the **general (non-financial) charting program** toward full Recharts parity and beyond.
-Trading and order-flow work lives in [Expansion.md](Expansion.md); both plans share one
-`ChartEngine` and one frame contract.
+Trading and order-flow work was delivered by the trading expansion plan (batches B1–B9, completed
+2026-10-06 and removed after closure; the final text is `plan/Expansion.md` at commit `71b17a8`).
+Both programs share one `ChartEngine` and one frame contract, documented in
+[Architecture.md](../docs/Architecture.md).
 
 How to read this file:
 
@@ -25,10 +27,10 @@ with its commit, and update the status table in the same commit. A phase or matr
 Updated 2026-09-25. Plan baseline dated 2026-09-23.
 
 > **Paused 2026-09-25.** General-chart work is paused after the R3 range-bar batch (`3fe3b22`,
-> recorded in `e063e9c`) so trading and order-flow work in [Expansion.md](Expansion.md) proceeds
-> first. Do not start new G1–G8 batches during the pause. Fixes to delivered general-chart behavior,
-> and shared work required by Expansion.md (cross-chart sync PD5 and image export PD6, which R4
-> later extends), remain allowed. Resume with G1 (R0 and R1) when the maintainer lifts the pause,
+> recorded in `e063e9c`) so trading and order-flow work in the trading expansion plan proceeds
+> first. That plan completed on 2026-10-06. Do not start new G1–G8 batches during the pause. Fixes
+> to delivered general-chart behavior, and work on the shared contracts that R4 extends (cross-chart
+> sync PD5 and image export PD6), remain allowed. Resume with G1 (R0 and R1) when the maintainer lifts the pause,
 > because the trading journal will need the general charts, then continue in dependency order.
 
 | Batch | Phase | Scope | Status | Done so far | Next |
@@ -36,7 +38,7 @@ Updated 2026-09-25. Plan baseline dated 2026-09-23.
 | G1 | R0 + R1 | Competitive baseline, lifecycle and mutable object foundations | **Open (paused)** | — | Resume point: pin Recharts version, map the matrix, standalone creation, in-place mutations, failure cleanup |
 | G2 | R2 | Scales, axes and responsive layout | **Open** | — | Temporal ticks and views, grid and zero lines, multiple axes |
 | G3 | R3 | Cartesian visual and data semantics (remainder) | **In progress (paused)** | 9 delivered R3 slices (see **Delivered work**) | Bars and stacks, gradients, error bars, composition, per-item styling |
-| G4 | R4 | Components and interaction | **Open** | — | Legend, tooltip, brush, selection, sync (extends Expansion.md PD5), export (PD6) |
+| G4 | R4 | Components and interaction | **Open** | — | Legend, tooltip, brush, selection, sync (extends PD5), export (PD6) |
 | G5 | R5 | React and framework-neutral authoring | **Open** | — | Composable components over complete mutations |
 | G6 | R6 | Polar families and transitions | **Open** | — | Polar transforms, pie/donut, radar, radial bar, polar area, animation |
 | G7 | R7 | Hierarchy and flow families | **Open** | — | Funnel, treemap, Sankey, sunburst |
@@ -229,8 +231,10 @@ fixtures demonstrate bounded work.
 - [ ] Keyboard and touch brush controls.
 - [ ] Selection.
 - [ ] Linked-chart synchronization, extending the shared contract delivered first for financial
-      charts as [Expansion.md](Expansion.md) PD5.
-- [ ] Frame image export, extending the shared contract delivered first as Expansion.md PD6.
+      charts as PD5 (semantic crosshair and visible-range events with source and revision; see
+      the trading contract in [Architecture.md](../docs/Architecture.md)).
+- [ ] Frame image export, extending the shared contract delivered first as PD6
+      (`capture_export_frame` and the native export path in Architecture.md).
 - [ ] Localization, overflow and focus behavior.
 - [ ] G4 full gate green; batch committed and pushed.
 

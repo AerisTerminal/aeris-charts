@@ -1,7 +1,8 @@
 # Studies milestone evidence (B9)
 
-Closure evidence for `plan/Expansion.md` batch B9 — breadth and extension (I2 breadth studies,
-I3 structure studies, I4 custom studies, OF13 auction markers). Collected 2026-10-06 on the
+Closure evidence for the trading expansion plan's batch B9, breadth and extension (I2 breadth
+studies, I3 structure studies, I4 custom studies, OF13 auction markers). The plan was removed
+after it completed; its final text is `plan/Expansion.md` at commit `71b17a8`. Collected 2026-10-06 on the
 closure working tree (Windows 11, 24 logical CPUs, 32 GB RAM; Rust 1.99, Chromium via
 Playwright 1.63).
 
@@ -12,8 +13,7 @@ reproduction commands below.
 ## Scope delivered
 
 - **I2 breadth tier** — 29 additional indicator kinds on the shared binding, schema,
-  persistence, and checkpoint paths (catalog row in `plan/Expansion.md`, inventory and repair
-  semantics in `docs/Architecture.md`).
+  persistence, and checkpoint paths (inventory and repair semantics in `docs/Architecture.md`).
 - **I3 structure tier** — swing points, market structure (BOS/CHoCH), fair value gaps, order
   blocks, session high/low, previous day/week/month levels, and opening range, all as typed
   engine bindings with interval-indexed annotations painted by the shared frame (no new
