@@ -4036,6 +4036,7 @@ impl ChartEngine {
                     s.price_format.min_move = min_move;
                 }
             }
+            self.adopt_scale_price_format(id);
             // The anchor output of the zone/structure studies is all-whitespace by contract.
             // Flag it so `base_index` skips its backward whitespace scan instead of walking the
             // full column on every time-point sync.

@@ -63,6 +63,10 @@ impl ChartEngine {
             return false;
         }
         let options = self.price_scale_options_json(pane, from);
+        let entry = &mut self.panes[pane];
+        if let Some(format) = entry.explicit_price_format(from) {
+            entry.set_explicit_price_format(to, Some(format));
+        }
         for id in ids {
             self.set_series_price_scale(id, to);
         }
@@ -259,6 +263,7 @@ impl ChartEngine {
         };
         let side = pane.named_scales[index].side;
         pane.named_scales.remove(index);
+        pane.set_explicit_price_format(target, None);
         let targets = pane.ordered_side_targets(side);
         for (order, candidate) in targets.into_iter().enumerate() {
             pane.set_scale_order(candidate, order);
@@ -638,8 +643,11 @@ impl ChartEngine {
             return;
         }
         self.invalidate_frame_all();
-        if let Some(series) = self.series_entry_mut(id) {
+        if let Some(series) = self.series_entry_mut(id)
+            && series.price_scale_target != target
+        {
             series.price_scale_target = target;
+            self.adopt_scale_price_format(id);
         }
     }
 

@@ -5226,7 +5226,7 @@ impl ChartEngine {
                 y: label_y,
             } => {
                 let label = if drawing.text.is_empty() {
-                    self.price_formatter.format(drawing.points[0].price)
+                    self.format_drawing_price(drawing, drawing.points[0].price)
                 } else {
                     drawing.text.clone()
                 };

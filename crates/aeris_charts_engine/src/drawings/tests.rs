@@ -6284,3 +6284,47 @@ fn measure_label_keeps_an_offscreen_area_in_the_viewport_candidates() {
         .count();
     assert_eq!(falling, 1);
 }
+
+#[test]
+fn drawing_price_labels_follow_the_selected_scale_precision() {
+    let mut chart = settled_chart();
+    assert!(chart.set_price_format_for_scale(0, PriceScaleTarget::Right, 0, 1.0));
+    let point = |logical: f64, price: f64| DrawingPoint { logical, price };
+    chart
+        .add_drawing(
+            DrawingKind::FibonacciRetracement,
+            0,
+            vec![point(1.0, 10.0), point(8.0, 13.0)],
+            Some(r#"{"level_show_prices":true,"level_show_values":false,"level_show_percents":false}"#),
+        )
+        .unwrap();
+    chart
+        .add_drawing(DrawingKind::PriceLabel, 0, vec![point(3.0, 11.4)], None)
+        .unwrap();
+    chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![point(2.0, 10.5), point(7.0, 12.5)],
+            Some(
+                r#"{"labels":[{"metric":"price","visible":true,"position":"above"},{"metric":"price_change","visible":true,"position":"below"}]}"#,
+            ),
+        )
+        .unwrap();
+    let frame = chart.build_frame();
+    let texts: Vec<String> = frame.panes[0]
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Text { text, .. } | Prim::RotatedText { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    for expected in ["13", "10", "11", "2"] {
+        assert!(
+            texts.iter().any(|text| text == expected),
+            "{expected} in {texts:?}"
+        );
+    }
+    assert!(texts.iter().all(|text| !text.contains('.')), "{texts:?}");
+}

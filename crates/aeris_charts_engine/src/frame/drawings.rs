@@ -254,7 +254,7 @@ impl ChartEngine {
             if !label.is_empty() {
                 label.push_str(" · ");
             }
-            label.push_str(&self.price_formatter.format(price));
+            label.push_str(&self.format_drawing_price(drawing, price));
         }
         (!label.is_empty()).then_some(label)
     }
@@ -1294,7 +1294,7 @@ impl ChartEngine {
             }
             DrawingBodyGeometry::PriceLabel { x, y } => {
                 let label = if drawing.text.is_empty() {
-                    self.price_formatter.format(drawing.points[0].price)
+                    self.format_drawing_price(drawing, drawing.points[0].price)
                 } else {
                     drawing.text.clone()
                 };
@@ -2503,9 +2503,9 @@ impl ChartEngine {
                 let first = drawing.points.first().map_or(0.0, |point| point.price);
                 let second = drawing.points.get(1).map(|point| point.price);
                 match label.metric {
-                    crate::DrawingLabelMetric::Price => self.price_formatter.format(first),
+                    crate::DrawingLabelMetric::Price => self.format_drawing_price(drawing, first),
                     crate::DrawingLabelMetric::PriceChange => second
-                        .map(|value| self.price_formatter.format(value - first))
+                        .map(|value| self.format_drawing_price(drawing, value - first))
                         .unwrap_or_default(),
                     crate::DrawingLabelMetric::PercentChange => second
                         .filter(|_| first.abs() > f64::EPSILON)
@@ -2786,32 +2786,14 @@ impl ChartEngine {
         self.push_stat_label_block(out, (center_x, center_y), &lines, color, vpr);
     }
 
-    /// A price-valued drawing statistic in the drawing's own price format: the host formatter,
-    /// then instrument precision on the tick grid, then the bound scale's series format.
-    fn format_drawing_price(&self, drawing: &Drawing, value: f64) -> String {
-        if let Some(text) = self
-            .price_formatter_fn
-            .as_ref()
-            .and_then(|formatter| formatter(value))
-        {
-            return text;
-        }
-        let tick = self.position_price_tick(drawing.pane_index, drawing.price_scale);
-        if let Some(precision) = self.trading_state.instrument.price_precision {
-            return super::PriceFormatter::from_precision(
-                precision,
-                tick.unwrap_or(10.0_f64.powi(-(precision as i32))),
-            )
-            .format(value);
-        }
+    /// A price-valued drawing statistic in the bound scale's price format.
+    pub(crate) fn format_drawing_price(&self, drawing: &Drawing, value: f64) -> String {
         let scale_target = match drawing.price_scale {
             crate::DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
             crate::DrawingPriceScale::Left => crate::PriceScaleTarget::Left,
             crate::DrawingPriceScale::Overlay => crate::PriceScaleTarget::Overlay,
         };
-        self.scale_formatter_source(drawing.pane_index, scale_target)
-            .and_then(|series| self.format_with_price_format(&series.price_format, value))
-            .unwrap_or_else(|| self.price_formatter.format(value))
+        self.format_scale_price(drawing.pane_index, scale_target, value)
     }
 
     fn build_position_labels(

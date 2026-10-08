@@ -2774,6 +2774,7 @@ impl ChartEngine {
         });
         series.price_format = footprint_price_format(options.aggregation.tick_size);
         series.custom_frame = Default::default();
+        self.adopt_scale_price_format(id);
         self.data.set_rows_count_as_data(id, true);
         if had_data {
             let cleared = self.install_footprint_projection(
@@ -2878,6 +2879,7 @@ impl ChartEngine {
                 visual: options.visual,
             });
         series.price_format = footprint_price_format(options.aggregation.tick_size);
+        self.adopt_scale_price_format(id);
         self.install_footprint_bars_projection(id, aggregation, &bars)?;
         self.invalidate_frame_series(id);
         Ok(())
@@ -6599,6 +6601,71 @@ mod tests {
         assert!(chart.remove_order_flow_presentation(presentation));
         assert_eq!(chart.big_trades_options(big_trades), None);
         assert!(chart.trade_stream(presentation.trade_stream()).is_none());
+    }
+
+    #[test]
+    fn footprints_joining_a_scale_adopt_its_selected_price_format() {
+        let quarter_tick = |show_footprint| OrderFlowPresentationOptions {
+            aggregation: FootprintAggregationOptions {
+                tick_size: 0.25,
+                ticks_per_row: 1,
+                ..FootprintAggregationOptions::default()
+            },
+            show_cumulative_delta: false,
+            ..order_flow_options(show_footprint)
+        };
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        assert!(chart.set_price_format_for_scale(0, crate::PriceScaleTarget::Right, 0, 1.0));
+        let presentation = chart
+            .add_order_flow_presentation("CME:NQ", 0, quarter_tick(true))
+            .unwrap();
+        let footprint = presentation.footprint_series().unwrap();
+        let format = &chart.series_entry(footprint).unwrap().price_format;
+        assert_eq!((format.precision, format.min_move), (0, 1.0));
+        chart
+            .update_order_flow_presentation(
+                presentation,
+                vec![
+                    trade(1_000_000, 31_443.75, 2.0, AggressorSide::Buy),
+                    trade(61_000_000, 31_444.25, 1.0, AggressorSide::Sell),
+                ],
+                false,
+            )
+            .unwrap();
+        chart.time_scale.set_width(600.0);
+        chart.fit_content();
+        chart.build_frame();
+        let axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
+        assert!(axis.labels.iter().any(|label| label.text == "31,444"));
+        assert!(
+            axis.labels
+                .iter()
+                .filter(|label| label.background.is_some())
+                .all(|label| !label.text.contains('.'))
+        );
+
+        // Switching to the footprint later rebuilds the series on the same scale.
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        assert!(chart.set_price_format_for_scale(0, crate::PriceScaleTarget::Right, 0, 1.0));
+        let mut presentation = chart
+            .add_order_flow_presentation("CME:NQ", 0, quarter_tick(false))
+            .unwrap();
+        chart
+            .reconfigure_order_flow_presentation(&mut presentation, quarter_tick(true))
+            .unwrap();
+        let footprint = presentation.footprint_series().unwrap();
+        assert_eq!(
+            chart
+                .series_entry(footprint)
+                .unwrap()
+                .price_format
+                .precision,
+            0
+        );
     }
 
     fn order_flow_options(show_footprint: bool) -> OrderFlowPresentationOptions {

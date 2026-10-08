@@ -1380,6 +1380,9 @@ pub struct Pane {
     pub left_scale: PriceScaleCore,
     pub overlay_scale: PriceScaleCore,
     pub(crate) named_scales: Vec<NamedPriceScale>,
+    /// Price formats selected for a whole scale. Series joining the scale later adopt them, and
+    /// engine-built price labels on the scale format through them.
+    explicit_price_formats: Vec<(PriceScaleTarget, ScalePriceFormat)>,
     next_price_scale_id: u32,
     right_scale_order: usize,
     left_scale_order: usize,
@@ -1426,6 +1429,7 @@ impl Pane {
             left_scale: PriceScaleCore::new(PriceScaleCoreOptions::default()),
             overlay_scale,
             named_scales: Vec::new(),
+            explicit_price_formats: Vec::new(),
             next_price_scale_id: 1,
             right_scale_order: 0,
             left_scale_order: 0,
@@ -1508,7 +1512,35 @@ pub(crate) struct NamedPriceScale {
     pub scale: PriceScaleCore,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ScalePriceFormat {
+    pub precision: u32,
+    pub min_move: f64,
+}
+
 impl Pane {
+    pub(crate) fn explicit_price_format(
+        &self,
+        target: PriceScaleTarget,
+    ) -> Option<ScalePriceFormat> {
+        self.explicit_price_formats
+            .iter()
+            .find(|(candidate, _)| *candidate == target)
+            .map(|(_, format)| *format)
+    }
+
+    pub(crate) fn set_explicit_price_format(
+        &mut self,
+        target: PriceScaleTarget,
+        format: Option<ScalePriceFormat>,
+    ) {
+        self.explicit_price_formats
+            .retain(|(candidate, _)| *candidate != target);
+        if let Some(format) = format {
+            self.explicit_price_formats.push((target, format));
+        }
+    }
+
     pub(crate) fn scale(&self, target: PriceScaleTarget) -> Option<&PriceScaleCore> {
         match target {
             PriceScaleTarget::Right => Some(&self.price_scale),
@@ -2642,6 +2674,7 @@ impl ChartEngine {
                 visual: Default::default(),
             });
         }
+        self.adopt_scale_price_format(id);
         // new series paint on top (reference appends to the pane's data sources)
         self.series_order.push(id);
         // Custom time-only rows and footprint scale-projection rows both anchor the base index.
@@ -3193,6 +3226,7 @@ impl ChartEngine {
         }
         series.pane_index = pane_index;
         series.price_scale_target = destination_target;
+        self.adopt_scale_price_format(id);
         if from != PANELESS {
             self.cleanup_if_pane_is_empty(from);
         }
@@ -3232,8 +3266,12 @@ impl ChartEngine {
         let Some(series) = self.series_entry_mut(id) else {
             return false;
         };
+        let joined = series.pane_index != pane_index || series.price_scale_target != target;
         series.pane_index = pane_index;
         series.price_scale_target = target;
+        if joined {
+            self.adopt_scale_price_format(id);
+        }
         if from != pane_index && from != PANELESS {
             self.cleanup_if_pane_is_empty(from);
         }
