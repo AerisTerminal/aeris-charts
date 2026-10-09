@@ -1,9 +1,9 @@
-# General chart API proposal
+# General chart API
 
 ## Status and purpose
 
-This document began as the Phase 0 API proposal for the all-in-one architecture in [`plan.md`](../plan/plan.md) and
-remains the contract for unfinished chart families. The current package implements the Phase 2 Cartesian
+This document records the shipped general-chart API and clearly labeled future contracts from
+[`plan.md`](../plan/plan.md). The current package implements the Cartesian
 families: category columns and horizontal bars, category-band box plots, category/category plus
 numeric/numeric and temporal/numeric heatmap grids, numeric XY scatter/bubble marks, numeric/temporal/category error bars,
 and `xy_line`, `xy_area`, `range_area`, grouped/stacked bar, and stacked-area slices. Domain-aware panes, explicit axes, object and
@@ -14,8 +14,10 @@ axes with optional independent bounds on either axis, plus category band/point X
 `box_plot` uses category-band X with numeric Y and requires a complete ordered
 `min <= q1 <= median <= q3 <= max` row for visible geometry. All forms require their center/value channels
 for a visible mark. `heatmap_grid` supports band X/Y string categories, continuous numeric X with numeric Y
-coordinates, and temporal epoch-millisecond X with numeric Y coordinates. Later polar series names and the React surface
-below remain proposals until their implementations and release evidence land.
+coordinates, and temporal epoch-millisecond X with numeric Y coordinates. Later polar and
+hierarchy/flow series names remain proposals until their implementations and release evidence land.
+The current array-based React `GeneralPane` is supported; composable child authoring, controlled
+state, and full concurrent lifecycle remain proposed for R5.
 
 General-series legend metadata is engine-owned. `chart.general_legend_snapshot(pane?)` returns bounded
 series metadata in stable engine order, including pane, kind, title, color, and visibility. Hidden series remain
@@ -38,7 +40,7 @@ rectangular region bound to explicit general axes. Each reference declares `exte
 include its coordinates only when that flag is true. References lower into the same backend-neutral frame,
 participate in pane/axis lifecycle protection, and round-trip in V2 persistence.
 
-The proposal is additive. Existing financial series, data shapes, pane methods, price-scale
+The general API is additive. Existing financial series, data shapes, pane methods, price-scale
 handles, snake-case methods, and persistence V1 keep their current meaning. In particular,
 `"line"`, `"area"`, `"bar"`, `"histogram"`, `"baseline"`, `"candlestick"`, and `"footprint"`
 remain financial-time series. Aeris must never guess whether a row belongs to the financial or
@@ -167,7 +169,7 @@ Validation is structural and atomic:
   day, month, and year labels use injected locale month names and the same shared `AxisFrame` as
   numeric and category axes; hosts do not run a parallel date-axis layout.
 
-The first implementation should expose `chart.add_axis(options)`, `chart.axis(id)`,
+The supported API exposes `chart.add_axis(options)`, `chart.axis(id)`,
 `chart.axes(pane?)`, and `chart.remove_axis(id)`. Removing a populated axis is rejected. A series
 rebind is one atomic operation and fails without mutation when either target axis is absent or
 incompatible.
@@ -520,7 +522,7 @@ Adding a public series kind is incomplete until the engine owns all of these beh
 - keyboard focus and accessibility snapshot values;
 - selection and hover state;
 - lifecycle removal and bounded cache invalidation;
-- persistence under the future general-chart schema;
+- persistence under the general-chart V2 schema;
 - Canvas2D, WebGPU, GPUI, and native parity evidence;
 - financial-only, general-only, and combined performance evidence.
 

@@ -262,6 +262,20 @@ test("React general-series installation rolls back rejected initial data", async
   expect(result).toMatchObject({ pane_count: 1, axis_count: 0, legend_count: 0 });
 });
 
+test("React readiness callback failure cleans up and permits a valid retry", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactCallbackFailureCleanup();
+  });
+  expect(result).toEqual({
+    failure: "expected readiness callback failure",
+    after_failure: { pane_count: 1, axis_count: 0, legend_count: 0 },
+    after_retry: { pane_count: 2, axis_count: 3, legend_count: 1 },
+    disposed: true,
+  });
+});
+
 test("camel-case aliases share the original chart and series handles", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {

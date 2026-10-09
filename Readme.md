@@ -91,6 +91,26 @@ revenue.setData([{ id: "jan", x: "Jan", y: 42 }, { id: "feb", x: "Feb", y: 57 }]
 chart.render();
 ```
 
+General-only charts can select their first pane at construction time. This creates no temporary
+financial pane or hidden financial series:
+
+```ts
+const chart = await createChart(container, {
+  autoSize: true,
+  initialPane: { horizontal_domain: { type: "category", scale: "band" } },
+});
+chart.addAxis({ id: "month", pane: 0, dimension: "x", scale: "band" });
+chart.addAxis({ id: "revenue", pane: 0, dimension: "y", scale: "linear" });
+const revenue = chart.addSeries("column", {
+  pane: 0, x_axis_id: "month", y_axis_id: "revenue",
+});
+revenue.setData([{ id: "jan", x: "Jan", y: 42 }]);
+```
+
+The supported Cartesian API and proposed later families are separated in
+[`docs/General_charts_api.md`](docs/General_charts_api.md). The versioned 17-row competitive status
+matrix lives at `examples/web_demo/fixtures/g1/recharts-3.10.1/matrix.json`.
+
 The same engine is available as an optional React authoring layer. Install React in applications that
 use it, then import the adapter from the package subpath; framework-neutral applications do not load
 or depend on React:

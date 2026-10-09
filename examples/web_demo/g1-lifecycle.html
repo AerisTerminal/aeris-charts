@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>G1 topology and lifecycle</title>
+  <style>
+    :root { font: 14px system-ui, sans-serif; color: #e8edf5; background: #10141c; }
+    body { margin: 0; }
+    main { padding: 20px; }
+    .charts { display: grid; grid-template-columns: repeat(3, minmax(280px, 1fr)); gap: 12px; }
+    article { border: 1px solid #344156; border-radius: 8px; padding: 10px; }
+    .chart { position: relative; height: 260px; }
+    button { margin: 14px 8px 0 0; }
+    [role="status"] { display: inline-block; margin-left: 8px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>G1 topology and lifecycle</h1>
+    <p>Public package fixture for financial-default, general-first, and one-engine mixed panes.</p>
+    <div class="charts">
+      <article><h2>Financial default</h2><div id="financial" class="chart"></div></article>
+      <article><h2>General first pane</h2><div id="general" class="chart"></div></article>
+      <article><h2>Mixed engine</h2><div id="mixed" class="chart"></div></article>
+    </div>
+    <button id="invalid" type="button">Try invalid update</button>
+    <button id="remove-general" type="button">Remove general pane</button>
+    <button id="readd-general" type="button">Readd general pane</button>
+    <span role="status">Ready</span>
+  </main>
+  <script type="module">
+    import { createChart } from "/dist/aeris_charts_financial.js";
+
+    const status = document.querySelector('[role="status"]');
+    const chartOptions = { backend: "canvas2d", autoSize: false, accessibility: false };
+    const financial = await createChart(document.querySelector("#financial"), chartOptions);
+    const financialSeries = financial.panes()[0].get_series()[0];
+    financialSeries.setData([{ time: 1735689600, open: 18, high: 24, low: 17, close: 22 }]);
+
+    const general = await createChart(document.querySelector("#general"), {
+      ...chartOptions,
+      initialPane: { horizontal_domain: { type: "category", scale: "band" } },
+    });
+    const generalPane = general.panes()[0];
+    const generalX = general.addAxis({
+      id: "general-x", pane: 0, dimension: "x", scale: "band",
+    });
+    const generalY = general.addAxis({
+      id: "general-y", pane: 0, dimension: "y", scale: "linear",
+    });
+    const generalBars = general.addSeries("column", {
+      pane: 0, x_axis_id: "general-x", y_axis_id: "general-y", title: "General first",
+    });
+    generalBars.setData([
+      { id: "jan", x: "Jan", y: 12 },
+      { id: "feb", x: "Feb", y: 18 },
+    ]);
+
+    const mixed = await createChart(document.querySelector("#mixed"), chartOptions);
+    const mixedFinancial = mixed.panes()[0].get_series()[0];
+    mixedFinancial.setData([{ time: 1735689600, open: 18, high: 24, low: 17, close: 22 }]);
+    let mixedOwnership = null;
+    function addMixedGeneral() {
+      const pane = mixed.addPane({
+        preserve_empty: true,
+        horizontal_domain: { type: "category", scale: "band" },
+      });
+      const paneIndex = pane.paneIndex();
+      const x = mixed.addAxis({ id: "mixed-x", pane: paneIndex, dimension: "x", scale: "band" });
+      const y = mixed.addAxis({ id: "mixed-y", pane: paneIndex, dimension: "y", scale: "linear" });
+      const bars = mixed.addSeries("column", {
+        pane: paneIndex, x_axis_id: "mixed-x", y_axis_id: "mixed-y", title: "Mixed revenue",
+      });
+      bars.setData([{ id: "north", x: "North", y: 7 }, { id: "south", x: "South", y: 11 }]);
+      mixedOwnership = { pane, x, y, bars };
+    }
+    addMixedGeneral();
+
+    window.__g1Lifecycle = {
+      financial,
+      general,
+      mixed,
+      financialSeries,
+      mixedFinancial,
+      generalPane,
+      generalX,
+      generalY,
+      generalBars,
+    };
+
+    document.querySelector("#invalid").addEventListener("click", () => {
+      const before = JSON.stringify(mixed.exportState());
+      const id = mixedOwnership.bars.id;
+      try {
+        mixedOwnership.bars.applyOptions({ x_axis_id: "missing-axis" });
+      } catch {
+        const intact = JSON.stringify(mixed.exportState()) === before
+          && mixedOwnership.bars.id === id
+          && mixedOwnership.bars.dataAt(0)?.row_id === "north";
+        status.textContent = intact ? "Invalid update rejected; prior mixed state retained" : "Rollback failed";
+      }
+    });
+
+    document.querySelector("#remove-general").addEventListener("click", () => {
+      if (mixedOwnership === null) return;
+      const paneIndex = mixedOwnership.pane.paneIndex();
+      mixedOwnership.bars.remove();
+      mixedOwnership.y.remove();
+      mixedOwnership.x.remove();
+      const removed = mixed.remove_pane(paneIndex);
+      mixedOwnership = null;
+      status.textContent = removed && mixedFinancial.data()[0]?.close === 22
+        ? "Financial pane and view retained"
+        : "Removal failed";
+    });
+
+    document.querySelector("#readd-general").addEventListener("click", () => {
+      if (mixedOwnership === null) addMixedGeneral();
+      status.textContent = mixed.panes().length === 2
+        ? "One engine has financial and general panes"
+        : "Readd failed";
+    });
+
+    addEventListener("beforeunload", () => {
+      financial.remove();
+      general.remove();
+      mixed.remove();
+    }, { once: true });
+    document.body.dataset.ready = "true";
+  </script>
+</body>
+</html>

@@ -80,7 +80,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     primary: "#0091ff",
     primary_foreground: "#ffffff",
     button_fill: "#333333",
-    border_width: "1px",
+    border_width: "0.5px",
   });
   expect(light.palette).toMatchObject({
     background: "#ffffff",
@@ -113,7 +113,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     primary: "#0091ff",
     primary_foreground: "#ffffff",
     button_fill: "#f5f5f5",
-    border_width: "1px",
+    border_width: "0.5px",
   });
   expect(dark.palette).toMatchObject({
     background: "#1f1f1f",

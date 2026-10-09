@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "evidenceDate": "2026-10-10",
+  "baseRevision": "fde2088e20713fe2f3eb04b4fb75f8194da3a8be",
+  "classification": "local release diagnostic, not a controlled-runner public performance claim",
+  "command": "AERIS_CHARTS_PERF_STRICT=1 cargo run -p aeris_charts_native --example perf_gate --release",
+  "conditions": {
+    "platform": "Windows 10.0.26300",
+    "toolchain": "repository-pinned Rust 1.99 MSVC",
+    "viewportCssPixels": [1600, 800],
+    "dpr": 1,
+    "budgetPolicy": 7,
+    "buildProfile": "release"
+  },
+  "workloads": {
+    "financialOnly": {
+      "fixture": "Target A",
+      "data": "10 financial series x 50000 bars",
+      "buildFrameMs": 0.35,
+      "buildFrameBudgetMs": 16.67,
+      "result": "PASS"
+    },
+    "generalOnly": {
+      "fixture": "Target F",
+      "data": "1 xy_line x 100000 points",
+      "buildFrameMs": 1.43,
+      "nearestHitMs": 1.42,
+      "buildFrameBudgetMs": 16.67,
+      "nearestHitBudgetMs": 8,
+      "result": "PASS"
+    },
+    "generalDashboard": {
+      "fixture": "Target G",
+      "data": "5 general series x 20000 rows",
+      "buildFrameMs": 1.21,
+      "nearestHitMs": 1.98,
+      "retainedMemoryMiB": 5.51,
+      "buildFrameBudgetMs": 16.67,
+      "nearestHitBudgetMs": 8,
+      "retainedMemoryBudgetMiB": 12,
+      "result": "PASS"
+    },
+    "mixedFinancialGeneral": {
+      "fixture": "Target H",
+      "data": "50000 financial bars + 50000 general points in one engine",
+      "buildFrameMs": 0.8,
+      "retainedMemoryMiB": 5.68,
+      "buildFrameBudgetMs": 16.67,
+      "retainedMemoryBudgetMiB": 16,
+      "result": "PASS"
+    }
+  }
+}

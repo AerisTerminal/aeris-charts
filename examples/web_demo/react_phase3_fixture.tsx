@@ -265,3 +265,87 @@ export async function exerciseReactFailureCleanup(): Promise<Record<string, unkn
     host.remove();
   }
 }
+
+/** Prove a readiness callback failure releases committed child resources and permits a valid retry. */
+export async function exerciseReactCallbackFailureCleanup(): Promise<Record<string, unknown>> {
+  const host = document.createElement("div");
+  host.style.cssText = "width:720px;height:480px";
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  let chart: chart_api | null = null;
+  let failure: Error | null = null;
+  let retried: general_series_api | null = null;
+  const valid_series: readonly GeneralSeriesSpec[] = [{
+    key: "valid",
+    kind: "column",
+    options: { x_axis_id: "month", y_axis_id: "revenue" },
+    data: [{ id: "jan", x: "Jan", y: 42 }],
+  }];
+  const original_console_error = console.error;
+  console.error = () => {};
+  try {
+    root.render(
+      <AerisChart
+        options={{ backend: "canvas2d", autoSize: false, accessibility: false }}
+        onChartReady={(value) => { chart = value; }}
+      >
+        <FailureBoundary key="failed" onFailure={(error) => { failure = error; }}>
+          <GeneralPane
+            options={pane_options}
+            axes={axes}
+            series={valid_series}
+            onSeriesReady={() => { throw new Error("expected readiness callback failure"); }}
+          />
+        </FailureBoundary>
+      </AerisChart>,
+    );
+    await wait_until(() => chart !== null && failure !== null);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const live = chart as chart_api;
+    const after_failure = {
+      pane_count: live.panes().length,
+      axis_count: live.axes().length,
+      legend_count: live.general_legend_snapshot().items.length,
+    };
+
+    root.render(
+      <AerisChart
+        options={{ backend: "canvas2d", autoSize: false, accessibility: false }}
+        onChartReady={(value) => { chart = value; }}
+      >
+        <FailureBoundary key="retry" onFailure={(error) => { failure = error; }}>
+          <GeneralPane
+            options={pane_options}
+            axes={axes}
+            series={valid_series}
+            onSeriesReady={(_key, value) => { retried = value; }}
+          />
+        </FailureBoundary>
+      </AerisChart>,
+    );
+    await wait_until(() => retried !== null && safely(() => (retried as general_series_api).dataAt(0)?.value === 42));
+    const after_retry = {
+      pane_count: live.panes().length,
+      axis_count: live.axes().length,
+      legend_count: live.general_legend_snapshot().items.length,
+    };
+    root.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    let disposed = false;
+    try {
+      live.backend();
+    } catch {
+      disposed = true;
+    }
+    return {
+      failure: (failure as Error).message,
+      after_failure,
+      after_retry,
+      disposed,
+    };
+  } finally {
+    console.error = original_console_error;
+    root.unmount();
+    host.remove();
+  }
+}

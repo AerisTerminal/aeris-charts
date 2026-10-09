@@ -2,7 +2,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm --prefix ../../packages/charts run build && node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});for(const [source,target] of [['index.js','aeris_charts_financial.js'],['index.js.map','index.js.map'],['aeris_charts_wasm_bg.wasm','aeris_charts_wasm_bg.wasm'],['aeris_charts.css','aeris_charts.css']])fs.copyFileSync('../../packages/charts/dist/'+source,'dist/'+target)\" && esbuild react_phase3_fixture.tsx --bundle --format=esm --jsx=automatic --alias:react=./node_modules/react --alias:react-dom=./node_modules/react-dom --outfile=dist/react_phase3_fixture.js",
+    "build": "npm --prefix ../../packages/charts run build && node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});for(const [source,target] of [['index.js','aeris_charts_financial.js'],['index.js.map','index.js.map'],['aeris_charts_wasm_bg.wasm','aeris_charts_wasm_bg.wasm'],['aeris_charts.css','aeris_charts.css']])fs.copyFileSync('../../packages/charts/dist/'+source,'dist/'+target)\" && esbuild react_phase3_fixture.tsx --bundle --format=esm --jsx=automatic --alias:react=./node_modules/react --alias:react-dom=./node_modules/react-dom --outfile=dist/react_phase3_fixture.js && npm run build:g1-reference",
+    "build:g1-reference": "esbuild g1_recharts_reference.tsx --bundle --format=esm --jsx=automatic --outfile=dist/g1_recharts_reference.js",
     "test:browser": "playwright test",
     "test:gpui-webgpu": "npm run build && node run_gpui_webgpu_matrix.mjs"
   },
@@ -15,6 +16,7 @@
     "pixelmatch": "7.2.0",
     "pngjs": "7.0.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "recharts": "3.10.1"
   }
 }

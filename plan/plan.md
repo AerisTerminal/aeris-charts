@@ -24,20 +24,14 @@ with its commit, and update the status table in the same commit. A phase or matr
 
 ## Status at a glance
 
-Updated 2026-09-25. Plan baseline dated 2026-09-23.
-
-> **Paused 2026-09-25.** General-chart work is paused after the R3 range-bar batch (`3fe3b22`,
-> recorded in `e063e9c`) so trading and order-flow work in the trading expansion plan proceeds
-> first. That plan completed on 2026-10-06. Do not start new G1–G8 batches during the pause. Fixes
-> to delivered general-chart behavior, and work on the shared contracts that R4 extends (cross-chart
-> sync PD5 and image export PD6), remain allowed. Resume with G1 (R0 and R1) when the maintainer lifts the pause,
-> because the trading journal will need the general charts, then continue in dependency order.
+Updated 2026-10-10. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
+expansion completed on 2026-10-06; general-chart batches have resumed in dependency order.
 
 | Batch | Phase | Scope | Status | Done so far | Next |
 | --- | --- | --- | --- | --- | --- |
-| G1 | R0 + R1 | Competitive baseline, lifecycle and mutable object foundations | **Open (paused)** | — | Resume point: pin Recharts version, map the matrix, standalone creation, in-place mutations, failure cleanup |
+| G1 | R0 + R1 | Competitive baseline, lifecycle and mutable object foundations | **Complete** | Recharts 3.10.1 matrix and fixtures; general-first topology; atomic handles; cleanup | G2 |
 | G2 | R2 | Scales, axes and responsive layout | **Open** | — | Temporal ticks and views, grid and zero lines, multiple axes |
-| G3 | R3 | Cartesian visual and data semantics (remainder) | **In progress (paused)** | 9 delivered R3 slices (see **Delivered work**) | Bars and stacks, gradients, error bars, composition, per-item styling |
+| G3 | R3 | Cartesian visual and data semantics (remainder) | **In progress** | 9 delivered R3 slices (see **Delivered work**) | Resume after G2: bars and stacks, gradients, error bars, composition, per-item styling |
 | G4 | R4 | Components and interaction | **Open** | — | Legend, tooltip, brush, selection, sync (extends PD5), export (PD6) |
 | G5 | R5 | React and framework-neutral authoring | **Open** | — | Composable components over complete mutations |
 | G6 | R6 | Polar families and transitions | **Open** | — | Polar transforms, pie/donut, radar, radial bar, polar area, animation |
@@ -48,8 +42,8 @@ Notes:
 
 - R3 slices were delivered ahead of R0–R2. They count toward R3 only; R3 closes after R1–R2 land
   and its exit criteria pass.
-- No phase and no coverage-matrix row is verified yet. No competitive parity or release-completion
-  claim should be inferred from delivered slices.
+- G1 is complete. No full coverage-matrix row is yet Verified because each row includes later-phase
+  behavior; the versioned matrix records those rows as Partial or Open.
 
 ## How work is delivered
 
@@ -80,7 +74,13 @@ must pass the full gate on its own.
 
 ## Delivered work
 
-All items below are implemented and pushed to `github/main`. They belong to R3.
+G1 delivered the versioned Recharts 3.10.1 comparison matrix and executable private fixtures,
+general-first and mixed topology, stable atomic general handles, last-pane ownership, failed-install
+cleanup, and policy-v7 release baselines. Evidence lives in
+`examples/web_demo/tests/g1-foundations.spec.mjs`, the existing public general browser/native tests,
+and `benchmarks/baselines/g1-2026-10-10.json`.
+
+The items below were implemented earlier and belong to R3.
 
 | # | Capability | Commit | Evidence |
 | --- | --- | --- | --- |
@@ -111,17 +111,12 @@ remain valuable and must be preserved.
 
 | Gap | Evidence | Required correction | Phase |
 | --- | --- | --- | --- |
-| Standalone creation | `examples/web_demo/general_dashboard.js` creates a general pane then removes pane 0 | Explicit initial general domain through the canonical constructor, without a transient financial pane or host cleanup recipe; financial default stays compatible | R1 |
-| Mutable public objects | `packages/charts/src/types.ts::general_series_api` and `general_axis_api` | Handles lack option mutation; Rust has visibility mutation but the browser handle lacks it. Add atomic mutations that preserve identity and invalidate affected state | R1 |
-| Failed React installation | `GeneralPane` creates a handle, calls `setData`, then records ownership | A failed initial data install can leave an untracked series. Add rollback and failure-path lifecycle tests; review callback exceptions and cleanup ordering | R1, R5 |
 | Temporal axes | `general_axes.rs::axis_ticks`, `tick_labels_for_domain`, `pan_general_axis`, `zoom_general_axis` | Temporal data and geometry exist, but temporal ticks fall through to empty output and pan/zoom reject nonnumeric domains. Complete the temporal coordinate contract | R2 |
 | Grid and zero lines | `GeneralAxis` stores policies; `persistence.rs` serializes them | Accepted options have no general grid execution. Implement shared frame output and observable toggle tests | R2 |
 | Visual configuration | `GeneralSeriesOptions`, `frame/general_series_geometry.rs` | Surface is narrow. Audit and implement documented styles and geometry choices end to end (the delivered slices above began this) | R3 |
 | Shared components | Legend, shared-tooltip, brush and reference snapshots in `general_series.rs` | Snapshots alone do not establish a complete interactive legend, tooltip, brush or export experience | R4 |
-| React reconciliation | `packages/charts/src/react.ts::GeneralPane` | Changed series options recreate series; changed axes recreate dependent series; configuration arrays instead of component composition. Complete engine mutation and declarative authoring | R5 |
+| React reconciliation | `packages/charts/src/react.ts::GeneralPane` | Current array reconciliation retains ordinary mutations, but configuration arrays remain instead of component composition. Complete declarative authoring and concurrent lifecycle | R5 |
 | Chart breadth | `GeneralSeriesKind` has Cartesian variants only | Polar and hierarchy/flow families are open. Funnel, treemap, Sankey and sunburst are in the competitive target, not an indefinite backlog | R6, R7 |
-| Documentation | Prior plan examples and `Architecture.md` | Prior scatter example omitted required axis bindings. Architecture places engine-owned general behavior under the core heading and overgeneralizes retained React updates. Correct wording without presenting future code as current | R0 |
-| API docs mix | [General_charts_api.md](../docs/General_charts_api.md) | Mixes implemented contracts with proposals | R0 |
 
 These are not an exhaustive defect audit. Coverage-matrix rows are required coverage to audit, not
 assertions that every listed feature is absent.
@@ -136,19 +131,19 @@ demo chart.
 
 ### R0 — Auditable competitive baseline
 
-**Batch:** G1, together with R1. **Depends on:** nothing. **Status:** open, paused.
+**Batch:** G1, together with R1. **Depends on:** nothing. **Status:** complete.
 
-- [ ] Pin the Recharts release and source revision; retain the existing financial competitor
+- [x] Pin the Recharts release and source revision; retain the existing financial competitor
       baseline.
-- [ ] Inventory public props and components; map every relevant capability to the coverage matrix
+- [x] Inventory public props and components; map every relevant capability to the coverage matrix
       with supported combinations.
-- [ ] Add reference fixtures for each matrix row and record intentional differences. Executable
+- [x] Add reference fixtures for each matrix row and record intentional differences. Executable
       fixtures stay in existing test infrastructure; transient screenshots and reports stay out of
       committed documentation.
-- [ ] Reconcile `General_charts_api.md`, `Public_api.md`, examples and architecture claims against
+- [x] Reconcile `General_charts_api.md`, `Public_api.md`, examples and architecture claims against
       exports, manifests, scripts and actual call paths. Separate supported, experimental and
       proposed behavior.
-- [ ] Capture clean release financial, general and combined baselines and the current enforced
+- [x] Capture clean release financial, general and combined baselines and the current enforced
       budgets.
 
 **Exit:** every required capability has a scoped owner, dependency, fixture and honest status; no
@@ -157,14 +152,14 @@ paths accompany future status changes. Unverified rows stay open.
 
 ### R1 — Lifecycle and mutable object foundations
 
-**Batch:** G1, together with R0. **Depends on:** R0. **Status:** open.
+**Batch:** G1, together with R0. **Depends on:** R0. **Status:** complete.
 
-- [ ] Initial general-domain creation through the canonical constructor.
-- [ ] Last-pane ownership defined together with adapter ownership.
-- [ ] Atomic in-place axis and series mutations through all public boundaries.
-- [ ] Failed installation and cleanup fixed.
-- [ ] Visibility and ordering affect domains, legends, hits and exports consistently.
-- [ ] G1 full gate green (R0 and R1 items); batch committed and pushed.
+- [x] Initial general-domain creation through the canonical constructor.
+- [x] Last-pane ownership defined together with adapter ownership.
+- [x] Atomic in-place axis and series mutations through all public boundaries.
+- [x] Failed installation and cleanup fixed.
+- [x] Visibility and ordering affect domains, legends, hits and exports consistently.
+- [x] G1 full gate green (R0 and R1 items); batch committed and pushed.
 
 **Exit:** standalone general and mixed charts can create, update, rebind, reorder, hide, remove and
 restore through actual browser and native paths. Invalid operations leave prior state intact.
@@ -195,7 +190,7 @@ enforced bound.
 ### R3 — Cartesian visual and data semantics
 
 **Batch:** G3 (all remaining items in one batch). **Depends on:** R1–R2. **Status:** in progress,
-paused (see **Status at a glance**).
+pending completion of G2.
 
 - [x] Line width (item 1).
 - [x] Line dash styles (item 2).
@@ -370,9 +365,10 @@ milestone.
 They may be added later without postponing any required row. Full competitiveness is a release gate,
 not a promise to implement every conceivable visualization.
 
-**References.** Reviewed on 2026-09-23. R0 must pin the exact released Recharts version or source
-revision used by executable comparisons; a moving documentation site is insufficient as a permanent
-test baseline.
+**References.** Reviewed on 2026-10-10. R0 pins Recharts 3.10.1 at source revision
+`ffb918798051ef040bb7f9922d3850c9c189f39f`; its package and source `LICENSE` files are MIT.
+The executable mappings are in `examples/web_demo/fixtures/g1/recharts-3.10.1/matrix.json`. A moving
+documentation site is not the permanent test baseline.
 
 - [Recharts API catalog](https://recharts.github.io/en-US/api/) establishes Cartesian, polar, composed,
   funnel, treemap, Sankey and sunburst families plus shared components and synchronization.
@@ -556,7 +552,7 @@ Run performance thresholds in strict mode as CI does; never relax tests or budge
 regressions.
 
 Use `benchmarks/benchmark.mjs` and `benchmarks/budgets.json` for versioned release evidence. Current
-policy v3 includes a 2,000 ms general-dashboard startup ceiling and 100,663,296-byte first-frame
+policy v7 includes a 2,000 ms general-dashboard startup ceiling and 100,663,296-byte first-frame
 upload ceiling, alongside package-size limits. These limits are existing guards, not a declaration
 that their ceilings are competitive targets. Preserve them until measured evidence supports an
 explicit revision. Add family-specific budgets before closure, including p95 input/frame latency,
@@ -572,8 +568,7 @@ snapshot existence.
 
 Documentation-only revisions may skip runtime gates. Check diffs, links/paths, source consistency and
 documentation hygiene. This plan revision makes no production ownership or execution change; update
-`Architecture.md` in the same commit as future code that changes those contracts, and correct current
-wording discrepancies during R0. Preserve unrelated working-tree changes and stage only task-owned
+`Architecture.md` in the same commit as future code that changes those contracts. Preserve unrelated working-tree changes and stage only task-owned
 files.
 
 ## Definition of completion

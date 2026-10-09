@@ -2,6 +2,11 @@
 
 This subsystem is the source of truth for Aeris Charts performance, artifact-size, and memory claims. It measures the production `@aeristerminal/aeris-charts` package through its public browser API and keeps every number tied to source, environment, scenario, dataset, and raw samples. It does not optimize the product and it does not manufacture unsupported values.
 
+Versioned local release observations that support a completed batch live under `baselines/`.
+`baselines/g1-2026-10-10.json` records the financial-only, general-only, general-dashboard, and
+mixed-engine G1 workloads against policy v7. These local observations are diagnostics, not
+controlled-runner performance claims.
+
 ## Requirements
 
 - The repository's configured Rust toolchain and `wasm-pack` 0.15.0 for the production WASM build.

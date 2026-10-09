@@ -55,6 +55,8 @@ The financial coordinate path does not dispatch through them.
 Existing financial charts therefore continue to instantiate only `TimeScaleCore` and `PriceScaleCore`
 and pay no retained-memory cost for these foundations.
 
+### `aeris_charts_engine` general-chart domain
+
 Each pane has one immutable horizontal-domain binding. Absence of a general binding means
 `financial_time` and continues to use the chart's established `TimeScaleCore`; this is the initial
 pane and every legacy `add_pane` call. Non-financial continuous, temporal, category, and polar
