@@ -503,6 +503,16 @@ function trading_features(chart, bars) {
         trading.apply_snapshot({});
       };
     },
+  }, {
+    id: "trading-lines-from-marker",
+    label: "Lines from marker",
+    detail: "Order lines start at their controls",
+    icon: "analysis",
+    activate: () => {
+      const trading = chart.trading();
+      trading.apply_options({ extend_lines_left: false });
+      return () => trading.apply_options({ extend_lines_left: true });
+    },
   }];
 }
 

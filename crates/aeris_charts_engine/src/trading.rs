@@ -393,10 +393,12 @@ pub struct TradingStyle {
     pub rejected: Color,
     pub control: Color,
     pub label: Color,
-    /// Execution arrows use their own blue/red pair, distinct from the green/red order chrome,
-    /// so a past fill never reads as a live order.
+    /// Execution arrows use their own blue/red pair so a past fill never reads as a live order.
     pub execution_buy: Color,
     pub execution_sell: Color,
+    /// Whether order and position lines run from the pane's left edge to their marker. When
+    /// false a line starts at its leftmost control, so only the marker and its right side show.
+    pub extend_lines_left: bool,
 }
 
 impl Default for TradingStyle {
@@ -406,8 +408,8 @@ impl Default for TradingStyle {
             DEFAULT_PRIMARY_RGB.1,
             DEFAULT_PRIMARY_RGB.2,
         );
-        let market_up = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
-        let sell = Color::rgb(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2);
+        let positive = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
+        let negative = Color::rgb(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2);
         let warning = Color::rgb(
             MARKET_WARNING_RGB.0,
             MARKET_WARNING_RGB.1,
@@ -416,21 +418,22 @@ impl Default for TradingStyle {
         Self {
             position: primary,
             working_order: primary,
-            // Order and position chrome reads by direction, the way a trading terminal does:
-            // buy/long shares the up-bar green, sell/short the down-bar red. `primary` stays the
-            // neutral accent for connectors and group chrome, which carry no direction.
-            buy: market_up,
-            sell,
-            profit: market_up,
-            risk: sell,
-            take_profit: market_up,
-            stop_loss: warning,
+            // Lines and their solid markers read by direction in the brand tokens: buy/long and
+            // take-profit in `--primary`, sell/short and stop-loss in `--negative`. PnL text keeps
+            // the real `--positive`/`--negative` tokens on the marker's hollow value cell.
+            buy: primary,
+            sell: negative,
+            profit: positive,
+            risk: negative,
+            take_profit: primary,
+            stop_loss: negative,
             pending: warning,
             rejected: Color::rgb(0x78, 0x7b, 0x86),
             control: primary,
             label: Color::rgb(0xff, 0xff, 0xff),
             execution_buy: Color::rgb(0x29, 0x62, 0xff),
             execution_sell: Color::rgb(0xf2, 0x36, 0x45),
+            extend_lines_left: true,
         }
     }
 }
@@ -452,6 +455,7 @@ pub struct TradingStyleOptions {
     pub label: Option<String>,
     pub execution_buy: Option<String>,
     pub execution_sell: Option<String>,
+    pub extend_lines_left: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1132,12 +1136,17 @@ impl ChartEngine {
                 continue;
             };
             let distance = (y_css - y).abs();
+            let line_start = match item {
+                TradingPaintItem::Order(order) => self.trading_order_line_start(order),
+                TradingPaintItem::Position(position) => self.trading_position_line_start(position),
+            };
             let (kind, annotation_id) = if let Some(annotation_id) =
                 self.trading_annotation_hit(annotations, y, x_css, y_css)
             {
                 (TradingHitKind::Annotation, Some(annotation_id))
             } else {
-                if distance > control_reach {
+                // Nothing is drawn left of where the line begins, so nothing there answers.
+                if distance > control_reach || x_css < line_start {
                     continue;
                 }
                 let kind = match item {
@@ -2556,6 +2565,9 @@ impl ChartEngine {
         apply!(label);
         apply!(execution_buy);
         apply!(execution_sell);
+        if let Some(extend) = options.extend_lines_left {
+            style.extend_lines_left = extend;
+        }
         self.trading_state.style = style;
         self.invalidate_frame_trading();
         Ok(())
@@ -4261,6 +4273,115 @@ mod tests {
     }
 
     #[test]
+    fn lines_can_start_at_their_leftmost_control_instead_of_the_pane_edge() {
+        let mut chart = chart_with_market();
+        let mut working = order("working-1", OrderRole::Working, 103.0);
+        working.position_id = None;
+        working.bracket_id = None;
+        working.oco_group_id = None;
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                positions: vec![position(PositionSide::Long)],
+                orders: vec![working, order("sl-1", OrderRole::StopLoss, 99.0)],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        chart.build_frame();
+        let y_of = |chart: &ChartEngine, price| {
+            chart
+                .trading_price_coordinate(0, TradingPriceScale::Right, price)
+                .unwrap()
+        };
+        let (position_y, order_y, stop_y) =
+            (y_of(&chart, 101.0), y_of(&chart, 103.0), y_of(&chart, 99.0));
+        let line_starts = |chart: &mut ChartEngine| {
+            let frame = chart.build_frame();
+            let segments = chart.frame_pane_segments(0).unwrap();
+            frame.panes[0].main[segments.drawings_end..segments.trading_end]
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::HLine { x0, y, .. } => Some((*y, *x0)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let start_at = |starts: &[(i32, i32)], y: f64| {
+            starts
+                .iter()
+                .find(|(line_y, _)| *line_y == y.round() as i32)
+                .map(|(_, x0)| *x0)
+                .expect("marker line")
+        };
+
+        // By default every line reaches the pane's left edge and answers there.
+        let starts = line_starts(&mut chart);
+        for y in [position_y, order_y, stop_y] {
+            assert_eq!(start_at(&starts, y), 0);
+        }
+        assert!(chart.trading_hit_at(4.0, position_y).is_some());
+
+        chart
+            .apply_trading_style(TradingStyleOptions {
+                extend_lines_left: Some(false),
+                ..TradingStyleOptions::default()
+            })
+            .unwrap();
+        assert!(!chart.trading_style().extend_lines_left);
+        // Each line begins at its leftmost control: the working order offers TP and SL, the
+        // position only TP (its SL exists), and the stop loss itself offers neither.
+        let both = chart.trading_protection_buttons_start(true, true);
+        let take_profit_only = chart.trading_protection_buttons_start(true, false);
+        let marker_start = chart.trading_marker_start();
+        assert!(both < take_profit_only && take_profit_only < marker_start);
+        let starts = line_starts(&mut chart);
+        assert_eq!(start_at(&starts, order_y), both.round() as i32);
+        assert_eq!(
+            start_at(&starts, position_y),
+            take_profit_only.round() as i32
+        );
+        assert_eq!(start_at(&starts, stop_y), marker_start.round() as i32);
+        // Nothing is drawn left of the line start, so nothing there answers the pointer, while
+        // the buttons and the marker keep their hits.
+        assert!(chart.trading_hit_at(4.0, position_y).is_none());
+        assert!(chart.trading_hit_at(both - 1.0, order_y).is_none());
+        assert_eq!(
+            chart
+                .trading_hit_at(both + 1.0, order_y)
+                .map(|hit| hit.kind),
+            Some(TradingHitKind::TakeProfitButton)
+        );
+        assert_eq!(
+            chart
+                .trading_hit_at(marker_start + 4.0, position_y)
+                .map(|hit| hit.kind),
+            Some(TradingHitKind::PositionLine)
+        );
+
+        // A dragged protection order names its side ahead of the marker, and its line grows to
+        // meet that tag instead of leaving it floating.
+        assert!(chart.trading_drag_start_at(marker_start + 4.0, stop_y));
+        let target_y = y_of(&chart, 98.5);
+        assert!(chart.trading_drag_to(target_y));
+        let tag_left = marker_start - 3.0 - chart.trading_drag_tag_width(OrderSide::Sell);
+        let frame = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
+        assert!(trading.iter().any(|primitive| matches!(
+            primitive,
+            Prim::RoundRect { x, .. } if *x == tag_left.round() as f32
+        )));
+        assert!(
+            trading
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "Sell"))
+        );
+        assert_eq!(
+            start_at(&line_starts(&mut chart), target_y),
+            tag_left.round() as i32
+        );
+    }
+
+    #[test]
     fn retained_trading_frame_stays_bounded_at_acceptance_object_counts() {
         for count in [10, 50, 100, 500] {
             let mut chart = chart_with_market();
@@ -4400,9 +4521,10 @@ mod tests {
                 assert!(texts.contains(&text), "missing protection control {text:?}");
             }
             assert!(texts.iter().all(|text| *text != "×"));
-            let old_axis_label_height = (chart.options.get().layout.font_size + 5.0) as f32;
+            // The compact marker: 11px text in a 14px control at the canonical 12px font.
+            assert_eq!(chart.trading_marker_font_size(), 11.0);
             let expected_height = chart.trading_control_height() as f32;
-            assert!(expected_height > old_axis_label_height);
+            assert_eq!(expected_height, 14.0);
             let round_rect_heights = trading
                 .iter()
                 .filter_map(|primitive| match primitive {
@@ -4646,8 +4768,7 @@ mod tests {
     }
 
     #[test]
-    fn close_feedback_uses_brand_hover_and_active_surfaces_not_the_order_color() {
-        use aeris_charts_core::style::{DARK_ACCENT_RGB, DARK_ACTIVE_RGB};
+    fn only_the_close_cell_reacts_to_the_pointer_in_the_line_color() {
         let mut chart = chart_with_market();
         chart
             .update_trading_position(position(PositionSide::Long))
@@ -4656,59 +4777,111 @@ mod tests {
             &mut chart,
             TradingObjectId::Position(id("position-1", PositionId::new)),
         );
-        let close_surface = |chart: &mut ChartEngine| {
+        let line = chart.trading_position_color(PositionSide::Long).solid();
+        let round_rects = |chart: &mut ChartEngine| {
             let frame = chart.build_frame();
             let segments = chart.frame_pane_segments(0).unwrap();
             frame.panes[0].main[segments.drawings_end..segments.trading_end]
                 .iter()
-                .find_map(|primitive| match primitive {
-                    Prim::RoundRect { x, w, h, fill, .. }
-                        if w == h && f64::from(*x) <= cancel_x && f64::from(x + w) >= cancel_x =>
-                    {
-                        Some(*fill)
-                    }
+                .filter_map(|primitive| match primitive {
+                    Prim::RoundRect {
+                        x, y, w, h, fill, ..
+                    } => Some((*x, *y, *w, *h, *fill)),
                     _ => None,
                 })
+                .collect::<Vec<_>>()
         };
-        let rgb = |token: (u8, u8, u8)| Color::rgb(token.0, token.1, token.2);
-        // At rest the close control has no surface of its own.
-        assert_eq!(close_surface(&mut chart), None);
+        let close_surface = |rects: &[(f32, f32, f32, f32, Color)]| {
+            rects.iter().find_map(|(x, _, w, h, fill)| {
+                (w == h && f64::from(*x) <= cancel_x && f64::from(x + w) >= cancel_x)
+                    .then_some(*fill)
+            })
+        };
+        let rest = round_rects(&mut chart);
+        // At rest the close cell is part of the solid body and paints nothing of its own.
+        assert_eq!(close_surface(&rest), None);
+
+        // The quantity and value cells are readouts, not buttons: hovering or pressing them
+        // leaves every control surface exactly as it was.
+        let quantity_x = chart.trading_marker_start() + 4.0;
+        let value_x = cancel_x - chart.trading_close_width();
+        for x in [quantity_x, value_x] {
+            chart.set_trading_hover(x, cancel_y);
+            assert!(chart.trading_state.feedback_hover.is_some(), "hover at {x}");
+            assert_eq!(round_rects(&mut chart), rest, "hover at {x}");
+            chart.set_trading_pressed(x, cancel_y);
+            assert!(
+                chart.trading_state.feedback_pressed.is_some(),
+                "press at {x}"
+            );
+            assert_eq!(round_rects(&mut chart), rest, "press at {x}");
+            chart.clear_trading_pressed();
+        }
+
         assert!(chart.set_trading_hover(cancel_x, cancel_y));
-        assert_eq!(close_surface(&mut chart), Some(rgb(DARK_ACCENT_RGB)));
+        assert_eq!(
+            close_surface(&round_rects(&mut chart)),
+            Some(line.lighten(0.2))
+        );
         assert!(chart.set_trading_pressed(cancel_x, cancel_y));
-        assert_eq!(close_surface(&mut chart), Some(rgb(DARK_ACTIVE_RGB)));
+        assert_eq!(
+            close_surface(&round_rects(&mut chart)),
+            Some(line.darken(0.75))
+        );
     }
 
     #[test]
-    fn pill_outline_is_a_solid_theme_hairline_at_every_dpr() {
+    fn marker_body_is_solid_with_one_device_pixel_rails_at_every_dpr() {
         let mut chart = chart_with_market();
         chart
             .update_trading_position(position(PositionSide::Long))
             .unwrap();
         chart.build_frame();
-        for vpr in [1.0_f64, 1.5, 2.0, 3.0] {
-            let stroke = (aeris_charts_core::style::BORDER_WIDTH * vpr)
-                .floor()
-                .max(1.0) as f32;
+        let line = chart.trading_position_color(PositionSide::Long).solid();
+        let surface = chart.trading_chip_background();
+        for vpr in [1.0_f64, 1.25, 1.5, 2.0, 3.0] {
+            let rail = aeris_charts_core::style::border_width_device_px(vpr) as f32;
             let (mut regions, mut out) = (Vec::new(), Vec::new());
             chart.build_trading_frame_for_test(0, vpr, vpr, &mut regions, &mut out);
-            let expected = chart.trading_position_color(PositionSide::Long);
-            let outlines = out
+            let rects = out
                 .iter()
-                .filter(|primitive| {
-                    matches!(
-                        primitive,
-                        Prim::RoundRect { x, border_width, border_color, .. }
-                            if *border_width == stroke
-                                && *border_color == expected
-                                && (f64::from(*x)
-                                    - chart.trading_marker_start() * vpr)
-                                    .abs()
-                                    <= 0.5
-                    )
+                .filter_map(|primitive| match primitive {
+                    Prim::RoundRect {
+                        x,
+                        y,
+                        w,
+                        h,
+                        fill,
+                        border_width,
+                        ..
+                    } => Some((*x, *y, *w, *h, *fill, *border_width)),
+                    _ => None,
                 })
-                .count();
-            assert_eq!(outlines, 1, "one solid pill outline at dpr {vpr}");
+                .collect::<Vec<_>>();
+            let body = rects
+                .iter()
+                .find(|(x, .., fill, border)| {
+                    *fill == line
+                        && *border == 0.0
+                        && (f64::from(*x) - chart.trading_marker_start() * vpr).abs() <= 0.5
+                })
+                .expect("solid marker body");
+            let hollow = rects
+                .iter()
+                .find(|(x, _, w, .., fill, border)| {
+                    *fill == surface && *border == 0.0 && *x > body.0 && *x + *w < body.0 + body.2
+                })
+                .expect("hollow value cell inside the body");
+            // The value cell is cut out of the body, leaving rails of exactly one border width.
+            assert_eq!(hollow.1, body.1 + rail, "top rail at dpr {vpr}");
+            assert_eq!(
+                hollow.1 + hollow.3,
+                body.1 + body.3 - rail,
+                "bottom rail at dpr {vpr}"
+            );
+            for edge in [body.0, body.1, body.0 + body.2, body.1 + body.3, hollow.0] {
+                assert_eq!(edge.fract(), 0.0, "edge {edge} at dpr {vpr}");
+            }
         }
     }
 
@@ -4789,6 +4962,7 @@ mod tests {
             .update_trading_position(position(PositionSide::Long))
             .unwrap();
         chart.build_frame();
+        let body = chart.trading_position_color(PositionSide::Long).solid();
         // Sweep line positions so the line lands on fractional device pixels at several DPRs.
         for price in [100.13, 100.37, 100.5, 100.71, 101.0] {
             let mut position = position(PositionSide::Long);
@@ -4801,12 +4975,16 @@ mod tests {
                     .iter()
                     .filter_map(|primitive| match primitive {
                         Prim::RoundRect {
-                            y, h, border_width, ..
-                        } if *border_width > 0.0 => Some((*y, *h)),
+                            y,
+                            h,
+                            border_width,
+                            fill,
+                            ..
+                        } if *border_width > 0.0 || *fill == body => Some((*y, *h)),
                         _ => None,
                     })
                     .collect();
-                // TP button, SL button, and the marker pill.
+                // TP button, SL button, and the solid marker body.
                 assert_eq!(outlined.len(), 3, "price {price} dpr {dpr}");
                 for (y, h) in &outlined {
                     assert_eq!((*y, *h), outlined[0], "price {price} dpr {dpr}");
@@ -4827,17 +5005,12 @@ mod tests {
         let texts_and_boxes = |chart: &ChartEngine, dpr: f64| {
             let mut out = Vec::new();
             chart.build_trading_frame_for_test(0, dpr, dpr, &mut Vec::new(), &mut out);
+            // Every control box: TP/SL buttons, the marker body, and the hollow value cell, which
+            // shares the body's center because its rails are equal.
             let boxes: Vec<_> = out
                 .iter()
                 .filter_map(|primitive| match primitive {
-                    Prim::RoundRect {
-                        x,
-                        y,
-                        w,
-                        h,
-                        border_width,
-                        ..
-                    } if *border_width > 0.0 => Some((*x, *y, *w, *h)),
+                    Prim::RoundRect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
                     _ => None,
                 })
                 .collect();
@@ -4855,38 +5028,41 @@ mod tests {
                 .iter()
                 .find(|(left, _, width, _)| x > *left && x < *left + *width)
                 .map(|(_, top, _, height)| *top + *height / 2.0)
-                .expect("text sits inside an outlined control")
+                .expect("text sits inside a control")
         };
 
-        // TP, SL, quantity, and P&L text all anchor on their box center plus one shared host
-        // cap-height correction, so each has equal visual padding above and below.
-        let dpr = 2.0;
-        chart.set_text_cap_center(Some(Box::new(|size, _, _, _| size / 12.0 * 1.25)));
-        let (texts, boxes) = texts_and_boxes(&chart, dpr);
-        for label in ["TP", "SL"] {
-            assert!(
-                texts.iter().any(|(text, ..)| text == label),
-                "{label} missing"
-            );
-        }
-        assert!(texts.len() >= 4);
-        for (text, x, y) in &texts {
-            let expected = box_center_of(&boxes, *x) + (1.25 * dpr) as f32;
-            assert!(
-                (*y - expected).abs() <= 0.01,
-                "{text:?} anchored at {y}, expected {expected}"
-            );
-        }
+        // TP, SL, quantity, and P&L text all anchor on their snapped box center plus one shared
+        // host cap-height correction, so each has equal visual padding above and below at every
+        // pixel ratio, including fractional ones.
+        let cap = chart.trading_marker_font_size() / 12.0 * 1.25;
+        for dpr in [1.0_f64, 1.25, 1.5, 2.0, 3.0] {
+            chart.set_text_cap_center(Some(Box::new(|size, _, _, _| size / 12.0 * 1.25)));
+            let (texts, boxes) = texts_and_boxes(&chart, dpr);
+            for label in ["TP", "SL"] {
+                assert!(
+                    texts.iter().any(|(text, ..)| text == label),
+                    "{label} missing"
+                );
+            }
+            assert!(texts.len() >= 4);
+            for (text, x, y) in &texts {
+                let expected = box_center_of(&boxes, *x) + (cap * dpr) as f32;
+                assert!(
+                    (*y - expected).abs() <= 0.01,
+                    "{text:?} anchored at {y}, expected {expected} at dpr {dpr}"
+                );
+            }
 
-        // Without a host metric, text stays on the geometric center.
-        chart.set_text_cap_center(None);
-        let (texts, boxes) = texts_and_boxes(&chart, dpr);
-        for (text, x, y) in &texts {
-            let expected = box_center_of(&boxes, *x);
-            assert!(
-                (*y - expected).abs() <= 0.01,
-                "{text:?} anchored at {y}, expected {expected}"
-            );
+            // Without a host metric, text stays on the geometric center.
+            chart.set_text_cap_center(None);
+            let (texts, boxes) = texts_and_boxes(&chart, dpr);
+            for (text, x, y) in &texts {
+                let expected = box_center_of(&boxes, *x);
+                assert!(
+                    (*y - expected).abs() <= 0.01,
+                    "{text:?} anchored at {y}, expected {expected} at dpr {dpr}"
+                );
+            }
         }
     }
 
@@ -5113,50 +5289,42 @@ mod tests {
         let frame = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
         let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
-        // One pill contains quantity, detail, and the integrated close cell for every marker.
-        let pill_radius = (chart.trading_control_height() / 2.0)
-            .min(aeris_charts_core::style::RADIUS_LARGE) as f32;
+        // One solid body contains quantity, value, and the integrated close cell for every
+        // marker, all starting at the shared marker start with the shared 2px corner.
         let marker_start = chart.trading_marker_start() as f32;
-        let chips = trading
+        let surface = chart.trading_chip_background();
+        let bodies = trading
             .iter()
             .filter_map(|primitive| match primitive {
                 Prim::RoundRect {
                     x,
-                    y,
                     w,
                     radii,
+                    fill,
                     border_width,
                     ..
-                } if *border_width > 0.0
-                    && *radii == [pill_radius; 4]
+                } if *border_width == 0.0
+                    && *fill != surface
                     && (*x - marker_start).abs() <= 0.5 =>
                 {
-                    Some((*x, *y, *w, *radii))
+                    Some((*w, *radii))
                 }
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(chips.len(), 4);
-        for (start, _, width, radii) in &chips {
+        assert_eq!(bodies.len(), 4);
+        for (width, radii) in &bodies {
             assert!(*width > 0.0);
-            assert!((*start - marker_start).abs() <= 0.5);
-            assert_eq!(
-                *radii, [pill_radius; 4],
-                "chip at {start} must use the shared pill-radius token"
-            );
+            assert_eq!(*radii, [2.0; 4], "markers use the shared 2px corner");
         }
-        // Each marker has one quantity fill at the shared start, behind the 1px inside border
-        // and the 2px surface gap.
+        // Each marker cuts one hollow value cell out of its body.
         assert_eq!(
             trading
                 .iter()
                 .filter(|primitive| matches!(
                     primitive,
-                    Prim::RoundRect { x, fill, border_width, radii, .. }
-                        if *border_width == 0.0
-                            && fill.a() == 255
-                            && *radii != [pill_radius; 4]
-                            && (*x - (marker_start.round() + 3.0)).abs() <= 0.5
+                    Prim::RoundRect { x, fill, border_width, .. }
+                        if *border_width == 0.0 && *fill == surface && *x > marker_start
                 ))
                 .count(),
             4
@@ -5215,22 +5383,21 @@ mod tests {
             text.chars().count() as f64 * 6.0
         })));
 
-        let quantity_fill_width = |chart: &mut ChartEngine| {
+        let marker_body_width = |chart: &mut ChartEngine| {
             let frame = chart.build_frame();
             let segments = chart.frame_pane_segments(0).unwrap();
             frame.panes[0].main[segments.drawings_end..segments.trading_end]
                 .iter()
                 .find_map(|primitive| match primitive {
-                    Prim::RoundRect {
-                        x, w, border_width, ..
-                    } if *border_width > 0.0
-                        && (f64::from(*x) - chart.trading_marker_start()).abs() <= 0.5 =>
+                    Prim::RoundRect { x, w, fill, .. }
+                        if *fill == chart.trading_position_color(PositionSide::Long).solid()
+                            && (f64::from(*x) - chart.trading_marker_start()).abs() <= 0.5 =>
                     {
                         Some(*w)
                     }
                     _ => None,
                 })
-                .expect("solid quantity cell")
+                .expect("solid marker body")
         };
 
         let short = position(PositionSide::Long);
@@ -5241,7 +5408,7 @@ mod tests {
             })
             .unwrap();
         let short_cluster = chart.trading_position_cluster_width(&short);
-        let short_fill = quantity_fill_width(&mut chart);
+        let short_fill = marker_body_width(&mut chart);
         let old_close_center =
             chart.trading_marker_start() + short_cluster - chart.trading_close_width() / 2.0;
 
@@ -5254,7 +5421,7 @@ mod tests {
             })
             .unwrap();
         let long_cluster = chart.trading_position_cluster_width(&long);
-        let long_fill = quantity_fill_width(&mut chart);
+        let long_fill = marker_body_width(&mut chart);
         assert_eq!(long_fill - short_fill, 24.0);
         assert_eq!(long_cluster - short_cluster, 24.0);
         assert_eq!(
@@ -5345,23 +5512,15 @@ mod tests {
         chart
             .update_trading_position(position(PositionSide::Short))
             .unwrap();
-        let pill_radius = (chart.trading_control_height() / 2.0)
-            .min(aeris_charts_core::style::RADIUS_LARGE) as f32;
+        let body = chart.trading_position_color(PositionSide::Short).solid();
         let baseline = chart.build_frame();
         let pane_segments = chart.frame_pane_segments(0).unwrap();
         let bounds = baseline.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end]
             .iter()
             .find_map(|primitive| match primitive {
                 Prim::RoundRect {
-                    x,
-                    y,
-                    w,
-                    h,
-                    border_width,
-                    radii,
-                    ..
-                } if *border_width > 0.0
-                    && *radii == [pill_radius; 4]
+                    x, y, w, h, fill, ..
+                } if *fill == body
                     && (f64::from(*x) - chart.trading_marker_start()).abs() <= 0.5 =>
                 {
                     Some((*x, *y, *w, *h))
@@ -5402,19 +5561,8 @@ mod tests {
             .iter()
             .find_map(|primitive| match primitive {
                 Prim::RoundRect {
-                    x,
-                    y,
-                    w,
-                    h,
-                    border_width,
-                    radii,
-                    ..
-                } if *border_width > 0.0
-                    && *radii == [pill_radius; 4]
-                    && (*w - bounds.2).abs() <= 0.5 =>
-                {
-                    Some((*x, *y, *w, *h))
-                }
+                    x, y, w, h, fill, ..
+                } if *fill == body && (*w - bounds.2).abs() <= 0.5 => Some((*x, *y, *w, *h)),
                 _ => None,
             })
             .unwrap();
@@ -5539,8 +5687,9 @@ mod tests {
             frame.panes[0].main[segments.drawings_end..segments.trading_end].to_vec()
         };
         let trading = marker(&mut chart);
-        let pill_radius = (chart.trading_control_height() / 2.0)
-            .min(aeris_charts_core::style::RADIUS_LARGE) as f32;
+        let line_color = chart.trading_position_color(PositionSide::Long);
+        let body_fill = line_color.solid();
+        let surface = chart.trading_chip_background();
         let (container_x, container_y, container_w, container_h) = trading
             .iter()
             .find_map(|primitive| match primitive {
@@ -5549,33 +5698,25 @@ mod tests {
                     y,
                     w,
                     h,
+                    fill,
                     border_width,
-                    radii,
                     ..
-                } if *border_width > 0.0
-                    && *radii == [pill_radius; 4]
+                } if *fill == body_fill
+                    && *border_width == 0.0
                     && (f64::from(*x) - chart.trading_marker_start()).abs() <= 0.5 =>
                 {
                     Some((*x, *y, *w, *h))
                 }
                 _ => None,
             })
-            .expect("marker container");
-        // The close cell is integrated at the container's right edge, immediately after PnL.
+            .expect("solid marker body");
+        // The close cell is integrated at the body's right edge, immediately after the PnL.
         let close_left = f64::from(container_x + container_w) - chart.trading_close_width();
-        let close_surface_left = close_left + 3.0;
         assert!((cancel_x - (close_left + chart.trading_close_width() / 2.0)).abs() <= 0.5);
         assert!((f64::from(container_x) - chart.trading_marker_start()).abs() <= 0.5);
-        // At rest the integrated close cell paints no surface of its own.
-        assert!(!trading.iter().any(|primitive| matches!(
-            primitive,
-            Prim::RoundRect { x, border_width, .. }
-                if *border_width == 0.0 && (f64::from(*x) - close_surface_left).abs() <= 0.5
-        )));
-        // The solid quantity cell keeps a deliberate surface gap inside the outline, with a
-        // concentric rounded end.
-        let quantity_fill = chart.trading_position_color(PositionSide::Long).solid();
-        let (qx, qy, qw, qh, qradii) = trading
+        // The value cell is cut hollow between the solid quantity and close cells, leaving one
+        // pixel rails of the line color above and below it at DPR 1.
+        let (hx, hy, hw, hh, hradii) = trading
             .iter()
             .find_map(|primitive| match primitive {
                 Prim::RoundRect {
@@ -5585,23 +5726,28 @@ mod tests {
                     h,
                     radii,
                     fill,
+                    border_width,
                     ..
-                } if *fill == quantity_fill => Some((*x, *y, *w, *h, *radii)),
+                } if *fill == surface && *border_width == 0.0 => Some((*x, *y, *w, *h, *radii)),
                 _ => None,
             })
-            .expect("filled quantity cell");
-        // At DPR 1: the 1px inside border, then the 1.5px gap rounded to 2 device px.
-        assert_eq!(qx, container_x + 3.0);
-        assert_eq!(qy, container_y + 3.0);
-        assert_eq!(qy + qh, container_y + container_h - 3.0);
-        assert!(qx + qw < close_left as f32);
-        assert_eq!(qradii, [qh / 2.0, 0.0, 0.0, qh / 2.0]);
-        assert!(trading.iter().any(|primitive| matches!(
-            primitive,
-            Prim::RoundRect { border_width, border_color, .. }
-                if *border_width == 1.0
-                    && *border_color == chart.trading_position_color(PositionSide::Long)
-        )));
+            .expect("hollow value cell");
+        assert!(hx > container_x);
+        assert_eq!(hy, container_y + 1.0);
+        assert_eq!(hy + hh, container_y + container_h - 1.0);
+        assert_eq!(f64::from(hx + hw), close_left);
+        assert_eq!(hradii, [0.0; 4]);
+        // The TP/SL buttons are separate hollow chips with a one-pixel border in their tokens.
+        for color in [
+            chart.trading_style().take_profit,
+            chart.trading_style().stop_loss,
+        ] {
+            assert!(trading.iter().any(|primitive| matches!(
+                primitive,
+                Prim::RoundRect { border_width, border_color, fill, .. }
+                    if *border_width == 1.0 && *border_color == color && *fill == surface
+            )));
+        }
 
         for expected in ["TP", "SL"] {
             assert!(
@@ -5616,9 +5762,9 @@ mod tests {
             primitive,
             Prim::Text { text, .. } if matches!(text.as_str(), "×" | "✕" | "↕")
         )));
-        // The close icon is two anti-aliased strokes in the marker's semantic color. Separate
-        // triangles and cap discs rendered unevenly across executors.
-        let line_color = chart.trading_position_color(PositionSide::Long);
+        // The close icon is two anti-aliased strokes in the label color on the solid close cell.
+        // Separate triangles and cap discs rendered unevenly across executors.
+        let label = chart.trading_style().label;
         assert!(
             !trading
                 .iter()
@@ -5633,7 +5779,7 @@ mod tests {
                     point_count: 2,
                     color,
                     ..
-                } if *color == line_color => Some(*first_point as usize),
+                } if *color == label => Some(*first_point as usize),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -5641,18 +5787,20 @@ mod tests {
         for first in icon_strokes {
             for [x, y] in &frame.panes[0].points[first..first + 2] {
                 assert!(
-                    (f64::from(*x) - cancel_x).abs() <= 4.5
-                        && (f64::from(*y) - cancel_y).abs() <= 4.5,
-                    "the close glyph must stay compact inside its hover surface"
+                    (f64::from(*x) - cancel_x).abs() <= 3.0
+                        && (f64::from(*y) - cancel_y).abs() <= 3.0,
+                    "the close glyph must stay compact inside its cell"
                 );
             }
         }
+        // Solid cells carry strong label text; the value text stays regular.
         assert!(trading.iter().any(|primitive| matches!(
             primitive,
-            Prim::Text { text, weight, .. } if text == "12" && *weight == 400
+            Prim::Text { text, weight, color, .. }
+                if text == "12" && *weight == 600 && *color == label
         )));
 
-        // At rest the quantity cell is the only borderless fill under the outlined container.
+        // At rest the marker paints exactly its body and the hollow value cell.
         assert_eq!(
             trading
                 .iter()
@@ -5661,7 +5809,7 @@ mod tests {
                     Prim::RoundRect { border_width, .. } if *border_width == 0.0
                 ))
                 .count(),
-            1
+            2
         );
         let close_fill = |primitives: &[Prim]| {
             primitives.iter().find_map(|primitive| match primitive {
@@ -5670,7 +5818,7 @@ mod tests {
                     fill,
                     border_width,
                     ..
-                } if *border_width == 0.0 && (f64::from(*x) - close_surface_left).abs() <= 0.5 => {
+                } if *border_width == 0.0 && (f64::from(*x) - close_left).abs() <= 0.5 => {
                     Some(*fill)
                 }
                 _ => None,
@@ -5830,10 +5978,11 @@ mod tests {
                 text: text.to_string(),
                 tone: TradingAnnotationTone::Info,
                 tooltip: None,
+                // The inline chip comes last so it sits past the close cell under the pointer.
                 placement: [
                     TradingAnnotationPlacement::Above,
-                    TradingAnnotationPlacement::Inline,
                     TradingAnnotationPlacement::Below,
+                    TradingAnnotationPlacement::Inline,
                 ][index],
             })
             .collect();

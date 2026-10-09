@@ -3317,6 +3317,9 @@ export interface trading_style_options {
   /** Execution arrow colors; default blue buy and red sell. */
   execution_buy: string;
   execution_sell: string;
+  /** Whether order and position lines run from the pane's left edge; default `true`. When
+   * `false`, each line starts at its leftmost control (the TP/SL buttons or the marker). */
+  extend_lines_left: boolean;
 }
 
 /** First-party, broker-neutral runtime trading state. Live objects are never chart-persisted. */

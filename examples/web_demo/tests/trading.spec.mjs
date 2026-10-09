@@ -1,14 +1,14 @@
 import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
 
-async function open_trading_demo(page, backend = "canvas2d") {
-  await page.goto(`/?feature=trading&backend=${backend}`);
+async function open_trading_demo(page, backend = "canvas2d", extra_query = "") {
+  await page.goto(`/?feature=trading&backend=${backend}${extra_query}`);
   await page.waitForFunction(() => window.__demo_catalogs?.lab.active_ids().includes("trading-bracket"));
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await page.evaluate(() => {
     // The close control is the trailing cell of the marker's one container. Sweep the marker span
     // for it instead of hardcoding the cell widths, and answer with the cell's center.
-    window.__close_x = (id, y) => {
+    window.__close_span = (id, y) => {
       const trading = window.__chart.trading();
       const width = Math.round(window.__chart.time_scale().width());
       let first = null;
@@ -22,7 +22,17 @@ async function open_trading_demo(page, backend = "canvas2d") {
           break;
         }
       }
-      return first === null ? null : (first + last) / 2;
+      return first === null ? null : { first, last };
+    };
+    window.__close_x = (id, y) => {
+      const span = window.__close_span(id, y);
+      return span === null ? null : (span.first + span.last) / 2;
+    };
+    // The value cell sits immediately left of the close cell and is never narrower than 76 px, so
+    // a point 20 px inside it is on the marker body but off every button.
+    window.__marker_x = (id, y) => {
+      const span = window.__close_span(id, y);
+      return span === null ? null : span.first - 20;
     };
   });
 }
@@ -207,11 +217,15 @@ test("trading lines use dedicated hits and render semantic colors through the sh
       const y = window.__main.price_to_coordinate(price);
       return { id, y, hit: trading.hit_at(window.__close_x(id, y), y) };
     });
+    const target_y = window.__main.price_to_coordinate(target.price);
+    const stop = trading.state().orders.find((order) => order.id === "demo-stop");
     return {
-      left_line: trading.hit_at(40, window.__main.price_to_coordinate(target.price)),
+      left_line: trading.hit_at(40, target_y),
       chart_width: width,
-      order: trading.hit_at(width - 200, window.__main.price_to_coordinate(target.price)),
-      position: trading.hit_at(width - 200, position_y),
+      stop_y: window.__main.price_to_coordinate(stop.price),
+      dpr: window.devicePixelRatio,
+      order: trading.hit_at(window.__marker_x(target.id, target_y), target_y),
+      position: trading.hit_at(window.__marker_x(position.id, position_y), position_y),
       order_start: first_line_hit(target.id, window.__main.price_to_coordinate(target.price)),
       position_start: first_line_hit(position.id, position_y),
       close: trading.hit_at(window.__close_x(position.id, position_y), position_y),
@@ -238,8 +252,48 @@ test("trading lines use dedicated hits and render semantic colors through the sh
 
   const url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
   const image = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
-  expect(count_near(image, [245, 158, 10]), "stop-loss order line/label pixels").toBeGreaterThan(100);
-  expect(count_near(image, [8, 153, 129]), "long position and buy order pixels").toBeGreaterThan(100);
+  // Primary blue appears only in trading chrome (long position, buy and take-profit orders).
+  expect(count_near(image, [0, 145, 255]), "long position and take-profit pixels").toBeGreaterThan(100);
+  // Stop-loss red is shared with bearish candles, so read it from the stop line's own row: the
+  // rule spans the pane, which candles crossing that row cannot fake.
+  const pane_px = Math.round(probe.chart_width * probe.dpr);
+  const row_negative = (row) => {
+    let count = 0;
+    for (let x = 0; x < pane_px; x += 1) {
+      const offset = (row * image.width + x) * 4;
+      if (Math.abs(image.data[offset] - 247) <= 12 && Math.abs(image.data[offset + 1] - 82) <= 12
+        && Math.abs(image.data[offset + 2] - 95) <= 12) count += 1;
+    }
+    return count;
+  };
+  const stop_row = Math.floor(probe.stop_y * probe.dpr);
+  const stop_line = Math.max(row_negative(stop_row - 1), row_negative(stop_row), row_negative(stop_row + 1));
+  expect(stop_line, "stop-loss rule pixels").toBeGreaterThan(pane_px * 0.5);
+});
+
+test("lines can start at their marker instead of the pane edge", async ({ page }) => {
+  await open_trading_demo(page, "canvas2d", "&tradingLines=marker");
+  expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toContain("trading-lines-from-marker");
+  const probe = await page.evaluate(() => {
+    const trading = window.__chart.trading();
+    const target = trading.state().orders.find((order) => order.id === "demo-target");
+    const y = window.__main.price_to_coordinate(target.price);
+    let start = null;
+    for (let x = 0; x <= window.__chart.time_scale().width(); x += 1) {
+      if (trading.hit_at(x, y)?.id === target.id) {
+        start = x;
+        break;
+      }
+    }
+    const marker = trading.hit_at(window.__marker_x(target.id, y), y);
+    // The lab's activate toggles: a second call runs the card's cleanup.
+    window.__demo_catalogs.lab.activate("trading-lines-from-marker");
+    const restored_y = window.__main.price_to_coordinate(target.price);
+    return { start, marker, restored: trading.hit_at(40, restored_y) };
+  });
+  expect(probe.start, "the rule no longer reaches the left edge").toBeGreaterThan(200);
+  expect(probe.marker).toMatchObject({ id: "demo-target", kind: "order_line" });
+  expect(probe.restored, "turning the card off restores the full rule").toMatchObject({ id: "demo-target", kind: "order_line" });
 });
 
 test("trading-line hover and drag apply the engine cursor", async ({ page }) => {
@@ -283,9 +337,10 @@ test("pointer drag has trading priority and emits one broker-neutral modify inte
     );
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
     const before_range = window.__chart.time_scale().get_visible_logical_range();
+    const marker_x = window.__marker_x(order.id, window.__main.price_to_coordinate(order.price));
     return {
-      from: { x: overlay.left + window.__chart.time_scale().width() - 200, y: overlay.top + window.__main.price_to_coordinate(order.price) },
-      to: { x: overlay.left + window.__chart.time_scale().width() - 200, y: overlay.top + window.__main.price_to_coordinate(order.price + 1.25) },
+      from: { x: overlay.left + marker_x, y: overlay.top + window.__main.price_to_coordinate(order.price) },
+      to: { x: overlay.left + marker_x, y: overlay.top + window.__main.price_to_coordinate(order.price + 1.25) },
       before_range,
       confirmed_price: order.price,
       drawing_points: window.__trading_blocker.points(),
@@ -350,9 +405,8 @@ test("unlinked protection orders remain draggable and preserve stop-limit modify
     window.__orphan_intents = [];
     trading.subscribe_intents((intent) => window.__orphan_intents.push(intent));
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
-    const width = window.__chart.time_scale().width();
-    const chip_x = width - 200;
     const y = window.__main.price_to_coordinate(100);
+    const chip_x = window.__marker_x("orphan-stop", y);
     return {
       from: { x: overlay.left + chip_x, y: overlay.top + y },
       to: { x: overlay.left + chip_x, y: overlay.top + window.__main.price_to_coordinate(98) },
@@ -506,11 +560,12 @@ test("bracket connector disappears as soon as the host acknowledges the drag", a
       overlay: { left: overlay.left, top: overlay.top, width: overlay.width, height: overlay.height },
       pane_width: window.__chart.time_scale().width(),
       connector_color: getComputedStyle(document.documentElement).getPropertyValue("--primary").trim(),
+      marker_x: window.__marker_x(target.id, window.__main.price_to_coordinate(target.price)),
       from_y: window.__main.price_to_coordinate(target.price),
       to_y: window.__main.price_to_coordinate(target.price + 0.5),
     };
   });
-  await page.mouse.move(probe.overlay.left + probe.pane_width - 200, probe.overlay.top + probe.from_y);
+  await page.mouse.move(probe.overlay.left + probe.marker_x, probe.overlay.top + probe.from_y);
   await page.mouse.down();
   await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.to_y, { steps: 5 });
   await page.mouse.up();
@@ -594,7 +649,7 @@ test("dedicated entry TP and SL buttons create fixed-role protection", async ({ 
       sell_sl_x: button_x("stop_loss_button", sell_y),
       hits: {
         empty_left: trading.hit_at(40, window.__main.price_to_coordinate(100)),
-        marker: trading.hit_at(width - 200, window.__main.price_to_coordinate(100)),
+        marker: trading.hit_at(window.__marker_x("buy-limit", buy_y), buy_y),
         cancel: trading.hit_at(
           window.__close_x("buy-limit", window.__main.price_to_coordinate(100)),
           window.__main.price_to_coordinate(100),
@@ -667,7 +722,8 @@ test("existing TP and SL adjustments release into intents with no confirmation s
     const position = trading.state().positions.find((item) => item.id === "demo-position");
     return {
       overlay: { left: overlay.left, top: overlay.top },
-      width: window.__chart.time_scale().width(),
+      target_x: window.__marker_x(target.id, window.__main.price_to_coordinate(target.price)),
+      stop_x: window.__marker_x(stop.id, window.__main.price_to_coordinate(stop.price)),
       target_y: window.__main.price_to_coordinate(target.price),
       target_next_y: window.__main.price_to_coordinate(target.price + 0.75),
       stop_y: window.__main.price_to_coordinate(stop.price),
@@ -676,11 +732,11 @@ test("existing TP and SL adjustments release into intents with no confirmation s
     };
   });
 
-  for (const [id, role, from_y, to_y, expected_count] of [
-    ["demo-target", "take_profit", probe.target_y, probe.target_next_y, 1],
-    ["demo-stop", "stop_loss", probe.stop_y, probe.stop_next_y, 2],
+  for (const [id, role, from_x, from_y, to_y, expected_count] of [
+    ["demo-target", "take_profit", probe.target_x, probe.target_y, probe.target_next_y, 1],
+    ["demo-stop", "stop_loss", probe.stop_x, probe.stop_y, probe.stop_next_y, 2],
   ]) {
-    await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + from_y);
+    await page.mouse.move(probe.overlay.left + from_x, probe.overlay.top + from_y);
     await page.mouse.down();
     await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + to_y, { steps: 5 });
     await page.mouse.up();
@@ -730,7 +786,7 @@ for (const backend of ["canvas2d", "webgpu"]) {
         entry_y,
         take_profit_x,
         left_line: trading.hit_at(left_x, entry_y),
-        marker: trading.hit_at(width - 200, entry_y),
+        marker: trading.hit_at(window.__marker_x("position-only", entry_y), entry_y),
         close_x: window.__close_x("position-only", entry_y),
         close: trading.hit_at(window.__close_x("position-only", entry_y), entry_y),
       };
