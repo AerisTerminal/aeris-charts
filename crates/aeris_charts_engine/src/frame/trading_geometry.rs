@@ -1652,412 +1652,429 @@ impl ChartEngine {
             }
         }
 
-        for position in &self.trading_state.positions {
-            if !self
-                .trading_state
-                .account_visible(position.account_id.as_ref())
-            {
-                continue;
-            }
-            if position.pane_index != pane_index {
-                continue;
-            }
-            let Some(y) = self.trading_price_coordinate(
-                pane_index,
-                position.price_scale,
-                position.average_price,
-            ) else {
-                continue;
-            };
-            let hovered = self.trading_state.feedback_hover.as_ref().filter(|hit| {
-                matches!(&hit.object, crate::TradingObjectId::Position(id) if id == &position.id)
-            });
-            let pressed = self.trading_state.feedback_pressed.as_ref().filter(|hit| {
-                matches!(&hit.object, crate::TradingObjectId::Position(id) if id == &position.id)
-            });
-            let position_color = self.trading_position_color(position.side);
-            lines.push(Prim::HLine {
-                y: (y * vpr).round() as i32,
-                x0: 0,
-                x1: (self.trading_marker_end() * hpr).round() as i32,
-                width: min_line_width,
-                style: LineStyle::Solid,
-                color: position_color,
-            });
-            if hovered.is_some() {
-                self.push_trading_endpoint(lines, y, position_color, hpr, vpr);
-            }
-            let quantity = self.trading_position_quantity_text(position);
-            let pnl = position.display_pnl.map_or_else(
-                || "—".to_string(),
-                |value| self.trading_pnl_text(value, position.currency.as_deref()),
-            );
-            let pnl_color = position.display_pnl.map_or(position_color, |value| {
-                if value >= 0.0 {
-                    self.trading_state.style.profit
-                } else {
-                    self.trading_state.style.risk
-                }
-            });
-            let segments = [
-                TradingControlSegment {
-                    kind: TradingControlSegmentKind::Quantity,
-                    text: quantity.as_str(),
-                    width: self.trading_quantity_width(&quantity),
-                    color: position_color,
-                    filled: true,
-                },
-                // The PnL text keeps its profit/loss tint — the container around it is what
-                // carries the position's direction color.
-                TradingControlSegment {
-                    kind: TradingControlSegmentKind::Pnl,
-                    text: pnl.as_str(),
-                    width: PNL_WIDTH,
-                    color: pnl_color,
-                    filled: false,
-                },
-                TradingControlSegment {
-                    kind: TradingControlSegmentKind::Cancel,
-                    text: "",
-                    width: self.trading_close_width(),
-                    color: position_color,
-                    filled: false,
-                },
-            ];
-            let cluster = TradingControlCluster {
-                segments: &segments,
-                left: self.trading_marker_start(),
-                color: position_color,
-            };
-            let hovered_segment = hovered.and_then(|hit| Self::trading_control_kind(hit.kind));
-            let pressed_segment = pressed.and_then(|hit| Self::trading_control_kind(hit.kind));
-            self.push_trading_protection_buttons(
-                lines,
-                self.trading_position_protection_preview(position, OrderRole::TakeProfit)
-                    .is_some(),
-                self.trading_position_protection_preview(position, OrderRole::StopLoss)
-                    .is_some(),
-                hovered.map(|hit| hit.kind),
-                pressed.map(|hit| hit.kind),
-                TradingChipLayout {
-                    x: self.trading_marker_start(),
-                    y,
-                    hpr,
-                    vpr,
-                },
-            );
-            self.push_trading_cluster(
-                lines,
-                points,
-                &cluster,
-                hovered_segment,
-                pressed_segment,
-                TradingChipLayout {
-                    x: cluster.start(),
-                    y,
-                    hpr,
-                    vpr,
-                },
-            );
-            self.push_trading_annotations(lines, &position.annotations, y, hpr, vpr);
-            if self.trading_state.tooltip_armed
-                && hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::CancelButton)
-            {
-                tooltip = Some(TradingTooltip {
-                    text: "Close position".to_string(),
-                    layout: TradingChipLayout {
-                        x: cluster.start() + cluster.width() - self.trading_close_width() / 2.0,
-                        y,
-                        hpr,
-                        vpr,
-                    },
-                });
-            }
-        }
-
-        for order in &self.trading_state.orders {
-            if !self
-                .trading_state
-                .account_visible(order.account_id.as_ref())
-            {
-                continue;
-            }
-            if order.pane_index != pane_index {
-                continue;
-            }
-            let display_price = self.trading_effective_order_price(order);
-            let Some(y) =
-                self.trading_price_coordinate(pane_index, order.price_scale, display_price)
-            else {
-                continue;
-            };
-            let preview = self.trading_order_preview(order);
-            let creating_protection =
-                self.trading_state
-                    .interaction
-                    .preview()
-                    .is_some_and(|preview| {
-                        matches!(
-                            &preview.source,
-                            crate::TradingPreviewSource::OrderStopLoss { order_id }
-                                | crate::TradingPreviewSource::OrderTakeProfit { order_id }
-                                if order_id == &order.id
-                        )
-                    });
-            let base_color = trading_order_color(
-                &self.trading_state.style,
-                order.kind,
-                order.side,
-                order.role,
-                order.status,
-            );
-            // Only a live drag dims the line; a released change is already applied, so nothing
-            // lingers in a pending tint.
-            let color = if preview.is_some() {
-                Color::rgba(base_color.r(), base_color.g(), base_color.b(), 176)
-            } else {
-                base_color
-            };
-            let hovered = self.trading_state.feedback_hover.as_ref().filter(
-                |hit| matches!(&hit.object, crate::TradingObjectId::Order(id) if id == &order.id),
-            );
-            let pressed = self.trading_state.feedback_pressed.as_ref().filter(
-                |hit| matches!(&hit.object, crate::TradingObjectId::Order(id) if id == &order.id),
-            );
-            lines.push(Prim::HLine {
-                y: (y * vpr).round() as i32,
-                x0: 0,
-                x1: (self.trading_marker_end() * hpr).round() as i32,
-                // Hover is communicated by the dash pattern, not a thickness jump. Dash metrics
-                // scale with stroke width in every executor, so keeping the hairline also keeps
-                // the hover dashes compact and consistent across DPRs.
-                width: min_line_width,
-                style: if creating_protection {
-                    LineStyle::Dashed
-                } else if preview.is_some()
-                    || matches!(
-                        order.status,
-                        OrderStatus::PendingSubmit
-                            | OrderStatus::PendingModify
-                            | OrderStatus::PendingCancel
-                    )
-                {
-                    LineStyle::Dotted
-                } else {
-                    LineStyle::Solid
-                },
-                color,
-            });
-            if hovered.is_some() {
-                self.push_trading_endpoint(lines, y, color, hpr, vpr);
-            }
-            let remaining = (order.quantity - order.filled_quantity).max(0.0);
-            let quantity = self.trading_order_quantity_text(order);
-            let kind = match order.kind {
-                crate::OrderKind::Market => "Market",
-                crate::OrderKind::Limit => "Limit",
-                crate::OrderKind::Stop => "Stop",
-                crate::OrderKind::StopLimit => "Stop Limit",
-            };
-            let descriptor = if preview.is_some() {
-                kind.to_string()
-            } else {
-                format!(
-                    "{} {kind}",
-                    if order.side == OrderSide::Buy {
-                        "Buy"
-                    } else {
-                        "Sell"
+        for item in self.trading_paint_items() {
+            match item {
+                crate::trading::TradingPaintItem::Position(position) => {
+                    if !self
+                        .trading_state
+                        .account_visible(position.account_id.as_ref())
+                    {
+                        continue;
                     }
-                )
-            };
-            let main_x = self.trading_marker_start();
-            // A drag names its side ahead of the readout chip so the pointer never hides which way
-            // the order goes. Release commits the modification directly — a host that wants a
-            // confirmation step runs it around the emitted intent, not inside the chart.
-            if preview.is_some() {
-                self.push_trading_segment(
-                    lines,
-                    TradingControlSegment {
-                        kind: TradingControlSegmentKind::Quantity,
-                        text: if order.side == OrderSide::Buy {
-                            "Buy"
+                    if position.pane_index != pane_index {
+                        continue;
+                    }
+                    let Some(y) = self.trading_price_coordinate(
+                        pane_index,
+                        position.price_scale,
+                        position.average_price,
+                    ) else {
+                        continue;
+                    };
+                    let hovered = self.trading_state.feedback_hover.as_ref().filter(|hit| {
+                matches!(&hit.object, crate::TradingObjectId::Position(id) if id == &position.id)
+            });
+                    let pressed = self.trading_state.feedback_pressed.as_ref().filter(|hit| {
+                matches!(&hit.object, crate::TradingObjectId::Position(id) if id == &position.id)
+            });
+                    let position_color = self.trading_position_color(position.side);
+                    lines.push(Prim::HLine {
+                        y: (y * vpr).round() as i32,
+                        x0: 0,
+                        x1: (self.trading_marker_end() * hpr).round() as i32,
+                        width: min_line_width,
+                        style: LineStyle::Solid,
+                        color: position_color,
+                    });
+                    if hovered.is_some() {
+                        self.push_trading_endpoint(lines, y, position_color, hpr, vpr);
+                    }
+                    let quantity = self.trading_position_quantity_text(position);
+                    let pnl = position.display_pnl.map_or_else(
+                        || "—".to_string(),
+                        |value| self.trading_pnl_text(value, position.currency.as_deref()),
+                    );
+                    let pnl_color = position.display_pnl.map_or(position_color, |value| {
+                        if value >= 0.0 {
+                            self.trading_state.style.profit
                         } else {
-                            "Sell"
+                            self.trading_state.style.risk
+                        }
+                    });
+                    let segments = [
+                        TradingControlSegment {
+                            kind: TradingControlSegmentKind::Quantity,
+                            text: quantity.as_str(),
+                            width: self.trading_quantity_width(&quantity),
+                            color: position_color,
+                            filled: true,
                         },
-                        width: 46.0,
-                        color: base_color,
-                        filled: true,
-                    },
-                    TradingControlFeedback::Idle,
-                    TradingChipLayout {
-                        x: main_x - 52.0,
-                        y,
-                        hpr,
-                        vpr,
-                    },
-                );
-            }
-            let hovered_segment = hovered.and_then(|hit| Self::trading_control_kind(hit.kind));
-            let pressed_segment = pressed.and_then(|hit| Self::trading_control_kind(hit.kind));
-            let (detail_kind, detail_text, detail_color) = if order.role == OrderRole::Working {
-                (
-                    TradingControlSegmentKind::OrderType,
-                    descriptor.clone(),
-                    color,
-                )
-            } else {
-                // The PnL text keeps its profit/loss tint; the container carries the order's
-                // buy/sell color.
-                let (pnl, pnl_color) = self
-                    .trading_protection_pnl(order, display_price)
-                    .unwrap_or_else(|| ("—".to_string(), color));
-                (TradingControlSegmentKind::Pnl, pnl, pnl_color)
-            };
-            let segments = [
-                TradingControlSegment {
-                    kind: TradingControlSegmentKind::Quantity,
-                    text: quantity.as_str(),
-                    width: self.trading_quantity_width(&quantity),
-                    color,
-                    filled: true,
-                },
-                TradingControlSegment {
-                    kind: detail_kind,
-                    text: detail_text.as_str(),
-                    width: Self::trading_order_detail_width(order),
-                    color: detail_color,
-                    filled: false,
-                },
-                TradingControlSegment {
-                    kind: TradingControlSegmentKind::Cancel,
-                    text: "",
-                    width: self.trading_close_width(),
-                    color,
-                    filled: false,
-                },
-            ];
-            let cluster = TradingControlCluster {
-                segments: &segments,
-                left: main_x,
-                color,
-            };
-            self.push_trading_protection_buttons(
-                lines,
-                self.trading_order_protection_preview(order, OrderRole::TakeProfit)
-                    .is_some(),
-                self.trading_order_protection_preview(order, OrderRole::StopLoss)
-                    .is_some(),
-                hovered.map(|hit| hit.kind),
-                pressed.map(|hit| hit.kind),
-                TradingChipLayout {
-                    x: self.trading_marker_start(),
-                    y,
-                    hpr,
-                    vpr,
-                },
-            );
-            self.push_trading_cluster(
-                lines,
-                points,
-                &cluster,
-                hovered_segment,
-                pressed_segment,
-                TradingChipLayout {
-                    x: main_x,
-                    y,
-                    hpr,
-                    vpr,
-                },
-            );
-            self.push_trading_annotations(lines, &order.annotations, y, hpr, vpr);
-            // The tooltip names exactly what the click does. An order's close control cancels the
-            // unfilled remainder (any filled part already belongs to the position), and it only
-            // acts on live orders, so pending or terminal orders get no action tooltip.
-            let cancel_label = match (order.role, order.status) {
-                (_, status)
-                    if !matches!(status, OrderStatus::Working | OrderStatus::PartiallyFilled) =>
-                {
-                    None
+                        // The PnL text keeps its profit/loss tint — the container around it is what
+                        // carries the position's direction color.
+                        TradingControlSegment {
+                            kind: TradingControlSegmentKind::Pnl,
+                            text: pnl.as_str(),
+                            width: PNL_WIDTH,
+                            color: pnl_color,
+                            filled: false,
+                        },
+                        TradingControlSegment {
+                            kind: TradingControlSegmentKind::Cancel,
+                            text: "",
+                            width: self.trading_close_width(),
+                            color: position_color,
+                            filled: false,
+                        },
+                    ];
+                    let cluster = TradingControlCluster {
+                        segments: &segments,
+                        left: self.trading_marker_start(),
+                        color: position_color,
+                    };
+                    let hovered_segment =
+                        hovered.and_then(|hit| Self::trading_control_kind(hit.kind));
+                    let pressed_segment =
+                        pressed.and_then(|hit| Self::trading_control_kind(hit.kind));
+                    self.push_trading_protection_buttons(
+                        lines,
+                        self.trading_position_protection_preview(position, OrderRole::TakeProfit)
+                            .is_some(),
+                        self.trading_position_protection_preview(position, OrderRole::StopLoss)
+                            .is_some(),
+                        hovered.map(|hit| hit.kind),
+                        pressed.map(|hit| hit.kind),
+                        TradingChipLayout {
+                            x: self.trading_marker_start(),
+                            y,
+                            hpr,
+                            vpr,
+                        },
+                    );
+                    self.push_trading_cluster(
+                        lines,
+                        points,
+                        &cluster,
+                        hovered_segment,
+                        pressed_segment,
+                        TradingChipLayout {
+                            x: cluster.start(),
+                            y,
+                            hpr,
+                            vpr,
+                        },
+                    );
+                    self.push_trading_annotations(lines, &position.annotations, y, hpr, vpr);
+                    if self.trading_state.tooltip_armed
+                        && hovered
+                            .is_some_and(|hit| hit.kind == crate::TradingHitKind::CancelButton)
+                    {
+                        tooltip = Some(TradingTooltip {
+                            text: "Close position".to_string(),
+                            layout: TradingChipLayout {
+                                x: cluster.start() + cluster.width()
+                                    - self.trading_close_width() / 2.0,
+                                y,
+                                hpr,
+                                vpr,
+                            },
+                        });
+                    }
                 }
-                (OrderRole::TakeProfit, _) => Some("Cancel take profit".to_string()),
-                (OrderRole::StopLoss, _) => Some("Cancel stop loss".to_string()),
-                (OrderRole::Working, OrderStatus::PartiallyFilled) => Some(format!(
-                    "Cancel remaining {}",
-                    self.format_trading_quantity(remaining)
-                )),
-                (OrderRole::Working, _) => Some("Cancel order".to_string()),
-            };
-            if let Some(text) = cancel_label.filter(|_| {
-                self.trading_state.tooltip_armed
-                    && hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::CancelButton)
-            }) {
-                tooltip = Some(TradingTooltip {
-                    text,
-                    layout: TradingChipLayout {
-                        x: cluster.start() + cluster.width() - self.trading_close_width() / 2.0,
-                        y,
-                        hpr,
-                        vpr,
-                    },
-                });
-            }
-            if order.kind == crate::OrderKind::StopLimit
-                && let Some(stop_price) = order.stop_price.filter(|price| *price != display_price)
-                && let Some(stop_y) =
-                    self.trading_price_coordinate(pane_index, order.price_scale, stop_price)
-            {
-                lines.push(Prim::HLine {
-                    y: (stop_y * vpr).round() as i32,
-                    x0: 0,
-                    x1: (self.pane_w * hpr).round() as i32,
-                    width: min_line_width,
-                    style: LineStyle::Dotted,
-                    color,
-                });
-                let trigger = format!("Trigger {}", self.format_trading_quantity(remaining));
-                self.push_trading_segment(
-                    lines,
-                    TradingControlSegment {
-                        kind: TradingControlSegmentKind::OrderType,
-                        text: &trigger,
-                        width: 92.0,
+                crate::trading::TradingPaintItem::Order(order) => {
+                    if !self
+                        .trading_state
+                        .account_visible(order.account_id.as_ref())
+                    {
+                        continue;
+                    }
+                    if order.pane_index != pane_index {
+                        continue;
+                    }
+                    let display_price = self.trading_effective_order_price(order);
+                    let Some(y) =
+                        self.trading_price_coordinate(pane_index, order.price_scale, display_price)
+                    else {
+                        continue;
+                    };
+                    let preview = self.trading_order_preview(order);
+                    let creating_protection =
+                        self.trading_state
+                            .interaction
+                            .preview()
+                            .is_some_and(|preview| {
+                                matches!(
+                                    &preview.source,
+                                    crate::TradingPreviewSource::OrderStopLoss { order_id }
+                                        | crate::TradingPreviewSource::OrderTakeProfit { order_id }
+                                        if order_id == &order.id
+                                )
+                            });
+                    let base_color = trading_order_color(
+                        &self.trading_state.style,
+                        order.kind,
+                        order.side,
+                        order.role,
+                        order.status,
+                    );
+                    // Only a live drag dims the line; a released change is already applied, so nothing
+                    // lingers in a pending tint.
+                    let color = if preview.is_some() {
+                        Color::rgba(base_color.r(), base_color.g(), base_color.b(), 176)
+                    } else {
+                        base_color
+                    };
+                    let hovered = self.trading_state.feedback_hover.as_ref().filter(
+                |hit| matches!(&hit.object, crate::TradingObjectId::Order(id) if id == &order.id),
+            );
+                    let pressed = self.trading_state.feedback_pressed.as_ref().filter(
+                |hit| matches!(&hit.object, crate::TradingObjectId::Order(id) if id == &order.id),
+            );
+                    lines.push(Prim::HLine {
+                        y: (y * vpr).round() as i32,
+                        x0: 0,
+                        x1: (self.trading_marker_end() * hpr).round() as i32,
+                        // Hover is communicated by the dash pattern, not a thickness jump. Dash metrics
+                        // scale with stroke width in every executor, so keeping the hairline also keeps
+                        // the hover dashes compact and consistent across DPRs.
+                        width: min_line_width,
+                        style: if creating_protection {
+                            LineStyle::Dashed
+                        } else if preview.is_some()
+                            || matches!(
+                                order.status,
+                                OrderStatus::PendingSubmit
+                                    | OrderStatus::PendingModify
+                                    | OrderStatus::PendingCancel
+                            )
+                        {
+                            LineStyle::Dotted
+                        } else {
+                            LineStyle::Solid
+                        },
                         color,
-                        filled: false,
-                    },
-                    TradingControlFeedback::Idle,
-                    TradingChipLayout {
-                        x: self.trading_marker_start(),
-                        y: stop_y,
+                    });
+                    if hovered.is_some() {
+                        self.push_trading_endpoint(lines, y, color, hpr, vpr);
+                    }
+                    let remaining = (order.quantity - order.filled_quantity).max(0.0);
+                    let quantity = self.trading_order_quantity_text(order);
+                    let kind = match order.kind {
+                        crate::OrderKind::Market => "Market",
+                        crate::OrderKind::Limit => "Limit",
+                        crate::OrderKind::Stop => "Stop",
+                        crate::OrderKind::StopLimit => "Stop Limit",
+                    };
+                    let descriptor = if preview.is_some() {
+                        kind.to_string()
+                    } else {
+                        format!(
+                            "{} {kind}",
+                            if order.side == OrderSide::Buy {
+                                "Buy"
+                            } else {
+                                "Sell"
+                            }
+                        )
+                    };
+                    let main_x = self.trading_marker_start();
+                    // A drag names its side ahead of the readout chip so the pointer never hides which way
+                    // the order goes. Release commits the modification directly — a host that wants a
+                    // confirmation step runs it around the emitted intent, not inside the chart.
+                    if preview.is_some() {
+                        self.push_trading_segment(
+                            lines,
+                            TradingControlSegment {
+                                kind: TradingControlSegmentKind::Quantity,
+                                text: if order.side == OrderSide::Buy {
+                                    "Buy"
+                                } else {
+                                    "Sell"
+                                },
+                                width: 46.0,
+                                color: base_color,
+                                filled: true,
+                            },
+                            TradingControlFeedback::Idle,
+                            TradingChipLayout {
+                                x: main_x - 52.0,
+                                y,
+                                hpr,
+                                vpr,
+                            },
+                        );
+                    }
+                    let hovered_segment =
+                        hovered.and_then(|hit| Self::trading_control_kind(hit.kind));
+                    let pressed_segment =
+                        pressed.and_then(|hit| Self::trading_control_kind(hit.kind));
+                    let (detail_kind, detail_text, detail_color) =
+                        if order.role == OrderRole::Working {
+                            (
+                                TradingControlSegmentKind::OrderType,
+                                descriptor.clone(),
+                                color,
+                            )
+                        } else {
+                            // The PnL text keeps its profit/loss tint; the container carries the order's
+                            // buy/sell color.
+                            let (pnl, pnl_color) = self
+                                .trading_protection_pnl(order, display_price)
+                                .unwrap_or_else(|| ("—".to_string(), color));
+                            (TradingControlSegmentKind::Pnl, pnl, pnl_color)
+                        };
+                    let segments = [
+                        TradingControlSegment {
+                            kind: TradingControlSegmentKind::Quantity,
+                            text: quantity.as_str(),
+                            width: self.trading_quantity_width(&quantity),
+                            color,
+                            filled: true,
+                        },
+                        TradingControlSegment {
+                            kind: detail_kind,
+                            text: detail_text.as_str(),
+                            width: Self::trading_order_detail_width(order),
+                            color: detail_color,
+                            filled: false,
+                        },
+                        TradingControlSegment {
+                            kind: TradingControlSegmentKind::Cancel,
+                            text: "",
+                            width: self.trading_close_width(),
+                            color,
+                            filled: false,
+                        },
+                    ];
+                    let cluster = TradingControlCluster {
+                        segments: &segments,
+                        left: main_x,
+                        color,
+                    };
+                    self.push_trading_protection_buttons(
+                        lines,
+                        self.trading_order_protection_preview(order, OrderRole::TakeProfit)
+                            .is_some(),
+                        self.trading_order_protection_preview(order, OrderRole::StopLoss)
+                            .is_some(),
+                        hovered.map(|hit| hit.kind),
+                        pressed.map(|hit| hit.kind),
+                        TradingChipLayout {
+                            x: self.trading_marker_start(),
+                            y,
+                            hpr,
+                            vpr,
+                        },
+                    );
+                    self.push_trading_cluster(
+                        lines,
+                        points,
+                        &cluster,
+                        hovered_segment,
+                        pressed_segment,
+                        TradingChipLayout {
+                            x: main_x,
+                            y,
+                            hpr,
+                            vpr,
+                        },
+                    );
+                    self.push_trading_annotations(lines, &order.annotations, y, hpr, vpr);
+                    // The tooltip names exactly what the click does. An order's close control cancels the
+                    // unfilled remainder (any filled part already belongs to the position), and it only
+                    // acts on live orders, so pending or terminal orders get no action tooltip.
+                    let cancel_label = match (order.role, order.status) {
+                        (_, status)
+                            if !matches!(
+                                status,
+                                OrderStatus::Working | OrderStatus::PartiallyFilled
+                            ) =>
+                        {
+                            None
+                        }
+                        (OrderRole::TakeProfit, _) => Some("Cancel take profit".to_string()),
+                        (OrderRole::StopLoss, _) => Some("Cancel stop loss".to_string()),
+                        (OrderRole::Working, OrderStatus::PartiallyFilled) => Some(format!(
+                            "Cancel remaining {}",
+                            self.format_trading_quantity(remaining)
+                        )),
+                        (OrderRole::Working, _) => Some("Cancel order".to_string()),
+                    };
+                    if let Some(text) = cancel_label.filter(|_| {
+                        self.trading_state.tooltip_armed
+                            && hovered
+                                .is_some_and(|hit| hit.kind == crate::TradingHitKind::CancelButton)
+                    }) {
+                        tooltip = Some(TradingTooltip {
+                            text,
+                            layout: TradingChipLayout {
+                                x: cluster.start() + cluster.width()
+                                    - self.trading_close_width() / 2.0,
+                                y,
+                                hpr,
+                                vpr,
+                            },
+                        });
+                    }
+                    if order.kind == crate::OrderKind::StopLimit
+                        && let Some(stop_price) =
+                            order.stop_price.filter(|price| *price != display_price)
+                        && let Some(stop_y) =
+                            self.trading_price_coordinate(pane_index, order.price_scale, stop_price)
+                    {
+                        lines.push(Prim::HLine {
+                            y: (stop_y * vpr).round() as i32,
+                            x0: 0,
+                            x1: (self.pane_w * hpr).round() as i32,
+                            width: min_line_width,
+                            style: LineStyle::Dotted,
+                            color,
+                        });
+                        let trigger =
+                            format!("Trigger {}", self.format_trading_quantity(remaining));
+                        self.push_trading_segment(
+                            lines,
+                            TradingControlSegment {
+                                kind: TradingControlSegmentKind::OrderType,
+                                text: &trigger,
+                                width: 92.0,
+                                color,
+                                filled: false,
+                            },
+                            TradingControlFeedback::Idle,
+                            TradingChipLayout {
+                                x: self.trading_marker_start(),
+                                y: stop_y,
+                                hpr,
+                                vpr,
+                            },
+                        );
+                    }
+                    self.push_host_trigger_line(
+                        lines,
+                        TradingTriggerLine {
+                            pane_index,
+                            price_scale: order.price_scale,
+                            trigger_price: order.trailing_trigger_price,
+                            display_price,
+                            color: self.trading_state.style.pending,
+                        },
                         hpr,
                         vpr,
-                    },
-                );
+                    );
+                    self.push_host_trigger_line(
+                        lines,
+                        TradingTriggerLine {
+                            pane_index,
+                            price_scale: order.price_scale,
+                            trigger_price: order.break_even_trigger_price,
+                            display_price,
+                            color: self.trading_state.style.take_profit,
+                        },
+                        hpr,
+                        vpr,
+                    );
+                }
             }
-            self.push_host_trigger_line(
-                lines,
-                TradingTriggerLine {
-                    pane_index,
-                    price_scale: order.price_scale,
-                    trigger_price: order.trailing_trigger_price,
-                    display_price,
-                    color: self.trading_state.style.pending,
-                },
-                hpr,
-                vpr,
-            );
-            self.push_host_trigger_line(
-                lines,
-                TradingTriggerLine {
-                    pane_index,
-                    price_scale: order.price_scale,
-                    trigger_price: order.break_even_trigger_price,
-                    display_price,
-                    color: self.trading_state.style.take_profit,
-                },
-                hpr,
-                vpr,
-            );
         }
 
         if let Some(preview) = self

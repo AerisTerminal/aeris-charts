@@ -792,6 +792,49 @@ pub struct TradingHit {
     pub annotation_id: Option<String>,
 }
 
+/// How strongly a trading hit claims a press among overlapping objects: a drawn marker box beats
+/// a bare line passing through it, an object a press can act on beats a static one, then the
+/// nearer line wins. Remaining ties go to the object painted on top.
+#[derive(Clone, Copy)]
+struct TradingHitRank {
+    on_marker: bool,
+    actionable: bool,
+    distance: f64,
+}
+
+impl TradingHitRank {
+    fn beats(&self, other: &Self) -> bool {
+        let class = (self.on_marker, self.actionable);
+        let other_class = (other.on_marker, other.actionable);
+        if class != other_class {
+            return class > other_class;
+        }
+        self.distance < other.distance
+    }
+}
+
+/// One order or position in trading-layer paint order.
+#[derive(Clone, Copy)]
+pub(crate) enum TradingPaintItem<'a> {
+    Position(&'a TradingPosition),
+    Order(&'a WorkingOrder),
+}
+
+impl TradingPaintItem<'_> {
+    fn object_id(self) -> TradingObjectId {
+        match self {
+            Self::Position(position) => TradingObjectId::Position(position.id.clone()),
+            Self::Order(order) => TradingObjectId::Order(order.id.clone()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PromotedTradingObject<'a> {
+    Position(&'a PositionId),
+    Order(&'a OrderId),
+}
+
 impl TradingHit {
     fn heap_bytes(&self) -> usize {
         match &self.object {
@@ -976,6 +1019,72 @@ fn validate_unique<'a>(
 }
 
 impl ChartEngine {
+    /// The order or position the trader is working with: the one being dragged, else pressed,
+    /// else hovered. It paints above every other trading object so coincident lines never hide
+    /// the one under the pointer.
+    fn trading_promoted_object(&self) -> Option<PromotedTradingObject<'_>> {
+        if let Some(preview) = self.trading_state.interaction.preview() {
+            return Some(match &preview.source {
+                TradingPreviewSource::Order { order_id }
+                | TradingPreviewSource::OrderStopLoss { order_id }
+                | TradingPreviewSource::OrderTakeProfit { order_id } => {
+                    PromotedTradingObject::Order(order_id)
+                }
+                TradingPreviewSource::StopLoss { position_id }
+                | TradingPreviewSource::TakeProfit { position_id } => {
+                    PromotedTradingObject::Position(position_id)
+                }
+            });
+        }
+        [
+            &self.trading_state.feedback_pressed,
+            &self.trading_state.feedback_hover,
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|hit| match &hit.object {
+            TradingObjectId::Position(id) => Some(PromotedTradingObject::Position(id)),
+            TradingObjectId::Order(id) => Some(PromotedTradingObject::Order(id)),
+            TradingObjectId::Execution(_) => None,
+        })
+    }
+
+    /// Positions and orders bottom to top: positions, then orders, each in snapshot order, with
+    /// the promoted object moved to the top. Frame construction paints in this order and hit
+    /// testing walks it in reverse, so what is on top is what the pointer grabs.
+    pub(crate) fn trading_paint_items(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = TradingPaintItem<'_>> + '_ {
+        let promoted = self.trading_promoted_object();
+        let state = &self.trading_state;
+        let top = match promoted {
+            Some(PromotedTradingObject::Position(id)) => state
+                .positions
+                .iter()
+                .find(|position| &position.id == id)
+                .map(TradingPaintItem::Position),
+            Some(PromotedTradingObject::Order(id)) => state
+                .orders
+                .iter()
+                .find(|order| &order.id == id)
+                .map(TradingPaintItem::Order),
+            None => None,
+        };
+        state
+            .positions
+            .iter()
+            .filter(move |position| promoted != Some(PromotedTradingObject::Position(&position.id)))
+            .map(TradingPaintItem::Position)
+            .chain(
+                state
+                    .orders
+                    .iter()
+                    .filter(move |order| promoted != Some(PromotedTradingObject::Order(&order.id)))
+                    .map(TradingPaintItem::Order),
+            )
+            .chain(top)
+    }
+
     pub fn trading_hit_at(&self, x_css: f64, y_css: f64) -> Option<TradingHit> {
         self.trading_hit_at_with_profile(x_css, y_css, HitProfile::PRECISION)
     }
@@ -991,117 +1100,101 @@ impl ChartEngine {
         }
         let pane_index = self.pane_at_y(y_css)?;
         let line_tolerance = profile.trading_line_tolerance;
+        let control_reach = line_tolerance.max(self.trading_control_height() / 2.0);
+        let marker_start = self.trading_marker_start();
 
-        for order in self.trading_state.orders.iter().rev() {
-            if !self
-                .trading_state
-                .account_visible(order.account_id.as_ref())
-            {
+        // Coincident lines (an SL dropped on its entry, a TP on another order) must stay usable,
+        // so every overlapping object competes instead of the first one found winning. Walking
+        // the paint order topmost-first lets the promoted (hovered, pressed, or dragged) object
+        // win remaining ties, which keeps the hover stable and matches what is painted on top.
+        let mut best: Option<(TradingHit, TradingHitRank)> = None;
+        for item in self.trading_paint_items().rev() {
+            let (account_id, item_pane, price_scale, price, annotations) = match item {
+                TradingPaintItem::Order(order) => (
+                    order.account_id.as_ref(),
+                    order.pane_index,
+                    order.price_scale,
+                    self.trading_effective_order_price(order),
+                    order.annotations.as_slice(),
+                ),
+                TradingPaintItem::Position(position) => (
+                    position.account_id.as_ref(),
+                    position.pane_index,
+                    position.price_scale,
+                    position.average_price,
+                    position.annotations.as_slice(),
+                ),
+            };
+            if item_pane != pane_index || !self.trading_state.account_visible(account_id) {
                 continue;
             }
-            if order.pane_index != pane_index {
-                continue;
-            }
-            let Some(y) = self.trading_price_coordinate(
-                pane_index,
-                order.price_scale,
-                self.trading_effective_order_price(order),
-            ) else {
+            let Some(y) = self.trading_price_coordinate(pane_index, price_scale, price) else {
                 continue;
             };
             let distance = (y_css - y).abs();
-            if let Some(annotation_id) =
-                self.trading_annotation_hit(&order.annotations, y, x_css, y_css)
+            let (kind, annotation_id) = if let Some(annotation_id) =
+                self.trading_annotation_hit(annotations, y, x_css, y_css)
             {
-                return Some(TradingHit {
-                    object: TradingObjectId::Order(order.id.clone()),
-                    kind: TradingHitKind::Annotation,
-                    distance: (y_css - y).abs(),
-                    annotation_id: Some(annotation_id),
-                });
-            }
-            if distance > line_tolerance.max(self.trading_control_height() / 2.0) {
-                continue;
-            }
-            let kind = self
-                .trading_order_protection_hit(order, x_css)
-                .unwrap_or_else(|| self.trading_order_chip_hit(order, x_css));
-            // The control cluster is a chip, not a hairline: over it the marker answers across the
-            // chip's full height (and the device's control box, for touch), not the line tolerance.
-            let tolerance = if matches!(
-                kind,
-                TradingHitKind::CancelButton
-                    | TradingHitKind::TakeProfitButton
-                    | TradingHitKind::StopLossButton
-            ) {
-                line_tolerance.max(self.trading_control_height() / 2.0)
+                (TradingHitKind::Annotation, Some(annotation_id))
             } else {
-                line_tolerance
+                if distance > control_reach {
+                    continue;
+                }
+                let kind = match item {
+                    TradingPaintItem::Order(order) => self
+                        .trading_order_protection_hit(order, x_css)
+                        .unwrap_or_else(|| self.trading_order_chip_hit(order, x_css)),
+                    TradingPaintItem::Position(position) => self
+                        .trading_position_protection_hit(position, x_css)
+                        .unwrap_or_else(|| self.trading_position_chip_hit(position, x_css)),
+                };
+                // The control cluster is a chip, not a hairline: over it the marker answers across
+                // the chip's full height (and the device's control box, for touch), not the line
+                // tolerance.
+                let tolerance = if matches!(
+                    kind,
+                    TradingHitKind::CancelButton
+                        | TradingHitKind::TakeProfitButton
+                        | TradingHitKind::StopLossButton
+                ) {
+                    control_reach
+                } else {
+                    line_tolerance
+                };
+                if distance > tolerance {
+                    continue;
+                }
+                (kind, None)
             };
-            if distance > tolerance {
-                continue;
-            }
-            return Some(TradingHit {
-                object: TradingObjectId::Order(order.id.clone()),
+            let on_marker = match kind {
+                TradingHitKind::OrderLine | TradingHitKind::PositionLine => {
+                    let width = match item {
+                        TradingPaintItem::Order(order) => self.trading_order_cluster_width(order),
+                        TradingPaintItem::Position(position) => {
+                            self.trading_position_cluster_width(position)
+                        }
+                    };
+                    (marker_start..=marker_start + width).contains(&x_css)
+                }
+                _ => true,
+            };
+            let hit = TradingHit {
+                object: item.object_id(),
                 kind,
                 distance,
-                annotation_id: None,
-            });
+                annotation_id,
+            };
+            let rank = TradingHitRank {
+                on_marker,
+                actionable: self.trading_hit_cursor(&hit).is_some(),
+                distance,
+            };
+            if best.as_ref().is_none_or(|(_, current)| rank.beats(current)) {
+                best = Some((hit, rank));
+            }
         }
-
-        for position in self.trading_state.positions.iter().rev() {
-            if !self
-                .trading_state
-                .account_visible(position.account_id.as_ref())
-            {
-                continue;
-            }
-            if position.pane_index != pane_index {
-                continue;
-            }
-            let Some(y) = self.trading_price_coordinate(
-                pane_index,
-                position.price_scale,
-                position.average_price,
-            ) else {
-                continue;
-            };
-            let distance = (y_css - y).abs();
-            if let Some(annotation_id) =
-                self.trading_annotation_hit(&position.annotations, y, x_css, y_css)
-            {
-                return Some(TradingHit {
-                    object: TradingObjectId::Position(position.id.clone()),
-                    kind: TradingHitKind::Annotation,
-                    distance: (y_css - y).abs(),
-                    annotation_id: Some(annotation_id),
-                });
-            }
-            if distance > line_tolerance.max(self.trading_control_height() / 2.0) {
-                continue;
-            }
-            let kind = self
-                .trading_position_protection_hit(position, x_css)
-                .unwrap_or_else(|| self.trading_position_chip_hit(position, x_css));
-            let tolerance = if matches!(
-                kind,
-                TradingHitKind::CancelButton
-                    | TradingHitKind::TakeProfitButton
-                    | TradingHitKind::StopLossButton
-            ) {
-                line_tolerance.max(self.trading_control_height() / 2.0)
-            } else {
-                line_tolerance
-            };
-            if distance > tolerance {
-                continue;
-            }
-            return Some(TradingHit {
-                object: TradingObjectId::Position(position.id.clone()),
-                kind,
-                distance,
-                annotation_id: None,
-            });
+        if let Some((hit, _)) = best {
+            return Some(hit);
         }
 
         // Hits resolve against the exact marks the frame draws; the topmost (last drawn) wins and
@@ -1127,7 +1220,12 @@ impl ChartEngine {
     /// Pointer affordance for the trading object under the cursor, shared by every host so a
     /// line reads as draggable exactly when a drag would start there.
     pub fn trading_cursor_at(&self, x_css: f64, y_css: f64) -> Option<TradingCursor> {
-        let hit = self.trading_hit_at(x_css, y_css)?;
+        self.trading_hit_cursor(&self.trading_hit_at(x_css, y_css)?)
+    }
+
+    /// The affordance a hit answers with; `None` marks a hit a press cannot act on, such as a
+    /// working entry's own line.
+    fn trading_hit_cursor(&self, hit: &TradingHit) -> Option<TradingCursor> {
         match (&hit.object, hit.kind) {
             // An execution arrow is clickable detail: it reveals the exact fill on its bar.
             (_, TradingHitKind::CancelButton | TradingHitKind::ExecutionMarker) => {

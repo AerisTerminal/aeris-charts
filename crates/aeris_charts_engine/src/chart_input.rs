@@ -1804,9 +1804,10 @@ impl ChartEngine {
         }
     }
 
-    /// Pane-press arbitration, topmost owner first: a live measure, trading controls, the
-    /// crosshair action chip, an armed drawing tool, an existing drawing, the delta tooltip, a
-    /// Shift measure, then pan.
+    /// Pane-press arbitration, topmost owner first: a live measure, an armed drawing tool, trading
+    /// controls, the crosshair action chip, an existing drawing, the delta tooltip, a Shift
+    /// measure, then pan. An armed tool places its anchor anywhere in the pane, including on an
+    /// order or position line, exactly as its crosshair cursor promises.
     fn begin_pane_press(&mut self, input: PointerInput) -> PressMode {
         let (x, y) = (input.x, input.y);
         let modifiers = drawing_modifiers(input.modifiers);
@@ -1817,16 +1818,17 @@ impl ChartEngine {
         if self.measure_active() && self.measure_pointer_down(x, y, false, magnet_only) {
             return PressMode::Measure;
         }
-        if self.trading_hit_at(x, y).is_some() {
+        let tool_armed = self.active_drawing_tool().is_some();
+        if !tool_armed && self.trading_hit_at(x, y).is_some() {
             self.set_trading_pressed(x, y);
             let dragging = self.trading_drag_start_at(x, y);
             return PressMode::Trading { dragging };
         }
-        if self.alert_create_hit_at(x, y) {
+        if !tool_armed && self.alert_create_hit_at(x, y) {
             return PressMode::Alert;
         }
         self.deactivate_trading_group();
-        if self.active_drawing_tool().is_some() {
+        if tool_armed {
             let update = self.drawing_tool_pointer_down(x, y, modifiers);
             self.note_drawing_created(update.created);
             return PressMode::DrawingCreation {
@@ -2197,8 +2199,14 @@ impl ChartEngine {
         // `resolve_pointer_hover`; the built-in candidates resolve here.
         self.input.host_primitive_cursor = false;
         self.input.hover = self.arbitrate_hover(x, y, None);
-        // Only a changed trading hover restarts the dwell; holding still lets it elapse.
-        if !captured && self.set_trading_hover(x, y) {
+        // A live measure or an armed tool claims every press, so trading objects show no hover
+        // feedback that would promise a drag or click they will not receive. Otherwise only a
+        // changed trading hover restarts the dwell; holding still lets it elapse.
+        if self.measure_active() || self.active_drawing_tool().is_some() {
+            if self.clear_trading_hover() {
+                self.input.tooltip_deadline_ms = None;
+            }
+        } else if !captured && self.set_trading_hover(x, y) {
             let on_close = self
                 .trading_hit_at(x, y)
                 .is_some_and(|hit| hit.kind == TradingHitKind::CancelButton);
@@ -2927,6 +2935,99 @@ mod tests {
             vec![ChartInputEvent::CrosshairLeft]
         );
         assert!(chart.drawing(id).is_some(), "Escape never deletes");
+    }
+
+    /// A working buy entry with its stop loss placed on the same price. The entry is listed last,
+    /// so snapshot order alone would put the static entry line above the movable stop.
+    fn chart_with_stop_on_its_entry() -> (ChartEngine, f64) {
+        let mut chart = chart();
+        let snapshot: TradingSnapshot = serde_json::from_str(
+            r#"{"instrument":{"tick_size":0.25},
+                "orders":[
+                    {"id":"sl-1","pane_index":0,"price_scale":"right","side":"sell",
+                     "kind":"stop","role":"stop_loss","status":"working","price":103.0,
+                     "quantity":2.0,"filled_quantity":0.0,"parent_order_id":"entry-1",
+                     "revision":1},
+                    {"id":"entry-1","pane_index":0,"price_scale":"right","side":"buy",
+                     "kind":"limit","role":"working","status":"working","price":103.0,
+                     "quantity":2.0,"filled_quantity":0.0,"revision":1}]}"#,
+        )
+        .unwrap();
+        chart.set_trading_snapshot(snapshot).unwrap();
+        chart.build_frame();
+        let y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 103.0)
+            .unwrap();
+        (chart, y)
+    }
+
+    fn hit_order(chart: &ChartEngine, x: f64, y: f64) -> Option<String> {
+        chart.trading_hit_at(x, y).and_then(|hit| match hit.object {
+            TradingObjectId::Order(id) => Some(id.as_str().to_string()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn an_armed_drawing_tool_places_on_top_of_an_order_line() {
+        let (mut chart, y) = chart_with_stop_on_its_entry();
+        assert!(chart.set_drawing_tool(Some(DrawingKind::LongPosition), None, None));
+        let x = 200.0;
+        chart.input_pointer_move(at(x, y), false);
+        assert_eq!(chart.input_cursor(), ChartCursor::Crosshair);
+        assert!(
+            chart.trading_state.feedback_hover.is_none(),
+            "an armed tool shows no order hover it would not honor"
+        );
+        click(&mut chart, x, y);
+        assert!(
+            chart
+                .take_input_events()
+                .iter()
+                .any(|event| matches!(event, ChartInputEvent::DrawingCreated(_))),
+            "the press over the order line places the position tool"
+        );
+        assert!(chart.trading_preview().is_none());
+        assert!(chart.take_trading_intents().is_empty());
+    }
+
+    #[test]
+    fn a_stop_on_its_entry_line_is_the_one_the_pointer_hovers_and_drags() {
+        let (mut chart, y) = chart_with_stop_on_its_entry();
+        let line_x = 200.0;
+        let chip_x = chart.trading_marker_start() + 4.0;
+        assert_eq!(hit_order(&chart, line_x, y).as_deref(), Some("sl-1"));
+        assert_eq!(hit_order(&chart, chip_x, y).as_deref(), Some("sl-1"));
+
+        chart.input_pointer_move(at(chip_x, y), false);
+        assert_eq!(chart.input_cursor(), ChartCursor::VerticalGrab);
+        let mut regions = Vec::new();
+        let mut lines = Vec::new();
+        chart.build_trading_frame_for_test(0, 1.0, 1.0, &mut regions, &mut lines);
+        let row = y.round() as i32;
+        let last_rule = lines
+            .iter()
+            .rev()
+            .find_map(|prim| match prim {
+                aeris_charts_render::draw_list::Prim::HLine {
+                    y, x0: 0, color, ..
+                } if *y == row => Some(*color),
+                _ => None,
+            })
+            .expect("order rules at the shared price");
+        assert_eq!(
+            last_rule, chart.trading_state.style.stop_loss,
+            "the hovered stop paints above its entry"
+        );
+
+        drag(&mut chart, (line_x, y), (line_x, y + 40.0));
+        let intents = chart.take_trading_intents();
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].action, TradingIntentAction::ModifyOrder);
+        assert_eq!(
+            intents[0].order_id.as_ref().map(OrderId::as_str),
+            Some("sl-1")
+        );
     }
 
     #[test]
