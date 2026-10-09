@@ -1156,6 +1156,26 @@ impl ChartEngine {
         self.frame_invalidation.series_geometry(id);
     }
 
+    /// Generation a retained series layer must match to be reused. An up/down volume histogram
+    /// is tinted from other series' bars, so a price-only update to those sources must rebuild it
+    /// too. Generations come from one monotonic clock, so the newest source generation is enough;
+    /// a change of source identity (visibility, removal) already invalidates the whole scene.
+    fn series_layer_source_generation(&self, id: SeriesId) -> u64 {
+        let own = self.frame_invalidation.series_generation(id);
+        if !self
+            .series_entry(id)
+            .is_some_and(|series| series.histogram_updown)
+        {
+            return own;
+        }
+        let (primary, footprint) = self.volume_direction_sources();
+        [primary, footprint]
+            .into_iter()
+            .flatten()
+            .map(|source| self.frame_invalidation.series_generation(source))
+            .fold(own, u64::max)
+    }
+
     pub(crate) fn invalidate_frame_drawings(&mut self) {
         self.frame_invalidation.drawings();
     }
@@ -1634,7 +1654,7 @@ impl ChartEngine {
                     .iter()
                     .filter(|rs| rs.pane == Some(pi) && rs.visible)
                     .any(|rs| {
-                        let source_generation = self.frame_invalidation.series_generation(rs.id);
+                        let source_generation = self.series_layer_source_generation(rs.id);
                         cache
                             .series_layers
                             .iter()
@@ -1660,7 +1680,7 @@ impl ChartEngine {
                         if rs.pane != Some(pi) || !rs.visible {
                             continue;
                         }
-                        let source_generation = self.frame_invalidation.series_generation(rs.id);
+                        let source_generation = self.series_layer_source_generation(rs.id);
                         let layer_index = match cache
                             .series_layers
                             .iter()

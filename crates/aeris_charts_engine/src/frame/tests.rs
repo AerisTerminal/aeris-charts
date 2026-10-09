@@ -9560,6 +9560,50 @@ fn histogram_per_bar_color_overrides_the_updown_tint() {
 }
 
 #[test]
+fn updown_volume_retints_when_only_the_primary_series_changes() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times: Vec<f64> = (0..4).map(|i| f64::from(i) * 60.0).collect();
+    let open = [100.0, 100.0, 100.0, 100.0];
+    let close = [101.0, 101.0, 101.0, 101.0];
+    let high = [102.0; 4];
+    let low = [99.0; 4];
+    chart
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .unwrap();
+    let volume = chart.add_series(SeriesKind::Histogram);
+    let volumes = [10.0, 20.0, 30.0, 40.0];
+    chart
+        .set_series_data(volume, &times, &volumes, &volumes, &volumes, &volumes)
+        .unwrap();
+    chart.series_entry_mut(volume).unwrap().histogram_updown = true;
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let count = |chart: &mut ChartEngine| {
+        let frame = chart.build_frame();
+        let up = frame.panes[0]
+            .main
+            .iter()
+            .filter(|p| matches!(p, Prim::Rect { color, .. } if *color == VOLUME_UP))
+            .count();
+        let down = frame.panes[0]
+            .main
+            .iter()
+            .filter(|p| matches!(p, Prim::Rect { color, .. } if *color == VOLUME_DOWN))
+            .count();
+        (up, down)
+    };
+    assert_eq!(count(&mut chart), (4, 0));
+    // Price-only replace: the volume series is untouched, yet every bar now closes down.
+    chart
+        .set_series_data(0, &times, &close, &high, &low, &open)
+        .unwrap();
+    assert_eq!(count(&mut chart), (0, 4));
+    // A live tick that turns the last bar up again retints only that column.
+    chart.update_series_bars(0, [(180.0, [100.0, 102.0, 99.0, 101.0])]);
+    assert_eq!(count(&mut chart), (1, 3));
+}
+
+#[test]
 fn updown_volume_takes_its_direction_from_a_footprint_over_a_whitespace_primary() {
     let mut chart = ChartEngine::new(1200.0, 600.0, 1.0);
     let times: Vec<f64> = (0..4).map(|minute| f64::from(minute) * 60.0).collect();

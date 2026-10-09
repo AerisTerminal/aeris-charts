@@ -951,6 +951,22 @@ impl ChartEngine {
         );
     }
 
+    /// Series whose bars supply an up/down volume histogram's per-bar direction: the primary
+    /// series (the first visible, non-removed entry, mirroring the reference volume tint) and a
+    /// footprint on its pane, which presents the bars wherever the primary row is whitespace.
+    pub(super) fn volume_direction_sources(&self) -> (Option<SeriesId>, Option<SeriesId>) {
+        let Some(primary) = self.primary_series() else {
+            return (None, None);
+        };
+        let footprint = self.series.iter().find(|s| {
+            !s.removed
+                && s.visible
+                && s.kind == SeriesKind::Footprint
+                && s.pane_index == primary.pane_index
+        });
+        (Some(primary.id), footprint.map(|s| s.id))
+    }
+
     #[allow(clippy::too_many_arguments)] // mirrors the reference renderer-data signature
     pub(super) fn build_histogram_frame(
         &self,
@@ -972,22 +988,9 @@ impl ChartEngine {
         } else {
             HISTOGRAM
         };
-        // the public reference volume tint: the primary series' up/down direction per bar. The primary
-        // is the first visible, non-removed series (id 0 may be tombstoned).
-        let primary = self.primary_series();
-        let main = primary.map(|s| self.data.plot(s.id));
-        // A footprint drawn over a whitespace primary presents those bars, so it supplies the
-        // direction wherever the primary row carries none.
-        let presented = primary
-            .and_then(|primary| {
-                self.series.iter().find(|s| {
-                    !s.removed
-                        && s.visible
-                        && s.kind == SeriesKind::Footprint
-                        && s.pane_index == primary.pane_index
-                })
-            })
-            .map(|s| self.data.plot(s.id));
+        let (primary, footprint) = self.volume_direction_sources();
+        let main = primary.map(|id| self.data.plot(id));
+        let presented = footprint.map(|id| self.data.plot(id));
         let point_colors = self.data.point_colors(rs.id);
         let histogram_updown = self
             .series_entry(rs.id)
