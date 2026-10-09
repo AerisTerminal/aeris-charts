@@ -2,8 +2,9 @@
 
 use crate::{ChartEngine, ChartTheme, SeriesId};
 use aeris_charts_core::style::{
-    DARK_BORDER_CSS, DARK_CROSSHAIR_LINE_CSS, DARK_MARKET_DOWN_CSS, DARK_MARKET_UP_CSS,
-    LIGHT_BORDER_CSS, LIGHT_CROSSHAIR_LINE_CSS, LIGHT_MARKET_DOWN_CSS, LIGHT_MARKET_UP_CSS,
+    DARK_BORDER_CSS, DARK_CROSSHAIR_LINE_CSS, DARK_FOREGROUND_CSS, DARK_MARKET_DOWN_CSS,
+    DARK_MARKET_UP_CSS, DARK_SURFACE_CSS, LIGHT_BORDER_CSS, LIGHT_CROSSHAIR_LINE_CSS,
+    LIGHT_FOREGROUND_CSS, LIGHT_MARKET_DOWN_CSS, LIGHT_MARKET_UP_CSS, LIGHT_SURFACE_CSS,
 };
 
 /// A color either follows its field's canonical semantic theme role or is explicitly pinned.
@@ -32,6 +33,8 @@ impl AppearanceColor {
 /// Canonical effective colors for the semantic roles exposed by financial appearance controls.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinancialThemeColors {
+    pub background: &'static str,
+    pub text: &'static str,
     pub grid: &'static str,
     pub crosshair: &'static str,
     pub bullish: &'static str,
@@ -43,12 +46,16 @@ impl FinancialThemeColors {
     pub const fn for_theme(theme: ChartTheme) -> Self {
         match theme {
             ChartTheme::Light => Self {
+                background: LIGHT_SURFACE_CSS,
+                text: LIGHT_FOREGROUND_CSS,
                 grid: LIGHT_BORDER_CSS,
                 crosshair: LIGHT_CROSSHAIR_LINE_CSS,
                 bullish: LIGHT_MARKET_UP_CSS,
                 bearish: LIGHT_MARKET_DOWN_CSS,
             },
             ChartTheme::Dark => Self {
+                background: DARK_SURFACE_CSS,
+                text: DARK_FOREGROUND_CSS,
                 grid: DARK_BORDER_CSS,
                 crosshair: DARK_CROSSHAIR_LINE_CSS,
                 bullish: DARK_MARKET_UP_CSS,
@@ -62,6 +69,8 @@ impl FinancialThemeColors {
 #[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct FinancialAppearance {
+    pub background_color: AppearanceColor,
+    pub text_color: AppearanceColor,
     pub grid_visible: bool,
     pub grid_color: AppearanceColor,
     pub grid_style: u8,
@@ -89,6 +98,8 @@ pub struct FinancialAppearance {
 impl Default for FinancialAppearance {
     fn default() -> Self {
         Self {
+            background_color: AppearanceColor::Theme,
+            text_color: AppearanceColor::Theme,
             grid_visible: true,
             grid_color: AppearanceColor::Theme,
             grid_style: 2,
@@ -116,6 +127,18 @@ impl Default for FinancialAppearance {
 }
 
 impl FinancialAppearance {
+    #[must_use]
+    pub fn effective_background_color(&self, theme: ChartTheme) -> String {
+        self.background_color
+            .custom_or(FinancialThemeColors::for_theme(theme).background)
+    }
+
+    #[must_use]
+    pub fn effective_text_color(&self, theme: ChartTheme) -> String {
+        self.text_color
+            .custom_or(FinancialThemeColors::for_theme(theme).text)
+    }
+
     #[must_use]
     pub fn effective_grid_color(&self, theme: ChartTheme) -> String {
         self.grid_color
@@ -152,6 +175,16 @@ impl ChartEngine {
             .find(|series| series.id == series_id && !series.removed)?;
         let options = self.options.get();
         let mut appearance = FinancialAppearance::default();
+        appearance.background_color = if self.background_color_follows_theme {
+            AppearanceColor::Theme
+        } else {
+            AppearanceColor::Custom(options.layout.background.color.clone())
+        };
+        appearance.text_color = if self.text_color_follows_theme {
+            AppearanceColor::Theme
+        } else {
+            AppearanceColor::Custom(options.layout.text_color.clone())
+        };
         appearance.grid_visible =
             options.grid.vert_lines.visible && options.grid.horz_lines.visible;
         appearance.grid_color = if self.grid_color_follows_theme {
@@ -203,10 +236,26 @@ impl ChartEngine {
     pub fn apply_financial_canvas_appearance(&mut self, appearance: &FinancialAppearance) -> bool {
         let before = self.financial_appearance(0);
         let colors = FinancialThemeColors::for_theme(self.theme);
+        self.background_color_follows_theme =
+            matches!(appearance.background_color, AppearanceColor::Theme);
+        self.text_color_follows_theme = matches!(appearance.text_color, AppearanceColor::Theme);
         self.grid_color_follows_theme = matches!(appearance.grid_color, AppearanceColor::Theme);
         self.crosshair_color_follows_theme =
             matches!(appearance.crosshair_color, AppearanceColor::Theme);
+        let background = appearance.background_color.custom_or(colors.background);
+        let text = appearance.text_color.custom_or(colors.text);
         let patch = serde_json::json!({
+            "layout": {
+                "background": {
+                    "type": "solid",
+                    "color": background,
+                    "topColor": background,
+                    "bottomColor": background,
+                },
+                "textColor": text,
+            },
+            "leftPriceScale": { "textColor": text },
+            "rightPriceScale": { "textColor": text },
             "grid": {
                 "vertLines": {
                     "visible": appearance.grid_visible,
@@ -233,6 +282,7 @@ impl ChartEngine {
             }
         });
         self.options.apply(&patch);
+        self.route_price_scale_patch(&patch);
         self.invalidate_frame_all();
         before != self.financial_appearance(0)
     }
@@ -311,6 +361,63 @@ mod tests {
         assert_eq!(
             chart.options.get().crosshair.vert_line.color,
             FinancialThemeColors::for_theme(ChartTheme::Dark).crosshair
+        );
+    }
+
+    #[test]
+    fn custom_background_and_text_survive_theme_changes_until_reset() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let mut appearance = chart.financial_appearance(0).unwrap();
+        appearance.background_color = AppearanceColor::Custom("#101820".into());
+        appearance.text_color = AppearanceColor::Custom("#f0e68c".into());
+        assert!(chart.apply_financial_canvas_appearance(&appearance));
+
+        for theme in [ChartTheme::Light, ChartTheme::Dark] {
+            chart.set_theme(theme);
+            let options = chart.options.get();
+            assert_eq!(options.layout.background.color, "#101820");
+            assert_eq!(options.layout.background.bottom_color, "#101820");
+            assert_eq!(options.layout.text_color, "#f0e68c");
+            assert_eq!(
+                chart.panes[0].price_scale.options().text_color.as_deref(),
+                Some("#f0e68c")
+            );
+            let typed = chart.financial_appearance(0).unwrap();
+            assert_eq!(
+                typed.background_color,
+                AppearanceColor::Custom("#101820".into())
+            );
+            assert_eq!(typed.text_color, AppearanceColor::Custom("#f0e68c".into()));
+        }
+
+        appearance.background_color = AppearanceColor::Theme;
+        appearance.text_color = AppearanceColor::Theme;
+        assert!(chart.apply_financial_canvas_appearance(&appearance));
+        chart.set_theme(ChartTheme::Light);
+        let light = FinancialThemeColors::for_theme(ChartTheme::Light);
+        assert_eq!(
+            chart.options.get().layout.background.color,
+            light.background
+        );
+        assert_eq!(chart.options.get().layout.text_color, light.text);
+        assert_eq!(
+            chart.panes[0].price_scale.options().text_color.as_deref(),
+            Some(light.text)
+        );
+
+        chart
+            .apply_options(
+                r##"{"layout":{"background":{"color":"#222222"},"textColor":"#eeeeee"}}"##,
+            )
+            .unwrap();
+        chart.reset_style_to_theme_defaults(ChartTheme::Dark);
+        let typed = chart.financial_appearance(0).unwrap();
+        assert_eq!(typed.background_color, AppearanceColor::Theme);
+        assert_eq!(typed.text_color, AppearanceColor::Theme);
+        chart.set_theme(ChartTheme::Light);
+        assert_eq!(
+            chart.options.get().layout.background.color,
+            light.background
         );
     }
 

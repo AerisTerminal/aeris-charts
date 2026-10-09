@@ -1789,6 +1789,8 @@ pub struct ChartEngine {
     general_series: Option<general_series::GeneralSeriesRegistry>,
     pub options: ChartOptionsStore,
     theme: ChartTheme,
+    background_color_follows_theme: bool,
+    text_color_follows_theme: bool,
     grid_color_follows_theme: bool,
     crosshair_color_follows_theme: bool,
     pub crosshair_mode: CrosshairMode,
@@ -2072,6 +2074,8 @@ impl ChartEngine {
             general_series: None,
             options: ChartOptionsStore::new(),
             theme: ChartTheme::default(),
+            background_color_follows_theme: true,
+            text_color_follows_theme: true,
             grid_color_follows_theme: true,
             crosshair_color_follows_theme: true,
             crosshair_mode: CrosshairMode::Normal,
@@ -4742,6 +4746,20 @@ impl ChartEngine {
     /// public time-scale API. Returns the parse error for a malformed patch.
     pub fn apply_options(&mut self, patch_json: &str) -> Result<(), serde_json::Error> {
         let patch: serde_json::Value = serde_json::from_str(patch_json)?;
+        let layout = patch.get("layout");
+        if layout
+            .and_then(|layout| layout.get("background"))
+            .is_some_and(|background| {
+                ["color", "topColor", "bottomColor"]
+                    .iter()
+                    .any(|key| background.get(key).is_some())
+            })
+        {
+            self.background_color_follows_theme = false;
+        }
+        if layout.and_then(|layout| layout.get("textColor")).is_some() {
+            self.text_color_follows_theme = false;
+        }
         if patch
             .get("grid")
             .and_then(|grid| grid.get("vertLines").or_else(|| grid.get("horzLines")))
@@ -4777,39 +4795,43 @@ impl ChartEngine {
 
     /// Switch all chart cosmetics using Aeris's canonical style-token source.
     pub fn set_theme(&mut self, theme: ChartTheme) {
-        let custom_grid = (!self.grid_color_follows_theme).then(|| {
-            (
-                self.options.get().grid.vert_lines.color.clone(),
-                self.options.get().grid.horz_lines.color.clone(),
-            )
-        });
-        let custom_crosshair = (!self.crosshair_color_follows_theme).then(|| {
-            (
-                self.options.get().crosshair.vert_line.color.clone(),
-                self.options.get().crosshair.horz_line.color.clone(),
-            )
-        });
         self.theme = theme;
-        let patch = chart_theme_patch(theme);
+        let mut patch = chart_theme_patch(theme);
+        self.pin_custom_canvas_colors(&mut patch);
         self.options.apply(&patch);
-        if let Some((vert, horz)) = custom_grid {
-            self.options.apply(&serde_json::json!({
-                "grid": {
-                    "vertLines": { "color": vert },
-                    "horzLines": { "color": horz },
-                }
-            }));
-        }
-        if let Some((vert, horz)) = custom_crosshair {
-            self.options.apply(&serde_json::json!({
-                "crosshair": {
-                    "vertLine": { "color": vert },
-                    "horzLine": { "color": horz },
-                }
-            }));
-        }
         self.route_price_scale_patch(&patch);
         self.invalidate_frame_all();
+    }
+
+    /// Overwrite a theme patch's canvas colors with every color that no longer follows the theme,
+    /// so a theme switch retokenizes only the followers.
+    fn pin_custom_canvas_colors(&self, patch: &mut serde_json::Value) {
+        let options = self.options.get();
+        if !self.background_color_follows_theme {
+            let background = &options.layout.background;
+            patch["layout"]["background"] = serde_json::json!({
+                "type": background.kind,
+                "color": background.color,
+                "topColor": background.top_color,
+                "bottomColor": background.bottom_color,
+            });
+        }
+        if !self.text_color_follows_theme {
+            let text = serde_json::Value::from(options.layout.text_color.as_str());
+            patch["layout"]["textColor"] = text.clone();
+            patch["leftPriceScale"]["textColor"] = text.clone();
+            patch["rightPriceScale"]["textColor"] = text;
+        }
+        if !self.grid_color_follows_theme {
+            patch["grid"]["vertLines"]["color"] = options.grid.vert_lines.color.as_str().into();
+            patch["grid"]["horzLines"]["color"] = options.grid.horz_lines.color.as_str().into();
+        }
+        if !self.crosshair_color_follows_theme {
+            patch["crosshair"]["vertLine"]["color"] =
+                options.crosshair.vert_line.color.as_str().into();
+            patch["crosshair"]["horzLine"]["color"] =
+                options.crosshair.horz_line.color.as_str().into();
+        }
     }
 
     /// Restore Aeris-owned chart and series styling without touching view/runtime state.
@@ -4825,6 +4847,8 @@ impl ChartEngine {
     /// Theme-aware form used by hosts whose selected theme lives outside the headless engine.
     pub fn reset_style_to_theme_defaults(&mut self, theme: ChartTheme) {
         self.theme = theme;
+        self.background_color_follows_theme = true;
+        self.text_color_follows_theme = true;
         self.grid_color_follows_theme = true;
         self.crosshair_color_follows_theme = true;
         self.options.reset_style_to_defaults(theme);

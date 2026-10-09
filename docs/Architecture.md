@@ -862,9 +862,10 @@ The package also ships `aeris_charts.css` as the portable host design system. It
 
 The package preserves its complete `snake_case` surface and adds camel-case aliases for the common JavaScript chart/series/scale lifecycle without creating parallel state or handles. Financial and general series use the same chart object and ordered frame. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. Typed update batches transfer their sanitized owned columns to the engine's batch entry point; the browser wrapper never loops through the single-row engine API. The published artifact exports the optimized WASM asset explicitly and the generated glue also resolves that sibling asset by `import.meta.url`; source-tree `pkg/`, crate, benchmark, and demo paths are not runtime dependencies. `examples/web_demo` remains an integration and parity test host, while `examples/all_in_one` contains consumer-facing framework-neutral and React compositions.
 
-Financial appearance keeps theme provenance typed in the engine. Grid, crosshair, bullish, bearish,
-wick, and border colors are either semantic theme followers or explicit custom colors; theme changes
-retokenize only followers. Native hosts consume and apply the typed financial appearance transaction
+Financial appearance keeps theme provenance typed in the engine. Canvas background, chart text
+(layout and price-axis labels), grid, crosshair, bullish, bearish, wick, and border colors are either
+semantic theme followers or explicit custom colors; theme changes retokenize only followers. A raw
+`applyOptions` color patch for any of these canvas roles pins it the same way until a style reset. Native hosts consume and apply the typed financial appearance transaction
 and must not infer provenance by comparing resolved CSS strings, create dummy engines for defaults,
 or send empty-string color sentinels to clear series overrides.
 
