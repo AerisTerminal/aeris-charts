@@ -2024,8 +2024,10 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
     ) {
         const ANCHOR_RADIUS: f64 = 3.0;
-        const ANCHOR_BORDER_WIDTH: f64 = 1.0;
+        const ANCHOR_BORDER_WIDTH: f64 = 0.75;
         const ANCHOR_BORDER: Color = PRIMARY;
+        // A light ring: whole device pixels, at least one (1 px at 1x and 2x, 2 px at 3x).
+        let border = (ANCHOR_BORDER_WIDTH * vpr).floor().max(1.0);
         let pane = &self.panes[pane_index];
         let anchor_fill = || {
             let fallback = aeris_charts_core::style::DEFAULT_SURFACE_RGB;
@@ -2044,7 +2046,7 @@ impl ChartEngine {
             out.push(Prim::Circle {
                 cx,
                 cy,
-                radius: ((ANCHOR_RADIUS + ANCHOR_BORDER_WIDTH) * vpr) as f32,
+                radius: (ANCHOR_RADIUS * vpr + border) as f32,
                 fill: ANCHOR_BORDER,
                 stroke_width: 0.0,
                 stroke: ANCHOR_BORDER,

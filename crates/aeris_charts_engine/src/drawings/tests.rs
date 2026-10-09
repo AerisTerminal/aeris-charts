@@ -296,6 +296,7 @@ fn active_drawing_state_and_pixel_baselines_rebase_with_the_union() {
         start_px: vec![(f64::NAN, f64::NAN); 2],
         start_icon_size: drawing.icon_size,
         history_icon_size: drawing.icon_size,
+        duplicate: false,
     });
     chart.drawing_controller.pending = Some(PendingDrawing {
         drawing: Drawing::new(
@@ -6784,7 +6785,7 @@ fn painted_handles(frame: &crate::ChartFrame) -> Vec<(f64, f64, bool)> {
                 border_width,
                 border_color,
                 ..
-            } if w == 12.0 && h == 12.0 && border_width == 2.0 && border_color == primary() => {
+            } if w == 12.0 && h == 12.0 && border_width == 1.0 && border_color == primary() => {
                 assert_eq!(
                     (x.fract(), y.fract()),
                     (0.0, 0.0),
@@ -7737,4 +7738,92 @@ fn drawing_labels_never_sit_on_their_own_strokes() {
         }
         assert!(!labels.is_empty(), "{kind:?} paints labels");
     }
+}
+
+#[test]
+fn idle_position_progress_keeps_its_drawing_z_order() {
+    use aeris_charts_render::color::Color;
+
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [0.0, 60.0, 120.0, 180.0, 240.0];
+    let values = [10.0, 11.0, 12.0, 11.5, 12.5];
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let position = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 12.0,
+                },
+                DrawingPoint {
+                    logical: 4.0,
+                    price: 14.0,
+                },
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 9.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let rectangle = chart
+        .add_drawing(
+            DrawingKind::Rectangle,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.5,
+                    price: 13.5,
+                },
+                DrawingPoint {
+                    logical: 4.0,
+                    price: 10.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    chart.set_selected_drawing(None);
+
+    let frame = chart.build_frame();
+    let reward = Color::rgb(0x08, 0x99, 0x81);
+    let progress_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 96);
+    let progress_index = frame.panes[0]
+        .main
+        .iter()
+        .position(|prim| matches!(prim, Prim::Rect { color, .. } if *color == progress_fill))
+        .expect("reward travel overlay");
+    let segment = |chart: &ChartEngine, id| {
+        *chart
+            .frame_drawing_segments(0)
+            .iter()
+            .find(|segment| segment.drawing_id == Some(id))
+            .expect("drawing segment")
+    };
+    let (position_segment, rectangle_segment) =
+        (segment(&chart, position), segment(&chart, rectangle));
+    assert!(
+        (position_segment.start..position_segment.end).contains(&progress_index),
+        "progress belongs to its position's segment, not to pane chrome"
+    );
+    assert!(
+        progress_index < rectangle_segment.start,
+        "an idle position's progress must stay below drawings stacked above it"
+    );
+
+    // A data tick moves progress; the retained segment revision changes so WebGPU re-uploads it.
+    let series = chart.series[0].id;
+    assert!(chart.update_series_bar(series, 240.0, [13.0; 4]));
+    chart.build_frame();
+    assert_ne!(
+        segment(&chart, position).revision,
+        position_segment.revision
+    );
 }

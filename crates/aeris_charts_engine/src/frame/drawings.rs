@@ -26,9 +26,10 @@ use aeris_charts_core::model::plot_list::PlotValueIndex;
 
 /// Drawing handles (`push_handle`): a theme-derived fill inside a primary-token border, round or
 /// square. The fill radius plus border makes a 12 px handle, larger than the series selection
-/// anchors (2.5/1.5, series_geometry.rs) since these are drag targets.
-const ANCHOR_RADIUS: f64 = 4.0;
-const ANCHOR_BORDER_WIDTH: f64 = 2.0;
+/// anchors (series_geometry.rs) since these are drag targets. The border floors to whole device
+/// pixels so it stays a light ring: 1 px at 1x, 3 px at 2x.
+const ANCHOR_RADIUS: f64 = 4.5;
+const ANCHOR_BORDER_WIDTH: f64 = 1.5;
 /// Square handles keep slightly rounded corners.
 const ANCHOR_SQUARE_RADIUS: f64 = 2.0;
 const ANCHOR_BORDER: Color = PRIMARY;
@@ -3788,14 +3789,16 @@ impl ChartEngine {
         self.push_stat_label_block(out, (center_x, position.entry_y), &middle, pnl_color, vpr);
     }
 
-    /// Dynamic position progress belongs to pane chrome rather than retained drawing geometry:
-    /// series updates already invalidate chrome, so the darker traversed fill and terminal-candle
-    /// trend can follow data without rebuilding every drawing on each tick.
+    /// Dynamic position progress is rebuilt with pane chrome rather than retained drawing
+    /// geometry: series updates already invalidate chrome, so the darker traversed fill and
+    /// terminal-candle trend can follow data without rebuilding every drawing on each tick.
+    /// `parts` records each position's range so reassembly paints it in its drawing's z-slot.
     pub(super) fn build_position_progress_frame(
         &self,
         pane_index: usize,
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
+        parts: &mut Vec<super::RetainedDrawingPart>,
         hpr: f64,
         vpr: f64,
     ) {
@@ -3875,6 +3878,7 @@ impl ChartEngine {
             // Stronger opacity represents only the price/time space actually travelled since the
             // fill: first-fill x -> current/terminal x, entry y -> current/terminal y. It never
             // darkens the untouched remainder of either TP/SL zone.
+            let (prim_start, point_start) = (out.len(), points.len());
             let travel_left = start_x.min(run_x);
             let travel_right = start_x.max(run_x);
             if travel_right > travel_left && (run_y - position.entry_y).abs() > f64::EPSILON {
@@ -3904,6 +3908,15 @@ impl ChartEngine {
                     LineType::Simple,
                     POSITION_ENTRY,
                 );
+            }
+            if out.len() != prim_start {
+                parts.push(super::RetainedDrawingPart {
+                    id: drawing.id,
+                    prim_start,
+                    prim_end: out.len(),
+                    point_start,
+                    point_end: points.len(),
+                });
             }
         }
     }
@@ -4677,7 +4690,7 @@ fn push_handle(center: (f64, f64), square: bool, vpr: f64, fill: Color, out: &mu
         h: side as f32,
         radii: [radius as f32; 4],
         fill,
-        border_width: (ANCHOR_BORDER_WIDTH * vpr).round().max(1.0) as f32,
+        border_width: (ANCHOR_BORDER_WIDTH * vpr).floor().max(1.0) as f32,
         border_color: ANCHOR_BORDER,
     });
 }

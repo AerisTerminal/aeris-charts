@@ -910,6 +910,11 @@ impl ChartEngine {
                 self.drawing_tool_pointer_move(x, y, modifiers, primary_pressed);
             }
             Some(PressMode::DrawingDrag) if primary_pressed => {
+                // The Ctrl/⌘ held to duplicate is the clone gesture, not a magnet override.
+                let modifiers = DrawingModifiers {
+                    magnet: modifiers.magnet && !self.drawing_duplicate_drag_active(),
+                    ..modifiers
+                };
                 self.drawing_drag_to(x, y, modifiers);
             }
             Some(PressMode::Pane { price_pan, panning }) if primary_pressed => {
@@ -1036,7 +1041,7 @@ impl ChartEngine {
             // The second press opened a gesture session like any press; it closes here without
             // the release action, which the double-click replaces.
             match press.mode {
-                PressMode::DrawingDrag => self.drawing_drag_end(),
+                PressMode::DrawingDrag => self.finish_drawing_drag(false),
                 PressMode::TimeAxis => self.time_axis_end_scale(),
                 PressMode::PriceAxis { pane, target } => {
                     self.price_axis_end_scale(pane, target);
@@ -1134,7 +1139,7 @@ impl ChartEngine {
                 }
             }
             PressMode::DrawingDrag => {
-                self.drawing_drag_end();
+                self.finish_drawing_drag(moved);
                 if !moved {
                     self.input_primary_click(x, y, press.text_press_selected);
                     self.push_input_event(ChartInputEvent::Click { x, y });
@@ -1829,6 +1834,11 @@ impl ChartEngine {
                 committed_on_press: update.created.is_some(),
             };
         }
+        if (input.modifiers.control || input.modifiers.meta)
+            && self.drawing_duplicate_drag_start_at(x, y)
+        {
+            return PressMode::DrawingDrag;
+        }
         if self.drawing_drag_start_at(x, y) {
             return PressMode::DrawingDrag;
         }
@@ -1902,6 +1912,24 @@ impl ChartEngine {
 
     /// Click-to-select, drawings first: a trend label or drawing hit selects it and clears the
     /// series selection; a miss falls through to the series under the click (or clears it).
+    /// Close a drawing drag on release. A duplicate that stayed within the click slop is a
+    /// Ctrl-click, not a clone, so it is discarded instead of committing a jittered copy.
+    /// A committed duplicate reports `DrawingCreated` like any other new drawing.
+    fn finish_drawing_drag(&mut self, moved: bool) {
+        let duplicate = self
+            .drawing_duplicate_drag_active()
+            .then(|| self.drawing_drag.as_ref().map(|drag| drag.id))
+            .flatten();
+        if !moved && duplicate.is_some() {
+            self.drawing_drag_cancel();
+            return;
+        }
+        self.drawing_drag_end();
+        if let Some(id) = duplicate.filter(|&id| self.drawing(id).is_some()) {
+            self.push_input_event(ChartInputEvent::DrawingCreated(id));
+        }
+    }
+
     fn input_primary_click(&mut self, x: f64, y: f64, text_press_selected: Option<DrawingId>) {
         let trend_text_hit = self.drawing_text_hit_at(x, y);
         let drawing_hit = trend_text_hit.is_some() || self.select_drawing_at(x, y);
@@ -2541,6 +2569,70 @@ mod tests {
         chart.input_pointer_move(sample(150.0, 90.0, 210.0), true);
         chart.input_pointer_up(sample(150.0, 90.0, 220.0));
         assert_ne!(chart.drawing(id).unwrap().points, before);
+    }
+
+    #[test]
+    fn control_drag_duplicates_a_drawing_as_one_undoable_creation() {
+        let mut chart = chart();
+        chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None);
+        click(&mut chart, 120.0, 120.0);
+        click(&mut chart, 300.0, 220.0);
+        let source = chart.drawings()[0].clone();
+        chart.take_input_events();
+        let held = |x: f64, y: f64, timestamp_ms: f64, meta: bool| PointerInput {
+            modifiers: InputModifiers {
+                control: !meta,
+                meta,
+                ..InputModifiers::default()
+            },
+            timestamp_ms,
+            ..at(x, y)
+        };
+
+        // Ctrl-click without movement neither duplicates nor moves anything.
+        chart.input_pointer_down(held(210.0, 170.0, 1_000.0, false), 1);
+        chart.input_pointer_move(held(211.0, 170.0, 1_010.0, false), true);
+        chart.input_pointer_up(held(211.0, 170.0, 1_020.0, false));
+        assert_eq!(chart.drawings().len(), 1);
+        assert_eq!(chart.drawings()[0].points, source.points);
+        chart.take_input_events();
+
+        // Ctrl/⌘ + drag leaves the source in place and drops a selected copy on top.
+        for (step, meta) in [(0.0, false), (1.0, true)] {
+            let t = 5_000.0 + step * 1_000.0;
+            chart.input_pointer_down(held(210.0, 170.0, t, meta), 1);
+            assert_eq!(chart.drawings().len(), 2 + step as usize);
+            chart.input_pointer_move(held(210.0, 210.0, t + 10.0, meta), true);
+            chart.input_pointer_move(held(210.0, 240.0, t + 20.0, meta), true);
+            chart.input_pointer_up(held(210.0, 240.0, t + 30.0, meta));
+        }
+        let drawings = chart.drawings();
+        assert_eq!(drawings.len(), 3);
+        assert_eq!(drawings[0], source, "the source drawing never moves");
+        let copy = drawings[2].clone();
+        assert_eq!(chart.selected_drawing(), Some(copy.id));
+        assert_eq!(copy.kind, source.kind);
+        assert!(copy.z_order > source.z_order, "the copy stacks on top");
+        assert_eq!(copy.points[0].logical, source.points[0].logical);
+        assert!(copy.points[0].price < source.points[0].price);
+        assert!(
+            chart
+                .take_input_events()
+                .contains(&ChartInputEvent::DrawingCreated(copy.id))
+        );
+
+        // Each duplicate is exactly one undo step.
+        assert!(chart.undo_drawing());
+        assert_eq!(chart.drawings().len(), 2);
+        assert!(chart.drawing(copy.id).is_none());
+
+        // An interrupted duplicate drag leaves no copy behind.
+        chart.input_pointer_down(held(210.0, 170.0, 9_000.0, false), 1);
+        chart.input_pointer_move(held(210.0, 240.0, 9_010.0, false), true);
+        assert_eq!(chart.drawings().len(), 3);
+        chart.input_cancel();
+        assert_eq!(chart.drawings().len(), 2);
+        assert_eq!(chart.drawings()[0], source);
     }
 
     #[test]

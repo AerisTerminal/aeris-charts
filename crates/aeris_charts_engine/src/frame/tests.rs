@@ -8275,7 +8275,7 @@ fn position_square_controls_have_one_rounded_fill_and_inside_border() {
                     } if *border_width > 0.0 && *border_color == super::PRIMARY => {
                         assert_eq!(*actual_fill, fill);
                         assert_eq!(*border_color, super::PRIMARY);
-                        assert_eq!(*border_width, (2.0_f64 * dpr).round().max(1.0) as f32);
+                        assert_eq!(*border_width, (1.5_f64 * dpr).floor().max(1.0) as f32);
                         assert_eq!(*w, *h);
                         assert_eq!(x.fract(), 0.0);
                         assert_eq!(y.fract(), 0.0);

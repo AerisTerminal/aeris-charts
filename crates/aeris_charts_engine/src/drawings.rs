@@ -1697,6 +1697,9 @@ pub(crate) struct DrawingDrag {
     /// start, for cancellation and history.
     pub(crate) start_icon_size: f64,
     pub(crate) history_icon_size: f64,
+    /// A Ctrl/⌘ duplicate drag: the drawing is an unrecorded copy that commits as one Create on
+    /// a moved release and is removed on cancellation or a release without movement.
+    pub(crate) duplicate: bool,
 }
 
 const DRAWING_HISTORY_LIMIT: usize = 100;
@@ -5725,7 +5728,57 @@ impl ChartEngine {
             start_px,
             start_icon_size: icon_size,
             history_icon_size: icon_size,
+            duplicate: false,
         });
+        true
+    }
+
+    /// Ctrl/⌘ + drag on a drawing's body (industry-standard clone gesture): an exact copy is
+    /// placed on top, selected, and dragged while the original stays put. The copy is not
+    /// recorded until [`Self::drawing_drag_end`] sees it moved, so the gesture is one undo step,
+    /// and a cancel or a release without movement leaves the chart unchanged. Anchor presses and
+    /// locked drawings return false so the caller falls back to the ordinary press.
+    pub fn drawing_duplicate_drag_start_at(&mut self, x: f64, y: f64) -> bool {
+        let Some(hit) = self.hit_test_drawing_with_profile(x, y, HitProfile::PRECISION) else {
+            return false;
+        };
+        let Some(source) = self
+            .drawing(hit.id)
+            .filter(|drawing| hit.part == DrawingDragPart::Body && !drawing.locked)
+        else {
+            return false;
+        };
+        let Some(start_px) = self.drawing_px(source) else {
+            return false;
+        };
+        let mut copy = source.clone();
+        let Some(id) = self.take_drawing_id() else {
+            return false;
+        };
+        copy.id = id;
+        copy.z_order = id as i32;
+        copy.revision = 1;
+        let start_points = copy.points.clone();
+        self.drawing_drag = Some(DrawingDrag {
+            id,
+            part: DrawingDragPart::Body,
+            start_x: x,
+            start_y: y,
+            current_x: x,
+            current_y: y,
+            history_points: start_points.clone(),
+            history_screen_position: (copy.screen_x, copy.screen_y),
+            history_bars_pattern: copy.bars_pattern.clone(),
+            start_points,
+            start_px,
+            start_icon_size: copy.icon_size,
+            history_icon_size: copy.icon_size,
+            duplicate: true,
+        });
+        self.drawings.push(copy);
+        self.insert_drawing_runtime(id);
+        self.set_selected_drawing(Some(id));
+        self.invalidate_frame_drawings();
         true
     }
 
@@ -6106,6 +6159,24 @@ impl ChartEngine {
                 }
             }
             self.update_drawing_runtime(id);
+            if drag.duplicate {
+                // A copy that never left its source is no duplicate: drop it unrecorded.
+                let moved = self.drawing(id).is_some_and(|drawing| {
+                    drawing.points != drag.history_points
+                        || (drawing.screen_x, drawing.screen_y) != drag.history_screen_position
+                });
+                if !moved {
+                    self.remove_drawing_snapshot(id);
+                    self.invalidate_frame_drawings();
+                } else if let Some(index) = self.drawings.iter().position(|item| item.id == id) {
+                    self.record_drawing_command(DrawingCommand::Create {
+                        drawing: self.drawings[index].clone(),
+                        index,
+                    });
+                    self.bump_drawing_sync_revision();
+                }
+                return;
+            }
             if let Some(after) = self.drawing(id).cloned() {
                 let mut before = after.clone();
                 before.points = drag.history_points;
@@ -6131,6 +6202,11 @@ impl ChartEngine {
         let Some(drag) = self.drawing_drag.take() else {
             return;
         };
+        if drag.duplicate {
+            self.remove_drawing_snapshot(drag.id);
+            self.invalidate_frame_drawings();
+            return;
+        }
         if let Some(drawing) = self
             .drawings
             .iter_mut()
@@ -6148,6 +6224,12 @@ impl ChartEngine {
 
     pub fn drawing_drag_active(&self) -> bool {
         self.drawing_drag.is_some()
+    }
+
+    pub(crate) fn drawing_duplicate_drag_active(&self) -> bool {
+        self.drawing_drag
+            .as_ref()
+            .is_some_and(|drag| drag.duplicate)
     }
 
     /// Keyboard-equivalent movement through the same drag/history path as pointer input.
@@ -6237,6 +6319,7 @@ impl ChartEngine {
             start_px,
             start_icon_size: drawing.icon_size,
             history_icon_size: drawing.icon_size,
+            duplicate: false,
         });
         self.drawing_drag_to(
             origin.0 + dx_css,
