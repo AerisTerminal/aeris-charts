@@ -516,17 +516,18 @@ impl ChartEngine {
 
     /// Earliest host-clock time at which [`Self::input_tick`] has deferred work, if any.
     pub fn input_wake_deadline_ms(&self) -> Option<f64> {
-        match (
+        [
             self.input.tooltip_deadline_ms,
             self.input.touch_longpress_deadline_ms,
-        ) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (Some(a), None) | (None, Some(a)) => Some(a),
-            (None, None) => None,
-        }
+            self.drawing_text_caret_deadline_ms(),
+        ]
+        .into_iter()
+        .flatten()
+        .reduce(f64::min)
     }
 
-    /// Advance time-driven input state: animations and the trading-tooltip dwell. Hosts call this
+    /// Advance time-driven input state: animations, the trading-tooltip dwell, and the painted
+    /// text caret's blink. Hosts call this
     /// once per prepared frame and when a wake deadline passes. Returns whether state changed.
     pub fn input_tick(&mut self, now_ms: f64) -> bool {
         let mut changed = false;
@@ -564,6 +565,7 @@ impl ChartEngine {
             self.input.touch_longpress_deadline_ms = None;
             changed |= self.arm_touch_tracking();
         }
+        changed |= self.tick_drawing_text_caret(now_ms);
         if changed {
             self.input.frame_dirty = true;
         }
@@ -596,8 +598,9 @@ impl ChartEngine {
         true
     }
 
-    /// Forward the newest coalesced captured-drawing sample. Hosts that receive raw device-rate
-    /// motion call this once per prepared frame; hosts that already coalesce never need it.
+    /// Forward the newest coalesced captured-drawing sample. Frame construction calls this
+    /// itself, once per prepared frame; a host may call it earlier to learn whether the sample
+    /// changed anything before scheduling a frame.
     pub fn flush_coalesced_input(&mut self) -> bool {
         let Some((x, y, modifiers)) = self.input.pending_capture.take() else {
             return false;
@@ -3548,6 +3551,32 @@ mod tests {
         assert!(!options.kinetic_mouse && !options.price_axis_wheel_zoom);
     }
 
+    /// A host that only builds frames (the browser main thread) still gets one knot per frame:
+    /// frame construction applies the coalesced sample, so the brush draws live and commits
+    /// its full stroke instead of a start-to-release line.
+    #[test]
+    fn frame_construction_applies_captured_freehand_samples() {
+        let mut chart = chart();
+        chart.set_drawing_tool(Some(DrawingKind::Brush), None, None);
+        chart.input_pointer_down(at(100.0, 100.0), 1);
+        for step in 1..=5 {
+            let t = f64::from(step);
+            chart.input_pointer_move(at(100.0 + 20.0 * t, 100.0 + 15.0 * (t * 1.3).sin()), true);
+            assert!(chart.frame_pending());
+            chart.build_frame();
+            assert!(
+                chart.input.pending_capture.is_none(),
+                "the sample was consumed by the frame"
+            );
+        }
+        chart.input_pointer_up(at(200.0, 100.0 + 15.0 * 6.5_f64.sin()));
+        let events = chart.take_input_events();
+        let [ChartInputEvent::DrawingCreated(id)] = events[..] else {
+            panic!("the brush commits: {events:?}");
+        };
+        assert_eq!(chart.drawing(id).unwrap().points.len(), 6);
+    }
+
     /// Native platforms may deliver motion per HID report (Wayland: often one axis per event). A
     /// captured freehand stream forwards only the newest sample per frame, so device cadence never
     /// becomes stroke knots.
@@ -3617,7 +3646,10 @@ mod tests {
     fn text_annotation_creation_and_reedit_use_the_engine_controller() {
         let mut chart = chart();
         assert!(chart.set_drawing_tool(Some(DrawingKind::Note), None, None));
+        // The pinned point, then the box (hanging from the second click).
         click(&mut chart, 250.0, 180.0);
+        assert!(chart.take_input_events().is_empty());
+        click(&mut chart, 300.0, 200.0);
         let events = chart.take_input_events();
         let [ChartInputEvent::DrawingCreated(id)] = events[..] else {
             panic!("note creation must notify the host: {events:?}");
@@ -3626,7 +3658,8 @@ mod tests {
         assert!(chart.set_drawing_text_edit("Remember", 8));
         assert!(chart.commit_drawing_text_edit());
         assert_eq!(chart.drawing(id).unwrap().text, "Remember");
-        click(&mut chart, 250.0, 180.0);
+        // A click inside the box reopens the editor.
+        click(&mut chart, 300.0, 212.0);
         assert_eq!(chart.drawing_text_edit().map(|session| session.0), Some(id));
         assert!(chart.cancel_drawing_text_edit());
 

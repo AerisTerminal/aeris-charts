@@ -95,6 +95,11 @@
   #drawing_catalog { flex-basis: 100%; }
   #drawing_catalog .drawing_catalog_row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
   #drawing_catalog .drawing_catalog_row > span { min-width: 84px; font-size: 12px; opacity: 0.7; }
+  .icon_picker { display: grid; grid-template-columns: repeat(auto-fill, 32px); gap: 4px; flex: 1; min-width: 0; }
+  .icon_picker button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: var(--border-width) solid transparent; border-radius: var(--radius-small); background: transparent; color: var(--icon); }
+  .icon_picker button:hover { color: var(--icon-active); background: var(--hover-bg); }
+  .icon_picker button[aria-pressed="true"] { color: var(--primary-foreground); background: var(--primary); }
+  .icon_picker svg { width: 20px; height: 20px; }
   #inspector .group h2 { flex-basis: 100%; margin: 0 0 6px; font-size: 13px; font-weight: 600; line-height: 1.4; }
   #inspector label { display: flex; flex: 1 1 100%; gap: 8px; align-items: center; min-width: 0; min-height: 40px; color: var(--text-secondary); font-size: 12px; }
   #inspector label[hidden] { display: none; }
@@ -460,6 +465,7 @@
           <button type="button" data-tool="flag_mark">flag</button>
           <button type="button" data-tool="signpost">signpost</button>
         </div>
+        <div class="drawing_catalog_row"><span>icons</span><div id="icon_picker" class="icon_picker" role="group" aria-label="Built-in icons"></div></div>
       </details>
       <label title="Hypothetical balance used by position drawing statistics">balance <input type="number" id="position_account_size" min="0.01" max="1000000000000000" step="any" value="1000"></label>
       <label title="Percentage of the hypothetical balance risked at the stop">risk % <input type="number" id="position_risk_percent" min="0" max="100" step="any" value="25"></label>
@@ -1282,7 +1288,44 @@ function arm_drawing_tool(kind) {
 for (const button of drawing_tool_buttons) {
   button.addEventListener("click", () => arm_drawing_tool(button.dataset.tool));
 }
-active_chart_router.set_drawing_tool_listener(sync_drawing_tool_buttons);
+// Icon picker: the chart's built-in solid icons. Their SVG comes from the engine, so the picker
+// shows exactly what the chart paints. Picking one arms an icon stamp carrying that name.
+const icon_picker_buttons = [];
+let picked_icon_name = null;
+function sync_icon_picker(tool) {
+  if (tool !== "icon_stamp") picked_icon_name = null;
+  for (const button of icon_picker_buttons) {
+    button.setAttribute("aria-pressed", String(button.dataset.iconName === picked_icon_name));
+  }
+}
+function add_icon_picker_button(container, name, label, svg) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.iconName = name;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-pressed", "false");
+  button.innerHTML = svg;
+  button.addEventListener("click", () => {
+    const disarm = picked_icon_name === name && active_chart_router.active_drawing_tool() === "icon_stamp";
+    picked_icon_name = disarm ? null : name;
+    active_chart_router.set_drawing_tool(disarm ? null : "icon_stamp", {
+      ...drawing_options_from_inputs("icon_stamp"),
+      icon_name: name,
+      icon_size: 32,
+    });
+    sync_icon_picker(disarm ? null : "icon_stamp");
+  });
+  icon_picker_buttons.push(button);
+  container.append(button);
+}
+for (const icon of chart.builtin_drawing_icons()) {
+  add_icon_picker_button(document.getElementById("icon_picker"), icon.name, icon.name.replaceAll("-", " "), icon.svg);
+}
+active_chart_router.set_drawing_tool_listener((tool) => {
+  sync_drawing_tool_buttons(tool);
+  sync_icon_picker(tool);
+});
 // The toolbar follows the common selection-settings model: clicking a drawing loads
 // its style into the inputs, so a later change applies on top of the drawing's current style
 // instead of resetting the rest. (#rrggbb needed for the color inputs; other CSS forms skip.)

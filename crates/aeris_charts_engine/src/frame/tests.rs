@@ -7326,6 +7326,42 @@ fn price_line_family_renders_per_series_with_reference_defaults() {
 }
 
 #[test]
+fn a_partial_live_price_line_runs_toward_the_side_its_price_scale_is_on() {
+    let mut chart = two_identical_line_series();
+    chart.series[1].price_line_visible = false;
+    let span = |chart: &mut ChartEngine| {
+        let frame = chart.build_frame();
+        let width = chart.pane_w.round() as i32;
+        frame.panes[0]
+            .main
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::HLine { x0, x1, color, .. } if *color == LINE => Some((*x0, *x1)),
+                _ => None,
+            })
+            .map(|span| (span, width))
+            .expect("the live price line")
+    };
+    // On the right scale: from the latest bar to the right edge.
+    let ((x0, x1), width) = span(&mut chart);
+    assert!(x0 > 0 && x1 == width, "{x0}..{x1} of {width}");
+    let bar_x = x0;
+    // On the left scale: from the left edge (its label) to the latest bar.
+    chart.set_series_price_scale(0, PriceScaleTarget::Left);
+    let ((x0, x1), _) = span(&mut chart);
+    assert_eq!(x0, 0, "the line reaches the left-side label");
+    assert!((x1 - bar_x).abs() <= 1, "{x1} vs bar {bar_x}");
+    // A named scale moved to the left side follows its side too.
+    let moved = chart
+        .add_price_scale(0, "moved", PriceScaleSide::Right, None, true)
+        .unwrap();
+    chart.set_series_price_scale(0, moved);
+    assert_eq!(span(&mut chart).0.1, span(&mut chart).1);
+    assert!(chart.move_price_scale(0, moved, PriceScaleSide::Left, 0));
+    assert_eq!(span(&mut chart).0.0, 0);
+}
+
+#[test]
 fn indicator_outputs_inherit_partial_live_price_lines() {
     let mut chart = two_identical_line_series();
     let sma = chart.add_sma(0, 2).expect("sma output");
@@ -8239,7 +8275,7 @@ fn position_square_controls_have_one_rounded_fill_and_inside_border() {
                     } if *border_width > 0.0 && *border_color == super::PRIMARY => {
                         assert_eq!(*actual_fill, fill);
                         assert_eq!(*border_color, super::PRIMARY);
-                        assert_eq!(*border_width, (1.5_f64 * dpr).floor().max(1.0) as f32);
+                        assert_eq!(*border_width, (2.0_f64 * dpr).round().max(1.0) as f32);
                         assert_eq!(*w, *h);
                         assert_eq!(x.fract(), 0.0);
                         assert_eq!(y.fract(), 0.0);
@@ -8248,15 +8284,18 @@ fn position_square_controls_have_one_rounded_fill_and_inside_border() {
                                 .iter()
                                 .all(|radius| *radius > 0.0 && *radius == radii[0])
                         );
-                        Some(())
+                        // Squares keep small corners; the entry control is fully round.
+                        Some(radii[0] < *w / 2.0)
                     }
                     _ => None,
                 })
-                .count();
+                .collect::<Vec<_>>();
             assert_eq!(
-                squares, 3,
+                squares.iter().filter(|square| **square).count(),
+                3,
                 "one bordered rounded shape per square position control"
             );
+            assert_eq!(squares.len(), 4, "plus the round entry control");
         }
     }
 }
@@ -12501,11 +12540,18 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
     );
     chart.set_editing_drawing(None);
 
-    // The trend line keeps its anchor handles on selection (border discs + fill discs).
+    // The trend line keeps its two anchor handles on selection, each one bordered shape.
     chart.set_selected_drawing(Some(line));
     chart.set_hovered_text(None);
-    let discs = frame_discs(&mut chart);
-    assert_eq!(discs.len(), 4, "two anchors × (border disc + fill disc)");
+    let handles = chart.build_frame().panes[0]
+        .main
+        .iter()
+        .filter(|prim| {
+            matches!(prim, Prim::RoundRect { border_color, border_width, .. }
+                if *border_color == PRIMARY && *border_width > 0.0)
+        })
+        .count();
+    assert_eq!(handles, 2, "two anchor handles");
 
     // Deselect/deshover clears everything.
     chart.set_selected_drawing(None);

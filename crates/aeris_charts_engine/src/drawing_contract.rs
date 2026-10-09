@@ -283,6 +283,9 @@ pub enum DrawingKindOptions {
         icon_name: Option<String>,
         icon_size: f64,
     },
+    ArrowMarker {
+        icon_size: f64,
+    },
     BarsPattern {
         mirror_x: bool,
         mirror_y: bool,
@@ -534,13 +537,15 @@ pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
             DrawingPropertyType::String,
             serde_json::json!(""),
         ));
+    }
+    if kind.has_icon_size() {
         let mut size = descriptor(
             "icon_size",
             DrawingPropertyType::Number,
             serde_json::json!(24.0),
         );
-        size.min = Some(8.0);
-        size.max = Some(96.0);
+        size.min = Some(crate::drawings::MIN_DRAWING_ICON_DISPLAY_SIZE);
+        size.max = Some(crate::drawings::MAX_DRAWING_ICON_DISPLAY_SIZE);
         properties.push(size);
     }
     if kind == DrawingKind::BarsPattern {

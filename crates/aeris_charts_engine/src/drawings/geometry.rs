@@ -11,6 +11,9 @@ use super::{DrawingKind, TextBox, path_arrow_points};
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DrawingBodyGeometry<'a> {
     Empty,
+    /// A box annotation; its box, text, and connector need text measurement, so they resolve
+    /// through `ChartEngine::annotation_layout` (annotations.rs).
+    Annotation,
     Segment {
         a: (f64, f64),
         b: (f64, f64),
@@ -205,6 +208,41 @@ impl FibonacciArcGeometry {
         )
     }
 
+    /// Where along each level's arc its label goes: the point whose radius runs closest to
+    /// vertical (the top, else the bottom, else the nearer end of the sweep). Concentric levels
+    /// are spaced radially there, so their one-line labels stack instead of crossing the next
+    /// ring. The spiral keeps its middle.
+    pub(crate) fn label_t(self) -> f64 {
+        if self.kind == DrawingKind::FibonacciSpiral || self.sweep.abs() <= f64::EPSILON {
+            return 0.5;
+        }
+        let first = if self.kind == DrawingKind::FibonacciWedge {
+            self.start_angle
+        } else {
+            self.start_angle - self.sweep / 2.0
+        };
+        let tau = std::f64::consts::TAU;
+        let t_of = |angle: f64| {
+            // The sweep may run either way; measure the target along it.
+            let along = if self.sweep > 0.0 {
+                (angle - first).rem_euclid(tau)
+            } else {
+                -(first - angle).rem_euclid(tau)
+            };
+            along / self.sweep
+        };
+        let up = t_of(-std::f64::consts::FRAC_PI_2);
+        if (0.0..=1.0).contains(&up) {
+            return up;
+        }
+        let down = t_of(std::f64::consts::FRAC_PI_2);
+        if (0.0..=1.0).contains(&down) {
+            return down;
+        }
+        let top = |t: f64| self.point(1.0, t).1;
+        if top(0.0) <= top(1.0) { 0.0 } else { 1.0 }
+    }
+
     /// Chords for every level up to `value` (the largest visible one), so level bands pair
     /// their boundaries point for point.
     pub(crate) fn segments(self, value: f64) -> u32 {
@@ -363,34 +401,23 @@ impl SineGeometry {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MarkerGeometry {
-    pub(crate) kind: DrawingKind,
     pub(crate) anchor: (f64, f64),
-    pub(crate) base: Option<(f64, f64)>,
     pub(crate) radius: f64,
 }
 
 impl MarkerGeometry {
+    /// The flag's pennant, hanging right of the top of its stem.
     pub(crate) fn triangle(self) -> [(f64, f64); 3] {
         let (x, y) = self.anchor;
         let r = self.radius;
-        match self.kind {
-            DrawingKind::ArrowMarkerUp => [(x, y), (x - r, y + 2.0 * r), (x + r, y + 2.0 * r)],
-            DrawingKind::ArrowMarkerDown => [(x, y), (x - r, y - 2.0 * r), (x + r, y - 2.0 * r)],
-            DrawingKind::ArrowMarkerLeft => [(x, y), (x + 2.0 * r, y - r), (x + 2.0 * r, y + r)],
-            DrawingKind::ArrowMarkerRight => [(x, y), (x - 2.0 * r, y - r), (x - 2.0 * r, y + r)],
-            _ => [(x, y - 2.0 * r), (x + 2.0 * r, y - 1.5 * r), (x, y - r)],
-        }
+        [(x, y - 2.0 * r), (x + 2.0 * r, y - 1.5 * r), (x, y - r)]
     }
 
-    pub(crate) fn stem(self) -> Option<((f64, f64), (f64, f64))> {
-        match self.kind {
-            DrawingKind::FlagMark => Some((
-                self.anchor,
-                (self.anchor.0, self.anchor.1 - 2.0 * self.radius),
-            )),
-            DrawingKind::Signpost => Some((self.base?, self.anchor)),
-            _ => None,
-        }
+    pub(crate) fn stem(self) -> ((f64, f64), (f64, f64)) {
+        (
+            self.anchor,
+            (self.anchor.0, self.anchor.1 - 2.0 * self.radius),
+        )
     }
 }
 
@@ -1034,16 +1061,22 @@ pub(crate) fn resolve_drawing_geometry<'a>(
         DrawingKind::ArrowMarkerUp
         | DrawingKind::ArrowMarkerDown
         | DrawingKind::ArrowMarkerLeft
-        | DrawingKind::ArrowMarkerRight
-        | DrawingKind::FlagMark
-        | DrawingKind::Signpost => DrawingBodyGeometry::Marker(MarkerGeometry {
-            kind,
-            anchor: if kind == DrawingKind::Signpost {
-                *px.get(1)?
-            } else {
-                *px.first()?
-            },
-            base: (kind == DrawingKind::Signpost).then(|| px[0]),
+        | DrawingKind::ArrowMarkerRight => {
+            // The built-in arrow icon, placed so its tip lands on the anchor.
+            let (_, tip) = super::icons::arrow_marker_icon(kind)?;
+            let size = options.icon_size * options.device_scale;
+            let scale = size / super::icons::ICON_VIEWBOX;
+            let anchor = *px.first()?;
+            DrawingBodyGeometry::IconStamp {
+                center: (
+                    anchor.0 - (tip.0 - super::icons::ICON_VIEWBOX / 2.0) * scale,
+                    anchor.1 - (tip.1 - super::icons::ICON_VIEWBOX / 2.0) * scale,
+                ),
+                size,
+            }
+        }
+        DrawingKind::FlagMark => DrawingBodyGeometry::Marker(MarkerGeometry {
+            anchor: *px.first()?,
             radius: 7.0 * options.device_scale,
         }),
         DrawingKind::RotatedRectangle => {
@@ -1111,19 +1144,15 @@ pub(crate) fn resolve_drawing_geometry<'a>(
                 bottom: a.1.max(b.1),
             }
         }
-        DrawingKind::Text
-        | DrawingKind::Note
+        DrawingKind::Text | DrawingKind::AnchoredText => DrawingBodyGeometry::Empty,
+        DrawingKind::Note
         | DrawingKind::Comment
-        | DrawingKind::AnchoredText => DrawingBodyGeometry::Empty,
-        DrawingKind::Callout => DrawingBodyGeometry::Segment {
-            a: *px.first()?,
-            b: *px.get(1)?,
-        },
-        DrawingKind::PriceNote => DrawingBodyGeometry::Horizontal {
-            y: px[0].1,
-            x0: 0.0,
-            x1: pane_w,
-        },
+        | DrawingKind::Callout
+        | DrawingKind::PriceNote
+        | DrawingKind::Signpost => {
+            px.first()?;
+            DrawingBodyGeometry::Annotation
+        }
         DrawingKind::PriceLabel => DrawingBodyGeometry::PriceLabel {
             x: px[0].0,
             y: px[0].1,
@@ -1215,16 +1244,10 @@ pub(crate) fn resolve_drawing_geometry<'a>(
         }
     };
 
-    let text_box = if kind == DrawingKind::Callout {
-        let (x, y) = *px.get(1)?;
-        TextBox {
-            left: x,
-            right: x,
-            top: y,
-            bottom: y,
-        }
-    } else {
+    let text_box = {
         match body {
+            // Annotations size their box from measured text; the anchors bound the rest.
+            DrawingBodyGeometry::Annotation => points_box(px)?,
             DrawingBodyGeometry::Empty => {
                 let (x, y) = *px.first()?;
                 TextBox {
@@ -1302,12 +1325,7 @@ pub(crate) fn resolve_drawing_geometry<'a>(
             },
             DrawingBodyGeometry::Marker(marker) => {
                 let triangle = marker.triangle();
-                points_box(&[
-                    triangle[0],
-                    triangle[1],
-                    triangle[2],
-                    marker.base.unwrap_or(marker.anchor),
-                ])?
+                points_box(&[triangle[0], triangle[1], triangle[2], marker.anchor])?
             }
             DrawingBodyGeometry::PriceLabel { x, y } => TextBox {
                 left: x,
@@ -1988,8 +2006,12 @@ mod tests {
     }
 
     #[test]
-    fn marker_arrows_keep_the_anchor_at_the_tip_and_signpost_keeps_its_stem() {
-        let options = DrawingGeometryOptions::default();
+    fn marker_arrows_keep_the_anchor_at_the_tip_and_signpost_is_an_annotation() {
+        let options = DrawingGeometryOptions {
+            icon_size: 48.0,
+            device_scale: 1.0,
+            ..DrawingGeometryOptions::default()
+        };
         for kind in [
             DrawingKind::ArrowMarkerUp,
             DrawingKind::ArrowMarkerDown,
@@ -1999,11 +2021,22 @@ mod tests {
             let geometry =
                 resolve_drawing_geometry(kind, &[(40.0, 50.0)], 100.0, 0.0, 100.0, options)
                     .unwrap();
-            let DrawingBodyGeometry::Marker(marker) = geometry.body else {
-                panic!("arrow marker needs shared marker geometry");
+            let DrawingBodyGeometry::IconStamp { center, size } = geometry.body else {
+                panic!("arrow marker needs its icon box");
             };
-            assert_eq!(marker.triangle()[0], (40.0, 50.0));
-            assert!(marker.stem().is_none());
+            // The arrow icon's tip lands on the anchor, inside its box.
+            let (_, tip) = super::super::icons::arrow_marker_icon(kind).unwrap();
+            let scale = size / super::super::icons::ICON_VIEWBOX;
+            let tip_px = (
+                center.0 + (tip.0 - super::super::icons::ICON_VIEWBOX / 2.0) * scale,
+                center.1 + (tip.1 - super::super::icons::ICON_VIEWBOX / 2.0) * scale,
+            );
+            assert!(
+                (tip_px.0 - 40.0).abs() < 1e-9 && (tip_px.1 - 50.0).abs() < 1e-9,
+                "{kind:?}"
+            );
+            assert_eq!(size, 48.0);
+            assert_ne!(center, (40.0, 50.0));
         }
         let signpost = resolve_drawing_geometry(
             DrawingKind::Signpost,
@@ -2014,10 +2047,8 @@ mod tests {
             options,
         )
         .unwrap();
-        let DrawingBodyGeometry::Marker(signpost) = signpost.body else {
-            panic!("signpost needs marker geometry");
-        };
-        assert_eq!(signpost.stem(), Some(((20.0, 80.0), (40.0, 50.0))));
+        // The signpost is a box annotation laid out by `ChartEngine::annotation_layout`.
+        assert!(matches!(signpost.body, DrawingBodyGeometry::Annotation));
     }
 
     #[test]

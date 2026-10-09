@@ -2265,12 +2265,16 @@ export type drawing_wave_degree = "subminuette" | "minuette" | "minute" | "minor
 export type drawing_property_type = "boolean" | "number" | "integer" | "string" | "color" | "enum" | "points" | "levels" | "interval_set";
 export interface drawing_property_descriptor { name: string; property_type: drawing_property_type; default: unknown; min?: number; max?: number; enum_values: string[] }
 export interface drawing_property_schema { revision: number; kind: drawing_kind; properties: drawing_property_descriptor[] }
+
+/** A built-in vector icon: the `icon_name` value and inline SVG markup for pickers. */
+export interface builtin_drawing_icon { name: string; svg: string }
 export interface drawing_template { name: string; kind: drawing_kind; options: Partial<drawing_options> }
 export type drawing_kind_options =
   | { kind: "rectangle"; fill_color?: string; preview_fill_color?: string; border_visible: boolean; show_labels: boolean; axis_bands_visible: boolean; label_color?: string; label_text_color?: string; snap_time_to_data: boolean }
   | { kind: "text"; box_color?: string; box_border_color?: string; box_border_width: number }
   | { kind: "anchored_text"; screen_x: number; screen_y: number; box_color?: string; box_border_color?: string; box_border_width: number }
   | { kind: "icon_stamp"; icon_name?: string; icon_size: number }
+  | { kind: "arrow_marker"; icon_size: number }
   | { kind: "bars_pattern"; mirror_x: boolean; mirror_y: boolean; mode: "bars" | "line_open" | "line_high" | "line_low" | "line_close"; bar_count: number }
   | { kind: "position"; levels: drawing_level[]; account_size: number; risk_percent: number }
   | { kind: "levels"; levels: drawing_level[]; reverse: boolean; log_scale: boolean; show_prices: boolean; show_values: boolean; show_percents: boolean; label_align: "left" | "center" | "right" }
@@ -2323,6 +2327,7 @@ export interface drawing_options {
   /** Pane-relative screen position for anchored text, 0 to 1. */
   screen_x: number;
   screen_y: number;
+  /** Icon stamp: a built-in icon name (`builtin_drawing_icons()`) or a registered image name. */
   icon_name?: string;
   icon_size: number;
   bars_pattern_mirror_x: boolean;
@@ -2425,6 +2430,7 @@ export interface persisted_drawing_style_v1 {
   wave_degree?: drawing_wave_degree;
   screen_x?: number;
   screen_y?: number;
+  /** Icon stamp: a built-in icon name (`builtin_drawing_icons()`) or a registered image name. */
   icon_name?: string;
   icon_size?: number;
   /** Frozen OHLC sample for a bars-pattern ghost copy; at most 512 bars. */
@@ -3937,6 +3943,11 @@ export interface chart_api {
   /** Register a bounded chart-local RGBA8 stamp by name. Re-register to replace its pixels. */
   register_drawing_icon(name: string, width: number, height: number, pixels: Uint8Array): void;
   remove_drawing_icon(name: string): boolean;
+  /**
+   * The built-in solid icons, in catalog order. Pass a `name` as an icon stamp's `icon_name`;
+   * `svg` is inline markup (`currentColor` fill) for icon pickers.
+   */
+  builtin_drawing_icons(): builtin_drawing_icon[];
   /** Return the object-tree snapshot as stable JSON-compatible records. */
   drawing_object_tree(): unknown[];
   /** Set host-supplied interval metadata used by interval visibility. */

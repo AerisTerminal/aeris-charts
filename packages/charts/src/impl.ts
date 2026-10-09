@@ -24,7 +24,7 @@ import type {
   any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state, chart_value_snapshot, comparison_legend_entry, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   depth_event_columns, depth_event_layer_options, depth_heatmap_options, depth_ladder_row, depth_options, depth_snapshot_columns, depth_study_snapshot, depth_update_columns,
-  drawing_point, drawing_tool_change_handler, drawing_interval, drawing_property_schema, drawing_kind_options, drawing_template,
+  drawing_point, drawing_tool_change_handler, drawing_interval, drawing_property_schema, drawing_kind_options, drawing_template, builtin_drawing_icon,
   ema_ribbon_options, ema_ribbon_periods, kst_periods, fair_value_gap_options, order_block_options,
   structure_break_on, structure_zone_options, study_calendar_policy, previous_period,
   feature_series_kind, frame_stats,
@@ -6320,6 +6320,10 @@ export class chart_impl implements chart_api {
     return removed;
   }
 
+  builtin_drawing_icons(): builtin_drawing_icon[] {
+    return JSON.parse(this.wasm.builtin_drawing_icons_json()) as builtin_drawing_icon[];
+  }
+
   drawing_object_tree(): unknown[] {
     return JSON.parse(this.wasm.drawing_object_tree_json()) as unknown[];
   }
@@ -6712,7 +6716,8 @@ export class chart_impl implements chart_api {
     // the transparent caret overlay.
     wrap.style.border = "none";
     wrap.style.borderRadius = "0";
-    wrap.style.background = options.box_color || "transparent";
+    // The engine paints every box (text tool and annotations); the wrap adds no ink of its own.
+    wrap.style.background = "transparent";
     wrap.style.padding = "0";
     wrap.style.outline = "none";
 
@@ -6744,17 +6749,24 @@ export class chart_impl implements chart_api {
     caret.setAttribute("aria-hidden", "true");
     caret.style.position = "absolute";
     caret.style.top = "0";
-    caret.style.width = "1px";
     caret.style.height = `${font_size * 1.2}px`;
     caret.style.background = ink;
     caret.style.pointerEvents = "none";
+    // The platform caret rhythm: solid while typing or moving, then a 1.06 s blink.
+    const caret_blink = "aeris_charts-caret-blink 1.06s step-end infinite";
+    const restart_caret_blink = () => {
+      caret.style.animation = "none";
+      void caret.offsetWidth;
+      caret.style.animation = caret_blink;
+    };
 
     // Selection is painted by the browser in a separate phase and can remain visible even when
     // the editable element itself is transparent. Suppress it locally so a selected/composing
     // trend label cannot place theme-colored blocks over the canonical canvas glyphs.
     const selection_style = document.createElement("style");
     selection_style.textContent =
-      "#aeris_charts-text-input::selection{background:transparent!important;color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:none!important}";
+      "#aeris_charts-text-input::selection{background:transparent!important;color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:none!important}" +
+      "@keyframes aeris_charts-caret-blink{0%{opacity:1}50%{opacity:0}}";
 
     const position_editor = () => {
       const current = read_layout();
@@ -6764,11 +6776,26 @@ export class chart_impl implements chart_api {
       editor.style.lineHeight = `${size * 1.2}px`;
       editor.style.minWidth = `${size}px`;
       editor.style.width = `${Math.ceil(current.advance) + 1}px`;
-      caret.style.height = `${size * 1.2}px`;
-      caret.style.left = `${current.caret_x - current.left_edge}px`;
-      wrap.style.left = `${current.left_edge}px`;
-      wrap.style.top = `${current.anchor_y - size * 0.6}px`;
-      wrap.style.transformOrigin = `${current.anchor_x - current.left_edge}px ${size * 0.6}px`;
+      // A one-device-pixel caret on whole device pixels keeps one thickness wherever it moves; a
+      // 1 CSS px bar at a fractional offset would smear across two pixels at some positions.
+      // Snapping happens in page space: the chart container itself may sit at a fractional offset.
+      const dpr = this.pixel_ratio;
+      const origin = this.container.getBoundingClientRect();
+      const snap_x = (value: number) => Math.round((value + origin.left) * dpr) / dpr - origin.left;
+      const snap_y = (value: number) => Math.round((value + origin.top) * dpr) / dpr - origin.top;
+      const top = current.anchor_y - size * 0.6;
+      // Browser 1 px rule semantics: whole device pixels, rounded down, at least one.
+      caret.style.width = `${Math.max(1, Math.floor(dpr)) / dpr}px`;
+      caret.style.height = `${snap_y(top + size * 1.2) - snap_y(top)}px`;
+      // The wrap itself sits on whole device pixels, so the caret offset inside it is a whole
+      // number of device pixels too and layout rounding cannot split the bar across two pixels.
+      const wrap_left = snap_x(current.left_edge);
+      const wrap_top = snap_y(top);
+      caret.style.left = `${snap_x(current.caret_x) - wrap_left}px`;
+      caret.style.top = "0";
+      wrap.style.left = `${wrap_left}px`;
+      wrap.style.top = `${wrap_top}px`;
+      wrap.style.transformOrigin = `${current.anchor_x - wrap_left}px ${top + size * 0.6 - wrap_top}px`;
       wrap.style.transform = `rotate(${current.angle}rad)`;
       return true;
     };
@@ -6792,11 +6819,13 @@ export class chart_impl implements chart_api {
     const sync_editor = () => {
       push_live_text();
       position_editor();
+      restart_caret_blink();
     };
     const sync_caret = () => {
       const text = editor.textContent ?? "";
       this.wasm.set_drawing_text_edit(text, caret_offset(text));
       position_editor();
+      restart_caret_blink();
     };
     editor.addEventListener("input", sync_editor);
     editor.addEventListener("keyup", sync_caret);

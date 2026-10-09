@@ -902,8 +902,7 @@ impl ChartEngine {
                         icon_name: (drawing.kind == DrawingKind::IconStamp)
                             .then(|| drawing.icon_name.clone())
                             .flatten(),
-                        icon_size: (drawing.kind == DrawingKind::IconStamp)
-                            .then_some(drawing.icon_size),
+                        icon_size: drawing.kind.has_icon_size().then_some(drawing.icon_size),
                         bars_pattern: (drawing.kind == DrawingKind::BarsPattern)
                             .then(|| drawing.bars_pattern.clone()),
                         bars_pattern_mirror_x: (drawing.kind == DrawingKind::BarsPattern
@@ -1634,9 +1633,11 @@ impl ChartEngine {
                 drawing.icon_name = Some(name);
             }
             if let Some(size) = style.icon_size {
-                if drawing.kind != DrawingKind::IconStamp
+                if !drawing.kind.has_icon_size()
                     || !size.is_finite()
-                    || !(8.0..=96.0).contains(&size)
+                    || !(crate::drawings::MIN_DRAWING_ICON_DISPLAY_SIZE
+                        ..=crate::drawings::MAX_DRAWING_ICON_DISPLAY_SIZE)
+                        .contains(&size)
                 {
                     return Err(invalid(format!(
                         "drawing {} has invalid icon size",

@@ -64,6 +64,15 @@ pub(crate) enum DrawingHandleMode {
     /// A shape inscribed in its two-corner bounds (the ellipse): only the four edge midpoints,
     /// which lie on the shape, are handles; each resizes one edge like the rectangle's.
     BoundsEdges,
+    /// One handle on anchor `index`, square or round: the callout's pointer tip, the signpost's
+    /// post top. The other anchors move with the body.
+    OneAnchor {
+        index: u8,
+        square: bool,
+    },
+    /// An icon's square box with four round corner handles (`Anchor(0..4)`, clockwise from top
+    /// left) that resize it about its anchor.
+    IconBox,
     Position,
 }
 
@@ -133,10 +142,6 @@ pub(crate) struct DrawingToolSpec {
     /// Placement commits directly into a platform text-edit session.  The editor itself remains a
     /// host concern, but the decision that this tool requests one is canonical engine metadata.
     pub(crate) requests_text_editor: bool,
-    /// Every tool's anchors land on the crosshair's time slot during creation, anchor drags, and
-    /// body moves. These tools also land prices on the instrument/scale tick, so derived
-    /// statistics read whole ticks.
-    pub(crate) price_tick_snap: bool,
 }
 
 const TREND_LINE: DrawingToolSpec = DrawingToolSpec {
@@ -152,7 +157,6 @@ const TREND_LINE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: false,
 };
 
 const HORIZONTAL_LINE: DrawingToolSpec = DrawingToolSpec {
@@ -168,7 +172,6 @@ const HORIZONTAL_LINE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: false,
 };
 
 const HORIZONTAL_RAY: DrawingToolSpec = DrawingToolSpec {
@@ -184,7 +187,6 @@ const HORIZONTAL_RAY: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: false,
 };
 
 const VERTICAL_LINE: DrawingToolSpec = DrawingToolSpec {
@@ -200,7 +202,6 @@ const VERTICAL_LINE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: false,
 };
 
 const RECTANGLE: DrawingToolSpec = DrawingToolSpec {
@@ -216,7 +217,6 @@ const RECTANGLE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: false,
 };
 
 const TEXT: DrawingToolSpec = DrawingToolSpec {
@@ -232,7 +232,6 @@ const TEXT: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: true,
-    price_tick_snap: false,
 };
 
 const BRUSH: DrawingToolSpec = DrawingToolSpec {
@@ -248,7 +247,6 @@ const BRUSH: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.25,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: false,
 };
 
 const PATH: DrawingToolSpec = DrawingToolSpec {
@@ -264,7 +262,6 @@ const PATH: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: false,
 };
 
 const LONG_POSITION: DrawingToolSpec = DrawingToolSpec {
@@ -280,7 +277,6 @@ const LONG_POSITION: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: true,
 };
 
 const SHORT_POSITION: DrawingToolSpec = DrawingToolSpec {
@@ -296,7 +292,6 @@ const SHORT_POSITION: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: true,
 };
 
 const FIXED_RANGE_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
@@ -312,7 +307,6 @@ const FIXED_RANGE_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: false,
 };
 
 const ANCHORED_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
@@ -328,7 +322,6 @@ const ANCHORED_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: false,
 };
 
 const ANCHORED_VWAP: DrawingToolSpec = DrawingToolSpec {
@@ -344,7 +337,6 @@ const ANCHORED_VWAP: DrawingToolSpec = DrawingToolSpec {
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
     requests_text_editor: false,
-    price_tick_snap: false,
 };
 
 /// Measuring tools share one placement contract: two clicks (or a Shift press-drag for the
@@ -363,7 +355,6 @@ const fn measure_spec(kind: DrawingKind, wire_id: u8, name: &'static str) -> Dra
         bounds_padding_ratio: 0.0,
         default_width: 1.0,
         requests_text_editor: false,
-        price_tick_snap: true,
     }
 }
 
@@ -627,16 +618,34 @@ const SINE_LINE: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Ray,
     ..shape_spec(DrawingKind::SineLine, 64, "sine_line", 2)
 };
+/// Icon-drawn tools select with a resizable box (`DrawingHandleMode::IconBox`).
+const fn icon_spec(kind: DrawingKind, wire_id: u8, name: &'static str) -> DrawingToolSpec {
+    DrawingToolSpec {
+        handles: DrawingHandleMode::IconBox,
+        ..shape_spec(kind, wire_id, name, 1)
+    }
+}
 const ARROW_MARKER_UP: DrawingToolSpec =
-    shape_spec(DrawingKind::ArrowMarkerUp, 65, "arrow_marker_up", 1);
+    icon_spec(DrawingKind::ArrowMarkerUp, 65, "arrow_marker_up");
 const ARROW_MARKER_DOWN: DrawingToolSpec =
-    shape_spec(DrawingKind::ArrowMarkerDown, 66, "arrow_marker_down", 1);
+    icon_spec(DrawingKind::ArrowMarkerDown, 66, "arrow_marker_down");
 const ARROW_MARKER_LEFT: DrawingToolSpec =
-    shape_spec(DrawingKind::ArrowMarkerLeft, 67, "arrow_marker_left", 1);
+    icon_spec(DrawingKind::ArrowMarkerLeft, 67, "arrow_marker_left");
 const ARROW_MARKER_RIGHT: DrawingToolSpec =
-    shape_spec(DrawingKind::ArrowMarkerRight, 68, "arrow_marker_right", 1);
+    icon_spec(DrawingKind::ArrowMarkerRight, 68, "arrow_marker_right");
 const FLAG_MARK: DrawingToolSpec = shape_spec(DrawingKind::FlagMark, 69, "flag_mark", 1);
-const SIGNPOST: DrawingToolSpec = shape_spec(DrawingKind::Signpost, 70, "signpost", 2);
+/// A signpost drops from one click: the post's base on the clicked bar and its text box a fixed
+/// height above (the preset owns the second point). Only the post top is a handle.
+const SIGNPOST: DrawingToolSpec = DrawingToolSpec {
+    placement: DrawingPlacement::SingleClickPreset { points: 2 },
+    handles: DrawingHandleMode::OneAnchor {
+        index: 1,
+        square: true,
+    },
+    ..text_annotation_spec(DrawingKind::Signpost, 70, "signpost", 2)
+};
+/// Note, comment, callout, price note, and signpost paint a text box resolved by the shared
+/// annotation layout (annotations.rs) and edit through the engine text editor.
 const fn text_annotation_spec(
     kind: DrawingKind,
     wire_id: u8,
@@ -648,16 +657,27 @@ const fn text_annotation_spec(
         wire_id,
         name,
         placement: DrawingPlacement::ClickAnchors { count },
+        handles: DrawingHandleMode::Anchors,
         requests_text_editor: true,
         ..TEXT
     }
 }
-const NOTE: DrawingToolSpec = text_annotation_spec(DrawingKind::Note, 71, "note", 1);
+/// A note pins a box (second anchor) to a point (first anchor) with a leader line.
+const NOTE: DrawingToolSpec = text_annotation_spec(DrawingKind::Note, 71, "note", 2);
 const COMMENT: DrawingToolSpec = text_annotation_spec(DrawingKind::Comment, 72, "comment", 1);
-const CALLOUT: DrawingToolSpec = text_annotation_spec(DrawingKind::Callout, 73, "callout", 2);
+/// A callout points a wedge from its tip (first anchor, the only handle) to its box.
+const CALLOUT: DrawingToolSpec = DrawingToolSpec {
+    handles: DrawingHandleMode::OneAnchor {
+        index: 0,
+        square: false,
+    },
+    ..text_annotation_spec(DrawingKind::Callout, 73, "callout", 2)
+};
+/// A price note tags its first anchor's price above a line to its second anchor; the tag shows
+/// the price, so it opens no text editor.
 const PRICE_NOTE: DrawingToolSpec = DrawingToolSpec {
-    price_extent: DrawingPriceExtent::Full,
-    ..text_annotation_spec(DrawingKind::PriceNote, 74, "price_note", 1)
+    requests_text_editor: false,
+    ..text_annotation_spec(DrawingKind::PriceNote, 74, "price_note", 2)
 };
 const PRICE_LABEL: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Full,
@@ -667,9 +687,10 @@ const PRICE_LABEL: DrawingToolSpec = DrawingToolSpec {
 const ANCHORED_TEXT: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Full,
     price_extent: DrawingPriceExtent::Full,
+    handles: DrawingHandleMode::None,
     ..text_annotation_spec(DrawingKind::AnchoredText, 76, "anchored_text", 1)
 };
-const ICON_STAMP: DrawingToolSpec = shape_spec(DrawingKind::IconStamp, 77, "icon_stamp", 1);
+const ICON_STAMP: DrawingToolSpec = icon_spec(DrawingKind::IconStamp, 77, "icon_stamp");
 const GANN_BOX: DrawingToolSpec = shape_spec(DrawingKind::GannBox, 78, "gann_box", 2);
 const GANN_SQUARE: DrawingToolSpec = shape_spec(DrawingKind::GannSquare, 79, "gann_square", 2);
 const GANN_SQUARE_FIXED: DrawingToolSpec =
@@ -909,10 +930,31 @@ impl DrawingKind {
         )
     }
 
+    /// Icon stamps and the icon-drawn arrow markers carry an editable `icon_size`.
+    pub(crate) const fn has_icon_size(self) -> bool {
+        matches!(
+            self,
+            Self::IconStamp
+                | Self::ArrowMarkerUp
+                | Self::ArrowMarkerDown
+                | Self::ArrowMarkerLeft
+                | Self::ArrowMarkerRight
+        )
+    }
+
+    /// Text-carrying annotations edited through the engine text editor, besides the text tool.
     pub(crate) const fn is_text_annotation(self) -> bool {
         matches!(
             self,
-            Self::Note | Self::Comment | Self::Callout | Self::PriceNote | Self::AnchoredText
+            Self::Note | Self::Comment | Self::Callout | Self::Signpost | Self::AnchoredText
+        )
+    }
+
+    /// Kinds whose box, text, and connector come from the shared annotation layout.
+    pub(crate) const fn is_annotation(self) -> bool {
+        matches!(
+            self,
+            Self::Note | Self::Comment | Self::Callout | Self::PriceNote | Self::Signpost
         )
     }
 

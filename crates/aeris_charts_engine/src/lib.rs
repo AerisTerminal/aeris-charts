@@ -109,10 +109,10 @@ pub use drawing_contract::{
 };
 pub use drawing_text_edit::{DrawingTextEditKey, DrawingTextEditLayout};
 pub use drawings::{
-    DRAWING_DEFAULT_COLOR, Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId,
-    DrawingKind, DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats,
-    MAX_DRAWING_ICON_NAME_BYTES, MAX_DRAWING_ICON_SIZE, MAX_DRAWING_ICONS, TextCapCenterFn,
-    TextMeasureFn,
+    BuiltinDrawingIcon, DRAWING_DEFAULT_COLOR, Drawing, DrawingCreationUpdate, DrawingDragPart,
+    DrawingHit, DrawingId, DrawingKind, DrawingModifiers, DrawingPoint, DrawingPriceScale,
+    DrawingWorkStats, MAX_DRAWING_ICON_NAME_BYTES, MAX_DRAWING_ICON_SIZE, MAX_DRAWING_ICONS,
+    TextCapCenterFn, TextMeasureFn,
 };
 pub(crate) use drawings::{
     DrawingAnchorTime, DrawingController, DrawingDrag, DrawingHistory, DrawingIconRegistry,
@@ -1932,6 +1932,8 @@ pub struct ChartEngine {
     /// text) in z-order, bottom first. See drawings.rs.
     drawings: Vec<Drawing>,
     drawing_icons: DrawingIconRegistry,
+    /// Rasterized built-in icons; frame construction (`&self`) fills it on demand.
+    icon_rasters: std::cell::RefCell<drawings::IconRasterCache>,
     /// Derived, chart-local drawing bounds, pane candidates, and coordinate geometry. Semantic
     /// anchors and styles in `drawings` remain authoritative and are the only serialized state.
     drawing_runtime: RefCell<DrawingRuntime>,
@@ -2144,6 +2146,7 @@ impl ChartEngine {
             drawings: Vec::new(),
             drawing_runtime: RefCell::new(DrawingRuntime::default()),
             drawing_icons: DrawingIconRegistry::default(),
+            icon_rasters: Default::default(),
             next_drawing_id: 1,
             selected_drawing: None,
             selected_drawings: Vec::new(),

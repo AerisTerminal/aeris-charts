@@ -294,6 +294,8 @@ fn active_drawing_state_and_pixel_baselines_rebase_with_the_union() {
         history_bars_pattern: drawing.bars_pattern.clone(),
         start_points: drawing.points.clone(),
         start_px: vec![(f64::NAN, f64::NAN); 2],
+        start_icon_size: drawing.icon_size,
+        history_icon_size: drawing.icon_size,
     });
     chart.drawing_controller.pending = Some(PendingDrawing {
         drawing: Drawing::new(
@@ -501,7 +503,86 @@ fn cancelled_drag_rolls_back_and_keyboard_nudge_uses_history() {
 }
 
 #[test]
-fn drawings_move_bar_by_bar_horizontally_without_tick_snapping_prices() {
+fn drawings_step_by_price_ticks_vertically_like_bars_horizontally() {
+    let mut chart = settled_chart();
+    // A futures-style quarter-point tick makes the vertical steps visible.
+    chart
+        .set_instrument_metadata(crate::InstrumentMetadata {
+            tick_size: Some(0.25),
+            ..Default::default()
+        })
+        .unwrap();
+    let on_tick = |price: f64| ((price / 0.25).round() * 0.25 - price).abs() < 1e-9;
+    let prices = |chart: &ChartEngine, id: DrawingId| {
+        chart
+            .drawing(id)
+            .unwrap()
+            .points
+            .iter()
+            .map(|point| point.price)
+            .collect::<Vec<_>>()
+    };
+
+    // Placement lands each anchor's price on the tick under the cursor.
+    assert!(chart.drawing_create_begin(DrawingKind::TrendLine, None));
+    chart.drawing_create_click(
+        x_at(&chart, 2.0),
+        y_at(&chart, 10.62),
+        DrawingModifiers::default(),
+    );
+    let id = chart.drawing_create_click(
+        x_at(&chart, 7.0),
+        y_at(&chart, 12.38),
+        DrawingModifiers::default(),
+    ) as DrawingId;
+    assert_eq!(prices(&chart, id), [10.5, 12.5]);
+
+    // A body drag moves in whole ticks and keeps the slope.
+    chart.build_frame();
+    let (x, y) = (x_at(&chart, 4.0), y_at(&chart, 10.5 + 2.0 * 0.4));
+    assert!(chart.drawing_drag_start_at(x, y));
+    chart.drawing_drag_to(
+        x,
+        y - (y_at(&chart, 10.0) - y_at(&chart, 10.33)),
+        DrawingModifiers::default(),
+    );
+    chart.drawing_drag_end();
+    let moved = prices(&chart, id);
+    assert!(moved.iter().all(|&price| on_tick(price)), "{moved:?}");
+    assert!(
+        (moved[1] - moved[0] - 2.0).abs() < 1e-9,
+        "the shape holds: {moved:?}"
+    );
+    assert!(moved[0] > 10.5, "the drag moved it up: {moved:?}");
+
+    // An anchor drag lands on a tick too.
+    chart.set_selected_drawing(Some(id));
+    let (ax, ay) = (x_at(&chart, 2.0), y_at(&chart, moved[0]));
+    assert!(chart.drawing_drag_start_at(ax, ay));
+    chart.drawing_drag_to(
+        ax,
+        y_at(&chart, moved[0] - 0.61),
+        DrawingModifiers::default(),
+    );
+    chart.drawing_drag_end();
+    let anchored = prices(&chart, id);
+    assert!(
+        on_tick(anchored[0]) && (anchored[0] - (moved[0] - 0.5)).abs() < 1e-9,
+        "{anchored:?}"
+    );
+
+    // A one-pixel keyboard nudge still moves a whole tick (a tick here is several pixels).
+    assert!(y_at(&chart, 10.0) - y_at(&chart, 10.25) > 1.0);
+    assert!(chart.nudge_selected_drawing(0.0, -1.0, None));
+    let nudged = prices(&chart, id);
+    assert!(
+        (nudged[0] - anchored[0] - 0.25).abs() < 1e-9,
+        "{anchored:?} -> {nudged:?}"
+    );
+}
+
+#[test]
+fn drawings_move_bar_by_bar_horizontally_and_land_prices_on_the_scale_tick() {
     let mut chart = settled_chart();
     let bar = chart.bar_spacing();
 
@@ -1022,18 +1103,14 @@ fn the_creation_preview_shows_all_eight_rectangle_anchors() {
         y_at(&chart, 12.0),
         DrawingModifiers::default(),
     );
-    let frame = chart.build_frame();
-    let main = &frame.panes[0].main;
-    let circles = main
-        .iter()
-        .filter(|p| matches!(p, Prim::Circle { .. }))
-        .count();
-    let rounds = main
-        .iter()
-        .filter(|p| matches!(p, Prim::RoundRect { .. }))
-        .count();
-    assert_eq!(circles, 8, "four corner discs during the preview");
-    assert_eq!(rounds, 8, "four midpoint squares during the preview");
+    let handles = painted_handles(&chart.build_frame());
+    let squares = handles.iter().filter(|handle| handle.2).count();
+    assert_eq!(
+        handles.len() - squares,
+        4,
+        "four round corners during the preview"
+    );
+    assert_eq!(squares, 4, "four square midpoints during the preview");
     chart.drawing_create_cancel();
 }
 
@@ -1062,22 +1139,14 @@ fn a_selected_rectangle_paints_eight_handles_and_a_styleable_border() {
     let frame = chart.build_frame();
     let main = &frame.panes[0].main;
     let drawing_color = Color::parse_css(DRAWING_DEFAULT_COLOR).unwrap();
-    let circles = main
-        .iter()
-        .filter(|p| matches!(p, Prim::Circle { .. }))
-        .count();
-    let rounds = main
-        .iter()
-        .filter(|p| matches!(p, Prim::RoundRect { .. }))
-        .count();
+    let handles = painted_handles(&frame);
+    let squares = handles.iter().filter(|handle| handle.2).count();
     assert_eq!(
-        circles, 8,
-        "four corner discs (border + fill each), got {circles}"
+        handles.len() - squares,
+        4,
+        "four round corners: {handles:?}"
     );
-    assert_eq!(
-        rounds, 8,
-        "four midpoint squares (border + fill each), got {rounds}"
-    );
+    assert_eq!(squares, 4, "four square midpoints: {handles:?}");
     assert!(!chart.drawing(id).unwrap().border_visible);
     assert!(
         !main
@@ -1298,12 +1367,17 @@ fn rectangle_anchor_drags_resize_independently_and_flip_across_the_opposite_side
 
     // Top-mid anchor (1) drag: only the top edge moves; x sides stay.
     let close = |a: f64, b: f64| (a - b).abs() < 1e-6; // px→logical→px round-trip fuzz
+    // A dragged edge lands on the 0.01 price tick under the cursor.
+    let on_tick = |chart: &ChartEngine, y: f64| {
+        let price = chart.series_coordinate_to_price(0, y).unwrap();
+        y_at(chart, (price / 0.01).round() * 0.01)
+    };
     assert!(chart.drawing_drag_start_at(mx, top));
     chart.drawing_drag_to(mx + 30.0, top - 40.0, DrawingModifiers::default());
     chart.drawing_drag_end();
     let (l, t, r, b) = box_of(&chart);
     assert!(close(l, left) && close(r, right));
-    assert!(close(t, top - 40.0));
+    assert!(close(t, on_tick(&chart, top - 40.0)));
     assert!(close(b, bottom));
 
     // Top-mid dragged BELOW the bottom edge: the box flips — the bottom edge holds, the
@@ -1317,7 +1391,7 @@ fn rectangle_anchor_drags_resize_independently_and_flip_across_the_opposite_side
         close(t2, bottom),
         "the opposite edge stays put through the flip"
     );
-    assert!(close(b2, bottom + 50.0));
+    assert!(close(b2, on_tick(&chart, bottom + 50.0)));
 
     // Corner (4 = bottom-right) drag past the top-left: both axes flip independently. The
     // dragged x lands on the bar slot under the cursor.
@@ -1339,7 +1413,7 @@ fn rectangle_anchor_drags_resize_independently_and_flip_across_the_opposite_side
         "{l3} vs {}",
         x_at(&chart, 1.0)
     );
-    assert!(close(t3, t2 - 60.0));
+    assert!(close(t3, on_tick(&chart, t2 - 60.0)));
 }
 
 #[test]
@@ -4371,7 +4445,7 @@ fn measure_tools_have_stable_catalog_identity_and_defaults() {
         assert_eq!((kind.to_u8(), kind.name()), (wire, name));
         assert_eq!(kind.anchor_count(), 2);
         assert!(kind.valid_point_count(2) && !kind.valid_point_count(3));
-        assert!(kind.is_measure() && kind.spec().price_tick_snap);
+        assert!(kind.is_measure());
         let drawing = Drawing::new(1, kind, 0, Vec::new());
         assert!(drawing.fill_enabled);
         assert_eq!(drawing.width, 1.0);
@@ -4863,7 +4937,7 @@ fn icon_stamp_uses_named_rgba_asset_and_survives_state_round_trip() {
                 DrawingKind::IconStamp,
                 0,
                 anchor.clone(),
-                Some(r#"{"icon_size":200}"#)
+                Some(r#"{"icon_size":300}"#)
             )
             .is_none()
     );
@@ -5815,7 +5889,7 @@ fn cycle_tools_render_visible_repetitions_hit_and_persist() {
 }
 
 #[test]
-fn arrow_flags_and_signposts_render_hit_and_persist() {
+fn arrow_markers_and_flags_render_hit_and_persist() {
     let mut chart = settled_chart();
     for (kind, wire) in [
         (DrawingKind::ArrowMarkerUp, 65),
@@ -5823,26 +5897,20 @@ fn arrow_flags_and_signposts_render_hit_and_persist() {
         (DrawingKind::ArrowMarkerLeft, 67),
         (DrawingKind::ArrowMarkerRight, 68),
         (DrawingKind::FlagMark, 69),
-        (DrawingKind::Signpost, 70),
     ] {
         assert_eq!(DrawingKind::from_u8(wire), Some(kind));
-        let mut anchors = vec![DrawingPoint {
+        let anchors = vec![DrawingPoint {
             logical: 2.0,
             price: 10.0,
         }];
-        if kind == DrawingKind::Signpost {
-            anchors.push(DrawingPoint {
-                logical: 3.0,
-                price: 11.0,
-            });
-        }
         let id = chart.add_drawing(kind, 0, anchors, None).unwrap();
         let frame = chart.build_frame();
-        assert!(
-            frame.panes[0].main.iter().any(|prim| {
-                matches!(prim, Prim::Triangle { color, .. } if *color == primary())
-            })
-        );
+        // Arrow markers paint their built-in arrow icon; flags a pennant.
+        assert!(frame.panes[0].main.iter().any(|prim| match prim {
+            Prim::Image { .. } => kind.has_icon_size(),
+            Prim::Triangle { color, .. } if !kind.has_icon_size() => *color == primary(),
+            _ => false,
+        }));
         assert_eq!(
             chart
                 .hit_test_drawing(x_at(&chart, 2.0), y_at(&chart, 10.0))
@@ -5857,9 +5925,74 @@ fn arrow_flags_and_signposts_render_hit_and_persist() {
     }
 }
 
+/// The annotation box (the first rounded rect larger than a handle) as
+/// `([left, top, width, height], radii, fill, border_width)`.
+fn annotation_box(frame: &crate::ChartFrame) -> ([f64; 4], [f32; 4], Color, f32) {
+    frame.panes[0]
+        .main
+        .iter()
+        .find_map(|prim| match *prim {
+            Prim::RoundRect {
+                x,
+                y,
+                w,
+                h,
+                radii,
+                fill,
+                border_width,
+                ..
+            } if w > 12.0 => Some((
+                [f64::from(x), f64::from(y), f64::from(w), f64::from(h)],
+                radii,
+                fill,
+                border_width,
+            )),
+            _ => None,
+        })
+        .expect("an annotation box")
+}
+
+/// The text run painted inside the annotation box: `(text, x, y, color)`.
+fn annotation_text(frame: &crate::ChartFrame, rect: [f64; 4]) -> (String, f64, f64, Color) {
+    frame.panes[0]
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::Text {
+                text, x, y, color, ..
+            } if f64::from(*x) > rect[0]
+                && f64::from(*x) < rect[0] + rect[2]
+                && f64::from(*y) > rect[1]
+                && f64::from(*y) < rect[1] + rect[3] =>
+            {
+                Some((text.clone(), f64::from(*x), f64::from(*y), *color))
+            }
+            _ => None,
+        })
+        .expect("text inside the annotation box")
+}
+
+/// Whether a 2-point polyline joins `a` and `b` (either direction) within a pixel.
+fn has_segment(frame: &crate::ChartFrame, a: (f64, f64), b: (f64, f64)) -> bool {
+    let pane = &frame.panes[0];
+    let near =
+        |p: [f32; 2], q: (f64, f64)| (f64::from(p[0]) - q.0).hypot(f64::from(p[1]) - q.1) < 1.0;
+    pane.main.iter().any(|prim| match *prim {
+        Prim::Polyline {
+            first_point,
+            point_count: 2,
+            ..
+        } => {
+            let s = &pane.points[first_point as usize..first_point as usize + 2];
+            (near(s[0], a) && near(s[1], b)) || (near(s[0], b) && near(s[1], a))
+        }
+        _ => false,
+    })
+}
+
 #[test]
-fn text_annotations_render_editable_boxes_and_guides_from_shared_frame() {
-    let mut chart = settled_chart();
+fn box_annotations_follow_their_reference_layouts() {
+    let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
     for (kind, wire) in [
         (DrawingKind::Note, 71),
         (DrawingKind::Comment, 72),
@@ -5867,46 +6000,243 @@ fn text_annotations_render_editable_boxes_and_guides_from_shared_frame() {
         (DrawingKind::PriceNote, 74),
     ] {
         assert_eq!(DrawingKind::from_u8(wire), Some(kind));
-        let mut anchors = vec![DrawingPoint {
-            logical: 2.0,
-            price: 11.0,
-        }];
-        if kind == DrawingKind::Callout {
-            anchors.push(DrawingPoint {
-                logical: 5.0,
-                price: 12.0,
-            });
-        }
-        let id = chart
-            .add_drawing(kind, 0, anchors, Some(r#"{"text":"Read this"}"#))
-            .unwrap();
-        assert!(chart.drawing_requests_text_edit(id));
+        let mut chart = settled_chart();
+        let points = match kind {
+            DrawingKind::Comment => vec![point(4.0, 11.0)],
+            DrawingKind::PriceNote => vec![point(4.0, 12.0), point(4.0, 10.5)],
+            _ => vec![point(2.0, 10.5), point(5.0, 12.0)],
+        };
+        let px = points
+            .iter()
+            .map(|p| (x_at(&chart, p.logical), y_at(&chart, p.price)))
+            .collect::<Vec<_>>();
+        let text = (kind != DrawingKind::PriceNote).then_some(r#"{"text":"Read this"}"#);
+        let id = chart.add_drawing(kind, 0, points, text).unwrap();
+        assert_eq!(
+            chart.drawing_requests_text_edit(id),
+            kind != DrawingKind::PriceNote,
+            "{kind:?}"
+        );
+        chart.set_selected_drawing(Some(id));
         let frame = chart.build_frame();
-        assert!(frame.panes[0].main.iter().any(|prim| {
-            matches!(prim, Prim::Text { text, .. } | Prim::RotatedText { text, .. } if text == "Read this")
-        }));
+        let (rect, radii, fill, border) = annotation_box(&frame);
+        let [left, top, width, height] = rect;
+        let (label, text_x, _, ink) = annotation_text(&frame, rect);
+        let handles = painted_handles(&frame);
+        match kind {
+            // The box hangs from its anchor at the top center, led from the pinned point.
+            DrawingKind::Note => {
+                assert!(
+                    near(left + width / 2.0, px[1].0) && near(top, px[1].1),
+                    "{rect:?}"
+                );
+                assert!(has_segment(&frame, px[0], px[1]));
+                assert_eq!(handles.len(), 2);
+                assert_eq!(border, 0.0);
+            }
+            // A speech bubble whose square bottom-left corner is the anchor.
+            DrawingKind::Comment => {
+                assert!(
+                    near(left, px[0].0) && near(top + height, px[0].1),
+                    "{rect:?}"
+                );
+                assert_eq!(radii[3], 0.0);
+                assert!(
+                    radii[..3]
+                        .iter()
+                        .all(|&r| (f64::from(r) - height / 2.0).abs() <= 1.0)
+                );
+                assert_eq!(fill, primary());
+                assert_eq!(ink, primary().contrast_text());
+                assert_eq!(handles.len(), 1);
+            }
+            // The box sits on its second anchor and its tail reaches the tip as one shape: an
+            // opaque fill (box plus a tail tucked into it) and one closed 2 px outline that
+            // runs around both, through the tip. The tip is the only handle.
+            DrawingKind::Callout => {
+                assert!(
+                    near(left, px[1].0) && near(top + height, px[1].1),
+                    "{rect:?}"
+                );
+                assert_eq!(border, 0.0, "the outline, not the box, carries the border");
+                assert_eq!(fill.a(), 255, "an opaque fill never doubles alpha");
+                assert!(frame.panes[0].main.iter().any(|prim| matches!(
+                    prim,
+                    Prim::Triangle { a, color, .. }
+                        if near(f64::from(a[0]), px[0].0)
+                            && near(f64::from(a[1]), px[0].1)
+                            && *color == fill
+                )));
+                let pane = &frame.panes[0];
+                let outline = pane
+                    .main
+                    .iter()
+                    .find_map(|prim| match *prim {
+                        Prim::Polyline {
+                            first_point,
+                            point_count,
+                            width,
+                            color,
+                            ..
+                        } if point_count > 8 && width == 2.0 && color == primary() => Some(
+                            &pane.points
+                                [first_point as usize..(first_point + point_count) as usize],
+                        ),
+                        _ => None,
+                    })
+                    .expect("one closed callout outline");
+                assert_eq!(outline.first(), outline.last(), "the outline closes");
+                assert!(
+                    outline
+                        .iter()
+                        .any(|p| near(f64::from(p[0]), px[0].0) && near(f64::from(p[1]), px[0].1)),
+                    "the outline runs through the tip"
+                );
+                assert_eq!(handles.len(), 1);
+                assert!(near(handles[0].0, px[0].0) && near(handles[0].1, px[0].1));
+            }
+            // The price tag sits on its first anchor above the line to the second.
+            DrawingKind::PriceNote => {
+                assert!(near(left + width / 2.0, px[0].0) && near(top + height, px[0].1));
+                assert!(has_segment(&frame, px[0], px[1]));
+                assert_eq!(fill, primary());
+                assert_eq!(
+                    label,
+                    chart.format_drawing_price(chart.drawing(id).unwrap(), 12.0)
+                );
+                assert_eq!(handles.len(), 2);
+            }
+            _ => unreachable!(),
+        }
         if kind != DrawingKind::PriceNote {
+            assert_eq!(label, "Read this");
+            // The editor types at the painted run's start.
+            assert!(chart.begin_drawing_text_edit(id, false));
+            let editor = chart.drawing_text_edit_layout().unwrap();
             assert!(
-                frame.panes[0]
-                    .main
-                    .iter()
-                    .any(|prim| matches!(prim, Prim::Rect { .. }))
+                (editor.left_edge - text_x).abs() < 1e-3,
+                "{kind:?}: editor {} vs painted {text_x}",
+                editor.left_edge
             );
+            assert!(chart.cancel_drawing_text_edit());
         }
-        if kind == DrawingKind::PriceNote {
-            assert!(
-                frame.panes[0]
-                    .main
-                    .iter()
-                    .any(|prim| matches!(prim, Prim::HLine { .. }))
-            );
-        }
+        // The box is a grab area.
+        assert_eq!(
+            chart
+                .hit_test_drawing(left + width / 2.0, top + height / 2.0)
+                .map(|hit| hit.id),
+            Some(id),
+            "{kind:?}"
+        );
         let saved = chart.export_state_json().unwrap();
         let mut restored = settled_chart();
         restored.import_state_json(&saved).unwrap();
-        assert_eq!(restored.drawing(id).unwrap().text, "Read this");
-        assert!(chart.remove_drawing(id));
+        assert_eq!(
+            restored.drawing(id).unwrap().text,
+            chart.drawing(id).unwrap().text
+        );
     }
+
+    // An empty box shows the muted placeholder while its text is typed.
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::Note,
+            0,
+            vec![point(2.0, 10.5), point(5.0, 12.0)],
+            None,
+        )
+        .unwrap();
+    let frame = chart.build_frame();
+    let (rect, ..) = annotation_box(&frame);
+    assert_eq!(annotation_text(&frame, rect).0, "Add text");
+    // A note saved before notes gained their pinned point still loads and paints its box.
+    assert!(chart.remove_drawing(id));
+    chart
+        .add_drawing(DrawingKind::Note, 0, vec![point(4.0, 11.0)], None)
+        .unwrap();
+    annotation_box(&chart.build_frame());
+}
+
+#[test]
+fn signpost_drops_from_one_click_with_a_vertical_post_and_square_handle() {
+    let mut chart = settled_chart();
+    assert!(chart.drawing_create_begin(DrawingKind::Signpost, None));
+    let (x, y) = (x_at(&chart, 4.0), y_at(&chart, 10.5));
+    let id = chart.drawing_create_click(x, y, DrawingModifiers::default());
+    assert!(id > 0, "one click places the signpost");
+    let id = id as DrawingId;
+    assert!(chart.drawing_requests_text_edit(id));
+    let points = chart.drawing(id).unwrap().points.clone();
+    assert_eq!(points.len(), 2);
+    assert_eq!(points[0].logical, points[1].logical, "the post is vertical");
+    let top = y_at(&chart, points[1].price);
+    assert!(
+        (y - top - 96.0).abs() < 1.0,
+        "the box sits 96 px above the bar"
+    );
+
+    chart.set_selected_drawing(Some(id));
+    let frame = chart.build_frame();
+    let (rect, ..) = annotation_box(&frame);
+    let [left, box_top, width, height] = rect;
+    assert!((left + width / 2.0 - x).abs() <= 1.0 && (box_top - top).abs() <= 1.0);
+    // The post drops from the box to the bar.
+    assert!(has_segment(&frame, (x, box_top + height), (x, y)));
+    let handles = painted_handles(&frame);
+    assert_eq!(handles.len(), 1, "only the post top is a handle");
+    assert!(handles[0].2, "and it is square");
+    assert!((handles[0].0 - x).abs() <= 1.0 && (handles[0].1 - top).abs() <= 1.0);
+    // Dragging the top keeps the post vertical.
+    assert!(chart.drawing_drag_start_at(x, top));
+    chart.drawing_drag_to(
+        x + 3.0 * chart.bar_spacing(),
+        top - 40.0,
+        DrawingModifiers::default(),
+    );
+    chart.drawing_drag_end();
+    let moved = chart.drawing(id).unwrap().points.clone();
+    assert_eq!(moved[1].logical, moved[0].logical);
+    assert!(y_at(&chart, moved[1].price) < top - 30.0);
+}
+
+#[test]
+fn arrow_line_ends_in_the_path_tools_open_chevron() {
+    let mut chart = settled_chart();
+    let (a, b) = ((2.0, 10.5), (6.0, 12.0));
+    chart
+        .add_drawing(
+            DrawingKind::ArrowLine,
+            0,
+            vec![point(a.0, a.1), point(b.0, b.1)],
+            None,
+        )
+        .unwrap();
+    let frame = chart.build_frame();
+    let start = (x_at(&chart, a.0), y_at(&chart, a.1));
+    let end = (x_at(&chart, b.0), y_at(&chart, b.1));
+    let expected = crate::drawings::path_arrow_points(&[start, end], 1.0, 1.0).unwrap();
+    let pane = &frame.panes[0];
+    assert!(pane.main.iter().any(|prim| {
+        match *prim {
+            Prim::Polyline {
+                first_point,
+                point_count: 3,
+                ..
+            } => pane.points[first_point as usize..first_point as usize + 3]
+                .iter()
+                .zip(expected)
+                .all(|(p, q)| (f64::from(p[0]) - q.0).hypot(f64::from(p[1]) - q.1) < 1e-3),
+            _ => false,
+        }
+    }));
+    assert!(
+        !pane
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::Triangle { .. })),
+        "no filled arrowhead"
+    );
 }
 
 #[test]
@@ -6438,17 +6768,44 @@ fn point(logical: f64, price: f64) -> DrawingPoint {
     DrawingPoint { logical, price }
 }
 
-/// The selection chrome's painted anchor-handle centers: the fill discs (radius 4 at dpr 1).
-fn painted_handle_centers(frame: &crate::ChartFrame) -> Vec<(f64, f64)> {
+/// Every painted drawing handle as `(center x, center y, square)`: the one shared 12 px
+/// pixel-aligned shape with a 2 px primary border (at dpr 1), round or square.
+fn painted_handles(frame: &crate::ChartFrame) -> Vec<(f64, f64, bool)> {
     frame.panes[0]
         .main
         .iter()
-        .filter_map(|prim| match prim {
-            Prim::Circle { cx, cy, radius, .. } if *radius == 4.0 => {
-                Some((f64::from(*cx), f64::from(*cy)))
+        .filter_map(|prim| match *prim {
+            Prim::RoundRect {
+                x,
+                y,
+                w,
+                h,
+                radii,
+                border_width,
+                border_color,
+                ..
+            } if w == 12.0 && h == 12.0 && border_width == 2.0 && border_color == primary() => {
+                assert_eq!(
+                    (x.fract(), y.fract()),
+                    (0.0, 0.0),
+                    "handles are pixel-aligned"
+                );
+                Some((
+                    f64::from(x) + 6.0,
+                    f64::from(y) + 6.0,
+                    radii.iter().all(|&radius| radius < 6.0),
+                ))
             }
             _ => None,
         })
+        .collect()
+}
+
+/// The painted handles' centers.
+fn painted_handle_centers(frame: &crate::ChartFrame) -> Vec<(f64, f64)> {
+    painted_handles(frame)
+        .into_iter()
+        .map(|(x, y, _)| (x, y))
         .collect()
 }
 
@@ -6712,7 +7069,10 @@ fn ellipse_edge_handles_sit_on_the_outline_and_resize_one_bound() {
         .collect::<Vec<_>>();
     handles.dedup();
     assert_eq!(handles.len(), 4, "{handles:?}");
-    assert!(painted_handle_centers(&frame).is_empty(), "no corner discs");
+    assert!(
+        painted_handles(&frame).iter().all(|handle| handle.2),
+        "only square edge handles, no round corners"
+    );
     for (index, &(hx, hy)) in handles.iter().enumerate() {
         let on = ((hx - cx) / rx).powi(2) + ((hy - cy) / ry).powi(2);
         assert!(
@@ -6976,4 +7336,405 @@ fn every_click_placed_tool_draws_live_after_its_first_anchor() {
         }
     }
     assert!(stalled.is_empty(), "no live preview: {stalled:#?}");
+}
+
+/// The single image a frame paints, with its destination rect.
+fn painted_image(
+    frame: &crate::ChartFrame,
+) -> Option<([f32; 4], aeris_charts_render::draw_list::RasterImage)> {
+    frame.panes[0].main.iter().find_map(|prim| match prim {
+        Prim::Image { rect, image, .. } => Some((*rect, image.clone())),
+        _ => None,
+    })
+}
+
+/// Centers of the image's inked pixels (alpha above half), in frame px.
+fn inked_pixels(
+    rect: [f32; 4],
+    image: &aeris_charts_render::draw_list::RasterImage,
+) -> Vec<(f64, f64)> {
+    image
+        .pixels
+        .chunks(4)
+        .enumerate()
+        .filter(|(_, px)| px[3] > 127)
+        .map(|(index, _)| {
+            let (col, row) = (index as u32 % image.width, index as u32 / image.width);
+            (
+                f64::from(rect[0]) + f64::from(col) + 0.5,
+                f64::from(rect[1]) + f64::from(row) + 0.5,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn icon_stamps_paint_solid_builtin_icons_and_registered_images_first() {
+    let mut chart = settled_chart();
+    let anchor = vec![point(4.0, 11.5)];
+    let center = (x_at(&chart, 4.0), y_at(&chart, 11.5));
+    let star = chart
+        .add_drawing(
+            DrawingKind::IconStamp,
+            0,
+            anchor,
+            Some(r##"{"icon_name":"star","icon_size":96,"color":"#ff8000"}"##),
+        )
+        .unwrap();
+    let frame = chart.build_frame();
+    let (rect, image) = painted_image(&frame).expect("the star paints as one solid image");
+    // A pixel-aligned 96 px square around the anchor, drawn 1:1.
+    assert_eq!((image.width, image.height), (96, 96));
+    assert_eq!((rect[2], rect[3]), (96.0, 96.0));
+    assert_eq!((rect[0].fract(), rect[1].fract()), (0.0, 0.0));
+    assert!((f64::from(rect[0]) + 48.0 - center.0).abs() <= 0.5);
+    assert!((f64::from(rect[1]) + 48.0 - center.1).abs() <= 0.5);
+    // Solid: the center is fully inked in the drawing color, the corners are clear.
+    let at = |col: usize, row: usize| &image.pixels[(row * 96 + col) * 4..][..4];
+    assert_eq!(at(48, 50), &[255, 128, 0, 255]);
+    assert_eq!(at(1, 1)[3], 0);
+    assert!(inked_pixels(rect, &image).len() > 96 * 96 / 4);
+    // Rebuilding reuses the cached raster.
+    let again = painted_image(&chart.build_frame()).unwrap().1;
+    assert_eq!(again.key, image.key);
+    // A recolor rasterizes a new image under a new key.
+    assert!(chart.drawing_apply_options(star, r##"{"color":"#00a0ff"}"##));
+    let recolored = painted_image(&chart.build_frame()).unwrap().1;
+    assert_ne!(recolored.key, image.key);
+    assert_eq!(
+        &recolored.pixels[(50 * 96 + 48) * 4..][..4],
+        &[0, 160, 255, 255]
+    );
+
+    // A host-registered image under the same name wins over the built-in icon.
+    assert!(chart.set_drawing_icon("star", 2, 2, vec![255; 16].into()));
+    let (_, registered) = painted_image(&chart.build_frame()).unwrap();
+    assert_eq!((registered.width, registered.height), (2, 2));
+    assert!(chart.remove_drawing(star));
+
+    let catalog = ChartEngine::builtin_drawing_icons();
+    assert_eq!(catalog.len(), 59);
+    assert!(catalog.iter().any(|icon| icon.name == "currency-btc"));
+    for icon in &catalog {
+        assert!(
+            icon.svg.starts_with("<svg ")
+                && icon.svg.contains("fill=\"currentColor\"")
+                && icon.svg.ends_with("</svg>"),
+            "{}",
+            icon.name
+        );
+    }
+}
+
+#[test]
+fn selected_icons_frame_their_box_and_resize_from_any_corner() {
+    for kind in [DrawingKind::IconStamp, DrawingKind::ArrowMarkerUp] {
+        let mut chart = settled_chart();
+        let options = if kind == DrawingKind::IconStamp {
+            r#"{"icon_name":"star","icon_size":40}"#
+        } else {
+            r#"{"icon_size":40}"#
+        };
+        let id = chart
+            .add_drawing(kind, 0, vec![point(4.0, 11.5)], Some(options))
+            .unwrap();
+        chart.set_selected_drawing(Some(id));
+        let frame = chart.build_frame();
+        // A 1 px frame on the icon's square and a round handle on each corner.
+        let (rect, _) = painted_image(&frame).expect("the icon image");
+        let edge = f64::from(rect[2]);
+        assert!(frame.panes[0].main.iter().any(|prim| matches!(
+            prim,
+            Prim::RectFrame { rect: frame_rect, border: 1, color }
+                if *color == primary()
+                    && f64::from(frame_rect.x) == f64::from(rect[0])
+                    && f64::from(frame_rect.w) == edge
+        )));
+        let handles = painted_handles(&frame);
+        assert_eq!(handles.len(), 4, "{kind:?}: {handles:?}");
+        assert!(
+            handles.iter().all(|handle| !handle.2),
+            "round corner handles"
+        );
+        let (left, top) = (f64::from(rect[0]), f64::from(rect[1]));
+        let corners = [
+            (left, top),
+            (left + edge, top),
+            (left + edge, top + edge),
+            (left, top + edge),
+        ];
+        for (corner, &(cx, cy)) in corners.iter().enumerate() {
+            let hit = chart.hit_test_drawing(cx, cy).unwrap();
+            assert_eq!(hit.part, DrawingDragPart::Anchor(corner), "{kind:?}");
+            assert!(hit.cursor.ends_with("-resize"));
+        }
+
+        // Dragging the bottom-right corner outward grows the icon uniformly and keeps its anchor.
+        let before = chart.drawing(id).unwrap().points.clone();
+        let (cx, cy) = corners[2];
+        assert!(chart.drawing_drag_start_at(cx, cy));
+        chart.drawing_drag_to(cx + 30.0, cy + 10.0, DrawingModifiers::default());
+        chart.drawing_drag_end();
+        let grown = chart.drawing(id).unwrap();
+        assert!(grown.icon_size > 50.0, "{kind:?}: {}", grown.icon_size);
+        assert_eq!(grown.points, before, "resizing never moves the anchor");
+        // Undo restores the size; a cancelled resize leaves it untouched.
+        assert!(chart.undo_drawing());
+        assert_eq!(chart.drawing(id).unwrap().icon_size, 40.0);
+        chart.build_frame();
+        assert!(chart.drawing_drag_start_at(cx, cy));
+        chart.drawing_drag_to(cx + 300.0, cy + 300.0, DrawingModifiers::default());
+        assert_eq!(chart.drawing(id).unwrap().icon_size, 256.0, "bounded");
+        chart.drawing_drag_cancel();
+        assert_eq!(chart.drawing(id).unwrap().icon_size, 40.0);
+    }
+}
+
+#[test]
+fn arrow_markers_paint_a_solid_arrow_with_its_tip_on_the_anchor() {
+    for (kind, tip_side) in [
+        (DrawingKind::ArrowMarkerUp, (0.0, -1.0)),
+        (DrawingKind::ArrowMarkerDown, (0.0, 1.0)),
+        (DrawingKind::ArrowMarkerLeft, (-1.0, 0.0)),
+        (DrawingKind::ArrowMarkerRight, (1.0, 0.0)),
+    ] {
+        let mut chart = settled_chart();
+        let id = chart
+            .add_drawing(
+                kind,
+                0,
+                vec![point(4.0, 11.5)],
+                Some(r#"{"icon_size":120}"#),
+            )
+            .unwrap();
+        let anchor = (x_at(&chart, 4.0), y_at(&chart, 11.5));
+        let (rect, image) = painted_image(&chart.build_frame()).expect("a solid arrow image");
+        // The inked pixel furthest in the arrow's direction is its tip, on the anchor (within
+        // the half-pixel square snap plus the tip's anti-aliased rounding).
+        let inked = inked_pixels(rect, &image);
+        let reach = |p: &(f64, f64)| p.0 * tip_side.0 + p.1 * tip_side.1;
+        let furthest = inked.iter().map(reach).fold(f64::MIN, f64::max);
+        let tip_row = inked
+            .iter()
+            .filter(|p| reach(p) > furthest - 0.5)
+            .collect::<Vec<_>>();
+        let n = tip_row.len() as f64;
+        let tip = tip_row
+            .iter()
+            .fold((0.0, 0.0), |acc, p| (acc.0 + p.0 / n, acc.1 + p.1 / n));
+        let along = (tip.0 - anchor.0) * tip_side.0 + (tip.1 - anchor.1) * tip_side.1;
+        let across = (tip.0 - anchor.0) * tip_side.1 - (tip.1 - anchor.1) * tip_side.0;
+        assert!(
+            along.abs() <= 2.0 && across.abs() <= 2.0,
+            "{kind:?}: tip {tip:?} vs anchor {anchor:?}"
+        );
+        // The body extends away from the tip and is grabbable there.
+        let body = (anchor.0 - tip_side.0 * 50.0, anchor.1 - tip_side.1 * 50.0);
+        assert_eq!(
+            chart.hit_test_drawing(body.0, body.1).map(|hit| hit.id),
+            Some(id),
+            "{kind:?}"
+        );
+        // Size is editable up to 256 px and bounded.
+        assert!(chart.drawing_apply_options(id, r#"{"icon_size":256}"#));
+        assert!(!chart.drawing_apply_options(id, r#"{"icon_size":300}"#));
+        assert!(!chart.drawing_apply_options(id, r#"{"icon_name":"star"}"#));
+        let saved = chart.export_state_json().unwrap();
+        let mut restored = settled_chart();
+        restored.import_state_json(&saved).unwrap();
+        assert_eq!(restored.drawing(id).unwrap().icon_size, 256.0);
+    }
+}
+
+/// Whether segment `a`-`b` crosses the axis-aligned box `[left, top, right, bottom]`.
+fn segment_hits_box(a: (f64, f64), b: (f64, f64), [left, top, right, bottom]: [f64; 4]) -> bool {
+    let inside = |p: (f64, f64)| p.0 > left && p.0 < right && p.1 > top && p.1 < bottom;
+    if inside(a) || inside(b) {
+        return true;
+    }
+    let crosses = |p: (f64, f64), q: (f64, f64), r: (f64, f64), s: (f64, f64)| {
+        let cross = |o: (f64, f64), u: (f64, f64), v: (f64, f64)| {
+            (u.0 - o.0) * (v.1 - o.1) - (u.1 - o.1) * (v.0 - o.0)
+        };
+        let (d1, d2) = (cross(r, s, p), cross(r, s, q));
+        let (d3, d4) = (cross(p, q, r), cross(p, q, s));
+        d1 * d2 < 0.0 && d3 * d4 < 0.0
+    };
+    let corners = [(left, top), (right, top), (right, bottom), (left, bottom)];
+    (0..4).any(|i| crosses(a, b, corners[i], corners[(i + 1) % 4]))
+}
+
+#[test]
+fn drawing_labels_never_sit_on_their_own_strokes() {
+    let cases = [
+        (
+            DrawingKind::PatternXabcd,
+            vec![
+                point(1.0, 11.0),
+                point(2.5, 12.6),
+                point(4.0, 10.6),
+                point(6.0, 12.2),
+                point(8.0, 10.4),
+            ],
+        ),
+        (
+            DrawingKind::ElliottImpulse,
+            vec![
+                point(1.0, 10.4),
+                point(2.0, 11.6),
+                point(3.0, 10.9),
+                point(5.0, 12.7),
+                point(6.0, 11.8),
+                point(8.0, 12.9),
+            ],
+        ),
+        (
+            DrawingKind::FibonacciSpeedArcs,
+            vec![point(2.0, 11.0), point(6.0, 11.0)],
+        ),
+        (
+            DrawingKind::AndrewsPitchfork,
+            vec![point(2.0, 10.5), point(5.0, 12.5), point(6.0, 11.0)],
+        ),
+        (
+            DrawingKind::GannBox,
+            vec![point(2.0, 10.5), point(7.0, 12.5)],
+        ),
+        (
+            DrawingKind::FibonacciChannel,
+            vec![point(2.0, 10.5), point(5.0, 12.5), point(6.0, 10.6)],
+        ),
+        (
+            DrawingKind::FibonacciRetracement,
+            vec![point(2.0, 10.5), point(7.0, 12.5)],
+        ),
+        (
+            DrawingKind::FibonacciExtension,
+            vec![point(1.0, 10.5), point(4.0, 12.8), point(6.0, 11.0)],
+        ),
+        (
+            DrawingKind::FibonacciSpeedFan,
+            vec![point(2.0, 10.4), point(7.0, 12.6)],
+        ),
+        (
+            DrawingKind::FibonacciCircles,
+            vec![point(3.0, 11.0), point(5.0, 11.8)],
+        ),
+        (
+            DrawingKind::FibonacciWedge,
+            vec![point(2.0, 11.0), point(7.0, 12.6), point(7.0, 10.4)],
+        ),
+        (
+            DrawingKind::SchiffPitchfork,
+            vec![point(2.0, 10.5), point(5.0, 12.5), point(6.0, 11.0)],
+        ),
+        (
+            DrawingKind::GannSquare,
+            vec![point(2.0, 10.5), point(7.0, 12.5)],
+        ),
+        (
+            DrawingKind::PatternAbcd,
+            vec![
+                point(1.0, 10.5),
+                point(3.0, 12.5),
+                point(5.0, 11.0),
+                point(7.0, 12.8),
+            ],
+        ),
+        (
+            DrawingKind::ElliottCorrection,
+            vec![
+                point(1.0, 12.5),
+                point(3.0, 10.6),
+                point(5.0, 11.8),
+                point(7.0, 10.3),
+            ],
+        ),
+        (
+            DrawingKind::Forecast,
+            vec![point(3.0, 10.8), point(7.0, 12.4)],
+        ),
+    ];
+    for (kind, points) in cases {
+        let mut chart = settled_chart();
+        chart.add_drawing(kind, 0, points, None).unwrap();
+        let frame = chart.build_frame();
+        let pane = &frame.panes[0];
+        let mut strokes = Vec::new();
+        for prim in &pane.main {
+            match *prim {
+                Prim::Polyline {
+                    first_point,
+                    point_count,
+                    ..
+                } => {
+                    let run =
+                        &pane.points[first_point as usize..(first_point + point_count) as usize];
+                    for pair in run.windows(2) {
+                        strokes.push((
+                            (f64::from(pair[0][0]), f64::from(pair[0][1])),
+                            (f64::from(pair[1][0]), f64::from(pair[1][1])),
+                        ));
+                    }
+                }
+                Prim::HLine { y, x0, x1, .. } => strokes.push((
+                    (f64::from(x0), f64::from(y) + 0.5),
+                    (f64::from(x1), f64::from(y) + 0.5),
+                )),
+                Prim::VLine { x, y0, y1, .. } => strokes.push((
+                    (f64::from(x) + 0.5, f64::from(y0)),
+                    (f64::from(x) + 0.5, f64::from(y1)),
+                )),
+                _ => {}
+            }
+        }
+        let mut labels: Vec<[f64; 4]> = Vec::new();
+        for prim in &pane.main {
+            let Prim::Text {
+                text,
+                x,
+                y,
+                size,
+                align,
+                ..
+            } = prim
+            else {
+                continue;
+            };
+            // The headless fixture measures 0.6 em per character.
+            let (x, y, size) = (f64::from(*x), f64::from(*y), f64::from(*size));
+            let width = text.chars().count() as f64 * size * 0.6;
+            let left = match align {
+                aeris_charts_render::draw_list::TextAlign::Left => x,
+                aeris_charts_render::draw_list::TextAlign::Center => x - width / 2.0,
+                aeris_charts_render::draw_list::TextAlign::Right => x - width,
+            };
+            // The glyph run itself, shrunk by a pixel so touching edges do not count.
+            let run = [
+                left + 1.0,
+                y - size * 0.5 + 1.0,
+                left + width - 1.0,
+                y + size * 0.5 - 1.0,
+            ];
+            for &(a, b) in &strokes {
+                assert!(
+                    !segment_hits_box(a, b, run),
+                    "{kind:?}: label {text:?} at {run:?} sits on stroke {a:?}-{b:?}"
+                );
+            }
+            // Nor on another of the drawing's labels.
+            for other in &labels {
+                let overlap = run[0] < other[2]
+                    && other[0] < run[2]
+                    && run[1] < other[3]
+                    && other[1] < run[3];
+                assert!(
+                    !overlap,
+                    "{kind:?}: label {text:?} at {run:?} overlaps {other:?}"
+                );
+            }
+            labels.push(run);
+        }
+        assert!(!labels.is_empty(), "{kind:?} paints labels");
+    }
 }

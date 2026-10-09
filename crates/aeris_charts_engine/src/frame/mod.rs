@@ -1408,6 +1408,9 @@ impl ChartEngine {
 
     /// Build pane geometry without resetting work already recorded by host layout preparation.
     pub fn build_frame_into_accumulating(&mut self, output: &mut ChartFrame) {
+        // A captured freehand stroke's newest coalesced sample becomes a knot of this frame, so
+        // every host's brush draws live without a separate per-frame input call.
+        self.flush_coalesced_input();
         self.sync_frame_input_invalidation();
 
         let layout_dirty = self.retained_frame.layout_generation != self.frame_invalidation.layout;

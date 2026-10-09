@@ -24,14 +24,18 @@ use aeris_charts_render::draw_list::{LineStyle, LineType, RasterImage};
 
 use super::*;
 
+mod annotations;
 mod geometry;
+mod icons;
 mod tools;
 
+pub(crate) use annotations::{SIGNPOST_PRESET_HEIGHT, annotation_text_weight};
 pub(crate) use geometry::{
     DrawingBodyGeometry, DrawingGeometryOptions, FibonacciGeometry, MeasureAxes, MeasureGeometry,
     PositionGeometry, PositionZone, anchor_handle_points, arc_segments, ellipse_segments,
     resolve_drawing_geometry,
 };
+pub(crate) use icons::{BUILTIN_ICONS, IconRasterCache, arrow_marker_icon, builtin_icon};
 pub(crate) use tools::{
     DRAWING_TOOL_SPECS, DrawingHandleMode, DrawingLogicalExtent, DrawingMovementAxis,
     DrawingPlacement, DrawingPriceExtent, DrawingStraightenMode,
@@ -55,8 +59,18 @@ pub type DrawingId = u32;
 /// Hard cap shared by live drawing APIs and persistence so variable-point tools remain bounded.
 pub(crate) const MAX_DRAWING_POINTS: usize = 100_000;
 pub const MAX_DRAWING_ICONS: usize = 32;
+
+/// One built-in icon for host pickers: the `icon_name` value and its inline SVG.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct BuiltinDrawingIcon {
+    pub name: &'static str,
+    pub svg: String,
+}
 pub const MAX_DRAWING_ICON_SIZE: u32 = 96;
 pub const MAX_DRAWING_ICON_NAME_BYTES: usize = 64;
+/// Display size bounds for icon stamps and arrow markers, in CSS px.
+pub(crate) const MIN_DRAWING_ICON_DISPLAY_SIZE: f64 = 8.0;
+pub(crate) const MAX_DRAWING_ICON_DISPLAY_SIZE: f64 = 256.0;
 pub const MAX_BARS_PATTERN_BARS: usize = 512;
 
 /// Frozen source bar stored with a bars-pattern drawing. Offsets preserve whitespace gaps.
@@ -236,6 +250,18 @@ impl ChartEngine {
         }
         self.invalidate_frame_drawings();
         true
+    }
+
+    /// The built-in solid icons an icon stamp's `icon_name` can name, in catalog order, each
+    /// with inline SVG so host pickers show exactly what the chart paints.
+    pub fn builtin_drawing_icons() -> Vec<BuiltinDrawingIcon> {
+        BUILTIN_ICONS
+            .iter()
+            .map(|icon| BuiltinDrawingIcon {
+                name: icon.name,
+                svg: icon.svg(),
+            })
+            .collect()
     }
 
     pub fn remove_drawing_icon(&mut self, name: &str) -> bool {
@@ -887,6 +913,9 @@ impl DrawingKind {
     /// Whether `count` is a valid point count for a stored drawing of this kind.
     pub fn valid_point_count(self, count: usize) -> bool {
         self.spec().placement.valid_point_count(count)
+            // Notes and price notes saved before they gained their second anchor keep loading;
+            // the annotation layout places a one-anchor box on that anchor.
+            || (count == 1 && matches!(self, Self::Note | Self::PriceNote))
     }
 }
 
@@ -1176,11 +1205,7 @@ impl Drawing {
             locked: false,
             z_order: id as i32,
             interval_visibility: Default::default(),
-            stroke_start: if kind == DrawingKind::Callout {
-                crate::DrawingLineCap::Arrow
-            } else {
-                Default::default()
-            },
+            stroke_start: Default::default(),
             stroke_end: if kind == DrawingKind::ArrowLine {
                 crate::DrawingLineCap::Arrow
             } else {
@@ -1404,18 +1429,10 @@ impl Drawing {
             text_italic: false,
             text_h_align,
             text_v_align,
-            box_color: match kind {
-                DrawingKind::Note => Some("#facc1533".to_string()),
-                DrawingKind::Comment | DrawingKind::Callout => Some("#2962ff22".to_string()),
-                _ => None,
-            },
-            box_border_color: match kind {
-                DrawingKind::Note => Some("#eab308".to_string()),
-                DrawingKind::Comment | DrawingKind::Callout => {
-                    Some(DRAWING_DEFAULT_COLOR.to_string())
-                }
-                _ => None,
-            },
+            // Box annotations resolve unset box colors from the painted theme or the drawing
+            // color at frame time (`build_annotation_prims`), so they follow theme changes.
+            box_color: None,
+            box_border_color: None,
             box_border_width: aeris_charts_core::style::BORDER_WIDTH,
         }
     }
@@ -1522,6 +1539,12 @@ impl Drawing {
             },
             DrawingKind::IconStamp => crate::DrawingKindOptions::IconStamp {
                 icon_name: self.icon_name.clone(),
+                icon_size: self.icon_size,
+            },
+            DrawingKind::ArrowMarkerUp
+            | DrawingKind::ArrowMarkerDown
+            | DrawingKind::ArrowMarkerLeft
+            | DrawingKind::ArrowMarkerRight => crate::DrawingKindOptions::ArrowMarker {
                 icon_size: self.icon_size,
             },
             DrawingKind::BarsPattern => crate::DrawingKindOptions::BarsPattern {
@@ -1670,6 +1693,10 @@ pub(crate) struct DrawingDrag {
     pub(crate) history_points: Vec<DrawingPoint>,
     pub(crate) history_screen_position: (f64, f64),
     pub(crate) history_bars_pattern: Vec<BarsPatternBar>,
+    /// Icon display size at the interaction baseline (corner resizes scale it) and at the
+    /// start, for cancellation and history.
+    pub(crate) start_icon_size: f64,
+    pub(crate) history_icon_size: f64,
 }
 
 const DRAWING_HISTORY_LIMIT: usize = 100;
@@ -2130,15 +2157,17 @@ impl Drawing {
         {
             return false;
         }
-        if (patch.icon_name.is_some() || patch.icon_size.is_some())
-            && (self.kind != DrawingKind::IconStamp
-                || patch
-                    .icon_name
-                    .as_ref()
-                    .is_some_and(|name| name.len() > MAX_DRAWING_ICON_NAME_BYTES)
-                || patch
-                    .icon_size
-                    .is_some_and(|size| !size.is_finite() || !(8.0..=96.0).contains(&size)))
+        if (patch.icon_name.is_some() && self.kind != DrawingKind::IconStamp)
+            || (patch.icon_size.is_some() && !self.kind.has_icon_size())
+            || patch
+                .icon_name
+                .as_ref()
+                .is_some_and(|name| name.len() > MAX_DRAWING_ICON_NAME_BYTES)
+            || patch.icon_size.is_some_and(|size| {
+                !size.is_finite()
+                    || !(MIN_DRAWING_ICON_DISPLAY_SIZE..=MAX_DRAWING_ICON_DISPLAY_SIZE)
+                        .contains(&size)
+            })
         {
             return false;
         }
@@ -2433,6 +2462,8 @@ impl Drawing {
         }
         if self.kind == DrawingKind::IconStamp {
             options["icon_name"] = serde_json::json!(self.icon_name);
+        }
+        if self.kind.has_icon_size() {
             options["icon_size"] = serde_json::json!(self.icon_size);
         }
         if self.kind == DrawingKind::BarsPattern {
@@ -2526,15 +2557,22 @@ impl ChartEngine {
             let drawing = self.drawing(drag.id)?;
             let points = drawing.points.clone();
             let px = self.drawing_px(drawing)?;
-            Some((points, px, drag.current_x, drag.current_y))
+            Some((
+                points,
+                px,
+                drawing.icon_size,
+                drag.current_x,
+                drag.current_y,
+            ))
         });
-        if let (Some(drag), Some((start_points, start_px, pointer_x, pointer_y))) =
+        if let (Some(drag), Some((start_points, start_px, icon_size, pointer_x, pointer_y))) =
             (self.drawing_drag.as_mut(), drag_baseline)
         {
             drag.start_x = pointer_x;
             drag.start_y = pointer_y;
             drag.start_points = start_points;
             drag.start_px = start_px;
+            drag.start_icon_size = icon_size;
         }
 
         let brush_px =
@@ -2864,7 +2902,8 @@ impl ChartEngine {
     }
 
     /// Anchors land on the crosshair's time slot under `x` (unless the magnet already chose a
-    /// bar), so drawings step bar by bar horizontally; price-tick tools also land on the tick grid.
+    /// bar) and on the instrument/scale price tick, so drawings step bar by bar horizontally and
+    /// tick by tick vertically.
     fn grid_snap_point(
         &self,
         kind: DrawingKind,
@@ -2874,11 +2913,13 @@ impl ChartEngine {
         mut point: DrawingPoint,
         magnet: bool,
     ) -> DrawingPoint {
-        // Anchored text pins to a pane-relative screen position, not a bar.
-        if !magnet && kind != DrawingKind::AnchoredText {
-            point.logical = self.snapped_crosshair_index(x) as f64;
+        // Anchored text pins to a pane-relative screen position, not a bar or a price.
+        if kind == DrawingKind::AnchoredText {
+            return point;
         }
-        if kind.spec().price_tick_snap {
+        // An engaged magnet already chose an exact bar and OHLC price; those win.
+        if !magnet {
+            point.logical = self.snapped_crosshair_index(x) as f64;
             point.price = self.snap_position_price(pane_index, price_scale, point.price);
         }
         point
@@ -3392,9 +3433,15 @@ impl ChartEngine {
             extra_x = extra_x.max(16.0);
             extra_y = extra_y.max(16.0);
         }
-        if drawing.kind == DrawingKind::IconStamp {
-            extra_x = extra_x.max(drawing.icon_size / 2.0);
-            extra_y = extra_y.max(drawing.icon_size / 2.0);
+        if drawing.kind.has_icon_size() {
+            // A stamp centers on its anchor; an arrow marker's tip is its anchor.
+            let reach = if drawing.kind == DrawingKind::IconStamp {
+                drawing.icon_size / 2.0
+            } else {
+                drawing.icon_size
+            };
+            extra_x = extra_x.max(reach);
+            extra_y = extra_y.max(reach);
         }
         if drawing.kind == DrawingKind::Forecast {
             extra_x = extra_x.max(160.0);
@@ -3430,9 +3477,15 @@ impl ChartEngine {
             extra_x = extra_x.max(16.0);
             extra_y = extra_y.max(16.0);
         }
-        if drawing.kind == DrawingKind::IconStamp {
-            extra_x = extra_x.max(drawing.icon_size / 2.0);
-            extra_y = extra_y.max(drawing.icon_size / 2.0);
+        if drawing.kind.has_icon_size() {
+            // A stamp centers on its anchor; an arrow marker's tip is its anchor.
+            let reach = if drawing.kind == DrawingKind::IconStamp {
+                drawing.icon_size / 2.0
+            } else {
+                drawing.icon_size
+            };
+            extra_x = extra_x.max(reach);
+            extra_y = extra_y.max(reach);
         }
         if drawing.kind == DrawingKind::Forecast {
             extra_x = extra_x.max(160.0);
@@ -3550,6 +3603,24 @@ impl ChartEngine {
             // reach that keeps a visible label's drawing in the candidate set.
             let size = crate::frame::stat_label_height(font_size, 2) + MEASURE_LABEL_GAP;
             return Some((MEASURE_LABEL_REACH_X, size / 1.2));
+        }
+        if drawing.kind.is_annotation() {
+            // A box reaches up to its full width and height past an anchor (a comment's or
+            // callout's box grows right and up); the margin covers price-tag digit changes.
+            if entry.text_key != key {
+                let (text, _) = self.annotation_text(drawing);
+                let size = drawing.resolved_text_size(font_size);
+                entry.text_width = self.measure_text_run(
+                    &text,
+                    size,
+                    font_family,
+                    annotation_text_weight(drawing),
+                    drawing.text_italic,
+                );
+                entry.text_size = size;
+                entry.text_key = key;
+            }
+            return Some((entry.text_width + 48.0, entry.text_size + 16.0));
         }
         if drawing.text.is_empty()
             && drawing.kind != DrawingKind::Text
@@ -3693,6 +3764,45 @@ impl ChartEngine {
     /// clock order from the top-left: 0 TL, 1 top-mid, 2 TR, 3 right-mid, 4 BR, 5 bottom-mid,
     /// 6 BL, 7 left-mid. Corners resize both adjacent edges, midpoints one edge — all with
     /// flip-on-cross (the opposite side stays put). Works on any px basis (media/bitmap).
+    /// An icon-drawn drawing's box as `(center, size)` in the basis of `px` (media px scaled by
+    /// `scale`): the square its icon paints in and its resize handles frame.
+    pub(crate) fn icon_box(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        scale: f64,
+    ) -> Option<((f64, f64), f64)> {
+        let pane = self.panes.get(drawing.pane_index)?;
+        let geometry = resolve_drawing_geometry(
+            drawing.kind,
+            px,
+            self.pane_w * scale,
+            pane.top * scale,
+            pane.height * scale,
+            DrawingGeometryOptions {
+                line_width: drawing.width,
+                device_scale: scale,
+                icon_size: drawing.icon_size,
+                ..Default::default()
+            },
+        )?;
+        match geometry.body {
+            DrawingBodyGeometry::IconStamp { center, size } => Some((center, size)),
+            _ => None,
+        }
+    }
+
+    /// An icon box's corners, clockwise from top left (the `IconBox` handle order).
+    pub(crate) fn icon_box_corners((center, size): ((f64, f64), f64)) -> [(f64, f64); 4] {
+        let half = size / 2.0;
+        [
+            (center.0 - half, center.1 - half),
+            (center.0 + half, center.1 - half),
+            (center.0 + half, center.1 + half),
+            (center.0 - half, center.1 + half),
+        ]
+    }
+
     pub(crate) fn rectangle_anchors(px: &[(f64, f64)]) -> [(f64, f64); 8] {
         let (a, b) = (px[0], px[1]);
         let (l, r) = (a.0.min(b.0), a.0.max(b.0));
@@ -5000,6 +5110,37 @@ impl ChartEngine {
                         }
                     }
                 }
+                DrawingHandleMode::IconBox => {
+                    if let Some(icon) = self.icon_box(drawing, &px, 1.0) {
+                        for (corner, (ax, ay)) in
+                            Self::icon_box_corners(icon).into_iter().enumerate()
+                        {
+                            if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
+                                return Some(DrawingHit {
+                                    id: selected,
+                                    part: DrawingDragPart::Anchor(corner),
+                                    cursor: if corner % 2 == 0 {
+                                        "nwse-resize"
+                                    } else {
+                                        "nesw-resize"
+                                    },
+                                });
+                            }
+                        }
+                    }
+                }
+                DrawingHandleMode::OneAnchor { index, .. } => {
+                    let index = usize::from(index);
+                    if let Some(&(ax, ay)) = px.get(index)
+                        && (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius
+                    {
+                        return Some(DrawingHit {
+                            id: selected,
+                            part: DrawingDragPart::Anchor(index),
+                            cursor: "pointer",
+                        });
+                    }
+                }
                 DrawingHandleMode::RectangleBounds
                 | DrawingHandleMode::BoundsEdges
                 | DrawingHandleMode::Position => {}
@@ -5160,6 +5301,24 @@ impl ChartEngine {
             return true;
         }
         match geometry.body {
+            // The painted box, its connector, and the callout's whole outline (box and tail)
+            // are grab areas.
+            DrawingBodyGeometry::Annotation => self
+                .annotation_layout(drawing, px, 1.0)
+                .is_some_and(|layout| {
+                    layout.contains((x, y), 0.0)
+                        || layout.connector.is_some_and(|(a, b)| {
+                            distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
+                        })
+                        || layout.outline.as_deref().is_some_and(|outline| {
+                            point_in_polygon((x, y), outline)
+                                || outline.windows(2).any(|edge| {
+                                    distance_to_segment(
+                                        x, y, edge[0].0, edge[0].1, edge[1].0, edge[1].1,
+                                    ) <= tolerance
+                                })
+                        })
+                }),
             DrawingBodyGeometry::Segment { a, b } => {
                 distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
             }
@@ -5283,9 +5442,10 @@ impl ChartEngine {
                         let b = triangle[(index + 1) % 3];
                         distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
                     })
-                    || marker.stem().is_some_and(|(a, b)| {
+                    || {
+                        let (a, b) = marker.stem();
                         distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
-                    })
+                    }
             }
             DrawingBodyGeometry::PriceLabel {
                 x: label_x,
@@ -5546,6 +5706,7 @@ impl ChartEngine {
         let start_points = drawing.points.clone();
         let screen_position = (drawing.screen_x, drawing.screen_y);
         let history_bars_pattern = drawing.bars_pattern.clone();
+        let icon_size = drawing.icon_size;
         let Some(start_px) = self.drawing_px(drawing) else {
             return false;
         };
@@ -5562,6 +5723,8 @@ impl ChartEngine {
             history_bars_pattern,
             start_points,
             start_px,
+            start_icon_size: icon_size,
+            history_icon_size: icon_size,
         });
         true
     }
@@ -5621,6 +5784,24 @@ impl ChartEngine {
                 if let Some(point) = market_point {
                     drawing.points[0] = point;
                 }
+            }
+            self.update_drawing_runtime(id);
+            return;
+        }
+        if kind.spec().handles == DrawingHandleMode::IconBox
+            && matches!(part, DrawingDragPart::Anchor(0..4))
+        {
+            // A corner resizes the icon about its anchor (a stamp's center, an arrow's tip): the
+            // size scales with the cursor's farther-axis reach from that point, uniformly.
+            let (Some(&fixed), Some(drag)) = (start_px.first(), self.drawing_drag.as_ref()) else {
+                return;
+            };
+            let reach = |(px, py): (f64, f64)| (px - fixed.0).abs().max((py - fixed.1).abs());
+            let start_reach = reach((start_x, y - dy)).max(1.0);
+            let size = (drag.start_icon_size * reach((x, y)) / start_reach)
+                .clamp(MIN_DRAWING_ICON_DISPLAY_SIZE, MAX_DRAWING_ICON_DISPLAY_SIZE);
+            if let Some(drawing) = self.drawings.iter_mut().find(|drawing| drawing.id == id) {
+                drawing.icon_size = size;
             }
             self.update_drawing_runtime(id);
             return;
@@ -5830,6 +6011,10 @@ impl ChartEngine {
                         point = snapped;
                     }
                 }
+                // A signpost's post stays vertical: its top follows only the cursor's price.
+                if kind == DrawingKind::Signpost && index == 1 {
+                    point.logical = points[0].logical;
+                }
                 points[index] = point;
             }
             DrawingDragPart::Body => {
@@ -5882,7 +6067,9 @@ impl ChartEngine {
                             DrawingMovementAxis::Both => snapped,
                         };
                     }
-                    if kind.spec().price_tick_snap {
+                    // Body moves step by price ticks too once they move vertically; a freehand
+                    // stroke keeps its exact shape and a magnet-chosen OHLC price stays exact.
+                    if dy != 0.0 && !kind.spec().placement.is_freehand() && !magnet_engaged {
                         point.price = self.snap_position_price(pane, price_scale, point.price);
                     }
                     *slot = point;
@@ -5925,6 +6112,7 @@ impl ChartEngine {
                 before.screen_x = drag.history_screen_position.0;
                 before.screen_y = drag.history_screen_position.1;
                 before.bars_pattern = drag.history_bars_pattern;
+                before.icon_size = drag.history_icon_size;
                 if before != after {
                     self.drawing_anchor_times.remove(&id);
                     self.record_drawing_command(DrawingCommand::Update {
@@ -5952,6 +6140,7 @@ impl ChartEngine {
             drawing.screen_x = drag.history_screen_position.0;
             drawing.screen_y = drag.history_screen_position.1;
             drawing.bars_pattern = drag.history_bars_pattern;
+            drawing.icon_size = drag.history_icon_size;
             self.update_drawing_runtime(drag.id);
             self.invalidate_frame_drawings();
         }
@@ -6005,6 +6194,29 @@ impl ChartEngine {
             let spacing = self.time_scale.bar_spacing().max(f64::EPSILON);
             dx_css.signum() * (dx_css.abs() / spacing).round().max(1.0) * spacing
         };
+        // Prices land on ticks, so a vertical nudge steps at least one tick: a step shorter than
+        // a tick's height would snap straight back to where it started.
+        let dy_css = if dy_css == 0.0 {
+            0.0
+        } else {
+            let reference = anchor.unwrap_or(0);
+            let tick_px = drawing.points.get(reference).and_then(|point| {
+                let tick = self.position_price_tick(drawing.pane_index, drawing.price_scale)?;
+                let above = DrawingPoint {
+                    price: point.price + tick,
+                    ..*point
+                };
+                let (_, y0) =
+                    self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, *point)?;
+                let (_, y1) =
+                    self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, above)?;
+                Some((y1 - y0).abs())
+            });
+            match tick_px {
+                Some(tick_px) if tick_px > dy_css.abs() => dy_css.signum() * tick_px,
+                _ => dy_css,
+            }
+        };
         // The virtual pointer starts on the moved anchor (or mid-pane for a body move) so bar
         // stepping resolves inside the visible slot range.
         let origin = anchor.map_or(
@@ -6023,6 +6235,8 @@ impl ChartEngine {
             history_bars_pattern: drawing.bars_pattern.clone(),
             start_points,
             start_px,
+            start_icon_size: drawing.icon_size,
+            history_icon_size: drawing.icon_size,
         });
         self.drawing_drag_to(
             origin.0 + dx_css,
@@ -6607,6 +6821,16 @@ impl ChartEngine {
         entry: DrawingPoint,
         snap_time_to_data: bool,
     ) -> Option<Vec<DrawingPoint>> {
+        if kind == DrawingKind::Signpost {
+            // The post stands on the clicked bar with its box a fixed height above, kept
+            // inside the pane.
+            let pane_geometry = self.panes.get(pane)?;
+            let (x, y) = self.drawing_to_px_for(pane, price_scale, entry)?;
+            let top_y = (y - SIGNPOST_PRESET_HEIGHT).max(pane_geometry.top + 8.0);
+            let mut top = self.drawing_from_px_for(pane, price_scale, x, top_y)?;
+            top.logical = entry.logical;
+            return Some(vec![entry, top]);
+        }
         if !matches!(kind, DrawingKind::LongPosition | DrawingKind::ShortPosition) {
             return None;
         }

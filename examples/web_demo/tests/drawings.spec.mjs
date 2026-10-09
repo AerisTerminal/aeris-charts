@@ -542,10 +542,10 @@ test("a drawing's own magnet mode snaps unmodified anchor drags", async ({ page 
       expect(point.logical).toBe(target);
       expect(point.price).toBeCloseTo(expected.nearest, 9);
     } else {
-      // Every drawing lands on the bar under the cursor; only the magnet snaps the price.
+      // Every drawing lands on the bar and the 0.01 price tick under the cursor; only the magnet
+      // snaps to the bar's OHLC.
       expect(point.logical).toBe(target);
-      // Browser pointer coordinates are quantized, so the raw price is exact only to ~1e-6.
-      expect(point.price).toBeCloseTo(expected.raw, 4);
+      expect(point.price).toBeCloseTo(Math.round(expected.raw * 100) / 100, 9);
       expect(point.price).not.toBe(expected.nearest);
     }
   }
@@ -583,7 +583,8 @@ test("anchor drag re-anchors one point; body drag moves the whole drawing", asyn
 
   const reanchored = (await drawings(page))[0];
   expect(reanchored.points[0].logical).toBeCloseTo(before.points[0].logical + 4, 1);
-  expect(reanchored.points[0].price).toBeCloseTo(expected_price, 6);
+  // Drawings land on the 0.01 price tick under the cursor.
+  expect(reanchored.points[0].price).toBeCloseTo(Math.round(expected_price * 100) / 100, 6);
   // Anchor 1 untouched.
   expect(reanchored.points[1].logical).toBeCloseTo(before.points[1].logical, 6);
   expect(reanchored.points[1].price).toBeCloseTo(before.points[1].price, 6);
@@ -612,7 +613,7 @@ test("anchor drag re-anchors one point; body drag moves the whole drawing", asyn
   const moved = (await drawings(page))[0];
   expect(moved.points[0].logical).toBeCloseTo(reanchored.points[0].logical - 2, 1);
   expect(moved.points[1].logical).toBeCloseTo(reanchored.points[1].logical - 2, 1);
-  expect(moved.points[0].price).toBeCloseTo(expected_body_price0, 6);
+  expect(moved.points[0].price).toBeCloseTo(Math.round(expected_body_price0 * 100) / 100, 6);
   // The shape (anchor spacing) is preserved exactly by the coordinate-space translation.
   expect(moved.points[1].logical - moved.points[0].logical)
     .toBeCloseTo(reanchored.points[1].logical - reanchored.points[0].logical, 6);
@@ -1879,14 +1880,18 @@ test("inline editor caret follows engine geometry for aligned and rotated labels
         expected,
         left: parseFloat(wrap.style.left), top: parseFloat(wrap.style.top),
         caret_left: parseFloat(caret.style.left), angle: parseFloat(wrap.style.transform.slice(7)),
-        font: editor.style.font,
+        font: editor.style.font, dpr: window.devicePixelRatio,
       };
     }, { ...item, s });
     expect(actual.expected).not.toBeNull();
     expect(actual.expected.caret_x).toBeLessThan(actual.expected.left_edge + actual.expected.advance);
-    expect(actual.left).toBeCloseTo(actual.expected.left_edge, 2);
-    expect(actual.top).toBeCloseTo(actual.expected.anchor_y - actual.expected.font_size * 0.6, 2);
-    expect(actual.caret_left).toBeCloseTo(actual.expected.caret_x - actual.expected.left_edge, 2);
+    // The DOM caret sits on the engine geometry snapped to whole device pixels, so it keeps one
+    // thickness wherever it moves: within half a device pixel of the engine position.
+    const snap_tolerance = 0.5 / actual.dpr + 1e-6;
+    expect(Math.abs(actual.left - actual.expected.left_edge)).toBeLessThanOrEqual(snap_tolerance);
+    expect(Math.abs(actual.top - (actual.expected.anchor_y - actual.expected.font_size * 0.6)))
+      .toBeLessThanOrEqual(snap_tolerance);
+    expect(Math.abs(actual.left + actual.caret_left - actual.expected.caret_x)).toBeLessThanOrEqual(snap_tolerance);
     expect(actual.angle).toBeCloseTo(actual.expected.angle, 4);
     expect(actual.font.replaceAll('"', "'")).toContain(actual.expected.font_family);
     await page.evaluate(() => window.__chart.close_text_editor(false));
