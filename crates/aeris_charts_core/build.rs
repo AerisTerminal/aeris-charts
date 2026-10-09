@@ -118,6 +118,8 @@ fn main() {
             ("ring", "RING"),
             ("bullish", "MARKET_UP"),
             ("bearish", "MARKET_DOWN"),
+            ("positive_subtle", "POSITIVE_SUBTLE"),
+            ("negative_subtle", "NEGATIVE_SUBTLE"),
         ] {
             emit_color(
                 &mut output,

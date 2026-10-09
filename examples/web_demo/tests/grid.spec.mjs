@@ -138,11 +138,15 @@ test("portable design tokens and disabled controls match the brand contract", as
     "text-warning", "text-interactive", "text-hover", "text-active", "hover-bg", "active-bg", "disabled-bg", "icon",
     "icon-active", "positive", "positive-subtle", "negative", "negative-subtle", "warning", "warning-subtle", "indigo",
     "indigo-subtle", "purple", "purple-subtle", "primary", "primary-hover", "primary-active", "primary-disabled",
-    "primary-disabled-foreground", "primary-ring", "primary-subtle", "primary-foreground", "danger", "danger-disabled",
+    "primary-disabled-foreground", "primary-subtle", "primary-foreground", "danger", "danger-hover", "danger-disabled",
     "danger-disabled-foreground", "danger-ring", "danger-foreground", "button-fill", "button-fill-hover", "button-fill-active",
-    "button-fill-foreground", "button-fill-subtle", "ring", "radius-default", "radius-medium", "radius-small", "radius-large",
-    "radius-button", "shadow-1", "shadow-2", "shadow-3", "shadow-dialog", "bullish", "bearish",
+    "button-fill-foreground", "button-fill-subtle", "buy", "buy-hover", "buy-active", "buy-disabled",
+    "buy-disabled-foreground", "buy-foreground", "sell", "sell-hover", "sell-active", "sell-disabled",
+    "sell-disabled-foreground", "sell-foreground", "book-bid-fill", "book-bid-text", "book-ask-fill", "book-ask-text",
+    "ring-primary", "radius-default", "radius-medium", "radius-small", "radius-large", "radius-compact", "shadow-1",
+    "shadow-2", "shadow-3", "shadow-dialog", "bullish", "bearish", "buy-bubble", "sell-bubble",
   ];
+  const retired = ["primary-ring", "ring", "radius-button"];
   const tokens = () => page.evaluate((names) => {
     const style = getComputedStyle(document.documentElement);
     return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(`--${name}`).trim().toLowerCase()]));
@@ -154,7 +158,9 @@ test("portable design tokens and disabled controls match the brand contract", as
     surface: "#1f1f1f", border: "#333333", "text-primary": "#f5f5f5", "text-secondary": "#c2c2c2",
     "text-muted": "#808080", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#0091ff",
     "primary-hover": "#0077fa", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
-    "button-fill": "#f5f5f5", "radius-button": "6px",
+    "button-fill": "#f5f5f5", "radius-compact": "6px", "border-width": "0.5px",
+    "positive-subtle": "#193c37", "negative-subtle": "#532b2e", "danger-hover": "#f96a75",
+    "danger-disabled": "#6b3135", "danger-disabled-foreground": "#d0646c", buy: "#089981", sell: "#f7525f",
   });
 
   await page.selectOption("#theme_select", "light");
@@ -164,8 +170,15 @@ test("portable design tokens and disabled controls match the brand contract", as
     surface: "#ffffff", border: "#e5e5e5", "text-primary": "#222222", "text-secondary": "#646465",
     "text-muted": "#c2c2c2", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#0091ff",
     "primary-hover": "#0077fa", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
-    "button-fill": "#333333", "radius-button": "6px",
+    "button-fill": "#333333", "radius-compact": "6px", "border-width": "0.5px",
+    "positive-subtle": "#dcf5f0", "negative-subtle": "#ffe2e2", "danger-hover": "#e5404d", buy: "#089981",
+    sell: "#f7525f",
   });
+  const stale = await page.evaluate((names) => {
+    const style = getComputedStyle(document.documentElement);
+    return names.filter((name) => style.getPropertyValue(`--${name}`).trim() !== "");
+  }, retired);
+  expect(stale).toEqual([]);
 
   await page.evaluate(() => {
     const button = document.createElement("button");

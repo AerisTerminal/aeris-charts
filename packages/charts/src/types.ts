@@ -3306,6 +3306,11 @@ export interface trading_style_options {
   working_order: string;
   buy: string;
   sell: string;
+  /** Marker and line color of a resting buy or sell limit (and stop-limit). Defaults follow
+   * the painted surface's `--positive-subtle` / `--negative-subtle`; text and hollow axis tags
+   * keep the strong `buy` / `sell` color. */
+  buy_limit: string;
+  sell_limit: string;
   profit: string;
   risk: string;
   take_profit: string;

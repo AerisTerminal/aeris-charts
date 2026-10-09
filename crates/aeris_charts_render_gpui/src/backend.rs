@@ -183,11 +183,11 @@ pub fn text_measurer(
 /// metrics report `descent` negative below the baseline, the convention `paint_text` places with.
 pub fn text_cap_centerer(
     window: &Window,
-) -> impl Fn(f64, &str, u16, bool) -> f64 + 'static + use<> {
+) -> impl Fn(f64, &str, u16, bool) -> aeris_charts_engine::TextCapMetrics + 'static + use<> {
     let text_system = window.text_system().clone();
     move |size, family, weight, italic| {
         if !(size.is_finite() && size > 0.0) {
-            return 0.0;
+            return aeris_charts_engine::TextCapMetrics::default();
         }
         let font = to_font(&TextRun {
             x: 0.0,
@@ -206,7 +206,10 @@ pub fn text_cap_centerer(
         let ascent: f32 = text_system.ascent(font_id, font_size).into();
         let descent: f32 = text_system.descent(font_id, font_size).into();
         let cap_height: f32 = text_system.cap_height(font_id, font_size).into();
-        f64::from(text::cap_center_offset(ascent, descent, cap_height))
+        aeris_charts_engine::TextCapMetrics {
+            center_offset: f64::from(text::cap_center_offset(ascent, descent, cap_height)),
+            cap_height: f64::from(cap_height),
+        }
     }
 }
 

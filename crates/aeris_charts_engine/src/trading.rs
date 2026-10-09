@@ -385,6 +385,11 @@ pub struct TradingStyle {
     pub working_order: Color,
     pub buy: Color,
     pub sell: Color,
+    /// Marker and line color of a resting buy or sell limit (including stop-limit). `None`
+    /// follows the painted surface's `--positive-subtle` / `--negative-subtle` token.
+    /// Text and hollow axis tags keep the strong `buy` / `sell` color.
+    pub buy_limit: Option<Color>,
+    pub sell_limit: Option<Color>,
     pub profit: Color,
     pub risk: Color,
     pub take_profit: Color,
@@ -418,11 +423,12 @@ impl Default for TradingStyle {
         Self {
             position: primary,
             working_order: primary,
-            // Lines and their solid markers read by direction in the brand tokens: buy/long and
-            // take-profit in `--primary`, sell/short and stop-loss in `--negative`. PnL text keeps
-            // the real `--positive`/`--negative` tokens on the marker's hollow value cell.
-            buy: primary,
+            // Lines and their markers read by direction in the market tokens: buy/long in
+            // `--positive`, sell/short and stop-loss in `--negative`, take-profit in `--primary`.
+            buy: positive,
             sell: negative,
+            buy_limit: None,
+            sell_limit: None,
             profit: positive,
             risk: negative,
             take_profit: primary,
@@ -445,6 +451,8 @@ pub struct TradingStyleOptions {
     pub working_order: Option<String>,
     pub buy: Option<String>,
     pub sell: Option<String>,
+    pub buy_limit: Option<String>,
+    pub sell_limit: Option<String>,
     pub profit: Option<String>,
     pub risk: Option<String>,
     pub take_profit: Option<String>,
@@ -2555,6 +2563,14 @@ impl ChartEngine {
         apply!(working_order);
         apply!(buy);
         apply!(sell);
+        for (name, value, slot) in [
+            ("buy_limit", &options.buy_limit, &mut style.buy_limit),
+            ("sell_limit", &options.sell_limit, &mut style.sell_limit),
+        ] {
+            if let Some(color) = parse_style_color(name, value.as_deref())? {
+                *slot = Some(color);
+            }
+        }
         apply!(profit);
         apply!(risk);
         apply!(take_profit);
@@ -4521,10 +4537,10 @@ mod tests {
                 assert!(texts.contains(&text), "missing protection control {text:?}");
             }
             assert!(texts.iter().all(|text| *text != "×"));
-            // The compact marker: 11px text in a 14px control at the canonical 12px font.
+            // The compact marker: 11px text in a 16px control at the canonical 12px font.
             assert_eq!(chart.trading_marker_font_size(), 11.0);
             let expected_height = chart.trading_control_height() as f32;
-            assert_eq!(expected_height, 14.0);
+            assert_eq!(expected_height, 16.0);
             let round_rect_heights = trading
                 .iter()
                 .filter_map(|primitive| match primitive {
@@ -5023,20 +5039,25 @@ mod tests {
                 .collect();
             (texts, boxes)
         };
-        let box_center_of = |boxes: &[(f32, f32, f32, f32)], x: f32| {
-            boxes
+        let box_of = |boxes: &[(f32, f32, f32, f32)], x: f32, y: f32| {
+            *boxes
                 .iter()
-                .find(|(left, _, width, _)| x > *left && x < *left + *width)
-                .map(|(_, top, _, height)| *top + *height / 2.0)
+                .find(|(left, top, width, height)| {
+                    x > *left && x < *left + *width && y > *top && y < *top + *height
+                })
                 .expect("text sits inside a control")
         };
 
-        // TP, SL, quantity, and P&L text all anchor on their snapped box center plus one shared
-        // host cap-height correction, so each has equal visual padding above and below at every
-        // pixel ratio, including fractional ones.
-        let cap = chart.trading_marker_font_size() / 12.0 * 1.25;
-        for dpr in [1.0_f64, 1.25, 1.5, 2.0, 3.0] {
-            chart.set_text_cap_center(Some(Box::new(|size, _, _, _| size / 12.0 * 1.25)));
+        // A font-like metric with a fractional cap height (Segoe UI's 0.7 em caps sit 0.09 em
+        // below the em middle). TP, SL, quantity, and P&L text must put their cap ink on a whole
+        // device row with exactly as many device rows above it as below it, at every ratio.
+        let font = chart.trading_marker_font_size();
+        let nominal = chart.trading_control_height();
+        for dpr in [1.0_f64, 1.1, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0] {
+            chart.set_text_cap_center(Some(Box::new(|size, _, _, _| crate::TextCapMetrics {
+                center_offset: size * 0.088,
+                cap_height: size * 0.7,
+            })));
             let (texts, boxes) = texts_and_boxes(&chart, dpr);
             for label in ["TP", "SL"] {
                 assert!(
@@ -5045,11 +5066,25 @@ mod tests {
                 );
             }
             assert!(texts.len() >= 4);
+            let cap = font * dpr * 0.7;
+            let offset = font * dpr * 0.088;
+            let ink_rows = (cap - 0.01).ceil();
             for (text, x, y) in &texts {
-                let expected = box_center_of(&boxes, *x) + (cap * dpr) as f32;
+                let (_, top, _, height) = box_of(&boxes, *x, *y);
                 assert!(
-                    (*y - expected).abs() <= 0.01,
-                    "{text:?} anchored at {y}, expected {expected} at dpr {dpr}"
+                    (f64::from(height) - (nominal * dpr).round()).abs() <= 1.0,
+                    "{text:?} box {height} strays from the nominal height at dpr {dpr}"
+                );
+                let baseline = f64::from(*y) - offset + cap / 2.0;
+                assert!(
+                    (baseline - baseline.round()).abs() < 0.01,
+                    "{text:?} baseline {baseline} is not on a device row at dpr {dpr}"
+                );
+                let above = baseline.round() - ink_rows - f64::from(top);
+                let below = f64::from(top + height) - baseline.round();
+                assert!(
+                    above >= 1.0 && (above - below).abs() < 0.01,
+                    "{text:?} has {above} rows above its ink and {below} below at dpr {dpr}"
                 );
             }
 
@@ -5057,7 +5092,8 @@ mod tests {
             chart.set_text_cap_center(None);
             let (texts, boxes) = texts_and_boxes(&chart, dpr);
             for (text, x, y) in &texts {
-                let expected = box_center_of(&boxes, *x);
+                let (_, top, _, height) = box_of(&boxes, *x, *y);
+                let expected = top + height / 2.0;
                 assert!(
                     (*y - expected).abs() <= 0.01,
                     "{text:?} anchored at {y}, expected {expected} at dpr {dpr}"
@@ -5178,6 +5214,8 @@ mod tests {
 
     #[test]
     fn order_colors_preserve_limit_side_and_protection_semantics() {
+        use aeris_charts_core::style::{DARK_NEGATIVE_SUBTLE_RGB, DARK_POSITIVE_SUBTLE_RGB};
+        let subtle = |rgb: (u8, u8, u8)| Color::rgb(rgb.0, rgb.1, rgb.2);
         let mut chart = chart_with_market();
         let mut sell_limit = order("sell-limit", OrderRole::Working, 103.0);
         sell_limit.side = OrderSide::Sell;
@@ -5220,8 +5258,8 @@ mod tests {
         let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
         let style = chart.trading_style();
         for (price, expected) in [
-            (103.0, style.sell),
-            (100.5, style.buy),
+            (103.0, subtle(DARK_NEGATIVE_SUBTLE_RGB)),
+            (100.5, subtle(DARK_POSITIVE_SUBTLE_RGB)),
             (101.5, style.sell),
             (99.0, style.sell),
             (104.0, style.take_profit),
@@ -5259,6 +5297,169 @@ mod tests {
                 "{price} tag solidity does not follow its fill state"
             );
         }
+    }
+
+    #[test]
+    fn resting_limits_use_subtle_lines_and_markers_but_stop_style_axis_tags() {
+        use aeris_charts_core::style::{
+            DARK_NEGATIVE_SUBTLE_RGB, DARK_POSITIVE_SUBTLE_RGB, LIGHT_POSITIVE_SUBTLE_RGB,
+            MARKET_UP_RGB,
+        };
+        let rgb = |c: (u8, u8, u8)| Color::rgb(c.0, c.1, c.2);
+        let mut chart = chart_with_market();
+        assert_eq!(
+            chart.trading_style().buy,
+            rgb(MARKET_UP_RGB),
+            "buy is --positive"
+        );
+        let ordinary = |name: &str, side: OrderSide, kind: OrderKind, price: f64| {
+            let mut order = order(name, OrderRole::Working, price);
+            order.position_id = None;
+            order.bracket_id = None;
+            order.oco_group_id = None;
+            order.side = side;
+            order.kind = kind;
+            order
+        };
+        let mut sell_stop_limit = ordinary("ssl", OrderSide::Sell, OrderKind::StopLimit, 103.0);
+        sell_stop_limit.stop_price = Some(103.5);
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                orders: vec![
+                    ordinary("bl", OrderSide::Buy, OrderKind::Limit, 100.5),
+                    ordinary("sl", OrderSide::Sell, OrderKind::Limit, 99.25),
+                    sell_stop_limit,
+                    ordinary("bs", OrderSide::Buy, OrderKind::Stop, 101.5),
+                    ordinary("ss", OrderSide::Sell, OrderKind::Stop, 102.0),
+                ],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        let style = chart.trading_style();
+
+        // (body fill, quantity text color, detail text color) of the marker on `price`'s row.
+        let marker = |chart: &mut ChartEngine, price: f64, detail: &str| -> (Color, Color, Color) {
+            let frame = chart.build_frame();
+            let segments = chart.frame_pane_segments(0).unwrap();
+            let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
+            let row = chart
+                .trading_price_coordinate(0, TradingPriceScale::Right, price)
+                .unwrap() as f32;
+            let start = chart.trading_marker_start() as f32;
+            let body = trading
+                .iter()
+                .find_map(|primitive| match primitive {
+                    Prim::RoundRect { x, y, h, fill, .. }
+                        if (*x - start).abs() < 1.0 && *y <= row && *y + *h >= row =>
+                    {
+                        Some(*fill)
+                    }
+                    _ => None,
+                })
+                .expect("marker body");
+            let text = trading
+                .iter()
+                .find_map(|primitive| match primitive {
+                    Prim::Text { text, y, color, .. } if text == "12" && (*y - row).abs() < 8.0 => {
+                        Some(*color)
+                    }
+                    _ => None,
+                })
+                .expect("quantity text");
+            let detail_color = trading
+                .iter()
+                .find_map(|primitive| match primitive {
+                    Prim::Text { text, y, color, .. }
+                        if text == detail && (*y - row).abs() < 8.0 =>
+                    {
+                        Some(*color)
+                    }
+                    _ => None,
+                })
+                .expect("order-type text");
+            (body, text, detail_color)
+        };
+        assert_eq!(
+            marker(&mut chart, 100.5, "Buy Limit"),
+            (rgb(DARK_POSITIVE_SUBTLE_RGB), style.buy, style.buy),
+            "buy limit quantity and middle text use the same --positive token"
+        );
+        assert_eq!(
+            marker(&mut chart, 99.25, "Sell Limit"),
+            (rgb(DARK_NEGATIVE_SUBTLE_RGB), style.sell, style.sell),
+            "sell limit quantity and middle text use the same --negative token"
+        );
+        assert_eq!(
+            marker(&mut chart, 103.0, "Sell Stop Limit"),
+            (rgb(DARK_NEGATIVE_SUBTLE_RGB), style.sell, style.sell),
+            "sell stop-limit quantity and middle text use the same --negative token"
+        );
+        assert_eq!(
+            marker(&mut chart, 101.5, "Buy Stop"),
+            (style.buy, style.label, chart.primary_text_color()),
+            "a stop (market on trigger) stays solid"
+        );
+
+        let frame = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
+        for (price, color) in [
+            (100.5, rgb(DARK_POSITIVE_SUBTLE_RGB)),
+            (103.0, rgb(DARK_NEGATIVE_SUBTLE_RGB)),
+        ] {
+            let y = chart
+                .trading_price_coordinate(0, TradingPriceScale::Right, price)
+                .unwrap()
+                .round() as i32;
+            assert!(
+                trading.iter().any(|primitive| matches!(
+                    primitive,
+                    Prim::HLine { y: line_y, color: line_color, .. }
+                        if *line_y == y && *line_color == color
+                )),
+                "limit line at {price} uses the subtle token"
+            );
+        }
+        // Like buy/sell stops, limits have no tinted fill on the axis. Their text and outline
+        // use the strong side color over the chart surface, including the stop-limit trigger tag.
+        let axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
+        let tag = |text: &str| {
+            axis.labels
+                .iter()
+                .find(|label| label.text == text && label.background.is_some())
+                .unwrap_or_else(|| panic!("axis tag for {text}"))
+        };
+        let surface = chart.trading_chip_background();
+        for (limit, stop, strong) in [
+            ("100.50", "101.50", style.buy),
+            ("99.25", "102.00", style.sell),
+            ("103.00", "102.00", style.sell),
+        ] {
+            let limit = tag(limit);
+            let stop = tag(stop);
+            assert_eq!(limit.color, strong);
+            assert_eq!(limit.color, stop.color, "limit and stop text match");
+            assert_eq!(
+                limit.background.unwrap().4,
+                surface,
+                "no tinted price-tag fill"
+            );
+            assert_eq!(limit.background.unwrap().4, stop.background.unwrap().4);
+            assert_eq!(limit.border, stop.border, "limit and stop outlines match");
+        }
+        assert_eq!(tag("103.50").background.unwrap().4, surface);
+        assert_eq!(tag("103.50").color, style.sell);
+
+        chart.set_theme(crate::ChartTheme::Light);
+        assert_eq!(
+            marker(&mut chart, 100.5, "Buy Limit").0,
+            rgb(LIGHT_POSITIVE_SUBTLE_RGB),
+            "the subtle fill follows the painted theme"
+        );
     }
 
     #[test]
@@ -5784,11 +5985,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(icon_strokes.len(), 2, "the close icon has two strokes");
+        let reach = chart.trading_control_height() / 4.0;
         for first in icon_strokes {
             for [x, y] in &frame.panes[0].points[first..first + 2] {
                 assert!(
-                    (f64::from(*x) - cancel_x).abs() <= 3.0
-                        && (f64::from(*y) - cancel_y).abs() <= 3.0,
+                    (f64::from(*x) - cancel_x).abs() <= reach
+                        && (f64::from(*y) - cancel_y).abs() <= reach,
                     "the close glyph must stay compact inside its cell"
                 );
             }

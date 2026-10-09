@@ -613,7 +613,10 @@ fn axis_text_uses_the_run_font_for_the_shared_cap_center_metric() {
     chart.set_text_cap_center(Some(Box::new(move |size, family, weight, italic| {
         assert_eq!(family, expected_family);
         assert!(!italic);
-        size / 10.0 + if weight == 700 { 2.0 } else { 0.0 }
+        crate::TextCapMetrics {
+            center_offset: size / 10.0 + if weight == 700 { 2.0 } else { 0.0 },
+            cap_height: size * 0.7,
+        }
     })));
     let mut frame = AxisFrame::default();
     for (text, scale, bold, midpoint) in [

@@ -1667,12 +1667,21 @@ fn effective_drawing_magnet(
 /// tests).
 pub type TextMeasureFn = Box<dyn Fn(&str, f64, &str, u16, bool) -> f64>;
 
-/// Host vertical glyph metric for `{italic} {weight} {size}px {family}`: the offset, in the same px
-/// units as `size`, that moves a `Prim::Text` anchor (Canvas `textBaseline: "middle"`, the em-box
-/// center) so cap-height ink is centered on the intended line instead. Browser hosts derive it
-/// from `measureText` font bounds and cap ink; native hosts use the font's cap height.
-/// Without one the engine uses no correction (deterministic for native tests).
-pub type TextCapCenterFn = Box<dyn Fn(f64, &str, u16, bool) -> f64>;
+/// Vertical cap-ink metrics of one font run, in the same px units as its size.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TextCapMetrics {
+    /// Offset that moves a `Prim::Text` anchor (the executor's `textBaseline: "middle"`) so
+    /// cap-height ink is centered on the intended line instead.
+    pub center_offset: f64,
+    /// Height of the cap ink (`H`), baseline to cap top.
+    pub cap_height: f64,
+}
+
+/// Host vertical glyph metric for `{italic} {weight} {size}px {family}` (see [`TextCapMetrics`]).
+/// Browser hosts measure cap ink against the same middle baseline the executor draws with;
+/// native hosts use the font's cap height. Without one the engine uses no correction
+/// (deterministic for native tests).
+pub type TextCapCenterFn = Box<dyn Fn(f64, &str, u16, bool) -> TextCapMetrics>;
 
 /// Active anchor/body drag session (the interaction.rs session pattern: the engine owns the
 /// start snapshot and the math; hosts forward drag positions).
@@ -4035,9 +4044,27 @@ impl ChartEngine {
     ) -> f64 {
         self.text_cap_center_fn
             .as_ref()
-            .map(|correction| correction(size, family, weight, italic))
+            .map(|metrics| metrics(size, family, weight, italic).center_offset)
             .filter(|correction| correction.is_finite())
             .unwrap_or(0.0)
+    }
+
+    /// Host cap metrics for a run, or `None` without a host metric or with unusable values.
+    pub(crate) fn text_cap_metrics(
+        &self,
+        size: f64,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> Option<TextCapMetrics> {
+        self.text_cap_center_fn
+            .as_ref()
+            .map(|metrics| metrics(size, family, weight, italic))
+            .filter(|metrics| {
+                metrics.center_offset.is_finite()
+                    && metrics.cap_height.is_finite()
+                    && metrics.cap_height > 0.0
+            })
     }
 
     /// Install (or clear with `None`) the host vertical glyph metric used to optically center

@@ -2177,12 +2177,13 @@ impl ChartEngine {
     }
 
     /// Crosshair and hover promotion for a pointer position. Over axis strips or a separator the
-    /// crosshair hides; during a captured drag it keeps tracking, clamped into the plot.
+    /// crosshair hides, and it stays hidden for a whole axis or separator drag wherever the
+    /// pointer travels; during any other captured drag it keeps tracking, clamped into the plot.
     fn refresh_pointer_hover(&mut self, x: f64, y: f64, now_ms: f64) {
         let captured = self.input.press.is_some();
         if matches!(
             self.input.press.map(|press| press.mode),
-            Some(PressMode::Separator { .. })
+            Some(PressMode::Separator { .. } | PressMode::TimeAxis | PressMode::PriceAxis { .. })
         ) {
             self.clear_pointer_hover();
             return;
@@ -2694,6 +2695,46 @@ mod tests {
             chart.price_scale_auto_scale_for(0, PriceScaleTarget::Right),
             Some(true)
         );
+    }
+
+    #[test]
+    fn axis_drags_keep_the_crosshair_hidden_from_press_to_release() {
+        let mut chart = chart();
+        relayout(&mut chart);
+        let axis_x = chart.pane_w + 10.0;
+        let time_y = chart.pane_h + 4.0;
+        for (press, travel) in [
+            (
+                (axis_x, 100.0),
+                [(axis_x, 160.0), (200.0, 160.0), (axis_x, 120.0)],
+            ),
+            (
+                (200.0, time_y),
+                [(120.0, time_y), (120.0, 100.0), (160.0, time_y)],
+            ),
+        ] {
+            chart.input_pointer_move(at(200.0, 100.0), false);
+            assert!(chart.crosshair.is_some(), "the plot shows the crosshair");
+            chart.input_pointer_move(at(press.0, press.1), false);
+            assert_eq!(chart.crosshair, None, "an axis strip hides it");
+            chart.input_pointer_down(at(press.0, press.1), 1);
+            assert_eq!(
+                chart.crosshair, None,
+                "pressing the axis must not pin it to the plot edge"
+            );
+            for (x, y) in travel {
+                chart.input_pointer_move(at(x, y), true);
+                assert_eq!(
+                    chart.crosshair, None,
+                    "the axis drag stays crosshair-free over the plot"
+                );
+            }
+            chart.input_pointer_up(at(travel[2].0, travel[2].1));
+            assert_eq!(
+                chart.crosshair, None,
+                "release over the axis leaves it hidden"
+            );
+        }
     }
 
     #[test]

@@ -32,7 +32,7 @@
   --border-softer: #f5f5f5;
   --border-strong: #c2c2c2;
   --border-inverse: #222222;
-  --border-width: 1px;
+  --border-width: 0.5px;
 
   /* Text */
   --text-primary: #222222;
@@ -62,7 +62,7 @@
 
   /* Status — gains / losses, success / failure. Shared with the main platform. */
   --positive: #089981;
-  --positive-subtle: #dbfce7;
+  --positive-subtle: #dcf5f0;
   --negative: #f7525f;
   --negative-subtle: #ffe2e2;
   --warning: #ff6900;
@@ -78,10 +78,10 @@
   --primary-active: #0050b2;
   --primary-disabled: #b7d9f8;
   --primary-disabled-foreground: #5eb0ef;
-  --primary-ring: #cee7fe;
   --primary-subtle: #e1f0ff;
   --primary-foreground: #ffffff;
   --danger: #f7525f;
+  --danger-hover: #e5404d;
   --danger-disabled: #ffc9c9;
   --danger-disabled-foreground: #ffa2a2;
   --danger-ring: #ffc9c9;
@@ -94,15 +94,35 @@
   --button-fill-foreground: #ffffff;
   --button-fill-subtle: #f5f5f5;
 
+  /* Trade — dedicated buy / sell buttons. Hover and press darken the fill; no shadows. */
+  --buy: #089981;
+  --buy-hover: #07876f;
+  --buy-active: #056f5c;
+  --buy-disabled: #b3e3da;
+  --buy-disabled-foreground: #5cbfae;
+  --buy-foreground: #ffffff;
+  --sell: #f7525f;
+  --sell-hover: #e5404d;
+  --sell-active: #c9303c;
+  --sell-disabled: #ffc9c9;
+  --sell-disabled-foreground: #ffa2a2;
+  --sell-foreground: #ffffff;
+
+  /* Order book — depth-bar fills and the price text drawn over them (text passes 4.5:1 on its fill). */
+  --book-bid-fill: #e0f3ef;
+  --book-bid-text: #067a66;
+  --book-ask-fill: #fdeef0;
+  --book-ask-text: #d91a2b;
+
   /* Focus */
-  --ring: color-mix(in srgb, #c2c2c2 50%, transparent);
+  --ring-primary: var(--primary);
 
   /* Radius */
   --radius-default: 8px;
   --radius-medium: 12px;
   --radius-small: 4px;
   --radius-large: 999px;
-  --radius-button: 6px;
+  --radius-compact: 6px;
 
   /* Shadows */
   --shadow-1: 0 0 1px 0 color-mix(in srgb, #000000 20%, transparent), 0 1px 2px 0 color-mix(in srgb, #000000 5%, transparent), 0 1px 1px 0 color-mix(in srgb, #000000 1%, transparent);
@@ -111,8 +131,11 @@
   --shadow-dialog: 0 4px 6px -4px color-mix(in srgb, #101828 10%, transparent), 0 10px 15px -3px color-mix(in srgb, #000000 10%, transparent);
 
   /* Chart */
-  --bullish: #089981;
-  --bearish: #f7525f;
+  --bullish: var(--positive);
+  --bearish: var(--negative);
+  /* Big-trade bubble fills; the bubble outline uses bullish / bearish. */
+  --buy-bubble: color-mix(in srgb, #089981 35%, transparent);
+  --sell-bubble: color-mix(in srgb, #f7525f 35%, transparent);
 }
 
 .dark,
@@ -134,7 +157,7 @@
   --border-softer: #2b2b2b;
   --border-strong: #404040;
   --border-inverse: #ffffff;
-  --border-width: 1px;
+  --border-width: 0.5px;
 
   /* Text */
   --text-primary: #f5f5f5;
@@ -160,9 +183,9 @@
 
   /* Status — gains / losses, success / failure. Shared with the main platform. */
   --positive: #089981;
-  --positive-subtle: #0d542b;
+  --positive-subtle: #193c37;
   --negative: #f7525f;
-  --negative-subtle: #460809;
+  --negative-subtle: #532b2e;
   --warning: #ff6900;
   --warning-subtle: #7e2a0c;
   --indigo: #615fff;
@@ -176,12 +199,12 @@
   --primary-active: #0050b2;
   --primary-disabled: #5eb0ef;
   --primary-disabled-foreground: #b7d9f8;
-  --primary-ring: #5eb0ef;
   --primary-subtle: #0050b2;
   --primary-foreground: #ffffff;
   --danger: #f7525f;
-  --danger-disabled: #9f0712;
-  --danger-disabled-foreground: #ff6467;
+  --danger-hover: #f96a75;
+  --danger-disabled: #6b3135;
+  --danger-disabled-foreground: #d0646c;
   --danger-ring: #c10007;
   --danger-foreground: #ffffff;
 
@@ -192,12 +215,35 @@
   --button-fill-foreground: #404040;
   --button-fill-subtle: #222222;
 
+  /* Trade — dedicated buy / sell buttons. Hover and press brighten the fill; no shadows. */
+  --buy: #089981;
+  --buy-hover: #0aad92;
+  --buy-active: #0bc0a2;
+  --buy-disabled: #0f4a41;
+  --buy-disabled-foreground: #3f9e8e;
+  --buy-foreground: #ffffff;
+  --sell: #f7525f;
+  --sell-hover: #f96a75;
+  --sell-active: #fb838c;
+  --sell-disabled: #6b3135;
+  --sell-disabled-foreground: #ae8e90;
+  --sell-foreground: #ffffff;
+
+  /* Order book — depth-bar fills and the price text drawn over them (text passes 4.5:1 on its fill). */
+  --book-bid-fill: #16332e;
+  --book-bid-text: #22c3a6;
+  --book-ask-fill: #3a2124;
+  --book-ask-text: #ff6b76;
+
   /* Focus */
-  --ring: color-mix(in srgb, #404040 50%, transparent);
+  --ring-primary: var(--primary);
 
   /* Chart */
-  --bullish: #089981;
-  --bearish: #f7525f;
+  --bullish: var(--positive);
+  --bearish: var(--negative);
+  /* Big-trade bubble fills; the bubble outline uses bullish / bearish. */
+  --buy-bubble: color-mix(in srgb, #089981 35%, transparent);
+  --sell-bubble: color-mix(in srgb, #f7525f 35%, transparent);
 }
 
 *,
@@ -242,7 +288,7 @@ button:not(:disabled):not([aria-disabled="true"]),
 }
 
 :focus-visible {
-  outline: 2px solid var(--ring);
+  outline: 2px solid var(--ring-primary);
   outline-offset: 2px;
 }
 
@@ -317,7 +363,7 @@ input[type="number"] {
   gap: 6px;
   padding: 0 12px;
   border: var(--border-width) solid transparent;
-  border-radius: var(--radius-button);
+  border-radius: var(--radius-compact);
   font-size: 14px;
   line-height: 1;
   text-decoration: none;

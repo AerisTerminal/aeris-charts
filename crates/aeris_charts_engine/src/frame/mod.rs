@@ -149,10 +149,6 @@ impl DeviceBox {
             h: (y1 - y0) as f32,
         }
     }
-
-    pub(crate) fn center_x(&self) -> f32 {
-        self.x + self.w / 2.0
-    }
 }
 
 fn ceiled_odd(value: f64) -> f64 {

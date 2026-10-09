@@ -121,49 +121,36 @@ fn warn_backend_fallback(status: &BackendStatus) {
     );
 }
 
-/// Canvas's alphabetic font bounds give the same cap-center contract as GPUI's native
-/// ascent/descent and cap height. The returned offset is in the run's media-pixel font units.
+/// Cap ink measured against the `middle` baseline every executor draws with, so the offset is
+/// exact for the browser's own definition of "middle". Chromium anchors `middle` on the em box,
+/// not the font bounding box, so deriving it from `fontBoundingBox*` left cap ink about one
+/// pixel high at chart sizes. Values are in the run's font px.
 fn browser_text_cap_center(
     ctx: &CanvasRenderingContext2d,
     size: f64,
     family: &str,
     weight: u16,
     italic: bool,
-) -> f64 {
+) -> aeris_charts_engine::TextCapMetrics {
     ctx.set_font(&aeris_charts_render::draw_list::text_font_spec(
         size as f32,
         family,
         weight,
         italic,
     ));
-    ctx.set_text_baseline("alphabetic");
-    if let Ok(metrics) = ctx.measure_text("H") {
-        let cap_height =
-            metrics.actual_bounding_box_ascent() + metrics.actual_bounding_box_descent();
-        let ascent = metrics.font_bounding_box_ascent();
-        let descent = metrics.font_bounding_box_descent();
-        let offset = (cap_height - ascent + descent) / 2.0;
-        if cap_height.is_finite()
-            && cap_height > 0.0
-            && ascent.is_finite()
-            && ascent > 0.0
-            && descent.is_finite()
-            && descent >= 0.0
-            && offset.is_finite()
-        {
-            return offset;
-        }
-    }
-    // Older Canvas implementations can omit fontBoundingBox*. The same cap run measured
-    // against the middle baseline still supplies a bounded optical correction.
     ctx.set_text_baseline("middle");
     ctx.measure_text("H")
         .ok()
         .map(|metrics| {
-            (metrics.actual_bounding_box_ascent() - metrics.actual_bounding_box_descent()) / 2.0
+            let above = metrics.actual_bounding_box_ascent();
+            let below = metrics.actual_bounding_box_descent();
+            aeris_charts_engine::TextCapMetrics {
+                center_offset: (above - below) / 2.0,
+                cap_height: above + below,
+            }
         })
-        .filter(|offset| offset.is_finite())
-        .unwrap_or(0.0)
+        .filter(|metrics| metrics.center_offset.is_finite() && metrics.cap_height.is_finite())
+        .unwrap_or_default()
 }
 
 fn validation_diagnostics_json(

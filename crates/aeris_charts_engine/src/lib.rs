@@ -112,7 +112,7 @@ pub use drawings::{
     BuiltinDrawingIcon, DRAWING_DEFAULT_COLOR, Drawing, DrawingCreationUpdate, DrawingDragPart,
     DrawingHit, DrawingId, DrawingKind, DrawingModifiers, DrawingPoint, DrawingPriceScale,
     DrawingWorkStats, MAX_DRAWING_ICON_NAME_BYTES, MAX_DRAWING_ICON_SIZE, MAX_DRAWING_ICONS,
-    TextCapCenterFn, TextMeasureFn,
+    TextCapCenterFn, TextCapMetrics, TextMeasureFn,
 };
 pub(crate) use drawings::{
     DrawingAnchorTime, DrawingController, DrawingDrag, DrawingHistory, DrawingIconRegistry,

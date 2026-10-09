@@ -252,8 +252,10 @@ test("trading lines use dedicated hits and render semantic colors through the sh
 
   const url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
   const image = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
-  // Primary blue appears only in trading chrome (long position, buy and take-profit orders).
-  expect(count_near(image, [0, 145, 255]), "long position and take-profit pixels").toBeGreaterThan(100);
+  // Primary blue appears only in trading chrome (the take-profit order).
+  expect(count_near(image, [0, 145, 255]), "take-profit pixels").toBeGreaterThan(100);
+  // The resting limit uses the subtle token in the marker, not the axis label.
+  expect(count_near(image, [0x19, 0x3c, 0x37], 4), "--positive-subtle buy limit").toBeGreaterThan(100);
   // Stop-loss red is shared with bearish candles, so read it from the stop line's own row: the
   // rule spans the pane, which candles crossing that row cannot fake.
   const pane_px = Math.round(probe.chart_width * probe.dpr);
@@ -270,6 +272,66 @@ test("trading lines use dedicated hits and render semantic colors through the sh
   const stop_line = Math.max(row_negative(stop_row - 1), row_negative(stop_row), row_negative(stop_row + 1));
   expect(stop_line, "stop-loss rule pixels").toBeGreaterThan(pane_px * 0.5);
 });
+
+for (const [backend, theme] of [["canvas2d", "light"], ["webgpu", "dark"]]) {
+  test(`resting limit lines use subtle tokens while stops use strong tokens (${backend}, ${theme})`, async ({ page }) => {
+    await open_trading_demo(page, backend, `&theme=${theme}`);
+    const probe = await page.evaluate(() => {
+      const chart = window.__chart;
+      const main = window.__main;
+      const trading = chart.trading();
+      const center = trading.state().positions[0].average_price;
+      const cases = [
+        { id: "limit-buy", side: "buy", kind: "limit", price: center - 1.1 },
+        { id: "stop-buy", side: "buy", kind: "stop", price: center - 0.35 },
+        { id: "stop-sell", side: "sell", kind: "stop", price: center + 0.4 },
+        { id: "limit-sell", side: "sell", kind: "limit", price: center + 1.15 },
+      ];
+      trading.apply_snapshot({
+        instrument: { price_precision: 2 },
+        orders: cases.map((order) => ({ ...order, status: "working", quantity: 2 })),
+      });
+      return {
+        rows: cases.map((order) => ({ id: order.id, y: main.price_to_coordinate(order.price) })),
+        dpr: window.devicePixelRatio,
+        pane: chart.time_scale().width(),
+      };
+    });
+    const url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
+    const image = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
+    const colors = theme === "light"
+      ? [[220, 245, 240], [8, 153, 129], [247, 82, 95], [255, 226, 226]]
+      : [[25, 60, 55], [8, 153, 129], [247, 82, 95], [83, 43, 46]];
+    for (const [index, { id, y }] of probe.rows.entries()) {
+      expect(y, `${id} must be visible`).toBeGreaterThan(5);
+      expect(y).toBeLessThan(image.height / probe.dpr - 5);
+      const row = Math.round(y * probe.dpr);
+      const expected = colors[index];
+      let pixels = 0;
+      for (let x = 40 * probe.dpr; x < Math.min(220 * probe.dpr, probe.pane * probe.dpr); x += 1) {
+        for (let dy = -1; dy <= 1; dy += 1) {
+          const offset = ((row + dy) * image.width + x) * 4;
+          if (expected.every((channel, i) => Math.abs(image.data[offset + i] - channel) <= 8)) pixels++;
+        }
+      }
+      expect(pixels, `${id} line uses its exact token`).toBeGreaterThan(30);
+      if (id.startsWith("limit-")) {
+        const strong = index === 0 ? [8, 153, 129] : [247, 82, 95];
+        const start = (probe.pane - 304) * probe.dpr;
+        let middle_text_pixels = 0;
+        for (let x = Math.round(start + 34 * probe.dpr); x < start + 88 * probe.dpr; x += 1) {
+          for (let dy = -7 * probe.dpr; dy <= 7 * probe.dpr; dy += 1) {
+            const offset = ((row + Math.round(dy)) * image.width + x) * 4;
+            if (strong.every((channel, i) => Math.abs(image.data[offset + i] - channel) <= 8)) {
+              middle_text_pixels++;
+            }
+          }
+        }
+        expect(middle_text_pixels, `${id} middle text matches its quantity color`).toBeGreaterThan(5);
+      }
+    }
+  });
+}
 
 test("lines can start at their marker instead of the pane edge", async ({ page }) => {
   await open_trading_demo(page, "canvas2d", "&tradingLines=marker");

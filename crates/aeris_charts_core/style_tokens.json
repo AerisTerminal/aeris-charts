@@ -23,7 +23,9 @@
     "muted_border": "#e5e5e5",
     "ring": "#e0e0e0",
     "bullish": "#089981",
-    "bearish": "#f7525f"
+    "bearish": "#f7525f",
+    "positive_subtle": "#dcf5f0",
+    "negative_subtle": "#ffe2e2"
   },
   "dark": {
     "surface": "#1f1f1f",
@@ -40,7 +42,9 @@
     "muted_border": "#333333",
     "ring": "#303030",
     "bullish": "#089981",
-    "bearish": "#f7525f"
+    "bearish": "#f7525f",
+    "positive_subtle": "#193c37",
+    "negative_subtle": "#532b2e"
   },
   "market": {
     "up": "#089981",
