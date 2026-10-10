@@ -37,6 +37,7 @@
         "esbuild_version": { "type": ["string", "null"] },
         "package_lock_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "cargo_lock_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "rust_opt_level": { "enum": ["3", "z"] },
         "wasm_opt_args": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": false

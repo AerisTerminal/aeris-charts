@@ -48,6 +48,7 @@ export async function build_provenance(kind = "package") {
     esbuild_version: esbuild?.version ?? null,
     package_lock_sha256: createHash("sha256").update(lock).digest("hex"),
     cargo_lock_sha256: createHash("sha256").update(cargo_lock).digest("hex"),
+    rust_opt_level: native ? "3" : "z",
     wasm_opt_args: native ? [] : ["-Oz", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-bulk-memory", "--enable-sign-ext", "--enable-simd"],
   };
 }
@@ -101,7 +102,7 @@ export function validate_run(run) {
   assert_record(run, "result");
   if (run.schema_version !== 1) throw new Error(`unsupported schema_version ${run.schema_version}`);
   if (run.product?.name !== "aeris_charts-financial" || !run.product.version) throw new Error("invalid product metadata");
-  if (run.build?.profile !== "release" || run.build?.logging !== "default-no-verbose-debug" || !run.build?.build_command || !/^[a-f0-9]{64}$/.test(run.build?.package_lock_sha256 ?? "") || !/^[a-f0-9]{64}$/.test(run.build?.cargo_lock_sha256 ?? "") || !Array.isArray(run.build?.wasm_opt_args)) throw new Error("invalid release build metadata");
+  if (run.build?.profile !== "release" || run.build?.logging !== "default-no-verbose-debug" || !run.build?.build_command || !/^[a-f0-9]{64}$/.test(run.build?.package_lock_sha256 ?? "") || !/^[a-f0-9]{64}$/.test(run.build?.cargo_lock_sha256 ?? "") || (run.build?.rust_opt_level !== undefined && !["3", "z"].includes(run.build.rust_opt_level)) || !Array.isArray(run.build?.wasm_opt_args)) throw new Error("invalid release build metadata");
   assert_record(run.source, "source");
   if (typeof run.source.dirty_worktree !== "boolean") throw new Error("invalid source metadata");
   assert_record(run.environment, "environment");

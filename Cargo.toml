@@ -37,10 +37,8 @@ codegen-units = 1
 panic = "abort"
 strip = "symbols"
 
-# External deps (wgpu, naga, wasm-bindgen, ...) dominate the wasm binary; our hot loops
-# live in workspace crates, which stay at opt-level 3. This trims download size without
-# touching engine throughput (headless perf gates measure workspace code).
+# External deps (wgpu, naga, wasm-bindgen, ...) use size optimization in every release build.
+# Native workspace crates retain opt-level 3. The published package's build_wasm.mjs applies
+# opt-level "z" to the complete WASM graph only, without changing native release throughput.
 [profile.release.package."*"]
 opt-level = "z"
-
-# wasm release builds care about size too; tune later per-target.

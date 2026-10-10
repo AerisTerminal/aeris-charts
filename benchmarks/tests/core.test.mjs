@@ -12,7 +12,7 @@ function fixture() {
     schema_version: 1,
     product: { name: "aeris_charts-financial", version: "0.8.13" },
     source: { git_commit: "abc", git_branch: "main", git_tag: null, dirty_worktree: false },
-    build: { profile: "release", logging: "default-no-verbose-debug", build_command: "npm run build", rustc_version: "rustc test", wasm_pack_version: "wasm-pack test", node_version: process.version, npm_version: "test", esbuild_version: "test", package_lock_sha256: "0".repeat(64), cargo_lock_sha256: "1".repeat(64), wasm_opt_args: ["-Oz"] },
+    build: { profile: "release", logging: "default-no-verbose-debug", build_command: "npm run build", rustc_version: "rustc test", wasm_pack_version: "wasm-pack test", node_version: process.version, npm_version: "test", esbuild_version: "test", package_lock_sha256: "0".repeat(64), cargo_lock_sha256: "1".repeat(64), rust_opt_level: "z", wasm_opt_args: ["-Oz"] },
     environment: { ...base_environment("official-benchmark-runner"), id: "official-test" },
     execution: { profile: "release", started_at: "2026-01-01T00:00:00.000Z", completed_at: "2026-01-01T00:01:00.000Z", clock: "performance.now monotonic in browser and Node; std::time::Instant monotonic in native Rust; wall time is metadata only", command: "benchmark release" },
     scenarios: [{
@@ -77,6 +77,10 @@ test("result validation rejects non-finite and negative duration samples", () =>
   const inconsistent = fixture();
   inconsistent.scenarios[0].metrics.set_data_api_ms.summary.p50 = 999;
   assert.throws(() => validate_run(inconsistent), /inconsistent p50/);
+
+  const invalid_opt_level = fixture();
+  invalid_opt_level.build.rust_opt_level = "s";
+  assert.throws(() => validate_run(invalid_opt_level), /invalid release build metadata/);
 });
 
 test("comparison enforces scenario, dataset, and environment compatibility", () => {
@@ -181,6 +185,7 @@ test("scenario registry and JSON schema remain versioned and complete", async ()
   const schema = JSON.parse(await readFile(path.join(benchmark_root, "schema", "result-v1.schema.json"), "utf8"));
   assert.equal(schema.properties.schema_version.const, 1);
   assert.ok(schema.required.includes("environment"));
+  assert.deepEqual(schema.properties.build.properties.rust_opt_level.enum, ["3", "z"]);
   assert.ok(schema.$defs.summary.required.includes("p95"));
   assert.equal(schema.$defs.dataset.properties.seed.maximum, 0xffff_ffff);
 });

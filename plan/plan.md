@@ -92,12 +92,15 @@ aspect-ratio, hidden/revealed and small-container paths retain hit/input alignme
 `crates/aeris_charts_engine/src/frame/tests.rs`,
 `crates/aeris_charts_render_gpui/tests/parity.rs`, and
 `examples/web_demo/tests/general-charts.spec.mjs`; the complete Rust/WASM/package/Playwright/GPUI and
-strict performance gates passed on 2026-10-10. The interactive general dashboard was checked in its
+strict performance gates passed on 2026-10-10. The corrective package-size gate uses a WASM-only
+Cargo optimization level `z` before wasm-opt `-Oz`, while native release remains at optimization
+level 3. Policy-v7 artifact measurements are tarball 1,666,975 bytes, unpacked 5,230,364 bytes,
+raw WASM 4,360,081 bytes and Brotli WASM 1,043,172 bytes, all under their unchanged ceilings.
+The interactive general dashboard was checked in its
 light-theme filtered-bar state with Canvas2D, while deterministic Chromium/Firefox/WebKit coverage owns
 the resize, DPR, pointer and keyboard assertions. No separate assistive-technology session is claimed
-for this engine-focused phase. The optional local browser release smoke remained non-green on the
-pre-release artifact-size budgets (tarball 2,122,120 > 2,090,000 bytes, unpacked 6,747,620 > 6,660,000,
-WASM 5,877,272 > 5,780,000); G8 owns controlled release-size closure, and no public size claim is made.
+for this engine-focused phase. These local artifact measurements establish the deterministic CI gate,
+not a controlled-runner browser performance claim.
 
 The items below were implemented earlier and belong to R3.
 

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { WASM_RUST_OPT_LEVEL, wasm_build_environment } from "./build_wasm.mjs";
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 const ci = readFileSync(`${root}/.github/workflows/ci.yml`, "utf8");
 const publish = readFileSync(`${root}/.github/workflows/publish.yml`, "utf8");
+const packageJson = JSON.parse(readFileSync(`${root}/packages/charts/package.json`, "utf8"));
 
 function verify(ciSource, publishSource) {
   assert.match(ciSource, /Run required portable browser suite[\s\S]*npx playwright test/,
@@ -36,6 +38,14 @@ function verify(ciSource, publishSource) {
 }
 
 verify(ci, publish);
+assert.equal(packageJson.scripts["build:wasm"], "node scripts/build_wasm.mjs",
+  "production package builds must use the checked-in WASM build profile");
+assert.equal(WASM_RUST_OPT_LEVEL, "z",
+  "published WASM must retain the measured size-oriented Rust optimization level");
+assert.equal(wasm_build_environment({ SENTINEL: "kept" }).SENTINEL, "kept",
+  "the WASM build profile must preserve its caller environment");
+assert.equal(wasm_build_environment({}).CARGO_PROFILE_RELEASE_OPT_LEVEL, "z",
+  "the WASM build profile must override Cargo release optimization without changing native release builds");
 for (const [brokenCi, brokenPublish] of [
   [ci.replace("AERIS_CHARTS_PERF_STRICT: \"1\"", "AERIS_CHARTS_PERF_STRICT: \"0\""), publish],
   [ci.replace("node benchmarks/benchmark.mjs size", "node benchmarks/benchmark.mjs test"), publish],
