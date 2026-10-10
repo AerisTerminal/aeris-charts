@@ -63,7 +63,7 @@ The supported root surface is:
 - the additive `wheel_behavior` chart option (`auto`, `pan`, or `zoom`); existing gesture option
   names remain compatible;
 - `AerisChartsError` and its machine-readable error codes;
-- chart-state persistence V1 through `chart.export_state()` and `chart.import_state()`.
+- chart-state persistence V1, V2, and V3 through `chart.export_state()` and `chart.import_state()`.
 - camel-case aliases for the common JavaScript lifecycle (`createChart`, `initWasm`, chart/series/scale
   creation and data methods) while every existing snake-case entry remains supported on the same handles;
 - canonical presentation reset through `chart.reset_style_to_defaults()`. It restores Aeris-owned

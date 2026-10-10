@@ -42,7 +42,8 @@ Notes:
 
 - R3 slices were delivered ahead of R0–R2. They count toward R3 only; R3 closes after R1–R2 land
   and its exit criteria pass.
-- G1 is complete after the corrective general-first V2 restore regression and full gates passed.
+- G1 is complete after the corrective general-first V2 restore regression, declaration snapshot
+  correction, and full gates passed.
   No full coverage-matrix row is yet Verified because each row includes later-phase behavior; the
   versioned matrix records those rows as Partial or Open.
 
@@ -160,7 +161,8 @@ paths accompany future status changes. Unverified rows stay open.
 - [x] Atomic in-place axis and series mutations through all public boundaries.
 - [x] Failed installation and cleanup fixed.
 - [x] Visibility and ordering affect domains, legends, hits and exports consistently.
-- [x] G1 corrective general-first V2 restore gate green; corrective commit pushed.
+- [x] G1 corrective general-first V2 restore and declaration snapshot gates green; corrective
+      commits pushed.
 
 **Exit:** standalone general and mixed charts can create, update, rebind, reorder, hide, remove and
 restore through actual browser and native paths. Invalid operations leave prior state intact.

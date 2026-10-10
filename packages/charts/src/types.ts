@@ -3979,7 +3979,11 @@ export interface chart_api {
   apply_drawing_sync_payload(payload: string): boolean;
   /** Export V1 financial state or V2 general state; neither includes financial market data or runtime caches. */
   export_state(): chart_state;
-  /** Atomically restore V1/V2/V3 into a compatible fresh chart. V2 accepts financial-default or matching general-first targets. */
+  /**
+   * Atomically restore V1/V2/V3 into a compatible fresh chart.
+   * V2 accepts financial-default or matching general-first targets.
+   * Throws {@link AerisChartsError} on failure.
+   */
   import_state(state: chart_state | string): persistence_restore_result;
   /** Remove every drawing (the "clear all" action) and repaint. */
   clear_drawings(): void;
