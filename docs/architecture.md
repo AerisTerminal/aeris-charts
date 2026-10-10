@@ -298,7 +298,10 @@ selection, and ordering identity while shared invalidation updates domains, hits
 Their browser `apply_options` transactions also update mutable axis configuration and series presentation in
 place after validating the complete candidate. General-series rebinding commits through that same engine
 transaction only when the target pane has equivalent horizontal-domain semantics and its X/Y scale types match;
-kind and dataset identity remain structural. Invalid candidates leave the live object unchanged. The general
+kind and dataset identity remain structural. Invalid candidates leave the live object unchanged.
+The engine retains finite, bounded dormant point radii and line widths, and valid dormant line
+styles, even when markers or the relevant stroke are not painted. This preserves partial-patch
+toggles and earlier V2 state without relaxing active-kind checks or atomic invalid updates. The general
 registry is also the single ordering owner: exact global or pane-local permutations update paint, legend,
 hit-test, React keyed-array, and persistence order while leaving other panes' relative order intact. React uses
 these mutations for ordinary prop and order changes and releases a new pane or series if initial data installation

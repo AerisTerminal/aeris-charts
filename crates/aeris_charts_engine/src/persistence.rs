@@ -4002,6 +4002,101 @@ mod tests {
     }
 
     #[test]
+    fn v2_import_retains_pre_g3_dormant_presentation_settings() {
+        let mut source = ChartEngine::new(800.0, 500.0, 1.0);
+        let pane = source
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Category {
+                    scale: crate::CategoryScaleType::Band,
+                },
+            )
+            .unwrap();
+        source
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "x",
+                pane,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Band,
+            ))
+            .unwrap();
+        source
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "y",
+                pane,
+                crate::AxisDimension::Y,
+                crate::GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = source
+            .create_general_xy_dataset(crate::GeneralXyInput::Category {
+                ids: Some(vec![crate::GeneralRowId::Text("a".into())]),
+                categories: vec!["A".into()],
+                category_indices: vec![0],
+                y: vec![5.0],
+                y_valid: None,
+            })
+            .unwrap();
+        source
+            .add_general_series(crate::GeneralSeriesOptions::xy_line(
+                pane, dataset, "x", "y",
+            ))
+            .unwrap();
+        source
+            .add_general_series(crate::GeneralSeriesOptions::column(pane, dataset, "x", "y"))
+            .unwrap();
+        let mut active_invalid = crate::GeneralSeriesOptions::column(pane, dataset, "x", "y");
+        active_invalid.point_markers = true;
+        assert!(source.add_general_series(active_invalid).is_err());
+        let baseline: serde_json::Value =
+            serde_json::from_str(&source.export_state_json().unwrap()).unwrap();
+        for (series_index, field, value) in [
+            (0, "point_radius", serde_json::json!(7.0)),
+            (1, "line_width", serde_json::json!(5.0)),
+            (1, "line_style", serde_json::json!("Dashed")),
+        ] {
+            let mut old = baseline.clone();
+            old["series"][series_index][field] = value.clone();
+            // These fields did not exist in the earlier V2 writer.
+            for series in old["series"].as_array_mut().unwrap() {
+                let series = series.as_object_mut().unwrap();
+                for newer in [
+                    "fill_gradient",
+                    "baseline_policy",
+                    "bar_gap",
+                    "bar_max_width",
+                    "bar_corner_radius",
+                    "heatmap_value_domain",
+                    "heatmap_low_color",
+                    "heatmap_high_color",
+                    "box_fill_color",
+                    "box_median_color",
+                ] {
+                    series.remove(newer);
+                }
+            }
+            let mut target = ChartEngine::new(800.0, 500.0, 1.0);
+            target.import_state_json(&old.to_string()).unwrap();
+            let saved: serde_json::Value =
+                serde_json::from_str(&target.export_state_json().unwrap()).unwrap();
+            assert_eq!(saved["series"][series_index][field], value);
+            assert_eq!(saved["datasets"][0], baseline["datasets"][0]);
+        }
+        for (series_index, field, value) in [
+            (0, "point_radius", serde_json::json!(1000.0)),
+            (1, "line_width", serde_json::json!(0.0)),
+            (1, "point_markers", serde_json::json!(true)),
+        ] {
+            let mut invalid = baseline.clone();
+            invalid["series"][series_index][field] = value;
+            let mut target = ChartEngine::new(800.0, 500.0, 1.0);
+            let before = target.export_state_json().unwrap();
+            assert!(target.import_state_json(&invalid.to_string()).is_err());
+            assert_eq!(target.export_state_json().unwrap(), before);
+        }
+    }
+
+    #[test]
     fn v2_general_only_round_trip_accepts_fresh_general_first_target() {
         let domain = crate::HorizontalDomain::Category {
             scale: crate::CategoryScaleType::Band,

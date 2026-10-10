@@ -147,6 +147,17 @@ G3 candidate (0/1,937,997 differing pixels). Physical monitor DPR is 1.25, not t
 `continue-on-error`; GPUI pixel equivalence remains pending a calibrated runner, not inferred
 from passing structural parity.
 
+The post-delivery G3 scrutiny found that the new presentation validator rejected valid dormant
+styles saved by earlier V2 writers or retained by partial browser option patches. A separately
+gated corrective change preserves dormant marker radius, line width and dash style without
+loosening numeric bounds or active-kind checks. Engine toggle and old-shaped V2 fixtures plus
+public browser toggle/restore fixtures cover the compatibility boundary. The correction's
+2026-10-11 gate passed locked workspace tests, warning-denying workspace/wasm32 Clippy,
+formatting, package install/lint/build/typecheck/pack/API/namespace/release guards,
+all six policy-v7 package-size ceilings, strict native performance, GPUI structural
+parity/replay, and 570 portable Chromium/Firefox/WebKit browser tests (16 intended
+platform skips). The physical-DPR GPUI pixel limitation above is unchanged.
+
 The rebuilt-assets `general-dashboard-100k` local diagnostic on 2026-10-11 used dirty
 `ba4723d` plus the G3 worktree, Chromium 153, 1280×720 at DPR 1, WebGPU, one warm-up and five
 measured runs. The command was

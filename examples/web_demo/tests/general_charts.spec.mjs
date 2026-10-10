@@ -954,6 +954,119 @@ test("general path styles, interpolation, missing connections, and point markers
   expect(result.steps).toEqual(["step_before", "step_middle", "step_after", "step", "monotone", "natural"]);
 });
 
+test("public path marker toggle keeps chosen radius, rows, series, and view", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "640px", height: "360px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    try {
+      const pane = chart.add_pane({
+        preserve_empty: true, horizontal_domain: { type: "continuous", scale: "linear" },
+      });
+      chart.add_axis({ id: "toggle-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
+      chart.add_axis({ id: "toggle-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+      const series = chart.add_series("xy_line", {
+        pane: pane.pane_index(), x_axis_id: "toggle-x", y_axis_id: "toggle-y",
+      });
+      series.set_data([{ id: "a", x: 0, y: 2 }, { id: "b", x: 1, y: 4 }]);
+      series.apply_options({ point_markers: true, point_radius: 7 });
+      const before = chart.export_state();
+      series.apply_options({ point_markers: false });
+      const dormant = chart.export_state();
+      const disabled = series.options();
+      series.apply_options({ point_markers: true });
+      const restored = chart.export_state();
+      let invalid;
+      try {
+        series.apply_options({ point_radius: 1000 });
+      } catch (error) {
+        invalid = error.code;
+      }
+      return {
+        same_series: before.series[0].dataset === dormant.series[0].dataset
+          && before.series[0].dataset === restored.series[0].dataset,
+        same_data: JSON.stringify(before.datasets) === JSON.stringify(dormant.datasets),
+        same_view: JSON.stringify(before.axes) === JSON.stringify(dormant.axes),
+        restored: JSON.stringify(restored) === JSON.stringify(before),
+        atomic: JSON.stringify(chart.export_state()) === JSON.stringify(before),
+        disabled, invalid, id: series.id,
+      };
+    } finally {
+      chart.remove();
+      host.remove();
+    }
+  });
+  expect(result.disabled).toMatchObject({ point_markers: false, point_radius: 7 });
+  expect(result.same_series).toBe(true);
+  expect(result.same_data).toBe(true);
+  expect(result.same_view).toBe(true);
+  expect(result.restored).toBe(true);
+  expect(result.atomic).toBe(true);
+  expect(result.invalid).toBe("invalid_options");
+});
+
+test("public V2 restore accepts older dormant radius, width, and style combinations", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const hosts = [];
+    const charts = [];
+    const create = async () => {
+      const host = document.createElement("div");
+      Object.assign(host.style, { width: "640px", height: "360px" });
+      document.body.appendChild(host);
+      hosts.push(host);
+      const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+      charts.push(chart);
+      return chart;
+    };
+    try {
+      const source = await create();
+      const pane = source.add_pane({
+        preserve_empty: true, horizontal_domain: { type: "category", scale: "band" },
+      });
+      source.add_axis({ id: "old-x", pane: pane.pane_index(), dimension: "x", scale: "band" });
+      source.add_axis({ id: "old-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+      const line = source.add_series("xy_line", {
+        pane: pane.pane_index(), x_axis_id: "old-x", y_axis_id: "old-y",
+      });
+      line.set_data([{ id: "a", x: "A", y: 2 }]);
+      const column = source.add_series("column", {
+        pane: pane.pane_index(), x_axis_id: "old-x", y_axis_id: "old-y",
+      });
+      column.set_data([{ id: "b", x: "A", y: 4 }]);
+      const baseline = source.export_state();
+      const values = [];
+      for (const [index, field, value] of [
+        [0, "point_radius", 7], [1, "line_width", 5], [1, "line_style", "Dashed"],
+      ]) {
+        const old = structuredClone(baseline);
+        old.series[index][field] = value;
+        for (const series of old.series) {
+          for (const newer of [
+            "fill_gradient", "baseline_policy", "bar_gap", "bar_max_width",
+            "bar_corner_radius", "heatmap_value_domain", "heatmap_low_color",
+            "heatmap_high_color", "box_fill_color", "box_median_color",
+          ]) delete series[newer];
+        }
+        const target = await create();
+        target.import_state(old);
+        const saved = target.export_state();
+        values.push([saved.series[index][field], saved.datasets.length,
+          saved.series.length, saved.schema_version]);
+      }
+      return values;
+    } finally {
+      for (const chart of charts) chart.remove();
+      for (const host of hosts) host.remove();
+    }
+  });
+  expect(result).toEqual([[7, 2, 2, 2], [5, 2, 2, 2], ["Dashed", 2, 2, 2]]);
+});
+
 test("general area baselines and fill opacity round-trip through the public browser API", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {

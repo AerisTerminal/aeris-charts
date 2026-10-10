@@ -7900,28 +7900,8 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
             "general series line_width must be finite and in [0.5, 32]",
         ));
     }
-    if options.line_width != 2.0
-        && !matches!(
-            options.kind,
-            GeneralSeriesKind::XyLine
-                | GeneralSeriesKind::XyArea
-                | GeneralSeriesKind::RangeArea
-                | GeneralSeriesKind::ErrorBar
-                | GeneralSeriesKind::BoxPlot
-        )
-    {
-        return Err(invalid(
-            "line_width is supported only by path, error_bar, and box_plot series",
-        ));
-    }
-    if options.line_style != GeneralLineStyle::Solid
-        && !matches!(
-            options.kind,
-            GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea | GeneralSeriesKind::RangeArea
-        )
-    {
-        return Err(invalid("line_style is supported only by path series"));
-    }
+    // Preserve valid dormant styles across partial updates and older V2 documents.
+    // Only the active series kind decides whether a style contributes to paint.
     if let Some(value) = options.baseline_value {
         if !value.is_finite() {
             return Err(invalid("general series baseline_value must be finite"));
@@ -8004,30 +7984,12 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
     if options.stack_id.is_none() && options.stack_mode != GeneralStackMode::Normal {
         return Err(invalid("nondefault stack mode requires a stack ID"));
     }
-    if (options.kind == GeneralSeriesKind::Scatter
-        || options.kind == GeneralSeriesKind::ErrorBar
-        || options.point_markers)
-        && (!options.point_radius.is_finite()
-            || !(MIN_GENERAL_POINT_RADIUS..=MAX_GENERAL_POINT_RADIUS)
-                .contains(&options.point_radius))
+    if !options.point_radius.is_finite()
+        || !(MIN_GENERAL_POINT_RADIUS..=MAX_GENERAL_POINT_RADIUS).contains(&options.point_radius)
     {
         return Err(invalid(format!(
             "general series point radius must be finite and in {MIN_GENERAL_POINT_RADIUS}..={MAX_GENERAL_POINT_RADIUS} CSS px"
         )));
-    }
-    let default_radius = if options.kind == GeneralSeriesKind::ErrorBar {
-        4.0
-    } else {
-        3.0
-    };
-    if options.point_radius != default_radius
-        && options.kind != GeneralSeriesKind::Scatter
-        && options.kind != GeneralSeriesKind::ErrorBar
-        && !options.point_markers
-    {
-        return Err(invalid(
-            "point_radius requires scatter, error_bar, or enabled path markers",
-        ));
     }
     Ok(())
 }

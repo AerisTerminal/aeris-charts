@@ -1502,6 +1502,69 @@ fn general_legend_snapshot_preserves_series_order_visibility_filtering_and_remov
 }
 
 #[test]
+fn dormant_path_radius_survives_marker_toggle_and_invalid_patch_is_atomic() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: Some(vec![GeneralRowId::Text("first".into())]),
+            categories: vec!["First".into()],
+            category_indices: vec![0],
+            y: vec![5.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::xy_line(pane, dataset, "x", "y");
+    options.point_markers = true;
+    options.point_radius = 7.0;
+    let series = chart.add_general_series(options.clone()).unwrap();
+    let before = chart.export_state_json().unwrap();
+    options.point_markers = false;
+    chart
+        .update_general_series_options(series, options.clone())
+        .unwrap();
+    assert_eq!(chart.general_series(series).unwrap().point_radius(), 7.0);
+    assert!(!chart.general_series(series).unwrap().point_markers());
+    assert_eq!(chart.general_series(series).unwrap().dataset(), dataset);
+    assert_eq!(chart.general_series_order(Some(pane)), vec![series]);
+    options.point_markers = true;
+    chart
+        .update_general_series_options(series, options.clone())
+        .unwrap();
+    assert_eq!(chart.export_state_json().unwrap(), before);
+    options.point_radius = f64::INFINITY;
+    assert!(
+        chart
+            .update_general_series_options(series, options)
+            .is_err()
+    );
+    assert_eq!(chart.export_state_json().unwrap(), before);
+}
+
+#[test]
 fn general_shared_tooltip_groups_visible_rows_by_exact_horizontal_datum() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     let pane = chart
@@ -2463,11 +2526,11 @@ fn grouped_columns_share_each_band_without_overlap_and_keep_hit_identity() {
     invalid.bar_gap = f64::NAN;
     assert!(chart.update_general_series_options(first, invalid).is_err());
     assert_eq!(chart.general_series(first).unwrap().bar_gap(), 8.0);
-    let mut unsupported = GeneralSeriesOptions::column(pane, dataset_a, "group-x", "group-y");
-    unsupported.line_width = 4.0;
+    let mut out_of_range = GeneralSeriesOptions::column(pane, dataset_a, "group-x", "group-y");
+    out_of_range.line_width = 40.0;
     assert!(
         chart
-            .update_general_series_options(first, unsupported)
+            .update_general_series_options(first, out_of_range)
             .is_err()
     );
     assert_eq!(chart.general_series(first).unwrap().bar_gap(), 8.0);
