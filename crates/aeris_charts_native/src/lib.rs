@@ -827,6 +827,9 @@ pub struct ImageExportOptions {
     pub scale: f32,
     pub include_crosshair: bool,
     pub include_trading: bool,
+    /// Remove only unused space beyond the painted right price-axis labels. The plot and
+    /// requested viewport retain their positions; the output bitmap may be narrower.
+    pub trim_right_axis: bool,
 }
 
 impl Default for ImageExportOptions {
@@ -837,6 +840,7 @@ impl Default for ImageExportOptions {
             scale: 1.0,
             include_crosshair: true,
             include_trading: true,
+            trim_right_axis: false,
         }
     }
 }
@@ -869,6 +873,75 @@ pub struct PreparedChartImage {
     panes: Vec<PreparedPane>,
     /// The engine's unscissored axis/top layer: scales, tags, separators, and watermark.
     axis: Vec<Prim>,
+}
+
+fn trimmed_right_axis_width(
+    axis: &[Prim],
+    panes: &[PreparedPane],
+    width: u32,
+    pixel_ratio: f32,
+) -> Option<u32> {
+    let plot_right = panes
+        .iter()
+        .map(|pane| pane.scissor[0] + pane.scissor[2])
+        .max()?;
+    let plot_bottom = panes
+        .iter()
+        .map(|pane| pane.scissor[1] + pane.scissor[3])
+        .max()?;
+    if plot_right >= width {
+        return None;
+    }
+    let mut painted_right: Option<f64> = None;
+    for primitive in axis {
+        let edge = match primitive {
+            Prim::Text {
+                x,
+                y,
+                text,
+                size,
+                family,
+                align,
+                weight,
+                italic,
+                ..
+            } if *x >= plot_right as f32 && *y < plot_bottom as f32 => {
+                let advance = f64::from(measure_text(text, *size, family, *weight, *italic)?);
+                Some(match align {
+                    TextAlign::Left => f64::from(*x) + advance,
+                    TextAlign::Right => f64::from(*x),
+                    TextAlign::Center => f64::from(*x) + advance / 2.0,
+                })
+            }
+            Prim::Rect { rect, .. }
+                if rect.x >= plot_right as i32
+                    && rect.y < plot_bottom as i32
+                    && rect.w > 0
+                    && rect.w <= (width - plot_right) as i32 =>
+            {
+                Some(f64::from(rect.x + rect.w))
+            }
+            Prim::RoundRect { x, y, w, .. }
+                if *x >= plot_right as f32 && *y < plot_bottom as f32 =>
+            {
+                Some(f64::from(*x + *w))
+            }
+            Prim::Image { rect, .. }
+                if rect[0] >= plot_right as f32 && rect[1] < plot_bottom as f32 =>
+            {
+                Some(f64::from(rect[0] + rect[2]))
+            }
+            // A rotated axis title's extent is not its anchor; preserve the complete
+            // viewport rather than risk clipping a general chart's title.
+            Prim::RotatedText { y, .. } if *y < plot_bottom as f32 => return None,
+            _ => None,
+        };
+        if let Some(edge) = edge {
+            painted_right = Some(painted_right.map_or(edge, |current| current.max(edge)));
+        }
+    }
+    let padded = (painted_right? + f64::from(pixel_ratio) * 2.0).ceil();
+    Some((padded as u32).clamp(plot_right + 1, width))
 }
 
 impl PreparedChartImage {
@@ -1016,8 +1089,19 @@ pub fn prepare_engine_image(
             points: pane.points,
         });
     }
+    let width = if options.trim_right_axis {
+        trimmed_right_axis_width(
+            &capture.axis_primitives,
+            &panes,
+            output_width as u32,
+            options.scale,
+        )
+        .unwrap_or(output_width as u32)
+    } else {
+        output_width as u32
+    };
     Ok(PreparedChartImage {
-        width: output_width as u32,
+        width,
         height: output_height as u32,
         pixel_ratio: options.scale,
         background,
@@ -1949,6 +2033,85 @@ mod tests {
             (chart.css_width, chart.css_height),
             (240.0, 160.0),
             "export restores the live viewport"
+        );
+    }
+
+    #[test]
+    fn image_export_can_trim_unused_space_after_the_right_price_axis() {
+        let mut chart = ChartEngine::new(280.0, 160.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0, 3.0],
+                &[10.0, 11.0, 12.0],
+                &[11.0, 12.0, 13.0],
+                &[9.0, 10.0, 11.0],
+                &[10.5, 11.5, 12.5],
+            )
+            .unwrap();
+        chart.recompute_layout_with_measure(
+            true,
+            |text, _| text.len() as f64 * 13.0,
+            |text, _| text.len() as f64 * 13.0,
+        );
+        let original_layout = (chart.css_width, chart.pane_w, chart.axis_w);
+        let full = prepare_engine_image(
+            &mut chart,
+            ImageExportOptions {
+                scale: 2.0,
+                ..ImageExportOptions::default()
+            },
+        )
+        .unwrap();
+        let cropped = prepare_engine_image(
+            &mut chart,
+            ImageExportOptions {
+                scale: 2.0,
+                trim_right_axis: true,
+                ..ImageExportOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            cropped.size().0 < full.size().0,
+            "unused axis gutter is removed"
+        );
+        assert_eq!(cropped.size().1, full.size().1);
+        assert_eq!(
+            cropped.pane_rects(),
+            full.pane_rects(),
+            "plot geometry stays put"
+        );
+        let image = cropped.render(&[]).unwrap();
+        let original = full.render(&[]).unwrap();
+        let background = &image.pixels[..4];
+        let [plot_x, _, plot_w, plot_h] = cropped.pane_rects()[0];
+        for y in 0..plot_h {
+            for x in image.width..original.width {
+                let offset = ((y * original.width + x) * 4) as usize;
+                assert_eq!(
+                    &original.pixels[offset..offset + 4],
+                    background,
+                    "the discarded right edge must contain no price-axis paint"
+                );
+            }
+        }
+        let last_axis_pixel = (plot_x + plot_w..image.width)
+            .flat_map(|x| (0..plot_h).map(move |y| (x, y)))
+            .filter(|&(x, y)| {
+                let offset = ((y * image.width + x) * 4) as usize;
+                &image.pixels[offset..offset + 4] != background
+            })
+            .map(|(x, _)| x)
+            .max()
+            .expect("the right axis still paints its labels");
+        assert!(
+            image.width - last_axis_pixel <= 6,
+            "no visible trailing gutter"
+        );
+        assert_eq!(
+            (chart.css_width, chart.pane_w, chart.axis_w),
+            original_layout
         );
     }
 
