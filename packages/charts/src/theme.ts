@@ -17,6 +17,7 @@ export interface chart_theme {
   foreground: string;
   primary: string;
   primary_foreground: string;
+  /** Opaque projection of the CSS primary-hover mix onto this theme's chart surface. */
   primary_hover: string;
   /** Secondary surface; named themes also use it for crosshair labels. */
   muted: string;

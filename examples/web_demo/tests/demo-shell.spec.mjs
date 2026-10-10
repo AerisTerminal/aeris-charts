@@ -44,6 +44,16 @@ test("design tokens and chart theme projections match the supplied light/dark pa
       const { theme_palette } = await import("../dist/aeris_charts_financial.js");
       const css = getComputedStyle(document.documentElement);
       const token = (name) => css.getPropertyValue(name).trim().toLowerCase();
+      const resolvedColor = (value) => {
+        const probe = document.createElement("div");
+        probe.style.backgroundColor = value;
+        document.body.appendChild(probe);
+        const color = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return color;
+      };
+      const expected_disabled_mix = name === "dark" ? "35%" : "30%";
+      const expected_disabled_foreground = name === "dark" ? "white" : "var(--surface)";
       const options = window.__chart.options();
       return {
         css: {
@@ -52,6 +62,14 @@ test("design tokens and chart theme projections match the supplied light/dark pa
           text_secondary: token("--text-secondary"),
           text_muted: token("--text-muted"),
           primary: token("--primary"),
+          primary_hover_matches: resolvedColor("var(--primary-hover)")
+            === resolvedColor("color-mix(in srgb, var(--primary) 80%, transparent)"),
+          primary_disabled_matches: resolvedColor("var(--primary-disabled)")
+            === resolvedColor(`color-mix(in srgb, var(--primary) ${expected_disabled_mix}, var(--surface))`),
+          primary_disabled_foreground_matches: resolvedColor("var(--primary-disabled-foreground)")
+            === resolvedColor(`color-mix(in srgb, var(--primary) 65%, ${expected_disabled_foreground})`),
+          primary_subtle_matches: resolvedColor("var(--primary-subtle)")
+            === resolvedColor(`color-mix(in srgb, var(--primary) ${name === "dark" ? "22%" : "12%"}, var(--surface))`),
           primary_foreground: token("--primary-foreground"),
           button_fill: token("--button-fill"),
           border_width: token("--border-width"),
@@ -77,7 +95,11 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     text_primary: "#222222",
     text_secondary: "#646465",
     text_muted: "#c2c2c2",
-    primary: "#0091ff",
+    primary: "#006edd",
+    primary_hover_matches: true,
+    primary_disabled_matches: true,
+    primary_disabled_foreground_matches: true,
+    primary_subtle_matches: true,
     primary_foreground: "#ffffff",
     button_fill: "#333333",
     border_width: "0.5px",
@@ -86,9 +108,9 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     background: "#ffffff",
     foreground: "#222222",
     muted_foreground: "#646465",
-    primary: "#0091ff",
+    primary: "#006edd",
     primary_foreground: "#ffffff",
-    primary_hover: "#0077fa",
+    primary_hover: "#338be4",
     border: "#e5e5e5",
     bullish: "#089981",
     bearish: "#f7525f",
@@ -110,7 +132,11 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     text_primary: "#f5f5f5",
     text_secondary: "#c2c2c2",
     text_muted: "#808080",
-    primary: "#0091ff",
+    primary: "#006edd",
+    primary_hover_matches: true,
+    primary_disabled_matches: true,
+    primary_disabled_foreground_matches: true,
+    primary_subtle_matches: true,
     primary_foreground: "#ffffff",
     button_fill: "#f5f5f5",
     border_width: "0.5px",
@@ -119,9 +145,9 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     background: "#1f1f1f",
     foreground: "#f5f5f5",
     muted_foreground: "#c2c2c2",
-    primary: "#0091ff",
+    primary: "#006edd",
     primary_foreground: "#ffffff",
-    primary_hover: "#0077fa",
+    primary_hover: "#065eb7",
     border: "#333333",
     bullish: "#089981",
     bearish: "#f7525f",

@@ -74,10 +74,10 @@ for (const backend of ["canvas2d", "webgpu"]) {
 }
 
 function count_anchor_border(png) {
-  // Semantic primary #0091ff, the selection anchor border.
+  // Semantic primary #006edd, the selection anchor border.
   let n = 0;
   for (let o = 0; o < png.data.length; o += 4) {
-    if (Math.abs(png.data[o]) <= 30 && Math.abs(png.data[o + 1] - 145) <= 30 && Math.abs(png.data[o + 2] - 255) <= 30) n += 1;
+    if (Math.abs(png.data[o]) <= 30 && Math.abs(png.data[o + 1] - 110) <= 30 && Math.abs(png.data[o + 2] - 221) <= 30) n += 1;
   }
   return n;
 }

@@ -253,7 +253,7 @@ test("trading lines use dedicated hits and render semantic colors through the sh
   const url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
   const image = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
   // Primary blue appears only in trading chrome (the take-profit order).
-  expect(count_near(image, [0, 145, 255]), "take-profit pixels").toBeGreaterThan(100);
+  expect(count_near(image, [0, 110, 221]), "take-profit pixels").toBeGreaterThan(100);
   // The resting limit uses the subtle token in the marker, not the axis label.
   expect(count_near(image, [0x19, 0x3c, 0x37], 4), "--positive-subtle buy limit").toBeGreaterThan(100);
   // Stop-loss red is shared with bearish candles, so read it from the stop line's own row: the

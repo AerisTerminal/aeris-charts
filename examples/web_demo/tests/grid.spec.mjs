@@ -156,8 +156,8 @@ test("portable design tokens and disabled controls match the brand contract", as
   expect(Object.values(dark).every(Boolean)).toBe(true);
   expect(dark).toMatchObject({
     surface: "#1f1f1f", border: "#333333", "text-primary": "#f5f5f5", "text-secondary": "#c2c2c2",
-    "text-muted": "#808080", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#0091ff",
-    "primary-hover": "#0077fa", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
+    "text-muted": "#808080", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
+    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
     "button-fill": "#f5f5f5", "radius-compact": "6px", "border-width": "0.5px",
     "positive-subtle": "#193c37", "negative-subtle": "#532b2e", "danger-hover": "#f96a75",
     "danger-disabled": "#6b3135", "danger-disabled-foreground": "#d0646c", buy: "#089981", sell: "#f7525f",
@@ -168,8 +168,8 @@ test("portable design tokens and disabled controls match the brand contract", as
   expect(Object.values(light).every(Boolean)).toBe(true);
   expect(light).toMatchObject({
     surface: "#ffffff", border: "#e5e5e5", "text-primary": "#222222", "text-secondary": "#646465",
-    "text-muted": "#c2c2c2", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#0091ff",
-    "primary-hover": "#0077fa", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
+    "text-muted": "#c2c2c2", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
+    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
     "button-fill": "#333333", "radius-compact": "6px", "border-width": "0.5px",
     "positive-subtle": "#dcf5f0", "negative-subtle": "#ffe2e2", "danger-hover": "#e5404d", buy: "#089981",
     sell: "#f7525f",

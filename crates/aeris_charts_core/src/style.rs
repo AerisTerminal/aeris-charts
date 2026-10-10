@@ -32,9 +32,9 @@ mod tests {
         assert_eq!(LIGHT_FOREGROUND_CSS, "#222222");
         assert_eq!(LIGHT_MUTED_CSS, "#fafafa");
         assert_eq!(LIGHT_MUTED_FOREGROUND_CSS, "#646465");
-        assert_eq!(LIGHT_PRIMARY_CSS, "#0091ff");
+        assert_eq!(LIGHT_PRIMARY_CSS, "#006edd");
         assert_eq!(LIGHT_PRIMARY_FOREGROUND_CSS, "#ffffff");
-        assert_eq!(LIGHT_PRIMARY_HOVER_CSS, "#0077fa");
+        assert_eq!(LIGHT_PRIMARY_HOVER_CSS, "#338be4");
         assert_eq!(LIGHT_DANGER_CSS, "#f7525f");
         assert_eq!(LIGHT_ACCENT_CSS, "#f0f0f0");
         assert_eq!(LIGHT_ACTIVE_CSS, "#e5e5e5");
@@ -47,9 +47,9 @@ mod tests {
         assert_eq!(DARK_FOREGROUND_CSS, "#f5f5f5");
         assert_eq!(DARK_MUTED_CSS, "#222222");
         assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#c2c2c2");
-        assert_eq!(DARK_PRIMARY_CSS, "#0091ff");
+        assert_eq!(DARK_PRIMARY_CSS, "#006edd");
         assert_eq!(DARK_PRIMARY_FOREGROUND_CSS, "#ffffff");
-        assert_eq!(DARK_PRIMARY_HOVER_CSS, "#0077fa");
+        assert_eq!(DARK_PRIMARY_HOVER_CSS, "#065eb7");
         assert_eq!(DARK_DANGER_CSS, LIGHT_DANGER_CSS);
         assert_eq!(DARK_BORDER_CSS, "#333333");
         assert_eq!(CROSSHAIR_LINE_CSS, "#4a4a4a");

@@ -1426,7 +1426,7 @@ async function drag_position(page, backend, kind, theme) {
     expect([...screenshot.data.subarray(center, center + 3)], "square anchor has an opaque theme fill").toEqual(fill);
     let border_pixels = 0;
     for (let offset = 0; offset < pixels.length; offset += 4) {
-      if (pixels[offset] < 20 && Math.abs(pixels[offset + 1] - 145) < 20 && pixels[offset + 2] > 235) border_pixels += 1;
+      if (pixels[offset] < 20 && Math.abs(pixels[offset + 1] - 110) < 20 && Math.abs(pixels[offset + 2] - 221) < 20) border_pixels += 1;
     }
     expect(border_pixels, "square anchor has a visible thin primary border").toBeGreaterThan(12);
     return pixels;

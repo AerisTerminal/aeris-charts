@@ -428,7 +428,7 @@ test("rectangle tool uses official two-click preview, data-time snapping, and en
     let band_pixels = 0;
     const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     for (let index = 0; index < pixels.length; index += 4) {
-      if (Math.abs(pixels[index] - 191) <= 3 && Math.abs(pixels[index + 1] - 227) <= 3 && Math.abs(pixels[index + 2] - 255) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index] - 191) <= 3 && Math.abs(pixels[index + 1] - 219) <= 3 && Math.abs(pixels[index + 2] - 247) <= 3 && pixels[index + 3] === 255) {
         band_pixels += 1;
       }
     }
@@ -457,10 +457,10 @@ test("rectangle tool uses official two-click preview, data-time snapping, and en
     let band_pixels = 0;
     const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     for (let index = 0; index < pixels.length; index += 4) {
-      if (Math.abs(pixels[index] - 0) <= 3 && Math.abs(pixels[index + 1] - 145) <= 3 && Math.abs(pixels[index + 2] - 255) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index]) <= 3 && Math.abs(pixels[index + 1] - 110) <= 3 && Math.abs(pixels[index + 2] - 221) <= 3 && pixels[index + 3] === 255) {
         label_pixels += 1;
       }
-      if (Math.abs(pixels[index] - 191) <= 3 && Math.abs(pixels[index + 1] - 227) <= 3 && Math.abs(pixels[index + 2] - 255) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index] - 191) <= 3 && Math.abs(pixels[index + 1] - 219) <= 3 && Math.abs(pixels[index + 2] - 247) <= 3 && pixels[index + 3] === 255) {
         band_pixels += 1;
       }
     }
