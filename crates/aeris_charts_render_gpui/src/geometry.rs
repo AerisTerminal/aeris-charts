@@ -464,7 +464,7 @@ pub(crate) fn area_fill_mesh(
 }
 
 /// Rescale an area fill's gradient stops onto the mesh's own bounds (see [`area_fill_mesh`]).
-fn area_gradient(
+pub(crate) fn area_gradient(
     pool: &[MeshVertex],
     (first, count): (u32, u32),
     top: Color,
@@ -708,7 +708,7 @@ pub(crate) fn fill_polygon(pool: &mut Vec<MeshVertex>, poly: &[[f32; 2]]) -> (u3
 ///
 /// Reads both edges straight out of the frame's shared pool — a band over a dense visible range is
 /// as large as a polyline, so it uses the reusable staging buffer rather than allocating.
-pub(crate) fn band_fill_mesh(
+pub(crate) fn band_fill_mesh_parts(
     scratch: &mut Scratch,
     pool: &mut Vec<MeshVertex>,
     points: &[[f32; 2]],
@@ -716,12 +716,12 @@ pub(crate) fn band_fill_mesh(
     lower_first: u32,
     count: u32,
     line_type: LineType,
-) -> (u32, u32) {
+) -> ((u32, u32), (u32, u32)) {
     let at = |first: u32, i: u32| -> Option<[f32; 2]> {
         points.get(first as usize + i as usize).copied()
     };
     if count < 2 || at(upper_first, count - 1).is_none() || at(lower_first, count - 1).is_none() {
-        return (pool.len() as u32, 0);
+        return ((pool.len() as u32, 0), (pool.len() as u32, 0));
     }
     scratch.points.clear();
     scratch.expanded.clear();
@@ -749,7 +749,7 @@ pub(crate) fn band_fill_mesh(
     );
     let expanded_count = scratch.band_upper.len().min(scratch.band_lower.len());
     if expanded_count < 2 {
-        return (pool.len() as u32, 0);
+        return ((pool.len() as u32, 0), (pool.len() as u32, 0));
     }
     scratch.verts.clear();
     for i in 0..expanded_count - 1 {
@@ -767,7 +767,7 @@ pub(crate) fn band_fill_mesh(
                 u0, u1, l0, l1,
             ));
     }
-    let (first, _) = push_vertices(pool, scratch.verts.iter().copied());
+    let core = push_vertices(pool, scratch.verts.iter().copied());
     scratch.verts.clear();
     scratch.contour.clear();
     let point = |p: &LinePoint| [p.x as f32, p.y as f32];
@@ -806,7 +806,29 @@ pub(crate) fn band_fill_mesh(
         scratch.contour.push(l1);
     }
     finish_lobe(&mut scratch.verts, &scratch.contour, pool);
-    (first, pool.len() as u32 - first)
+    let fringe = (core.0 + core.1, pool.len() as u32 - core.0 - core.1);
+    (core, fringe)
+}
+
+pub(crate) fn band_fill_mesh(
+    scratch: &mut Scratch,
+    pool: &mut Vec<MeshVertex>,
+    points: &[[f32; 2]],
+    upper_first: u32,
+    lower_first: u32,
+    count: u32,
+    line_type: LineType,
+) -> (u32, u32) {
+    let (core, fringe) = band_fill_mesh_parts(
+        scratch,
+        pool,
+        points,
+        upper_first,
+        lower_first,
+        count,
+        line_type,
+    );
+    (core.0, core.1 + fringe.1)
 }
 
 #[cfg(test)]

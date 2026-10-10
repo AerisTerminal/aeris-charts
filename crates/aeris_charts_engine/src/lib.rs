@@ -166,11 +166,11 @@ pub use general_data::{
 #[doc(hidden)]
 pub use general_series::{
     DEFAULT_GENERAL_FILL_OPACITY, GeneralAccessibilityItem, GeneralAccessibilitySnapshot,
-    GeneralBrushRange, GeneralBrushSnapshot, GeneralHitMode, GeneralInterpolation,
-    GeneralLegendItem, GeneralLegendSnapshot, GeneralLineStyle, GeneralPointSymbol,
-    GeneralReference, GeneralReferenceId, GeneralReferenceOptions, GeneralReferenceValue,
-    GeneralSeries, GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralSharedTooltipSnapshot, GeneralStackMode, GeneralTooltipSnapshot,
+    GeneralAreaBaseline, GeneralBrushRange, GeneralBrushSnapshot, GeneralHitMode,
+    GeneralInterpolation, GeneralLegendItem, GeneralLegendSnapshot, GeneralLineStyle,
+    GeneralPointSymbol, GeneralReference, GeneralReferenceId, GeneralReferenceOptions,
+    GeneralReferenceValue, GeneralSeries, GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind,
+    GeneralSeriesOptions, GeneralSharedTooltipSnapshot, GeneralStackMode, GeneralTooltipSnapshot,
     MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_BRUSH_ITEMS, MAX_GENERAL_POINT_RADIUS,
     MAX_GENERAL_REFERENCES, MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES,
     MAX_GENERAL_SERIES_GROUP_ID_BYTES, MAX_GENERAL_SERIES_STACK_ID_BYTES,
@@ -2369,6 +2369,18 @@ impl ChartEngine {
         input: GeneralXyInput,
         labels: Option<Vec<Option<String>>>,
     ) -> Result<(), ChartError> {
+        self.replace_general_xy_dataset_styled(id, input, labels, None, None)
+    }
+
+    #[doc(hidden)]
+    pub fn replace_general_xy_dataset_styled(
+        &mut self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+        labels: Option<Vec<Option<String>>>,
+        colors: Option<Vec<Option<String>>>,
+        symbols: Option<Vec<Option<String>>>,
+    ) -> Result<(), ChartError> {
         let bound = self.general_series_uses_dataset(id);
         if bound {
             self.validate_general_dataset_replacement(id, &input)?;
@@ -2376,7 +2388,9 @@ impl ChartEngine {
         let store = self.general_data.as_mut().ok_or_else(|| {
             ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
         })?;
-        if let Some(labels) = labels {
+        if colors.is_some() || symbols.is_some() {
+            store.replace_styled(id, input, labels, colors, symbols)?;
+        } else if let Some(labels) = labels {
             store.replace_labeled(id, input, Some(labels))?;
         } else {
             store.replace(id, input)?;
@@ -2408,6 +2422,19 @@ impl ChartEngine {
         labels: Option<Vec<Option<String>>>,
         max_rows: Option<usize>,
     ) -> Result<(), ChartError> {
+        self.upsert_general_xy_dataset_styled(id, input, labels, None, None, max_rows)
+    }
+
+    #[doc(hidden)]
+    pub fn upsert_general_xy_dataset_styled(
+        &mut self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+        labels: Option<Vec<Option<String>>>,
+        colors: Option<Vec<Option<String>>>,
+        symbols: Option<Vec<Option<String>>>,
+        max_rows: Option<usize>,
+    ) -> Result<(), ChartError> {
         let bound = self.general_series_uses_dataset(id);
         if bound {
             self.validate_general_dataset_replacement(id, &input)?;
@@ -2415,7 +2442,9 @@ impl ChartEngine {
         let store = self.general_data.as_mut().ok_or_else(|| {
             ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
         })?;
-        let removed_front = if let Some(labels) = labels {
+        let removed_front = if colors.is_some() || symbols.is_some() {
+            store.upsert_styled(id, input, labels, colors, symbols, max_rows)?
+        } else if let Some(labels) = labels {
             store.upsert_labeled(id, input, Some(labels), max_rows)?
         } else {
             store.upsert(id, input, max_rows)?

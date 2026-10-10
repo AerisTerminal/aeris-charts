@@ -3,9 +3,11 @@ use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{Gradient, IRect, LineStyle, Prim, TextAlign};
 
 use crate::general_axes::NumericAxisScale;
+use crate::general_series::general_bar_radii;
 use crate::{
     AxisDimension, ChartEngine, DEFAULT_LINE_COLOR, GeneralAxisDomain, GeneralPointSymbol,
-    GeneralReferenceOptions, GeneralReferenceValue, GeneralScaleType, GeneralSeriesKind,
+    GeneralReferenceOptions, GeneralReferenceValue, GeneralScaleType, GeneralSeries,
+    GeneralSeriesKind,
 };
 
 use super::PRIMARY;
@@ -15,12 +17,87 @@ const GENERAL_BRUSH: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x28);
 const GENERAL_BRUSH_EDGE: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x8F);
 const GENERAL_REFERENCE_REGION: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x20);
 const GENERAL_REFERENCE_MARK: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0xCC);
-const GENERAL_LINE_WIDTH_CSS: f64 = 2.0;
 const MAX_GENERAL_DATA_LABELS_PER_PANE: usize = 512;
 const MAX_GENERAL_DATA_LABEL_ATTEMPTS_PER_PANE: usize = 4_096;
 
 fn opacity_alpha(opacity: f64) -> u8 {
     (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn general_fill_gradient(series: &GeneralSeries) -> Option<Gradient> {
+    series.fill_gradient().map(|[top, bottom]| {
+        let opacity = if matches!(
+            series.kind(),
+            GeneralSeriesKind::XyArea | GeneralSeriesKind::RangeArea
+        ) {
+            series.fill_opacity()
+        } else {
+            1.0
+        };
+        let stop = |css: &str| {
+            let color = Color::parse_css(css).expect("validated area gradient color");
+            Color::rgba(
+                color.r(),
+                color.g(),
+                color.b(),
+                opacity_alpha(opacity * f64::from(color.a()) / 255.0),
+            )
+        };
+        Gradient {
+            top: stop(top),
+            bottom: stop(bottom),
+        }
+    })
+}
+
+fn interpolate_color(low: Color, high: Color, intensity: f64) -> Color {
+    let t = intensity.clamp(0.0, 1.0);
+    let channel = |from: u8, to: u8| (from as f64 + (to as f64 - from as f64) * t).round() as u8;
+    Color::rgba(
+        channel(low.r(), high.r()),
+        channel(low.g(), high.g()),
+        channel(low.b(), high.b()),
+        channel(low.a(), high.a()),
+    )
+}
+
+fn push_general_bar_fill(
+    out: &mut Vec<Prim>,
+    rect: IRect,
+    radii: Option<[f32; 4]>,
+    series_color: Color,
+    row_color: Option<Color>,
+    gradient: Option<Gradient>,
+) {
+    let gradient = gradient.filter(|_| row_color.is_none());
+    match (radii, gradient) {
+        (Some(radii), Some(gradient)) => out.push(Prim::GradientRoundRect {
+            x: rect.x as f32,
+            y: rect.y as f32,
+            w: rect.w as f32,
+            h: rect.h as f32,
+            radii,
+            gradient,
+        }),
+        (Some(radii), None) => {
+            let color = row_color.unwrap_or(series_color);
+            out.push(Prim::RoundRect {
+                x: rect.x as f32,
+                y: rect.y as f32,
+                w: rect.w as f32,
+                h: rect.h as f32,
+                radii,
+                fill: color,
+                border_width: 0.0,
+                border_color: color,
+            });
+        }
+        (None, Some(gradient)) => out.push(Prim::GradientRect { rect, gradient }),
+        (None, None) => out.push(Prim::Rect {
+            rect,
+            color: row_color.unwrap_or(series_color),
+        }),
+    }
 }
 
 fn push_general_point_symbol(
@@ -216,6 +293,7 @@ impl ChartEngine {
                     break;
                 }
             };
+            let fill_gradient = general_fill_gradient(series);
             match series.kind() {
                 GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
                     let color = series
@@ -241,13 +319,23 @@ impl ChartEngine {
                                     points.append(upper);
                                     let lower_first = points.len() as u32;
                                     points.append(lower);
-                                    out.push(Prim::BandFill {
-                                        upper_first,
-                                        lower_first,
-                                        point_count,
-                                        line_type: series.interpolation().render_type(),
-                                        fill,
-                                    });
+                                    if let Some(gradient) = fill_gradient {
+                                        out.push(Prim::BandGradientFill {
+                                            upper_first,
+                                            lower_first,
+                                            point_count,
+                                            line_type: series.interpolation().render_type(),
+                                            gradient,
+                                        });
+                                    } else {
+                                        out.push(Prim::BandFill {
+                                            upper_first,
+                                            lower_first,
+                                            point_count,
+                                            line_type: series.interpolation().render_type(),
+                                            fill,
+                                        });
+                                    }
                                     out.push(Prim::Polyline {
                                         first_point: upper_first,
                                         point_count,
@@ -270,11 +358,13 @@ impl ChartEngine {
                             if series.point_markers() {
                                 push_general_point_symbol(
                                     &mut markers,
-                                    series.point_symbol(),
+                                    dataset
+                                        .row_symbol(geometry.row)
+                                        .unwrap_or(series.point_symbol()),
                                     geometry.x * hpr,
                                     geometry.high_y * vpr,
                                     series.point_radius() * vpr,
-                                    color,
+                                    dataset.row_color(geometry.row).unwrap_or(color),
                                 );
                             }
                             push_label(
@@ -318,7 +408,7 @@ impl ChartEngine {
                                     point_count,
                                     base_y: (base_y * vpr) as f32,
                                     line_type: series.interpolation().render_type(),
-                                    gradient: Gradient {
+                                    gradient: fill_gradient.unwrap_or(Gradient {
                                         top: Color::rgba(
                                             color.r(),
                                             color.g(),
@@ -331,7 +421,7 @@ impl ChartEngine {
                                             color.b(),
                                             opacity_alpha(series.fill_opacity() / 3.0),
                                         ),
-                                    },
+                                    }),
                                 });
                             }
                             out.push(Prim::Polyline {
@@ -354,11 +444,13 @@ impl ChartEngine {
                         if series.point_markers() {
                             push_general_point_symbol(
                                 &mut markers,
-                                series.point_symbol(),
+                                dataset
+                                    .row_symbol(geometry.row)
+                                    .unwrap_or(series.point_symbol()),
                                 geometry.x * hpr,
                                 geometry.y * vpr,
                                 series.point_radius() * vpr,
-                                color,
+                                dataset.row_color(geometry.row).unwrap_or(color),
                             );
                         }
                         push_label(
@@ -398,15 +490,20 @@ impl ChartEngine {
                         if right <= left || bottom <= top {
                             return;
                         }
-                        out.push(Prim::Rect {
-                            rect: IRect {
-                                x: left,
-                                y: top,
-                                w: right - left,
-                                h: bottom - top,
-                            },
+                        let rect = IRect {
+                            x: left,
+                            y: top,
+                            w: right - left,
+                            h: bottom - top,
+                        };
+                        push_general_bar_fill(
+                            out,
+                            rect,
+                            None,
                             color,
-                        });
+                            dataset.row_color(geometry.row),
+                            fill_gradient,
+                        );
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
@@ -446,13 +543,23 @@ impl ChartEngine {
                             points.append(upper);
                             let lower_first = points.len() as u32;
                             points.append(lower);
-                            out.push(Prim::BandFill {
-                                upper_first,
-                                lower_first,
-                                point_count,
-                                line_type: series.interpolation().render_type(),
-                                fill,
-                            });
+                            if let Some(gradient) = fill_gradient {
+                                out.push(Prim::BandGradientFill {
+                                    upper_first,
+                                    lower_first,
+                                    point_count,
+                                    line_type: series.interpolation().render_type(),
+                                    gradient,
+                                });
+                            } else {
+                                out.push(Prim::BandFill {
+                                    upper_first,
+                                    lower_first,
+                                    point_count,
+                                    line_type: series.interpolation().render_type(),
+                                    fill,
+                                });
+                            }
                             out.push(Prim::Polyline {
                                 first_point: upper_first,
                                 point_count,
@@ -484,11 +591,13 @@ impl ChartEngine {
                             for y in [geometry.low_y, geometry.high_y] {
                                 push_general_point_symbol(
                                     &mut markers,
-                                    series.point_symbol(),
+                                    dataset
+                                        .row_symbol(geometry.row)
+                                        .unwrap_or(series.point_symbol()),
                                     geometry.x * hpr,
                                     y * vpr,
                                     series.point_radius() * vpr,
-                                    color,
+                                    dataset.row_color(geometry.row).unwrap_or(color),
                                 );
                             }
                         }
@@ -523,6 +632,7 @@ impl ChartEngine {
                         .unwrap_or(DEFAULT_LINE_COLOR);
                     let line_width = hpr.min(vpr).round().max(1.0) as i32;
                     self.visit_general_error_bars(series, |geometry| {
+                        let color = dataset.row_color(geometry.row).unwrap_or(color);
                         let x = (geometry.x * hpr).round() as i32;
                         let y = (geometry.y * vpr).round() as i32;
                         let cap_x = (geometry.cap_half_size * hpr).round().max(1.0) as i32;
@@ -629,15 +739,20 @@ impl ChartEngine {
                         if height <= 0 {
                             return;
                         }
-                        out.push(Prim::Rect {
-                            rect: IRect {
+                        let radii = general_bar_radii(series, geometry, hpr, vpr, false);
+                        push_general_bar_fill(
+                            out,
+                            IRect {
                                 x: left,
                                 y: top,
                                 w: width,
                                 h: height,
                             },
+                            radii,
                             color,
-                        });
+                            dataset.row_color(geometry.row),
+                            fill_gradient,
+                        );
                         let positive_above = (dataset.y()[geometry.row] >= 0.0)
                             != self
                                 .general_axis(series.y_axis_id())
@@ -693,15 +808,20 @@ impl ChartEngine {
                         if width <= 0 {
                             return;
                         }
-                        out.push(Prim::Rect {
-                            rect: IRect {
+                        let radii = general_bar_radii(series, geometry, hpr, vpr, true);
+                        push_general_bar_fill(
+                            out,
+                            IRect {
                                 x: left,
                                 y: top,
                                 w: width,
                                 h: height,
                             },
+                            radii,
                             color,
-                        });
+                            dataset.row_color(geometry.row),
+                            fill_gradient,
+                        );
                         push_label(
                             geometry.row,
                             (geometry.left + geometry.right) * 0.5,
@@ -732,10 +852,22 @@ impl ChartEngine {
                         .color()
                         .and_then(Color::parse_css)
                         .unwrap_or(DEFAULT_LINE_COLOR);
-                    let fill = Color::rgba(color.r(), color.g(), color.b(), 48);
-                    let line_width =
-                        (GENERAL_LINE_WIDTH_CSS * hpr.min(vpr)).round().max(1.0) as i32;
+                    let fill = series
+                        .box_fill_color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 48));
+                    let median_color = series
+                        .box_median_color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(color);
+                    let line_width = (series.line_width() * hpr.min(vpr)).round().max(1.0) as i32;
                     self.visit_general_box_plots(series, |geometry| {
+                        let row_color = dataset.row_color(geometry.row);
+                        let color = row_color.unwrap_or(color);
+                        let fill = row_color
+                            .map(|color| Color::rgba(color.r(), color.g(), color.b(), 48))
+                            .unwrap_or(fill);
+                        let median_color = row_color.unwrap_or(median_color);
                         let left = (geometry.left * hpr).round() as i32;
                         let right = (geometry.right * hpr).round() as i32;
                         let q1 = (geometry.q1_y * vpr).round() as i32;
@@ -762,14 +894,20 @@ impl ChartEngine {
                         let median_y = (geometry.median_y * vpr).round() as i32;
                         let q3_y = (geometry.q3_y * vpr).round() as i32;
                         let max_y = (geometry.max_y * vpr).round() as i32;
-                        for y in [q1_y, median_y, q3_y, min_y, max_y] {
+                        for (y, stroke) in [
+                            (q1_y, color),
+                            (median_y, median_color),
+                            (q3_y, color),
+                            (min_y, color),
+                            (max_y, color),
+                        ] {
                             out.push(Prim::HLine {
                                 y,
                                 x0,
                                 x1,
                                 width: line_width,
                                 style: LineStyle::Solid,
-                                color,
+                                color: stroke,
                             });
                         }
                         for x in [x0, x1] {
@@ -823,6 +961,23 @@ impl ChartEngine {
                 }
                 GeneralSeriesKind::HeatmapGrid => {
                     let base_color = series.color().and_then(Color::parse_css);
+                    let low = series
+                        .heatmap_low_color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or_else(|| {
+                            base_color.map_or(Color::rgba(0, 100, 0, 51), |base| {
+                                Color::rgba(
+                                    base.r(),
+                                    base.g(),
+                                    base.b(),
+                                    ((base.a() as f64) * 0.2).round() as u8,
+                                )
+                            })
+                        });
+                    let high = series
+                        .heatmap_high_color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or_else(|| base_color.unwrap_or(Color::rgba(0, 255, 100, 255)));
                     self.visit_general_heatmap_cells(series, |geometry| {
                         let left = (geometry.left * hpr).round() as i32;
                         let right = (geometry.right * hpr).round() as i32;
@@ -830,28 +985,31 @@ impl ChartEngine {
                         let bottom = (geometry.bottom * vpr).round() as i32;
                         let width = (right - left).max(1);
                         let height = (bottom - top).max(1);
-                        let intensity = geometry.intensity.clamp(0.0, 1.0);
-                        let color = base_color.map_or_else(
-                            || {
-                                Color::rgba(
-                                    0,
-                                    (100.0 + 155.0 * intensity).round() as u8,
-                                    (100.0 * intensity).round() as u8,
-                                    (51.0 + 204.0 * intensity).round() as u8,
-                                )
-                            },
-                            |base| {
-                                Color::rgba(
-                                    base.r(),
-                                    base.g(),
-                                    base.b(),
-                                    ((base.a() as f64) * (0.2 + 0.8 * intensity))
-                                        .round()
-                                        .clamp(0.0, 255.0)
-                                        as u8,
-                                )
-                            },
-                        );
+                        let color = if series.heatmap_low_color().is_none()
+                            && series.heatmap_high_color().is_none()
+                        {
+                            let intensity = geometry.intensity.clamp(0.0, 1.0);
+                            base_color.map_or_else(
+                                || {
+                                    Color::rgba(
+                                        0,
+                                        (100.0 + 155.0 * intensity).round() as u8,
+                                        (100.0 * intensity).round() as u8,
+                                        (51.0 + 204.0 * intensity).round() as u8,
+                                    )
+                                },
+                                |base| {
+                                    Color::rgba(
+                                        base.r(),
+                                        base.g(),
+                                        base.b(),
+                                        ((base.a() as f64) * (0.2 + 0.8 * intensity)).round() as u8,
+                                    )
+                                },
+                            )
+                        } else {
+                            interpolate_color(low, high, geometry.intensity)
+                        };
                         out.push(Prim::Rect {
                             rect: IRect {
                                 x: left,
@@ -859,7 +1017,7 @@ impl ChartEngine {
                                 w: width,
                                 h: height,
                             },
-                            color,
+                            color: dataset.row_color(geometry.row).unwrap_or(color),
                         });
                         push_label(
                             geometry.row,
@@ -897,12 +1055,14 @@ impl ChartEngine {
                             if series.kind() == GeneralSeriesKind::Bubble {
                                 GeneralPointSymbol::Circle
                             } else {
-                                series.point_symbol()
+                                dataset
+                                    .row_symbol(geometry.row)
+                                    .unwrap_or(series.point_symbol())
                             },
                             geometry.x * hpr,
                             geometry.y * vpr,
                             geometry.radius * vpr,
-                            color,
+                            dataset.row_color(geometry.row).unwrap_or(color),
                         );
                         push_label(
                             geometry.row,

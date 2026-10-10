@@ -503,6 +503,50 @@ fn tessellated_prims_take_the_path_route_on_both_backends() {
             },
         ),
         (
+            "Step-before Polyline",
+            Prim::Polyline {
+                first_point: 0,
+                point_count: 3,
+                width: 2.0,
+                style: LineStyle::Solid,
+                line_type: LineType::StepBefore,
+                color: c,
+            },
+        ),
+        (
+            "Centered-step Polyline",
+            Prim::Polyline {
+                first_point: 0,
+                point_count: 3,
+                width: 2.0,
+                style: LineStyle::Solid,
+                line_type: LineType::StepMiddle,
+                color: c,
+            },
+        ),
+        (
+            "Monotone Polyline",
+            Prim::Polyline {
+                first_point: 0,
+                point_count: 3,
+                width: 2.0,
+                style: LineStyle::Solid,
+                line_type: LineType::Monotone,
+                color: c,
+            },
+        ),
+        (
+            "Natural Polyline",
+            Prim::Polyline {
+                first_point: 0,
+                point_count: 3,
+                width: 2.0,
+                style: LineStyle::Solid,
+                line_type: LineType::Natural,
+                color: c,
+            },
+        ),
+        (
             "AreaFill",
             Prim::AreaFill {
                 first_point: 0,
@@ -519,6 +563,49 @@ fn tessellated_prims_take_the_path_route_on_both_backends() {
             "BandFill",
             Prim::BandFill {
                 line_type: LineType::Curved,
+                upper_first: 0,
+                lower_first: 3,
+                point_count: 3,
+                fill: c,
+            },
+        ),
+        (
+            "BandGradientFill",
+            Prim::BandGradientFill {
+                line_type: LineType::Curved,
+                upper_first: 0,
+                lower_first: 3,
+                point_count: 3,
+                gradient: Gradient {
+                    top: c,
+                    bottom: Color::rgba(0x21, 0x96, 0xf3, 0),
+                },
+            },
+        ),
+        (
+            "Centered-step BandFill",
+            Prim::BandFill {
+                line_type: LineType::StepMiddle,
+                upper_first: 0,
+                lower_first: 3,
+                point_count: 3,
+                fill: c,
+            },
+        ),
+        (
+            "Monotone BandFill",
+            Prim::BandFill {
+                line_type: LineType::Monotone,
+                upper_first: 0,
+                lower_first: 3,
+                point_count: 3,
+                fill: c,
+            },
+        ),
+        (
+            "Natural BandFill",
+            Prim::BandFill {
+                line_type: LineType::Natural,
                 upper_first: 0,
                 lower_first: 3,
                 point_count: 3,
@@ -650,6 +737,19 @@ fn gpui_meshes_contain_the_webgpu_contract_vertices_for_each_shape() {
                 point_count: 3,
                 line_type: LineType::Simple,
                 fill: c,
+            },
+        ),
+        (
+            "BandGradientFill",
+            Prim::BandGradientFill {
+                upper_first: 0,
+                lower_first: 3,
+                point_count: 3,
+                line_type: LineType::Simple,
+                gradient: Gradient {
+                    top: c,
+                    bottom: Color::rgb(80, 20, 20),
+                },
             },
         ),
         (
@@ -844,6 +944,64 @@ fn image_and_background_fixture_preserve_rects_pixels_and_gradient_extent() {
     let (top_y, bottom_y, top, bottom) = canvas.gradient_extents[0];
     assert_eq!((rect.y, rect.y + rect.h), (top_y, bottom_y));
     assert_eq!(fill, Paint::VGradient { top, bottom });
+}
+
+#[test]
+fn bar_gradient_extents_and_order_match_canvas_and_gpui() {
+    let gradient = Gradient {
+        top: Color::rgb(0x11, 0x22, 0x33),
+        bottom: Color::rgb(0x44, 0x55, 0x66),
+    };
+    let prims = [
+        Prim::GradientRect {
+            rect: IRect {
+                x: 5,
+                y: 10,
+                w: 12,
+                h: 30,
+            },
+            gradient,
+        },
+        Prim::GradientRoundRect {
+            x: 25.0,
+            y: 50.0,
+            w: 16.0,
+            h: 32.0,
+            radii: [4.0; 4],
+            gradient,
+        },
+    ];
+    let canvas = canvas_rects(&prims, &[]);
+    let (plan, metrics) = gpui_plan(&prims, &[]);
+    assert_eq!(metrics.dropped_prims, 0);
+    assert_eq!(
+        canvas.gradient_extents,
+        vec![
+            (10.0, 40.0, gradient.top, gradient.bottom),
+            (50.0, 82.0, gradient.top, gradient.bottom),
+        ]
+    );
+    assert_eq!(
+        gpui_quads(&plan),
+        vec![(
+            5.0,
+            10.0,
+            12.0,
+            30.0,
+            Paint::VGradient {
+                top: gradient.top,
+                bottom: gradient.bottom
+            }
+        ),]
+    );
+    assert!(matches!(
+        plan.ops.get(1),
+        Some(SceneOp::Mesh {
+            fill: Paint::VGradient { .. },
+            ..
+        })
+    ));
+    assert_eq!(canvas.path_fills, 1);
 }
 
 #[test]

@@ -216,6 +216,84 @@ test("general charts can own the first pane and failed creation leaves no host r
   });
 });
 
+test("general row styles survive object updates, typed replacement, and V2 restore", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "640px", height: "360px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    try {
+      const pane = chart.add_pane({
+        preserve_empty: true,
+        horizontal_domain: { type: "category", scale: "band" },
+      });
+      chart.add_axis({ id: "color-x", pane: pane.pane_index(), dimension: "x", scale: "band" });
+      chart.add_axis({ id: "color-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+      const bars = chart.add_series("column", {
+        pane: pane.pane_index(), x_axis_id: "color-x", y_axis_id: "color-y",
+        bar_corner_radius: 4,
+      });
+      bars.set_data([
+        { id: "a", x: "A", y: 3, color: "#ff0000" },
+        { id: "b", x: "B", y: 5, color: "#00ff00" },
+      ]);
+      const initial = chart.export_state().datasets[0].colors;
+      const colored = chart.take_screenshot().toDataURL();
+      bars.update_data([{ id: "b", x: "B", y: 6, color: "#0000ff" }]);
+      const updated = chart.export_state().datasets[0].colors;
+      const restored = chart.export_state();
+      bars.set_data_typed({
+        categories: ["A", "B"], category_indices: new Uint32Array([0, 1]),
+        y: new Float64Array([3, 5]), colors: ["#ff00ff", null],
+      });
+      const typed = chart.export_state().datasets[0].colors;
+      const points_pane = chart.add_pane({
+        preserve_empty: true,
+        horizontal_domain: { type: "continuous", scale: "linear" },
+      });
+      chart.add_axis({ id: "point-x", pane: points_pane.pane_index(), dimension: "x", scale: "linear" });
+      chart.add_axis({ id: "point-y", pane: points_pane.pane_index(), dimension: "y", scale: "linear" });
+      const points = chart.add_series("scatter", {
+        pane: points_pane.pane_index(), x_axis_id: "point-x", y_axis_id: "point-y",
+      });
+      points.set_data_typed({
+        x: new Float64Array([1, 2]), y: new Float64Array([2, 3]),
+        colors: ["#112233", null], symbols: ["diamond", "square"],
+      });
+      const numeric_typed = chart.export_state().datasets[1].colors;
+      const numeric_symbols = chart.export_state().datasets[1].symbols;
+      points.set_data([{ x: 1, y: 2, symbol: "triangle" }, { x: 2, y: 3, symbol: "square" }]);
+      const object_symbols = chart.export_state().datasets[1].symbols;
+      const restored_host = document.createElement("div");
+      Object.assign(restored_host.style, { width: "640px", height: "360px" });
+      document.body.appendChild(restored_host);
+      const restored_chart = await create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+      let round_trip;
+      try {
+        restored_chart.import_state(restored);
+        round_trip = restored_chart.export_state().datasets[0].colors;
+      } finally {
+        restored_chart.remove();
+        restored_host.remove();
+      }
+      return { initial, updated, round_trip, typed, numeric_typed, numeric_symbols, object_symbols, colored: colored.length > 100 };
+    } finally {
+      chart.remove();
+      host.remove();
+    }
+  });
+  expect(result.initial).toEqual(["#ff0000ff", "#00ff00ff"]);
+  expect(result.updated).toEqual(["#ff0000ff", "#0000ffff"]);
+  expect(result.round_trip).toEqual(result.updated);
+  expect(result.typed).toEqual(["#ff00ffff", null]);
+  expect(result.numeric_typed).toEqual(["#112233ff", null]);
+  expect(result.numeric_symbols).toEqual(["diamond", "square"]);
+  expect(result.object_symbols).toEqual(["triangle", "square"]);
+  expect(result.colored).toBe(true);
+});
+
 test("general keyboard focus keeps series and explicit row identity across reorder and relayout", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
@@ -854,19 +932,26 @@ test("general path styles, interpolation, missing connections, and point markers
         line_width: 4, line_style: "dashed", interpolation: "curved",
         connect_missing: true, point_markers: true, point_symbol: "diamond", point_radius: 7,
       });
-      return series.options();
+      const steps = [];
+      for (const interpolation of ["step_before", "step_middle", "step_after", "step", "monotone", "natural"]) {
+        series.apply_options({ interpolation });
+        steps.push(series.options().interpolation);
+      }
+      series.apply_options({ interpolation: "curved" });
+      return { options: series.options(), steps };
     } finally {
       chart.remove();
       host.remove();
     }
   });
-  expect(result.line_width).toBe(4);
-  expect(result.line_style).toBe("dashed");
-  expect(result.interpolation).toBe("curved");
-  expect(result.connect_missing).toBe(true);
-  expect(result.point_markers).toBe(true);
-  expect(result.point_symbol).toBe("diamond");
-  expect(result.point_radius).toBe(7);
+  expect(result.options.line_width).toBe(4);
+  expect(result.options.line_style).toBe("dashed");
+  expect(result.options.interpolation).toBe("curved");
+  expect(result.options.connect_missing).toBe(true);
+  expect(result.options.point_markers).toBe(true);
+  expect(result.options.point_symbol).toBe("diamond");
+  expect(result.options.point_radius).toBe(7);
+  expect(result.steps).toEqual(["step_before", "step_middle", "step_after", "step", "monotone", "natural"]);
 });
 
 test("general area baselines and fill opacity round-trip through the public browser API", async ({ page }) => {
@@ -889,14 +974,50 @@ test("general area baselines and fill opacity round-trip through the public brow
         baseline_value: 1.5, fill_opacity: 0.5,
       });
       series.set_data([{ x: 0, y: 1 }, { x: 1, y: 3 }, { x: 2, y: 2 }]);
-      return series.options();
+      const domain_area = chart.add_series("xy_area", {
+        pane: pane.pane_index(), x_axis_id: "baseline-x", y_axis_id: "baseline-y",
+        baseline_policy: "domain_min",
+      });
+      domain_area.set_data([{ x: 0, y: 2 }, { x: 1, y: 4 }]);
+      let invalid_baseline = null;
+      try {
+        chart.add_series("xy_area", {
+          pane: pane.pane_index(), x_axis_id: "baseline-x", y_axis_id: "baseline-y",
+          baseline_value: 1.5, baseline_policy: "domain_max",
+        });
+      } catch (error) {
+        invalid_baseline = error.code;
+      }
+      const state = chart.export_state();
+      const restored_host = document.createElement("div");
+      document.body.appendChild(restored_host);
+      const restored = await create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+      restored.import_state(state);
+      const restored_policy = restored.panes().flatMap((entry) => entry.get_series())
+        .filter((item) => item.kind === "xy_area")
+        .map((item) => item.options().baseline_policy);
+      restored.remove();
+      restored_host.remove();
+      return {
+        value: series.options().baseline_value,
+        opacity: series.options().fill_opacity,
+        policy: domain_area.options().baseline_policy,
+        invalid_baseline,
+        persisted_policy: state.series.filter((item) => item.kind === "XyArea")
+          .map((item) => item.baseline_policy),
+        restored_policy,
+      };
     } finally {
       chart.remove();
       host.remove();
     }
   });
-  expect(result.baseline_value).toBe(1.5);
-  expect(result.fill_opacity).toBe(0.5);
+  expect(result.value).toBe(1.5);
+  expect(result.opacity).toBe(0.5);
+  expect(result.policy).toBe("domain_min");
+  expect(result.invalid_baseline).toBe("invalid_options");
+  expect(result.persisted_policy).toEqual(["Zero", "DomainMin"]);
+  expect(result.restored_policy).toEqual(["zero", "domain_min"]);
 });
 
 test("public linear axes render and navigate the complete finite numeric domain", async ({ page }) => {
@@ -1831,6 +1952,102 @@ test("general reference lines, dots, and regions survive lifecycle and V2 restor
   expect(result.screenshot).toBeGreaterThan(1000);
 });
 
+test("category area, line, and columns compose on shared axes", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:640px;height:400px;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(640, 400, 1);
+    const pane = chart.add_pane({ preserve_empty: true,
+      horizontal_domain: { type: "category", scale: "band" } });
+    const index = pane.pane_index();
+    chart.add_axis({ id: "compose-x", pane: index, dimension: "x", scale: "band" });
+    chart.add_axis({ id: "compose-y", pane: index, dimension: "y", scale: "linear" });
+    const options = { pane: index, x_axis_id: "compose-x", y_axis_id: "compose-y" };
+    const area = chart.add_series("xy_area", options);
+    const line = chart.add_series("xy_line", options);
+    const bars = chart.add_series("column", options);
+    for (const series of [area, line, bars]) {
+      series.set_data([{ id: "a", x: "A", y: 4 }, { id: "b", x: "B", y: 6 }]);
+    }
+    const ranges = chart.add_series("range_bar", options);
+    ranges.set_data([{ id: "range-a", x: "A", low: 1, high: 2 }]);
+    const band = chart.add_series("range_area", options);
+    band.set_data([{ id: "band-a", x: "A", low: 2, high: 3 },
+      { id: "band-b", x: "B", low: 3, high: 4 }]);
+    const boxes = chart.add_series("box_plot", options);
+    boxes.set_data([{ id: "box-b", x: "B", min: 1, q1: 2, median: 3, q3: 4, max: 5 }]);
+    const errors = chart.add_series("error_bar", options);
+    errors.set_data([{ id: "error-a", x: "A", y: 3, y_low: 2, y_high: 4 }]);
+    chart.resize(640, 400, 1);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const kinds = pane.get_series().map((series) => series.kind);
+    const saved_kinds = chart.export_state().series.map((series) => series.kind);
+    let bar_hit = false;
+    const geometry = pane.get_geometry();
+    for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2 && !bar_hit; y += 3) {
+      for (let x = 0; x < geometry.width; x += 3) {
+        if (chart.general_hit_test(index, x, y)?.series === bars.id) { bar_hit = true; break; }
+      }
+    }
+    bars.set_visible(false);
+    const hidden = pane.get_series().map((series) => series.options().visible);
+    const screenshot = chart.take_screenshot().toDataURL().length;
+    chart.remove();
+    host.remove();
+    return { kinds, saved_kinds, bar_hit, hidden, screenshot };
+  });
+  expect(result.kinds).toEqual(["xy_area", "xy_line", "column", "range_bar", "range_area", "box_plot", "error_bar"]);
+  expect(result.saved_kinds.slice(-7)).toEqual(["XyArea", "XyLine", "Column", "RangeBar", "RangeArea", "BoxPlot", "ErrorBar"]);
+  expect(result.bar_hit).toBe(true);
+  expect(result.hidden).toEqual([true, true, false, true, true, true, true]);
+  expect(result.screenshot).toBeGreaterThan(1000);
+});
+
+test("continuous line, scatter, bubble, error, and heatmap share numeric axes", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:640px;height:400px;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(640, 400, 1);
+    const pane = chart.add_pane({ preserve_empty: true,
+      horizontal_domain: { type: "continuous", scale: "linear" } });
+    const index = pane.pane_index();
+    chart.add_axis({ id: "numeric-compose-x", pane: index, dimension: "x", scale: "linear" });
+    chart.add_axis({ id: "numeric-compose-y", pane: index, dimension: "y", scale: "linear" });
+    const options = { pane: index, x_axis_id: "numeric-compose-x", y_axis_id: "numeric-compose-y" };
+    const line = chart.add_series("xy_line", options);
+    line.set_data([{ id: "l1", x: 1, y: 2 }, { id: "l2", x: 2, y: 3 }]);
+    const scatter = chart.add_series("scatter", options);
+    scatter.set_data([{ id: "s", x: 1.5, y: 2.5 }]);
+    const bubble = chart.add_series("bubble", options);
+    bubble.set_data([{ id: "b", x: 2, y: 2, size: 36 }]);
+    const error = chart.add_series("error_bar", options);
+    error.set_data([{ id: "e", x: 1, y: 3, x_low: 0.8, x_high: 1.2, y_low: 2.5, y_high: 3.5 }]);
+    const heatmap = chart.add_series("heatmap_grid", options);
+    heatmap.set_data([{ id: "h1", x: 1, y: 1, value: 5 }, { id: "h2", x: 2, y: 1, value: 10 }]);
+    chart.resize(640, 400, 1);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const kinds = pane.get_series().map((series) => series.kind);
+    const saved_kinds = chart.export_state().series.map((series) => series.kind);
+    const screenshot = chart.take_screenshot().toDataURL().length;
+    chart.remove();
+    host.remove();
+    return { kinds, saved_kinds, screenshot };
+  });
+  expect(result.kinds).toEqual(["xy_line", "scatter", "bubble", "error_bar", "heatmap_grid"]);
+  expect(result.saved_kinds.slice(-5)).toEqual(["XyLine", "Scatter", "Bubble", "ErrorBar", "HeatmapGrid"]);
+  expect(result.screenshot).toBeGreaterThan(1000);
+});
+
 test("general columns group and stack through the browser API and V2 persistence", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
@@ -1851,11 +2068,11 @@ test("general columns group and stack through the browser API and V2 persistence
     chart.add_axis({ id: "grouped-y", pane: grouped_pane.pane_index(), dimension: "y", scale: "linear" });
     const grouped_a = chart.add_series("column", {
       pane: grouped_pane.pane_index(), x_axis_id: "grouped-x", y_axis_id: "grouped-y",
-      group_id: "sales", title: "North",
+      group_id: "sales", title: "North", bar_gap: 8, bar_max_width: 20, bar_corner_radius: 4,
     });
     const grouped_b = chart.add_series("column", {
       pane: grouped_pane.pane_index(), x_axis_id: "grouped-x", y_axis_id: "grouped-y",
-      group_id: "sales", title: "South",
+      group_id: "sales", title: "South", bar_gap: 8, bar_max_width: 20, bar_corner_radius: 4,
     });
     grouped_a.set_data([{ id: "north-jan", x: "Jan", y: 10 }, { id: "north-feb", x: "Feb", y: 14 }]);
     grouped_b.set_data([{ id: "south-jan", x: "Jan", y: 18 }, { id: "south-feb", x: "Feb", y: 7 }]);
@@ -1868,11 +2085,11 @@ test("general columns group and stack through the browser API and V2 persistence
     chart.add_axis({ id: "stacked-y", pane: stacked_pane.pane_index(), dimension: "y", scale: "linear" });
     const stacked_a = chart.add_series("column", {
       pane: stacked_pane.pane_index(), x_axis_id: "stacked-x", y_axis_id: "stacked-y",
-      group_id: "totals", stack_id: "combined", stack_mode: "normal", title: "Base",
+      group_id: "totals", stack_id: "combined", stack_mode: "normal", title: "Base", bar_corner_radius: 6,
     });
     const stacked_b = chart.add_series("column", {
       pane: stacked_pane.pane_index(), x_axis_id: "stacked-x", y_axis_id: "stacked-y",
-      group_id: "totals", stack_id: "combined", stack_mode: "normal", title: "Top",
+      group_id: "totals", stack_id: "combined", stack_mode: "normal", title: "Top", bar_corner_radius: 6,
     });
     stacked_a.set_data([{ id: "base-up", x: "Up", y: 10 }, { id: "base-down", x: "Down", y: -4 }]);
     stacked_b.set_data([{ id: "top-up", x: "Up", y: 5 }, { id: "top-down", x: "Down", y: -2 }]);
@@ -1885,6 +2102,18 @@ test("general columns group and stack through the browser API and V2 persistence
       });
     } catch (error) {
       invalid_stack_mode = error.code;
+    }
+    let invalid_bar_gap = null;
+    try {
+      grouped_a.apply_options({ bar_gap: -1 });
+    } catch (error) {
+      invalid_bar_gap = error.code;
+    }
+    let invalid_bar_corner_radius = null;
+    try {
+      stacked_b.apply_options({ bar_corner_radius: -1 });
+    } catch (error) {
+      invalid_bar_corner_radius = error.code;
     }
 
     chart.resize(720, 640, 1);
@@ -1903,6 +2132,8 @@ test("general columns group and stack through the browser API and V2 persistence
     };
     const grouped_hits = scan_hits(grouped_pane, [grouped_a.id, grouped_b.id]);
     const stacked_hits = scan_hits(stacked_pane, [stacked_a.id, stacked_b.id]);
+    const stack_reordered = chart.set_general_series_order([stacked_b, stacked_a], stacked_pane.pane_index());
+    const stack_order = chart.general_series_order(stacked_pane.pane_index()).map((series) => series.options().title);
 
     const state = chart.export_state();
     const persisted_columns = state.series.filter((series) => series.kind === "Column");
@@ -1915,12 +2146,20 @@ test("general columns group and stack through the browser API and V2 persistence
     const restored_columns = restored.panes()
       .flatMap((pane) => pane.get_series())
       .filter((series) => series.kind === "column").length;
+    const restored_stack_order = restored.general_series_order(stacked_pane.pane_index()).map((series) => series.options().title);
 
     const snapshot = {
       invalid_stack_mode,
+      invalid_bar_gap,
+      invalid_bar_corner_radius,
+      grouped_width: grouped_a.options().bar_max_width,
+      grouped_gap: grouped_a.options().bar_gap,
       grouped_hits,
       stacked_hits,
-      persisted_columns: persisted_columns.map(({ group_id, stack_id, stack_mode }) => ({ group_id, stack_id, stack_mode })),
+      stack_reordered,
+      stack_order,
+      restored_stack_order,
+      persisted_columns: persisted_columns.map(({ group_id, stack_id, stack_mode, bar_gap, bar_max_width, bar_corner_radius }) => ({ group_id, stack_id, stack_mode, bar_gap, bar_max_width, bar_corner_radius })),
       restored_columns,
       restore_version: restore_result.schema_version,
       grouped_values: [grouped_a.data_at(0)?.value, grouped_b.data_at(0)?.value],
@@ -1934,20 +2173,345 @@ test("general columns group and stack through the browser API and V2 persistence
   });
 
   expect(result.invalid_stack_mode).toBe("invalid_options");
+  expect(result.invalid_bar_gap).toBe("invalid_options");
+  expect(result.invalid_bar_corner_radius).toBe("invalid_options");
+  expect([result.grouped_gap, result.grouped_width]).toEqual([8, 20]);
   expect(result.grouped_hits).toHaveLength(2);
   expect(new Set(result.grouped_hits.map((hit) => hit.series)).size).toBe(2);
   expect(result.stacked_hits).toHaveLength(2);
+  expect(result.stack_reordered).toBe(true);
+  expect(result.stack_order).toEqual(["Top", "Base"]);
+  expect(result.restored_stack_order).toEqual(["Top", "Base"]);
   expect(new Set(result.stacked_hits.map((hit) => hit.series)).size).toBe(2);
   expect(result.grouped_values).toEqual([10, 18]);
   expect(result.stacked_values).toEqual([10, 5]);
   expect(result.persisted_columns).toEqual([
-    { group_id: "sales", stack_id: null, stack_mode: "Normal" },
-    { group_id: "sales", stack_id: null, stack_mode: "Normal" },
-    { group_id: "totals", stack_id: "combined", stack_mode: "Normal" },
-    { group_id: "totals", stack_id: "combined", stack_mode: "Normal" },
+    { group_id: "sales", stack_id: null, stack_mode: "Normal", bar_gap: 8, bar_max_width: 20, bar_corner_radius: 4 },
+    { group_id: "sales", stack_id: null, stack_mode: "Normal", bar_gap: 8, bar_max_width: 20, bar_corner_radius: 4 },
+    { group_id: "totals", stack_id: "combined", stack_mode: "Normal", bar_gap: 0, bar_max_width: null, bar_corner_radius: 6 },
+    { group_id: "totals", stack_id: "combined", stack_mode: "Normal", bar_gap: 0, bar_max_width: null, bar_corner_radius: 6 },
   ]);
   expect(result.restore_version).toBe(2);
   expect(result.restored_columns).toBe(4);
+});
+
+test("cumulative signed stacks round-trip through browser options and V2 state", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:640px;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(720, 640, 1);
+    const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "category", scale: "band" } });
+    chart.add_axis({ id: "cum-x", pane: pane.pane_index(), dimension: "x", scale: "band" });
+    chart.add_axis({ id: "cum-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+    const options = {
+      pane: pane.pane_index(), x_axis_id: "cum-x", y_axis_id: "cum-y",
+      stack_id: "signed", stack_mode: "cumulative", bar_corner_radius: 4,
+    };
+    const first = chart.add_series("column", { ...options, title: "First" });
+    const second = chart.add_series("column", { ...options, title: "Second" });
+    first.set_data([{ x: "A", y: 10 }, { x: "B", y: -3 }]);
+    second.set_data([{ x: "A", y: -15 }, { x: "B", y: 5 }]);
+    chart.resize(720, 640, 1);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const geometry = pane.get_geometry();
+    let second_hit = false;
+    for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2 && !second_hit; y += 3) {
+      for (let x = 0; x < geometry.width && !second_hit; x += 3) {
+        second_hit = chart.general_hit_test(pane.pane_index(), x, y)?.series === second.id;
+      }
+    }
+    const state = chart.export_state();
+    const serialized = state.series.filter((series) => series.stack_id === "signed").map((series) => series.stack_mode);
+    const restore_host = document.createElement("div");
+    restore_host.style.cssText = "position:fixed;left:-10000px;top:0;width:720px;height:640px";
+    document.body.appendChild(restore_host);
+    const restored = await create_chart(restore_host, { backend: "canvas2d", autoSize: false });
+    restored.resize(720, 640, 1);
+    restored.import_state(state);
+    const round_trip = restored.export_state().series.filter((series) => series.stack_id === "signed").map((series) => series.stack_mode);
+    const result = { second_hit, option: second.options().stack_mode, serialized, round_trip };
+    restored.remove();
+    chart.remove();
+    restore_host.remove();
+    host.remove();
+    return result;
+  });
+
+  expect(result).toEqual({
+    second_hit: true,
+    option: "cumulative",
+    serialized: ["Cumulative", "Cumulative"],
+    round_trip: ["Cumulative", "Cumulative"],
+  });
+});
+
+test("silhouette stacks center signed area totals and survive V2 restore", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:640px;height:400px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(640, 400, 1);
+    const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "continuous", scale: "linear" } });
+    chart.add_axis({ id: "sil-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
+    chart.add_axis({ id: "sil-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+    const options = {
+      pane: pane.pane_index(), x_axis_id: "sil-x", y_axis_id: "sil-y",
+      stack_id: "centered", stack_mode: "silhouette",
+    };
+    const first = chart.add_series("xy_area", { ...options, title: "Silhouette first" });
+    const second = chart.add_series("xy_area", { ...options, title: "Silhouette second" });
+    first.set_data([{ x: 0, y: 10 }, { x: 1, y: -3 }]);
+    second.set_data([{ x: 0, y: -15 }, { x: 1, y: 5 }]);
+    const state = chart.export_state();
+    const serialized = state.series.filter((series) => series.stack_id === "centered").map((series) => series.stack_mode);
+    const restored_host = document.createElement("div");
+    restored_host.style.cssText = "position:fixed;left:-10000px;top:0;width:640px;height:400px";
+    document.body.appendChild(restored_host);
+    const restored = await create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+    restored.resize(640, 400, 1);
+    restored.import_state(state);
+    const round_trip = restored.export_state().series.filter((series) => series.stack_id === "centered").map((series) => series.stack_mode);
+    const result = { option: second.options().stack_mode, serialized, round_trip };
+    restored.remove();
+    chart.remove();
+    restored_host.remove();
+    host.remove();
+    return result;
+  });
+  expect(result).toEqual({
+    option: "silhouette",
+    serialized: ["Silhouette", "Silhouette"],
+    round_trip: ["Silhouette", "Silhouette"],
+  });
+});
+
+test("wiggle stacks change area geometry and survive V2 restore", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:640px;height:400px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(640, 400, 1);
+    const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "continuous", scale: "linear" } });
+    chart.add_axis({ id: "wig-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
+    chart.add_axis({ id: "wig-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+    const options = { pane: pane.pane_index(), x_axis_id: "wig-x", y_axis_id: "wig-y",
+      stack_id: "stream", stack_mode: "wiggle" };
+    const first = chart.add_series("xy_area", { ...options, title: "First" });
+    const second = chart.add_series("xy_area", { ...options, title: "Second" });
+    first.set_data([{ x: 0, y: 2 }, { x: 1, y: 4 }]);
+    second.set_data([{ x: 0, y: 2 }, { x: 1, y: 2 }]);
+    const wiggle = chart.take_screenshot().toDataURL();
+    const state = chart.export_state();
+    const restored_host = document.createElement("div");
+    restored_host.style.cssText = "position:fixed;left:-10000px;top:0;width:640px;height:400px";
+    document.body.appendChild(restored_host);
+    const restored = await create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+    restored.resize(640, 400, 1);
+    restored.import_state(state);
+    const round_trip = restored.export_state().series.filter((series) => series.stack_id === "stream").map((series) => series.stack_mode);
+    chart.remove_series(second);
+    chart.remove_series(first);
+    const cumulative_options = { ...options, stack_mode: "cumulative" };
+    const base = chart.add_series("xy_area", { ...cumulative_options, title: "First" });
+    const top = chart.add_series("xy_area", { ...cumulative_options, title: "Second" });
+    base.set_data([{ x: 0, y: 2 }, { x: 1, y: 4 }]);
+    top.set_data([{ x: 0, y: 2 }, { x: 1, y: 2 }]);
+    const changed = wiggle !== chart.take_screenshot().toDataURL();
+    const result = { option: restored.export_state().series.find((series) => series.stack_id === "stream")?.stack_mode,
+      round_trip, changed };
+    restored.remove(); chart.remove(); restored_host.remove(); host.remove();
+    return result;
+  });
+  expect(result).toEqual({ option: "Wiggle", round_trip: ["Wiggle", "Wiggle"], changed: true });
+});
+
+test("custom area gradient validates and round-trips through browser options", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:640px;height:400px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(640, 400, 1);
+    const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "continuous", scale: "linear" } });
+    chart.add_axis({ id: "gradient-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
+    chart.add_axis({ id: "gradient-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+    const area = chart.add_series("xy_area", {
+      pane: pane.pane_index(), x_axis_id: "gradient-x", y_axis_id: "gradient-y",
+      title: "Gradient area", fill_opacity: 0.5, fill_gradient: ["#ff000080", "#0000ff"],
+    });
+    area.set_data([{ x: 0, y: 1 }, { x: 1, y: 2 }]);
+    const stacked = chart.add_series("xy_area", {
+      pane: pane.pane_index(), x_axis_id: "gradient-x", y_axis_id: "gradient-y",
+      title: "Gradient stack", stack_id: "gradient-stack", fill_opacity: 0.5,
+      fill_gradient: ["#00ff00", "#000000"],
+    });
+    stacked.set_data([{ x: 0, y: 0.5 }, { x: 1, y: 1.5 }]);
+    const range = chart.add_series("range_area", {
+      pane: pane.pane_index(), x_axis_id: "gradient-x", y_axis_id: "gradient-y",
+      title: "Gradient range", fill_opacity: 0.5,
+      fill_gradient: ["#ffff00", "#000000"],
+    });
+    range.set_data([{ x: 0, low: 0.25, high: 1.25 }, { x: 1, low: 0.5, high: 2.5 }]);
+    let invalid = null;
+    try {
+      area.apply_options({ fill_gradient: ["bad-color", "#0000ff"] });
+    } catch (error) {
+      invalid = error.code;
+    }
+    const option = area.options().fill_gradient;
+    const state = chart.export_state();
+    const serialized = state.series
+      .filter((series) => series.title.startsWith("Gradient "))
+      .map((series) => series.fill_gradient);
+    const restore_host = document.createElement("div");
+    restore_host.style.cssText = "position:fixed;left:-10000px;top:0;width:640px;height:400px";
+    document.body.appendChild(restore_host);
+    const restored = await create_chart(restore_host, { backend: "canvas2d", autoSize: false });
+    restored.resize(640, 400, 1);
+    restored.import_state(state);
+    const round_trip = restored.export_state().series
+      .filter((series) => series.title.startsWith("Gradient "))
+      .map((series) => series.fill_gradient);
+    restored.remove();
+    chart.remove();
+    restore_host.remove();
+    host.remove();
+    return { invalid, option, serialized, round_trip };
+  });
+  expect(result).toEqual({
+    invalid: "invalid_options",
+    option: ["#ff000080", "#0000ff"],
+    serialized: [["#ff000080", "#0000ff"], ["#00ff00", "#000000"], ["#ffff00", "#000000"]],
+    round_trip: [["#ff000080", "#0000ff"], ["#00ff00", "#000000"], ["#ffff00", "#000000"]],
+  });
+});
+
+test("bar gradients render and persist across both orientations and range bars", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const results = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const output = [];
+    for (const kind of ["column", "horizontal_bar", "range_bar"]) {
+      const horizontal = kind === "horizontal_bar";
+      const host = document.createElement("div");
+      Object.assign(host.style, { width: "640px", height: "360px" });
+      document.body.appendChild(host);
+      const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+      try {
+        const pane = chart.add_pane({
+          preserve_empty: true,
+          horizontal_domain: horizontal
+            ? { type: "continuous", scale: "linear" }
+            : { type: "category", scale: "band" },
+        });
+        chart.add_axis({ id: "bar-gradient-x", pane: pane.pane_index(), dimension: "x", scale: horizontal ? "linear" : "band" });
+        chart.add_axis({ id: "bar-gradient-y", pane: pane.pane_index(), dimension: "y", scale: horizontal ? "band" : "linear" });
+        const bars = chart.add_series(kind, {
+          pane: pane.pane_index(), x_axis_id: "bar-gradient-x", y_axis_id: "bar-gradient-y",
+          title: "Gradient bar",
+          bar_corner_radius: kind === "range_bar" ? 0 : 5,
+        });
+        bars.set_data(kind === "range_bar"
+          ? [{ x: "A", low: 1, high: 5 }, { x: "B", low: 2, high: 4 }]
+          : [{ x: "A", y: 5 }, { x: "B", y: 3 }]);
+        const solid = chart.take_screenshot().toDataURL();
+        bars.apply_options({ fill_gradient: ["#ff0000", "#0000ff"] });
+        const gradient = chart.take_screenshot().toDataURL();
+        output.push({
+          kind,
+          changed: gradient !== solid,
+          option: bars.options().fill_gradient,
+          persisted: chart.export_state().series.find((series) => series.title === "Gradient bar")?.fill_gradient,
+        });
+      } finally {
+        chart.remove();
+        host.remove();
+      }
+    }
+    return output;
+  });
+  for (const result of results) {
+    expect(result.changed, result.kind).toBe(true);
+    expect(result.option).toEqual(["#ff0000", "#0000ff"]);
+    expect(result.persisted).toEqual(["#ff0000", "#0000ff"]);
+  }
+});
+
+test("positive stack mode omits negative bars and survives V2 restore", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:640px;height:400px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(640, 400, 1);
+    const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "category", scale: "band" } });
+    chart.add_axis({ id: "positive-x", pane: pane.pane_index(), dimension: "x", scale: "band" });
+    chart.add_axis({ id: "positive-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+    const add = (title, up, down) => {
+      const series = chart.add_series("column", {
+        pane: pane.pane_index(), x_axis_id: "positive-x", y_axis_id: "positive-y",
+        stack_id: "positive", stack_mode: "positive", title,
+      });
+      series.set_data([{ id: `${title}-up`, x: "Up", y: up }, { id: `${title}-down`, x: "Down", y: down }]);
+      return series;
+    };
+    const a = add("A", 10, -4);
+    const b = add("B", 5, -2);
+    chart.resize(640, 400, 1);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const hits = new Map();
+    const geometry = pane.get_geometry();
+    for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2; y += 2) {
+      for (let x = 0; x < geometry.width; x += 2) {
+        const hit = chart.general_hit_test(pane.pane_index(), x, y);
+        if (hit) hits.set(`${hit.series}:${hit.row}`, hit);
+      }
+    }
+    const state = chart.export_state();
+    const restored_host = document.createElement("div");
+    document.body.appendChild(restored_host);
+    const restored = await create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+    restored.resize(640, 400, 1);
+    restored.import_state(state);
+    const snapshot = {
+      hits: [...hits.values()].map(({ series, row }) => ({ series, row })),
+      values: [a.data_at(1)?.value, b.data_at(1)?.value],
+      modes: state.series.map((series) => series.stack_mode),
+      restored_modes: restored.panes().flatMap((entry) => entry.get_series())
+        .filter((series) => series.kind === "column")
+        .map((series) => series.options().stack_mode),
+    };
+    restored.remove();
+    restored_host.remove();
+    chart.remove();
+    host.remove();
+    return snapshot;
+  });
+  expect(result.hits).toHaveLength(2);
+  expect(result.hits.every(({ row }) => row === 0)).toBe(true);
+  expect(result.values).toEqual([-4, -2]);
+  expect(result.modes).toEqual(["Positive", "Positive"]);
+  expect(result.restored_modes).toEqual(["positive", "positive"]);
 });
 
 test("horizontal bars use category Y axes with stacking, hits, typed updates, and V2 restore", async ({ page }) => {
@@ -2482,6 +3046,9 @@ test("box plots preserve five-number summaries through updates, hits, accessibil
       y_axis_id: "box-y",
       title: "Distribution",
       color: "#345678",
+      box_fill_color: "#112233",
+      box_median_color: "#ff00ff",
+      line_width: 3,
     });
     boxes.set_data([
       { id: "north", x: "North", min: 5, q1: 10, median: 15, q3: 20, max: 28 },
@@ -2498,6 +3065,12 @@ test("box plots preserve five-number summaries through updates, hits, accessibil
       invalid_order = error.code;
     }
     const after_invalid = boxes.data_at(0);
+    let invalid_style = null;
+    try {
+      boxes.apply_options({ box_fill_color: "invalid" });
+    } catch (error) {
+      invalid_style = error.code;
+    }
 
     boxes.update_data_typed({
       ids: ["south", "east"],
@@ -2538,8 +3111,14 @@ test("box plots preserve five-number summaries through updates, hits, accessibil
       .flatMap((candidate) => candidate.get_series())
       .find((series) => series.kind === "box_plot");
     const restored_snapshot = restored_boxes?.accessibility_snapshot(0, 10) ?? null;
+    const persisted_boxes = state.series.find((series) => series.kind === "BoxPlot");
     const output = {
       invalid_order,
+      invalid_style,
+      persisted_style: persisted_boxes
+        ? [persisted_boxes.box_fill_color, persisted_boxes.box_median_color, persisted_boxes.line_width] : null,
+      restored_style: [restored_boxes?.options().box_fill_color,
+        restored_boxes?.options().box_median_color, restored_boxes?.options().line_width],
       after_invalid,
       south,
       missing,
@@ -2558,6 +3137,9 @@ test("box plots preserve five-number summaries through updates, hits, accessibil
   });
 
   expect(result.invalid_order).toBe("invalid_data");
+  expect(result.invalid_style).toBe("invalid_options");
+  expect(result.persisted_style).toEqual(["#112233", "#ff00ff", 3]);
+  expect(result.restored_style).toEqual(["#112233", "#ff00ff", 3]);
   expect(result.after_invalid).toMatchObject({
     row_id: "north", low: 5, q1: 10, value: 15, q3: 20, high: 28, x_low: null, x_high: null,
   });
@@ -2600,6 +3182,9 @@ test("heatmap grids preserve X/Y categories through typed updates, hits, accessi
       y_axis_id: "heat-y",
       title: "Regional heat",
       color: "#336699",
+      heatmap_value_domain: [0, 100],
+      heatmap_low_color: "#0000ff",
+      heatmap_high_color: "#ff0000",
     });
     heatmap.set_data([
       { id: "jan-north", x: "Jan", y: "North", value: 10 },
@@ -2622,6 +3207,12 @@ test("heatmap grids preserve X/Y categories through typed updates, hits, accessi
       invalid_index = error.code;
     }
     const after_invalid = heatmap.data_at(0);
+    let invalid_domain = null;
+    try {
+      heatmap.apply_options({ heatmap_value_domain: [100, 0] });
+    } catch (error) {
+      invalid_domain = error.code;
+    }
 
     heatmap.update_data_typed({
       ids: ["jan-south", "mar-west"],
@@ -2658,8 +3249,17 @@ test("heatmap grids preserve X/Y categories through typed updates, hits, accessi
       .flatMap((candidate) => candidate.get_series())
       .find((series) => series.kind === "heatmap_grid");
     const restored_snapshot = restored_heatmap?.accessibility_snapshot(0, 10) ?? null;
+    const persisted_heatmap = state.series.find((series) => series.kind === "HeatmapGrid");
     const output = {
       invalid_index,
+      invalid_domain,
+      domain: heatmap.options().heatmap_value_domain,
+      persisted_domain: persisted_heatmap?.heatmap_value_domain,
+      restored_domain: restored_heatmap?.options().heatmap_value_domain,
+      persisted_colors: persisted_heatmap
+        ? [persisted_heatmap.heatmap_low_color, persisted_heatmap.heatmap_high_color] : null,
+      restored_colors: [restored_heatmap?.options().heatmap_low_color,
+        restored_heatmap?.options().heatmap_high_color],
       after_invalid,
       before_restore,
       restored_snapshot,
@@ -2676,6 +3276,12 @@ test("heatmap grids preserve X/Y categories through typed updates, hits, accessi
   });
 
   expect(result.invalid_index).toBe("invalid_data");
+  expect(result.invalid_domain).toBe("invalid_options");
+  expect(result.domain).toEqual([0, 100]);
+  expect(result.persisted_domain).toEqual([0, 100]);
+  expect(result.restored_domain).toEqual([0, 100]);
+  expect(result.persisted_colors).toEqual(["#0000ff", "#ff0000"]);
+  expect(result.restored_colors).toEqual(["#0000ff", "#ff0000"]);
   expect(result.after_invalid).toMatchObject({
     row_id: "jan-north", x_label: "Jan", y_label: "North", value: 10,
   });

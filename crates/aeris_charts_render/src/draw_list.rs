@@ -43,7 +43,11 @@ impl LineStyle {
 pub enum LineType {
     Simple,
     WithSteps,
+    StepBefore,
+    StepMiddle,
     Curved,
+    Monotone,
+    Natural,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -143,6 +147,8 @@ impl PartialEq for RasterImage {
 pub enum Prim {
     /// Integer bitmap-space filled rect (Canvas2D `fillRect` semantics).
     Rect { rect: IRect, color: Color },
+    /// Integer bitmap-space rect with a top-to-bottom gradient over its own bounds.
+    GradientRect { rect: IRect, gradient: Gradient },
     /// Hollow frame filled inside `rect` (Canvas2D `fillRectInnerBorder` semantics).
     RectFrame {
         rect: IRect,
@@ -196,6 +202,14 @@ pub enum Prim {
         line_type: LineType,
         fill: Color,
     },
+    /// The same coupled band geometry painted with a vertical gradient over its exact bounds.
+    BandGradientFill {
+        upper_first: u32,
+        lower_first: u32,
+        point_count: u32,
+        line_type: LineType,
+        gradient: Gradient,
+    },
     RoundRect {
         x: f32,
         y: f32,
@@ -206,6 +220,15 @@ pub enum Prim {
         fill: Color,
         border_width: f32,
         border_color: Color,
+    },
+    /// Rounded fill with a top-to-bottom gradient over the full outer rectangle.
+    GradientRoundRect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radii: [f32; 4],
+        gradient: Gradient,
     },
     /// Filled disc with an optional centered stroke. A non-finite or non-positive radius emits
     /// nothing, including its stroke, on every executor.

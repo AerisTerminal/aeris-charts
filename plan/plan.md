@@ -24,14 +24,14 @@ with its commit, and update the status table in the same commit. A phase or matr
 
 ## Status at a glance
 
-Updated 2026-10-10. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
+Updated 2026-10-11. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
 expansion completed on 2026-10-06; general-chart batches have resumed in dependency order.
 
 | Batch | Phase | Scope | Status | Done so far | Next |
 | --- | --- | --- | --- | --- | --- |
 | G1 | R0 + R1 | Competitive baseline, lifecycle and mutable object foundations | **Complete** | Recharts 3.10.1 matrix and rendered-mark fixtures; general-first topology; atomic handles; host cleanup; focus retention; validated general-first V2 restore | G2 |
 | G2 | R2 | Scales, axes and responsive layout | **Complete** | Numeric/log/symlog, UTC temporal and category views; typed ticks; grids/zero rules; multi-axis titles; padding; bounded responsive layout | G3 |
-| G3 | R3 | Cartesian visual and data semantics (remainder) | **In progress** | 9 delivered R3 slices (see **Delivered work**) | Bars and stacks, gradients, error bars, composition, per-item styling |
+| G3 | R3 | Cartesian visual and data semantics (remainder) | **Complete** | Cartesian families, stack offsets, gradients, composition, per-item styles and required portable gates delivered | G4; calibrated GPUI images and official browser benchmark remain separately pending |
 | G4 | R4 | Components and interaction | **Open** | — | Legend, tooltip, brush, selection, sync (extends PD5), export (PD6) |
 | G5 | R5 | React and framework-neutral authoring | **Open** | — | Composable components over complete mutations |
 | G6 | R6 | Polar families and transitions | **Open** | — | Polar transforms, pie/donut, radar, radial bar, polar area, animation |
@@ -123,6 +123,44 @@ release performance gate.
 These slices do not close R3. The phase still requires the rest of the Cartesian visual and data
 matrix and its complete acceptance evidence.
 
+The existing error-bar implementation already covers numeric and temporal X/Y bounds and
+category-centered Y bounds. Engine geometry/hit and V2 persistence tests, GPUI parity cases in
+`crates/aeris_charts_render_gpui/tests/parity.rs`, and the three Chromium browser cases in
+`examples/web_demo/tests/general_charts.spec.mjs` establish the audited G3 checklist item.
+The browser cases passed again on 2026-10-11. The G3 batch (this revision) completes shared
+curve and gap geometry, area baselines, signed stack offsets and exposed bar corners, gradients,
+row-level colors and symbols, composition, heatmap intensity, and box styling across engine,
+executors, WASM and public TypeScript options. Its fresh-asset gate on 2026-10-11 passed locked
+workspace tests and warning-denying workspace/wasm32 Clippy; formatting; package `npm ci`,
+lint/build/typecheck, API/namespace/release guards and pack smoke; native frame/golden tests;
+GPUI structural parity/replay; 564 portable Chromium/Firefox/WebKit tests (16 platform-intended
+skips); strict native release performance (all targets); and all six policy-v7 package-size
+ceilings (`node benchmarks/benchmark.mjs size`). The browser shared native/Canvas2D pane fixture
+had 0 differing pixels out of 1,937,997; WebGPU/Canvas2D shared-frame residual was 2,207
+antialiasing-edge pixels (maximum channel delta 32), within its existing portable fixture
+tolerance. Neither comparison proves GPUI window pixels.
+
+The optional Windows GPUI/WebGPU image matrix is **not passed**: its D1 canonical WebGPU hash
+is `a8d1a034` versus `c53be636` on this machine, identically for clean `ba4723d` and the
+G3 candidate (0/1,937,997 differing pixels). Physical monitor DPR is 1.25, not the required
+1.5, so no actual GPUI window image could be captured. The CI matrix is machine-specific and
+`continue-on-error`; GPUI pixel equivalence remains pending a calibrated runner, not inferred
+from passing structural parity.
+
+The rebuilt-assets `general-dashboard-100k` local diagnostic on 2026-10-11 used dirty
+`ba4723d` plus the G3 worktree, Chromium 153, 1280×720 at DPR 1, WebGPU, one warm-up and five
+measured runs. The command was
+`AERIS_CHARTS_BENCH_PORT=4174 node benchmarks/benchmark.mjs scenario general-dashboard-100k`.
+It recorded p50 startup 726.425 ms, first-frame CPU 92.59 ms, WASM
+linear memory 406,847,488 bytes and p50 uploaded vertex bytes 137,585,528. The local
+scenario process exited 1 because upload exceeds the unchanged 100,663,296-byte policy-v7
+ceiling; its attempt to spawn another server on the occupied shared port also logged
+`EADDRINUSE`, although the scenario ran against the existing server and recorded five samples.
+This dirty/local run is diagnostic, **not an official budget pass**. Clean official-runner
+startup/upload evidence and any needed remediation remain due at phase closure/G8. GPU timestamp
+and photon-visible presentation were unsupported; repeat-frame/disposal metrics were not
+measured by this scenario. Strict native line/mixed/error targets passed independently.
+
 ## Known gaps
 
 Source-confirmed gaps and review risks from the 2026-09-23 review. Each is owned by a phase. The
@@ -210,27 +248,74 @@ enforced bound.
 
 ### R3 — Cartesian visual and data semantics
 
-**Batch:** G3 (all remaining items in one batch). **Depends on:** R1–R2. **Status:** in progress,
-pending completion of G2.
+**Batch:** G3 (all remaining items in one batch). **Depends on:** R1–R2 (complete).
+**Status:** complete.
 
 - [x] Line width (item 1).
 - [x] Line dash styles (item 2).
 - [x] Area baseline value (item 3).
 - [x] Point markers and marker symbols (items 4–5).
 - [x] Linear, step and curved interpolation (item 6).
+- [x] Explicit `step_before`, `step_middle`, and `step_after` interpolation across shared line/band
+      expansion, exact hits, V2 persistence, WASM, browser options, and GPUI path parity; legacy
+      `step` retains its step-after shape.
+- [x] Shape-preserving `monotone` interpolation on shared lines and coupled bands, with bounded
+      samples, reversed/duplicate-X regression, exact hits, V2/browser round trips, and GPUI paths.
+- [x] Natural cubic interpolation with zero endpoint curvature across shared line/band
+      expansion, bounded sampling, exact hits, V2/browser options, and GPUI path parity.
 - [x] Missing-value connection policy (item 7).
 - [x] Area fill opacity (item 8).
-- [ ] Remaining curve, gap and baseline policies across every applicable family.
-- [ ] Bars and stacks: both orientations, groups, sizing and gaps, corners, mixed signs, stack order
+- [x] Curve, gap, and baseline policies across applicable path families: `xy_line`, `xy_area`,
+      and `range_area` share interpolation and missing-row run handling; `xy_area` resolves zero,
+      explicit, and effective-domain baselines in shared geometry, while ranged and stacked areas
+      retain their data-defined lower boundary. Existing frame and exact-hit regressions cover
+      range gaps, bridging, and baseline choices.
+- [x] Unstacked area baseline policy for zero, effective domain minimum, and effective domain
+      maximum, with explicit numeric baseline preserved and stacked-area conflicts rejected.
+- [x] Bars and stacks: both orientations, groups, sizing and gaps, corners, mixed signs, stack order
       and required offset modes.
+- [x] Bounded bar corner radius for vertical and horizontal bars, including exposed stack ends,
+      shared rounded-rectangle frames, exact hits, persistence, and browser options.
+- [x] Stack order through the existing atomic general-series ordering API, now verified against
+      stack geometry, exposed corners, browser ordering, and V2 restore.
+- [x] Positive-only stack offset for both bar orientations and X-aligned areas, with negative
+      source rows retained for queries and removed from stacked marks and automatic value domains.
+- [x] Cumulative signed stack offset for both bar orientations and X-aligned areas, with every
+      intermediate boundary included in automatic domains, exposed bar ends, V2 persistence,
+      and browser options.
+- [x] Silhouette stack offset centers signed totals for both bar orientations and X-aligned
+      areas, retaining prefix-aware autoscale, exposed bar ends, V2 persistence, and browser options.
+- [x] Wiggle stack offset uses weighted adjacent-position baseline changes for both bar
+      orientations and X-aligned areas, with shared auto domains, exact hits, V2 persistence,
+      and browser options.
 - [x] Range bars (category-band low/high rectangles and exact hits).
-- [ ] Error bars.
-- [ ] Gradients.
-- [ ] Per-item customization (per-point and per-bar styles).
-- [ ] Composition of families on shared axes.
-- [ ] Audit existing box plot, heatmap and bubble behavior rather than rewriting completed storage
-      and geometry.
-- [ ] G3 full gate green; batch committed and pushed.
+- [x] Error bars: numeric, temporal, and category bounds, updates, hits, persistence, and executor coverage audited against existing engine, browser, and GPUI tests.
+- [x] Gradients across area and bar fill families.
+- [x] `xy_area` and `range_area` explicit top/bottom CSS gradient colors use ordered `AreaFill`
+      and `BandGradientFill` contracts across Canvas2D, WebGPU, and GPUI, with alpha scaled by fill
+      opacity, atomic validation, V2 persistence, and browser options.
+- [x] `column`, `horizontal_bar`, and `range_bar` use bounded top/bottom `fill_gradient` stops
+      over each mark's own bounds; square/rounded paths, row-color precedence, Canvas2D/WebGPU/GPUI
+      lowering, V2 persistence, and browser image assertions are covered.
+- [x] Per-item customization (per-point color/symbol and per-bar color styles).
+- [x] Sparse per-row CSS color overrides across object/typed ingestion, atomic explicit-ID updates,
+      bounded retention, shared mark frames, V2 persistence, and browser round trip.
+- [x] Sparse per-row point-symbol overrides for scatter and enabled path markers, with shared
+      frame/exact-hit semantics, atomic updates, V2 persistence, and typed browser ingestion.
+- [x] Composition of compatible families on shared axes: ordered category area/line/column/range/
+      box/error and continuous line/scatter/bubble/error/heatmap browser fixtures, plus an engine
+      frame-order, domain, and exact-hit regression.
+- [x] Audit existing box plot, heatmap and bubble storage, geometry, update, hit, accessibility,
+      persistence, and browser paths rather than rewriting them; four focused Chromium cases passed
+      on 2026-10-10. Legends remain in R4.
+- [x] Heatmap value-intensity domain can be fixed through shared series options, V2 persistence,
+      and browser API; category, numeric, and temporal geometry tests and a Chromium restore case pass.
+- [x] Heatmap low/high CSS color endpoints interpolate in the shared frame with the existing
+      default palette preserved; engine frame, V2 persistence, and Chromium restore tests pass.
+- [x] Box-plot fill and median CSS colors plus shared stroke width reach the ordered frame,
+      with atomic validation, V2 persistence, and focused Chromium coverage.
+- [x] G3 required portable full gate green; batch committed and pushed. Machine-specific GPUI
+      pixel capture and clean official browser startup/upload budgets remain separately pending.
 
 **Exit:** each family passes object and typed ingestion, atomic updates, missing, duplicate and
 extreme data, visibility and stack changes, exact and nearest hits, labels, accessibility,

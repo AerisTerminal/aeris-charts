@@ -124,6 +124,15 @@ row counts, category bytes, and ID bytes are bounded, and retained capacity is a
 engine memory evidence. A financial-only chart keeps the store absent and therefore retains zero general
 dataset capacity.
 
+General datasets also own sparse, validated per-row CSS color and point-symbol overrides. Object rows and typed
+column metadata enter the same atomic replace/upsert path; explicit-ID updates replace the affected
+override, front retention remaps surviving indices, and V2 snapshots persist canonical RGBA colors.
+Frame construction resolves an override at each emitted mark before backends receive ordered
+primitives. Path strokes keep their series color while optional point markers can vary in color
+and symbol per row; scatter exact hits use the same row symbol as the frame, while bubbles retain
+their area-scaled circle contract;
+bars, points, error bars, boxes, and heatmap cells use the row color when present.
+
 The released Phase 2 Cartesian bindings are category-band columns, horizontal bars, box plots, category/category
 plus numeric/numeric and temporal/numeric heatmaps, numeric XY scatter/bubble marks, numeric/temporal/category
 error bars, and `xy_line`, `xy_area`, `range_area`, and category-band `range_bar`. General
@@ -133,15 +142,38 @@ series, and a pane containing a general series cannot be removed until that seri
 column series contribute their category union and finite valid Y values to automatic domains; the zero baseline participates in the Y
 domain. Horizontal bars reuse the same category/value dataset but bind the numeric value scale to X and the
 category band scale to Y; category Y autoscale is engine-owned and the numeric X zero baseline participates in
-autoscale. Phase 2 bar layout options add bounded `group_id`/`stack_id` state without creating renderer-specific
+autoscale. Bar layout options carry bounded `group_id`/`stack_id` state without creating renderer-specific
 primitives. Visible members of one group subdivide each category band, while one stack consumes one group
 slot. Normal stacks accumulate positive and negative values independently from zero and contribute their
 summed category extents to the oriented numeric-axis autoscale; percent stacks normalize each category independently to `+1` and
 `-1`. Horizontal stacks apply the same rules on numeric X; vertical stacks apply them on numeric Y.
-Stack membership requires the same pane, group, axes, orientation, and stack mode. Missing rows remain queryable
-and accessible but emit no mark or stack contribution. Bar geometry is computed once
+Positive-only stacks retain negative source rows but omit their marks and domain contribution.
+Cumulative stacks add signed values onto the preceding boundary in series order; numeric autoscale
+includes every intermediate prefix, and only the final nonzero bar mark in each category receives
+exposed-end corners.
+Silhouette stacks share that signed accumulation but shift the starting boundary by minus half
+the final total per category or exact X identity. Autoscale includes the shifted baseline and every
+shifted prefix, including mixed-sign overshoots.
+  Wiggle stacks share the cumulative signed layer order and shift each baseline by weighted
+  adjacent-position changes; zero-total positions hold the preceding baseline. The category axis
+  or sorted exact X positions define adjacency. Automatic domains and geometry use the same offsets.
+The same policy applies to category bars and X-aligned areas.
+Stack membership requires the same pane, group, axes, orientation, and stack mode.
+The existing general-series order controls both stack accumulation and paint order; an atomic
+reorder recomputes stacked geometry without changing data identity and persists in V2.
+Columns, horizontal bars, and range bars apply bounded CSS-space `bar_gap` and `bar_max_width`
+within their category slots before frame emission and hit testing. Columns and horizontal bars
+additionally carry a bounded corner radius; shared
+frame construction emits rounded rectangles only at exposed stack ends, clamping radii after
+device-pixel conversion so joins remain square on every executor. Range bars retain square ends.
+Missing rows remain queryable and accessible but emit no mark or stack contribution. Bar geometry is computed once
 in shared CSS-space semantics, reused by frame painting and exact/nearest hit testing, then lowered to
-ordinary ordered `Rect` primitives. Bounded tooltip and accessibility snapshots come from the same rows.
+ordinary ordered `Rect` or `RoundRect` primitives. Bar families may also use the persisted
+`fill_gradient` colors: square marks emit integer-bounded `GradientRect`, exposed rounded ends emit
+`GradientRoundRect`, and a per-row color takes precedence. Every executor samples the same
+top-to-bottom ramp over each bar's own bitmap bounds; bar stops retain their CSS alpha, while
+area stops continue to scale by `fill_opacity`. Bounded tooltip and accessibility snapshots come
+from the same rows.
 Scatter binds independent continuous numeric axes, validates logarithmic positivity, clips geometry to
 the runtime view, and lowers persisted circle, square, diamond, or triangle symbols to existing ordered
 primitives. Path point markers share the same symbol contract; bubbles remain area-scaled circles. Exact
@@ -156,13 +188,26 @@ accounting, and V2 persistence. `xy_line` and `xy_area` reuse the same
 general dataset/axis ownership across continuous numeric, temporal epoch-millisecond, and category
 band/point X domains. Missing rows split path runs by default, while persisted `connect_missing`
 can bridge them without removing their queryable identity. Transform-invalid rows always remain hard gaps.
-Their persisted `linear`, horizontal-then-vertical `step`, and Catmull-Rom `curved` interpolation policy
+Their persisted `linear`, legacy horizontal-then-vertical `step`, explicit `step_before`,
+`step_middle`, `step_after`, Catmull-Rom `curved`, bounded shape-preserving `monotone`, and
+natural cubic `natural` (zero endpoint second derivatives)
+interpolation policy
 travels on the ordered frame primitive and drives both shared lowering and exact/nearest hit geometry.
+Natural expansion solves both media-space coordinates once per run and caps each interval at 16
+segments, sampling short chords when neighboring knots bend them visibly; aligned band boundaries
+share each interval's sample count and X coordinates.
 `xy_line` lowers each run to the shared point pool plus ordered `Polyline` primitives. `xy_area` adds an
-ordered `AreaFill` before the matching stroke; its zero baseline is clamped into linear/symlog plots and
-falls back to the lower-domain plot edge when a logarithmic Y axis has no zero coordinate. A persisted,
-bounded fill opacity preserves the shared 3:1 top-to-baseline gradient and scales stacked/range bands from
-the same value. Line hits use
+ordered `AreaFill` before the matching stroke; its default zero baseline is clamped into linear/symlog plots and
+falls back to the lower-domain plot edge when a logarithmic Y axis has no zero coordinate. Unstacked
+areas can instead use an explicit numeric baseline or the effective Y-domain minimum or maximum;
+the resolved media-space baseline drives both fill construction and exact hits. Stacked and ranged
+areas use their own lower boundary and reject nondefault baseline options. A persisted,
+bounded fill opacity preserves the default 3:1 top-to-baseline gradient and scales stacked/range bands from
+the same value. `xy_area` and `range_area` may instead persist two validated CSS colors for the
+ordered `AreaFill` or `BandGradientFill`; each stop's alpha is multiplied by fill opacity in shared
+frame construction. Gradient bands retain the coupled boundary geometry. GPUI paints their exact
+core bounds and separately remaps the edge fringe stops; Canvas2D and WebGPU sample that same
+vertical extent. Line hits use
 segment distance, while area hits include the filled trapezoid and both preserve the closest endpoint row
 identity. When `xy_area` has a `stack_id`, visible members with the same pane, X/Y axes, stack ID, and stack
 mode, interpolation, and missing-row connection policy align by exact numeric, epoch-millisecond, or
@@ -190,7 +235,9 @@ Category-band `box_plot` reuses the aligned general dataset with five ordered nu
 remain queryable/accessibility-visible but emit no mark and do not affect autoscale. The outer whiskers drive
 numeric-Y autoscale, including logarithmic positivity checks across all present statistics. One shared CSS-space
 geometry path computes the IQR rectangle, median, whiskers, caps, labels, and exact/nearest hits, then lowers them
-to existing `Rect`, `HLine`, and `VLine` primitives for every backend. Tooltip/accessibility snapshots expose
+to existing `Rect`, `HLine`, and `VLine` primitives for every backend. The shared frame accepts
+persisted interquartile fill and median colors plus the series stroke width while preserving the
+default box style. Tooltip/accessibility snapshots expose
 quartiles separately, explicit-ID updates and bounded retention preserve aligned statistics, and V2 persistence
 round-trips the complete five-number summary without reinterpretation.
 `heatmap_grid` keeps one aligned dataset across all supported Cartesian coordinate variants. Category/category
@@ -200,7 +247,9 @@ temporal X heatmaps instead add one aligned numeric Y-coordinate column while re
 X column. Category registries validate, merge, remap, trim, and compact inside the same atomic update transaction.
 Automatic domains union category registries or numeric/temporal coordinate extents as appropriate. One shared cell
 geometry path maps band grids directly and infers numeric/temporal cell boundaries from neighboring coordinate
-centers, derives deterministic normalized value intensity from visible valid cells, drives exact/nearest rectangle
+centers, derives deterministic normalized value intensity from visible valid cells or a persisted
+finite increasing `heatmap_value_domain`, then interpolates optional CSS low/high color endpoints
+in the shared frame (retaining the existing default palette), and drives exact/nearest rectangle
 hits and labels, and lowers every cell to the ordered `Rect` primitive. Missing values remain queryable and
 accessible but emit no cell. Tooltip/accessibility snapshots expose both X and Y labels, explicit-ID updates and
 retention keep coordinate/value channels aligned, and V2 persistence round-trips every heatmap coordinate shape.

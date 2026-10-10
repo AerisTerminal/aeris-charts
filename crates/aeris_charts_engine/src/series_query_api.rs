@@ -347,7 +347,11 @@ impl ChartEngine {
         let verbatim = |value: &Option<String>| value.clone().unwrap_or_default();
         let line_type = match s.line_type {
             LineType::WithSteps => "stepped",
+            LineType::StepBefore => "step_before",
+            LineType::StepMiddle => "step_middle",
             LineType::Curved => "curved",
+            LineType::Monotone => "monotone",
+            LineType::Natural => "natural",
             LineType::Simple => "simple",
         };
         let price_scale_id = self

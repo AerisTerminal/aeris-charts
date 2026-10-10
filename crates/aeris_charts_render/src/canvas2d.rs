@@ -208,6 +208,17 @@ pub fn execute(
                 target.set_fill_solid(*color);
                 fill_irect(target, *rect);
             }
+            Prim::GradientRect { rect, gradient } => {
+                if rect.w > 0 && rect.h > 0 {
+                    target.set_fill_vgradient(
+                        rect.y as f32,
+                        (rect.y + rect.h) as f32,
+                        gradient.top,
+                        gradient.bottom,
+                    );
+                    fill_irect(target, *rect);
+                }
+            }
             Prim::RectFrame {
                 rect,
                 border,
@@ -326,6 +337,36 @@ pub fn execute(
                 target.close_path();
                 target.fill();
             }
+            Prim::BandGradientFill {
+                upper_first,
+                lower_first,
+                point_count,
+                line_type,
+                gradient,
+            } => {
+                let upper = pool_slice(points, *upper_first, *point_count);
+                let lower = pool_slice(points, *lower_first, *point_count);
+                if upper.len() < 2 || lower.len() < 2 {
+                    continue;
+                }
+                let (upper, lower) = expand_band(&upper, &lower, *line_type);
+                let (mut y_top, mut y_bottom) = (f32::INFINITY, f32::NEG_INFINITY);
+                for point in upper.iter().chain(&lower) {
+                    y_top = y_top.min(point.y as f32);
+                    y_bottom = y_bottom.max(point.y as f32);
+                }
+                target.set_fill_vgradient(y_top, y_bottom, gradient.top, gradient.bottom);
+                target.begin_path();
+                target.move_to(upper[0].x as f32, upper[0].y as f32);
+                for point in &upper[1..] {
+                    target.line_to(point.x as f32, point.y as f32);
+                }
+                for point in lower.iter().rev() {
+                    target.line_to(point.x as f32, point.y as f32);
+                }
+                target.close_path();
+                target.fill();
+            }
             Prim::Circle {
                 cx,
                 cy,
@@ -400,6 +441,22 @@ pub fn execute(
                     target.set_line_width(inset);
                     target.stroke();
                 }
+            }
+            Prim::GradientRoundRect {
+                x,
+                y,
+                w,
+                h,
+                radii,
+                gradient,
+            } => {
+                if *w <= 0.0 || *h <= 0.0 {
+                    continue;
+                }
+                let radii = crate::line::normalized_round_rect_radii(*w, *h, *radii);
+                round_rect_path(target, *x, *y, *w, *h, radii);
+                target.set_fill_vgradient(*y, *y + *h, gradient.top, gradient.bottom);
+                target.fill();
             }
             Prim::Background { rect, gradient } => {
                 // reference pane-widget.ts `_drawBackground`: the two-stop ramp spans the pane rect.
@@ -861,6 +918,46 @@ mod tests {
     }
 
     #[test]
+    fn bar_gradients_cover_their_own_square_and_rounded_bounds() {
+        let gradient = Gradient {
+            top: Color::rgb(255, 0, 0),
+            bottom: Color::rgb(0, 0, 255),
+        };
+        let ops = run(
+            &[
+                Prim::GradientRect {
+                    rect: IRect {
+                        x: 2,
+                        y: 10,
+                        w: 8,
+                        h: 20,
+                    },
+                    gradient,
+                },
+                Prim::GradientRoundRect {
+                    x: 20.0,
+                    y: 40.0,
+                    w: 12.0,
+                    h: 30.0,
+                    radii: [3.0; 4],
+                    gradient,
+                },
+            ],
+            &[],
+        );
+        assert!(
+            ops.iter()
+                .any(|op| op == "fill_grad 10 30 ff0000ff 0000ffff")
+        );
+        assert!(ops.iter().any(|op| op == "fill_rect 2 10 8 20"));
+        assert!(
+            ops.iter()
+                .any(|op| op == "fill_grad 40 70 ff0000ff 0000ffff")
+        );
+        assert!(ops.iter().any(|op| op.starts_with("arc ")));
+    }
+
+    #[test]
     fn area_fill_closes_down_to_base_with_gradient() {
         let points = [[0.0f32, 10.0], [20.0, 4.0]];
         let g = Gradient {
@@ -886,6 +983,27 @@ mod tests {
         assert_eq!(ops[5], "line 0 40"); // back to base at first x
         assert_eq!(ops[6], "close");
         assert_eq!(ops[7], "fill");
+    }
+
+    #[test]
+    fn band_gradient_spans_both_expanded_boundaries() {
+        let points = [[0.0, 10.0], [20.0, 4.0], [0.0, 30.0], [20.0, 24.0]];
+        let gradient = crate::draw_list::Gradient {
+            top: Color::rgb(255, 0, 0),
+            bottom: Color::rgb(0, 0, 255),
+        };
+        let ops = run(
+            &[Prim::BandGradientFill {
+                upper_first: 0,
+                lower_first: 2,
+                point_count: 2,
+                line_type: LineType::Simple,
+                gradient,
+            }],
+            &points,
+        );
+        assert_eq!(ops[0], "fill_grad 4 30 ff0000ff 0000ffff");
+        assert_eq!(ops.iter().filter(|op| *op == "fill").count(), 1);
     }
 
     #[test]

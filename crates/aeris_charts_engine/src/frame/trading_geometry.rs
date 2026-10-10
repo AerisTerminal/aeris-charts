@@ -349,7 +349,16 @@ impl ChartEngine {
                                 include(neighbor_y, pad);
                             }
                         }
-                        LineType::Simple | LineType::Curved => {
+                        LineType::StepBefore => {
+                            if step > 0 {
+                                include(neighbor_y, pad);
+                            }
+                        }
+                        LineType::StepMiddle => {}
+                        LineType::Simple
+                        | LineType::Curved
+                        | LineType::Monotone
+                        | LineType::Natural => {
                             if gap > 0.0 {
                                 let t = (half_width / gap).min(1.0);
                                 include(y + (neighbor_y - y) * t, pad);

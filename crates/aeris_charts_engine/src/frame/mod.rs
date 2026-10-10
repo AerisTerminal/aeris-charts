@@ -1039,13 +1039,15 @@ fn translate_prims_x(prims: &mut [Prim], dx: i32) {
     let dxf = dx as f32;
     for prim in prims {
         match prim {
-            Prim::Rect { rect, .. } | Prim::RectFrame { rect, .. } => rect.x += dx,
+            Prim::Rect { rect, .. }
+            | Prim::GradientRect { rect, .. }
+            | Prim::RectFrame { rect, .. } => rect.x += dx,
             Prim::HLine { x0, x1, .. } => {
                 *x0 += dx;
                 *x1 += dx;
             }
             Prim::VLine { x, .. } => *x += dx,
-            Prim::RoundRect { x, .. } => *x += dxf,
+            Prim::RoundRect { x, .. } | Prim::GradientRoundRect { x, .. } => *x += dxf,
             Prim::Circle { cx, .. } => *cx += dxf,
             Prim::Triangle { a, b, c, .. } => {
                 a[0] += dxf;
@@ -1057,6 +1059,7 @@ fn translate_prims_x(prims: &mut [Prim], dx: i32) {
             Prim::Polyline { .. }
             | Prim::AreaFill { .. }
             | Prim::BandFill { .. }
+            | Prim::BandGradientFill { .. }
             | Prim::Background { .. } => {}
         }
     }
@@ -1099,6 +1102,11 @@ fn append_drawing_part(
                 upper_first,
                 lower_first,
                 ..
+            }
+            | Prim::BandGradientFill {
+                upper_first,
+                lower_first,
+                ..
             } => {
                 *upper_first = upper_first.wrapping_add(adjust);
                 *lower_first = lower_first.wrapping_add(adjust);
@@ -1120,6 +1128,11 @@ fn append_retained_layer(layer: &RetainedLayer, prims: &mut Vec<Prim>, points: &
                 *first_point += point_base;
             }
             Prim::BandFill {
+                upper_first,
+                lower_first,
+                ..
+            }
+            | Prim::BandGradientFill {
                 upper_first,
                 lower_first,
                 ..

@@ -216,9 +216,149 @@ fn catmull_rom(p0: f64, p1: f64, p2: f64, p3: f64, t: f64) -> f64 {
         + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
 }
 
+fn monotone_secant(first: LinePoint, second: LinePoint) -> f64 {
+    let dx = second.x - first.x;
+    if dx == 0.0 {
+        0.0
+    } else {
+        (second.y - first.y) / dx
+    }
+}
+
+fn monotone_tangent(points: &[LinePoint], index: usize) -> f64 {
+    if index == 0 {
+        return monotone_secant(points[0], points[1]);
+    }
+    if index + 1 == points.len() {
+        return monotone_secant(points[index - 1], points[index]);
+    }
+    let previous = monotone_secant(points[index - 1], points[index]);
+    let next = monotone_secant(points[index], points[index + 1]);
+    if previous * next <= 0.0 {
+        return 0.0;
+    }
+    let left = (points[index].x - points[index - 1].x).abs();
+    let right = (points[index + 1].x - points[index].x).abs();
+    if left == 0.0 || right == 0.0 {
+        return 0.0;
+    }
+    let first_weight = 2.0 * right + left;
+    let second_weight = right + 2.0 * left;
+    (first_weight + second_weight) / (first_weight / previous + second_weight / next)
+}
+
+fn monotone_hermite(
+    first: LinePoint,
+    second: LinePoint,
+    first_slope: f64,
+    second_slope: f64,
+    t: f64,
+) -> LinePoint {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let dx = second.x - first.x;
+    LinePoint {
+        x: first.x + dx * t,
+        y: (2.0 * t3 - 3.0 * t2 + 1.0) * first.y
+            + (t3 - 2.0 * t2 + t) * dx * first_slope
+            + (-2.0 * t3 + 3.0 * t2) * second.y
+            + (t3 - t2) * dx * second_slope,
+    }
+}
+
+/// Solve the uniform-knot natural cubic spline for both media-space coordinates. The endpoint
+/// second derivatives are zero; a non-finite intermediate falls back to straight segments.
+fn natural_second_derivatives(points: &[LinePoint]) -> Option<Vec<LinePoint>> {
+    let count = points.len();
+    let mut second = vec![LinePoint { x: 0.0, y: 0.0 }; count];
+    if count < 3 {
+        return Some(second);
+    }
+    let mut upper = vec![0.0; count];
+    for index in 1..count - 1 {
+        let denominator = 4.0 - upper[index - 1];
+        let x_rhs = 6.0 * (points[index + 1].x - 2.0 * points[index].x + points[index - 1].x);
+        let y_rhs = 6.0 * (points[index + 1].y - 2.0 * points[index].y + points[index - 1].y);
+        upper[index] = 1.0 / denominator;
+        second[index] = LinePoint {
+            x: (x_rhs - second[index - 1].x) / denominator,
+            y: (y_rhs - second[index - 1].y) / denominator,
+        };
+        if !second[index].x.is_finite() || !second[index].y.is_finite() {
+            return None;
+        }
+    }
+    for index in (1..count - 1).rev() {
+        second[index].x -= upper[index] * second[index + 1].x;
+        second[index].y -= upper[index] * second[index + 1].y;
+        if !second[index].x.is_finite() || !second[index].y.is_finite() {
+            return None;
+        }
+    }
+    Some(second)
+}
+
+fn natural_component(
+    first: f64,
+    second: f64,
+    first_curvature: f64,
+    second_curvature: f64,
+    t: f64,
+) -> f64 {
+    let complement = 1.0 - t;
+    let chord = complement * first + t * second;
+    let curved = chord
+        + ((complement.powi(3) - complement) * first_curvature
+            + (t.powi(3) - t) * second_curvature)
+            / 6.0;
+    if curved.is_finite() { curved } else { chord }
+}
+
+fn natural_sample(points: &[LinePoint], second: &[LinePoint], index: usize, t: f64) -> LinePoint {
+    LinePoint {
+        x: natural_component(
+            points[index].x,
+            points[index + 1].x,
+            second[index].x,
+            second[index + 1].x,
+            t,
+        ),
+        y: natural_component(
+            points[index].y,
+            points[index + 1].y,
+            second[index].y,
+            second[index + 1].y,
+            t,
+        ),
+    }
+}
+
+fn natural_segments_for(
+    points: &[LinePoint],
+    second: &[LinePoint],
+    index: usize,
+    hpr: f64,
+    vpr: f64,
+) -> usize {
+    let first = points[index];
+    let last = points[index + 1];
+    let dx = last.x - first.x;
+    let dy = last.y - first.y;
+    let chord = (dx * hpr).hypot(dy * vpr);
+    let mut bend = 0.0_f64;
+    for t in [0.25, 0.5, 0.75] {
+        let sample = natural_sample(points, second, index, t);
+        let straight_x = (1.0 - t) * first.x + t * last.x;
+        let straight_y = (1.0 - t) * first.y + t * last.y;
+        bend = bend.max(((sample.x - straight_x) * hpr).hypot((sample.y - straight_y) * vpr));
+    }
+    // A one-device-pixel bend needs at least two chords even when both knots share a pixel.
+    curve_segments_for(chord.max(bend * 8.0))
+}
+
 /// Expand a polyline according to its [`LineType`] into `out` (cleared first, allocation reused):
-/// `Simple` is unchanged; `WithSteps` inserts a horizontal-then-vertical corner at each interval
-/// (the value holds until the next point); `Curved`
+/// `Simple` is unchanged; the step variants insert corners at the start, middle, or end of each
+/// interval; `Curved`
 /// tessellates a Catmull-Rom spline through the points with a per-interval segment count adapted
 /// to the interval's device-px length (`hpr`/`vpr` convert media to device px).
 pub fn expand_line_into(
@@ -244,6 +384,39 @@ pub fn expand_line_into(
                 out.push(*p);
             }
         }
+        LineType::StepBefore => {
+            out.reserve(points.len().saturating_mul(2));
+            if let Some(first) = points.first() {
+                out.push(*first);
+            }
+            for index in 1..points.len() {
+                out.push(LinePoint {
+                    x: points[index - 1].x,
+                    y: points[index].y,
+                });
+                out.push(points[index]);
+            }
+        }
+        LineType::StepMiddle => {
+            out.reserve(points.len().saturating_mul(3));
+            if let Some(first) = points.first() {
+                out.push(*first);
+            }
+            for index in 1..points.len() {
+                let previous = points[index - 1];
+                let current = points[index];
+                let middle = previous.x + (current.x - previous.x) * 0.5;
+                out.push(LinePoint {
+                    x: middle,
+                    y: previous.y,
+                });
+                out.push(LinePoint {
+                    x: middle,
+                    y: current.y,
+                });
+                out.push(current);
+            }
+        }
         LineType::Curved => {
             if points.len() < 3 {
                 out.extend_from_slice(points);
@@ -267,11 +440,58 @@ pub fn expand_line_into(
                 }
             }
         }
+        LineType::Monotone => {
+            if points.len() < 2 {
+                out.extend_from_slice(points);
+                return;
+            }
+            out.push(points[0]);
+            for index in 0..points.len() - 1 {
+                let first = points[index];
+                let second = points[index + 1];
+                let first_slope = monotone_tangent(points, index);
+                let second_slope = monotone_tangent(points, index + 1);
+                let len_px = ((second.x - first.x) * hpr).hypot((second.y - first.y) * vpr);
+                let segments = curve_segments_for(len_px);
+                for sample in 1..=segments {
+                    let t = sample as f64 / segments as f64;
+                    out.push(monotone_hermite(
+                        first,
+                        second,
+                        first_slope,
+                        second_slope,
+                        t,
+                    ));
+                }
+            }
+        }
+        LineType::Natural => {
+            if points.len() < 3 {
+                out.extend_from_slice(points);
+                return;
+            }
+            let Some(second) = natural_second_derivatives(points) else {
+                out.extend_from_slice(points);
+                return;
+            };
+            out.push(points[0]);
+            for index in 0..points.len() - 1 {
+                let segments = natural_segments_for(points, &second, index, hpr, vpr);
+                for sample in 1..=segments {
+                    out.push(natural_sample(
+                        points,
+                        &second,
+                        index,
+                        sample as f64 / segments as f64,
+                    ));
+                }
+            }
+        }
     }
 }
 
-/// Expand a polyline according to its [`LineType`]: `Simple` is unchanged; `WithSteps` inserts a
-/// horizontal-then-vertical corner at each interval (the value holds until the next point);
+/// Expand a polyline according to its [`LineType`]: `Simple` is unchanged; step variants insert
+/// deterministic corners in each interval;
 /// `Curved` tessellates a Catmull-Rom spline through the points.
 ///
 /// Allocating convenience wrapper over [`expand_line_into`] for callers whose points are already
@@ -322,6 +542,56 @@ pub fn expand_band_into(
                 out_lower.push(lower[index]);
             }
         }
+        LineType::StepBefore => {
+            out_upper.reserve(count.saturating_mul(2));
+            out_lower.reserve(count.saturating_mul(2));
+            if count > 0 {
+                out_upper.push(upper[0]);
+                out_lower.push(lower[0]);
+            }
+            for index in 1..count {
+                let x = upper[index - 1].x;
+                out_upper.push(LinePoint {
+                    x,
+                    y: upper[index].y,
+                });
+                out_lower.push(LinePoint {
+                    x,
+                    y: lower[index].y,
+                });
+                out_upper.push(upper[index]);
+                out_lower.push(lower[index]);
+            }
+        }
+        LineType::StepMiddle => {
+            out_upper.reserve(count.saturating_mul(3));
+            out_lower.reserve(count.saturating_mul(3));
+            if count > 0 {
+                out_upper.push(upper[0]);
+                out_lower.push(lower[0]);
+            }
+            for index in 1..count {
+                let x = upper[index - 1].x + (upper[index].x - upper[index - 1].x) * 0.5;
+                out_upper.push(LinePoint {
+                    x,
+                    y: upper[index - 1].y,
+                });
+                out_lower.push(LinePoint {
+                    x,
+                    y: lower[index - 1].y,
+                });
+                out_upper.push(LinePoint {
+                    x,
+                    y: upper[index].y,
+                });
+                out_lower.push(LinePoint {
+                    x,
+                    y: lower[index].y,
+                });
+                out_upper.push(upper[index]);
+                out_lower.push(lower[index]);
+            }
+        }
         LineType::Curved => {
             if count < 3 {
                 out_upper.extend_from_slice(upper);
@@ -356,6 +626,81 @@ pub fn expand_band_into(
                     };
                     out_upper.push(interpolate(upper));
                     out_lower.push(interpolate(lower));
+                }
+            }
+        }
+        LineType::Monotone => {
+            if count < 2 {
+                out_upper.extend_from_slice(upper);
+                out_lower.extend_from_slice(lower);
+                return;
+            }
+            out_upper.push(upper[0]);
+            out_lower.push(lower[0]);
+            for index in 0..count - 1 {
+                let upper_len = ((upper[index + 1].x - upper[index].x) * hpr)
+                    .hypot((upper[index + 1].y - upper[index].y) * vpr);
+                let lower_len = ((lower[index + 1].x - lower[index].x) * hpr)
+                    .hypot((lower[index + 1].y - lower[index].y) * vpr);
+                let segments = curve_segments_for(upper_len.max(lower_len));
+                let upper_slopes = (
+                    monotone_tangent(upper, index),
+                    monotone_tangent(upper, index + 1),
+                );
+                let lower_slopes = (
+                    monotone_tangent(lower, index),
+                    monotone_tangent(lower, index + 1),
+                );
+                for sample in 1..=segments {
+                    let t = sample as f64 / segments as f64;
+                    let x = upper[index].x + (upper[index + 1].x - upper[index].x) * t;
+                    let mut upper_point = monotone_hermite(
+                        upper[index],
+                        upper[index + 1],
+                        upper_slopes.0,
+                        upper_slopes.1,
+                        t,
+                    );
+                    let mut lower_point = monotone_hermite(
+                        lower[index],
+                        lower[index + 1],
+                        lower_slopes.0,
+                        lower_slopes.1,
+                        t,
+                    );
+                    upper_point.x = x;
+                    lower_point.x = x;
+                    out_upper.push(upper_point);
+                    out_lower.push(lower_point);
+                }
+            }
+        }
+        LineType::Natural => {
+            if count < 3 {
+                out_upper.extend_from_slice(upper);
+                out_lower.extend_from_slice(lower);
+                return;
+            }
+            let (Some(upper_second), Some(lower_second)) = (
+                natural_second_derivatives(upper),
+                natural_second_derivatives(lower),
+            ) else {
+                out_upper.extend_from_slice(upper);
+                out_lower.extend_from_slice(lower);
+                return;
+            };
+            out_upper.push(upper[0]);
+            out_lower.push(lower[0]);
+            for index in 0..count - 1 {
+                let segments = natural_segments_for(upper, &upper_second, index, hpr, vpr)
+                    .max(natural_segments_for(lower, &lower_second, index, hpr, vpr));
+                for sample in 1..=segments {
+                    let t = sample as f64 / segments as f64;
+                    let upper_point = natural_sample(upper, &upper_second, index, t);
+                    let mut lower_point = natural_sample(lower, &lower_second, index, t);
+                    lower_point.x = upper_point.x;
+                    out_upper.push(upper_point);
+                    out_lower.push(lower_point);
                 }
             }
         }
@@ -1755,6 +2100,21 @@ mod tests {
     }
 
     #[test]
+    fn step_before_and_centered_expansion_place_corners_at_shared_x_positions() {
+        let pts = [LinePoint { x: 0.0, y: 10.0 }, LinePoint { x: 8.0, y: 20.0 }];
+        let before = expand_line(&pts, LineType::StepBefore);
+        assert_eq!(
+            before.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
+            vec![(0.0, 10.0), (0.0, 20.0), (8.0, 20.0)]
+        );
+        let middle = expand_line(&pts, LineType::StepMiddle);
+        assert_eq!(
+            middle.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
+            vec![(0.0, 10.0), (4.0, 10.0), (4.0, 20.0), (8.0, 20.0)]
+        );
+    }
+
+    #[test]
     fn expand_curved_densifies_and_passes_through_points() {
         let pts = [
             LinePoint { x: 0.0, y: 0.0 },
@@ -1768,6 +2128,154 @@ mod tests {
         assert_eq!((out[0].x, out[0].y), (0.0, 0.0));
         assert_eq!((out[4].x, out[4].y), (10.0, 10.0));
         assert_eq!((out[8].x, out[8].y), (20.0, 0.0));
+    }
+
+    #[test]
+    fn monotone_curve_preserves_knots_and_never_exceeds_adjacent_values() {
+        let points = [
+            LinePoint { x: 0.0, y: 1.0 },
+            LinePoint { x: 20.0, y: 5.0 },
+            LinePoint { x: 40.0, y: 5.0 },
+            LinePoint { x: 60.0, y: 2.0 },
+        ];
+        let expanded = expand_line(&points, LineType::Monotone);
+        assert!(expanded.len() > points.len());
+        assert_eq!((expanded[0].x, expanded[0].y), (0.0, 1.0));
+        assert_eq!(
+            (expanded.last().unwrap().x, expanded.last().unwrap().y),
+            (60.0, 2.0)
+        );
+        for segment in points.windows(2) {
+            let low = segment[0].y.min(segment[1].y);
+            let high = segment[0].y.max(segment[1].y);
+            for sample in expanded
+                .iter()
+                .filter(|sample| sample.x >= segment[0].x && sample.x <= segment[1].x)
+            {
+                assert!(sample.y >= low - 1e-9 && sample.y <= high + 1e-9);
+            }
+        }
+        let reversed = [
+            LinePoint { x: 60.0, y: 1.0 },
+            LinePoint { x: 40.0, y: 5.0 },
+            LinePoint { x: 20.0, y: 5.0 },
+            LinePoint { x: 0.0, y: 2.0 },
+        ];
+        let expanded = expand_line(&reversed, LineType::Monotone);
+        for segment in reversed.windows(2) {
+            let low = segment[0].y.min(segment[1].y);
+            let high = segment[0].y.max(segment[1].y);
+            for sample in expanded
+                .iter()
+                .filter(|sample| sample.x <= segment[0].x && sample.x >= segment[1].x)
+            {
+                assert!(sample.y >= low - 1e-9 && sample.y <= high + 1e-9);
+            }
+        }
+        let duplicate_x = [
+            LinePoint { x: 0.0, y: 1.0 },
+            LinePoint { x: 0.0, y: 3.0 },
+            LinePoint { x: 20.0, y: 5.0 },
+        ];
+        assert!(
+            expand_line(&duplicate_x, LineType::Monotone)
+                .iter()
+                .all(|point| point.x.is_finite() && point.y.is_finite())
+        );
+    }
+
+    #[test]
+    fn natural_curve_uses_zero_second_derivative_at_endpoints_and_preserves_knots() {
+        let points = [
+            LinePoint { x: 0.0, y: 0.0 },
+            LinePoint { x: 64.0, y: 64.0 },
+            LinePoint { x: 128.0, y: 0.0 },
+            LinePoint { x: 192.0, y: 64.0 },
+        ];
+        let expanded = expand_line(&points, LineType::Natural);
+        assert_eq!(expanded.len(), 3 * CURVE_SEGMENTS + 1);
+        assert!((expanded[CURVE_SEGMENTS / 2].x - 32.0).abs() < 1e-9);
+        assert!((expanded[CURVE_SEGMENTS / 2].y - 48.0).abs() < 1e-9);
+        for (index, source) in points.iter().enumerate() {
+            let expanded_point = expanded[index * CURVE_SEGMENTS];
+            assert!((expanded_point.x - source.x).abs() < 1e-9);
+            assert!((expanded_point.y - source.y).abs() < 1e-9);
+        }
+        let reversed: Vec<_> = points
+            .iter()
+            .map(|point| LinePoint {
+                x: 192.0 - point.x,
+                y: point.y,
+            })
+            .collect();
+        assert!(
+            expand_line(&reversed, LineType::Natural)
+                .iter()
+                .all(|point| point.x.is_finite() && point.y.is_finite())
+        );
+        let duplicate_x = [
+            LinePoint { x: 0.0, y: 0.0 },
+            LinePoint { x: 0.0, y: 64.0 },
+            LinePoint { x: 64.0, y: 0.0 },
+        ];
+        assert!(
+            expand_line(&duplicate_x, LineType::Natural)
+                .iter()
+                .all(|point| point.x.is_finite() && point.y.is_finite())
+        );
+        let huge = [
+            LinePoint {
+                x: 0.0,
+                y: f64::MAX,
+            },
+            LinePoint {
+                x: 64.0,
+                y: f64::MAX,
+            },
+            LinePoint {
+                x: 128.0,
+                y: f64::MAX,
+            },
+        ];
+        let fallback = expand_line(&huge, LineType::Natural);
+        assert_eq!(fallback.len(), huge.len());
+        assert!(
+            fallback
+                .iter()
+                .zip(&huge)
+                .all(|(actual, expected)| actual.x == expected.x && actual.y == expected.y)
+        );
+    }
+
+    #[test]
+    fn natural_curve_samples_neighbor_driven_bends_on_short_chords() {
+        let points = [
+            LinePoint { x: 0.0, y: 0.0 },
+            LinePoint { x: 1.0, y: 0.0 },
+            LinePoint { x: 2.0, y: 100.0 },
+            LinePoint { x: 3.0, y: 100.0 },
+        ];
+        let expanded = expand_line(&points, LineType::Natural);
+        assert!(
+            expanded
+                .iter()
+                .any(|point| point.x > 0.0 && point.x < 1.0 && point.y.abs() > 1.0)
+        );
+        let lower = [
+            LinePoint { x: 0.0, y: 150.0 },
+            LinePoint { x: 1.0, y: 150.0 },
+            LinePoint { x: 2.0, y: 150.0 },
+            LinePoint { x: 3.0, y: 150.0 },
+        ];
+        let (upper_band, lower_band) = expand_band(&points, &lower, LineType::Natural);
+        assert_eq!(upper_band.len(), lower_band.len());
+        assert!(upper_band.len() > points.len());
+        assert!(
+            upper_band
+                .iter()
+                .zip(&lower_band)
+                .all(|(upper, lower)| upper.x == lower.x)
+        );
     }
 
     #[test]
@@ -1820,7 +2328,14 @@ mod tests {
             LinePoint { x: 10.0, y: 35.0 },
             LinePoint { x: 20.0, y: 25.0 },
         ];
-        for line_type in [LineType::WithSteps, LineType::Curved] {
+        for line_type in [
+            LineType::WithSteps,
+            LineType::StepBefore,
+            LineType::StepMiddle,
+            LineType::Monotone,
+            LineType::Natural,
+            LineType::Curved,
+        ] {
             let (expanded_upper, expanded_lower) = expand_band(&upper, &lower, line_type);
             assert_eq!(expanded_upper.len(), expanded_lower.len());
             assert!(expanded_upper.len() > upper.len());

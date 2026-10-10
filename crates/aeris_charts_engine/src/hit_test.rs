@@ -250,6 +250,18 @@ pub(crate) fn hit_test_line_series(
                 .min(distance_to_segment(
                     x, y, second.0, first.1, second.0, second.1,
                 )),
+            LineType::StepBefore => distance_to_segment(x, y, first.0, first.1, first.0, second.1)
+                .min(distance_to_segment(
+                    x, y, first.0, second.1, second.0, second.1,
+                )),
+            LineType::StepMiddle => {
+                let middle = first.0 + (second.0 - first.0) * 0.5;
+                distance_to_segment(x, y, first.0, first.1, middle, first.1)
+                    .min(distance_to_segment(x, y, middle, first.1, middle, second.1))
+                    .min(distance_to_segment(
+                        x, y, middle, second.1, second.0, second.1,
+                    ))
+            }
             LineType::Curved => {
                 let [cp1, cp2] = control_points(points, index - 1, index);
                 distance_to_bezier_curve(x, y, [first, cp1, cp2, second])

@@ -214,20 +214,63 @@ Grouped and stacked charts are options on compatible column, horizontal-bar, and
 separate engines or renderer-specific kinds. A stack ID joins series only when their pane, axes,
 orientation, and category/continuous coordinate semantics match.
 
-The currently implemented Phase 2 slice exposes `group_id` on `column` and `horizontal_bar`, and
+The series API exposes `group_id` on `column` and `horizontal_bar`, and
 `stack_id`/`stack_mode` on both bar orientations and `xy_area`. Vertical columns bind a category X axis
 to a numeric Y axis; horizontal bars reuse the same category/value rows with a numeric X axis and band Y axis.
 Grouped bars subdivide the category band; matching stacked bars occupy one group slot. Stacked areas align members by exact X identity across
 numeric, temporal, and category domains and fill between the preceding cumulative boundary and the new
 cumulative boundary. `stack_mode: "normal"` uses independent positive/negative accumulation around zero,
 while `stack_mode: "percent"` normalizes positive and negative totals independently to `+1`/`-1`.
-Both bar orientations reuse ordered `Rect` primitives, exact rectangle hits, bounded labels, snapshots,
+`stack_mode: "positive"` stacks values above zero and suppresses negative marks; their source
+rows remain available to data queries. Every nondefault mode requires a stack ID.
+`stack_mode: "cumulative"` adds signed values onto the preceding boundary in series order, so
+negative values may overlap earlier marks. The automatic value domain includes every intermediate
+boundary. This corresponds to the reference library's `stackOffset="none"`; `"normal"` corresponds
+to its diverging `"sign"` offset.
+`stack_mode: "silhouette"` adds signed values in the same order but shifts each category or X
+position's baseline by half its final signed total, centering the finished stack around zero.
+Automatic domains still include every intermediate boundary, including overshoots from mixed signs.
+This follows the [D3 silhouette offset](https://d3js.org/d3-shape/stack#stackOffsetSilhouette).
+  `stack_mode: "wiggle"` uses cumulative signed layers and shifts each baseline to reduce
+  weighted movement between adjacent category or X positions in axis order. Empty or zero-total
+  positions retain the preceding baseline. Automatic domains include each shifted boundary.
+  This follows the [D3 wiggle offset](https://d3js.org/d3-shape/stack#stackOffsetWiggle).
+Unstacked `xy_area` uses `baseline_policy: "zero"` by default. `"domain_min"` and
+`"domain_max"` follow the effective Y-axis view, including pan and zoom; they correspond to
+the [Recharts Area](https://recharts.github.io/en-US/api/Area/) `baseValue: "dataMin"` and
+`"dataMax"` choices, which resolve against the axis domain.
+`baseline_value` supplies a finite numeric value instead and cannot be combined with a
+nonzero policy. Stacked areas derive their baseline from the prior member and reject a numeric
+baseline or nonzero policy.
+`xy_area` and `range_area` accept `fill_gradient: [topColor, bottomColor]` with two supported CSS
+colors. The colors and their alpha reach the shared vertical `AreaFill` or gradient-band primitive;
+`fill_opacity` multiplies both stop alphas. Without this option, the existing one-color area fade
+or solid band remains.
+`column`, `horizontal_bar`, and `range_bar` accept the same `fill_gradient` pair. Both colors
+run from the top to the bottom of each bar in bitmap space, including horizontal bars; their
+CSS alpha is retained. Rounded bar ends clip the same ramp to the rounded shape. A row `color`
+override replaces the gradient for that mark.
+Both bar orientations accept `bar_gap` (0–64 CSS pixels of empty space per slot) and
+`bar_max_width` (1–512 CSS pixels). The engine centers the remaining bar within its group slot;
+stack members keep the same slot when configured alike. `range_bar` accepts the same thickness
+controls. Columns and horizontal bars also accept `bar_corner_radius` (0–64 CSS pixels). The
+engine rounds every corner of an unstacked bar and only the exposed value-end corners of a stack;
+interior stack joins stay square. The radius is clamped to half the rendered bar's smaller
+dimension. All three bar kinds reuse ordered rectangle primitives, exact rectangle hits, bounded labels, snapshots,
 typed/object updates, and V2 persistence.
 
 `range_bar` uses the aligned low/high dataset contract with a category X axis and numeric Y axis.
 Each complete row lowers to one category-width rectangle spanning its low/high values; missing or
 invalid bounds remain queryable but emit no geometry. Range bars use exact rectangle hits and the
 same persistence and update paths as range areas.
+
+Path interpolation accepts `step_before` (vertical then horizontal), `step_middle` (turn at the
+interval midpoint), and `step_after` (horizontal then vertical). The existing `step` name keeps its
+step-after behavior for saved charts. Map Recharts `step`, `stepBefore`, and `stepAfter` to
+`step_middle`, `step_before`, and `step_after` respectively.
+`monotone` uses a shape-preserving cubic curve along X and holds flat plateaus without overshoot.
+`natural` uses a cubic spline with zero endpoint curvature. Its knots pass through the source
+points, and its tessellation is bounded by the shared per-interval curve limit.
 
 ```ts
 interface cartesian_series_options {
@@ -241,21 +284,35 @@ interface cartesian_series_options {
   point_markers?: boolean;
   /** Marker shape for scatter and path markers; defaults to circle. */
   point_symbol?: "circle" | "square" | "diamond" | "triangle";
-  /** Stroke width for line, area, and range-area paths in CSS pixels; defaults to 2. */
+  /** Stroke width for paths, error bars, and box plots in CSS pixels; defaults to 2. */
   line_width?: number;
   /** Portable stroke pattern for line, area, and range-area paths; defaults to solid. */
   line_style?: "solid" | "dotted" | "dashed";
   /** Shared path interpolation for line, area, and range-area boundaries; defaults to linear. */
-  interpolation?: "linear" | "step" | "curved";
+  interpolation?: "linear" | "step" | "step_before" | "step_middle" | "step_after" | "curved" | "monotone" | "natural";
   /** Bridge missing rows in path series; transform-invalid rows remain gaps. Defaults to false. */
   connect_missing?: boolean;
   /** Area fill opacity from 0 through 1; defaults to 72 / 255. */
   fill_opacity?: number;
-  /** Explicit numeric fill baseline for `xy_area`; omitted uses zero when visible, otherwise the edge. */
+  fill_gradient?: readonly [string, string];
+  /** Explicit numeric fill baseline for an unstacked `xy_area`. */
   baseline_value?: number;
+  /** Baseline for an unstacked `xy_area`; domain bounds follow the effective Y-axis view. */
+  baseline_policy?: "zero" | "domain_min" | "domain_max";
+  bar_gap?: number;
+  bar_max_width?: number;
+  bar_corner_radius?: number;
+  /** Fix heatmap color-intensity scaling; omitted uses the visible cell values. */
+  heatmap_value_domain?: readonly [number, number];
+  /** Optional CSS endpoints for the heatmap's shared color ramp. */
+  heatmap_low_color?: string;
+  heatmap_high_color?: string;
+  /** Optional box-plot interquartile fill and median stroke CSS colors. */
+  box_fill_color?: string;
+  box_median_color?: string;
   group_id?: string;
   stack_id?: string;
-  stack_mode?: "normal" | "percent";
+    stack_mode?: "normal" | "cumulative" | "silhouette" | "wiggle" | "percent" | "positive";
   missing?: "gap" | "zero";
 }
 
@@ -451,6 +508,18 @@ transaction. A label is limited to 4,096 UTF-8 bytes, and each dataset to 65,536
 1,048,576 label bytes. Tooltip and bounded accessibility snapshots expose the custom text as
 `label: string | null` alongside the raw value.
 
+Object rows may set `color?: string`; typed columns may provide parallel
+`colors?: readonly (string | null)[]`. A color overrides that row's bar, point, error bar,
+box, or heatmap mark in the shared frame. Line and area strokes keep their series color while
+enabled point markers use row colors. Colors accept the same supported CSS syntax as series colors,
+are capped at 256 UTF-8 bytes and 65,536 colored rows per dataset, and survive explicit-ID updates,
+bounded retention, and V2 persistence. An updated row without a color clears its prior override.
+Point-marking rows may also set `symbol?: "circle" | "square" | "diamond" | "triangle"`, or typed
+columns may supply a parallel `symbols` array. Scatter and enabled line/area point markers paint
+and hit-test the row symbol; bubbles retain their size-scaled circle. A missing symbol falls back
+to the series symbol. Invalid symbols reject the full row transaction atomically, and V2 preserves
+explicit symbols.
+
 The current legend surface is metadata-only by design: the browser may render DOM legend controls, but the
 entry set, order, visibility, title, color, kind, and pane identity come from the engine snapshot. Axis and
 series handles expose `set_visible`/`setVisible`; legend controls use the series handle and then read the next
@@ -476,6 +545,7 @@ transforms atomically and leave the configured or automatic base domain availabl
 `chart.set_general_series_order(handles, pane?)` atomically accepts only an exact permutation of every live
 general series in that scope. Pane-local reordering leaves every other pane's relative order unchanged. The
 same order drives painting, legend and hit-test traversal, React keyed array order, and V2 persistence.
+For a stack, it also determines which member starts at zero and which member occupies the exposed end.
 
 Reference components are intentionally separate from series data. A reference line binds one X or Y axis and one
 compatible numeric/temporal/category value; a dot binds explicit X and Y axes; a region binds two endpoints on

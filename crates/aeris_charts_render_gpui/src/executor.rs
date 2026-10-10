@@ -17,9 +17,10 @@ use aeris_charts_render::draw_list::{LineStyle, Prim, positive_finite_extent};
 use aeris_charts_render::line::{normalized_round_rect_radii, round_rect_border};
 
 use crate::geometry::{
-    Scratch, area_fill_mesh, area_fringe_gradient, band_fill_mesh, dash_spans,
-    dashed_polyline_meshes, disc_mesh, fill_polygon, irect, line_span_start, polyline_mesh,
-    rect_frame_edges, ring_mesh, round_rect_polygon, round_rect_ring_mesh,
+    Scratch, area_fill_mesh, area_fringe_gradient, area_gradient, band_fill_mesh,
+    band_fill_mesh_parts, dash_spans, dashed_polyline_meshes, disc_mesh, fill_polygon, irect,
+    line_span_start, polyline_mesh, rect_frame_edges, ring_mesh, round_rect_polygon,
+    round_rect_ring_mesh,
 };
 use crate::metrics::GpuiFrameMetrics;
 use crate::scene::{DeviceRect, Paint, SceneOp, ScenePlan, TextRun};
@@ -71,6 +72,20 @@ fn lower_prim(
         Prim::Rect { rect, color } => {
             if let Some(rect) = irect(*rect) {
                 push_quad(plan, metrics, rect, Paint::Solid(*color));
+            }
+        }
+
+        Prim::GradientRect { rect, gradient } => {
+            if let Some(rect) = irect(*rect) {
+                push_quad(
+                    plan,
+                    metrics,
+                    rect,
+                    Paint::VGradient {
+                        top: gradient.top,
+                        bottom: gradient.bottom,
+                    },
+                );
             }
         }
 
@@ -227,6 +242,30 @@ fn lower_prim(
             push_mesh(plan, metrics, range, Paint::Solid(*fill));
         }
 
+        Prim::BandGradientFill {
+            upper_first,
+            lower_first,
+            point_count,
+            line_type,
+            gradient,
+        } => {
+            let (core, fringe) = band_fill_mesh_parts(
+                scratch,
+                &mut plan.vertices,
+                points,
+                *upper_first,
+                *lower_first,
+                *point_count,
+                *line_type,
+            );
+            let paint = area_gradient(&plan.vertices, core, gradient.top, gradient.bottom);
+            push_mesh(plan, metrics, core, paint);
+            if fringe.1 > 0 {
+                let fringe_paint = area_fringe_gradient(&plan.vertices, core, fringe, paint);
+                push_mesh(plan, metrics, fringe, fringe_paint);
+            }
+        }
+
         Prim::Circle {
             cx,
             cy,
@@ -291,6 +330,39 @@ fn lower_prim(
                 let outer = round_rect_polygon(*x, *y, *w, *h, radii);
                 let range = fill_polygon(&mut plan.vertices, &outer);
                 push_mesh(plan, metrics, range, Paint::Solid(*fill));
+            }
+        }
+
+        Prim::GradientRoundRect {
+            x,
+            y,
+            w,
+            h,
+            radii,
+            gradient,
+        } => {
+            if *w <= 0.0 || *h <= 0.0 {
+                return;
+            }
+            let radii = normalized_round_rect_radii(*w, *h, *radii);
+            let fill = Paint::VGradient {
+                top: gradient.top,
+                bottom: gradient.bottom,
+            };
+            if options.native_round_rects {
+                plan.ops.push(SceneOp::Quad {
+                    rect: DeviceRect::new(*x, *y, *w, *h),
+                    fill,
+                    corner_radii: radii,
+                    border_width: 0.0,
+                    border_color: gradient.top,
+                });
+                metrics.quads += 1;
+                metrics.ops += 1;
+            } else {
+                let outer = round_rect_polygon(*x, *y, *w, *h, radii);
+                let range = fill_polygon(&mut plan.vertices, &outer);
+                push_mesh(plan, metrics, range, fill);
             }
         }
 
@@ -616,6 +688,45 @@ mod tests {
                 DeviceRect::new(5.0, 12.0, 1.0, 6.0),
             ]
         );
+    }
+
+    #[test]
+    fn bar_gradients_keep_bounds_and_rounded_geometry() {
+        let gradient = Gradient {
+            top: Color::rgb(255, 0, 0),
+            bottom: Color::rgb(0, 0, 255),
+        };
+        let paint = Paint::VGradient {
+            top: gradient.top,
+            bottom: gradient.bottom,
+        };
+        let (plan, _) = run(
+            &[
+                Prim::GradientRect {
+                    rect: IRect {
+                        x: 2,
+                        y: 10,
+                        w: 8,
+                        h: 20,
+                    },
+                    gradient,
+                },
+                Prim::GradientRoundRect {
+                    x: 20.0,
+                    y: 40.0,
+                    w: 12.0,
+                    h: 30.0,
+                    radii: [3.0; 4],
+                    gradient,
+                },
+            ],
+            &[],
+        );
+        assert_eq!(
+            quads(&plan),
+            vec![(DeviceRect::new(2.0, 10.0, 8.0, 20.0), paint)]
+        );
+        assert!(plan.ops.iter().any(|op| matches!(op, SceneOp::Mesh { fill, vertex_count, .. } if *fill == paint && *vertex_count > 0)));
     }
 
     #[test]
@@ -1027,6 +1138,39 @@ mod tests {
             }
             assert!(outer > 0, "{name} has no zero-coverage fringe rim");
         }
+    }
+
+    #[test]
+    fn band_gradient_keeps_core_stops_and_remaps_fringe() {
+        let top = Color::rgba(255, 0, 0, 128);
+        let bottom = Color::rgba(0, 0, 255, 64);
+        let points = [[0.0, 0.0], [10.0, 0.0], [0.0, 10.0], [10.0, 10.0]];
+        let (plan, _) = run(
+            &[Prim::BandGradientFill {
+                upper_first: 0,
+                lower_first: 2,
+                point_count: 2,
+                line_type: LineType::Simple,
+                gradient: Gradient { top, bottom },
+            }],
+            &points,
+        );
+        let meshes: Vec<_> = plan
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                SceneOp::Mesh {
+                    first_vertex,
+                    vertex_count,
+                    fill,
+                } => Some((*first_vertex, *vertex_count, *fill)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(meshes.len(), 2);
+        assert_eq!(meshes[0].2, Paint::VGradient { top, bottom });
+        assert!(meshes[0].1 > 0 && meshes[1].1 > 0);
+        assert_ne!(meshes[1].2, meshes[0].2);
     }
 
     #[test]

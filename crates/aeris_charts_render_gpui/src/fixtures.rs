@@ -848,6 +848,11 @@ mod tests {
                             lower_first,
                             point_count,
                             ..
+                        }
+                        | Prim::BandGradientFill {
+                            lower_first,
+                            point_count,
+                            ..
                         } => (*lower_first, *point_count),
                         _ => continue,
                     };

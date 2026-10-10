@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 
-use crate::{ChartError, ErrorCode, MAX_GENERAL_TEMPORAL_MILLISECONDS};
+use aeris_charts_render::color::Color;
+
+use crate::{ChartError, ErrorCode, GeneralPointSymbol, MAX_GENERAL_TEMPORAL_MILLISECONDS};
 
 pub const MAX_GENERAL_DATASETS: usize = 1_024;
 pub const MAX_GENERAL_DATASET_ROWS: usize = 16_777_216;
@@ -258,6 +260,8 @@ pub struct GeneralDataset {
     heatmap_y_categories: Option<Vec<String>>,
     heatmap_y_category_indices: Option<Vec<u32>>,
     labels: HashMap<usize, String>,
+    colors: HashMap<usize, Color>,
+    symbols: HashMap<usize, GeneralPointSymbol>,
 }
 
 impl GeneralDataset {
@@ -373,6 +377,14 @@ impl GeneralDataset {
         self.labels.get(&index).map(String::as_str)
     }
 
+    pub fn row_color(&self, index: usize) -> Option<Color> {
+        self.colors.get(&index).copied()
+    }
+
+    pub fn row_symbol(&self, index: usize) -> Option<GeneralPointSymbol> {
+        self.symbols.get(&index).copied()
+    }
+
     pub fn numeric_x(&self) -> Option<&[f64]> {
         match &self.x {
             GeneralXColumn::Numeric(values) => Some(values),
@@ -481,6 +493,14 @@ impl GeneralDataset {
                     + std::mem::size_of::<String>()
                     + std::mem::size_of::<usize>())
             + self.labels.values().map(String::capacity).sum::<usize>()
+            + self.colors.capacity()
+                * (std::mem::size_of::<usize>()
+                    + std::mem::size_of::<Color>()
+                    + std::mem::size_of::<usize>())
+            + self.symbols.capacity()
+                * (std::mem::size_of::<usize>()
+                    + std::mem::size_of::<GeneralPointSymbol>()
+                    + std::mem::size_of::<usize>())
     }
 }
 
@@ -1665,6 +1685,71 @@ fn labels_for_rows(
         .collect())
 }
 
+fn colors_for_rows(
+    colors: Option<Vec<Option<String>>>,
+    row_count: usize,
+) -> Result<HashMap<usize, Color>, ChartError> {
+    let Some(colors) = colors else {
+        return Ok(HashMap::new());
+    };
+    if colors.len() != row_count {
+        return Err(invalid_data(
+            "general row colors and value columns must have equal lengths",
+        ));
+    }
+    if colors.iter().flatten().count() > MAX_GENERAL_ROW_LABELS {
+        return Err(resource("general row colors exceed their count limit"));
+    }
+    colors
+        .into_iter()
+        .enumerate()
+        .filter_map(|(row, color)| color.map(|color| (row, color)))
+        .map(|(row, color)| {
+            if color.len() > 256 {
+                return Err(resource("general row color exceeds 256 UTF-8 bytes"));
+            }
+            Color::parse_css(&color)
+                .map(|color| (row, color))
+                .ok_or_else(|| invalid_data("general row color must be a supported CSS color"))
+        })
+        .collect()
+}
+
+fn symbols_for_rows(
+    symbols: Option<Vec<Option<String>>>,
+    row_count: usize,
+) -> Result<HashMap<usize, GeneralPointSymbol>, ChartError> {
+    let Some(symbols) = symbols else {
+        return Ok(HashMap::new());
+    };
+    if symbols.len() != row_count {
+        return Err(invalid_data(
+            "general row symbols and value columns must have equal lengths",
+        ));
+    }
+    if symbols.iter().flatten().count() > MAX_GENERAL_ROW_LABELS {
+        return Err(resource("general row symbols exceed their count limit"));
+    }
+    symbols
+        .into_iter()
+        .enumerate()
+        .filter_map(|(row, symbol)| symbol.map(|symbol| (row, symbol)))
+        .map(|(row, symbol)| {
+            if symbol.len() > 16 {
+                return Err(resource("general row symbol exceeds 16 UTF-8 bytes"));
+            }
+            let symbol = match symbol.as_str() {
+                "circle" => GeneralPointSymbol::Circle,
+                "square" => GeneralPointSymbol::Square,
+                "diamond" => GeneralPointSymbol::Diamond,
+                "triangle" => GeneralPointSymbol::Triangle,
+                _ => return Err(invalid_data("general row symbol is unsupported")),
+            };
+            Ok((row, symbol))
+        })
+        .collect()
+}
+
 fn normalize_validity(validity: Option<Vec<u8>>) -> Option<Vec<u8>> {
     validity.and_then(|values| values.contains(&0).then_some(values))
 }
@@ -1748,6 +1833,8 @@ impl GeneralDataStore {
             heatmap_y_categories: validated.heatmap_y_categories,
             heatmap_y_category_indices: validated.heatmap_y_category_indices,
             labels,
+            colors: HashMap::new(),
+            symbols: HashMap::new(),
         });
         self.next_dataset_id = next_dataset_id;
         self.next_generated_row_id = next_generated_row_id;
@@ -1768,6 +1855,17 @@ impl GeneralDataStore {
         input: GeneralXyInput,
         labels: Option<Vec<Option<String>>>,
     ) -> Result<(), ChartError> {
+        self.replace_styled(id, input, labels, None, None)
+    }
+
+    pub(crate) fn replace_styled(
+        &mut self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+        labels: Option<Vec<Option<String>>>,
+        colors: Option<Vec<Option<String>>>,
+        symbols: Option<Vec<Option<String>>>,
+    ) -> Result<(), ChartError> {
         let Some(slot) = self.datasets.iter().position(|dataset| dataset.id == id) else {
             return Err(ChartError::new(
                 ErrorCode::InvalidHandle,
@@ -1776,6 +1874,8 @@ impl GeneralDataStore {
         };
         let validated = input.validate()?;
         let labels = labels_for_rows(labels, validated.y.len())?;
+        let colors = colors_for_rows(colors, validated.y.len())?;
+        let symbols = symbols_for_rows(symbols, validated.y.len())?;
         let generation = self.datasets[slot]
             .generation
             .checked_add(1)
@@ -1803,6 +1903,8 @@ impl GeneralDataStore {
             heatmap_y_categories: validated.heatmap_y_categories,
             heatmap_y_category_indices: validated.heatmap_y_category_indices,
             labels,
+            colors,
+            symbols,
         };
         self.next_generated_row_id = next_generated_row_id;
         Ok(())
@@ -1824,6 +1926,18 @@ impl GeneralDataStore {
         labels: Option<Vec<Option<String>>>,
         max_rows: Option<usize>,
     ) -> Result<usize, ChartError> {
+        self.upsert_styled(id, input, labels, None, None, max_rows)
+    }
+
+    pub(crate) fn upsert_styled(
+        &mut self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+        labels: Option<Vec<Option<String>>>,
+        colors: Option<Vec<Option<String>>>,
+        symbols: Option<Vec<Option<String>>>,
+        max_rows: Option<usize>,
+    ) -> Result<usize, ChartError> {
         let Some(slot) = self.datasets.iter().position(|dataset| dataset.id == id) else {
             return Err(ChartError::new(
                 ErrorCode::InvalidHandle,
@@ -1837,6 +1951,8 @@ impl GeneralDataStore {
         }
         let validated = input.validate()?;
         validate_label_input(labels.as_deref(), validated.y.len())?;
+        let colors = colors_for_rows(colors, validated.y.len())?;
+        let symbols = symbols_for_rows(symbols, validated.y.len())?;
         let Some(ids) = validated.ids.as_ref() else {
             return Err(invalid_data(
                 "general incremental updates require explicit row IDs",
@@ -1912,6 +2028,8 @@ impl GeneralDataStore {
         let trim_count = max_rows.map_or(0, |limit| untrimmed_len.saturating_sub(limit));
 
         let mut next_labels = dataset.labels.clone();
+        let mut next_colors = dataset.colors.clone();
+        let mut next_symbols = dataset.symbols.clone();
         let mut next_new_row = dataset.len();
         for (source_row, id) in ids.iter().enumerate() {
             let target_row = if let Some(&row) = existing.get(id) {
@@ -1925,17 +2043,45 @@ impl GeneralDataStore {
             if let Some(label) = labels.as_ref().and_then(|items| items[source_row].as_ref()) {
                 next_labels.insert(target_row, label.clone());
             }
+            next_colors.remove(&target_row);
+            if let Some(color) = colors.get(&source_row) {
+                next_colors.insert(target_row, *color);
+            }
+            next_symbols.remove(&target_row);
+            if let Some(symbol) = symbols.get(&source_row) {
+                next_symbols.insert(target_row, *symbol);
+            }
         }
         if trim_count > 0 {
             next_labels = next_labels
                 .into_iter()
                 .filter_map(|(row, label)| row.checked_sub(trim_count).map(|row| (row, label)))
                 .collect();
+            next_colors = next_colors
+                .into_iter()
+                .filter_map(|(row, color)| row.checked_sub(trim_count).map(|row| (row, color)))
+                .collect();
+            next_symbols = next_symbols
+                .into_iter()
+                .filter_map(|(row, symbol)| row.checked_sub(trim_count).map(|row| (row, symbol)))
+                .collect();
         }
         validate_label_map(&next_labels)?;
+        if next_colors.len() > MAX_GENERAL_ROW_LABELS {
+            return Err(resource("general row colors exceed their count limit"));
+        }
+        if next_symbols.len() > MAX_GENERAL_ROW_LABELS {
+            return Err(resource("general row symbols exceed their count limit"));
+        }
         let bounded_label_capacity = next_labels.len().saturating_mul(2).max(64);
         if next_labels.capacity() > bounded_label_capacity {
             next_labels.shrink_to(bounded_label_capacity);
+        }
+        if next_colors.capacity() > next_colors.len().saturating_mul(2).max(64) {
+            next_colors.shrink_to(next_colors.len().saturating_mul(2).max(64));
+        }
+        if next_symbols.capacity() > next_symbols.len().saturating_mul(2).max(64) {
+            next_symbols.shrink_to(next_symbols.len().saturating_mul(2).max(64));
         }
 
         let (category_registry, category_remap, old_category_remap) =
@@ -2424,6 +2570,8 @@ impl GeneralDataStore {
             dataset.x_high_valid = None;
         }
         dataset.labels = next_labels;
+        dataset.colors = next_colors;
+        dataset.symbols = next_symbols;
         dataset.generation = generation;
         Ok(removed_front)
     }
@@ -2879,6 +3027,88 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.code(), ErrorCode::ResourceLimit);
+        assert_eq!(store.get(id), Some(&before));
+    }
+
+    #[test]
+    fn row_colors_and_symbols_follow_explicit_ids_and_retention_atomically() {
+        let mut store = GeneralDataStore::new();
+        let id = store
+            .insert(GeneralXyInput::Numeric {
+                ids: Some(vec![GeneralRowId::Number(1.0), GeneralRowId::Number(2.0)]),
+                x: vec![1.0, 2.0],
+                y: vec![10.0, 20.0],
+                y_valid: None,
+            })
+            .unwrap();
+        store
+            .replace_styled(
+                id,
+                GeneralXyInput::Numeric {
+                    ids: Some(vec![GeneralRowId::Number(1.0), GeneralRowId::Number(2.0)]),
+                    x: vec![1.0, 2.0],
+                    y: vec![10.0, 20.0],
+                    y_valid: None,
+                },
+                None,
+                Some(vec![Some("#f00".into()), Some("#00f".into())]),
+                Some(vec![Some("circle".into()), Some("square".into())]),
+            )
+            .unwrap();
+        store
+            .upsert_styled(
+                id,
+                GeneralXyInput::Numeric {
+                    ids: Some(vec![GeneralRowId::Number(2.0), GeneralRowId::Number(3.0)]),
+                    x: vec![2.0, 3.0],
+                    y: vec![21.0, 30.0],
+                    y_valid: None,
+                },
+                None,
+                Some(vec![Some("#0f0".into()), Some("#ff0".into())]),
+                Some(vec![Some("diamond".into()), Some("triangle".into())]),
+                Some(2),
+            )
+            .unwrap();
+        let dataset = store.get(id).unwrap();
+        assert_eq!(dataset.row_color(0), Color::from_hex("#0f0"));
+        assert_eq!(dataset.row_color(1), Color::from_hex("#ff0"));
+        assert_eq!(dataset.row_symbol(0), Some(GeneralPointSymbol::Diamond));
+        assert_eq!(dataset.row_symbol(1), Some(GeneralPointSymbol::Triangle));
+        let before = dataset.clone();
+        let error = store
+            .upsert_styled(
+                id,
+                GeneralXyInput::Numeric {
+                    ids: Some(vec![GeneralRowId::Number(3.0)]),
+                    x: vec![3.0],
+                    y: vec![31.0],
+                    y_valid: None,
+                },
+                None,
+                Some(vec![Some("not a CSS color".into())]),
+                Some(vec![Some("hexagon".into())]),
+                Some(2),
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidData);
+        assert_eq!(store.get(id), Some(&before));
+        let error = store
+            .upsert_styled(
+                id,
+                GeneralXyInput::Numeric {
+                    ids: Some(vec![GeneralRowId::Number(3.0)]),
+                    x: vec![3.0],
+                    y: vec![31.0],
+                    y_valid: None,
+                },
+                None,
+                None,
+                Some(vec![Some("hexagon".into())]),
+                Some(2),
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidData);
         assert_eq!(store.get(id), Some(&before));
     }
 

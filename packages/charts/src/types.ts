@@ -51,6 +51,10 @@ export interface general_xy_row {
   y: number | null;
   /** Optional custom text for an enabled data label; omitted labels use the numeric Y value. */
   label?: string;
+  /** Optional CSS color for this mark; paths retain the series stroke. */
+  color?: string;
+  /** Optional symbol for point marks. */
+  symbol?: "circle" | "square" | "diamond" | "triangle";
 }
 
 export interface bubble_row extends general_xy_row {
@@ -65,6 +69,10 @@ export interface range_area_row {
   high: number | null;
   /** Optional custom text for an enabled data label; omitted labels use the high value. */
   label?: string;
+  /** Optional CSS color for this mark; paths retain the series stroke. */
+  color?: string;
+  /** Optional symbol for point marks. */
+  symbol?: "circle" | "square" | "diamond" | "triangle";
 }
 
 /** Numeric/temporal/category observation with error bounds supported by the bound X domain. */
@@ -85,6 +93,10 @@ export interface box_plot_row {
   q3: number | null;
   max: number | null;
   label?: string;
+  /** Optional CSS color for this mark; paths retain the series stroke. */
+  color?: string;
+  /** Optional symbol for point marks. */
+  symbol?: "circle" | "square" | "diamond" | "triangle";
 }
 
 export interface heatmap_grid_row {
@@ -93,11 +105,19 @@ export interface heatmap_grid_row {
   y: string | number;
   value: number | null;
   label?: string;
+  /** Optional CSS color for this mark; paths retain the series stroke. */
+  color?: string;
+  /** Optional symbol for point marks. */
+  symbol?: "circle" | "square" | "diamond" | "triangle";
 }
 
 export interface numeric_xy_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
+  /** Sparse CSS color override for each row. */
+  colors?: readonly (string | null)[];
+  /** Sparse point-symbol override for each row. */
+  symbols?: readonly ("circle" | "square" | "diamond" | "triangle" | null)[];
   x: Float64Array;
   y: Float64Array;
   y_valid?: Uint8Array;
@@ -111,6 +131,10 @@ export interface bubble_columns extends numeric_xy_columns {
 export interface numeric_range_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
+  /** Sparse CSS color override for each row. */
+  colors?: readonly (string | null)[];
+  /** Sparse point-symbol override for each row. */
+  symbols?: readonly ("circle" | "square" | "diamond" | "triangle" | null)[];
   x: Float64Array;
   low: Float64Array;
   low_valid?: Uint8Array;
@@ -133,6 +157,10 @@ export interface numeric_error_columns extends numeric_xy_columns {
 export interface temporal_xy_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
+  /** Sparse CSS color override for each row. */
+  colors?: readonly (string | null)[];
+  /** Sparse point-symbol override for each row. */
+  symbols?: readonly ("circle" | "square" | "diamond" | "triangle" | null)[];
   /** Whole epoch-millisecond values carried as JS-safe numbers. */
   x_epoch_ms: Float64Array;
   y: Float64Array;
@@ -142,6 +170,10 @@ export interface temporal_xy_columns {
 export interface temporal_range_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
+  /** Sparse CSS color override for each row. */
+  colors?: readonly (string | null)[];
+  /** Sparse point-symbol override for each row. */
+  symbols?: readonly ("circle" | "square" | "diamond" | "triangle" | null)[];
   /** Whole epoch-millisecond values carried as JS-safe numbers. */
   x_epoch_ms: Float64Array;
   low: Float64Array;
@@ -165,6 +197,10 @@ export interface temporal_error_columns extends temporal_xy_columns {
 export interface category_xy_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
+  /** Sparse CSS color override for each row. */
+  colors?: readonly (string | null)[];
+  /** Sparse point-symbol override for each row. */
+  symbols?: readonly ("circle" | "square" | "diamond" | "triangle" | null)[];
   categories: readonly string[];
   category_indices: Uint32Array;
   y: Float64Array;
@@ -174,6 +210,10 @@ export interface category_xy_columns {
 export interface category_range_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
+  /** Sparse CSS color override for each row. */
+  colors?: readonly (string | null)[];
+  /** Sparse point-symbol override for each row. */
+  symbols?: readonly ("circle" | "square" | "diamond" | "triangle" | null)[];
   categories: readonly string[];
   category_indices: Uint32Array;
   low: Float64Array;
@@ -193,6 +233,10 @@ export interface category_error_columns extends category_xy_columns {
 export interface category_box_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
+  /** Sparse CSS color override for each row. */
+  colors?: readonly (string | null)[];
+  /** Sparse point-symbol override for each row. */
+  symbols?: readonly ("circle" | "square" | "diamond" | "triangle" | null)[];
   categories: readonly string[];
   category_indices: Uint32Array;
   min: Float64Array;
@@ -210,6 +254,10 @@ export interface category_box_columns {
 export interface category_heatmap_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
+  /** Sparse CSS color override for each row. */
+  colors?: readonly (string | null)[];
+  /** Sparse point-symbol override for each row. */
+  symbols?: readonly ("circle" | "square" | "diamond" | "triangle" | null)[];
   x_categories: readonly string[];
   x_category_indices: Uint32Array;
   y_categories: readonly string[];
@@ -221,6 +269,10 @@ export interface category_heatmap_columns {
 export interface numeric_heatmap_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
+  /** Sparse CSS color override for each row. */
+  colors?: readonly (string | null)[];
+  /** Sparse point-symbol override for each row. */
+  symbols?: readonly ("circle" | "square" | "diamond" | "triangle" | null)[];
   x: Float64Array;
   y_coordinate: Float64Array;
   value: Float64Array;
@@ -230,6 +282,10 @@ export interface numeric_heatmap_columns {
 export interface temporal_heatmap_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
+  /** Sparse CSS color override for each row. */
+  colors?: readonly (string | null)[];
+  /** Sparse point-symbol override for each row. */
+  symbols?: readonly ("circle" | "square" | "diamond" | "triangle" | null)[];
   x_epoch_ms: Float64Array;
   y_coordinate: Float64Array;
   value: Float64Array;
@@ -358,26 +414,46 @@ export interface general_series_options {
   point_markers?: boolean;
   /** Marker shape for scatter and opt-in path markers (default `circle`). */
   point_symbol?: "circle" | "square" | "diamond" | "triangle";
-  /** Stroke width for line, area, and range-area paths in CSS pixels (default 2). */
+  /** Stroke width for line, area, range-area, error-bar, and box-plot marks in CSS pixels (default 2). */
   line_width?: number;
   /** Stroke pattern for line, area, and range-area paths (default `solid`). */
   line_style?: "solid" | "dotted" | "dashed";
-  /** Path interpolation for line, area, and range-area boundaries (default `linear`). */
-  interpolation?: "linear" | "step" | "curved";
+  /** Path interpolation for line, area, and range-area boundaries (default `linear`). `step` preserves the legacy step-after shape. */
+  interpolation?: "linear" | "step" | "step_before" | "step_middle" | "step_after" | "curved" | "monotone" | "natural";
   /** Bridge missing rows in line, area, and range-area paths; transform-invalid rows remain gaps. */
   connect_missing?: boolean;
   /** Area fill opacity from 0 through 1 (default `72 / 255`). */
   fill_opacity?: number;
-  /** Explicit numeric fill baseline for `xy_area`; omitted uses zero when visible, otherwise the edge. */
+  /** Top-to-bottom CSS fill colors for area and bar families; area stop alpha is multiplied by `fill_opacity`. */
+  fill_gradient?: readonly [string, string];
+  /** Explicit numeric fill baseline for an unstacked `xy_area`. */
   baseline_value?: number;
+  /** Baseline for an unstacked `xy_area`; domain bounds follow the effective Y-axis view. */
+  baseline_policy?: "zero" | "domain_min" | "domain_max";
   /** Show bounded, engine-placed value labels beside visible marks. */
   data_labels?: boolean;
+  /** Empty space across each bar slot in CSS pixels (default 0, range 0..64). */
+  bar_gap?: number;
+  /** Maximum bar thickness in CSS pixels (range 1..512); omitted fills the available slot. */
+  bar_max_width?: number;
+  /** Radius of exposed bar corners in CSS pixels (default 0, range 0..64). */
+  bar_corner_radius?: number;
+  /** Fixed heatmap value range for color intensity; omitted scales the visible cells. */
+  heatmap_value_domain?: readonly [number, number];
+  /** CSS color for the low end of heatmap intensity. */
+  heatmap_low_color?: string;
+  /** CSS color for the high end of heatmap intensity. */
+  heatmap_high_color?: string;
+  /** CSS fill color for the box plot's interquartile rectangle. */
+  box_fill_color?: string;
+  /** CSS stroke color for the box plot's median line. */
+  box_median_color?: string;
   /** Bar-only grouping key. Matching columns or horizontal bars share their category band side-by-side. */
   group_id?: string;
   /** Column/horizontal_bar/xy_area stack key. Bars accumulate by category; areas by exact X identity. */
   stack_id?: string;
-  /** Bar/xy_area stack normalization. `percent` requires `stack_id`. */
-  stack_mode?: "normal" | "percent";
+  /** Bar/xy_area stack policy. Nondefault modes require `stack_id`; `wiggle` minimizes weighted baseline movement. */
+  stack_mode?: "normal" | "cumulative" | "silhouette" | "wiggle" | "percent" | "positive";
 }
 
 /** Presentation-only subset retained for callers that do not need compatible axis rebinding. */
@@ -2535,11 +2611,13 @@ export interface chart_state_v2 {
     point_radius: number;
     line_width: number;
     line_style: "solid" | "dotted" | "dashed";
+    fill_gradient?: [string, string] | null;
     baseline_value: number | null;
+    baseline_policy?: "Zero" | "DomainMin" | "DomainMax";
     data_labels: boolean;
     group_id: string | null;
     stack_id: string | null;
-    stack_mode: "Normal" | "Percent";
+    stack_mode: "Normal" | "Cumulative" | "Silhouette" | "Wiggle" | "Percent" | "Positive";
   }[];
   chart_options: Record<string, unknown>;
 }

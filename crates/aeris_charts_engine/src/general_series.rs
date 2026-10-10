@@ -49,7 +49,23 @@ pub enum GeneralSeriesKind {
 pub enum GeneralStackMode {
     #[default]
     Normal,
+    /// Add every value to the preceding boundary, including negative values.
+    Cumulative,
+    /// Center each signed stack's final total around zero.
+    Silhouette,
+    /// Shift a cumulative stack baseline to reduce weighted vertical movement.
+    Wiggle,
     Percent,
+    /// Stack positive values from zero and suppress negative marks.
+    Positive,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralAreaBaseline {
+    #[default]
+    Zero,
+    DomainMin,
+    DomainMax,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -74,8 +90,14 @@ impl GeneralLineStyle {
 pub enum GeneralInterpolation {
     #[default]
     Linear,
+    /// Legacy horizontal-then-vertical step, equivalent to `StepAfter`.
     Step,
+    StepBefore,
+    StepMiddle,
+    StepAfter,
     Curved,
+    Monotone,
+    Natural,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -91,8 +113,12 @@ impl GeneralInterpolation {
     pub(crate) fn render_type(self) -> LineType {
         match self {
             Self::Linear => LineType::Simple,
-            Self::Step => LineType::WithSteps,
+            Self::Step | Self::StepAfter => LineType::WithSteps,
+            Self::StepBefore => LineType::StepBefore,
+            Self::StepMiddle => LineType::StepMiddle,
             Self::Curved => LineType::Curved,
+            Self::Monotone => LineType::Monotone,
+            Self::Natural => LineType::Natural,
         }
     }
 }
@@ -129,8 +155,23 @@ pub struct GeneralSeriesOptions {
     pub interpolation: GeneralInterpolation,
     pub connect_missing: bool,
     pub fill_opacity: f64,
+    /// Explicit top and bottom CSS colors for an unstacked area fill.
+    pub fill_gradient: Option<[String; 2]>,
     pub baseline_value: Option<f64>,
+    pub baseline_policy: GeneralAreaBaseline,
     pub data_labels: bool,
+    /// Total empty space within a bar slot, split equally between its sides, in CSS pixels.
+    pub bar_gap: f64,
+    /// Maximum bar thickness in CSS pixels; `None` uses the available slot.
+    pub bar_max_width: Option<f64>,
+    /// Radius of exposed bar corners in CSS pixels.
+    pub bar_corner_radius: f64,
+    /// Fixed color normalization domain for heatmap cells; omitted uses visible values.
+    pub heatmap_value_domain: Option<[f64; 2]>,
+    pub heatmap_low_color: Option<String>,
+    pub heatmap_high_color: Option<String>,
+    pub box_fill_color: Option<String>,
+    pub box_median_color: Option<String>,
     pub group_id: Option<String>,
     pub stack_id: Option<String>,
     pub stack_mode: GeneralStackMode,
@@ -160,8 +201,18 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            fill_gradient: None,
             baseline_value: None,
+            baseline_policy: GeneralAreaBaseline::Zero,
             data_labels: false,
+            bar_gap: 0.0,
+            bar_max_width: None,
+            bar_corner_radius: 0.0,
+            heatmap_value_domain: None,
+            heatmap_low_color: None,
+            heatmap_high_color: None,
+            box_fill_color: None,
+            box_median_color: None,
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
@@ -191,8 +242,18 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            fill_gradient: None,
             baseline_value: None,
+            baseline_policy: GeneralAreaBaseline::Zero,
             data_labels: false,
+            bar_gap: 0.0,
+            bar_max_width: None,
+            bar_corner_radius: 0.0,
+            heatmap_value_domain: None,
+            heatmap_low_color: None,
+            heatmap_high_color: None,
+            box_fill_color: None,
+            box_median_color: None,
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
@@ -222,8 +283,18 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            fill_gradient: None,
             baseline_value: None,
+            baseline_policy: GeneralAreaBaseline::Zero,
             data_labels: false,
+            bar_gap: 0.0,
+            bar_max_width: None,
+            bar_corner_radius: 0.0,
+            heatmap_value_domain: None,
+            heatmap_low_color: None,
+            heatmap_high_color: None,
+            box_fill_color: None,
+            box_median_color: None,
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
@@ -264,8 +335,18 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            fill_gradient: None,
             baseline_value: None,
+            baseline_policy: GeneralAreaBaseline::Zero,
             data_labels: false,
+            bar_gap: 0.0,
+            bar_max_width: None,
+            bar_corner_radius: 0.0,
+            heatmap_value_domain: None,
+            heatmap_low_color: None,
+            heatmap_high_color: None,
+            box_fill_color: None,
+            box_median_color: None,
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
@@ -295,8 +376,18 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            fill_gradient: None,
             baseline_value: None,
+            baseline_policy: GeneralAreaBaseline::Zero,
             data_labels: false,
+            bar_gap: 0.0,
+            bar_max_width: None,
+            bar_corner_radius: 0.0,
+            heatmap_value_domain: None,
+            heatmap_low_color: None,
+            heatmap_high_color: None,
+            box_fill_color: None,
+            box_median_color: None,
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
@@ -326,8 +417,18 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            fill_gradient: None,
             baseline_value: None,
+            baseline_policy: GeneralAreaBaseline::Zero,
             data_labels: false,
+            bar_gap: 0.0,
+            bar_max_width: None,
+            bar_corner_radius: 0.0,
+            heatmap_value_domain: None,
+            heatmap_low_color: None,
+            heatmap_high_color: None,
+            box_fill_color: None,
+            box_median_color: None,
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
@@ -357,8 +458,18 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            fill_gradient: None,
             baseline_value: None,
+            baseline_policy: GeneralAreaBaseline::Zero,
             data_labels: false,
+            bar_gap: 0.0,
+            bar_max_width: None,
+            bar_corner_radius: 0.0,
+            heatmap_value_domain: None,
+            heatmap_low_color: None,
+            heatmap_high_color: None,
+            box_fill_color: None,
+            box_median_color: None,
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
@@ -388,8 +499,18 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            fill_gradient: None,
             baseline_value: None,
+            baseline_policy: GeneralAreaBaseline::Zero,
             data_labels: false,
+            bar_gap: 0.0,
+            bar_max_width: None,
+            bar_corner_radius: 0.0,
+            heatmap_value_domain: None,
+            heatmap_low_color: None,
+            heatmap_high_color: None,
+            box_fill_color: None,
+            box_median_color: None,
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
@@ -419,8 +540,18 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            fill_gradient: None,
             baseline_value: None,
+            baseline_policy: GeneralAreaBaseline::Zero,
             data_labels: false,
+            bar_gap: 0.0,
+            bar_max_width: None,
+            bar_corner_radius: 0.0,
+            heatmap_value_domain: None,
+            heatmap_low_color: None,
+            heatmap_high_color: None,
+            box_fill_color: None,
+            box_median_color: None,
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
@@ -450,8 +581,18 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            fill_gradient: None,
             baseline_value: None,
+            baseline_policy: GeneralAreaBaseline::Zero,
             data_labels: false,
+            bar_gap: 0.0,
+            bar_max_width: None,
+            bar_corner_radius: 0.0,
+            heatmap_value_domain: None,
+            heatmap_low_color: None,
+            heatmap_high_color: None,
+            box_fill_color: None,
+            box_median_color: None,
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
@@ -478,8 +619,18 @@ pub struct GeneralSeries {
     interpolation: GeneralInterpolation,
     connect_missing: bool,
     fill_opacity: f64,
+    fill_gradient: Option<[String; 2]>,
     baseline_value: Option<f64>,
+    baseline_policy: GeneralAreaBaseline,
     data_labels: bool,
+    bar_gap: f64,
+    bar_max_width: Option<f64>,
+    bar_corner_radius: f64,
+    heatmap_value_domain: Option<[f64; 2]>,
+    heatmap_low_color: Option<String>,
+    heatmap_high_color: Option<String>,
+    box_fill_color: Option<String>,
+    box_median_color: Option<String>,
     group_id: Option<String>,
     stack_id: Option<String>,
     stack_mode: GeneralStackMode,
@@ -492,6 +643,10 @@ pub(crate) struct GeneralColumnGeometry {
     pub(crate) right: f64,
     pub(crate) top: f64,
     pub(crate) bottom: f64,
+    /// Whether the value end is the minimum coordinate on its value axis.
+    pub(crate) end_at_min: bool,
+    /// Whether this bar has an exposed value end (or is unstacked).
+    pub(crate) exposed_end: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1119,12 +1274,52 @@ impl GeneralSeries {
         self.fill_opacity
     }
 
+    pub fn fill_gradient(&self) -> Option<&[String; 2]> {
+        self.fill_gradient.as_ref()
+    }
+
     pub fn baseline_value(&self) -> Option<f64> {
         self.baseline_value
     }
 
+    pub fn baseline_policy(&self) -> GeneralAreaBaseline {
+        self.baseline_policy
+    }
+
     pub fn data_labels(&self) -> bool {
         self.data_labels
+    }
+
+    pub fn bar_gap(&self) -> f64 {
+        self.bar_gap
+    }
+
+    pub fn bar_max_width(&self) -> Option<f64> {
+        self.bar_max_width
+    }
+
+    pub fn bar_corner_radius(&self) -> f64 {
+        self.bar_corner_radius
+    }
+
+    pub fn heatmap_value_domain(&self) -> Option<[f64; 2]> {
+        self.heatmap_value_domain
+    }
+
+    pub fn heatmap_low_color(&self) -> Option<&str> {
+        self.heatmap_low_color.as_deref()
+    }
+
+    pub fn heatmap_high_color(&self) -> Option<&str> {
+        self.heatmap_high_color.as_deref()
+    }
+
+    pub fn box_fill_color(&self) -> Option<&str> {
+        self.box_fill_color.as_deref()
+    }
+
+    pub fn box_median_color(&self) -> Option<&str> {
+        self.box_median_color.as_deref()
     }
 
     pub fn group_id(&self) -> Option<&str> {
@@ -1144,6 +1339,10 @@ impl GeneralSeries {
             + self.y_axis_id.capacity()
             + self.title.capacity()
             + self.color.as_ref().map_or(0, String::capacity)
+            + self.heatmap_low_color.as_ref().map_or(0, String::capacity)
+            + self.heatmap_high_color.as_ref().map_or(0, String::capacity)
+            + self.box_fill_color.as_ref().map_or(0, String::capacity)
+            + self.box_median_color.as_ref().map_or(0, String::capacity)
             + self.group_id.as_ref().map_or(0, String::capacity)
             + self.stack_id.as_ref().map_or(0, String::capacity)
     }
@@ -1325,8 +1524,18 @@ impl GeneralSeriesRegistry {
             interpolation: options.interpolation,
             connect_missing: options.connect_missing,
             fill_opacity: options.fill_opacity,
+            fill_gradient: options.fill_gradient,
             baseline_value: options.baseline_value,
+            baseline_policy: options.baseline_policy,
             data_labels: options.data_labels,
+            bar_gap: options.bar_gap,
+            bar_max_width: options.bar_max_width,
+            bar_corner_radius: options.bar_corner_radius,
+            heatmap_value_domain: options.heatmap_value_domain,
+            heatmap_low_color: options.heatmap_low_color,
+            heatmap_high_color: options.heatmap_high_color,
+            box_fill_color: options.box_fill_color,
+            box_median_color: options.box_median_color,
             group_id: options.group_id,
             stack_id: options.stack_id,
             stack_mode: options.stack_mode,
@@ -1770,12 +1979,17 @@ impl ChartEngine {
                 if sibling.x_axis_id != options.x_axis_id
                     || sibling.y_axis_id != options.y_axis_id
                     || sibling.stack_mode != options.stack_mode
+                    || (matches!(
+                        options.kind,
+                        GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar
+                    ) && (sibling.bar_gap != options.bar_gap
+                        || sibling.bar_max_width != options.bar_max_width))
                     || (options.kind == GeneralSeriesKind::XyArea
                         && (sibling.interpolation != options.interpolation
                             || sibling.connect_missing != options.connect_missing))
                 {
                     return Err(invalid(
-                        "stacked series must share X/Y axes, group ID, stack mode, and area path policy",
+                        "stacked series must share X/Y axes, group ID, stack mode, bar thickness, and area path policy",
                     ));
                 }
             }
@@ -1864,8 +2078,18 @@ impl ChartEngine {
         series.interpolation = options.interpolation;
         series.connect_missing = options.connect_missing;
         series.fill_opacity = options.fill_opacity;
+        series.fill_gradient = options.fill_gradient;
         series.baseline_value = options.baseline_value;
+        series.baseline_policy = options.baseline_policy;
         series.data_labels = options.data_labels;
+        series.bar_gap = options.bar_gap;
+        series.bar_max_width = options.bar_max_width;
+        series.bar_corner_radius = options.bar_corner_radius;
+        series.heatmap_value_domain = options.heatmap_value_domain;
+        series.heatmap_low_color = options.heatmap_low_color;
+        series.heatmap_high_color = options.heatmap_high_color;
+        series.box_fill_color = options.box_fill_color;
+        series.box_median_color = options.box_median_color;
         series.group_id = options.group_id;
         series.stack_id = options.stack_id;
         series.stack_mode = options.stack_mode;
@@ -2173,8 +2397,16 @@ impl ChartEngine {
             .stack_id
             .is_some()
             .then(|| vec![(0.0_f64, 0.0_f64); axis_categories.len()]);
-        let mut stack_totals = (series.stack_mode == GeneralStackMode::Percent)
+        let mut stack_totals = (matches!(
+            series.stack_mode,
+            GeneralStackMode::Percent | GeneralStackMode::Cumulative | GeneralStackMode::Silhouette
+        ) || series.bar_corner_radius > 0.0)
             .then(|| vec![(0.0_f64, 0.0_f64); axis_categories.len()]);
+        let mut stack_last = (matches!(
+            series.stack_mode,
+            GeneralStackMode::Cumulative | GeneralStackMode::Silhouette | GeneralStackMode::Wiggle
+        ))
+        .then(|| vec![None; axis_categories.len()]);
         if series.stack_id.is_some()
             && let Some(registry) = self.general_series.as_ref()
         {
@@ -2182,13 +2414,23 @@ impl ChartEngine {
                 for sibling in registry.series.iter().filter(|candidate| {
                     candidate.visible && column_stack_matches(series, candidate)
                 }) {
-                    accumulate_column_values(self, sibling, &axis_lookup, |axis_index, value| {
-                        if value >= 0.0 {
-                            totals[axis_index].0 += value;
-                        } else {
-                            totals[axis_index].1 += -value;
-                        }
-                    });
+                    accumulate_column_values(
+                        self,
+                        sibling,
+                        &axis_lookup,
+                        |axis_index, row, value| {
+                            if value >= 0.0 {
+                                totals[axis_index].0 += value;
+                            } else {
+                                totals[axis_index].1 += -value;
+                            }
+                            if value != 0.0
+                                && let Some(last) = stack_last.as_mut()
+                            {
+                                last[axis_index] = Some((sibling.id, row));
+                            }
+                        },
+                    );
                 }
             }
             for sibling in registry
@@ -2202,15 +2444,24 @@ impl ChartEngine {
                 let Some(base) = stack_base.as_mut() else {
                     break;
                 };
-                accumulate_column_values(self, sibling, &axis_lookup, |axis_index, value| {
-                    if value >= 0.0 {
+                accumulate_column_values(self, sibling, &axis_lookup, |axis_index, _, value| {
+                    if value >= 0.0
+                        || matches!(
+                            series.stack_mode,
+                            GeneralStackMode::Cumulative
+                                | GeneralStackMode::Silhouette
+                                | GeneralStackMode::Wiggle
+                        )
+                    {
                         base[axis_index].0 += value;
-                    } else {
+                    } else if series.stack_mode != GeneralStackMode::Positive {
                         base[axis_index].1 += value;
                     }
                 });
             }
-            if let (Some(base), Some(totals)) = (stack_base.as_mut(), stack_totals.as_ref()) {
+            if series.stack_mode == GeneralStackMode::Percent
+                && let (Some(base), Some(totals)) = (stack_base.as_mut(), stack_totals.as_ref())
+            {
                 for (base, total) in base.iter_mut().zip(totals) {
                     if total.0 > 0.0 {
                         base.0 /= total.0;
@@ -2218,6 +2469,22 @@ impl ChartEngine {
                     if total.1 > 0.0 {
                         base.1 /= total.1;
                     }
+                }
+            }
+            if series.stack_mode == GeneralStackMode::Silhouette
+                && let (Some(base), Some(totals)) = (stack_base.as_mut(), stack_totals.as_ref())
+            {
+                for (base, total) in base.iter_mut().zip(totals) {
+                    base.0 -= (total.0 - total.1) * 0.5;
+                }
+            }
+            if series.stack_mode == GeneralStackMode::Wiggle
+                && let Some(base) = stack_base.as_mut()
+            {
+                let layers =
+                    self.general_wiggle_category_layers(series, &axis_lookup, column_stack_matches);
+                for (base, baseline) in base.iter_mut().zip(wiggle_baselines(&layers)) {
+                    base.0 += baseline;
                 }
             }
         }
@@ -2241,29 +2508,45 @@ impl ChartEngine {
             let full_left = left.min(right).clamp(0.0, plot.width);
             let full_right = left.max(right).clamp(0.0, plot.width);
             let slot_width = (full_right - full_left) / slot_count.max(1) as f64;
-            let left = full_left + slot_width * slot_index as f64;
-            let right = if slot_index + 1 == slot_count {
+            let slot_left = full_left + slot_width * slot_index as f64;
+            let slot_right = if slot_index + 1 == slot_count {
                 full_right
             } else {
-                left + slot_width
+                slot_left + slot_width
+            };
+            let Some((left, right)) =
+                bar_thickness_bounds(slot_left, slot_right, series.bar_gap, series.bar_max_width)
+            else {
+                continue;
             };
             let raw_value = dataset.y()[row];
+            if series.stack_mode == GeneralStackMode::Positive && raw_value < 0.0 {
+                continue;
+            }
             let (from_value, to_value) = if series.stack_id.is_some() {
                 let normalized_value = match stack_totals.as_ref() {
-                    Some(totals) if raw_value >= 0.0 => {
+                    Some(totals)
+                        if series.stack_mode == GeneralStackMode::Percent && raw_value >= 0.0 =>
+                    {
                         let total = totals[axis_index].0;
                         if total > 0.0 { raw_value / total } else { 0.0 }
                     }
-                    Some(totals) => {
+                    Some(totals) if series.stack_mode == GeneralStackMode::Percent => {
                         let total = totals[axis_index].1;
                         if total > 0.0 { raw_value / total } else { 0.0 }
                     }
-                    None => raw_value,
+                    _ => raw_value,
                 };
                 let Some(stack_base) = stack_base.as_mut() else {
                     continue;
                 };
-                let base = if raw_value >= 0.0 {
+                let base = if raw_value >= 0.0
+                    || matches!(
+                        series.stack_mode,
+                        GeneralStackMode::Cumulative
+                            | GeneralStackMode::Silhouette
+                            | GeneralStackMode::Wiggle
+                    ) {
                     &mut stack_base[axis_index].0
                 } else {
                     &mut stack_base[axis_index].1
@@ -2292,6 +2575,23 @@ impl ChartEngine {
                 right,
                 top,
                 bottom,
+                end_at_min: to_y < from_y,
+                exposed_end: if matches!(
+                    series.stack_mode,
+                    GeneralStackMode::Cumulative
+                        | GeneralStackMode::Silhouette
+                        | GeneralStackMode::Wiggle
+                ) {
+                    stack_last.as_ref().and_then(|last| last[axis_index]) == Some((series.id, row))
+                } else {
+                    bar_end_exposed(
+                        series,
+                        stack_totals.as_deref(),
+                        axis_index,
+                        raw_value,
+                        to_value,
+                    )
+                },
             });
         }
     }
@@ -2368,8 +2668,16 @@ impl ChartEngine {
             .stack_id
             .is_some()
             .then(|| vec![(0.0_f64, 0.0_f64); axis_categories.len()]);
-        let mut stack_totals = (series.stack_mode == GeneralStackMode::Percent)
+        let mut stack_totals = (matches!(
+            series.stack_mode,
+            GeneralStackMode::Percent | GeneralStackMode::Cumulative | GeneralStackMode::Silhouette
+        ) || series.bar_corner_radius > 0.0)
             .then(|| vec![(0.0_f64, 0.0_f64); axis_categories.len()]);
+        let mut stack_last = (matches!(
+            series.stack_mode,
+            GeneralStackMode::Cumulative | GeneralStackMode::Silhouette | GeneralStackMode::Wiggle
+        ))
+        .then(|| vec![None; axis_categories.len()]);
         if series.stack_id.is_some()
             && let Some(registry) = self.general_series.as_ref()
         {
@@ -2377,13 +2685,23 @@ impl ChartEngine {
                 for sibling in registry.series.iter().filter(|candidate| {
                     candidate.visible && horizontal_bar_stack_matches(series, candidate)
                 }) {
-                    accumulate_column_values(self, sibling, &axis_lookup, |axis_index, value| {
-                        if value >= 0.0 {
-                            totals[axis_index].0 += value;
-                        } else {
-                            totals[axis_index].1 += -value;
-                        }
-                    });
+                    accumulate_column_values(
+                        self,
+                        sibling,
+                        &axis_lookup,
+                        |axis_index, row, value| {
+                            if value >= 0.0 {
+                                totals[axis_index].0 += value;
+                            } else {
+                                totals[axis_index].1 += -value;
+                            }
+                            if value != 0.0
+                                && let Some(last) = stack_last.as_mut()
+                            {
+                                last[axis_index] = Some((sibling.id, row));
+                            }
+                        },
+                    );
                 }
             }
             for sibling in registry.series.iter().filter(|candidate| {
@@ -2395,15 +2713,24 @@ impl ChartEngine {
                 let Some(base) = stack_base.as_mut() else {
                     break;
                 };
-                accumulate_column_values(self, sibling, &axis_lookup, |axis_index, value| {
-                    if value >= 0.0 {
+                accumulate_column_values(self, sibling, &axis_lookup, |axis_index, _, value| {
+                    if value >= 0.0
+                        || matches!(
+                            series.stack_mode,
+                            GeneralStackMode::Cumulative
+                                | GeneralStackMode::Silhouette
+                                | GeneralStackMode::Wiggle
+                        )
+                    {
                         base[axis_index].0 += value;
-                    } else {
+                    } else if series.stack_mode != GeneralStackMode::Positive {
                         base[axis_index].1 += value;
                     }
                 });
             }
-            if let (Some(base), Some(totals)) = (stack_base.as_mut(), stack_totals.as_ref()) {
+            if series.stack_mode == GeneralStackMode::Percent
+                && let (Some(base), Some(totals)) = (stack_base.as_mut(), stack_totals.as_ref())
+            {
                 for (base, total) in base.iter_mut().zip(totals) {
                     if total.0 > 0.0 {
                         base.0 /= total.0;
@@ -2411,6 +2738,25 @@ impl ChartEngine {
                     if total.1 > 0.0 {
                         base.1 /= total.1;
                     }
+                }
+            }
+            if series.stack_mode == GeneralStackMode::Silhouette
+                && let (Some(base), Some(totals)) = (stack_base.as_mut(), stack_totals.as_ref())
+            {
+                for (base, total) in base.iter_mut().zip(totals) {
+                    base.0 -= (total.0 - total.1) * 0.5;
+                }
+            }
+            if series.stack_mode == GeneralStackMode::Wiggle
+                && let Some(base) = stack_base.as_mut()
+            {
+                let layers = self.general_wiggle_category_layers(
+                    series,
+                    &axis_lookup,
+                    horizontal_bar_stack_matches,
+                );
+                for (base, baseline) in base.iter_mut().zip(wiggle_baselines(&layers)) {
+                    base.0 += baseline;
                 }
             }
         }
@@ -2434,29 +2780,45 @@ impl ChartEngine {
             let full_top = from_y.min(to_y).clamp(plot.y, plot_bottom);
             let full_bottom = from_y.max(to_y).clamp(plot.y, plot_bottom);
             let slot_height = (full_bottom - full_top) / slot_count.max(1) as f64;
-            let top = full_top + slot_height * slot_index as f64;
-            let bottom = if slot_index + 1 == slot_count {
+            let slot_top = full_top + slot_height * slot_index as f64;
+            let slot_bottom = if slot_index + 1 == slot_count {
                 full_bottom
             } else {
-                top + slot_height
+                slot_top + slot_height
+            };
+            let Some((top, bottom)) =
+                bar_thickness_bounds(slot_top, slot_bottom, series.bar_gap, series.bar_max_width)
+            else {
+                continue;
             };
             let raw_value = dataset.y()[row];
+            if series.stack_mode == GeneralStackMode::Positive && raw_value < 0.0 {
+                continue;
+            }
             let (from_value, to_value) = if series.stack_id.is_some() {
                 let normalized_value = match stack_totals.as_ref() {
-                    Some(totals) if raw_value >= 0.0 => {
+                    Some(totals)
+                        if series.stack_mode == GeneralStackMode::Percent && raw_value >= 0.0 =>
+                    {
                         let total = totals[axis_index].0;
                         if total > 0.0 { raw_value / total } else { 0.0 }
                     }
-                    Some(totals) => {
+                    Some(totals) if series.stack_mode == GeneralStackMode::Percent => {
                         let total = totals[axis_index].1;
                         if total > 0.0 { raw_value / total } else { 0.0 }
                     }
-                    None => raw_value,
+                    _ => raw_value,
                 };
                 let Some(stack_base) = stack_base.as_mut() else {
                     continue;
                 };
-                let base = if raw_value >= 0.0 {
+                let base = if raw_value >= 0.0
+                    || matches!(
+                        series.stack_mode,
+                        GeneralStackMode::Cumulative
+                            | GeneralStackMode::Silhouette
+                            | GeneralStackMode::Wiggle
+                    ) {
                     &mut stack_base[axis_index].0
                 } else {
                     &mut stack_base[axis_index].1
@@ -2485,6 +2847,23 @@ impl ChartEngine {
                 right,
                 top,
                 bottom,
+                end_at_min: to_x < from_x,
+                exposed_end: if matches!(
+                    series.stack_mode,
+                    GeneralStackMode::Cumulative
+                        | GeneralStackMode::Silhouette
+                        | GeneralStackMode::Wiggle
+                ) {
+                    stack_last.as_ref().and_then(|last| last[axis_index]) == Some((series.id, row))
+                } else {
+                    bar_end_exposed(
+                        series,
+                        stack_totals.as_deref(),
+                        axis_index,
+                        raw_value,
+                        to_value,
+                    )
+                },
             });
         }
     }
@@ -2576,8 +2955,14 @@ impl ChartEngine {
             let Some((left, right)) = x_scale.bounds(axis_index) else {
                 continue;
             };
-            let bar_left = left.min(right).clamp(0.0, plot.width);
-            let bar_right = left.max(right).clamp(0.0, plot.width);
+            let Some((bar_left, bar_right)) = bar_thickness_bounds(
+                left.min(right).clamp(0.0, plot.width),
+                left.max(right).clamp(0.0, plot.width),
+                series.bar_gap,
+                series.bar_max_width,
+            ) else {
+                continue;
+            };
             let Some(low_y) = y_scale.coordinate(low[row]) else {
                 continue;
             };
@@ -2593,6 +2978,8 @@ impl ChartEngine {
                     right: bar_right,
                     top,
                     bottom,
+                    end_at_min: false,
+                    exposed_end: true,
                 });
             }
         }
@@ -2678,6 +3065,122 @@ impl ChartEngine {
         (target_slot, slot_count.max(1))
     }
 
+    fn general_wiggle_category_layers(
+        &self,
+        reference: &GeneralSeries,
+        axis_lookup: &HashMap<&str, usize>,
+        matches: fn(&GeneralSeries, &GeneralSeries) -> bool,
+    ) -> Vec<Vec<f64>> {
+        let Some(registry) = self.general_series.as_ref() else {
+            return Vec::new();
+        };
+        registry
+            .series
+            .iter()
+            .filter(|candidate| candidate.visible && matches(reference, candidate))
+            .map(|sibling| {
+                let mut values = vec![0.0; axis_lookup.len()];
+                accumulate_column_values(self, sibling, axis_lookup, |index, _, value| {
+                    values[index] += value;
+                });
+                values
+            })
+            .collect()
+    }
+
+    fn general_wiggle_category_bounds(
+        &self,
+        reference: &GeneralSeries,
+        category_axis_id: &str,
+        matches: fn(&GeneralSeries, &GeneralSeries) -> bool,
+        bounds: &mut Option<(f64, f64)>,
+    ) {
+        let Some(GeneralAxisDomain::Category(categories)) = self
+            .general_axis(category_axis_id)
+            .and_then(|axis| self.effective_general_axis_domain(axis))
+        else {
+            return;
+        };
+        let lookup: HashMap<&str, usize> = categories
+            .iter()
+            .enumerate()
+            .map(|(index, category)| (category.as_str(), index))
+            .collect();
+        let layers = self.general_wiggle_category_layers(reference, &lookup, matches);
+        let mut prefixes = wiggle_baselines(&layers);
+        for &baseline in &prefixes {
+            extend_numeric_pair(bounds, baseline);
+        }
+        if let Some(registry) = self.general_series.as_ref() {
+            for sibling in registry
+                .series
+                .iter()
+                .filter(|candidate| candidate.visible && matches(reference, candidate))
+            {
+                accumulate_column_values(self, sibling, &lookup, |index, _, value| {
+                    prefixes[index] += value;
+                    extend_numeric_pair(bounds, prefixes[index]);
+                });
+            }
+        }
+    }
+
+    fn general_wiggle_area_layers(
+        &self,
+        reference: &GeneralSeries,
+    ) -> (Vec<GeneralStackXKey>, Vec<Vec<f64>>) {
+        let Some(registry) = self.general_series.as_ref() else {
+            return (Vec::new(), Vec::new());
+        };
+        let mut keys = HashSet::new();
+        let mut sparse_layers = Vec::new();
+        for sibling in registry
+            .series
+            .iter()
+            .filter(|candidate| candidate.visible && area_stack_matches(reference, candidate))
+        {
+            let mut values = HashMap::new();
+            accumulate_area_values(self, sibling, |x, value| {
+                keys.insert(x.clone());
+                *values.entry(x).or_insert(0.0) += value;
+            });
+            sparse_layers.push(values);
+        }
+        let category_order: HashMap<String, usize> = self
+            .general_axis(&reference.x_axis_id)
+            .and_then(|axis| self.effective_general_axis_domain(axis))
+            .and_then(|domain| match domain {
+                GeneralAxisDomain::Category(categories) => Some(categories),
+                _ => None,
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .map(|(index, category)| (category, index))
+            .collect();
+        let mut keys: Vec<_> = keys.into_iter().collect();
+        keys.sort_by(|left, right| match (left, right) {
+            (GeneralStackXKey::Numeric(a), GeneralStackXKey::Numeric(b)) => {
+                f64::from_bits(*a).total_cmp(&f64::from_bits(*b))
+            }
+            (GeneralStackXKey::Temporal(a), GeneralStackXKey::Temporal(b)) => a.cmp(b),
+            (GeneralStackXKey::Category(a), GeneralStackXKey::Category(b)) => category_order
+                .get(a)
+                .cmp(&category_order.get(b))
+                .then_with(|| a.cmp(b)),
+            _ => std::cmp::Ordering::Equal,
+        });
+        let layers = sparse_layers
+            .into_iter()
+            .map(|values: HashMap<GeneralStackXKey, f64>| {
+                keys.iter()
+                    .map(|key| values.get(key).copied().unwrap_or(0.0))
+                    .collect()
+            })
+            .collect();
+        (keys, layers)
+    }
+
     pub(crate) fn general_column_axis_bounds(
         &self,
         pane_id: PaneId,
@@ -2703,7 +3206,17 @@ impl ChartEngine {
                 if !processed_stacks.insert(key) {
                     continue;
                 }
+                if series.stack_mode == GeneralStackMode::Wiggle {
+                    self.general_wiggle_category_bounds(
+                        series,
+                        &series.x_axis_id,
+                        column_stack_matches,
+                        &mut bounds,
+                    );
+                    continue;
+                }
                 let mut category_totals: HashMap<String, (f64, f64)> = HashMap::new();
+                let mut silhouette_prefixes: HashMap<String, (f64, f64)> = HashMap::new();
                 for sibling in registry.series.iter().filter(|candidate| {
                     candidate.visible
                         && candidate.y_axis_id == y_axis_id
@@ -2729,14 +3242,22 @@ impl ChartEngine {
                         };
                         let value = dataset.y()[row];
                         let totals = category_totals.entry(category.clone()).or_default();
-                        if value >= 0.0 {
+                        if series.stack_mode == GeneralStackMode::Cumulative {
+                            totals.0 += value;
+                            extend_numeric_pair(&mut bounds, totals.0);
+                        } else if series.stack_mode == GeneralStackMode::Silhouette {
+                            totals.0 += value;
+                            let prefix = silhouette_prefixes.entry(category.clone()).or_default();
+                            prefix.0 = prefix.0.min(totals.0);
+                            prefix.1 = prefix.1.max(totals.0);
+                        } else if value >= 0.0 {
                             totals.0 += value;
                         } else {
                             totals.1 += value;
                         }
                     }
                 }
-                for (positive, negative) in category_totals.into_values() {
+                for (category, (positive, negative)) in category_totals {
                     match series.stack_mode {
                         GeneralStackMode::Normal => {
                             extend_numeric_pair(&mut bounds, positive);
@@ -2750,6 +3271,14 @@ impl ChartEngine {
                                 extend_numeric_pair(&mut bounds, -1.0);
                             }
                         }
+                        GeneralStackMode::Positive => extend_numeric_pair(&mut bounds, positive),
+                        GeneralStackMode::Cumulative => {}
+                        GeneralStackMode::Silhouette => {
+                            let (min, max) = silhouette_prefixes[&category];
+                            extend_numeric_pair(&mut bounds, min - positive * 0.5);
+                            extend_numeric_pair(&mut bounds, max - positive * 0.5);
+                        }
+                        GeneralStackMode::Wiggle => unreachable!("wiggle bounds handled above"),
                     }
                 }
             } else if let Some(dataset) = self.general_dataset(series.dataset) {
@@ -2791,7 +3320,17 @@ impl ChartEngine {
                 if !processed_stacks.insert(key) {
                     continue;
                 }
+                if series.stack_mode == GeneralStackMode::Wiggle {
+                    self.general_wiggle_category_bounds(
+                        series,
+                        &series.y_axis_id,
+                        horizontal_bar_stack_matches,
+                        &mut bounds,
+                    );
+                    continue;
+                }
                 let mut category_totals: HashMap<String, (f64, f64)> = HashMap::new();
+                let mut silhouette_prefixes: HashMap<String, (f64, f64)> = HashMap::new();
                 for sibling in registry.series.iter().filter(|candidate| {
                     candidate.visible
                         && candidate.x_axis_id == x_axis_id
@@ -2817,14 +3356,22 @@ impl ChartEngine {
                         };
                         let value = dataset.y()[row];
                         let totals = category_totals.entry(category.clone()).or_default();
-                        if value >= 0.0 {
+                        if series.stack_mode == GeneralStackMode::Cumulative {
+                            totals.0 += value;
+                            extend_numeric_pair(&mut bounds, totals.0);
+                        } else if series.stack_mode == GeneralStackMode::Silhouette {
+                            totals.0 += value;
+                            let prefix = silhouette_prefixes.entry(category.clone()).or_default();
+                            prefix.0 = prefix.0.min(totals.0);
+                            prefix.1 = prefix.1.max(totals.0);
+                        } else if value >= 0.0 {
                             totals.0 += value;
                         } else {
                             totals.1 += value;
                         }
                     }
                 }
-                for (positive, negative) in category_totals.into_values() {
+                for (category, (positive, negative)) in category_totals {
                     match series.stack_mode {
                         GeneralStackMode::Normal => {
                             extend_numeric_pair(&mut bounds, positive);
@@ -2838,6 +3385,14 @@ impl ChartEngine {
                                 extend_numeric_pair(&mut bounds, -1.0);
                             }
                         }
+                        GeneralStackMode::Positive => extend_numeric_pair(&mut bounds, positive),
+                        GeneralStackMode::Cumulative => {}
+                        GeneralStackMode::Silhouette => {
+                            let (min, max) = silhouette_prefixes[&category];
+                            extend_numeric_pair(&mut bounds, min - positive * 0.5);
+                            extend_numeric_pair(&mut bounds, max - positive * 0.5);
+                        }
+                        GeneralStackMode::Wiggle => unreachable!("wiggle bounds handled above"),
                     }
                 }
             } else if let Some(dataset) = self.general_dataset(series.dataset) {
@@ -2878,22 +3433,55 @@ impl ChartEngine {
             if !processed_stacks.insert(key) {
                 continue;
             }
+            if series.stack_mode == GeneralStackMode::Wiggle {
+                let (keys, layers) = self.general_wiggle_area_layers(series);
+                let baselines = wiggle_baselines(&layers);
+                let mut prefixes: HashMap<_, _> = keys.into_iter().zip(baselines).collect();
+                for &baseline in prefixes.values() {
+                    extend_numeric_pair(&mut bounds, baseline);
+                }
+                for sibling in registry
+                    .series
+                    .iter()
+                    .filter(|candidate| candidate.visible && area_stack_matches(series, candidate))
+                {
+                    accumulate_area_values(self, sibling, |x, value| {
+                        if let Some(prefix) = prefixes.get_mut(&x) {
+                            *prefix += value;
+                            extend_numeric_pair(&mut bounds, *prefix);
+                        }
+                    });
+                }
+                continue;
+            }
             let mut totals: HashMap<GeneralStackXKey, (f64, f64)> = HashMap::new();
+            let mut silhouette_prefixes: HashMap<GeneralStackXKey, (f64, f64)> = HashMap::new();
             for sibling in registry
                 .series
                 .iter()
                 .filter(|candidate| candidate.visible && area_stack_matches(series, candidate))
             {
                 accumulate_area_values(self, sibling, |x, value| {
-                    let total = totals.entry(x).or_default();
-                    if value >= 0.0 {
+                    if series.stack_mode == GeneralStackMode::Silhouette {
+                        let total = totals.entry(x.clone()).or_default();
                         total.0 += value;
+                        let prefix = silhouette_prefixes.entry(x).or_default();
+                        prefix.0 = prefix.0.min(total.0);
+                        prefix.1 = prefix.1.max(total.0);
                     } else {
-                        total.1 += -value;
+                        let total = totals.entry(x).or_default();
+                        if series.stack_mode == GeneralStackMode::Cumulative {
+                            total.0 += value;
+                            extend_numeric_pair(&mut bounds, total.0);
+                        } else if value >= 0.0 {
+                            total.0 += value;
+                        } else {
+                            total.1 += -value;
+                        }
                     }
                 });
             }
-            for (positive, negative) in totals.into_values() {
+            for (x, (positive, negative)) in totals {
                 match series.stack_mode {
                     GeneralStackMode::Normal => {
                         if positive > 0.0 {
@@ -2911,6 +3499,18 @@ impl ChartEngine {
                             extend_numeric_pair(&mut bounds, -1.0);
                         }
                     }
+                    GeneralStackMode::Positive => {
+                        if positive > 0.0 {
+                            extend_numeric_pair(&mut bounds, positive);
+                        }
+                    }
+                    GeneralStackMode::Cumulative => {}
+                    GeneralStackMode::Silhouette => {
+                        let (min, max) = silhouette_prefixes[&x];
+                        extend_numeric_pair(&mut bounds, min - positive * 0.5);
+                        extend_numeric_pair(&mut bounds, max - positive * 0.5);
+                    }
+                    GeneralStackMode::Wiggle => unreachable!("wiggle bounds handled above"),
                 }
             }
         }
@@ -2955,8 +3555,11 @@ impl ChartEngine {
             return;
         };
 
-        let mut totals = (series.stack_mode == GeneralStackMode::Percent)
-            .then(HashMap::<GeneralStackXKey, (f64, f64)>::new);
+        let mut totals = (matches!(
+            series.stack_mode,
+            GeneralStackMode::Percent | GeneralStackMode::Silhouette
+        ))
+        .then(HashMap::<GeneralStackXKey, (f64, f64)>::new);
         if let Some(totals) = totals.as_mut() {
             for sibling in registry
                 .series
@@ -2965,7 +3568,7 @@ impl ChartEngine {
             {
                 accumulate_area_values(self, sibling, |x, value| {
                     let total = totals.entry(x).or_default();
-                    if value >= 0.0 {
+                    if value >= 0.0 || series.stack_mode == GeneralStackMode::Silhouette {
                         total.0 += value;
                     } else {
                         total.1 += -value;
@@ -2985,14 +3588,23 @@ impl ChartEngine {
             }
             accumulate_area_values(self, sibling, |x, value| {
                 let entry = base.entry(x).or_default();
-                if value >= 0.0 {
+                if value >= 0.0
+                    || matches!(
+                        series.stack_mode,
+                        GeneralStackMode::Cumulative
+                            | GeneralStackMode::Silhouette
+                            | GeneralStackMode::Wiggle
+                    )
+                {
                     entry.0 += value;
-                } else {
+                } else if series.stack_mode != GeneralStackMode::Positive {
                     entry.1 += value;
                 }
             });
         }
-        if let Some(totals) = totals.as_ref() {
+        if series.stack_mode == GeneralStackMode::Percent
+            && let Some(totals) = totals.as_ref()
+        {
             for (x, base) in &mut base {
                 let total = totals.get(x).copied().unwrap_or_default();
                 if total.0 > 0.0 {
@@ -3004,19 +3616,42 @@ impl ChartEngine {
             }
         }
 
+        let wiggle_offsets = if series.stack_mode == GeneralStackMode::Wiggle {
+            let (keys, layers) = self.general_wiggle_area_layers(series);
+            keys.into_iter()
+                .zip(wiggle_baselines(&layers))
+                .collect::<HashMap<_, _>>()
+        } else {
+            HashMap::new()
+        };
+
         self.visit_general_path_points(series, |geometry| {
             let Some(x_key) = general_stack_x_key(dataset, geometry.row) else {
                 return;
             };
             let raw_value = dataset.y()[geometry.row];
-            let normalized_value = match totals.as_ref().and_then(|values| values.get(&x_key)) {
-                Some(total) if raw_value >= 0.0 && total.0 > 0.0 => raw_value / total.0,
-                Some(total) if raw_value < 0.0 && total.1 > 0.0 => raw_value / total.1,
-                Some(_) => 0.0,
-                None => raw_value,
-            };
+            let normalized_value =
+                if series.stack_mode == GeneralStackMode::Positive && raw_value < 0.0 {
+                    0.0
+                } else {
+                    match totals.as_ref().and_then(|values| values.get(&x_key)) {
+                        _ if series.stack_mode != GeneralStackMode::Percent => raw_value,
+                        Some(total) if raw_value >= 0.0 && total.0 > 0.0 => raw_value / total.0,
+                        Some(total) if raw_value < 0.0 && total.1 > 0.0 => raw_value / total.1,
+                        Some(_) => 0.0,
+                        None => raw_value,
+                    }
+                };
             let stack_base = base.get(&x_key).copied().unwrap_or_default();
-            let from_value = if raw_value >= 0.0 {
+            let from_value = if series.stack_mode == GeneralStackMode::Wiggle {
+                stack_base.0 + wiggle_offsets.get(&x_key).copied().unwrap_or(0.0)
+            } else if series.stack_mode == GeneralStackMode::Silhouette {
+                stack_base.0
+                    - totals
+                        .as_ref()
+                        .and_then(|values| values.get(&x_key))
+                        .map_or(0.0, |total| total.0 * 0.5)
+            } else if raw_value >= 0.0 || series.stack_mode == GeneralStackMode::Cumulative {
                 stack_base.0
             } else {
                 stack_base.1
@@ -3377,12 +4012,7 @@ impl ChartEngine {
     }
 
     pub(crate) fn general_path_baseline_y(&self, series: &GeneralSeries) -> Option<f64> {
-        if !series.visible
-            || !matches!(
-                series.kind,
-                GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea
-            )
-        {
+        if !series.visible || series.kind != GeneralSeriesKind::XyArea {
             return None;
         }
         let pane_index = self.pane_index_for_id(series.pane_id)?;
@@ -3399,9 +4029,16 @@ impl ChartEngine {
             (plot_bottom, plot.y)
         };
         let scale = NumericAxisScale::new(y_axis.scale(), y_domain, y_range.0, y_range.1)?;
+        let baseline = series
+            .baseline_value
+            .unwrap_or(match series.baseline_policy {
+                GeneralAreaBaseline::Zero => 0.0,
+                GeneralAreaBaseline::DomainMin => y_domain[0],
+                GeneralAreaBaseline::DomainMax => y_domain[1],
+            });
         Some(
             scale
-                .coordinate(series.baseline_value.unwrap_or(0.0))
+                .coordinate(baseline)
                 .unwrap_or(y_range.0)
                 .clamp(plot.y, plot_bottom),
         )
@@ -3887,7 +4524,11 @@ impl ChartEngine {
                 None => (value, value),
             });
         }
-        let Some((value_low, value_high)) = value_bounds else {
+        let Some((value_low, value_high)) = series
+            .heatmap_value_domain
+            .map(|domain| (domain[0], domain[1]))
+            .or(value_bounds)
+        else {
             return;
         };
 
@@ -4048,7 +4689,11 @@ impl ChartEngine {
                 None => (value, value),
             });
         }
-        let Some((value_low, value_high)) = value_bounds else {
+        let Some((value_low, value_high)) = series
+            .heatmap_value_domain
+            .map(|domain| (domain[0], domain[1]))
+            .or(value_bounds)
+        else {
             return;
         };
 
@@ -4358,7 +5003,9 @@ impl ChartEngine {
                                         geometry.x,
                                         geometry.y,
                                         series.point_radius,
-                                        series.point_symbol,
+                                        dataset
+                                            .row_symbol(geometry.row)
+                                            .unwrap_or(series.point_symbol),
                                     ),
                                 );
                             }
@@ -4385,7 +5032,9 @@ impl ChartEngine {
                                     geometry.x,
                                     geometry.y,
                                     series.point_radius,
-                                    series.point_symbol,
+                                    dataset
+                                        .row_symbol(geometry.row)
+                                        .unwrap_or(series.point_symbol),
                                 ),
                             );
                         }
@@ -4434,7 +5083,9 @@ impl ChartEngine {
                                             geometry.x,
                                             geometry.high_y,
                                             series.point_radius,
-                                            series.point_symbol,
+                                            dataset
+                                                .row_symbol(geometry.row)
+                                                .unwrap_or(series.point_symbol),
                                         ),
                                     );
                                 }
@@ -4461,7 +5112,9 @@ impl ChartEngine {
                                         geometry.x,
                                         geometry.high_y,
                                         series.point_radius,
-                                        series.point_symbol,
+                                        dataset
+                                            .row_symbol(geometry.row)
+                                            .unwrap_or(series.point_symbol),
                                     ),
                                 );
                             }
@@ -4520,7 +5173,9 @@ impl ChartEngine {
                                         geometry.x,
                                         geometry.y,
                                         series.point_radius,
-                                        series.point_symbol,
+                                        dataset
+                                            .row_symbol(geometry.row)
+                                            .unwrap_or(series.point_symbol),
                                     ),
                                 );
                             }
@@ -4548,7 +5203,9 @@ impl ChartEngine {
                                     geometry.x,
                                     geometry.y,
                                     series.point_radius,
-                                    series.point_symbol,
+                                    dataset
+                                        .row_symbol(geometry.row)
+                                        .unwrap_or(series.point_symbol),
                                 ),
                             );
                         }
@@ -4596,7 +5253,9 @@ impl ChartEngine {
                                         geometry.x,
                                         geometry.low_y,
                                         series.point_radius,
-                                        series.point_symbol,
+                                        dataset
+                                            .row_symbol(geometry.row)
+                                            .unwrap_or(series.point_symbol),
                                     )
                                     .min(
                                         distance_to_point_symbol(
@@ -4605,7 +5264,9 @@ impl ChartEngine {
                                             geometry.x,
                                             geometry.high_y,
                                             series.point_radius,
-                                            series.point_symbol,
+                                            dataset
+                                                .row_symbol(geometry.row)
+                                                .unwrap_or(series.point_symbol),
                                         ),
                                     ),
                                 );
@@ -4633,7 +5294,9 @@ impl ChartEngine {
                                     geometry.x,
                                     geometry.low_y,
                                     series.point_radius,
-                                    series.point_symbol,
+                                    dataset
+                                        .row_symbol(geometry.row)
+                                        .unwrap_or(series.point_symbol),
                                 )
                                 .min(distance_to_point_symbol(
                                     x_css,
@@ -4641,7 +5304,9 @@ impl ChartEngine {
                                     geometry.x,
                                     geometry.high_y,
                                     series.point_radius,
-                                    series.point_symbol,
+                                    dataset
+                                        .row_symbol(geometry.row)
+                                        .unwrap_or(series.point_symbol),
                                 )),
                             );
                         }
@@ -4706,14 +5371,20 @@ impl ChartEngine {
                     });
                 }
                 GeneralSeriesKind::Column => self.visit_general_columns(series, |geometry| {
-                    consider(geometry.row, distance_to_rect(x_css, y_css, geometry));
+                    consider(
+                        geometry.row,
+                        distance_to_bar(x_css, y_css, geometry, series, self, false),
+                    );
                 }),
                 GeneralSeriesKind::RangeBar => self.visit_general_range_bars(series, |geometry| {
                     consider(geometry.row, distance_to_rect(x_css, y_css, geometry));
                 }),
                 GeneralSeriesKind::HorizontalBar => {
                     self.visit_general_horizontal_bars(series, |geometry| {
-                        consider(geometry.row, distance_to_rect(x_css, y_css, geometry));
+                        consider(
+                            geometry.row,
+                            distance_to_bar(x_css, y_css, geometry, series, self, true),
+                        );
                     })
                 }
                 GeneralSeriesKind::BoxPlot => self.visit_general_box_plots(series, |geometry| {
@@ -4735,6 +5406,8 @@ impl ChartEngine {
                                     right: geometry.right,
                                     top: geometry.top,
                                     bottom: geometry.bottom,
+                                    end_at_min: false,
+                                    exposed_end: true,
                                 },
                             ),
                         );
@@ -4759,7 +5432,9 @@ impl ChartEngine {
                                     if series.kind == GeneralSeriesKind::Bubble {
                                         GeneralPointSymbol::Circle
                                     } else {
-                                        series.point_symbol
+                                        dataset
+                                            .row_symbol(geometry.row)
+                                            .unwrap_or(series.point_symbol)
                                     },
                                 ),
                             );
@@ -5551,6 +6226,93 @@ fn distance_to_rect(x: f64, y: f64, geometry: GeneralColumnGeometry) -> f64 {
     dx.hypot(dy)
 }
 
+pub(crate) fn general_bar_radii(
+    series: &GeneralSeries,
+    geometry: GeneralColumnGeometry,
+    hpr: f64,
+    vpr: f64,
+    horizontal: bool,
+) -> Option<[f32; 4]> {
+    if !geometry.exposed_end {
+        return None;
+    }
+    let width = ((geometry.right * hpr).round() - (geometry.left * hpr).round()).max(1.0);
+    let height = ((geometry.bottom * vpr).round() - (geometry.top * vpr).round()).max(1.0);
+    let radius = (series.bar_corner_radius() * hpr.min(vpr)).min(width.min(height) * 0.5) as f32;
+    if radius <= 0.0 {
+        return None;
+    }
+    Some(if series.stack_id().is_none() {
+        [radius; 4]
+    } else if horizontal {
+        if geometry.end_at_min {
+            [radius, 0.0, 0.0, radius]
+        } else {
+            [0.0, radius, radius, 0.0]
+        }
+    } else if geometry.end_at_min {
+        [radius, radius, 0.0, 0.0]
+    } else {
+        [0.0, 0.0, radius, radius]
+    })
+}
+
+fn distance_to_bar(
+    x: f64,
+    y: f64,
+    geometry: GeneralColumnGeometry,
+    series: &GeneralSeries,
+    chart: &ChartEngine,
+    horizontal: bool,
+) -> f64 {
+    let hpr = (chart.pane_w * chart.dpr).round().max(1.0) / chart.pane_w.max(1.0);
+    let vpr = (chart.pane_h * chart.dpr).round().max(1.0) / chart.pane_h.max(1.0);
+    let Some(radii) = general_bar_radii(series, geometry, hpr, vpr, horizontal) else {
+        return distance_to_rect(x, y, geometry);
+    };
+    let left = (geometry.left * hpr).round();
+    let right = (geometry.right * hpr).round();
+    let top = (geometry.top * vpr).round();
+    let bottom = (geometry.bottom * vpr).round();
+    let px = x * hpr;
+    let py = y * vpr;
+    let rect_distance = (left - px)
+        .max(0.0)
+        .max(px - right)
+        .hypot((top - py).max(0.0).max(py - bottom));
+    let corner = if px < left + f64::from(radii[0]) && py < top + f64::from(radii[0]) {
+        Some((
+            left + f64::from(radii[0]),
+            top + f64::from(radii[0]),
+            radii[0],
+        ))
+    } else if px > right - f64::from(radii[1]) && py < top + f64::from(radii[1]) {
+        Some((
+            right - f64::from(radii[1]),
+            top + f64::from(radii[1]),
+            radii[1],
+        ))
+    } else if px > right - f64::from(radii[2]) && py > bottom - f64::from(radii[2]) {
+        Some((
+            right - f64::from(radii[2]),
+            bottom - f64::from(radii[2]),
+            radii[2],
+        ))
+    } else if px < left + f64::from(radii[3]) && py > bottom - f64::from(radii[3]) {
+        Some((
+            left + f64::from(radii[3]),
+            bottom - f64::from(radii[3]),
+            radii[3],
+        ))
+    } else {
+        None
+    };
+    let corner_distance = corner.map_or(0.0, |(cx, cy, radius)| {
+        ((px - cx).hypot(py - cy) - f64::from(radius)).max(0.0)
+    });
+    rect_distance.max(corner_distance) / hpr.min(vpr)
+}
+
 fn column_stack_matches(reference: &GeneralSeries, candidate: &GeneralSeries) -> bool {
     reference.kind == GeneralSeriesKind::Column
         && candidate.kind == GeneralSeriesKind::Column
@@ -5561,6 +6323,48 @@ fn column_stack_matches(reference: &GeneralSeries, candidate: &GeneralSeries) ->
         && reference.stack_id.is_some()
         && reference.stack_id == candidate.stack_id
         && reference.stack_mode == candidate.stack_mode
+}
+
+fn bar_end_exposed(
+    series: &GeneralSeries,
+    totals: Option<&[(f64, f64)]>,
+    category: usize,
+    raw_value: f64,
+    end_value: f64,
+) -> bool {
+    if series.stack_id.is_none() {
+        return true;
+    }
+    let Some(&(positive, negative_magnitude)) = totals.and_then(|values| values.get(category))
+    else {
+        return false;
+    };
+    let magnitude = if raw_value >= 0.0 {
+        positive
+    } else {
+        negative_magnitude
+    };
+    let target = if series.stack_mode == GeneralStackMode::Percent {
+        1.0
+    } else {
+        magnitude
+    };
+    target > 0.0 && end_value.abs() >= target - target.max(1.0) * 1e-12
+}
+
+fn bar_thickness_bounds(
+    from: f64,
+    to: f64,
+    gap: f64,
+    max_width: Option<f64>,
+) -> Option<(f64, f64)> {
+    let available = (to - from - gap).max(0.0);
+    let width = max_width.map_or(available, |limit| available.min(limit));
+    if width <= 0.0 {
+        return None;
+    }
+    let center = from + (to - from) * 0.5;
+    Some((center - width * 0.5, center + width * 0.5))
 }
 
 fn horizontal_bar_stack_matches(reference: &GeneralSeries, candidate: &GeneralSeries) -> bool {
@@ -5637,13 +6441,41 @@ where
     }
 }
 
+fn wiggle_baselines(layers: &[Vec<f64>]) -> Vec<f64> {
+    let Some(width) = layers.first().map(Vec::len) else {
+        return Vec::new();
+    };
+    let mut baselines = vec![0.0; width];
+    for column in 1..width {
+        let mut total = 0.0;
+        let mut weighted_change = 0.0;
+        let mut preceding_change = 0.0;
+        for layer in layers {
+            let current = layer[column];
+            let change = current - layer[column - 1];
+            total += current;
+            weighted_change += current * (preceding_change + change * 0.5);
+            preceding_change += change;
+        }
+        if total != 0.0 && total.is_finite() && weighted_change.is_finite() {
+            let next = baselines[column - 1] - weighted_change / total;
+            if next.is_finite() {
+                baselines[column] = next;
+                continue;
+            }
+        }
+        baselines[column] = baselines[column - 1];
+    }
+    baselines
+}
+
 fn accumulate_column_values<F>(
     engine: &ChartEngine,
     series: &GeneralSeries,
     axis_lookup: &HashMap<&str, usize>,
     mut visit: F,
 ) where
-    F: FnMut(usize, f64),
+    F: FnMut(usize, usize, f64),
 {
     let Some(dataset) = engine.general_dataset(series.dataset) else {
         return;
@@ -5665,7 +6497,7 @@ fn accumulate_column_values<F>(
         let Some(&axis_index) = axis_lookup.get(category.as_str()) else {
             continue;
         };
-        visit(axis_index, dataset.y()[row]);
+        visit(axis_index, row, dataset.y()[row]);
     }
 }
 
@@ -6902,6 +7734,109 @@ fn validate_logarithmic_input_y(
 }
 
 fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartError> {
+    if let Some(colors) = options.fill_gradient.as_ref() {
+        if !matches!(
+            options.kind,
+            GeneralSeriesKind::XyArea
+                | GeneralSeriesKind::RangeArea
+                | GeneralSeriesKind::Column
+                | GeneralSeriesKind::HorizontalBar
+                | GeneralSeriesKind::RangeBar
+        ) {
+            return Err(invalid(
+                "fill_gradient requires an area, column, horizontal_bar, or range_bar series",
+            ));
+        }
+        for color in colors {
+            if color.len() > MAX_GENERAL_SERIES_COLOR_BYTES {
+                return Err(resource(format!(
+                    "general gradient color exceeds {MAX_GENERAL_SERIES_COLOR_BYTES} UTF-8 bytes"
+                )));
+            }
+            if Color::parse_css(color).is_none() {
+                return Err(invalid("fill_gradient requires two valid CSS colors"));
+            }
+        }
+    }
+    for color in [
+        options.heatmap_low_color.as_deref(),
+        options.heatmap_high_color.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if options.kind != GeneralSeriesKind::HeatmapGrid || Color::parse_css(color).is_none() {
+            return Err(invalid(
+                "heatmap colors require a heatmap and valid CSS colors",
+            ));
+        }
+        if color.len() > MAX_GENERAL_SERIES_COLOR_BYTES {
+            return Err(resource(format!(
+                "heatmap color exceeds {MAX_GENERAL_SERIES_COLOR_BYTES} UTF-8 bytes"
+            )));
+        }
+    }
+    for color in [
+        options.box_fill_color.as_deref(),
+        options.box_median_color.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if options.kind != GeneralSeriesKind::BoxPlot || Color::parse_css(color).is_none() {
+            return Err(invalid(
+                "box colors require a box_plot and valid CSS colors",
+            ));
+        }
+        if color.len() > MAX_GENERAL_SERIES_COLOR_BYTES {
+            return Err(resource(format!(
+                "box color exceeds {MAX_GENERAL_SERIES_COLOR_BYTES} UTF-8 bytes"
+            )));
+        }
+    }
+    if let Some([low, high]) = options.heatmap_value_domain
+        && (options.kind != GeneralSeriesKind::HeatmapGrid
+            || !low.is_finite()
+            || !high.is_finite()
+            || low >= high)
+    {
+        return Err(invalid(
+            "heatmap_value_domain requires a heatmap and finite increasing bounds",
+        ));
+    }
+    if !options.bar_gap.is_finite() || !(0.0..=64.0).contains(&options.bar_gap) {
+        return Err(invalid(
+            "general series bar_gap must be finite and in [0, 64] CSS px",
+        ));
+    }
+    if options
+        .bar_max_width
+        .is_some_and(|width| !width.is_finite() || !(1.0..=512.0).contains(&width))
+    {
+        return Err(invalid(
+            "general series bar_max_width must be finite and in [1, 512] CSS px",
+        ));
+    }
+    if !matches!(
+        options.kind,
+        GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar | GeneralSeriesKind::RangeBar
+    ) && (options.bar_gap != 0.0 || options.bar_max_width.is_some())
+    {
+        return Err(invalid(
+            "bar_gap and bar_max_width are supported only by column, horizontal_bar, and range_bar",
+        ));
+    }
+    if !options.bar_corner_radius.is_finite()
+        || !(0.0..=64.0).contains(&options.bar_corner_radius)
+        || (!matches!(
+            options.kind,
+            GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar
+        ) && options.bar_corner_radius != 0.0)
+    {
+        return Err(invalid(
+            "bar_corner_radius requires a column or horizontal_bar series and a value in [0, 64] CSS px",
+        ));
+    }
     if !options.fill_opacity.is_finite() || !(0.0..=1.0).contains(&options.fill_opacity) {
         return Err(invalid(
             "general series fill_opacity must be finite and in [0, 1]",
@@ -6965,6 +7900,28 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
             "general series line_width must be finite and in [0.5, 32]",
         ));
     }
+    if options.line_width != 2.0
+        && !matches!(
+            options.kind,
+            GeneralSeriesKind::XyLine
+                | GeneralSeriesKind::XyArea
+                | GeneralSeriesKind::RangeArea
+                | GeneralSeriesKind::ErrorBar
+                | GeneralSeriesKind::BoxPlot
+        )
+    {
+        return Err(invalid(
+            "line_width is supported only by path, error_bar, and box_plot series",
+        ));
+    }
+    if options.line_style != GeneralLineStyle::Solid
+        && !matches!(
+            options.kind,
+            GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea | GeneralSeriesKind::RangeArea
+        )
+    {
+        return Err(invalid("line_style is supported only by path series"));
+    }
     if let Some(value) = options.baseline_value {
         if !value.is_finite() {
             return Err(invalid("general series baseline_value must be finite"));
@@ -6974,6 +7931,24 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
                 "general series baseline_value is supported only by xy_area",
             ));
         }
+    }
+    if options.baseline_policy != GeneralAreaBaseline::Zero
+        && options.kind != GeneralSeriesKind::XyArea
+    {
+        return Err(invalid("baseline_policy is supported only by xy_area"));
+    }
+    if options.baseline_value.is_some() && options.baseline_policy != GeneralAreaBaseline::Zero {
+        return Err(invalid(
+            "baseline_value and baseline_policy cannot both be set",
+        ));
+    }
+    if options.stack_id.is_some()
+        && (options.baseline_value.is_some()
+            || options.baseline_policy != GeneralAreaBaseline::Zero)
+    {
+        return Err(invalid(
+            "stacked areas use their cumulative boundary as the baseline",
+        ));
     }
     if options.title.len() > MAX_GENERAL_SERIES_TITLE_BYTES {
         return Err(resource(format!(
@@ -7027,9 +8002,11 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
         ));
     }
     if options.stack_id.is_none() && options.stack_mode != GeneralStackMode::Normal {
-        return Err(invalid("percent stack mode requires a stack ID"));
+        return Err(invalid("nondefault stack mode requires a stack ID"));
     }
-    if (options.kind == GeneralSeriesKind::Scatter || options.point_markers)
+    if (options.kind == GeneralSeriesKind::Scatter
+        || options.kind == GeneralSeriesKind::ErrorBar
+        || options.point_markers)
         && (!options.point_radius.is_finite()
             || !(MIN_GENERAL_POINT_RADIUS..=MAX_GENERAL_POINT_RADIUS)
                 .contains(&options.point_radius))
@@ -7037,6 +8014,20 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
         return Err(invalid(format!(
             "general series point radius must be finite and in {MIN_GENERAL_POINT_RADIUS}..={MAX_GENERAL_POINT_RADIUS} CSS px"
         )));
+    }
+    let default_radius = if options.kind == GeneralSeriesKind::ErrorBar {
+        4.0
+    } else {
+        3.0
+    };
+    if options.point_radius != default_radius
+        && options.kind != GeneralSeriesKind::Scatter
+        && options.kind != GeneralSeriesKind::ErrorBar
+        && !options.point_markers
+    {
+        return Err(invalid(
+            "point_radius requires scatter, error_bar, or enabled path markers",
+        ));
     }
     Ok(())
 }
@@ -7051,4 +8042,19 @@ fn invalid_data(message: impl Into<String>) -> ChartError {
 
 fn resource(message: impl Into<String>) -> ChartError {
     ChartError::new(ErrorCode::ResourceLimit, message)
+}
+
+#[cfg(test)]
+mod wiggle_tests {
+    use super::wiggle_baselines;
+
+    #[test]
+    fn weighted_changes_shift_the_baseline_and_empty_columns_hold_it() {
+        let offsets = wiggle_baselines(&[vec![2.0, 4.0, 0.0], vec![2.0, 2.0, 0.0]]);
+        assert_eq!(offsets[0], 0.0);
+        assert!((offsets[1] + 4.0 / 3.0).abs() < 1e-12);
+        assert_eq!(offsets[2], offsets[1]);
+        let signed = wiggle_baselines(&[vec![10.0, -3.0], vec![-15.0, 5.0], vec![2.0, -4.0]]);
+        assert!((signed[1] + 5.75).abs() < 1e-12);
+    }
 }

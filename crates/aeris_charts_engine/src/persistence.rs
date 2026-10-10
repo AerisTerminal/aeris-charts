@@ -147,6 +147,10 @@ struct DatasetV2 {
     input: crate::GeneralXyInput,
     #[serde(skip_serializing_if = "Option::is_none")]
     labels: Option<Vec<Option<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    colors: Option<Vec<Option<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    symbols: Option<Vec<Option<String>>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -175,8 +179,28 @@ struct SeriesV2 {
     #[serde(default = "default_general_fill_opacity")]
     fill_opacity: f64,
     #[serde(default)]
+    fill_gradient: Option<[String; 2]>,
+    #[serde(default)]
     baseline_value: Option<f64>,
+    #[serde(default)]
+    baseline_policy: crate::GeneralAreaBaseline,
     data_labels: bool,
+    #[serde(default)]
+    bar_gap: f64,
+    #[serde(default)]
+    bar_max_width: Option<f64>,
+    #[serde(default)]
+    bar_corner_radius: f64,
+    #[serde(default)]
+    heatmap_value_domain: Option<[f64; 2]>,
+    #[serde(default)]
+    heatmap_low_color: Option<String>,
+    #[serde(default)]
+    heatmap_high_color: Option<String>,
+    #[serde(default)]
+    box_fill_color: Option<String>,
+    #[serde(default)]
+    box_median_color: Option<String>,
     #[serde(default)]
     group_id: Option<String>,
     #[serde(default)]
@@ -1324,7 +1348,32 @@ impl ChartEngine {
                     .map(|row| dataset.row_label(row).map(str::to_string))
                     .collect::<Vec<_>>();
                 let labels = labels.iter().any(Option::is_some).then_some(labels);
-                DatasetV2 { id, input, labels }
+                let colors = (0..dataset.len())
+                    .map(|row| {
+                        dataset
+                            .row_color(row)
+                            .map(|color| format!("#{:08x}", color.0))
+                    })
+                    .collect::<Vec<_>>();
+                let colors = colors.iter().any(Option::is_some).then_some(colors);
+                let symbols = (0..dataset.len())
+                    .map(|row| {
+                        dataset.row_symbol(row).map(|symbol| match symbol {
+                            crate::GeneralPointSymbol::Circle => "circle".to_owned(),
+                            crate::GeneralPointSymbol::Square => "square".to_owned(),
+                            crate::GeneralPointSymbol::Diamond => "diamond".to_owned(),
+                            crate::GeneralPointSymbol::Triangle => "triangle".to_owned(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let symbols = symbols.iter().any(Option::is_some).then_some(symbols);
+                DatasetV2 {
+                    id,
+                    input,
+                    labels,
+                    colors,
+                    symbols,
+                }
             })
             .collect::<Vec<_>>();
         let series = self
@@ -1351,8 +1400,18 @@ impl ChartEngine {
                     interpolation: series.interpolation(),
                     connect_missing: series.connect_missing(),
                     fill_opacity: series.fill_opacity(),
+                    fill_gradient: series.fill_gradient().cloned(),
                     baseline_value: series.baseline_value(),
+                    baseline_policy: series.baseline_policy(),
                     data_labels: series.data_labels(),
+                    bar_gap: series.bar_gap(),
+                    bar_max_width: series.bar_max_width(),
+                    bar_corner_radius: series.bar_corner_radius(),
+                    heatmap_value_domain: series.heatmap_value_domain(),
+                    heatmap_low_color: series.heatmap_low_color().map(str::to_string),
+                    heatmap_high_color: series.heatmap_high_color().map(str::to_string),
+                    box_fill_color: series.box_fill_color().map(str::to_string),
+                    box_median_color: series.box_median_color().map(str::to_string),
                     group_id: series.group_id().map(str::to_string),
                     stack_id: series.stack_id().map(str::to_string),
                     stack_mode: series.stack_mode(),
@@ -2385,8 +2444,14 @@ impl ChartEngine {
                 return Err(invalid(format!("duplicate dataset id {:?}", dataset.id)));
             }
             let id = staged.create_general_xy_dataset(dataset.input.clone())?;
-            if let Some(labels) = dataset.labels {
-                staged.replace_general_xy_dataset_labeled(id, dataset.input, Some(labels))?;
+            if dataset.labels.is_some() || dataset.colors.is_some() || dataset.symbols.is_some() {
+                staged.replace_general_xy_dataset_styled(
+                    id,
+                    dataset.input,
+                    dataset.labels,
+                    dataset.colors,
+                    dataset.symbols,
+                )?;
             }
             datasets.insert(dataset.id, id);
         }
@@ -2414,8 +2479,18 @@ impl ChartEngine {
                 interpolation: series.interpolation,
                 connect_missing: series.connect_missing,
                 fill_opacity: series.fill_opacity,
+                fill_gradient: series.fill_gradient,
                 baseline_value: series.baseline_value,
+                baseline_policy: series.baseline_policy,
                 data_labels: series.data_labels,
+                bar_gap: series.bar_gap,
+                bar_max_width: series.bar_max_width,
+                bar_corner_radius: series.bar_corner_radius,
+                heatmap_value_domain: series.heatmap_value_domain,
+                heatmap_low_color: series.heatmap_low_color,
+                heatmap_high_color: series.heatmap_high_color,
+                box_fill_color: series.box_fill_color,
+                box_median_color: series.box_median_color,
                 group_id: series.group_id,
                 stack_id: series.stack_id,
                 stack_mode: series.stack_mode,
@@ -3808,7 +3883,7 @@ mod tests {
             })
             .unwrap();
         chart
-            .replace_general_xy_dataset_labeled(
+            .replace_general_xy_dataset_styled(
                 dataset,
                 crate::GeneralXyInput::Category {
                     ids: Some(vec![crate::GeneralRowId::Text("jan".into())]),
@@ -3818,11 +3893,17 @@ mod tests {
                     y_valid: None,
                 },
                 Some(vec![Some("January".into())]),
+                Some(vec![Some("#ff0000".into())]),
+                Some(vec![Some("diamond".into())]),
             )
             .unwrap();
         let mut series =
             crate::GeneralSeriesOptions::column(pane, dataset, "category-x", "category-y");
         series.data_labels = true;
+        series.bar_gap = 6.0;
+        series.bar_max_width = Some(24.0);
+        series.bar_corner_radius = 5.0;
+        series.fill_gradient = Some(["#112233".into(), "#445566".into()]);
         series.group_id = Some("sales".into());
         series.stack_id = Some("share".into());
         series.stack_mode = crate::GeneralStackMode::Percent;
@@ -3843,13 +3924,54 @@ mod tests {
         area.stack_id = Some("area-share".into());
         area.stack_mode = crate::GeneralStackMode::Percent;
         chart.add_general_series(area).unwrap();
+        for interpolation in [
+            crate::GeneralInterpolation::StepBefore,
+            crate::GeneralInterpolation::StepMiddle,
+            crate::GeneralInterpolation::StepAfter,
+            crate::GeneralInterpolation::Monotone,
+            crate::GeneralInterpolation::Natural,
+        ] {
+            let mut step =
+                crate::GeneralSeriesOptions::xy_line(pane, dataset, "category-x", "category-y");
+            step.interpolation = interpolation;
+            chart.add_general_series(step).unwrap();
+        }
+        let mut domain_area =
+            crate::GeneralSeriesOptions::xy_area(pane, dataset, "category-x", "category-y");
+        domain_area.baseline_policy = crate::GeneralAreaBaseline::DomainMax;
+        domain_area.fill_gradient = Some(["#112233".into(), "#44556680".into()]);
+        chart.add_general_series(domain_area).unwrap();
+        let mut cumulative =
+            crate::GeneralSeriesOptions::column(pane, dataset, "category-x", "category-y");
+        cumulative.stack_id = Some("cumulative".into());
+        cumulative.stack_mode = crate::GeneralStackMode::Cumulative;
+        chart.add_general_series(cumulative).unwrap();
+        let mut silhouette =
+            crate::GeneralSeriesOptions::xy_area(pane, dataset, "category-x", "category-y");
+        silhouette.stack_id = Some("silhouette".into());
+        silhouette.stack_mode = crate::GeneralStackMode::Silhouette;
+        chart.add_general_series(silhouette).unwrap();
+        let mut wiggle =
+            crate::GeneralSeriesOptions::xy_area(pane, dataset, "category-x", "category-y");
+        wiggle.stack_id = Some("wiggle".into());
+        wiggle.stack_mode = crate::GeneralStackMode::Wiggle;
+        chart.add_general_series(wiggle).unwrap();
 
         let document = chart.export_state_json().unwrap();
         let value: serde_json::Value = serde_json::from_str(&document).unwrap();
         assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["datasets"][0]["colors"][0], "#ff0000ff");
+        assert_eq!(value["datasets"][0]["symbols"][0], "diamond");
         assert_eq!(value["axes"][0]["ticks"][0]["label"], "January");
         assert!(value["axes"][0]["ticks"][1].get("label").is_none());
         assert_eq!(value["series"][0]["group_id"], "sales");
+        assert_eq!(value["series"][0]["bar_gap"], 6.0);
+        assert_eq!(value["series"][0]["bar_max_width"], 24.0);
+        assert_eq!(value["series"][0]["bar_corner_radius"], 5.0);
+        assert_eq!(
+            value["series"][0]["fill_gradient"],
+            serde_json::json!(["#112233", "#445566"])
+        );
         assert_eq!(value["series"][0]["stack_id"], "share");
         assert_eq!(value["series"][0]["stack_mode"], "Percent");
         assert_eq!(value["series"][1]["point_markers"], true);
@@ -3860,6 +3982,19 @@ mod tests {
         assert_eq!(value["series"][2]["stack_id"], "area-share");
         assert_eq!(value["series"][2]["fill_opacity"], 0.5);
         assert_eq!(value["series"][2]["stack_mode"], "Percent");
+        assert_eq!(value["series"][3]["interpolation"], "StepBefore");
+        assert_eq!(value["series"][4]["interpolation"], "StepMiddle");
+        assert_eq!(value["series"][5]["interpolation"], "StepAfter");
+        assert_eq!(value["series"][6]["interpolation"], "Monotone");
+        assert_eq!(value["series"][7]["interpolation"], "Natural");
+        assert_eq!(value["series"][8]["baseline_policy"], "DomainMax");
+        assert_eq!(
+            value["series"][8]["fill_gradient"],
+            serde_json::json!(["#112233", "#44556680"])
+        );
+        assert_eq!(value["series"][9]["stack_mode"], "Cumulative");
+        assert_eq!(value["series"][10]["stack_mode"], "Silhouette");
+        assert_eq!(value["series"][11]["stack_mode"], "Wiggle");
         let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
         let result = restored.import_state_json(&document).unwrap();
         assert_eq!(result.schema_version, 2);
@@ -4347,13 +4482,17 @@ mod tests {
                 max_valid: None,
             })
             .unwrap();
-        chart
-            .add_general_series(crate::GeneralSeriesOptions::box_plot(
-                pane, dataset, "box-x", "box-y",
-            ))
-            .unwrap();
+        let mut box_plot = crate::GeneralSeriesOptions::box_plot(pane, dataset, "box-x", "box-y");
+        box_plot.box_fill_color = Some("#112233".into());
+        box_plot.box_median_color = Some("#ff00ff".into());
+        box_plot.line_width = 3.0;
+        chart.add_general_series(box_plot).unwrap();
 
         let document = chart.export_state_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(value["series"][0]["box_fill_color"], "#112233");
+        assert_eq!(value["series"][0]["box_median_color"], "#ff00ff");
+        assert_eq!(value["series"][0]["line_width"], 3.0);
         let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
         restored.import_state_json(&document).unwrap();
         assert_eq!(restored.export_state_json().unwrap(), document);
@@ -4427,13 +4566,21 @@ mod tests {
                 value_valid: Some(vec![1, 0]),
             })
             .unwrap();
-        chart
-            .add_general_series(crate::GeneralSeriesOptions::heatmap_grid(
-                pane, dataset, "heat-x", "heat-y",
-            ))
-            .unwrap();
+        let mut heatmap =
+            crate::GeneralSeriesOptions::heatmap_grid(pane, dataset, "heat-x", "heat-y");
+        heatmap.heatmap_value_domain = Some([0.0, 50.0]);
+        heatmap.heatmap_low_color = Some("#112233".into());
+        heatmap.heatmap_high_color = Some("#ddeeff".into());
+        chart.add_general_series(heatmap).unwrap();
 
         let document = chart.export_state_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(
+            value["series"][0]["heatmap_value_domain"],
+            serde_json::json!([0.0, 50.0])
+        );
+        assert_eq!(value["series"][0]["heatmap_low_color"], "#112233");
+        assert_eq!(value["series"][0]["heatmap_high_color"], "#ddeeff");
         let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
         restored.import_state_json(&document).unwrap();
         assert_eq!(restored.export_state_json().unwrap(), document);

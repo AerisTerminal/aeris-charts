@@ -6,8 +6,8 @@ use super::conflation::{
 };
 use super::*;
 use crate::{
-    AxisDimension, AxisPosition, CategoryScaleType, ContinuousScaleType, GeneralAxisDomain,
-    GeneralAxisOptions, GeneralAxisTick, GeneralInterpolation, GeneralLineStyle,
+    AxisDimension, AxisPosition, CategoryScaleType, ContinuousScaleType, GeneralAreaBaseline,
+    GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralInterpolation, GeneralLineStyle,
     GeneralPointSymbol, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesKind,
     GeneralSeriesOptions, GeneralStackMode, GeneralXyInput, HorizontalDomain,
 };
@@ -2238,6 +2238,105 @@ fn automatic_category_views_clamp_to_replaced_registry_without_stale_labels() {
 }
 
 #[test]
+fn composed_category_area_line_and_columns_share_axes_and_frame_order() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "compose-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "compose-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: Some(vec![
+                GeneralRowId::Text("a".into()),
+                GeneralRowId::Text("b".into()),
+            ]),
+            categories: vec!["A".into(), "B".into()],
+            category_indices: vec![0, 1],
+            y: vec![4.0, 6.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let area = chart
+        .add_general_series(GeneralSeriesOptions::xy_area(
+            pane,
+            dataset,
+            "compose-x",
+            "compose-y",
+        ))
+        .unwrap();
+    let line = chart
+        .add_general_series(GeneralSeriesOptions::xy_line(
+            pane,
+            dataset,
+            "compose-x",
+            "compose-y",
+        ))
+        .unwrap();
+    let column = chart
+        .add_general_series(GeneralSeriesOptions::column(
+            pane,
+            dataset,
+            "compose-x",
+            "compose-y",
+        ))
+        .unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("compose-y"),
+        Some(GeneralAxisDomain::Numeric([0.0, 6.0]))
+    );
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let frame = chart.build_frame();
+    let main = &frame.panes[pane].main;
+    let fill = main
+        .iter()
+        .position(|prim| matches!(prim, Prim::AreaFill { .. }))
+        .unwrap();
+    let last_line = main
+        .iter()
+        .rposition(|prim| matches!(prim, Prim::Polyline { .. }))
+        .unwrap();
+    let first_bar = main
+        .iter()
+        .position(|prim| matches!(prim, Prim::Rect { .. }))
+        .unwrap();
+    assert!(fill < last_line && last_line < first_bar);
+    let mut bars = Vec::new();
+    chart.visit_general_columns(chart.general_series(column).unwrap(), |bar| bars.push(bar));
+    assert_eq!(bars.len(), 2);
+    let bar = bars[0];
+    let hit = chart
+        .general_hit_test(
+            pane,
+            (bar.left + bar.right) * 0.5,
+            (bar.top + bar.bottom) * 0.5,
+            crate::GeneralHitMode::Exact,
+        )
+        .unwrap();
+    assert_eq!((hit.series, hit.row), (column, 0));
+    assert_ne!(area, line);
+}
+
+#[test]
 fn grouped_columns_share_each_band_without_overlap_and_keep_hit_identity() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     let pane = chart
@@ -2322,6 +2421,56 @@ fn grouped_columns_share_each_band_without_overlap_and_keep_hit_identity() {
             crate::GeneralRowIdentity::Explicit(GeneralRowId::Text(expected_id.into()))
         );
     }
+
+    let mut resized = GeneralSeriesOptions::column(pane, dataset_a, "group-x", "group-y");
+    resized.group_id = Some("sales".into());
+    resized.bar_gap = 8.0;
+    resized.bar_max_width = Some(20.0);
+    chart
+        .update_general_series_options(first, resized.clone())
+        .unwrap();
+    resized.dataset = dataset_b;
+    chart
+        .update_general_series_options(second, resized)
+        .unwrap();
+    let mut resized_rects = Vec::new();
+    chart.visit_general_columns(chart.general_series(first).unwrap(), |rect| {
+        resized_rects.push(rect)
+    });
+    chart.visit_general_columns(chart.general_series(second).unwrap(), |rect| {
+        resized_rects.push(rect)
+    });
+    assert_eq!(resized_rects.len(), 2);
+    assert!(
+        resized_rects
+            .iter()
+            .all(|rect| rect.right - rect.left <= 20.0 + 1e-9)
+    );
+    assert!(resized_rects[1].left - resized_rects[0].right >= 8.0 - 1e-9);
+    assert!(
+        chart
+            .general_hit_test(
+                pane,
+                (resized_rects[0].right + resized_rects[1].left) * 0.5,
+                (resized_rects[0].top + resized_rects[0].bottom) * 0.5,
+                crate::GeneralHitMode::Exact
+            )
+            .is_none()
+    );
+
+    let mut invalid = GeneralSeriesOptions::column(pane, dataset_a, "group-x", "group-y");
+    invalid.group_id = Some("sales".into());
+    invalid.bar_gap = f64::NAN;
+    assert!(chart.update_general_series_options(first, invalid).is_err());
+    assert_eq!(chart.general_series(first).unwrap().bar_gap(), 8.0);
+    let mut unsupported = GeneralSeriesOptions::column(pane, dataset_a, "group-x", "group-y");
+    unsupported.line_width = 4.0;
+    assert!(
+        chart
+            .update_general_series_options(first, unsupported)
+            .is_err()
+    );
+    assert_eq!(chart.general_series(first).unwrap().bar_gap(), 8.0);
 }
 
 #[test]
@@ -2370,9 +2519,13 @@ fn stacked_columns_sum_auto_domain_and_diverge_from_zero_by_sign() {
     let second_dataset = make_dataset(&mut chart, "second", vec![5.0, -2.0]);
     let mut first = GeneralSeriesOptions::column(pane, first_dataset, "stack-x", "stack-y");
     first.stack_id = Some("total".into());
+    first.bar_corner_radius = 8.0;
+    first.color = Some("#112233".into());
     let first = chart.add_general_series(first).unwrap();
     let mut second = GeneralSeriesOptions::column(pane, second_dataset, "stack-x", "stack-y");
     second.stack_id = Some("total".into());
+    second.bar_corner_radius = 8.0;
+    second.color = Some("#445566".into());
     let second = chart.add_general_series(second).unwrap();
 
     assert_eq!(
@@ -2392,7 +2545,40 @@ fn stacked_columns_sum_auto_domain_and_diverge_from_zero_by_sign() {
     assert_eq!(second_geometry.len(), 2);
     assert!((second_geometry[0].bottom - first_geometry[0].top).abs() < 1e-9);
     assert!((second_geometry[1].top - first_geometry[1].bottom).abs() < 1e-9);
+    assert!(first_geometry.iter().all(|geometry| !geometry.exposed_end));
+    assert!(second_geometry.iter().all(|geometry| geometry.exposed_end));
+    assert!(second_geometry[0].end_at_min);
+    assert!(!second_geometry[1].end_at_min);
+    let corners: Vec<[f32; 4]> = chart.build_frame().panes[pane]
+        .main
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::RoundRect { radii, fill, .. }
+                if *fill == aeris_charts_render::color::Color::parse_css("#445566").unwrap() =>
+            {
+                Some(*radii)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(corners.len(), 2);
+    assert!(
+        corners
+            .iter()
+            .any(|r| r[0] > 0.0 && r[1] > 0.0 && r[2] == 0.0 && r[3] == 0.0)
+    );
+    assert!(
+        corners
+            .iter()
+            .any(|r| r[0] == 0.0 && r[1] == 0.0 && r[2] > 0.0 && r[3] > 0.0)
+    );
 
+    // Frame construction can resolve a different final plot from the measured layout.
+    chart.build_frame();
+    second_geometry.clear();
+    chart.visit_general_columns(chart.general_series(second).unwrap(), |geometry| {
+        second_geometry.push(geometry)
+    });
     let second_positive = second_geometry[0];
     let hit = chart
         .general_hit_test(
@@ -2403,7 +2589,809 @@ fn stacked_columns_sum_auto_domain_and_diverge_from_zero_by_sign() {
         )
         .unwrap();
     assert_eq!(hit.series, second);
+    let corner_hit = chart.general_hit_test(
+        pane,
+        second_geometry[0].right - 0.1,
+        second_geometry[0].top + 0.1,
+        crate::GeneralHitMode::Exact,
+    );
+    assert!(
+        corner_hit.is_none(),
+        "the clipped exposed corner must not claim a hit: {corner_hit:?}, {second_positive:?}"
+    );
+    assert_eq!(
+        chart
+            .general_hit_test(
+                pane,
+                second_geometry[0].right - 4.0,
+                second_geometry[0].top + 4.0,
+                crate::GeneralHitMode::Exact,
+            )
+            .unwrap()
+            .series,
+        second,
+    );
     assert_eq!(hit.row, 0);
+
+    assert!(chart.set_general_series_order(Some(pane), vec![second, first]));
+    let mut reordered_first = Vec::new();
+    let mut reordered_second = Vec::new();
+    chart.visit_general_columns(chart.general_series(first).unwrap(), |geometry| {
+        reordered_first.push(geometry)
+    });
+    chart.visit_general_columns(chart.general_series(second).unwrap(), |geometry| {
+        reordered_second.push(geometry)
+    });
+    assert!((reordered_first[0].bottom - reordered_second[0].top).abs() < 1e-9);
+    assert!((reordered_first[1].top - reordered_second[1].bottom).abs() < 1e-9);
+    assert!(reordered_first.iter().all(|geometry| geometry.exposed_end));
+    assert!(
+        reordered_second
+            .iter()
+            .all(|geometry| !geometry.exposed_end)
+    );
+    assert_eq!(chart.general_series_order(Some(pane)), vec![second, first]);
+}
+
+#[test]
+fn column_gradient_and_row_colors_preserve_rounded_bar_order() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "item-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "item-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let input = GeneralXyInput::Category {
+        ids: None,
+        categories: vec!["A".into(), "B".into(), "C".into()],
+        category_indices: vec![0, 1, 2],
+        y: vec![3.0, 5.0, 4.0],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input.clone()).unwrap();
+    chart
+        .replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            None,
+            Some(vec![Some("#ff0000".into()), Some("#00ff00".into()), None]),
+            None,
+        )
+        .unwrap();
+    let mut options = GeneralSeriesOptions::column(pane, dataset, "item-x", "item-y");
+    options.bar_corner_radius = 4.0;
+    options.fill_gradient = Some(["#112233".into(), "#445566".into()]);
+    let series = chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let frame = chart.build_frame();
+    let fills = frame.panes[pane]
+        .main
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::RoundRect { fill, .. } => Some(*fill),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(fills.contains(&Color::rgb(255, 0, 0)));
+    assert!(fills.contains(&Color::rgb(0, 255, 0)));
+    assert!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .any(|primitive| matches!(primitive,
+        Prim::GradientRoundRect { gradient, .. }
+        if gradient.top == Color::rgb(0x11, 0x22, 0x33)
+            && gradient.bottom == Color::rgb(0x44, 0x55, 0x66)))
+    );
+    let mut square = GeneralSeriesOptions::column(pane, dataset, "item-x", "item-y");
+    square.fill_gradient = Some(["#112233".into(), "#445566".into()]);
+    chart.update_general_series_options(series, square).unwrap();
+    assert!(
+        chart.build_frame().panes[pane]
+            .main
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::GradientRect { .. }))
+    );
+}
+
+#[test]
+fn horizontal_and_range_bars_emit_gradient_marks() {
+    for horizontal in [false, true] {
+        let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                if horizontal {
+                    HorizontalDomain::Continuous {
+                        scale: ContinuousScaleType::Linear,
+                    }
+                } else {
+                    HorizontalDomain::Category {
+                        scale: CategoryScaleType::Band,
+                    }
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "gradient-x",
+                pane,
+                AxisDimension::X,
+                if horizontal {
+                    GeneralScaleType::Linear
+                } else {
+                    GeneralScaleType::Band
+                },
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "gradient-y",
+                pane,
+                AxisDimension::Y,
+                if horizontal {
+                    GeneralScaleType::Band
+                } else {
+                    GeneralScaleType::Linear
+                },
+            ))
+            .unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(if horizontal {
+                GeneralXyInput::Category {
+                    ids: None,
+                    categories: vec!["A".into()],
+                    category_indices: vec![0],
+                    y: vec![5.0],
+                    y_valid: None,
+                }
+            } else {
+                GeneralXyInput::RangeCategory {
+                    ids: None,
+                    categories: vec!["A".into()],
+                    category_indices: vec![0],
+                    low: vec![2.0],
+                    low_valid: None,
+                    high: vec![5.0],
+                    high_valid: None,
+                }
+            })
+            .unwrap();
+        let mut options = if horizontal {
+            GeneralSeriesOptions::horizontal_bar(pane, dataset, "gradient-x", "gradient-y")
+        } else {
+            GeneralSeriesOptions::range_bar(pane, dataset, "gradient-x", "gradient-y")
+        };
+        options.fill_gradient = Some(["#112233".into(), "#445566".into()]);
+        if horizontal {
+            options.bar_corner_radius = 4.0;
+        }
+        chart.add_general_series(options).unwrap();
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let frame = chart.build_frame();
+        assert!(
+            frame.panes[pane]
+                .main
+                .iter()
+                .any(|primitive| match primitive {
+                    Prim::GradientRect { gradient, .. } if !horizontal =>
+                        gradient.top == Color::rgb(0x11, 0x22, 0x33)
+                            && gradient.bottom == Color::rgb(0x44, 0x55, 0x66),
+                    Prim::GradientRoundRect { gradient, .. } if horizontal =>
+                        gradient.top == Color::rgb(0x11, 0x22, 0x33)
+                            && gradient.bottom == Color::rgb(0x44, 0x55, 0x66),
+                    _ => false,
+                })
+        );
+    }
+}
+
+#[test]
+fn positive_stacks_suppress_negative_bars_in_both_orientations() {
+    for horizontal in [false, true] {
+        let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                if horizontal {
+                    HorizontalDomain::Continuous {
+                        scale: ContinuousScaleType::Linear,
+                    }
+                } else {
+                    HorizontalDomain::Category {
+                        scale: CategoryScaleType::Band,
+                    }
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "positive-x",
+                pane,
+                AxisDimension::X,
+                if horizontal {
+                    GeneralScaleType::Linear
+                } else {
+                    GeneralScaleType::Band
+                },
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "positive-y",
+                pane,
+                AxisDimension::Y,
+                if horizontal {
+                    GeneralScaleType::Band
+                } else {
+                    GeneralScaleType::Linear
+                },
+            ))
+            .unwrap();
+        let make_dataset = |chart: &mut ChartEngine, values| {
+            chart
+                .create_general_xy_dataset(GeneralXyInput::Category {
+                    ids: None,
+                    categories: vec!["Up".into(), "Down".into()],
+                    category_indices: vec![0, 1],
+                    y: values,
+                    y_valid: None,
+                })
+                .unwrap()
+        };
+        let first_dataset = make_dataset(&mut chart, vec![10.0, -4.0]);
+        let second_dataset = make_dataset(&mut chart, vec![5.0, -2.0]);
+        let make_options = |dataset| {
+            let mut options = if horizontal {
+                GeneralSeriesOptions::horizontal_bar(pane, dataset, "positive-x", "positive-y")
+            } else {
+                GeneralSeriesOptions::column(pane, dataset, "positive-x", "positive-y")
+            };
+            options.stack_id = Some("positive".into());
+            options.stack_mode = GeneralStackMode::Positive;
+            options.bar_corner_radius = 5.0;
+            options
+        };
+        let first = chart
+            .add_general_series(make_options(first_dataset))
+            .unwrap();
+        let second = chart
+            .add_general_series(make_options(second_dataset))
+            .unwrap();
+        let value_axis = if horizontal {
+            "positive-x"
+        } else {
+            "positive-y"
+        };
+        assert_eq!(
+            chart.general_axis_effective_domain(value_axis),
+            Some(GeneralAxisDomain::Numeric([0.0, 15.0]))
+        );
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let mut first_geometry = Vec::new();
+        let mut second_geometry = Vec::new();
+        if horizontal {
+            chart.visit_general_horizontal_bars(chart.general_series(first).unwrap(), |geometry| {
+                first_geometry.push(geometry)
+            });
+            chart
+                .visit_general_horizontal_bars(chart.general_series(second).unwrap(), |geometry| {
+                    second_geometry.push(geometry)
+                });
+        } else {
+            chart.visit_general_columns(chart.general_series(first).unwrap(), |geometry| {
+                first_geometry.push(geometry)
+            });
+            chart.visit_general_columns(chart.general_series(second).unwrap(), |geometry| {
+                second_geometry.push(geometry)
+            });
+        }
+        assert_eq!(first_geometry.len(), 1);
+        assert_eq!(second_geometry.len(), 1);
+        assert_eq!(first_geometry[0].row, 0);
+        assert_eq!(second_geometry[0].row, 0);
+        assert!(!first_geometry[0].exposed_end);
+        assert!(second_geometry[0].exposed_end);
+        if horizontal {
+            assert!((first_geometry[0].right - second_geometry[0].left).abs() < 1e-9);
+        } else {
+            assert!((first_geometry[0].top - second_geometry[0].bottom).abs() < 1e-9);
+        }
+        assert_eq!(chart.general_dataset(first_dataset).unwrap().y()[1], -4.0);
+    }
+}
+
+#[test]
+fn wiggle_bars_share_weighted_baselines_with_auto_domain_in_both_orientations() {
+    for horizontal in [false, true] {
+        let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                if horizontal {
+                    HorizontalDomain::Continuous {
+                        scale: ContinuousScaleType::Linear,
+                    }
+                } else {
+                    HorizontalDomain::Category {
+                        scale: CategoryScaleType::Band,
+                    }
+                },
+            )
+            .unwrap();
+        let (x_axis, y_axis) = if horizontal {
+            ("wiggle-value", "wiggle-category")
+        } else {
+            ("wiggle-category", "wiggle-value")
+        };
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                x_axis,
+                pane,
+                AxisDimension::X,
+                if horizontal {
+                    GeneralScaleType::Linear
+                } else {
+                    GeneralScaleType::Band
+                },
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                y_axis,
+                pane,
+                AxisDimension::Y,
+                if horizontal {
+                    GeneralScaleType::Band
+                } else {
+                    GeneralScaleType::Linear
+                },
+            ))
+            .unwrap();
+        let mut ids = Vec::new();
+        for values in [[2.0, 4.0], [2.0, 2.0]] {
+            let dataset = chart
+                .create_general_xy_dataset(GeneralXyInput::Category {
+                    ids: None,
+                    categories: vec!["A".into(), "B".into()],
+                    category_indices: vec![0, 1],
+                    y: values.to_vec(),
+                    y_valid: None,
+                })
+                .unwrap();
+            let mut options = if horizontal {
+                GeneralSeriesOptions::horizontal_bar(pane, dataset, x_axis, y_axis)
+            } else {
+                GeneralSeriesOptions::column(pane, dataset, x_axis, y_axis)
+            };
+            options.stack_id = Some("same".into());
+            options.stack_mode = GeneralStackMode::Wiggle;
+            options.bar_corner_radius = 4.0;
+            ids.push(chart.add_general_series(options).unwrap());
+        }
+        let [low, high] = match chart.general_axis_effective_domain("wiggle-value") {
+            Some(GeneralAxisDomain::Numeric(domain)) => domain,
+            other => panic!("unexpected wiggle domain: {other:?}"),
+        };
+        assert!((low + 4.0 / 3.0).abs() < 1e-12);
+        assert!((high - 14.0 / 3.0).abs() < 1e-12);
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let plot = chart.general_plot_rect(pane).unwrap();
+        let mut first = Vec::new();
+        let mut second = Vec::new();
+        if horizontal {
+            chart.visit_general_horizontal_bars(chart.general_series(ids[0]).unwrap(), |mark| {
+                first.push(mark)
+            });
+            chart.visit_general_horizontal_bars(chart.general_series(ids[1]).unwrap(), |mark| {
+                second.push(mark)
+            });
+        } else {
+            chart.visit_general_columns(chart.general_series(ids[0]).unwrap(), |mark| {
+                first.push(mark)
+            });
+            chart.visit_general_columns(chart.general_series(ids[1]).unwrap(), |mark| {
+                second.push(mark)
+            });
+        }
+        assert_eq!(first.len(), 2);
+        assert_eq!(second.len(), 2);
+        assert!(first.iter().all(|mark| !mark.exposed_end));
+        assert!(second.iter().all(|mark| mark.exposed_end));
+        let fraction = (-4.0 / 3.0 - low) / (high - low);
+        if horizontal {
+            assert!((first[1].left - plot.width * fraction).abs() < 1e-9);
+            assert!((first[1].right - second[1].left).abs() < 1e-9);
+        } else {
+            assert!((first[1].bottom - (plot.y + plot.height * (1.0 - fraction))).abs() < 1e-9);
+            assert!((first[1].top - second[1].bottom).abs() < 1e-9);
+        }
+        let end = second[1];
+        let hit = chart
+            .general_hit_test(
+                pane,
+                (end.left + end.right) * 0.5,
+                (end.top + end.bottom) * 0.5,
+                crate::GeneralHitMode::Exact,
+            )
+            .unwrap();
+        assert_eq!(hit.series, ids[1]);
+        assert_eq!(hit.row, 1);
+    }
+}
+
+#[test]
+fn wiggle_domains_include_duplicate_position_overshoots() {
+    for area in [false, true] {
+        let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                if area {
+                    HorizontalDomain::Continuous {
+                        scale: ContinuousScaleType::Linear,
+                    }
+                } else {
+                    HorizontalDomain::Category {
+                        scale: CategoryScaleType::Band,
+                    }
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "duplicate-x",
+                pane,
+                AxisDimension::X,
+                if area {
+                    GeneralScaleType::Linear
+                } else {
+                    GeneralScaleType::Band
+                },
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "duplicate-y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = if area {
+            chart
+                .create_general_xy_dataset(GeneralXyInput::Numeric {
+                    ids: None,
+                    x: vec![0.0, 1.0, 1.0],
+                    y: vec![1.0, 10.0, -9.0],
+                    y_valid: None,
+                })
+                .unwrap()
+        } else {
+            chart
+                .create_general_xy_dataset(GeneralXyInput::Category {
+                    ids: None,
+                    categories: vec!["A".into(), "B".into()],
+                    category_indices: vec![0, 1, 1],
+                    y: vec![1.0, 10.0, -9.0],
+                    y_valid: None,
+                })
+                .unwrap()
+        };
+        let mut options = if area {
+            GeneralSeriesOptions::xy_area(pane, dataset, "duplicate-x", "duplicate-y")
+        } else {
+            GeneralSeriesOptions::column(pane, dataset, "duplicate-x", "duplicate-y")
+        };
+        options.stack_id = Some("same".into());
+        options.stack_mode = GeneralStackMode::Wiggle;
+        chart.add_general_series(options).unwrap();
+        assert_eq!(
+            chart.general_axis_effective_domain("duplicate-y"),
+            Some(GeneralAxisDomain::Numeric([0.0, 10.0]))
+        );
+    }
+}
+
+#[test]
+fn wiggle_areas_align_boundaries_with_the_auto_domain_and_exact_hit() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "wiggle-area-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "wiggle-area-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let mut ids = Vec::new();
+    for values in [[2.0, 4.0], [2.0, 2.0]] {
+        let dataset = chart
+            .create_general_xy_dataset(GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![0.0, 1.0],
+                y: values.to_vec(),
+                y_valid: None,
+            })
+            .unwrap();
+        let mut options =
+            GeneralSeriesOptions::xy_area(pane, dataset, "wiggle-area-x", "wiggle-area-y");
+        options.stack_id = Some("same".into());
+        options.stack_mode = GeneralStackMode::Wiggle;
+        ids.push(chart.add_general_series(options).unwrap());
+    }
+    let [low, high] = match chart.general_axis_effective_domain("wiggle-area-y") {
+        Some(GeneralAxisDomain::Numeric(domain)) => domain,
+        other => panic!("unexpected wiggle area domain: {other:?}"),
+    };
+    assert!((low + 4.0 / 3.0).abs() < 1e-12);
+    assert!((high - 14.0 / 3.0).abs() < 1e-12);
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut first = Vec::new();
+    let mut second = Vec::new();
+    chart.visit_general_stacked_area_points(chart.general_series(ids[0]).unwrap(), |mark| {
+        first.push(mark)
+    });
+    chart.visit_general_stacked_area_points(chart.general_series(ids[1]).unwrap(), |mark| {
+        second.push(mark)
+    });
+    assert_eq!(first.len(), 2);
+    assert_eq!(second.len(), 2);
+    assert!((first[1].high_y - second[1].low_y).abs() < 1e-9);
+    let plot = chart.general_plot_rect(pane).unwrap();
+    assert!((first[1].low_y - (plot.y + plot.height)).abs() < 1e-9);
+    let hit = chart
+        .general_hit_test(
+            pane,
+            second[1].x,
+            (second[1].low_y + second[1].high_y) * 0.5,
+            crate::GeneralHitMode::Exact,
+        )
+        .unwrap();
+    assert_eq!(hit.series, ids[1]);
+}
+
+#[test]
+fn cumulative_and_silhouette_stacks_keep_mixed_sign_prefixes_in_domain_and_geometry() {
+    for mode in [GeneralStackMode::Cumulative, GeneralStackMode::Silhouette] {
+        let expected_domain = if mode == GeneralStackMode::Silhouette {
+            [-3.5, 11.5]
+        } else {
+            [-5.0, 10.0]
+        };
+        for horizontal in [false, true] {
+            let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+            let pane = chart
+                .add_pane_with_domain(
+                    true,
+                    if horizontal {
+                        HorizontalDomain::Continuous {
+                            scale: ContinuousScaleType::Linear,
+                        }
+                    } else {
+                        HorizontalDomain::Category {
+                            scale: CategoryScaleType::Band,
+                        }
+                    },
+                )
+                .unwrap();
+            let x_axis = if horizontal {
+                "cumulative-value"
+            } else {
+                "cumulative-category"
+            };
+            let y_axis = if horizontal {
+                "cumulative-category"
+            } else {
+                "cumulative-value"
+            };
+            chart
+                .add_general_axis(GeneralAxisOptions::new(
+                    x_axis,
+                    pane,
+                    AxisDimension::X,
+                    if horizontal {
+                        GeneralScaleType::Linear
+                    } else {
+                        GeneralScaleType::Band
+                    },
+                ))
+                .unwrap();
+            chart
+                .add_general_axis(GeneralAxisOptions::new(
+                    y_axis,
+                    pane,
+                    AxisDimension::Y,
+                    if horizontal {
+                        GeneralScaleType::Band
+                    } else {
+                        GeneralScaleType::Linear
+                    },
+                ))
+                .unwrap();
+            let mut ids = Vec::new();
+            for values in [[10.0, -3.0], [-15.0, 5.0], [2.0, -4.0]] {
+                let dataset = chart
+                    .create_general_xy_dataset(GeneralXyInput::Category {
+                        ids: None,
+                        categories: vec!["A".into(), "B".into()],
+                        category_indices: vec![0, 1],
+                        y: values.to_vec(),
+                        y_valid: None,
+                    })
+                    .unwrap();
+                let mut options = if horizontal {
+                    GeneralSeriesOptions::horizontal_bar(pane, dataset, x_axis, y_axis)
+                } else {
+                    GeneralSeriesOptions::column(pane, dataset, x_axis, y_axis)
+                };
+                options.stack_id = Some("same".into());
+                options.stack_mode = mode;
+                options.bar_corner_radius = 4.0;
+                ids.push(chart.add_general_series(options).unwrap());
+            }
+            assert_eq!(
+                chart.general_axis_effective_domain("cumulative-value"),
+                Some(GeneralAxisDomain::Numeric(expected_domain))
+            );
+            chart.recompute_layout_with_measure(
+                true,
+                |text, _| text.len() as f64 * 7.0,
+                |_, _| 0.0,
+            );
+            let mut geometry = Vec::new();
+            for id in ids {
+                let mut marks = Vec::new();
+                if horizontal {
+                    chart
+                        .visit_general_horizontal_bars(chart.general_series(id).unwrap(), |mark| {
+                            marks.push(mark)
+                        });
+                } else {
+                    chart.visit_general_columns(chart.general_series(id).unwrap(), |mark| {
+                        marks.push(mark)
+                    });
+                }
+                assert_eq!(marks.len(), 2);
+                geometry.push(marks);
+            }
+            assert!(geometry[0].iter().all(|mark| !mark.exposed_end));
+            assert!(geometry[1].iter().all(|mark| !mark.exposed_end));
+            assert!(geometry[2].iter().all(|mark| mark.exposed_end));
+            let plot = chart.general_plot_rect(pane).unwrap();
+            let start = if mode == GeneralStackMode::Silhouette {
+                1.5
+            } else {
+                0.0
+            };
+            let fraction = (start - expected_domain[0]) / (expected_domain[1] - expected_domain[0]);
+            if horizontal {
+                assert!((geometry[0][0].left - fraction * plot.width).abs() < 1e-9);
+                assert!((geometry[0][0].right - geometry[1][0].right).abs() < 1e-9);
+                assert!(geometry[1][0].left < geometry[0][0].left);
+            } else {
+                assert!(
+                    (geometry[0][0].bottom - (plot.y + plot.height * (1.0 - fraction))).abs()
+                        < 1e-9
+                );
+                assert!((geometry[0][0].top - geometry[1][0].top).abs() < 1e-9);
+                assert!(geometry[1][0].bottom > geometry[0][0].bottom);
+            }
+        }
+
+        let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "cum-area-x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "cum-area-y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let mut ids = Vec::new();
+        for values in [[10.0, -3.0], [-15.0, 5.0], [2.0, -4.0]] {
+            let dataset = chart
+                .create_general_xy_dataset(GeneralXyInput::Numeric {
+                    ids: None,
+                    x: vec![0.0, 1.0],
+                    y: values.to_vec(),
+                    y_valid: None,
+                })
+                .unwrap();
+            let mut options =
+                GeneralSeriesOptions::xy_area(pane, dataset, "cum-area-x", "cum-area-y");
+            options.stack_id = Some("same".into());
+            options.stack_mode = mode;
+            ids.push(chart.add_general_series(options).unwrap());
+        }
+        assert_eq!(
+            chart.general_axis_effective_domain("cum-area-y"),
+            Some(GeneralAxisDomain::Numeric(expected_domain))
+        );
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let mut geometry = Vec::new();
+        for &id in &ids {
+            let mut marks = Vec::new();
+            chart.visit_general_stacked_area_points(chart.general_series(id).unwrap(), |mark| {
+                marks.push(mark)
+            });
+            assert_eq!(marks.len(), 2);
+            geometry.push(marks);
+        }
+        for ((first, second), third) in geometry[0].iter().zip(&geometry[1]).zip(&geometry[2]) {
+            assert!((second.low_y - first.high_y).abs() < 1e-9);
+            assert!((third.low_y - second.high_y).abs() < 1e-9);
+        }
+        let plot = chart.general_plot_rect(pane).unwrap();
+        let start = if mode == GeneralStackMode::Silhouette {
+            1.5
+        } else {
+            0.0
+        };
+        let fraction = (start - expected_domain[0]) / (expected_domain[1] - expected_domain[0]);
+        assert!((geometry[0][0].low_y - (plot.y + plot.height * (1.0 - fraction))).abs() < 1e-9);
+        let second = &geometry[1][0];
+        let hit = chart
+            .general_hit_test(
+                pane,
+                second.x,
+                second.low_y + (second.high_y - second.low_y) * 0.8,
+                crate::GeneralHitMode::Exact,
+            )
+            .unwrap();
+        assert_eq!(hit.series, ids[1]);
+    }
 }
 
 #[test]
@@ -2568,11 +3556,22 @@ fn horizontal_bars_use_category_y_geometry_and_stack_on_numeric_x() {
     let mut first = GeneralSeriesOptions::horizontal_bar(pane, first_dataset, "bar-x", "bar-y");
     first.group_id = Some("totals".into());
     first.stack_id = Some("combined".into());
+    first.bar_gap = 6.0;
+    first.bar_max_width = Some(18.0);
+    first.bar_corner_radius = 7.0;
     let first = chart.add_general_series(first).unwrap();
     let mut second = GeneralSeriesOptions::horizontal_bar(pane, second_dataset, "bar-x", "bar-y");
     second.group_id = Some("totals".into());
     second.stack_id = Some("combined".into());
+    second.bar_gap = 6.0;
+    second.bar_max_width = Some(18.0);
+    second.bar_corner_radius = 7.0;
     let second = chart.add_general_series(second).unwrap();
+    let mut mismatched =
+        GeneralSeriesOptions::horizontal_bar(pane, second_dataset, "bar-x", "bar-y");
+    mismatched.group_id = Some("totals".into());
+    mismatched.stack_id = Some("combined".into());
+    assert!(chart.add_general_series(mismatched).is_err());
 
     assert_eq!(
         chart.general_axis_effective_domain("bar-y"),
@@ -2596,8 +3595,17 @@ fn horizontal_bars_use_category_y_geometry_and_stack_on_numeric_x() {
     assert_eq!(second_geometry.len(), 2);
     assert!((first_geometry[0].top - second_geometry[0].top).abs() < 1e-9);
     assert!((first_geometry[0].bottom - second_geometry[0].bottom).abs() < 1e-9);
+    assert!(
+        first_geometry
+            .iter()
+            .all(|rect| rect.bottom - rect.top <= 18.0 + 1e-9)
+    );
     assert!((second_geometry[0].left - first_geometry[0].right).abs() < 1e-9);
     assert!((second_geometry[1].right - first_geometry[1].left).abs() < 1e-9);
+    assert!(first_geometry.iter().all(|geometry| !geometry.exposed_end));
+    assert!(second_geometry.iter().all(|geometry| geometry.exposed_end));
+    assert!(!second_geometry[0].end_at_min);
+    assert!(second_geometry[1].end_at_min);
 
     let hit = chart
         .general_hit_test(
@@ -2614,7 +3622,41 @@ fn horizontal_bars_use_category_y_geometry_and_stack_on_numeric_x() {
             .iter()
             .filter(|primitive| matches!(primitive, Prim::Rect { .. }))
             .count(),
-        4
+        2
+    );
+    second_geometry.clear();
+    chart.visit_general_horizontal_bars(chart.general_series(second).unwrap(), |geometry| {
+        second_geometry.push(geometry)
+    });
+    assert!(
+        chart
+            .general_hit_test(
+                pane,
+                second_geometry[0].right - 0.1,
+                second_geometry[0].top + 0.1,
+                crate::GeneralHitMode::Exact,
+            )
+            .is_none(),
+        "the rounded horizontal bar corner is outside visible ink"
+    );
+    let rounded: Vec<[f32; 4]> = chart.build_frame().panes[pane]
+        .main
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::RoundRect { radii, .. } => Some(*radii),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rounded.len(), 2);
+    assert!(
+        rounded
+            .iter()
+            .any(|r| r[0] == 0.0 && r[1] > 0.0 && r[2] > 0.0 && r[3] == 0.0)
+    );
+    assert!(
+        rounded
+            .iter()
+            .any(|r| r[0] > 0.0 && r[1] == 0.0 && r[2] == 0.0 && r[3] > 0.0)
     );
 }
 
@@ -3028,6 +4070,45 @@ fn general_path_interpolation_drives_frame_geometry_and_exact_hits() {
             })
     );
 
+    for (interpolation, line_type, probe_x) in [
+        (
+            GeneralInterpolation::StepBefore,
+            LineType::StepBefore,
+            geometry[0].x,
+        ),
+        (
+            GeneralInterpolation::StepMiddle,
+            LineType::StepMiddle,
+            (geometry[0].x + geometry[1].x) * 0.5,
+        ),
+        (
+            GeneralInterpolation::StepAfter,
+            LineType::WithSteps,
+            geometry[1].x,
+        ),
+    ] {
+        let mut updated = GeneralSeriesOptions::xy_line(pane, dataset, "curve-x", "curve-y");
+        updated.interpolation = interpolation;
+        chart
+            .update_general_series_options(series, updated)
+            .unwrap();
+        assert!(
+            chart.build_frame().panes[pane]
+                .main
+                .iter()
+                .any(|primitive| matches!(primitive,
+            Prim::Polyline { line_type: actual, .. } if *actual == line_type))
+        );
+        let probe_y = (geometry[0].y + geometry[1].y) * 0.5;
+        assert_eq!(
+            chart
+                .general_hit_test(pane, probe_x, probe_y, crate::GeneralHitMode::Exact)
+                .unwrap()
+                .series,
+            series
+        );
+    }
+
     let mut curved = GeneralSeriesOptions::xy_line(pane, dataset, "curve-x", "curve-y");
     curved.interpolation = GeneralInterpolation::Curved;
     chart.update_general_series_options(series, curved).unwrap();
@@ -3095,6 +4176,62 @@ fn general_path_interpolation_drives_frame_geometry_and_exact_hits() {
                     }
                 )
             })
+    );
+
+    let mut monotone = GeneralSeriesOptions::xy_line(pane, dataset, "curve-x", "curve-y");
+    monotone.interpolation = GeneralInterpolation::Monotone;
+    chart
+        .update_general_series_options(series, monotone)
+        .unwrap();
+    let monotone_points = aeris_charts_render::line::expand_line(&source, LineType::Monotone);
+    let sample = monotone_points
+        .iter()
+        .find(|point| point.x > source[0].x && point.x < source[1].x)
+        .unwrap();
+    let hit = chart
+        .general_hit_test(pane, sample.x, sample.y, crate::GeneralHitMode::Exact)
+        .unwrap();
+    assert_eq!(hit.series, series);
+    assert_eq!(hit.distance, 0.0);
+    assert!(
+        chart.build_frame().panes[pane]
+            .main
+            .iter()
+            .any(|primitive| matches!(
+                primitive,
+                Prim::Polyline {
+                    line_type: LineType::Monotone,
+                    ..
+                }
+            ))
+    );
+
+    let mut natural = GeneralSeriesOptions::xy_line(pane, dataset, "curve-x", "curve-y");
+    natural.interpolation = GeneralInterpolation::Natural;
+    chart
+        .update_general_series_options(series, natural)
+        .unwrap();
+    let natural_points = aeris_charts_render::line::expand_line(&source, LineType::Natural);
+    let sample = natural_points
+        .iter()
+        .find(|point| point.x > source[0].x && point.x < source[1].x)
+        .unwrap();
+    let hit = chart
+        .general_hit_test(pane, sample.x, sample.y, crate::GeneralHitMode::Exact)
+        .unwrap();
+    assert_eq!(hit.series, series);
+    assert_eq!(hit.distance, 0.0);
+    assert!(
+        chart.build_frame().panes[pane]
+            .main
+            .iter()
+            .any(|primitive| matches!(
+                primitive,
+                Prim::Polyline {
+                    line_type: LineType::Natural,
+                    ..
+                }
+            ))
     );
 
     let mut invalid = GeneralSeriesOptions::scatter(pane, dataset, "curve-x", "curve-y");
@@ -3387,6 +4524,154 @@ fn xy_area_emits_fill_and_stroke_runs_and_hits_the_filled_region() {
         None,
         "missing rows must split area fill and hit geometry"
     );
+
+    let mut domain_baseline = GeneralSeriesOptions::xy_area(pane, dataset, "area-x", "area-y");
+    domain_baseline.interpolation = GeneralInterpolation::Step;
+    domain_baseline.baseline_policy = GeneralAreaBaseline::DomainMax;
+    chart
+        .update_general_series_options(series, domain_baseline.clone())
+        .unwrap();
+    chart.pan_general_axis("area-y", 0.25).unwrap();
+    let plot = chart.general_plot_rect(pane).unwrap();
+    let top_baseline = chart
+        .general_path_baseline_y(chart.general_series(series).unwrap())
+        .unwrap();
+    assert!((top_baseline - plot.y).abs() < 1e-9);
+    assert!(chart.build_frame().panes[pane].main.iter().any(|primitive| {
+        matches!(primitive, Prim::AreaFill { base_y, .. } if (*base_y as f64 - plot.y).abs() < 1e-6)
+    }));
+
+    chart.reset_general_axis_view("area-y");
+    domain_baseline.baseline_policy = GeneralAreaBaseline::DomainMin;
+    chart
+        .update_general_series_options(series, domain_baseline.clone())
+        .unwrap();
+    chart.pan_general_axis("area-y", -0.25).unwrap();
+    let bottom_baseline = chart
+        .general_path_baseline_y(chart.general_series(series).unwrap())
+        .unwrap();
+    assert!((bottom_baseline - (plot.y + plot.height)).abs() < 1e-9);
+
+    domain_baseline.baseline_value = Some(1.5);
+    assert!(
+        chart
+            .update_general_series_options(series, domain_baseline)
+            .is_err()
+    );
+    assert_eq!(
+        chart.general_series(series).unwrap().baseline_policy(),
+        GeneralAreaBaseline::DomainMin
+    );
+}
+
+#[test]
+fn xy_area_custom_gradient_reaches_shared_frame_and_validates_atomically() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "gradient-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "gradient-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![0.0, 1.0],
+            y: vec![1.0, 2.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::xy_area(pane, dataset, "gradient-x", "gradient-y");
+    options.fill_opacity = 0.5;
+    options.fill_gradient = Some(["#ff000080".into(), "#0000ff".into()]);
+    let series = chart.add_general_series(options.clone()).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(
+        chart.build_frame().panes[pane]
+            .main
+            .iter()
+            .any(|primitive| {
+                matches!(primitive, Prim::AreaFill { gradient, .. }
+            if gradient.top == Color::rgba(255, 0, 0, 64)
+                && gradient.bottom == Color::rgba(0, 0, 255, 128))
+            })
+    );
+    let mut invalid = options.clone();
+    invalid.fill_gradient = Some(["bad-color".into(), "#ffffff".into()]);
+    assert!(
+        chart
+            .update_general_series_options(series, invalid)
+            .is_err()
+    );
+    assert_eq!(
+        chart.general_series(series).unwrap().fill_gradient(),
+        options.fill_gradient.as_ref()
+    );
+    let mut wrong_kind = options.clone();
+    wrong_kind.kind = GeneralSeriesKind::XyLine;
+    assert!(
+        chart
+            .update_general_series_options(series, wrong_kind)
+            .is_err()
+    );
+    let mut stacked = options;
+    stacked.stack_id = Some("stack".into());
+    chart
+        .update_general_series_options(series, stacked)
+        .unwrap();
+    assert!(
+        chart.build_frame().panes[pane]
+            .main
+            .iter()
+            .any(|primitive| {
+                matches!(primitive, Prim::BandGradientFill { gradient, .. }
+            if gradient.top == Color::rgba(255, 0, 0, 64)
+                && gradient.bottom == Color::rgba(0, 0, 255, 128))
+            })
+    );
+    let range_dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::RangeNumeric {
+            ids: None,
+            x: vec![0.0, 1.0],
+            low: vec![0.0, 0.5],
+            low_valid: None,
+            high: vec![1.0, 2.0],
+            high_valid: None,
+        })
+        .unwrap();
+    let mut range =
+        GeneralSeriesOptions::range_area(pane, range_dataset, "gradient-x", "gradient-y");
+    range.fill_opacity = 0.5;
+    range.fill_gradient = Some(["#00ff00".into(), "#000000".into()]);
+    chart.add_general_series(range).unwrap();
+    assert!(
+        chart.build_frame().panes[pane]
+            .main
+            .iter()
+            .any(|primitive| {
+                matches!(primitive, Prim::BandGradientFill { gradient, .. }
+            if gradient.top == Color::rgba(0, 255, 0, 128)
+                && gradient.bottom == Color::rgba(0, 0, 0, 128))
+            })
+    );
 }
 
 #[test]
@@ -3446,6 +4731,12 @@ fn xy_area_stacks_by_x_identity_with_normal_and_percent_geometry() {
     second.stack_id = Some("total".into());
     second.interpolation = GeneralInterpolation::Curved;
     let second = chart.add_general_series(second).unwrap();
+    let mut invalid_baseline =
+        GeneralSeriesOptions::xy_area(pane, second_dataset, "stack-area-x", "stack-area-y");
+    invalid_baseline.stack_id = Some("total".into());
+    invalid_baseline.interpolation = GeneralInterpolation::Curved;
+    invalid_baseline.baseline_policy = GeneralAreaBaseline::DomainMin;
+    assert!(chart.add_general_series(invalid_baseline).is_err());
     let mut mismatched =
         GeneralSeriesOptions::xy_area(pane, second_dataset, "stack-area-x", "stack-area-y");
     mismatched.stack_id = Some("total".into());
@@ -3571,6 +4862,52 @@ fn xy_area_stacks_by_x_identity_with_normal_and_percent_geometry() {
     });
     assert!((b_geometry[0].low_y - a_geometry[0].high_y).abs() < 1e-9);
     assert!((b_geometry[1].low_y - a_geometry[1].high_y).abs() < 1e-9);
+
+    let positive_pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    add_axes(&mut chart, positive_pane, "positive-area");
+    let mut positive_a = GeneralSeriesOptions::xy_area(
+        positive_pane,
+        first_dataset,
+        "positive-area-x",
+        "positive-area-y",
+    );
+    positive_a.stack_id = Some("positive".into());
+    positive_a.stack_mode = GeneralStackMode::Positive;
+    let positive_a = chart.add_general_series(positive_a).unwrap();
+    let mut positive_b = GeneralSeriesOptions::xy_area(
+        positive_pane,
+        second_dataset,
+        "positive-area-x",
+        "positive-area-y",
+    );
+    positive_b.stack_id = Some("positive".into());
+    positive_b.stack_mode = GeneralStackMode::Positive;
+    let positive_b = chart.add_general_series(positive_b).unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("positive-area-y"),
+        Some(GeneralAxisDomain::Numeric([0.0, 5.0]))
+    );
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut positive_a_geometry = Vec::new();
+    let mut positive_b_geometry = Vec::new();
+    chart.visit_general_stacked_area_points(chart.general_series(positive_a).unwrap(), |point| {
+        positive_a_geometry.push(point)
+    });
+    chart.visit_general_stacked_area_points(chart.general_series(positive_b).unwrap(), |point| {
+        positive_b_geometry.push(point)
+    });
+    assert_eq!(positive_a_geometry.len(), 3);
+    assert_eq!(positive_b_geometry.len(), 3);
+    assert!((positive_a_geometry[1].low_y - positive_a_geometry[1].high_y).abs() < 1e-9);
+    assert!((positive_b_geometry[1].low_y - positive_b_geometry[1].high_y).abs() < 1e-9);
+    assert!((positive_b_geometry[0].low_y - positive_a_geometry[0].high_y).abs() < 1e-9);
 }
 
 #[test]
@@ -3810,6 +5147,74 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
         chart.general_tooltip_snapshot(series, 0).unwrap().x_label,
         "100"
     );
+}
+
+#[test]
+fn row_symbols_drive_scatter_frame_and_exact_hits() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    for (id, dimension) in [
+        ("symbol-x", AxisDimension::X),
+        ("symbol-y", AxisDimension::Y),
+    ] {
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                id,
+                pane,
+                dimension,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+    }
+    let input = GeneralXyInput::Numeric {
+        ids: None,
+        x: vec![0.0, 5.0, 10.0],
+        y: vec![0.0, 5.0, 10.0],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input.clone()).unwrap();
+    chart
+        .replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            None,
+            None,
+            Some(vec![Some("circle".into()), Some("square".into()), None]),
+        )
+        .unwrap();
+    let mut options = GeneralSeriesOptions::scatter(pane, dataset, "symbol-x", "symbol-y");
+    options.point_radius = 10.0;
+    let series = chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let frame = chart.build_frame();
+    assert!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::Circle { radius, .. } if *radius == 10.0))
+    );
+    assert!(frame.panes[pane].main.iter().any(
+        |primitive| matches!(primitive, Prim::RoundRect { w, h, .. } if *w == 20.0 && *h == 20.0)
+    ));
+    let mut points = Vec::new();
+    chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+        points.push(point)
+    });
+    let square = points.iter().find(|point| point.row == 1).unwrap();
+    let hit = chart.general_hit_test(
+        pane,
+        square.x + 9.0,
+        square.y + 9.0,
+        crate::GeneralHitMode::Exact,
+    );
+    assert_eq!(hit.map(|hit| hit.row), Some(1));
 }
 
 #[test]
@@ -4334,19 +5739,16 @@ fn range_bar_uses_bound_numeric_axis_transform() {
             high_valid: None,
         })
         .unwrap();
-    let series = chart
-        .add_general_series(GeneralSeriesOptions::range_bar(
-            pane,
-            dataset,
-            "range-log-x",
-            "range-log-y",
-        ))
-        .unwrap();
+    let mut options = GeneralSeriesOptions::range_bar(pane, dataset, "range-log-x", "range-log-y");
+    options.bar_gap = 4.0;
+    options.bar_max_width = Some(16.0);
+    let series = chart.add_general_series(options).unwrap();
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
     let plot = chart.general_plot_rect(pane).unwrap();
     let mut bars = Vec::new();
     chart.visit_general_range_bars(chart.general_series(series).unwrap(), |bar| bars.push(bar));
     assert_eq!(bars.len(), 1);
+    assert!(bars[0].right - bars[0].left <= 16.0 + 1e-9);
     assert!((bars[0].top - (plot.y + plot.height * 0.5)).abs() < 1e-9);
     assert!((bars[0].bottom - (plot.y + plot.height)).abs() < 1e-9);
 }
@@ -4869,6 +6271,9 @@ fn category_box_plots_validate_autoscale_geometry_hits_and_atomic_updates() {
     let mut options = GeneralSeriesOptions::box_plot(pane, dataset, "box-x", "box-y");
     options.title = "Distribution".into();
     options.color = Some("#345678".into());
+    options.box_fill_color = Some("#112233".into());
+    options.box_median_color = Some("#ff00ff".into());
+    options.line_width = 3.0;
     let series = chart.add_general_series(options).unwrap();
 
     let GeneralAxisDomain::Numeric([low, high]) =
@@ -4901,6 +6306,20 @@ fn category_box_plots_validate_autoscale_geometry_hits_and_atomic_updates() {
             .main
             .iter()
             .any(|primitive| matches!(primitive, Prim::Rect { .. }))
+    );
+    assert!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .any(|primitive| matches!(primitive,
+        Prim::Rect { color, .. } if *color == Color::rgb(0x11, 0x22, 0x33)))
+    );
+    assert!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .any(|primitive| matches!(primitive,
+        Prim::HLine { color, width, .. } if *color == Color::rgb(0xff, 0, 0xff) && *width == 3))
     );
     assert!(
         frame.panes[pane]
@@ -4952,6 +6371,18 @@ fn category_box_plots_validate_autoscale_geometry_hits_and_atomic_updates() {
     assert_eq!(missing.value, None);
     assert_eq!(missing.q1, Some(-500.0));
     assert_eq!(missing.q3, Some(500.0));
+
+    let mut invalid_style = GeneralSeriesOptions::box_plot(pane, dataset, "box-x", "box-y");
+    invalid_style.box_fill_color = Some("invalid".into());
+    assert!(
+        chart
+            .update_general_series_options(series, invalid_style)
+            .is_err()
+    );
+    assert_eq!(
+        chart.general_series(series).unwrap().box_fill_color(),
+        Some("#112233")
+    );
 
     let before = chart.general_tooltip_snapshot(series, 0).unwrap();
     assert!(
@@ -5112,7 +6543,51 @@ fn category_heatmap_grid_owns_two_category_axes_geometry_hits_and_retention() {
         "distinct Y categories must occupy non-overlapping bands"
     );
 
+    let mut fixed = GeneralSeriesOptions::heatmap_grid(pane, dataset, "heat-x", "heat-y");
+    fixed.title = "Regional heat".into();
+    fixed.color = Some("#336699".into());
+    fixed.heatmap_value_domain = Some([0.0, 100.0]);
+    fixed.heatmap_low_color = Some("#0000ff".into());
+    fixed.heatmap_high_color = Some("#ff0000".into());
+    chart
+        .update_general_series_options(series, fixed.clone())
+        .unwrap();
+    let mut fixed_intensity = Vec::new();
+    chart.visit_general_heatmap_cells(chart.general_series(series).unwrap(), |cell| {
+        fixed_intensity.push(cell.intensity)
+    });
+    assert_eq!(fixed_intensity, vec![0.1, 0.3, 0.5]);
+    fixed.heatmap_value_domain = Some([100.0, 0.0]);
+    assert!(
+        chart
+            .update_general_series_options(series, fixed.clone())
+            .is_err()
+    );
+    fixed.heatmap_value_domain = Some([0.0, 100.0]);
+    fixed.heatmap_low_color = Some("invalid".into());
+    assert!(chart.update_general_series_options(series, fixed).is_err());
+    assert_eq!(
+        chart.general_series(series).unwrap().heatmap_value_domain(),
+        Some([0.0, 100.0])
+    );
+
     let frame = chart.build_frame();
+    let colors = frame.panes[pane]
+        .main
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Rect { color, .. } => Some(*color),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        colors,
+        vec![
+            Color::rgb(26, 0, 230),
+            Color::rgb(77, 0, 179),
+            Color::rgb(128, 0, 128),
+        ]
+    );
     assert_eq!(
         frame.panes[pane]
             .main
@@ -5321,6 +6796,21 @@ fn numeric_and_temporal_heatmaps_autoscale_geometry_hits_and_snapshots() {
     );
     assert_eq!(numeric_geometry[0].intensity, 0.0);
     assert_eq!(numeric_geometry[2].intensity, 1.0);
+    let mut fixed_numeric = GeneralSeriesOptions::heatmap_grid(
+        numeric_pane,
+        numeric_data,
+        "numeric-heat-x",
+        "numeric-heat-y",
+    );
+    fixed_numeric.heatmap_value_domain = Some([0.0, 4.0]);
+    chart
+        .update_general_series_options(numeric_series, fixed_numeric)
+        .unwrap();
+    let mut fixed_numeric_intensity = Vec::new();
+    chart.visit_general_heatmap_cells(chart.general_series(numeric_series).unwrap(), |cell| {
+        fixed_numeric_intensity.push(cell.intensity)
+    });
+    assert_eq!(fixed_numeric_intensity, vec![0.25, 0.5, 0.75]);
     let first = numeric_geometry[0];
     let hit = chart
         .general_hit_test(
@@ -5341,6 +6831,21 @@ fn numeric_and_temporal_heatmaps_autoscale_geometry_hits_and_snapshots() {
         temporal_geometry.push(cell)
     });
     assert_eq!(temporal_geometry.len(), 4);
+    let mut fixed_temporal = GeneralSeriesOptions::heatmap_grid(
+        temporal_pane,
+        temporal_data,
+        "temporal-heat-x",
+        "temporal-heat-y",
+    );
+    fixed_temporal.heatmap_value_domain = Some([0.0, 100.0]);
+    chart
+        .update_general_series_options(temporal_series, fixed_temporal)
+        .unwrap();
+    let mut fixed_temporal_intensity = Vec::new();
+    chart.visit_general_heatmap_cells(chart.general_series(temporal_series).unwrap(), |cell| {
+        fixed_temporal_intensity.push(cell.intensity)
+    });
+    assert_eq!(fixed_temporal_intensity, vec![0.1, 0.2, 0.3, 0.4]);
     let temporal_tooltip = chart.general_tooltip_snapshot(temporal_series, 3).unwrap();
     assert_eq!(temporal_tooltip.x_label, "1700000060000");
     assert_eq!(temporal_tooltip.y_label.as_deref(), Some("15"));

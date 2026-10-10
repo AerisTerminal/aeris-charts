@@ -175,10 +175,54 @@ fn round_rect_to_tris(
     }
 }
 
+fn rgba(color: aeris_charts_render::color::Color) -> [f32; 4] {
+    [
+        color.r() as f32 / 255.0,
+        color.g() as f32 / 255.0,
+        color.b() as f32 / 255.0,
+        color.a() as f32 / 255.0,
+    ]
+}
+
 /// Tessellate one geometry prim into `out`, appending nothing for rects, text, and unhandled
 /// prims (they render elsewhere). Used by the order-preserving group builder in `frame.rs`.
 pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVertex>) {
     match prim {
+        Prim::GradientRect { rect, gradient } => {
+            if rect.w <= 0 || rect.h <= 0 {
+                return;
+            }
+            let (x0, y0) = (rect.x as f32, rect.y as f32);
+            let (x1, y1) = ((rect.x + rect.w) as f32, (rect.y + rect.h) as f32);
+            let top = rgba(gradient.top);
+            let bottom = rgba(gradient.bottom);
+            out.extend([
+                TriVertex {
+                    pos: [x0, y0],
+                    color: top,
+                },
+                TriVertex {
+                    pos: [x1, y0],
+                    color: top,
+                },
+                TriVertex {
+                    pos: [x0, y1],
+                    color: bottom,
+                },
+                TriVertex {
+                    pos: [x1, y0],
+                    color: top,
+                },
+                TriVertex {
+                    pos: [x1, y1],
+                    color: bottom,
+                },
+                TriVertex {
+                    pos: [x0, y1],
+                    color: bottom,
+                },
+            ]);
+        }
         // reference `layout.background` VerticalGradient: two triangles over the pane rect with
         // the stops as per-vertex colors — the same linear ramp the Canvas2D executor
         // paints with `createLinearGradient` (stop-for-stop identical).
@@ -257,6 +301,57 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
                         point(&lower[i + 1]),
                     )
                     .map(|pos| TriVertex { pos, color: col }),
+                );
+            }
+        }
+        Prim::BandGradientFill {
+            upper_first,
+            lower_first,
+            point_count,
+            line_type,
+            gradient,
+        } => {
+            let upper = pool_slice(points, *upper_first, *point_count);
+            let lower = pool_slice(points, *lower_first, *point_count);
+            let (upper, lower) = expand_band(&upper, &lower, *line_type);
+            let n = upper.len().min(lower.len());
+            if n < 2 {
+                return;
+            }
+            let (mut y_top, mut y_bottom) = (f32::INFINITY, f32::NEG_INFINITY);
+            for point in upper.iter().chain(&lower) {
+                y_top = y_top.min(point.y as f32);
+                y_bottom = y_bottom.max(point.y as f32);
+            }
+            let span = (y_bottom - y_top).max(1.0);
+            let rgba = |color: aeris_charts_render::color::Color| {
+                [
+                    color.r() as f32 / 255.0,
+                    color.g() as f32 / 255.0,
+                    color.b() as f32 / 255.0,
+                    color.a() as f32 / 255.0,
+                ]
+            };
+            let top = rgba(gradient.top);
+            let bottom = rgba(gradient.bottom);
+            for i in 0..n - 1 {
+                let point = |p: &aeris_charts_render::line::LinePoint| [p.x as f32, p.y as f32];
+                out.extend(
+                    band_segment_triangles(
+                        point(&upper[i]),
+                        point(&upper[i + 1]),
+                        point(&lower[i]),
+                        point(&lower[i + 1]),
+                    )
+                    .map(|pos| {
+                        let t = ((pos[1] - y_top) / span).clamp(0.0, 1.0);
+                        TriVertex {
+                            pos,
+                            color: std::array::from_fn(|channel| {
+                                top[channel] + (bottom[channel] - top[channel]) * t
+                            }),
+                        }
+                    }),
                 );
             }
         }
@@ -363,6 +458,25 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
                 out,
             );
         }
+        Prim::GradientRoundRect {
+            x,
+            y,
+            w,
+            h,
+            radii,
+            gradient,
+        } => {
+            let first = out.len();
+            round_rect_to_tris(*x, *y, *w, *h, *radii, gradient.top, 0.0, gradient.top, out);
+            let top = rgba(gradient.top);
+            let bottom = rgba(gradient.bottom);
+            for vertex in &mut out[first..] {
+                let t = ((vertex.pos[1] - *y) / *h).clamp(0.0, 1.0);
+                vertex.color = std::array::from_fn(|channel| {
+                    top[channel] + (bottom[channel] - top[channel]) * t
+                });
+            }
+        }
         _ => {}
     }
 }
@@ -379,7 +493,10 @@ pub fn geom_prims_to_tris(
 ) {
     for prim in prims {
         match prim {
-            Prim::Background { .. } | Prim::AreaFill { .. } | Prim::BandFill { .. } => {
+            Prim::Background { .. }
+            | Prim::AreaFill { .. }
+            | Prim::BandFill { .. }
+            | Prim::BandGradientFill { .. } => {
                 geom_prim_to_tris(prim, points, fill);
             }
             _ => geom_prim_to_tris(prim, points, stroke),
@@ -392,6 +509,35 @@ mod tests {
     use super::*;
     use aeris_charts_render::color::Color;
     use aeris_charts_render::draw_list::Gradient;
+
+    #[test]
+    fn band_gradient_colors_follow_exact_vertical_extent() {
+        let points = [[0.0, 0.0], [10.0, 0.0], [0.0, 10.0], [10.0, 10.0]];
+        let mut vertices = Vec::new();
+        geom_prim_to_tris(
+            &Prim::BandGradientFill {
+                upper_first: 0,
+                lower_first: 2,
+                point_count: 2,
+                line_type: LineType::Simple,
+                gradient: Gradient {
+                    top: Color::rgba(255, 0, 0, 128),
+                    bottom: Color::rgba(0, 0, 255, 64),
+                },
+            },
+            &points,
+            &mut vertices,
+        );
+        assert_eq!(vertices.len(), 6);
+        for vertex in vertices {
+            let expected = if vertex.pos[1] == 0.0 {
+                [1.0, 0.0, 0.0, 128.0 / 255.0]
+            } else {
+                [0.0, 0.0, 1.0, 64.0 / 255.0]
+            };
+            assert_eq!(vertex.color, expected);
+        }
+    }
 
     #[test]
     fn crossed_band_has_exact_nonoverlapping_lobes() {
@@ -558,6 +704,66 @@ mod tests {
             vertices[24 * 3..]
                 .iter()
                 .all(|vertex| vertex.color == [1.0, 1.0, 1.0, 1.0])
+        );
+    }
+
+    #[test]
+    fn bar_gradients_use_bounded_geometry_and_vertex_stop_colors() {
+        use aeris_charts_render::draw_list::{Gradient, IRect};
+        let gradient = Gradient {
+            top: Color::rgb(255, 0, 0),
+            bottom: Color::rgb(0, 0, 255),
+        };
+        let mut vertices = Vec::new();
+        geom_prim_to_tris(
+            &Prim::GradientRect {
+                rect: IRect {
+                    x: 2,
+                    y: 10,
+                    w: 8,
+                    h: 20,
+                },
+                gradient,
+            },
+            &[],
+            &mut vertices,
+        );
+        assert_eq!(vertices.len(), 6);
+        assert!(
+            vertices
+                .iter()
+                .filter(|vertex| vertex.pos[1] == 10.0)
+                .all(|vertex| vertex.color == [1.0, 0.0, 0.0, 1.0])
+        );
+        assert!(
+            vertices
+                .iter()
+                .filter(|vertex| vertex.pos[1] == 30.0)
+                .all(|vertex| vertex.color == [0.0, 0.0, 1.0, 1.0])
+        );
+        vertices.clear();
+        geom_prim_to_tris(
+            &Prim::GradientRoundRect {
+                x: 2.0,
+                y: 10.0,
+                w: 8.0,
+                h: 20.0,
+                radii: [2.0; 4],
+                gradient,
+            },
+            &[],
+            &mut vertices,
+        );
+        assert!(!vertices.is_empty());
+        assert!(
+            vertices
+                .iter()
+                .all(|vertex| vertex.pos[1] >= 10.0 && vertex.pos[1] <= 30.0)
+        );
+        assert!(
+            vertices
+                .iter()
+                .any(|vertex| vertex.color[0] > 0.0 && vertex.color[2] > 0.0)
         );
     }
 

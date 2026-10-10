@@ -2,8 +2,8 @@
 
 use aeris_charts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
-    DEFAULT_GENERAL_FILL_OPACITY, GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick,
-    GeneralBrushRange, GeneralBrushSnapshot, GeneralDatasetId, GeneralHitMode,
+    DEFAULT_GENERAL_FILL_OPACITY, GeneralAreaBaseline, GeneralAxisDomain, GeneralAxisOptions,
+    GeneralAxisTick, GeneralBrushRange, GeneralBrushSnapshot, GeneralDatasetId, GeneralHitMode,
     GeneralInterpolation, GeneralLineStyle, GeneralPointSymbol, GeneralReferenceId,
     GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId,
     GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode, GeneralTooltipSnapshot,
@@ -117,9 +117,29 @@ struct SeriesInput {
     #[serde(default = "default_fill_opacity")]
     fill_opacity: f64,
     #[serde(default)]
+    fill_gradient: Option<[String; 2]>,
+    #[serde(default)]
     baseline_value: Option<f64>,
     #[serde(default)]
+    baseline_policy: Option<String>,
+    #[serde(default)]
     data_labels: bool,
+    #[serde(default)]
+    bar_gap: f64,
+    #[serde(default)]
+    bar_max_width: Option<f64>,
+    #[serde(default)]
+    bar_corner_radius: f64,
+    #[serde(default)]
+    heatmap_value_domain: Option<[f64; 2]>,
+    #[serde(default)]
+    heatmap_low_color: Option<String>,
+    #[serde(default)]
+    heatmap_high_color: Option<String>,
+    #[serde(default)]
+    box_fill_color: Option<String>,
+    #[serde(default)]
+    box_median_color: Option<String>,
     #[serde(default)]
     group_id: Option<String>,
     #[serde(default)]
@@ -133,12 +153,16 @@ struct CategoryUpdateInput {
     categories: Vec<String>,
     max_rows: u32,
     labels: Option<Vec<Option<String>>>,
+    colors: Option<Vec<Option<String>>>,
+    symbols: Option<Vec<Option<String>>>,
 }
 
 #[derive(Deserialize)]
 struct CategoryDataInput {
     categories: Vec<String>,
     labels: Option<Vec<Option<String>>>,
+    colors: Option<Vec<Option<String>>>,
+    symbols: Option<Vec<Option<String>>>,
 }
 
 #[derive(Deserialize)]
@@ -146,6 +170,8 @@ struct HeatmapCategoryDataInput {
     x_categories: Vec<String>,
     y_categories: Vec<String>,
     labels: Option<Vec<Option<String>>>,
+    colors: Option<Vec<Option<String>>>,
+    symbols: Option<Vec<Option<String>>>,
 }
 
 #[derive(Deserialize)]
@@ -154,12 +180,16 @@ struct HeatmapCategoryUpdateInput {
     y_categories: Vec<String>,
     max_rows: u32,
     labels: Option<Vec<Option<String>>>,
+    colors: Option<Vec<Option<String>>>,
+    symbols: Option<Vec<Option<String>>>,
 }
 
 #[derive(Deserialize)]
 struct NumericDataInput {
     ids: Option<Vec<Value>>,
     labels: Option<Vec<Option<String>>>,
+    colors: Option<Vec<Option<String>>>,
+    symbols: Option<Vec<Option<String>>>,
 }
 
 fn default_true() -> bool {
@@ -202,10 +232,15 @@ fn interpolation(value: Option<&str>) -> Result<GeneralInterpolation, ChartError
     match value.unwrap_or("linear") {
         "linear" => Ok(GeneralInterpolation::Linear),
         "step" => Ok(GeneralInterpolation::Step),
+        "step_before" => Ok(GeneralInterpolation::StepBefore),
+        "step_middle" => Ok(GeneralInterpolation::StepMiddle),
+        "step_after" => Ok(GeneralInterpolation::StepAfter),
         "curved" => Ok(GeneralInterpolation::Curved),
+        "monotone" => Ok(GeneralInterpolation::Monotone),
+        "natural" => Ok(GeneralInterpolation::Natural),
         _ => Err(ChartError::new(
             aeris_charts_engine::ErrorCode::InvalidOptions,
-            "general series interpolation must be linear, step, or curved",
+            "general series interpolation must be linear, step, step_before, step_middle, step_after, curved, monotone, or natural",
         )),
     }
 }
@@ -280,17 +315,41 @@ fn series_options_from_input(
     options.interpolation = interpolation(input.interpolation.as_deref())?;
     options.connect_missing = input.connect_missing;
     options.fill_opacity = input.fill_opacity;
+    options.fill_gradient = input.fill_gradient;
     options.baseline_value = input.baseline_value;
+    options.baseline_policy = match input.baseline_policy.as_deref().unwrap_or("zero") {
+        "zero" => GeneralAreaBaseline::Zero,
+        "domain_min" => GeneralAreaBaseline::DomainMin,
+        "domain_max" => GeneralAreaBaseline::DomainMax,
+        _ => {
+            return Err(ChartError::new(
+                aeris_charts_engine::ErrorCode::InvalidOptions,
+                "general series baseline_policy must be zero, domain_min, or domain_max",
+            ));
+        }
+    };
     options.data_labels = input.data_labels;
+    options.bar_gap = input.bar_gap;
+    options.bar_max_width = input.bar_max_width;
+    options.bar_corner_radius = input.bar_corner_radius;
+    options.heatmap_value_domain = input.heatmap_value_domain;
+    options.heatmap_low_color = input.heatmap_low_color;
+    options.heatmap_high_color = input.heatmap_high_color;
+    options.box_fill_color = input.box_fill_color;
+    options.box_median_color = input.box_median_color;
     options.group_id = input.group_id;
     options.stack_id = input.stack_id;
     options.stack_mode = match input.stack_mode.as_deref().unwrap_or("normal") {
         "normal" => GeneralStackMode::Normal,
+        "cumulative" => GeneralStackMode::Cumulative,
+        "silhouette" => GeneralStackMode::Silhouette,
+        "wiggle" => GeneralStackMode::Wiggle,
         "percent" => GeneralStackMode::Percent,
+        "positive" => GeneralStackMode::Positive,
         _ => {
             return Err(ChartError::new(
                 aeris_charts_engine::ErrorCode::InvalidOptions,
-                "general series stack_mode must be normal or percent",
+                "general series stack_mode must be normal, cumulative, silhouette, wiggle, percent, or positive",
             ));
         }
     };
@@ -839,17 +898,40 @@ impl ChartInner {
             "interpolation": match series.interpolation() {
                 GeneralInterpolation::Linear => "linear",
                 GeneralInterpolation::Step => "step",
+                GeneralInterpolation::StepBefore => "step_before",
+                GeneralInterpolation::StepMiddle => "step_middle",
+                GeneralInterpolation::StepAfter => "step_after",
                 GeneralInterpolation::Curved => "curved",
+                GeneralInterpolation::Monotone => "monotone",
+                GeneralInterpolation::Natural => "natural",
             },
             "connect_missing": series.connect_missing(),
             "fill_opacity": series.fill_opacity(),
+            "fill_gradient": series.fill_gradient(),
+            "bar_gap": series.bar_gap(),
+            "bar_max_width": series.bar_max_width(),
+            "bar_corner_radius": series.bar_corner_radius(),
+            "heatmap_value_domain": series.heatmap_value_domain(),
+            "heatmap_low_color": series.heatmap_low_color(),
+            "heatmap_high_color": series.heatmap_high_color(),
+            "box_fill_color": series.box_fill_color(),
+            "box_median_color": series.box_median_color(),
             "baseline_value": series.baseline_value(),
+            "baseline_policy": match series.baseline_policy() {
+                GeneralAreaBaseline::Zero => "zero",
+                GeneralAreaBaseline::DomainMin => "domain_min",
+                GeneralAreaBaseline::DomainMax => "domain_max",
+            },
             "data_labels": series.data_labels(),
             "group_id": series.group_id(),
             "stack_id": series.stack_id(),
             "stack_mode": match series.stack_mode() {
                 GeneralStackMode::Normal => "normal",
+                GeneralStackMode::Cumulative => "cumulative",
+                GeneralStackMode::Silhouette => "silhouette",
+                GeneralStackMode::Wiggle => "wiggle",
                 GeneralStackMode::Percent => "percent",
+                GeneralStackMode::Positive => "positive",
             },
         })
         .to_string()
@@ -1180,10 +1262,13 @@ impl ChartInner {
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1219,10 +1304,13 @@ impl ChartInner {
             size: size.to_vec(),
             size_valid: size_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1257,10 +1345,13 @@ impl ChartInner {
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1293,10 +1384,13 @@ impl ChartInner {
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1333,10 +1427,13 @@ impl ChartInner {
             value: value.to_vec(),
             value_valid: value_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1370,10 +1467,13 @@ impl ChartInner {
             value: value.to_vec(),
             value_valid: value_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1411,10 +1511,13 @@ impl ChartInner {
             value: value.to_vec(),
             value_valid: value_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1450,10 +1553,13 @@ impl ChartInner {
             high: high.to_vec(),
             high_valid: high_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1501,10 +1607,13 @@ impl ChartInner {
             y_high: y_high.to_vec(),
             y_high_valid: y_high_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1544,10 +1653,13 @@ impl ChartInner {
             high: high.to_vec(),
             high_valid: high_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1607,10 +1719,13 @@ impl ChartInner {
             y_high: y_high.to_vec(),
             y_high_valid: y_high_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1648,10 +1763,13 @@ impl ChartInner {
             high: high.to_vec(),
             high_valid: high_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1693,10 +1811,13 @@ impl ChartInner {
             y_high: y_high.to_vec(),
             y_high_valid: y_high_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1746,10 +1867,13 @@ impl ChartInner {
             max: max.to_vec(),
             max_valid: max_valid.map(|values| values.to_vec()),
         };
-        match self
-            .engine
-            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
-        {
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -1781,10 +1905,12 @@ impl ChartInner {
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             metadata.labels,
+            metadata.colors,
+            metadata.symbols,
             (max_rows > 0).then_some(max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -1823,10 +1949,12 @@ impl ChartInner {
             size: size.to_vec(),
             size_valid: size_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             metadata.labels,
+            metadata.colors,
+            metadata.symbols,
             (max_rows > 0).then_some(max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -1864,10 +1992,12 @@ impl ChartInner {
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             metadata.labels,
+            metadata.colors,
+            metadata.symbols,
             (max_rows > 0).then_some(max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -1902,10 +2032,12 @@ impl ChartInner {
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             update.labels,
+            update.colors,
+            update.symbols,
             (update.max_rows > 0).then_some(update.max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -1944,10 +2076,12 @@ impl ChartInner {
             value: value.to_vec(),
             value_valid: value_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             update.labels,
+            update.colors,
+            update.symbols,
             (update.max_rows > 0).then_some(update.max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -1984,10 +2118,12 @@ impl ChartInner {
             value: value.to_vec(),
             value_valid: value_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             metadata.labels,
+            metadata.colors,
+            metadata.symbols,
             (max_rows > 0).then_some(max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -2028,10 +2164,12 @@ impl ChartInner {
             value: value.to_vec(),
             value_valid: value_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             metadata.labels,
+            metadata.colors,
+            metadata.symbols,
             (max_rows > 0).then_some(max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -2070,10 +2208,12 @@ impl ChartInner {
             high: high.to_vec(),
             high_valid: high_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             metadata.labels,
+            metadata.colors,
+            metadata.symbols,
             (max_rows > 0).then_some(max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -2124,10 +2264,12 @@ impl ChartInner {
             y_high: y_high.to_vec(),
             y_high_valid: y_high_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             metadata.labels,
+            metadata.colors,
+            metadata.symbols,
             (max_rows > 0).then_some(max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -2170,10 +2312,12 @@ impl ChartInner {
             high: high.to_vec(),
             high_valid: high_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             metadata.labels,
+            metadata.colors,
+            metadata.symbols,
             (max_rows > 0).then_some(max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -2236,10 +2380,12 @@ impl ChartInner {
             y_high: y_high.to_vec(),
             y_high_valid: y_high_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             metadata.labels,
+            metadata.colors,
+            metadata.symbols,
             (max_rows > 0).then_some(max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -2279,10 +2425,12 @@ impl ChartInner {
             high: high.to_vec(),
             high_valid: high_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             update.labels,
+            update.colors,
+            update.symbols,
             (update.max_rows > 0).then_some(update.max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -2326,10 +2474,12 @@ impl ChartInner {
             y_high: y_high.to_vec(),
             y_high_valid: y_high_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             update.labels,
+            update.colors,
+            update.symbols,
             (update.max_rows > 0).then_some(update.max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -2381,10 +2531,12 @@ impl ChartInner {
             max: max.to_vec(),
             max_valid: max_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset_labeled(
+        match self.engine.upsert_general_xy_dataset_styled(
             dataset,
             input,
             update.labels,
+            update.colors,
+            update.symbols,
             (update.max_rows > 0).then_some(update.max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -2580,8 +2732,28 @@ mod tests {
             GeneralInterpolation::Step
         );
         assert_eq!(
+            interpolation(Some("step_before")).unwrap(),
+            GeneralInterpolation::StepBefore
+        );
+        assert_eq!(
+            interpolation(Some("step_middle")).unwrap(),
+            GeneralInterpolation::StepMiddle
+        );
+        assert_eq!(
+            interpolation(Some("step_after")).unwrap(),
+            GeneralInterpolation::StepAfter
+        );
+        assert_eq!(
             interpolation(Some("curved")).unwrap(),
             GeneralInterpolation::Curved
+        );
+        assert_eq!(
+            interpolation(Some("monotone")).unwrap(),
+            GeneralInterpolation::Monotone
+        );
+        assert_eq!(
+            interpolation(Some("natural")).unwrap(),
+            GeneralInterpolation::Natural
         );
         assert!(interpolation(Some("basis")).is_err());
         assert_eq!(point_symbol(None).unwrap(), GeneralPointSymbol::Circle);

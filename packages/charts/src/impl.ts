@@ -487,13 +487,31 @@ function general_labels_value(labels: readonly (string | null)[] | undefined, ro
   return labels;
 }
 
+function general_colors_value(colors: readonly (string | null)[] | undefined, rows: number): readonly (string | null)[] | null {
+  if (colors === undefined) return null;
+  if (colors.length !== rows) {
+    throw new AerisChartsError("invalid_data", "general row colors and value columns must have equal lengths");
+  }
+  return colors;
+}
+
+function general_symbols_value(symbols: readonly (string | null)[] | undefined, rows: number): readonly (string | null)[] | null {
+  if (symbols === undefined) return null;
+  if (symbols.length !== rows) {
+    throw new AerisChartsError("invalid_data", "general row symbols and value columns must have equal lengths");
+  }
+  return symbols;
+}
+
 function general_value_metadata_json(
-  columns: { ids?: readonly (string | number | null)[]; labels?: readonly (string | null)[] },
+  columns: { ids?: readonly (string | number | null)[]; labels?: readonly (string | null)[]; colors?: readonly (string | null)[]; symbols?: readonly (string | null)[] },
   rows: number,
 ): string {
   const ids = general_ids_json(columns.ids, rows) || "null";
   const labels = JSON.stringify(general_labels_value(columns.labels, rows));
-  return `{"ids":${ids},"labels":${labels}}`;
+  const colors = JSON.stringify(general_colors_value(columns.colors, rows));
+  const symbols = JSON.stringify(general_symbols_value(columns.symbols, rows));
+  return `{"ids":${ids},"labels":${labels},"colors":${colors},"symbols":${symbols}}`;
 }
 
 function pack_general_rows(
@@ -505,6 +523,10 @@ function pack_general_rows(
   const ids = has_explicit ? data.map((row) => row.id ?? null) : undefined;
   const has_labels = data.some((row) => row.label !== undefined);
   const labels = has_labels ? data.map((row) => row.label ?? null) : undefined;
+  const has_colors = data.some((row) => row.color !== undefined);
+  const colors = has_colors ? data.map((row) => row.color ?? null) : undefined;
+  const has_symbols = data.some((row) => row.symbol !== undefined);
+  const symbols = has_symbols ? data.map((row) => row.symbol ?? null) : undefined;
   if (kind === "heatmap_grid") {
     if (x_scale === "temporal") {
       const x_epoch_ms = new Float64Array(data.length);
@@ -532,7 +554,7 @@ function pack_general_rows(
           value[index] = row.value;
         }
       }
-      return { ids, labels, x_epoch_ms, y_coordinate, value, value_valid };
+      return { ids, labels, colors, symbols, x_epoch_ms, y_coordinate, value, value_valid };
     }
     if (x_scale !== "band" && x_scale !== "point") {
       const x = new Float64Array(data.length);
@@ -559,7 +581,7 @@ function pack_general_rows(
           value[index] = row.value;
         }
       }
-      return { ids, labels, x, y_coordinate, value, value_valid };
+      return { ids, labels, colors, symbols, x, y_coordinate, value, value_valid };
     }
     const x_categories: string[] = [];
     const y_categories: string[] = [];
@@ -599,7 +621,7 @@ function pack_general_rows(
       }
     }
     return {
-      ids, labels, x_categories, x_category_indices, y_categories, y_category_indices, value, value_valid,
+      ids, labels, colors, symbols, x_categories, x_category_indices, y_categories, y_category_indices, value, value_valid,
     };
   }
   if (kind === "box_plot") {
@@ -646,7 +668,7 @@ function pack_general_rows(
       }
     }
     return {
-      ids, labels, categories, category_indices,
+      ids, labels, colors, symbols, categories, category_indices,
       min, min_valid, q1, q1_valid, median, median_valid, q3, q3_valid, max, max_valid,
     };
   }
@@ -714,7 +736,7 @@ function pack_general_rows(
           size[index] = value;
         }
       }
-      return { ids, labels, x, y, y_valid, size, size_valid };
+      return { ids, labels, colors, symbols, x, y, y_valid, size, size_valid };
     }
     if (kind === "error_bar") {
       const x_low = new Float64Array(data.length);
@@ -748,12 +770,12 @@ function pack_general_rows(
         }
       }
       return {
-        ids, labels, x, y, y_valid, x_low, x_low_valid, x_high, x_high_valid,
+        ids, labels, colors, symbols, x, y, y_valid, x_low, x_low_valid, x_high, x_high_valid,
         y_low, y_low_valid, y_high, y_high_valid,
       };
     }
-    if (is_range) return { ids, labels, x, low: low!, low_valid, high: y, high_valid: y_valid };
-    return { ids, labels, x, y, y_valid };
+    if (is_range) return { ids, labels, colors, symbols, x, low: low!, low_valid, high: y, high_valid: y_valid };
+    return { ids, labels, colors, symbols, x, y, y_valid };
   }
   if (x_mode === "temporal") {
     const x_epoch_ms = new Float64Array(data.length);
@@ -808,12 +830,12 @@ function pack_general_rows(
         }
       }
       return {
-        ids, labels, x_epoch_ms, y, y_valid, x_low_epoch_ms, x_low_valid,
+        ids, labels, colors, symbols, x_epoch_ms, y, y_valid, x_low_epoch_ms, x_low_valid,
         x_high_epoch_ms, x_high_valid, y_low, y_low_valid, y_high, y_high_valid,
       };
     }
-    if (is_range) return { ids, labels, x_epoch_ms, low: low!, low_valid, high: y, high_valid: y_valid };
-    return { ids, labels, x_epoch_ms, y, y_valid };
+    if (is_range) return { ids, labels, colors, symbols, x_epoch_ms, low: low!, low_valid, high: y, high_valid: y_valid };
+    return { ids, labels, colors, symbols, x_epoch_ms, y, y_valid };
   }
   const categories: string[] = [];
   const category_lookup = new Map<string, number>();
@@ -831,7 +853,7 @@ function pack_general_rows(
     }
     category_indices[index] = category;
   }
-  if (is_range) return { ids, labels, categories, category_indices, low: low!, low_valid, high: y, high_valid: y_valid };
+  if (is_range) return { ids, labels, colors, symbols, categories, category_indices, low: low!, low_valid, high: y, high_valid: y_valid };
   if (kind === "error_bar") {
     const y_low = new Float64Array(data.length);
     const y_high = new Float64Array(data.length);
@@ -851,9 +873,9 @@ function pack_general_rows(
         y_high_valid[index] = 1;
       }
     }
-    return { ids, labels, categories, category_indices, y, y_valid, y_low, y_low_valid, y_high, y_high_valid };
+    return { ids, labels, colors, symbols, categories, category_indices, y, y_valid, y_low, y_low_valid, y_high, y_high_valid };
   }
-  return { ids, labels, categories, category_indices, y, y_valid };
+  return { ids, labels, colors, symbols, categories, category_indices, y, y_valid };
 }
 
 function normalize_general_axis_options(options: general_axis_options): general_axis_options {
@@ -1214,7 +1236,7 @@ class general_series_impl implements general_series_api {
           JSON.stringify({
             x_categories: columns.x_categories,
             y_categories: columns.y_categories,
-            labels: general_labels_value(columns.labels, columns.value.length),
+            labels: general_labels_value(columns.labels, columns.value.length), colors: general_colors_value(columns.colors, columns.value.length), symbols: general_symbols_value(columns.symbols, columns.value.length),
             max_rows: max_rows ?? 0,
           }),
           columns.x_category_indices,
@@ -1249,7 +1271,7 @@ class general_series_impl implements general_series_api {
         general_ids_json(columns.ids, columns.category_indices.length),
         JSON.stringify({
           categories: columns.categories,
-          labels: general_labels_value(columns.labels, columns.category_indices.length),
+          labels: general_labels_value(columns.labels, columns.category_indices.length), colors: general_colors_value(columns.colors, columns.category_indices.length), symbols: general_symbols_value(columns.symbols, columns.category_indices.length),
           max_rows: max_rows ?? 0,
         }),
         columns.category_indices,
@@ -1277,7 +1299,7 @@ class general_series_impl implements general_series_api {
       result = this.chart.wasm.upsert_general_error_category_data_typed(
         this.dataset,
         general_ids_json(columns.ids, columns.category_indices.length),
-        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length), max_rows: max_rows ?? 0 }),
+        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length), colors: general_colors_value(columns.colors, columns.category_indices.length), symbols: general_symbols_value(columns.symbols, columns.category_indices.length), max_rows: max_rows ?? 0 }),
         columns.category_indices, columns.y, columns.y_valid,
         columns.y_low, columns.y_low_valid, columns.y_high, columns.y_high_valid,
       );
@@ -1295,7 +1317,7 @@ class general_series_impl implements general_series_api {
       result = this.chart.wasm.upsert_general_range_category_data_typed(
         this.dataset,
         general_ids_json(columns.ids, columns.category_indices.length),
-        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length), max_rows: max_rows ?? 0 }),
+        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length), colors: general_colors_value(columns.colors, columns.category_indices.length), symbols: general_symbols_value(columns.symbols, columns.category_indices.length), max_rows: max_rows ?? 0 }),
         columns.category_indices, columns.low, columns.low_valid, columns.high, columns.high_valid,
       );
     } else if ("size" in columns) {
@@ -1333,7 +1355,7 @@ class general_series_impl implements general_series_api {
         general_ids_json(columns.ids, columns.category_indices.length),
         JSON.stringify({
           categories: columns.categories,
-          labels: general_labels_value(columns.labels, columns.category_indices.length),
+          labels: general_labels_value(columns.labels, columns.category_indices.length), colors: general_colors_value(columns.colors, columns.category_indices.length), symbols: general_symbols_value(columns.symbols, columns.category_indices.length),
           max_rows: max_rows ?? 0,
         }),
         columns.category_indices,
@@ -1378,7 +1400,7 @@ class general_series_impl implements general_series_api {
           JSON.stringify({
             x_categories: columns.x_categories,
             y_categories: columns.y_categories,
-            labels: general_labels_value(columns.labels, columns.value.length),
+            labels: general_labels_value(columns.labels, columns.value.length), colors: general_colors_value(columns.colors, columns.value.length), symbols: general_symbols_value(columns.symbols, columns.value.length),
           }),
           columns.x_category_indices,
           columns.y_category_indices,
@@ -1410,7 +1432,7 @@ class general_series_impl implements general_series_api {
         general_ids_json(columns.ids, columns.category_indices.length),
         JSON.stringify({
           categories: columns.categories,
-          labels: general_labels_value(columns.labels, columns.category_indices.length),
+          labels: general_labels_value(columns.labels, columns.category_indices.length), colors: general_colors_value(columns.colors, columns.category_indices.length), symbols: general_symbols_value(columns.symbols, columns.category_indices.length),
         }),
         columns.category_indices,
         columns.min, columns.min_valid,
@@ -1437,7 +1459,7 @@ class general_series_impl implements general_series_api {
       result = this.chart.wasm.set_general_error_category_data_typed(
         this.dataset,
         general_ids_json(columns.ids, columns.category_indices.length),
-        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length) }),
+        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length), colors: general_colors_value(columns.colors, columns.category_indices.length), symbols: general_symbols_value(columns.symbols, columns.category_indices.length) }),
         columns.category_indices, columns.y, columns.y_valid,
         columns.y_low, columns.y_low_valid, columns.y_high, columns.y_high_valid,
       );
@@ -1455,7 +1477,7 @@ class general_series_impl implements general_series_api {
       result = this.chart.wasm.set_general_range_category_data_typed(
         this.dataset,
         general_ids_json(columns.ids, columns.category_indices.length),
-        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length) }),
+        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length), colors: general_colors_value(columns.colors, columns.category_indices.length), symbols: general_symbols_value(columns.symbols, columns.category_indices.length) }),
         columns.category_indices, columns.low, columns.low_valid, columns.high, columns.high_valid,
       );
     } else if ("size" in columns) {
@@ -1490,7 +1512,7 @@ class general_series_impl implements general_series_api {
         general_ids_json(columns.ids, columns.category_indices.length),
         JSON.stringify({
           categories: columns.categories,
-          labels: general_labels_value(columns.labels, columns.category_indices.length),
+          labels: general_labels_value(columns.labels, columns.category_indices.length), colors: general_colors_value(columns.colors, columns.category_indices.length), symbols: general_symbols_value(columns.symbols, columns.category_indices.length),
         }),
         columns.category_indices,
         columns.y,
