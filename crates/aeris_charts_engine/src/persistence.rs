@@ -2289,18 +2289,53 @@ impl ChartEngine {
     }
 
     fn import_state_v2(&mut self, state: StateV2) -> Result<PersistenceRestoreResult, ChartError> {
+        let target_domain = self.pane_horizontal_domain(0);
+        let source_has_financial_pane = state
+            .panes
+            .iter()
+            .any(|pane| pane.horizontal_domain.is_financial_time());
+        let compatible_initial_topology = match target_domain {
+            Some(crate::HorizontalDomain::FinancialTime) => {
+                self.series.len() == 1
+                    && self.series.iter().all(|series| {
+                        !series.removed
+                            && series.id == 0
+                            && series.kind == crate::SeriesKind::Candlestick
+                    })
+                    && self.series_order == [0]
+                    && self.data.series_count() == 1
+                    && self
+                        .data
+                        .series_data(0)
+                        .is_some_and(|(times, _)| times.is_empty())
+            }
+            Some(domain) => {
+                !source_has_financial_pane
+                    && state
+                        .panes
+                        .first()
+                        .is_some_and(|pane| pane.horizontal_domain == domain)
+                    && self.panes[0].preserve_empty
+                    && self.panes[0].named_scales.is_empty()
+                    && self.series.is_empty()
+                    && self.series_order.is_empty()
+                    && self.data.series_count() == 0
+            }
+            None => false,
+        };
         if self.panes.len() != 1
-            || self.panes[0].general_horizontal_domain.is_some()
+            || !compatible_initial_topology
             || !self.drawings.is_empty()
             || self.next_drawing_id != 1
             || self.general_dataset_count() != 0
+            || self.general_dataset_handles_issued
             || self.general_series_count() != 0
             || self.general_reference_count() != 0
             || self.general_axes.has_issued_handles()
         {
             return Err(ChartError::new(
                 ErrorCode::UnsupportedOperation,
-                "state import requires a fresh chart before general or drawing handles have been issued",
+                "V2 state import requires a compatible fresh financial-default or general-first chart before data, series, axis, reference, or drawing handles have been issued",
             ));
         }
         if !state.chart_options.is_object() {
@@ -2321,7 +2356,17 @@ impl ChartEngine {
             panes: state.panes.into_iter().map(|pane| pane.pane).collect(),
             drawings: state.drawings,
         })?;
-        let mut staged = ChartEngine::new(self.css_width, self.css_height, self.dpr);
+        let staged_initial_domain = if source_has_financial_pane {
+            crate::HorizontalDomain::FinancialTime
+        } else {
+            domains[0]
+        };
+        let mut staged = ChartEngine::new_with_initial_domain(
+            self.css_width,
+            self.css_height,
+            self.dpr,
+            staged_initial_domain,
+        )?;
         staged.next_pane_id = self.next_pane_id;
         let mut result = staged.install_validated_state(validated)?;
         for (pane, domain) in staged.panes.iter_mut().zip(domains) {
@@ -2380,12 +2425,29 @@ impl ChartEngine {
         staged
             .apply_options(&options_json)
             .map_err(|error| invalid(format!("invalid V2 chart_options: {error}")))?;
+        let restored_financial_pane = staged
+            .panes
+            .iter()
+            .position(|pane| pane.general_horizontal_domain.is_none());
+        if let Some(pane_index) = restored_financial_pane {
+            for series in &mut staged.series {
+                if !series.removed {
+                    series.pane_index = pane_index;
+                }
+            }
+        }
         self.panes = staged.panes;
+        self.data = staged.data;
+        self.series = staged.series;
+        self.series_order = staged.series_order;
+        self.series_order_explicit = staged.series_order_explicit;
         self.general_horizontal_domains = staged.general_horizontal_domains;
         self.general_axes = staged.general_axes;
         self.general_data = staged.general_data;
+        self.general_dataset_handles_issued = staged.general_dataset_handles_issued;
         self.general_series = staged.general_series;
         self.drawings = staged.drawings;
+        self.drawing_anchor_times = staged.drawing_anchor_times;
         self.next_pane_id = staged.next_pane_id;
         self.next_persistent_pane_id = staged.next_persistent_pane_id;
         self.next_drawing_id = staged.next_drawing_id;
@@ -2403,11 +2465,6 @@ impl ChartEngine {
         self.drawing_text_edit = None;
         self.hovered_drawing = None;
         self.hovered_text = None;
-        for series in &mut self.series {
-            if !series.removed {
-                series.pane_index = 0;
-            }
-        }
         self.drawing_runtime
             .borrow_mut()
             .rebuild_all(&self.drawings, self.panes.len());
@@ -3809,6 +3866,141 @@ mod tests {
     }
 
     #[test]
+    fn v2_general_only_round_trip_accepts_fresh_general_first_target() {
+        let domain = crate::HorizontalDomain::Category {
+            scale: crate::CategoryScaleType::Band,
+        };
+        let mut chart = ChartEngine::new_with_initial_domain(800.0, 500.0, 1.0, domain).unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "category-x",
+                0,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Band,
+            ))
+            .unwrap();
+        let mut y_axis = crate::GeneralAxisOptions::new(
+            "value-y",
+            0,
+            crate::AxisDimension::Y,
+            crate::GeneralScaleType::Linear,
+        );
+        y_axis.visible = false;
+        chart.add_general_axis(y_axis).unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(crate::GeneralXyInput::Category {
+                ids: Some(vec![
+                    crate::GeneralRowId::Text("jan".into()),
+                    crate::GeneralRowId::Text("feb".into()),
+                ]),
+                categories: vec!["Jan".into(), "Feb".into()],
+                category_indices: vec![0, 1],
+                y: vec![12.0, 18.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let bars = chart
+            .add_general_series(crate::GeneralSeriesOptions::column(
+                0,
+                dataset,
+                "category-x",
+                "value-y",
+            ))
+            .unwrap();
+        let line = chart
+            .add_general_series(crate::GeneralSeriesOptions::xy_line(
+                0,
+                dataset,
+                "category-x",
+                "value-y",
+            ))
+            .unwrap();
+        assert!(chart.set_general_series_visible(line, false));
+        assert!(chart.set_general_series_order(Some(0), vec![line, bars]));
+
+        let document = chart.export_state_json().unwrap();
+        let mut restored = ChartEngine::new_with_initial_domain(800.0, 500.0, 1.0, domain).unwrap();
+        let old_pane = restored.pane_stable_id(0).unwrap();
+        let result = restored.import_state_json(&document).unwrap();
+
+        assert_eq!(result.schema_version, 2);
+        assert_eq!(restored.export_state_json().unwrap(), document);
+        assert_eq!(restored.pane_index_for_id(old_pane), None);
+        assert_eq!(restored.pane_horizontal_domain(0), Some(domain));
+        assert!(restored.pane_preserve_empty(0));
+        assert!(restored.pane_series_ids(0).is_empty());
+        assert!(restored.series_entries().is_empty());
+        assert_eq!(restored.general_axes(Some(0)).len(), 2);
+        let restored_order = restored.general_series_order(Some(0));
+        assert_eq!(restored_order.len(), 2);
+        assert!(
+            !restored
+                .general_series(restored_order[0])
+                .unwrap()
+                .visible()
+        );
+        assert!(
+            restored
+                .general_series(restored_order[1])
+                .unwrap()
+                .visible()
+        );
+        assert!(!restored.build_frame().panes[0].main.is_empty());
+
+        let mut financial_default = ChartEngine::new(800.0, 500.0, 1.0);
+        financial_default.import_state_json(&document).unwrap();
+        assert_eq!(financial_default.export_state_json().unwrap(), document);
+        assert!(financial_default.series_entries().is_empty());
+        assert!(financial_default.pane_series_ids(0).is_empty());
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_financial_drawing_anchor_times() {
+        let mut chart = settled_chart();
+        chart
+            .add_pane_with_domain(true, crate::HorizontalDomain::Temporal)
+            .unwrap();
+        chart
+            .add_drawing(
+                DrawingKind::TrendLine,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 2.0,
+                        price: 10.0,
+                    },
+                    DrawingPoint {
+                        logical: 5.0,
+                        price: 12.0,
+                    },
+                ],
+                None,
+            )
+            .unwrap();
+        let mut document: serde_json::Value =
+            serde_json::from_str(&chart.export_state_json().unwrap()).unwrap();
+        document["drawings"][0]["anchor_times_micros"] = serde_json::json!([
+            {
+                "open_timestamp_micros": 7_200_000_000_i64,
+                "close_timestamp_micros": 10_800_000_000_i64
+            },
+            {
+                "open_timestamp_micros": 18_000_000_000_i64,
+                "close_timestamp_micros": 21_600_000_000_i64
+            }
+        ]);
+        let document = serde_json::to_string(&document).unwrap();
+
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored.import_state_json(&document).unwrap();
+
+        let anchors = restored.drawing_anchor_times.get(&1).unwrap();
+        assert_eq!(anchors.len(), 2);
+        assert_eq!(anchors[0].unwrap().open_timestamp_micros, 7_200_000_000);
+        assert_eq!(anchors[1].unwrap().close_timestamp_micros, 21_600_000_000);
+    }
+
+    #[test]
     fn v2_round_trip_preserves_horizontal_bar_axes_and_stack_options() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         let pane = chart
@@ -4562,7 +4754,78 @@ mod tests {
 
         let error = target.import_state_json(&document).unwrap_err();
         assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
+        assert!(error.message().contains("compatible fresh"));
         assert_eq!(target.export_state_json().unwrap(), before);
+    }
+
+    #[test]
+    fn v2_import_rejects_a_conflicting_general_first_domain_atomically() {
+        let source = ChartEngine::new_with_initial_domain(
+            800.0,
+            500.0,
+            1.0,
+            crate::HorizontalDomain::Category {
+                scale: crate::CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+        let document = source.export_state_json().unwrap();
+        let mut target = ChartEngine::new_with_initial_domain(
+            800.0,
+            500.0,
+            1.0,
+            crate::HorizontalDomain::Temporal,
+        )
+        .unwrap();
+        let before = target.export_state_json().unwrap();
+        let pane = target.pane_stable_id(0).unwrap();
+
+        let error = target.import_state_json(&document).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
+        assert!(error.message().contains("compatible fresh"));
+        assert_eq!(target.export_state_json().unwrap(), before);
+        assert_eq!(target.pane_index_for_id(pane), Some(0));
+    }
+
+    #[test]
+    fn v2_import_rejects_removed_dataset_handles_without_aliasing() {
+        let domain = crate::HorizontalDomain::Category {
+            scale: crate::CategoryScaleType::Band,
+        };
+        let source = ChartEngine::new_with_initial_domain(800.0, 500.0, 1.0, domain).unwrap();
+        let document = source.export_state_json().unwrap();
+        let mut target = ChartEngine::new_with_initial_domain(800.0, 500.0, 1.0, domain).unwrap();
+        let stale = target
+            .create_general_xy_dataset(crate::GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["A".into()],
+                category_indices: vec![0],
+                y: vec![1.0],
+                y_valid: None,
+            })
+            .unwrap();
+        assert!(target.remove_general_dataset(stale));
+        let before = target.export_state_json().unwrap();
+
+        let error = target.import_state_json(&document).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
+        assert_eq!(target.export_state_json().unwrap(), before);
+        assert!(
+            target
+                .replace_general_xy_dataset(
+                    stale,
+                    crate::GeneralXyInput::Category {
+                        ids: None,
+                        categories: vec!["B".into()],
+                        category_indices: vec![0],
+                        y: vec![2.0],
+                        y_valid: None,
+                    },
+                )
+                .is_err()
+        );
     }
 
     #[test]

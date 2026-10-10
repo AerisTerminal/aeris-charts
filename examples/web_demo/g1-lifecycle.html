@@ -8,7 +8,7 @@
     :root { font: 14px system-ui, sans-serif; color: #e8edf5; background: #10141c; }
     body { margin: 0; }
     main { padding: 20px; }
-    .charts { display: grid; grid-template-columns: repeat(3, minmax(280px, 1fr)); gap: 12px; }
+    .charts { display: grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); gap: 12px; }
     article { border: 1px solid #344156; border-radius: 8px; padding: 10px; }
     .chart { position: relative; height: 260px; }
     button { margin: 14px 8px 0 0; }
@@ -22,6 +22,7 @@
     <div class="charts">
       <article><h2>Financial default</h2><div id="financial" class="chart"></div></article>
       <article><h2>General first pane</h2><div id="general" class="chart"></div></article>
+      <article><h2>Restored general pane</h2><div id="restored-general" class="chart"></div></article>
       <article><h2>Mixed engine</h2><div id="mixed" class="chart"></div></article>
     </div>
     <button id="invalid" type="button">Try invalid update</button>
@@ -56,6 +57,22 @@
       { id: "jan", x: "Jan", y: 12 },
       { id: "feb", x: "Feb", y: 18 },
     ]);
+    const generalLine = general.addSeries("xy_line", {
+      pane: 0, x_axis_id: "general-x", y_axis_id: "general-y", title: "Hidden trend",
+    });
+    generalLine.setData([
+      { id: "jan-line", x: "Jan", y: 14 },
+      { id: "feb-line", x: "Feb", y: 16 },
+    ]);
+    generalLine.setVisible(false);
+    general.set_general_series_order([generalLine, generalBars], 0);
+
+    const generalState = general.exportState();
+    const restoredGeneral = await createChart(document.querySelector("#restored-general"), {
+      ...chartOptions,
+      initialPane: { horizontal_domain: { type: "category", scale: "band" } },
+    });
+    restoredGeneral.importState(generalState);
 
     const mixed = await createChart(document.querySelector("#mixed"), chartOptions);
     const mixedFinancial = mixed.panes()[0].get_series()[0];
@@ -87,6 +104,9 @@
       generalX,
       generalY,
       generalBars,
+      generalLine,
+      generalState,
+      restoredGeneral,
     };
 
     document.querySelector("#invalid").addEventListener("click", () => {
@@ -125,6 +145,7 @@
     addEventListener("beforeunload", () => {
       financial.remove();
       general.remove();
+      restoredGeneral.remove();
       mixed.remove();
     }, { once: true });
     document.body.dataset.ready = "true";

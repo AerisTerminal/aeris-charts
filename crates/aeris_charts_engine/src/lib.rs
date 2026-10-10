@@ -1786,6 +1786,9 @@ pub struct ChartEngine {
     general_horizontal_domains: domains::HorizontalDomainRegistry,
     general_axes: general_axes::GeneralAxisRegistry,
     general_data: Option<general_data::GeneralDataStore>,
+    /// Monotonic freshness guard for V2 import. The optional store is released when empty, but an
+    /// issued dataset identity must still prevent a restored dataset from aliasing a stale handle.
+    general_dataset_handles_issued: bool,
     general_series: Option<general_series::GeneralSeriesRegistry>,
     pub options: ChartOptionsStore,
     theme: ChartTheme,
@@ -2071,6 +2074,7 @@ impl ChartEngine {
             general_horizontal_domains,
             general_axes: general_axes::GeneralAxisRegistry::new(),
             general_data: None,
+            general_dataset_handles_issued: false,
             general_series: None,
             options: ChartOptionsStore::new(),
             theme: ChartTheme::default(),
@@ -2343,6 +2347,7 @@ impl ChartEngine {
             self.general_data = Some(store);
             id
         };
+        self.general_dataset_handles_issued = true;
         self.invalidate_frame_scene();
         Ok(id)
     }

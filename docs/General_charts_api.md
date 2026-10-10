@@ -81,6 +81,13 @@ pane's stable identity and installs a fresh, unpreserved financial-time default 
 the removed handle becomes stale. A populated or unpreserved final pane is rejected. This lets
 declarative owners dispose their pane without manufacturing a temporary keeper pane.
 
+V2 state can be restored atomically into a fresh financial-default chart or into a fresh
+general-first chart whose initial domain matches the general-only document. General-only restore
+never retains or creates a hidden financial series. Pane domains and `preserve_empty`, axes,
+datasets, series ordering, and visibility come from the document. Restore rejects targets with
+issued general or drawing handles, data, extra financial series, or a conflicting initial general
+domain, and leaves the target unchanged.
+
 A pane's horizontal-domain type is immutable while the pane contains a series, axis, selection,
 or persisted general dataset. This avoids silently reinterpreting stored coordinates. An empty
 pane may be rebound explicitly in a later API, but remove-and-recreate is sufficient for the first

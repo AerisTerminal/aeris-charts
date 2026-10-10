@@ -287,7 +287,7 @@ Any invalid timestamp rejects a direct set/update batch atomically, and an inval
 leaves the current series unchanged. Shared-ring drains reject malformed rows individually.
 Worker charts expose the most recent result through `offscreen_chart.last_ingestion_diagnostics()`.
 
-## Persistence V1
+## Persistence V1 and V2
 
 Persistence schema versioning is independent of the npm package version. V1 contains only:
 
@@ -309,6 +309,15 @@ receive fresh live handle IDs while retaining separate persistent pane IDs; pre-
 price-scale handles therefore become stale. Import is accepted only before drawing IDs have been
 issued and while the chart still has its initial pane topology. This prevents an old drawing handle
 from retargeting a restored drawing with the same persistent ID.
+
+General or mixed charts export schema V2, including pane domains and preserve-empty flags, general
+axes, datasets, series order and visibility, and chart options. Restore accepts either a fresh
+financial-default chart or a fresh general-first chart whose initial domain matches a general-only
+document. A general-only restore contains no financial series, regardless of which compatible fresh
+constructor was used for the target. A target with issued general/drawing handles, data, additional
+financial series, or a conflicting initial general domain is rejected before mutation. Restored
+pane, axis, dataset, and series handles are new; callbacks and transient interaction state are not
+serialized.
 
 Limits for untrusted input are 8 MiB per document, 64 panes, 10,000 drawings, 100,000 anchors per
 drawing, 250,000 total anchors, 64 KiB text per drawing, and 1 MiB total drawing text. Unknown

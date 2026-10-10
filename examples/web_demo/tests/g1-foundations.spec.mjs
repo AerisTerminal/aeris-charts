@@ -45,6 +45,17 @@ test("public lifecycle fixture creates general-first and one-engine mixed panes"
     generalPanes: window.__g1Lifecycle.general.panes().length,
     generalDomain: window.__g1Lifecycle.general.exportState().panes[0].horizontal_domain,
     generalSeries: window.__g1Lifecycle.general.panes()[0].get_series().length,
+    restoredState: window.__g1Lifecycle.restoredGeneral.exportState(),
+    restoredSeries: window.__g1Lifecycle.restoredGeneral.panes()[0].get_series().map((series) => ({
+      kind: series.kind,
+      visible: series.options().visible,
+    })),
+    restoredAxes: window.__g1Lifecycle.restoredGeneral.axes(0).map((axis) => ({
+      id: axis.id,
+      visible: axis.options().visible,
+    })),
+    restoredOrder: window.__g1Lifecycle.restoredGeneral.general_series_order(0).map((series) => series.kind),
+    sourceState: window.__g1Lifecycle.generalState,
     mixedPanes: window.__g1Lifecycle.mixed.panes().length,
     mixedFinancialClose: window.__g1Lifecycle.mixedFinancial.data()[0].close,
   }));
@@ -53,10 +64,24 @@ test("public lifecycle fixture creates general-first and one-engine mixed panes"
     financialSchema: 1,
     generalPanes: 1,
     generalDomain: { Category: { scale: "Band" } },
-    generalSeries: 1,
+    generalSeries: 2,
+    restoredState: initial.sourceState,
+    restoredSeries: [
+      { kind: "xy_line", visible: false },
+      { kind: "column", visible: true },
+    ],
+    restoredAxes: [
+      { id: "general-x", visible: true },
+      { id: "general-y", visible: true },
+    ],
+    restoredOrder: ["xy_line", "column"],
+    sourceState: initial.sourceState,
     mixedPanes: 2,
     mixedFinancialClose: 22,
   });
+  expect(initial.restoredState.schema_version).toBe(2);
+  expect(initial.restoredState.panes[0]).toEqual(initial.sourceState.panes[0]);
+  expect(initial.restoredSeries.every(({ kind }) => kind !== "candlestick")).toBe(true);
 
   await page.getByRole("button", { name: "Try invalid update" }).click();
   await expect(page.getByRole("status")).toContainText("prior mixed state retained");

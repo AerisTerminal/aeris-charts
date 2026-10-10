@@ -274,8 +274,11 @@ receive ordinary ordered text primitives. Sparse, bounded custom row labels live
 store and participate in the same validated replacement/upsert/retention transaction as X/Y data;
 tooltip and accessibility snapshots expose their text without replacing raw numeric values. General
 chart persistence uses schema V2 for pane domains, axes, datasets, labels, series bindings, and chart
-options while financial-only exports remain V1-compatible; restore rehydrates browser general-series
-handles without persisting transient hover, selection, or keyboard focus.
+options while financial-only exports remain V1-compatible. V2 restore stages the complete document
+against its persisted initial topology, then atomically replaces a compatible fresh financial-default
+or matching general-first target. A general-only document installs no financial data or series;
+mixed documents place the fresh default financial series on the restored financial pane. Restore
+rehydrates browser general-series handles without persisting transient hover, selection, or keyboard focus.
 
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
 object only for boundary-compatible deep merges and serialization. An option patch is merged and

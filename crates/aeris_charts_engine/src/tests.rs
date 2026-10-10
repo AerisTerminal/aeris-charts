@@ -8934,6 +8934,61 @@ fn initial_general_domain_has_one_preserved_pane_and_no_financial_series() {
 }
 
 #[test]
+fn occupied_general_first_only_pane_rejects_removal_without_staling_or_changing_frame() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        800.0,
+        500.0,
+        1.0,
+        HorizontalDomain::Category {
+            scale: CategoryScaleType::Band,
+        },
+    )
+    .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "category-x",
+            0,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "value-y",
+            0,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let data = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: Some(vec![GeneralRowId::Text("jan".into())]),
+            categories: vec!["Jan".into()],
+            category_indices: vec![0],
+            y: vec![12.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::column(
+            0,
+            data,
+            "category-x",
+            "value-y",
+        ))
+        .unwrap();
+    let pane = chart.pane_stable_id(0).unwrap();
+    let before = chart.export_state_json().unwrap();
+    let frame_before = chart.build_frame();
+
+    assert!(!chart.remove_pane(0));
+    assert_eq!(chart.pane_index_for_id(pane), Some(0));
+    assert!(chart.general_series(series).is_some());
+    assert_eq!(chart.export_state_json().unwrap(), before);
+    assert_eq!(chart.build_frame(), frame_before);
+}
+
+#[test]
 fn general_data_is_lazy_atomic_and_releases_capacity_when_empty() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     assert_eq!(chart.general_dataset_count(), 0);
