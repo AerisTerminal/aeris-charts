@@ -9,11 +9,11 @@
 use std::time::{Duration, Instant};
 
 use aeris_charts_engine::{
-    ChartCursor, ChartEngine, ChartKey, DrawingTextEditKey, InputModifiers, PointerInput,
-    WheelDeltaMode, WheelSample,
+    CHART_KEY_BINDINGS, ChartCursor, ChartEngine, ChartKey, DrawingTextEditKey, InputModifiers,
+    PointerInput, WheelDeltaMode, WheelSample,
 };
 use gpui::{
-    App, Bounds, ClipboardItem, CursorStyle, KeyDownEvent, KeyUpEvent, Modifiers,
+    App, Bounds, ClipboardItem, CursorStyle, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
     ModifiersChangedEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PinchEvent, Pixels, Point,
     ScrollDelta, ScrollWheelEvent, Window, point,
 };
@@ -221,23 +221,60 @@ pub fn input_modifiers(modifiers: &Modifiers) -> InputModifiers {
     }
 }
 
+/// GPUI key names of the chart's keys. Undo and Redo are command chords on `z`.
+const CHART_KEY_NAMES: &[(&str, ChartKey)] = &[
+    ("left", ChartKey::ArrowLeft),
+    ("right", ChartKey::ArrowRight),
+    ("pageup", ChartKey::PageUp),
+    ("pagedown", ChartKey::PageDown),
+    ("+", ChartKey::ZoomIn),
+    ("=", ChartKey::ZoomIn),
+    ("-", ChartKey::ZoomOut),
+    ("_", ChartKey::ZoomOut),
+    ("home", ChartKey::Home),
+    ("end", ChartKey::End),
+    ("enter", ChartKey::Enter),
+    ("backspace", ChartKey::Backspace),
+    ("delete", ChartKey::Delete),
+    ("escape", ChartKey::Escape),
+];
+
 /// GPUI key names the chart binds.
 pub fn chart_key(key: &str) -> Option<ChartKey> {
-    Some(match key {
-        "left" => ChartKey::ArrowLeft,
-        "right" => ChartKey::ArrowRight,
-        "pageup" => ChartKey::PageUp,
-        "pagedown" => ChartKey::PageDown,
-        "+" | "=" => ChartKey::ZoomIn,
-        "-" | "_" => ChartKey::ZoomOut,
-        "home" => ChartKey::Home,
-        "end" => ChartKey::End,
-        "enter" => ChartKey::Enter,
-        "backspace" => ChartKey::Backspace,
-        "delete" => ChartKey::Delete,
-        "escape" => ChartKey::Escape,
-        _ => return None,
-    })
+    CHART_KEY_NAMES
+        .iter()
+        .find_map(|&(name, chart_key)| (name == key).then_some(chart_key))
+}
+
+/// Every GPUI keystroke the chart may consume outside text editing, derived from the engine's
+/// [`CHART_KEY_BINDINGS`]. Hosts check their application shortcuts against it so no shortcut
+/// shadows a chart key.
+pub fn chart_keystrokes() -> Vec<Keystroke> {
+    let mut keystrokes = Vec::new();
+    for binding in CHART_KEY_BINDINGS {
+        let modifiers = Modifiers {
+            control: binding.modifiers.control,
+            alt: binding.modifiers.alt,
+            shift: binding.modifiers.shift,
+            platform: binding.modifiers.meta,
+            function: false,
+        };
+        let mut push = |key: &str| {
+            keystrokes.push(Keystroke {
+                modifiers,
+                key: key.to_string(),
+                key_char: None,
+            });
+        };
+        match binding.key {
+            ChartKey::Undo | ChartKey::Redo => push("z"),
+            key => CHART_KEY_NAMES
+                .iter()
+                .filter(|&&(_, named)| named == key)
+                .for_each(|&(name, _)| push(name)),
+        }
+    }
+    keystrokes
 }
 
 /// The one GPUI cursor for each engine cursor.
@@ -617,9 +654,56 @@ mod wheel_tests {
 mod key_tests {
     use super::*;
     use aeris_charts_engine::{
-        ChartInputEvent, DrawingKind, DrawingModifiers, DrawingPoint, InteractionOptions,
+        ChartInputEvent, ChartKeyBinding, DrawingKind, DrawingModifiers, DrawingPoint,
+        InteractionOptions,
     };
-    use gpui::Keystroke;
+
+    #[test]
+    fn published_keystrokes_are_exactly_the_engine_bindings() {
+        let keystrokes = chart_keystrokes();
+        for keystroke in &keystrokes {
+            let event = KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            };
+            let key = chart_key_down(&event).unwrap_or_else(|| panic!("{keystroke}"));
+            let binding = ChartKeyBinding {
+                key,
+                modifiers: input_modifiers(&keystroke.modifiers),
+            };
+            assert!(CHART_KEY_BINDINGS.contains(&binding), "{keystroke}");
+        }
+        for binding in CHART_KEY_BINDINGS {
+            assert!(
+                keystrokes.iter().any(|keystroke| {
+                    let event = KeyDownEvent {
+                        keystroke: keystroke.clone(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    };
+                    chart_key_down(&event) == Some(binding.key)
+                        && input_modifiers(&keystroke.modifiers) == binding.modifiers
+                }),
+                "{binding:?} has no GPUI keystroke"
+            );
+        }
+        for chord in [
+            "alt-left",
+            "alt-enter",
+            "ctrl-shift-pageup",
+            "ctrl-home",
+            "alt-escape",
+        ] {
+            let parsed = Keystroke::parse(chord).unwrap();
+            assert!(
+                !keystrokes
+                    .iter()
+                    .any(|k| k.key == parsed.key && k.modifiers == parsed.modifiers),
+                "{chord} is not a chart key"
+            );
+        }
+    }
 
     fn press(chart: &mut ChartEngine, name: &str, modifiers: Modifiers) -> bool {
         let event = KeyDownEvent {

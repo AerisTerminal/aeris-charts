@@ -299,9 +299,11 @@ export function install_gestures(chart: chart_impl): () => void {
   };
   const on_keydown = (event: KeyboardEvent) => {
     const cfg = chart.gesture_config();
-    if (!wasm.input_key_down(event.key, modifiers(event), event.repeat, event.timeStamp,
-      chart.prefers_reduced_motion(), cfg.wheel_zoom)) return;
-    if (!MODIFIER_KEYS.has(event.key)) event.preventDefault();
+    const handled = wasm.input_key_down(event.key, modifiers(event), event.repeat,
+      event.timeStamp, chart.prefers_reduced_motion(), cfg.wheel_zoom);
+    // An unconsumed key can still change the chart: Escape always drops hover.
+    if (!handled && !wasm.frame_pending()) return;
+    if (handled && !MODIFIER_KEYS.has(event.key)) event.preventDefault();
     chart.consume_input_events();
     chart.repaint();
     chart.announce_view();

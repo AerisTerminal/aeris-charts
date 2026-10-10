@@ -1314,17 +1314,35 @@ impl ChartEngine {
         true
     }
 
-    /// Clear every brushed comparison range (double-click and Escape).
-    pub(crate) fn clear_brushable_ranges(&mut self) {
+    /// Clear every brushed comparison range (double-click and Escape). Returns whether any range
+    /// was set.
+    pub(crate) fn clear_brushable_ranges(&mut self) -> bool {
         let tooltips: Vec<_> = self
             .brushable_areas
             .iter()
             .map(|area| area.tooltip)
             .collect();
+        let had_range = tooltips
+            .iter()
+            .any(|&tooltip| self.delta_tooltip_has_range(tooltip));
         for tooltip in tooltips {
             self.clear_delta_tooltip(tooltip);
         }
         self.sync_brushable_areas();
+        had_range
+    }
+
+    fn delta_tooltip_has_range(&self, primitive_id: NativePrimitiveId) -> bool {
+        self.series.iter().any(|series| {
+            series.native_primitives.iter().any(|primitive| {
+                primitive.id == primitive_id
+                    && matches!(
+                        &primitive.kind,
+                        NativeSeriesPrimitiveKind::DeltaTooltip(state)
+                            if !state.committed_points.is_empty() || !state.preview_points.is_empty()
+                    )
+            })
+        })
     }
 
     /// Restyle each brushable area from its tooltip's active range. Compositions whose series or

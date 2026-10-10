@@ -532,8 +532,11 @@ export class offscreen_chart {
       : this.wasm.input_key_down(event.key, modifiers, event.repeat ?? false,
         event.timestamp_ms ?? performance.now(),
         event.type === "down" ? this.reduced_motion : true, true);
-    if (handled) this.consume_input_events();
-    if (handled) this.render();
+    // An unconsumed key can still change the chart: Escape always drops hover.
+    if (handled || this.wasm.frame_pending()) {
+      this.consume_input_events();
+      this.render();
+    }
     if (this.wasm.input_animating()) this.schedule_input_tick();
     return handled;
   }

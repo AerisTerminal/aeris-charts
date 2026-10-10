@@ -6709,14 +6709,17 @@ impl ChartEngine {
     }
 
     /// Cancel creation and disarm the tool as one atomic controller operation. Escape routes
-    /// here, so it also dismisses a transient measure.
-    pub fn cancel_drawing_tool(&mut self) {
+    /// here, so it also dismisses a transient measure. Returns whether a tool, creation, or
+    /// measure was active.
+    pub fn cancel_drawing_tool(&mut self) -> bool {
         self.invalidate_frame_drawings();
         self.invalidate_frame_overlay();
-        self.drawing_controller.armed = None;
-        self.drawing_controller.pending = None;
-        self.drawing_controller.brush = None;
-        self.drawing_controller.measure = None;
+        let controller = &mut self.drawing_controller;
+        let armed = controller.armed.take().is_some();
+        let pending = controller.pending.take().is_some();
+        let brush = controller.brush.take().is_some();
+        let measure = controller.measure.take().is_some();
+        armed || pending || brush || measure
     }
 
     // --- transient Shift-click measure ------------------------------------------------------

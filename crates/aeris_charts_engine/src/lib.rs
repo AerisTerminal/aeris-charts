@@ -75,9 +75,10 @@ pub use big_trades::{
     MAX_BIG_TRADES_INDICATORS,
 };
 pub use chart_input::{
-    CLICK_SLOP_MANHATTAN, ChartContextMenu, ChartCursor, ChartFocusTarget, ChartHover,
-    ChartInputEvent, ChartKey, ChartRegion, HostPrimitiveHit, HostPrimitiveLayer,
-    InteractionOptions, PANE_SEPARATOR_HIT, PointerInput, TRADING_TOOLTIP_DWELL_MS,
+    CHART_KEY_BINDINGS, CLICK_SLOP_MANHATTAN, ChartContextMenu, ChartCursor, ChartFocusTarget,
+    ChartHover, ChartInputEvent, ChartKey, ChartKeyBinding, ChartRegion, HostPrimitiveHit,
+    HostPrimitiveLayer, InteractionOptions, PANE_SEPARATOR_HIT, PointerInput,
+    TRADING_TOOLTIP_DWELL_MS,
 };
 pub use custom_studies::{
     CustomStudyDefinition, CustomStudyFactory, CustomStudyFault, CustomStudyFaultEvent,

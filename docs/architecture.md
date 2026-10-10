@@ -493,7 +493,14 @@ click, double-click, and crosshair events to subscribers and opens the DOM edito
 editing sessions. Hosts keep event
 translation, pointer capture, applying the cursor, timer and frame scheduling, menus, clipboard, and
 product persistence; they never re-implement routing, cursor priority, or key bindings. A new
-interaction is therefore added to the controller once and every native host inherits it. Typed scale
+interaction is therefore added to the controller once and every native host inherits it.
+`CHART_KEY_BINDINGS` is the complete chart-wide keyboard contract: each key with the exact modifier
+sets it accepts. A key outside the table (Alt+Left, Ctrl+PageUp, Alt+Enter) is neither processed nor
+consumed, and Escape is consumed only when it cancelled transient state, so the host's application
+shortcuts receive every other chord. Escape still drops hover and reports the crosshair leaving, so
+hosts drain input events and repaint whenever `frame_pending` holds, not only after a consumed key. The GPUI adapter publishes the table as GPUI keystrokes
+(`input::chart_keystrokes`) so an application keymap can reject a shortcut that would shadow a chart
+key. Typed scale
 commands resolve the effective series, propagate price format across a scale, toggle series/axis
 chrome, and move every attached series between price axes as one operation; hosts do not walk engine
 series to reproduce these transactions. A price format selected for a scale is retained on the pane

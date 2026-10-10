@@ -189,6 +189,65 @@ pub enum ChartKey {
     Redo,
 }
 
+/// One chart-wide key binding: a key and the exact modifier set that triggers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChartKeyBinding {
+    pub key: ChartKey,
+    pub modifiers: InputModifiers,
+}
+
+const fn binding(key: ChartKey, shift: bool, control: bool, meta: bool) -> ChartKeyBinding {
+    ChartKeyBinding {
+        key,
+        modifiers: InputModifiers {
+            shift,
+            control,
+            alt: false,
+            meta,
+        },
+    }
+}
+
+/// Every chart-wide binding of [`ChartEngine::input_key_down`]. A key pressed with any other
+/// modifier set is not the chart's: it is left unconsumed and unprocessed so the host's
+/// application shortcuts receive it. Hosts publish this table to keep their own shortcuts off
+/// chart keys. Focused-target bindings ([`ChartEngine::input_target_key_down`]) are separate.
+pub const CHART_KEY_BINDINGS: &[ChartKeyBinding] = &[
+    binding(ChartKey::ArrowLeft, false, false, false),
+    binding(ChartKey::ArrowLeft, true, false, false),
+    binding(ChartKey::ArrowLeft, false, true, false),
+    binding(ChartKey::ArrowRight, false, false, false),
+    binding(ChartKey::ArrowRight, true, false, false),
+    binding(ChartKey::ArrowRight, false, true, false),
+    binding(ChartKey::PageUp, false, false, false),
+    binding(ChartKey::PageDown, false, false, false),
+    // `+` and `_` need Shift on common layouts.
+    binding(ChartKey::ZoomIn, false, false, false),
+    binding(ChartKey::ZoomIn, true, false, false),
+    binding(ChartKey::ZoomOut, false, false, false),
+    binding(ChartKey::ZoomOut, true, false, false),
+    binding(ChartKey::Home, false, false, false),
+    binding(ChartKey::End, false, false, false),
+    binding(ChartKey::Enter, false, false, false),
+    binding(ChartKey::Backspace, false, false, false),
+    binding(ChartKey::Delete, false, false, false),
+    // Escape cancels even while the drawing magnet (Ctrl/Cmd) or straighten (Shift) is held.
+    binding(ChartKey::Escape, false, false, false),
+    binding(ChartKey::Escape, true, false, false),
+    binding(ChartKey::Escape, false, true, false),
+    binding(ChartKey::Escape, true, true, false),
+    binding(ChartKey::Escape, false, false, true),
+    binding(ChartKey::Escape, true, false, true),
+    binding(ChartKey::Undo, false, true, false),
+    binding(ChartKey::Undo, false, false, true),
+    binding(ChartKey::Redo, true, true, false),
+    binding(ChartKey::Redo, true, false, true),
+];
+
+fn chart_key_bound(key: ChartKey, modifiers: InputModifiers) -> bool {
+    CHART_KEY_BINDINGS.contains(&ChartKeyBinding { key, modifiers })
+}
+
 /// The chart region under a pane-space point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChartRegion {
@@ -1327,7 +1386,8 @@ impl ChartEngine {
     // --- keyboard ---
 
     /// A key press while the chart has focus. Text editing is routed by the host first because its
-    /// key conventions are platform-specific. Returns whether the chart consumed the key.
+    /// key conventions are platform-specific. Only [`CHART_KEY_BINDINGS`] are processed; Escape is
+    /// consumed only when it cancelled something. Returns whether the chart consumed the key.
     pub fn input_key_down(
         &mut self,
         key: ChartKey,
@@ -1335,17 +1395,21 @@ impl ChartEngine {
         repeat: bool,
         now_ms: f64,
     ) -> bool {
+        if !chart_key_bound(key, modifiers) {
+            return false;
+        }
         let options = self.input.options;
         let step = if modifiers.control || modifiers.shift {
             10.0
         } else {
             1.0
         };
-        if key == ChartKey::Escape {
-            self.cancel_drawing_edit_session();
+        let edit_cancelled = if key == ChartKey::Escape {
+            self.cancel_drawing_edit_session()
         } else {
             self.commit_drawing_edit_session();
-        }
+            false
+        };
         let handled = match key {
             ChartKey::ArrowUp | ChartKey::ArrowDown | ChartKey::Tab => false,
             ChartKey::ArrowLeft | ChartKey::ArrowRight => {
@@ -1394,15 +1458,22 @@ impl ChartEngine {
             }
             ChartKey::Backspace | ChartKey::Delete => self.delete_selection(),
             ChartKey::Escape => {
-                self.abandon_press();
-                self.discard_trading_interaction();
-                self.cancel_drawing_tool();
+                // `|=` evaluates every step: one Escape clears all transient state at once.
+                let mut cancelled = edit_cancelled;
+                cancelled |= self.abandon_press();
+                cancelled |= self.discard_trading_interaction();
+                cancelled |= self.cancel_drawing_tool();
+                cancelled |= self.selected_drawing().is_some();
                 self.set_selected_drawing(None);
-                self.clear_volume_profile_selection();
-                self.clear_brushable_ranges();
+                cancelled |= self.clear_volume_profile_selection();
+                cancelled |= self.clear_brushable_ranges();
+                // Escape always drops hover so crosshair subscribers hear the cursor leave, but
+                // hover alone is not consumed: the host's own Escape handling still runs.
                 self.clear_pointer_hover();
                 self.push_input_event(ChartInputEvent::CrosshairLeft);
-                true
+                self.input.frame_dirty = true;
+                self.refresh_input_cursor();
+                cancelled
             }
             ChartKey::Undo => self.undo_drawing(),
             ChartKey::Redo => self.redo_drawing(),
@@ -1670,11 +1741,13 @@ impl ChartEngine {
         }
     }
 
-    /// Discard an open keyboard drawing edit, restoring its start.
-    fn cancel_drawing_edit_session(&mut self) {
-        if let Some(session) = self.input.drawing_edit.take() {
-            self.restore_drawing_points(session.before);
-        }
+    /// Discard an open keyboard drawing edit, restoring its start. Returns whether one was open.
+    fn cancel_drawing_edit_session(&mut self) -> bool {
+        let Some(session) = self.input.drawing_edit.take() else {
+            return false;
+        };
+        self.restore_drawing_points(session.before);
+        true
     }
 
     /// A committed placement. Tools that request typing open the engine session directly.
@@ -1713,10 +1786,13 @@ impl ChartEngine {
     }
 
     /// Close the open press without committing it: drags restore their start, captures and
-    /// previews are discarded, scale sessions end, and a delta-tooltip gesture settles.
-    fn abandon_press(&mut self) {
+    /// previews are discarded, scale sessions end, and a delta-tooltip gesture settles. Returns
+    /// whether a press or pending capture was open.
+    fn abandon_press(&mut self) -> bool {
+        let open = self.input.press.is_some() || self.input.pending_capture.is_some();
         self.input.resolver.cancel();
         self.abandon_press_state();
+        open
     }
 
     fn abandon_press_state(&mut self) {
@@ -2949,6 +3025,59 @@ mod tests {
     }
 
     #[test]
+    fn keys_outside_the_binding_table_are_left_to_the_host() {
+        let mut chart = chart();
+        let alt = InputModifiers {
+            alt: true,
+            ..InputModifiers::default()
+        };
+        let control = InputModifiers {
+            control: true,
+            ..InputModifiers::default()
+        };
+        let start = chart.scroll_position();
+        assert!(!chart.input_key_down(ChartKey::ArrowLeft, alt, false, 0.0));
+        assert!(!chart.input_animating());
+        assert!(!chart.input_key_down(ChartKey::PageUp, control, false, 0.0));
+        assert_eq!(chart.scroll_position(), start);
+
+        chart.set_drawing_tool(Some(DrawingKind::Path), None, None);
+        click(&mut chart, 120.0, 120.0);
+        click(&mut chart, 200.0, 160.0);
+        assert!(!chart.input_key_down(ChartKey::Enter, alt, false, 0.0));
+        assert!(!chart.input_key_down(ChartKey::Escape, alt, false, 0.0));
+        assert!(!chart.input_key_down(ChartKey::Home, control, false, 0.0));
+        assert_eq!(
+            chart.active_drawing_tool(),
+            Some(DrawingKind::Path),
+            "an unbound chord must not touch chart state"
+        );
+        assert!(chart.drawings().is_empty());
+    }
+
+    #[test]
+    fn escape_with_nothing_to_cancel_drops_hover_but_is_left_to_the_host() {
+        let mut chart = chart();
+        let none = InputModifiers::default();
+        let (x, y) = series_point(&chart);
+        chart.input_pointer_move(at(x, y), false);
+        assert!(chart.crosshair.is_some());
+        chart.take_input_events();
+        chart.input.frame_dirty = false;
+
+        assert!(!chart.input_key_down(ChartKey::Escape, none, false, 0.0));
+        assert_eq!(chart.crosshair, None);
+        assert_eq!(
+            chart.take_input_events(),
+            vec![ChartInputEvent::CrosshairLeft]
+        );
+        assert!(
+            chart.input.frame_dirty,
+            "the host repaints without the crosshair"
+        );
+    }
+
+    #[test]
     fn escape_cancels_every_transient_interaction_and_reports_the_crosshair_leaving() {
         let mut chart = chart();
         let none = InputModifiers::default();
@@ -3386,14 +3515,21 @@ mod tests {
     #[test]
     fn keyboard_undo_and_redo_share_the_drawing_history() {
         let mut chart = chart();
-        let none = InputModifiers::default();
+        let control = InputModifiers {
+            control: true,
+            ..InputModifiers::default()
+        };
+        let control_shift = InputModifiers {
+            shift: true,
+            ..control
+        };
         assert!(chart.set_drawing_tool(Some(DrawingKind::Rectangle), None, None));
         click(&mut chart, 120.0, 120.0);
         click(&mut chart, 300.0, 220.0);
         let id = chart.drawings()[0].id;
-        assert!(chart.input_key_down(ChartKey::Undo, none, false, 0.0));
+        assert!(chart.input_key_down(ChartKey::Undo, control, false, 0.0));
         assert!(chart.drawing(id).is_none());
-        assert!(chart.input_key_down(ChartKey::Redo, none, false, 0.0));
+        assert!(chart.input_key_down(ChartKey::Redo, control_shift, false, 0.0));
         assert!(chart.drawing(id).is_some());
     }
 

@@ -336,10 +336,13 @@ impl ChartEngine {
         true
     }
 
-    pub(crate) fn clear_volume_profile_selection(&mut self) {
-        if self.selected_volume_profile.take().is_some() {
+    /// Returns whether a profile was selected.
+    pub(crate) fn clear_volume_profile_selection(&mut self) -> bool {
+        let selected = self.selected_volume_profile.take().is_some();
+        if selected {
             self.invalidate_frame_overlay();
         }
+        selected
     }
 
     pub fn hovered_volume_profile_indicator(&self) -> Option<NativePrimitiveId> {
