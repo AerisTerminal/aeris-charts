@@ -201,7 +201,9 @@ ordered `AreaFill` before the matching stroke; its default zero baseline is clam
 falls back to the lower-domain plot edge when a logarithmic Y axis has no zero coordinate. Unstacked
 areas can instead use an explicit numeric baseline or the effective Y-domain minimum or maximum;
 the resolved media-space baseline drives both fill construction and exact hits. Stacked and ranged
-areas use their own lower boundary and reject nondefault baseline options. A persisted,
+areas use their own lower boundary; stacked areas retain valid dormant explicit or policy
+baselines so removing the stack restores the selected unstacked baseline. Ranged areas reject
+nondefault baseline options. A persisted,
 bounded fill opacity preserves the default 3:1 top-to-baseline gradient and scales stacked/range bands from
 the same value. `xy_area` and `range_area` may instead persist two validated CSS colors for the
 ordered `AreaFill` or `BandGradientFill`; each stop's alpha is multiplied by fill opacity in shared
@@ -299,9 +301,11 @@ Their browser `apply_options` transactions also update mutable axis configuratio
 place after validating the complete candidate. General-series rebinding commits through that same engine
 transaction only when the target pane has equivalent horizontal-domain semantics and its X/Y scale types match;
 kind and dataset identity remain structural. Invalid candidates leave the live object unchanged.
-The engine retains finite, bounded dormant point radii and line widths, and valid dormant line
-styles, even when markers or the relevant stroke are not painted. This preserves partial-patch
-toggles and earlier V2 state without relaxing active-kind checks or atomic invalid updates. The general
+The engine retains finite dormant point radii (including legacy zero), bounded line widths, and
+valid dormant line styles, even when markers or the relevant stroke are not painted. Active
+scatter and path markers enforce the current point-radius bounds; an error-bar radius of zero
+keeps legacy capless stems. This preserves partial-patch toggles and earlier V2 state without
+relaxing active-kind checks or atomic invalid updates. The general
 registry is also the single ordering owner: exact global or pane-local permutations update paint, legend,
 hit-test, React keyed-array, and persistence order while leaving other panes' relative order intact. React uses
 these mutations for ordinary prop and order changes and releases a new pane or series if initial data installation

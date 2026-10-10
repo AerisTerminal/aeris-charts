@@ -1067,6 +1067,129 @@ test("public V2 restore accepts older dormant radius, width, and style combinati
   expect(result).toEqual([[7, 2, 2, 2], [5, 2, 2, 2], ["Dashed", 2, 2, 2]]);
 });
 
+test("public area stack patches retain dormant baselines and restore them on unstack", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "640px", height: "360px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    try {
+      const pane = chart.add_pane({
+        preserve_empty: true, horizontal_domain: { type: "continuous", scale: "linear" },
+      });
+      chart.add_axis({ id: "stack-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
+      chart.add_axis({ id: "stack-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+      const values = [];
+      for (const baseline of [{ baseline_value: 1.5 }, { baseline_policy: "domain_max" }]) {
+        const series = chart.add_series("xy_area", {
+          pane: pane.pane_index(), x_axis_id: "stack-x", y_axis_id: "stack-y", ...baseline,
+        });
+        series.set_data([{ id: "a", x: 0, y: 2 }, { id: "b", x: 1, y: 4 }]);
+        const before = chart.export_state();
+        series.apply_options({ stack_id: "stack" });
+        const stacked = chart.export_state();
+        let invalid;
+        try {
+          series.apply_options({ baseline_value: 1.5, baseline_policy: "domain_min" });
+        } catch (error) {
+          invalid = error.code;
+        }
+        const atomic = JSON.stringify(chart.export_state()) === JSON.stringify(stacked);
+        series.apply_options({ stack_id: null });
+        values.push({
+          options: series.options(), stacked: stacked.series.at(-1),
+          same_data: JSON.stringify(before.datasets) === JSON.stringify(chart.export_state().datasets),
+          same_series: before.series.at(-1).dataset === stacked.series.at(-1).dataset,
+          restored: JSON.stringify(chart.export_state()) === JSON.stringify(before),
+          invalid, atomic,
+        });
+        series.remove();
+      }
+      return values;
+    } finally {
+      chart.remove();
+      host.remove();
+    }
+  });
+  for (const [index, field, expected] of [[0, "baseline_value", 1.5], [1, "baseline_policy", "domain_max"]]) {
+    expect(result[index].options[field]).toBe(expected);
+    expect(result[index].stacked.stack_id).toBe("stack");
+    expect(result[index].stacked[field]).toBe(index ? "DomainMax" : expected);
+    expect(result[index]).toMatchObject({ same_data: true, same_series: true, restored: true, invalid: "invalid_options", atomic: true });
+  }
+});
+
+test("public V2 import retains pre-G3 stacked baseline and zero-radius states", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const hosts = [];
+    const charts = [];
+    const create = async () => {
+      const host = document.createElement("div");
+      Object.assign(host.style, { width: "640px", height: "360px" });
+      document.body.appendChild(host);
+      hosts.push(host);
+      const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+      charts.push(chart);
+      return chart;
+    };
+    try {
+      const source = await create();
+      const pane = source.add_pane({
+        preserve_empty: true, horizontal_domain: { type: "continuous", scale: "linear" },
+      });
+      source.add_axis({ id: "old-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
+      source.add_axis({ id: "old-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+      for (const kind of ["xy_area", "xy_line", "scatter", "error_bar"]) {
+        const series = source.add_series(kind, {
+          pane: pane.pane_index(), x_axis_id: "old-x", y_axis_id: "old-y",
+        });
+        series.set_data([{ id: "a", x: 0, y: 2 }, { id: "b", x: 1, y: 4 }]);
+      }
+      const old = source.export_state();
+      old.series[0].stack_id = "stack";
+      old.series[0].baseline_value = 1.5;
+      old.series[1].point_radius = 0;
+      old.series[3].point_radius = 0;
+      for (const series of old.series) {
+        for (const field of [
+          "fill_gradient", "baseline_policy", "bar_gap", "bar_max_width",
+          "bar_corner_radius", "heatmap_value_domain", "heatmap_low_color",
+          "heatmap_high_color", "box_fill_color", "box_median_color",
+        ]) delete series[field];
+      }
+      const target = await create();
+      target.import_state(old);
+      const saved = target.export_state();
+      const area = target.panes().flatMap((entry) => entry.get_series()).find((entry) => entry.kind === "xy_area");
+      area.apply_options({ stack_id: null });
+      const unstacked = area.options();
+      const invalid = structuredClone(saved);
+      invalid.series[2].point_radius = 0;
+      const untouched = await create();
+      const before = JSON.stringify(untouched.export_state());
+      let error;
+      try { untouched.import_state(invalid); } catch (failure) { error = failure.code; }
+      return {
+        values: saved.series.map(({ baseline_value, point_radius, stack_id }) => ({ baseline_value, point_radius, stack_id })),
+        unstacked: unstacked.baseline_value,
+        invalid: error,
+        atomic: JSON.stringify(untouched.export_state()) === before,
+      };
+    } finally {
+      for (const chart of charts) chart.remove();
+      for (const host of hosts) host.remove();
+    }
+  });
+  expect(result.values[0]).toMatchObject({ baseline_value: 1.5, stack_id: "stack" });
+  expect(result.values[1].point_radius).toBe(0);
+  expect(result.values[3].point_radius).toBe(0);
+  expect(result).toMatchObject({ unstacked: 1.5, invalid: "invalid_options", atomic: true });
+});
+
 test("general area baselines and fill opacity round-trip through the public browser API", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {

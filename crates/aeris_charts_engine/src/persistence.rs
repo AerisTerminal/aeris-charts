@@ -4052,6 +4052,9 @@ mod tests {
             serde_json::from_str(&source.export_state_json().unwrap()).unwrap();
         for (series_index, field, value) in [
             (0, "point_radius", serde_json::json!(7.0)),
+            (0, "point_radius", serde_json::json!(0.0)),
+            (1, "point_radius", serde_json::json!(0.0)),
+            (1, "point_radius", serde_json::json!(1000.0)),
             (1, "line_width", serde_json::json!(5.0)),
             (1, "line_style", serde_json::json!("Dashed")),
         ] {
@@ -4083,9 +4086,9 @@ mod tests {
             assert_eq!(saved["datasets"][0], baseline["datasets"][0]);
         }
         for (series_index, field, value) in [
-            (0, "point_radius", serde_json::json!(1000.0)),
             (1, "line_width", serde_json::json!(0.0)),
             (1, "point_markers", serde_json::json!(true)),
+            (0, "point_radius", serde_json::json!("NaN")),
         ] {
             let mut invalid = baseline.clone();
             invalid["series"][series_index][field] = value;
@@ -4094,6 +4097,132 @@ mod tests {
             assert!(target.import_state_json(&invalid.to_string()).is_err());
             assert_eq!(target.export_state_json().unwrap(), before);
         }
+    }
+
+    #[test]
+    fn v2_import_retains_pre_g3_stacked_area_baseline_and_capless_error_bars() {
+        let mut source = ChartEngine::new(640.0, 400.0, 1.0);
+        let pane = source
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        for (id, dimension) in [
+            ("x", crate::AxisDimension::X),
+            ("y", crate::AxisDimension::Y),
+        ] {
+            source
+                .add_general_axis(crate::GeneralAxisOptions::new(
+                    id,
+                    pane,
+                    dimension,
+                    crate::GeneralScaleType::Linear,
+                ))
+                .unwrap();
+        }
+        let dataset = source
+            .create_general_xy_dataset(crate::GeneralXyInput::Numeric {
+                ids: Some(vec![crate::GeneralRowId::Text("point".into())]),
+                x: vec![1.0],
+                y: vec![3.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let area = source
+            .add_general_series(crate::GeneralSeriesOptions::xy_area(
+                pane, dataset, "x", "y",
+            ))
+            .unwrap();
+        let error_dataset = source
+            .create_general_xy_dataset(crate::GeneralXyInput::ErrorNumeric {
+                ids: Some(vec![crate::GeneralRowId::Text("error".into())]),
+                x: vec![1.0],
+                y: vec![3.0],
+                y_valid: None,
+                x_low: vec![0.0],
+                x_low_valid: Some(vec![0]),
+                x_high: vec![0.0],
+                x_high_valid: Some(vec![0]),
+                y_low: vec![0.0],
+                y_low_valid: Some(vec![0]),
+                y_high: vec![0.0],
+                y_high_valid: Some(vec![0]),
+            })
+            .unwrap();
+        source
+            .add_general_series(crate::GeneralSeriesOptions::error_bar(
+                pane,
+                error_dataset,
+                "x",
+                "y",
+            ))
+            .unwrap();
+        let mut old: serde_json::Value =
+            serde_json::from_str(&source.export_state_json().unwrap()).unwrap();
+        old["series"][0]["stack_id"] = serde_json::json!("stack");
+        old["series"][0]["baseline_value"] = serde_json::json!(1.5);
+        old["series"][1]["point_radius"] = serde_json::json!(0.0);
+        for series in old["series"].as_array_mut().unwrap() {
+            let series = series.as_object_mut().unwrap();
+            for field in [
+                "fill_gradient",
+                "baseline_policy",
+                "bar_gap",
+                "bar_max_width",
+                "bar_corner_radius",
+                "heatmap_value_domain",
+                "heatmap_low_color",
+                "heatmap_high_color",
+                "box_fill_color",
+                "box_median_color",
+            ] {
+                series.remove(field);
+            }
+        }
+        let mut target = ChartEngine::new(640.0, 400.0, 1.0);
+        target.import_state_json(&old.to_string()).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&target.export_state_json().unwrap()).unwrap();
+        assert_eq!(saved["series"][0]["baseline_value"], serde_json::json!(1.5));
+        assert_eq!(saved["series"][0]["stack_id"], serde_json::json!("stack"));
+        assert_eq!(saved["series"][1]["point_radius"], serde_json::json!(0.0));
+        let restored_area = target.general_series_order(Some(pane))[0];
+        let restored_error = target.general_series_order(Some(pane))[1];
+        assert_eq!(
+            target
+                .general_series(restored_error)
+                .unwrap()
+                .point_radius(),
+            0.0
+        );
+        let mut invalid_cap = old.clone();
+        invalid_cap["series"][1]["point_radius"] = serde_json::json!(-1.0);
+        let mut untouched = ChartEngine::new(640.0, 400.0, 1.0);
+        let before = untouched.export_state_json().unwrap();
+        assert!(
+            untouched
+                .import_state_json(&invalid_cap.to_string())
+                .is_err()
+        );
+        assert_eq!(untouched.export_state_json().unwrap(), before);
+        let mut unstack = crate::GeneralSeriesOptions::xy_area(pane, dataset, "x", "y");
+        unstack.baseline_value = Some(1.5);
+        // Restored datasets have new live handles; use the restored series' dataset.
+        unstack.dataset = target.general_series(restored_area).unwrap().dataset();
+        target
+            .update_general_series_options(restored_area, unstack)
+            .unwrap();
+        assert_eq!(
+            target
+                .general_series(restored_area)
+                .unwrap()
+                .baseline_value(),
+            Some(1.5)
+        );
+        assert!(source.general_series(area).is_some());
     }
 
     #[test]

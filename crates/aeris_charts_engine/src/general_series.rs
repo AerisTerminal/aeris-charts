@@ -7922,14 +7922,6 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
             "baseline_value and baseline_policy cannot both be set",
         ));
     }
-    if options.stack_id.is_some()
-        && (options.baseline_value.is_some()
-            || options.baseline_policy != GeneralAreaBaseline::Zero)
-    {
-        return Err(invalid(
-            "stacked areas use their cumulative boundary as the baseline",
-        ));
-    }
     if options.title.len() > MAX_GENERAL_SERIES_TITLE_BYTES {
         return Err(resource(format!(
             "general series title exceeds {MAX_GENERAL_SERIES_TITLE_BYTES} UTF-8 bytes"
@@ -7984,8 +7976,14 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
     if options.stack_id.is_none() && options.stack_mode != GeneralStackMode::Normal {
         return Err(invalid("nondefault stack mode requires a stack ID"));
     }
+    // Earlier V2 writers retained any finite dormant radius, including zero.
+    // A zero error-bar cap is meaningful (a stem without caps), even when painted.
     if !options.point_radius.is_finite()
-        || !(MIN_GENERAL_POINT_RADIUS..=MAX_GENERAL_POINT_RADIUS).contains(&options.point_radius)
+        || ((options.kind == GeneralSeriesKind::Scatter || options.point_markers)
+            && !(MIN_GENERAL_POINT_RADIUS..=MAX_GENERAL_POINT_RADIUS)
+                .contains(&options.point_radius))
+        || (options.kind == GeneralSeriesKind::ErrorBar
+            && !(0.0..=MAX_GENERAL_POINT_RADIUS).contains(&options.point_radius))
     {
         return Err(invalid(format!(
             "general series point radius must be finite and in {MIN_GENERAL_POINT_RADIUS}..={MAX_GENERAL_POINT_RADIUS} CSS px"

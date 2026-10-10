@@ -1565,6 +1565,112 @@ fn dormant_path_radius_survives_marker_toggle_and_invalid_patch_is_atomic() {
 }
 
 #[test]
+fn stacked_area_retains_dormant_baseline_until_unstacked() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                id,
+                pane,
+                dimension,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+    }
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: Some(vec![
+                GeneralRowId::Text("a".into()),
+                GeneralRowId::Text("b".into()),
+            ]),
+            x: vec![0.0, 1.0],
+            y: vec![2.0, 4.0],
+            y_valid: None,
+        })
+        .unwrap();
+    for baseline in [Some(1.5), None] {
+        let mut options = GeneralSeriesOptions::xy_area(pane, dataset, "x", "y");
+        options.baseline_value = baseline;
+        if baseline.is_none() {
+            options.baseline_policy = GeneralAreaBaseline::DomainMax;
+        }
+        let series = chart.add_general_series(options.clone()).unwrap();
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        assert!(
+            chart
+                .general_path_baseline_y(chart.general_series(series).unwrap())
+                .is_some()
+        );
+        let before = chart.export_state_json().unwrap();
+        options.stack_id = Some("stack".into());
+        chart
+            .update_general_series_options(series, options.clone())
+            .unwrap();
+        assert_eq!(chart.general_series(series).unwrap().dataset(), dataset);
+        assert_eq!(
+            chart.general_series(series).unwrap().baseline_value(),
+            baseline
+        );
+        assert_eq!(
+            chart.general_series(series).unwrap().baseline_policy(),
+            options.baseline_policy
+        );
+        let stacked_frame = chart.build_frame();
+        assert!(stacked_frame.panes[pane].main.iter().any(|primitive| {
+            matches!(
+                primitive,
+                Prim::BandFill { .. } | Prim::BandGradientFill { .. }
+            )
+        }));
+        assert!(
+            !stacked_frame.panes[pane]
+                .main
+                .iter()
+                .any(|primitive| { matches!(primitive, Prim::AreaFill { .. }) })
+        );
+        let stacked = chart.export_state_json().unwrap();
+        options.baseline_value = Some(f64::INFINITY);
+        assert!(
+            chart
+                .update_general_series_options(series, options.clone())
+                .is_err()
+        );
+        assert_eq!(chart.export_state_json().unwrap(), stacked);
+        options.baseline_value = baseline;
+        if baseline.is_some() {
+            options.baseline_policy = GeneralAreaBaseline::DomainMin;
+            assert!(
+                chart
+                    .update_general_series_options(series, options.clone())
+                    .is_err()
+            );
+            assert_eq!(chart.export_state_json().unwrap(), stacked);
+            options.baseline_policy = GeneralAreaBaseline::Zero;
+        }
+        options.stack_id = None;
+        chart
+            .update_general_series_options(series, options)
+            .unwrap();
+        assert!(
+            chart.build_frame().panes[pane]
+                .main
+                .iter()
+                .any(|primitive| { matches!(primitive, Prim::AreaFill { .. }) })
+        );
+        assert_eq!(chart.export_state_json().unwrap(), before);
+        assert!(chart.remove_general_series(series));
+    }
+}
+
+#[test]
 fn general_shared_tooltip_groups_visible_rows_by_exact_horizontal_datum() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     let pane = chart
@@ -4799,7 +4905,15 @@ fn xy_area_stacks_by_x_identity_with_normal_and_percent_geometry() {
     invalid_baseline.stack_id = Some("total".into());
     invalid_baseline.interpolation = GeneralInterpolation::Curved;
     invalid_baseline.baseline_policy = GeneralAreaBaseline::DomainMin;
-    assert!(chart.add_general_series(invalid_baseline).is_err());
+    let dormant_baseline = chart.add_general_series(invalid_baseline).unwrap();
+    assert_eq!(
+        chart
+            .general_series(dormant_baseline)
+            .unwrap()
+            .baseline_policy(),
+        GeneralAreaBaseline::DomainMin
+    );
+    chart.remove_general_series(dormant_baseline);
     let mut mismatched =
         GeneralSeriesOptions::xy_area(pane, second_dataset, "stack-area-x", "stack-area-y");
     mismatched.stack_id = Some("total".into());

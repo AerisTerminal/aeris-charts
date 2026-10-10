@@ -240,8 +240,9 @@ Unstacked `xy_area` uses `baseline_policy: "zero"` by default. `"domain_min"` an
 the [Recharts Area](https://recharts.github.io/en-US/api/Area/) `baseValue: "dataMin"` and
 `"dataMax"` choices, which resolve against the axis domain.
 `baseline_value` supplies a finite numeric value instead and cannot be combined with a
-nonzero policy. Stacked areas derive their baseline from the prior member and reject a numeric
-baseline or nonzero policy.
+nonzero policy. Stacked areas derive their painted baseline from the prior member; a valid
+explicit or policy baseline remains saved but dormant while stacked. Removing `stack_id`
+restores that baseline without requiring another option update.
 `xy_area` and `range_area` accept `fill_gradient: [topColor, bottomColor]` with two supported CSS
 colors. The colors and their alpha reach the shared vertical `AreaFill` or gradient-band primitive;
 `fill_opacity` multiplies both stop alphas. Without this option, the existing one-color area fade

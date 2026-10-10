@@ -158,6 +158,31 @@ all six policy-v7 package-size ceilings, strict native performance, GPUI structu
 parity/replay, and 570 portable Chromium/Firefox/WebKit browser tests (16 intended
 platform skips). The physical-DPR GPUI pixel limitation above is unchanged.
 
+A second G3 compatibility audit compared each `validate_presentation` branch introduced or
+tightened in `ba4723d..864dd59` against pre-G3 accepted states. The new gradient, heatmap,
+bar-sizing, corner, and baseline-policy fields are absent/defaulted in old V2 documents;
+preexisting fill opacity, symbol, connection, interpolation, marker, width, baseline-kind,
+group, and stack-kind checks remain unchanged. The first correction removed dormant
+line-width/style/radius kind rejections. This follow-up removes the remaining new cross-field
+stack/baseline rejection: valid explicit or policy baselines persist while stacked and apply again
+when unstacked, but explicit-plus-policy conflict, nonfinite values and incompatible kinds remain
+invalid. The newly unconditional radius bound had also rejected pre-G3 finite dormant zero (and
+other finite out-of-range) values on nonmarking kinds/markers-off lines and the meaningful zero-cap
+error-bar state. Dormant radii remain finite and unchanged; scatter/active markers retain [1, 64],
+error-bar caps retain [0, 64]. Old V2 and merged browser patch regressions exercise these exact
+states, atomic invalid updates, and retained identities. The public tests failed before the fix
+against the previous built bundle with the stacked-baseline error; engine tests reproduced the same
+rejection. New optional row metadata validators in `general_data.rs`, WASM and TypeScript have
+empty defaults for pre-G3 documents and do not tighten existing populated columns. The 2026-10-11
+follow-up gate passed locked workspace tests (1,086 engine unit tests), warning-denying workspace
+and wasm32 Clippy, formatting, fresh browser/package builds, package `npm ci`/lint/typecheck/pack
+and public API/namespace/release guards, all six policy-v7 size checks, GPUI structural
+parity/replay, strict native release performance (all targets), and 576 portable
+Chromium/Firefox/WebKit tests (16 intended skips). The first browser run had one transient
+`ERR_NO_BUFFER_SPACE` loading an icon module; the failed test passed on isolated rerun, then the
+entire portable suite passed. Calibrated GPUI pixels and clean official dashboard upload
+evidence remain pending as above.
+
 The rebuilt-assets `general-dashboard-100k` local diagnostic on 2026-10-11 used dirty
 `ba4723d` plus the G3 worktree, Chromium 153, 1280×720 at DPR 1, WebGPU, one warm-up and five
 measured runs. The command was
