@@ -91,7 +91,10 @@ the general-series registry per axis dimension and scale, keyed by dataset ident
 kind, and stacking, bounded per series and dropped with the series, so hit tests and frames resolve auto
 domains without rescanning unchanged data. A single extreme numeric value expands inward
 when outward padding would overflow; logarithmic domains use the adjacent positive value when a
-percentage expansion rounds back to the same endpoint. Continuous X/Y axes execute linear, logarithmic,
+percentage expansion rounds back to the same endpoint. Numeric axes also accept a bounded symmetric
+`domain_padding` fraction. Padding expands the base domain in the axis's transformed space, so logarithmic
+padding remains multiplicative, while runtime pan/zoom stays independent and reset returns to the padded
+base. Nonnumeric axes reject nonzero numeric padding instead of silently retaining it. Continuous X/Y axes execute linear, logarithmic,
 or symmetric-log transforms consistently for ticks, geometry, hit testing, and runtime pan/zoom; a
 runtime view is independent of the configured/automatic base domain and can be reset without rewriting
 axis options. Temporal axes use that same runtime-view contract with whole epoch-millisecond anchors and

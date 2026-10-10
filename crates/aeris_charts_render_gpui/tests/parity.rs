@@ -931,6 +931,65 @@ fn rotated_text_reaches_canvas_and_gpui_with_the_same_transform() {
     assert_eq!(run.align, canvas.text_runs[0].5);
 }
 
+#[test]
+fn general_axis_titles_and_grid_rules_reach_canvas_and_gpui_without_drops() {
+    for dpr in [1.0, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(560.0, 340.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        let mut x =
+            GeneralAxisOptions::new("g2-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+        x.domain = GeneralAxisDomain::Numeric([-10.0, 10.0]);
+        x.title = Some("Horizontal".into());
+        engine.add_general_axis(x).unwrap();
+        let mut y =
+            GeneralAxisOptions::new("g2-y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+        y.domain = GeneralAxisDomain::Numeric([-10.0, 10.0]);
+        y.title = Some("Vertical".into());
+        engine.add_general_axis(y).unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+        let frame = engine.build_frame();
+        let under = &frame.panes[pane].under;
+        let canvas_grid = canvas_rects(under, &frame.panes[pane].points);
+        let (gpui_grid, grid_metrics) = gpui_plan(under, &frame.panes[pane].points);
+        assert_eq!(
+            grid_metrics.dropped_prims, 0,
+            "DPR {dpr}: grid rule dropped"
+        );
+        assert_eq!(gpui_quads(&gpui_grid), canvas_grid.rects);
+
+        let axis = engine.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let mut primitives = Vec::new();
+        engine.build_axis_primitives_into(&axis, &mut primitives);
+        let canvas_axis = canvas_rects(&primitives, &[]);
+        let (_gpui_axis, axis_metrics) = gpui_plan(&primitives, &[]);
+        assert_eq!(
+            axis_metrics.dropped_prims, 0,
+            "DPR {dpr}: axis primitive dropped"
+        );
+        assert_eq!(axis_metrics.text_runs as usize, canvas_axis.text_runs.len());
+        assert!(
+            canvas_axis
+                .text_runs
+                .iter()
+                .any(|run| run.0 == "Horizontal")
+        );
+        assert!(
+            canvas_axis
+                .text_runs
+                .iter()
+                .any(|run| run.0.starts_with("Vertical@"))
+        );
+    }
+}
+
 /// A real multi-series, multi-pane engine frame — not a synthetic prim list.
 fn real_engine_frame(dpr: f64) -> ChartEngine {
     let mut engine = ChartEngine::new(900.0, 520.0, dpr);

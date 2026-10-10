@@ -1043,6 +1043,7 @@ impl ChartEngine {
                     tick_count: axis.tick_count(),
                     ticks: axis.ticks().map(<[_]>::to_vec),
                     min_tick_gap: axis.min_tick_gap(),
+                    domain_padding: axis.domain_padding(),
                     band_padding_inner: axis.band_padding_inner(),
                     band_padding_outer: axis.band_padding_outer(),
                     zero_line: axis.zero_line(),

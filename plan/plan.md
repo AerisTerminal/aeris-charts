@@ -30,8 +30,8 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | Batch | Phase | Scope | Status | Done so far | Next |
 | --- | --- | --- | --- | --- | --- |
 | G1 | R0 + R1 | Competitive baseline, lifecycle and mutable object foundations | **Complete** | Recharts 3.10.1 matrix and rendered-mark fixtures; general-first topology; atomic handles; host cleanup; focus retention; validated general-first V2 restore | G2 |
-| G2 | R2 | Scales, axes and responsive layout | **Open** | — | Temporal ticks and views, grid and zero lines, multiple axes |
-| G3 | R3 | Cartesian visual and data semantics (remainder) | **In progress** | 9 delivered R3 slices (see **Delivered work**) | Resume after G2: bars and stacks, gradients, error bars, composition, per-item styling |
+| G2 | R2 | Scales, axes and responsive layout | **Complete** | Numeric/log/symlog, UTC temporal and category views; typed ticks; grids/zero rules; multi-axis titles; padding; bounded responsive layout | G3 |
+| G3 | R3 | Cartesian visual and data semantics (remainder) | **In progress** | 9 delivered R3 slices (see **Delivered work**) | Bars and stacks, gradients, error bars, composition, per-item styling |
 | G4 | R4 | Components and interaction | **Open** | — | Legend, tooltip, brush, selection, sync (extends PD5), export (PD6) |
 | G5 | R5 | React and framework-neutral authoring | **Open** | — | Composable components over complete mutations |
 | G6 | R6 | Polar families and transitions | **Open** | — | Polar transforms, pie/donut, radar, radial bar, polar area, animation |
@@ -83,6 +83,22 @@ retiring an empty general-first pane, and policy-v7 release baselines. Evidence 
 `examples/web_demo/tests/g1-foundations.spec.mjs`, the existing public general browser/native tests,
 and `benchmarks/baselines/g1-2026-10-10.json`.
 
+G2 closed the shared scale, axis and responsive-layout contract. Numeric, logarithmic, symmetric-log,
+UTC epoch-millisecond temporal, band and point transforms now share runtime views with geometry, hits,
+ticks, grids and zero rules. Numeric axes expose bounded transformed-space domain padding; explicit
+typed ticks retain portable display labels, including duplicate display text over distinct category
+identities. Multiple reversed axes and titles use bounded strip layout, and browser resize, DPR, font,
+aspect-ratio, hidden/revealed and small-container paths retain hit/input alignment. Evidence lives in
+`crates/aeris_charts_engine/src/frame/tests.rs`,
+`crates/aeris_charts_render_gpui/tests/parity.rs`, and
+`examples/web_demo/tests/general-charts.spec.mjs`; the complete Rust/WASM/package/Playwright/GPUI and
+strict performance gates passed on 2026-10-10. The interactive general dashboard was checked in its
+light-theme filtered-bar state with Canvas2D, while deterministic Chromium/Firefox/WebKit coverage owns
+the resize, DPR, pointer and keyboard assertions. No separate assistive-technology session is claimed
+for this engine-focused phase. The optional local browser release smoke remained non-green on the
+pre-release artifact-size budgets (tarball 2,122,120 > 2,090,000 bytes, unpacked 6,747,620 > 6,660,000,
+WASM 5,877,272 > 5,780,000); G8 owns controlled release-size closure, and no public size claim is made.
+
 The items below were implemented earlier and belong to R3.
 
 | # | Capability | Commit | Evidence |
@@ -114,8 +130,6 @@ remain valuable and must be preserved.
 
 | Gap | Evidence | Required correction | Phase |
 | --- | --- | --- | --- |
-| Temporal axes | `general_axes.rs::axis_ticks`, `tick_labels_for_domain`, `pan_general_axis`, `zoom_general_axis` | Temporal data and geometry exist, but temporal ticks fall through to empty output and pan/zoom reject nonnumeric domains. Complete the temporal coordinate contract | R2 |
-| Grid and zero lines | `GeneralAxis` stores policies; `persistence.rs` serializes them | Accepted options have no general grid execution. Implement shared frame output and observable toggle tests | R2 |
 | Visual configuration | `GeneralSeriesOptions`, `frame/general_series_geometry.rs` | Surface is narrow. Audit and implement documented styles and geometry choices end to end (the delivered slices above began this) | R3 |
 | Shared components | Legend, shared-tooltip, brush and reference snapshots in `general_series.rs` | Snapshots alone do not establish a complete interactive legend, tooltip, brush or export experience | R4 |
 | React reconciliation | `packages/charts/src/react.ts::GeneralPane` | Current array reconciliation retains ordinary mutations, but configuration arrays remain instead of component composition. Complete declarative authoring and concurrent lifecycle | R5 |
@@ -172,19 +186,19 @@ mount and dispose release resources.
 
 ### R2 — Scale, axis and responsive layout contracts
 
-**Batch:** G2. **Depends on:** R1. **Status:** open.
+**Batch:** G2. **Depends on:** R1. **Status:** complete.
 
-- [ ] Temporal ticks, formatting and view operations.
-- [ ] Category behavior, including zoom/pan and duplicate labels.
-- [ ] Explicit ticks and formatters.
-- [ ] Numeric extremes and degenerate domains.
-- [ ] Grid and zero lines executed in the frame.
-- [ ] Domain padding and clipping.
-- [ ] Multiple axes.
-- [ ] Axis titles.
-- [ ] Small-container behavior.
-- [ ] Every reviewed silent-option gap corrected.
-- [ ] G2 full gate green; batch committed and pushed.
+- [x] Temporal ticks, formatting and view operations.
+- [x] Category behavior, including zoom/pan and duplicate labels.
+- [x] Explicit ticks and formatters.
+- [x] Numeric extremes and degenerate domains.
+- [x] Grid and zero lines executed in the frame.
+- [x] Domain padding and clipping.
+- [x] Multiple axes.
+- [x] Axis titles.
+- [x] Small-container behavior.
+- [x] Every reviewed silent-option gap corrected.
+- [x] G2 full gate green; batch committed and pushed.
 
 **Exit:** deterministic domain and coordinate round trips and frame fixtures cover all supported
 scale and orientation combinations. Browser resize, font, DPR, pointer and keyboard view tests agree
@@ -327,13 +341,13 @@ platform capabilities beyond the competitor's browser rendering model.
 | Line, area, range and scatter/bubble | Partial (items 1–8 delivered; range bars are tracked below) | Linear/step/curved interpolation, gap/connection policy, baselines, symbols, active marks, fills/strokes and error bounds | R3 |
 | Bars and stacks | Partial (range bars delivered) | Both orientations, groups, sizing/gaps, corners, per-item styling, mixed signs, range bars, stack order and required offset modes | R3 |
 | Box plots and heatmaps | Partial | Preserve existing extra families; complete color domains, legends, missing values and interaction | R3 |
-| Scales and axes | Partial | Numeric/log/symlog, temporal, category/point, reversed/multiple axes, explicit/auto domains, ticks, formatting, overflow and grid policy | R2 |
+| Scales and axes | Verified (G2, 2026-10-10) | Numeric/log/symlog, temporal, category/point, reversed/multiple axes, explicit/auto domains, ticks, formatting, overflow and grid policy | R2 |
 | Pie/donut, radar, radial bar, polar area | Open | Polar layout, start/end angles, inner/outer radii, padding, labels/leaders, angular/radial axes and interactions | R6 |
 | Funnel, treemap, Sankey, sunburst | Open | Purpose-built deterministic bounded layouts, data contracts, styling, labels, hits, accessibility and updates | R7 |
 | Legend and tooltip | Partial | Default usable components, visibility controls, item/shared modes, placement, formatting, ordering, custom content and touch/keyboard behavior | R4 |
 | References, labels, titles and grids | Partial | Engine layout and domain contribution, overlap/overflow policy, background/foreground order, style and export consistency | R2, R4 |
 | Brush, selection and synchronization | Partial | Pointer/touch/keyboard controls, semantic range handles, domain-aware pan/zoom, linked charts and feedback-loop prevention | R4 |
-| Responsive layout | Partial | Zero-size/hidden/revealed containers, constrained/aspect sizing, DPR/font changes, small plots and bounded layout convergence | R1, R2 |
+| Responsive layout | Verified (G2, 2026-10-10) | Zero-size/hidden/revealed containers, constrained/aspect sizing, DPR/font changes, small plots and bounded layout convergence | R1, R2 |
 | React authoring | Partial | Composable axes/series/components, typed data mapping, controlled updates, stable identities, Strict Mode, failure cleanup and SSR-safe import | R5 |
 | Customization | Partial | Per-item styles, symbols, gradients, dash patterns, label/tooltip formatting, bounded custom marks and explicit host-only content boundaries | R3–R5 |
 | Animation | Open for general transitions | Enter/update/exit and interruption with stable identities, bounded retained state, shared timing semantics and reduced motion | R6 |

@@ -142,6 +142,7 @@ interface general_axis_options {
   tick_count?: number;
   ticks?: readonly general_axis_tick[];
   min_tick_gap?: number;
+  domain_padding?: number;
   band_padding_inner?: number;
   band_padding_outer?: number;
   zero_line?: boolean;
@@ -157,6 +158,10 @@ Validation is structural and atomic:
   domain contribution while retaining those rows as missing geometry.
 - Band padding is finite and clamped only when the documented range permits it; invalid values do
   not partially mutate the axis.
+- `domain_padding` symmetrically expands a Cartesian numeric base domain by a fraction of its
+  transformed span before runtime pan/zoom. It accepts `0..=1`, defaults to `0`, uses
+  multiplicative spacing for logarithmic axes, and rejects nonnumeric axes instead of becoming a
+  silent option. Runtime reset returns to the padded base domain.
 - Automatic domains combine only visible series bound to that axis. Reference components declare
   explicitly whether they extend the domain.
 - On executable Cartesian axes, `ticks` replaces automatic tick selection with at most 512 typed

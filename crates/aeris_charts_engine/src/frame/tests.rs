@@ -6,10 +6,10 @@ use super::conflation::{
 };
 use super::*;
 use crate::{
-    AxisDimension, CategoryScaleType, ContinuousScaleType, GeneralAxisDomain, GeneralAxisOptions,
-    GeneralAxisTick, GeneralInterpolation, GeneralLineStyle, GeneralPointSymbol, GeneralRowId,
-    GeneralRowIdentity, GeneralScaleType, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralStackMode, GeneralXyInput, HorizontalDomain,
+    AxisDimension, AxisPosition, CategoryScaleType, ContinuousScaleType, GeneralAxisDomain,
+    GeneralAxisOptions, GeneralAxisTick, GeneralInterpolation, GeneralLineStyle,
+    GeneralPointSymbol, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesKind,
+    GeneralSeriesOptions, GeneralStackMode, GeneralXyInput, HorizontalDomain,
 };
 use aeris_charts_core::model::data_layer::DataLayer;
 use aeris_charts_core::model::plot_list::{PlotList, PlotValues};
@@ -888,6 +888,175 @@ fn complete_finite_numeric_domain_builds_geometry_ticks_and_runtime_views() {
     };
     assert_eq!(panned[0], 0.0);
     assert!((panned[1] / f64::MAX - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn numeric_domain_padding_expands_the_base_domain_and_rejects_incompatible_axes() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    let mut x =
+        GeneralAxisOptions::new("padded-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+    x.domain = GeneralAxisDomain::Numeric([10.0, 20.0]);
+    x.domain_padding = 0.1;
+    chart.add_general_axis(x).unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("padded-x"),
+        Some(GeneralAxisDomain::Numeric([9.0, 21.0]))
+    );
+
+    chart.zoom_general_axis("padded-x", 2.0, 15.0).unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("padded-x"),
+        Some(GeneralAxisDomain::Numeric([12.0, 18.0]))
+    );
+    assert!(chart.reset_general_axis_view("padded-x"));
+    assert_eq!(
+        chart.general_axis_effective_domain("padded-x"),
+        Some(GeneralAxisDomain::Numeric([9.0, 21.0]))
+    );
+    let temporal_pane = chart
+        .add_pane_with_domain(true, HorizontalDomain::Temporal)
+        .unwrap();
+    let mut temporal = GeneralAxisOptions::new(
+        "time",
+        temporal_pane,
+        AxisDimension::X,
+        GeneralScaleType::Temporal,
+    );
+    temporal.domain = GeneralAxisDomain::Temporal([0, 1_000]);
+    temporal.domain_padding = 0.1;
+    assert!(chart.add_general_axis(temporal).is_err());
+    assert!(chart.general_axis("time").is_none());
+}
+
+#[test]
+fn multiple_reversed_axes_keep_bound_geometry_hits_titles_and_strip_order() {
+    let mut chart = ChartEngine::new(720.0, 420.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    for (id, dimension, position, domain, reverse, title) in [
+        (
+            "x-bottom",
+            AxisDimension::X,
+            AxisPosition::Bottom,
+            [0.0, 10.0],
+            false,
+            "Bottom X",
+        ),
+        (
+            "x-top",
+            AxisDimension::X,
+            AxisPosition::Top,
+            [0.0, 100.0],
+            true,
+            "Top X",
+        ),
+        (
+            "y-left",
+            AxisDimension::Y,
+            AxisPosition::Left,
+            [0.0, 10.0],
+            false,
+            "Left Y",
+        ),
+        (
+            "y-right",
+            AxisDimension::Y,
+            AxisPosition::Right,
+            [0.0, 100.0],
+            true,
+            "Right Y",
+        ),
+    ] {
+        let mut axis = GeneralAxisOptions::new(id, pane, dimension, GeneralScaleType::Linear);
+        axis.position = Some(position);
+        axis.domain = GeneralAxisDomain::Numeric(domain);
+        axis.reverse = reverse;
+        axis.title = Some(title.into());
+        chart.add_general_axis(axis).unwrap();
+    }
+    let left_data = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: Some(vec![GeneralRowId::Text("left".into())]),
+            x: vec![2.0],
+            y: vec![2.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let right_data = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: Some(vec![GeneralRowId::Text("right".into())]),
+            x: vec![20.0],
+            y: vec![20.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let left = chart
+        .add_general_series(GeneralSeriesOptions::scatter(
+            pane, left_data, "x-bottom", "y-left",
+        ))
+        .unwrap();
+    let right = chart
+        .add_general_series(GeneralSeriesOptions::scatter(
+            pane, right_data, "x-top", "y-right",
+        ))
+        .unwrap();
+
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let plot = chart.general_plot_rect(pane).unwrap();
+    let point = |chart: &mut ChartEngine, series| {
+        let mut points = Vec::new();
+        chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+            points.push(point)
+        });
+        points[0]
+    };
+    let left_point = point(&mut chart, left);
+    let right_point = point(&mut chart, right);
+    assert!((left_point.x - plot.width * 0.2).abs() < 1e-9);
+    assert!((left_point.y - (plot.y + plot.height * 0.8)).abs() < 1e-9);
+    assert!((right_point.x - plot.width * 0.8).abs() < 1e-9);
+    assert!((right_point.y - (plot.y + plot.height * 0.2)).abs() < 1e-9);
+    assert_eq!(
+        chart
+            .general_hit_test(
+                pane,
+                right_point.x,
+                right_point.y,
+                crate::GeneralHitMode::Exact,
+            )
+            .unwrap()
+            .series,
+        right
+    );
+
+    let frame = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    for title in ["Bottom X", "Top X"] {
+        assert!(frame.labels.iter().any(|label| label.text == title));
+    }
+    for title in ["Left Y", "Right Y"] {
+        assert!(frame.rotated_labels.iter().any(|label| label.text == title));
+    }
+
+    let width_with_right = chart.axis_w;
+    assert!(chart.set_general_axis_visible("y-right", false));
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(chart.axis_w < width_with_right);
+    assert_eq!(chart.general_series(right).unwrap().x_axis_id(), "x-top");
+    assert_eq!(chart.general_series(right).unwrap().y_axis_id(), "y-right");
 }
 
 #[test]

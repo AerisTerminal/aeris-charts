@@ -284,6 +284,8 @@ export interface general_axis_options {
   /** Explicit tick values. Optional labels are retained by the engine and shared by every backend. */
   ticks?: readonly general_axis_tick[];
   min_tick_gap?: number;
+  /** Symmetric numeric-domain expansion as a fraction of transformed span (0 to 1). */
+  domain_padding?: number;
   band_padding_inner?: number;
   band_padding_outer?: number;
   /** Draw a solid zero rule when zero is inside a numeric domain. */

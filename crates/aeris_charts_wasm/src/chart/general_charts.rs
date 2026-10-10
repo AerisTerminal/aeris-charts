@@ -77,6 +77,8 @@ struct AxisInput {
     ticks: Option<Vec<GeneralAxisTick>>,
     #[serde(default = "default_tick_gap")]
     min_tick_gap: f64,
+    #[serde(default)]
+    domain_padding: f64,
     #[serde(default = "default_band_padding")]
     band_padding_inner: f64,
     #[serde(default = "default_band_padding")]
@@ -592,6 +594,7 @@ impl ChartInner {
         options.tick_count = input.tick_count;
         options.ticks = input.ticks;
         options.min_tick_gap = input.min_tick_gap;
+        options.domain_padding = input.domain_padding;
         options.band_padding_inner = input.band_padding_inner;
         options.band_padding_outer = input.band_padding_outer;
         options.zero_line = input.zero_line;
@@ -634,6 +637,7 @@ impl ChartInner {
         options.tick_count = input.tick_count;
         options.ticks = input.ticks;
         options.min_tick_gap = input.min_tick_gap;
+        options.domain_padding = input.domain_padding;
         options.band_padding_inner = input.band_padding_inner;
         options.band_padding_outer = input.band_padding_outer;
         options.zero_line = input.zero_line;
@@ -696,6 +700,7 @@ impl ChartInner {
             "tick_count": axis.tick_count(),
             "ticks": ticks,
             "min_tick_gap": axis.min_tick_gap(),
+            "domain_padding": axis.domain_padding(),
             "band_padding_inner": axis.band_padding_inner(),
             "band_padding_outer": axis.band_padding_outer(),
             "zero_line": axis.zero_line(),

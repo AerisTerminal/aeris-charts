@@ -109,6 +109,10 @@ pub struct GeneralAxisOptions {
     #[serde(default)]
     pub ticks: Option<Vec<GeneralAxisTick>>,
     pub min_tick_gap: f64,
+    /// Symmetric fractional expansion of a numeric base domain. A value of `0.1` adds ten
+    /// percent of the transformed span at each end before any runtime pan or zoom is applied.
+    #[serde(default)]
+    pub domain_padding: f64,
     pub band_padding_inner: f64,
     pub band_padding_outer: f64,
     pub zero_line: bool,
@@ -135,6 +139,7 @@ impl GeneralAxisOptions {
             tick_count: None,
             ticks: None,
             min_tick_gap: 4.0,
+            domain_padding: 0.0,
             band_padding_inner: 0.1,
             band_padding_outer: 0.1,
             zero_line: true,
@@ -161,6 +166,7 @@ pub struct GeneralAxis {
     tick_count: Option<u16>,
     ticks: Option<Vec<GeneralAxisTick>>,
     min_tick_gap: f64,
+    domain_padding: f64,
     band_padding_inner: f64,
     band_padding_outer: f64,
     zero_line: bool,
@@ -300,6 +306,10 @@ impl GeneralAxis {
         self.min_tick_gap
     }
 
+    pub fn domain_padding(&self) -> f64 {
+        self.domain_padding
+    }
+
     pub fn band_padding_inner(&self) -> f64 {
         self.band_padding_inner
     }
@@ -400,6 +410,7 @@ impl GeneralAxisRegistry {
             tick_count: options.tick_count,
             ticks: options.ticks,
             min_tick_gap: options.min_tick_gap,
+            domain_padding: options.domain_padding,
             band_padding_inner: options.band_padding_inner,
             band_padding_outer: options.band_padding_outer,
             zero_line: options.zero_line,
@@ -1007,7 +1018,7 @@ impl ChartEngine {
 
     fn base_general_axis_domain(&self, axis: &GeneralAxis) -> Option<GeneralAxisDomain> {
         if axis.domain != GeneralAxisDomain::Auto {
-            return Some(axis.domain.clone());
+            return padded_axis_domain(axis, axis.domain.clone());
         }
 
         match (axis.dimension, axis.scale) {
@@ -1224,6 +1235,9 @@ impl ChartEngine {
                 }
                 bounds.and_then(|(low, high)| {
                     expanded_numeric_domain_for_scale(axis.scale, low, high)
+                        .and_then(|domain| {
+                            padded_numeric_domain(axis.scale, domain, axis.domain_padding)
+                        })
                         .map(GeneralAxisDomain::Numeric)
                 })
             }
@@ -2275,6 +2289,36 @@ fn expanded_numeric_domain_for_scale(
     }
 }
 
+fn padded_axis_domain(axis: &GeneralAxis, domain: GeneralAxisDomain) -> Option<GeneralAxisDomain> {
+    match domain {
+        GeneralAxisDomain::Numeric(domain) => {
+            padded_numeric_domain(axis.scale, domain, axis.domain_padding)
+                .map(GeneralAxisDomain::Numeric)
+        }
+        domain => Some(domain),
+    }
+}
+
+fn padded_numeric_domain(
+    scale_type: GeneralScaleType,
+    domain: [f64; 2],
+    padding: f64,
+) -> Option<[f64; 2]> {
+    if padding == 0.0 {
+        return Some(domain);
+    }
+    let scale = NumericAxisScale::new(scale_type, domain, 0.0, 1.0)?;
+    let lower = scale
+        .invert(-padding)
+        .filter(|value| value.is_finite())
+        .unwrap_or(domain[0]);
+    let upper = scale
+        .invert(1.0 + padding)
+        .filter(|value| value.is_finite())
+        .unwrap_or(domain[1]);
+    ascending_numeric_domain(lower, upper).or(Some(domain))
+}
+
 fn ascending_numeric_domain(from: f64, to: f64) -> Option<[f64; 2]> {
     (from.is_finite() && to.is_finite() && from < to).then_some([from, to])
 }
@@ -2582,6 +2626,7 @@ impl ChartEngine {
         axis.tick_count = options.tick_count;
         axis.ticks = options.ticks;
         axis.min_tick_gap = options.min_tick_gap;
+        axis.domain_padding = options.domain_padding;
         axis.band_padding_inner = options.band_padding_inner;
         axis.band_padding_outer = options.band_padding_outer;
         axis.zero_line = options.zero_line;
@@ -2631,6 +2676,23 @@ fn validate_options(options: &GeneralAxisOptions) -> Result<(), ChartError> {
     if !options.min_tick_gap.is_finite() || !(0.0..=10_000.0).contains(&options.min_tick_gap) {
         return Err(invalid(
             "general axis min_tick_gap must be finite and in 0..=10000",
+        ));
+    }
+    if !options.domain_padding.is_finite() || !(0.0..=1.0).contains(&options.domain_padding) {
+        return Err(invalid(
+            "general axis domain_padding must be finite and in 0..=1",
+        ));
+    }
+    if options.domain_padding != 0.0
+        && !matches!(
+            options.scale,
+            GeneralScaleType::Linear
+                | GeneralScaleType::Logarithmic
+                | GeneralScaleType::SymmetricLog
+        )
+    {
+        return Err(invalid(
+            "general axis domain_padding requires a Cartesian numeric scale",
         ));
     }
     for (name, value) in [

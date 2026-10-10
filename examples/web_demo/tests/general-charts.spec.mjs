@@ -256,7 +256,21 @@ test("general keyboard focus keeps series and explicit row identity across reord
         key, bubbles: true, cancelable: true,
       }));
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve, reject) => {
+      let frames = 0;
+      const wait_for_focus = () => {
+        const hit = chart.general_accessibility_focused_hit();
+        const live = host.querySelector(".aeris_charts-a11y-live-region")?.textContent ?? "";
+        if (hit?.series === c.id && hit?.row_id === "c1" && live.includes("C")) {
+          resolve();
+        } else if (++frames >= 120) {
+          reject(new Error("general accessibility focus did not settle after keyboard navigation"));
+        } else {
+          requestAnimationFrame(wait_for_focus);
+        }
+      };
+      wait_for_focus();
+    });
     const focused = () => chart.general_accessibility_focused_hit();
     const before = focused();
     const before_live = host.querySelector(".aeris_charts-a11y-live-region")?.textContent ?? "";
@@ -984,6 +998,7 @@ test("public general axes retain typed explicit ticks and formatted labels", asy
       dimension: "x",
       scale: "linear",
       domain: [0, 10],
+      domain_padding: 0.1,
       ticks: [
         { type: "numeric", value: 0, label: "Floor" },
         { type: "numeric", value: 5 },
@@ -1031,14 +1046,25 @@ test("public general axes retain typed explicit ticks and formatted labels", asy
     } catch (error) {
       rejected = error.code;
     }
+    let rejected_temporal_padding = null;
+    try {
+      temporal_axis.apply_options({ domain_padding: 0.1 });
+    } catch (error) {
+      rejected_temporal_padding = error.code;
+    }
     const state = chart.export_state();
     const output = {
       initial_ticks: initial_token.ticks,
+      initial_padding: initial_token.domain_padding,
       updated_ticks: x_axis.options().ticks,
+      updated_padding: x_axis.options().domain_padding,
       temporal_ticks: temporal_axis.options().ticks,
+      temporal_padding: temporal_axis.options().domain_padding,
       changed,
       rejected,
+      rejected_temporal_padding,
       persisted_ticks: state.axes.find((axis) => axis.id === "explicit-x").ticks,
+      persisted_padding: state.axes.find((axis) => axis.id === "explicit-x").domain_padding,
     };
     chart.remove();
     host.remove();
@@ -1051,17 +1077,22 @@ test("public general axes retain typed explicit ticks and formatted labels", asy
       { type: "numeric", value: 5 },
       { type: "numeric", value: 20, label: "Clipped" },
     ],
+    initial_padding: 0.1,
     updated_ticks: [
       { type: "numeric", value: 0, label: "Baseline" },
       { type: "numeric", value: 10, label: "Ceiling" },
     ],
+    updated_padding: 0.1,
     temporal_ticks: [{ type: "temporal", value: 1767225600000, label: "Open" }],
+    temporal_padding: 0,
     changed: true,
     rejected: "invalid_options",
+    rejected_temporal_padding: "invalid_options",
     persisted_ticks: [
       { type: "numeric", value: 0, label: "Baseline" },
       { type: "numeric", value: 10, label: "Ceiling" },
     ],
+    persisted_padding: 0.1,
   });
 });
 
@@ -1085,6 +1116,9 @@ test("public category axes zoom by identity, pan by visible window, and reset", 
       dimension: "x",
       scale: "band",
       domain: ["A", "B", "C", "D", "E", "F"],
+      ticks: ["A", "B", "C", "D", "E", "F"].map((value) => ({
+        type: "category", value, label: value <= "C" ? "First half" : "Second half",
+      })),
     });
     chart.add_axis({
       id: "category-nav-y", pane: pane.pane_index(), dimension: "y", scale: "linear", domain: [0, 10],
@@ -1127,6 +1161,7 @@ test("public category axes zoom by identity, pan by visible window, and reset", 
     }));
     await settle();
     const keyboard_after = chart.take_screenshot().toDataURL();
+    const duplicate_display_ticks = axis.options().ticks;
     chart.remove();
     host.remove();
     return {
@@ -1136,6 +1171,7 @@ test("public category axes zoom by identity, pan by visible window, and reset", 
       reset_restored_frame: reset === before,
       keyboard_zoom_changed: keyboard_after !== keyboard_before,
       rejected,
+      duplicate_display_ticks,
     };
   });
 
@@ -1146,7 +1182,141 @@ test("public category axes zoom by identity, pan by visible window, and reset", 
     reset_restored_frame: true,
     keyboard_zoom_changed: true,
     rejected: "invalid_options",
+    duplicate_display_ticks: [
+      { type: "category", value: "A", label: "First half" },
+      { type: "category", value: "B", label: "First half" },
+      { type: "category", value: "C", label: "First half" },
+      { type: "category", value: "D", label: "Second half" },
+      { type: "category", value: "E", label: "Second half" },
+      { type: "category", value: "F", label: "Second half" },
+    ],
   });
+});
+
+test("multiple reversed axes stay aligned through aspect resize, DPR, and font changes", async ({ page }) => {
+  const page_errors = [];
+  page.on("pageerror", (error) => page_errors.push(error.message));
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:480px;aspect-ratio:2/1;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d",
+      autoSize: true,
+      initialPane: { horizontal_domain: { type: "continuous", scale: "linear" } },
+    });
+    const pane = chart.panes()[0];
+    const axes = [
+      chart.add_axis({ id: "bottom-x", pane: 0, dimension: "x", position: "bottom", scale: "linear", domain: [0, 10], domain_padding: 0.1, title: "Bottom X" }),
+      chart.add_axis({ id: "top-x", pane: 0, dimension: "x", position: "top", scale: "linear", domain: [0, 100], reverse: true, title: "Top X" }),
+      chart.add_axis({ id: "left-y", pane: 0, dimension: "y", position: "left", scale: "linear", domain: [0, 10], title: "Left Y" }),
+      chart.add_axis({ id: "right-y", pane: 0, dimension: "y", position: "right", scale: "linear", domain: [0, 100], reverse: true, title: "Right Y" }),
+    ];
+    const left = chart.add_series("scatter", {
+      pane: 0, x_axis_id: "bottom-x", y_axis_id: "left-y", title: "Left",
+    });
+    left.set_data([{ id: "left-row", x: 2, y: 2 }]);
+    const right = chart.add_series("scatter", {
+      pane: 0, x_axis_id: "top-x", y_axis_id: "right-y", title: "Right",
+    });
+    right.set_data([{ id: "right-row", x: 20, y: 20 }]);
+
+    const wait_for_size = (width, height) => new Promise((resolve, reject) => {
+      let frames = 0;
+      const poll = () => {
+        const canvas = host.querySelector("canvas");
+        const size = canvas === null ? [0, 0] : [
+          Number.parseFloat(canvas.style.width),
+          Number.parseFloat(canvas.style.height),
+        ];
+        if (size[0] === width && size[1] === height) resolve(size);
+        else if (++frames >= 120) reject(new Error(`chart did not resize to ${width}x${height}`));
+        else requestAnimationFrame(poll);
+      };
+      poll();
+    });
+    const find_hit = (series) => {
+      const geometry = pane.get_geometry();
+      for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2; y += 2) {
+        for (let x = 0; x < geometry.width; x += 2) {
+          const hit = chart.general_hit_test(0, x, y);
+          if (hit?.series === series.id) return { hit, x, y, geometry };
+        }
+      }
+      return null;
+    };
+
+    await wait_for_size(480, 240);
+    const initial = {
+      left: find_hit(left)?.hit ?? null,
+      right: find_hit(right)?.hit ?? null,
+      screenshot: chart.take_screenshot().toDataURL(),
+    };
+    host.style.width = "220px";
+    await wait_for_size(220, 110);
+    chart.apply_options({ layout: { fontSize: 16, fontFamily: "serif" } });
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 1.5 });
+    window.dispatchEvent(new Event("orientationchange"));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const resized_hit = find_hit(right);
+    let pointer_hit = null;
+    chart.subscribe_crosshair_move((params) => {
+      if (params.general_hit !== null) pointer_hit = params.general_hit;
+    });
+    const overlay = host.querySelectorAll("canvas")[3];
+    overlay.dispatchEvent(new PointerEvent("pointermove", {
+      clientX: resized_hit.geometry.left + resized_hit.x,
+      clientY: resized_hit.y,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+      buttons: 0,
+      bubbles: true,
+    }));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const canvas = host.querySelector("canvas");
+    const resized = {
+      hit: resized_hit.hit,
+      pointer_hit,
+      css: [Number.parseFloat(canvas.style.width), Number.parseFloat(canvas.style.height)],
+      bitmap: [canvas.width, canvas.height],
+      screenshot_changed: chart.take_screenshot().toDataURL() !== initial.screenshot,
+    };
+    axes[3].set_visible(false);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const hidden_axis = {
+      visible: axes[3].options().visible,
+      right_binding: right.options().y_axis_id,
+      hit: find_hit(right)?.hit ?? null,
+    };
+    const axis_options = axes.map((axis) => axis.options());
+    chart.remove();
+    host.remove();
+    return { initial, resized, hidden_axis, axis_options };
+  });
+
+  expect(page_errors).toEqual([]);
+  expect(result.initial.left).toMatchObject({ row_id: "left-row" });
+  expect(result.initial.right).toMatchObject({ row_id: "right-row" });
+  expect(result.resized.hit).toMatchObject({ row_id: "right-row" });
+  expect(result.resized.pointer_hit).toMatchObject({ row_id: "right-row" });
+  expect(result.resized.css).toEqual([220, 110]);
+  expect(result.resized.bitmap).toEqual([330, 165]);
+  expect(result.resized.screenshot_changed).toBe(true);
+  expect(result.hidden_axis).toMatchObject({
+    visible: false,
+    right_binding: "right-y",
+    hit: { row_id: "right-row" },
+  });
+  expect(result.axis_options.map(({ position, title, reverse }) => ({ position, title, reverse }))).toEqual([
+    { position: "bottom", title: "Bottom X", reverse: false },
+    { position: "top", title: "Top X", reverse: true },
+    { position: "left", title: "Left Y", reverse: false },
+    { position: "right", title: "Right Y", reverse: true },
+  ]);
 });
 
 test("general auto sizing disables cleanly and survives hidden-container reveal", async ({ page }) => {
