@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { expect } from "@playwright/test";
-import { test, wait_for_chart } from "./page-ready.mjs";
+import { test, wait_for_chart } from "./page_ready.mjs";
 
 const axe_path = createRequire(import.meta.url).resolve("axe-core/axe.min.js");
 const wcag_tags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];

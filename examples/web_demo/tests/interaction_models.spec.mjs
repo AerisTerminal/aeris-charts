@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { test, wait_for_chart } from "./page-ready.mjs";
+import { test, wait_for_chart } from "./page_ready.mjs";
 
 // Engine-owned interaction models (`aeris_charts_engine::interaction`): the TypeScript
 // recognizer only classifies events and forwards samples — the axis drag-to-scale, vertical

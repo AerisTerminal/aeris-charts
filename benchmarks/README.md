@@ -3,7 +3,7 @@
 This subsystem is the source of truth for Aeris Charts performance, artifact-size, and memory claims. It measures the production `@aeristerminal/aeris-charts` package through its public browser API and keeps every number tied to source, environment, scenario, dataset, and raw samples. It does not optimize the product and it does not manufacture unsupported values.
 
 Versioned local release observations that support a completed batch live under `baselines/`.
-`baselines/g1-2026-10-10.json` records the financial-only, general-only, general-dashboard, and
+`baselines/g1_2026_10_10.json` records the financial-only, general-only, general-dashboard, and
 mixed-engine G1 workloads against policy v7. These local observations are diagnostics, not
 controlled-runner performance claims.
 
@@ -93,7 +93,7 @@ Consumer JavaScript bundle metrics explicitly exclude the separately shipped WAS
 
 ## Results, baselines, budgets, and reports
 
-The versioned JSON contract is `schema/result-v1.schema.json`. Runtime validation rejects missing metadata, failed scenarios disguised as success, non-finite samples, and impossible negative durations. Scenario failures carry `status: failed` and an error; public summaries exclude them.
+The versioned JSON contract is `schema/result_v1.schema.json`. Runtime validation rejects missing metadata, failed scenarios disguised as success, non-finite samples, and impossible negative durations. Scenario failures carry `status: failed` and an error; public summaries exclude them.
 
 Local raw results are immutable files under `benchmarks/results/v<version>/<environment-id>/` and are gitignored. CI uploads them as artifacts. Release results should be attached immutably to the matching release. `baseline` copies only a clean official release result into `benchmarks/baselines/v<version>/<environment-id>.json` and refuses overwrite. The selected policy is an explicit previous-release baseline; it never rolls silently.
 

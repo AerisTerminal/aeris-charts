@@ -1,10 +1,10 @@
-// Cross-browser reach: the WebGPU pane is Chromium+SwiftShader only (see backend-parity.spec.mjs),
+// Cross-browser reach: the WebGPU pane is Chromium+SwiftShader only (see backend_parity.spec.mjs),
 // so this suite verifies the shared **Canvas2D fallback** actually initializes and renders on every
 // engine in the project matrix (Chromium, Firefox, WebKit). Pixel-exact parity is deliberately not
 // asserted here — each engine's Canvas2D rasterizer differs — only that a real chart is drawn.
 
 import { expect } from "@playwright/test";
-import { test, wait_for_chart } from "./page-ready.mjs";
+import { test, wait_for_chart } from "./page_ready.mjs";
 import { PNG } from "pngjs";
 
 test.beforeEach(async ({ page }) => {

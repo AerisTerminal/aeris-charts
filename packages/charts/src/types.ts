@@ -1914,7 +1914,7 @@ export interface footprint_series_options {
   imbalance_ratio: number;
   imbalance_minimum_volume: number;
   stacked_imbalance_levels: number;
-  /** Row presentation; every mode paints the same stored bars (see docs/Footprint.md). */
+  /** Row presentation; every mode paints the same stored bars (see docs/footprint.md). */
   cell_mode: "bid_ask" | "total" | "delta" | "profile_in_bar" | "volume_ladder" | "horizontal_imbalance" | "bid_ask_histogram";
   font_size: number;
   bid_color: string;

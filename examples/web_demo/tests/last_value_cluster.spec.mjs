@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { test, monitor_page, wait_for_chart } from "./page-ready.mjs";
+import { test, monitor_page, wait_for_chart } from "./page_ready.mjs";
 import { PNG } from "pngjs";
 
 // industry-standard last-value cluster: title chip + price text + candle-close countdown row,

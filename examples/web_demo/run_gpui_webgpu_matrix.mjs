@@ -9,7 +9,7 @@ if (process.platform !== "win32") {
 const cli = fileURLToPath(new URL("./node_modules/@playwright/test/cli.js", import.meta.url));
 const result = spawnSync(
   process.execPath,
-  [cli, "test", "tests/gpui-webgpu-matrix.spec.mjs", "--project=chromium"],
+  [cli, "test", "tests/gpui_webgpu_matrix.spec.mjs", "--project=chromium"],
   {
     cwd: fileURLToPath(new URL(".", import.meta.url)),
     env: { ...process.env, AERIS_CHARTS_RUN_GPUI_WEBGPU_MATRIX: "1" },

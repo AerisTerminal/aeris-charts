@@ -1,6 +1,6 @@
 import { expect } from "@playwright/test";
 import { PNG } from "pngjs";
-import { test, wait_for_chart } from "./page-ready.mjs";
+import { test, wait_for_chart } from "./page_ready.mjs";
 
 // Multi-chart split grid in the MAIN demo: the primary chart is the first cell, splits are
 // independent, dividers drag, the usage signal meters, the cap enforces, and closes collapse.

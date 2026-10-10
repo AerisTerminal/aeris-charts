@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { test, wait_for_chart } from "./page-ready.mjs";
+import { test, wait_for_chart } from "./page_ready.mjs";
 import { readFileSync } from "node:fs";
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
@@ -1066,7 +1066,7 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
   expect(pixel_diff(clean_probe, canvas.png), "drawings paint on Canvas2D").toBeGreaterThan(1000);
   expect(pixel_diff(clean_probe, gpu.png), "drawings paint on WebGPU").toBeGreaterThan(1000);
 
-  // The repo's ordering contract (backend-parity.spec.mjs markers gate): zero pixels may differ
+  // The repo's ordering contract (backend_parity.spec.mjs markers gate): zero pixels may differ
   // by more than an AA coverage step. Measurements across local and CI SwiftShader put isolated
   // diagonal-stroke coverage deltas at up to 121; paint-order swaps remain far above this band
   // (the regression fixture measured 201), so 128 separates raster coverage from wrong paint.

@@ -13,7 +13,7 @@ reproduction commands below.
 ## Scope delivered
 
 - **I2 breadth tier** — 29 additional indicator kinds on the shared binding, schema,
-  persistence, and checkpoint paths (inventory and repair semantics in `docs/Architecture.md`).
+  persistence, and checkpoint paths (inventory and repair semantics in `docs/architecture.md`).
 - **I3 structure tier** — swing points, market structure (BOS/CHoCH), fair value gaps, order
   blocks, session high/low, previous day/week/month levels, and opening range, all as typed
   engine bindings with interval-indexed annotations painted by the shared frame (no new
@@ -77,7 +77,7 @@ agent-browser --session b9evidence --executable-path $chrome screenshot <out.png
 ```
 
 WebGPU visuals use Playwright (the config's SwiftShader flags), e.g.
-`npx playwright test tests/custom-studies.spec.mjs --project=chromium`, which includes the
+`npx playwright test tests/custom_studies.spec.mjs --project=chromium`, which includes the
 combined Canvas2D/WebGPU parity scene for structure studies and auction markers.
 
 ## Accessibility review
@@ -160,5 +160,5 @@ aeris_charts_core -p aeris_charts_engine -p aeris_charts_native --all-targets --
 clean; `cargo test -p aeris_charts_core` 184 passed and `cargo test -p aeris_charts_engine`
 981 passed (includes the new base-index and anchor-flag regression tests). Browser-side parity
 and persistence evidence for these features was collected during milestone validation
-(`custom-studies.spec.mjs`, `structure-studies.spec.mjs`, `session-studies.spec.mjs`,
+(`custom_studies.spec.mjs`, `structure_studies.spec.mjs`, `session_studies.spec.mjs`,
 `footprint.spec.mjs`; see `validation/extensions/` syntheses).

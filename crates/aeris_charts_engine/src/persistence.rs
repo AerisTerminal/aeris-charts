@@ -2511,13 +2511,13 @@ mod tests {
         FootprintSeriesOptions, FootprintTrade,
     };
 
-    const MINIMAL: &str = include_str!("../fixtures/persistence/minimal-v1.json");
-    const VALID: &str = include_str!("../fixtures/persistence/valid-v1.json");
+    const MINIMAL: &str = include_str!("../fixtures/persistence/minimal_v1.json");
+    const VALID: &str = include_str!("../fixtures/persistence/valid_v1.json");
     const ALL_DRAWINGS: &str =
-        include_str!("../fixtures/persistence/all-drawings-multipane-v1.json");
+        include_str!("../fixtures/persistence/all_drawings_multipane_v1.json");
     const MALFORMED: &str = include_str!("../fixtures/persistence/malformed.json");
-    const UNKNOWN_VERSION: &str = include_str!("../fixtures/persistence/unknown-version.json");
-    const UNKNOWN_KIND: &str = include_str!("../fixtures/persistence/unknown-kind-v1.json");
+    const UNKNOWN_VERSION: &str = include_str!("../fixtures/persistence/unknown_version.json");
+    const UNKNOWN_KIND: &str = include_str!("../fixtures/persistence/unknown_kind_v1.json");
 
     fn settled_chart() -> ChartEngine {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);

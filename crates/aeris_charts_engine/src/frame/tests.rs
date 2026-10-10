@@ -9776,6 +9776,50 @@ fn updown_volume_retints_when_only_the_primary_series_changes() {
 }
 
 #[test]
+fn style_reset_preserves_mixed_updown_volume_colors() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [0.0, 60.0, 120.0, 180.0];
+    let open = [100.0; 4];
+    let close = [101.0, 99.0, 102.0, 98.0];
+    chart
+        .set_series_data(0, &times, &open, &[103.0; 4], &[97.0; 4], &close)
+        .unwrap();
+    let volume = chart.add_series(SeriesKind::Histogram);
+    let values = [10.0, 20.0, 30.0, 40.0];
+    chart
+        .set_series_data(volume, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.series_entry_mut(volume).unwrap().histogram_updown = true;
+    chart.set_series_price_scale(volume, crate::PriceScaleTarget::Overlay);
+    chart.set_price_scale_margins_for(0, crate::PriceScaleTarget::Overlay, 0.8, 0.0);
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+
+    let colors = |chart: &mut ChartEngine| {
+        let frame = chart.build_frame();
+        let prims = &frame.panes[0].main;
+        (
+            prims
+                .iter()
+                .filter(|prim| matches!(prim, Prim::Rect { color, .. } if *color == VOLUME_UP))
+                .count(),
+            prims
+                .iter()
+                .filter(|prim| matches!(prim, Prim::Rect { color, .. } if *color == VOLUME_DOWN))
+                .count(),
+        )
+    };
+    assert_eq!(colors(&mut chart), (2, 2));
+    chart.reset_style_to_defaults();
+    assert_eq!(
+        colors(&mut chart),
+        (2, 2),
+        "appearance reset must not change the meaning of volume bars"
+    );
+    assert!(chart.series_entry(volume).unwrap().histogram_updown);
+}
+
+#[test]
 fn updown_volume_takes_its_direction_from_a_footprint_over_a_whitespace_primary() {
     let mut chart = ChartEngine::new(1200.0, 600.0, 1.0);
     let times: Vec<f64> = (0..4).map(|minute| f64::from(minute) * 60.0).collect();

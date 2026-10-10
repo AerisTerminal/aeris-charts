@@ -182,7 +182,7 @@ test("scenario registry and JSON schema remain versioned and complete", async ()
       "absolute-budget scenario " + scenario_id + " must remain in the release profile",
     );
   }
-  const schema = JSON.parse(await readFile(path.join(benchmark_root, "schema", "result-v1.schema.json"), "utf8"));
+  const schema = JSON.parse(await readFile(path.join(benchmark_root, "schema", "result_v1.schema.json"), "utf8"));
   assert.equal(schema.properties.schema_version.const, 1);
   assert.ok(schema.required.includes("environment"));
   assert.deepEqual(schema.properties.build.properties.rust_opt_level.enum, ["3", "z"]);

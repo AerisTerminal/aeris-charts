@@ -6,7 +6,7 @@ covers the **general (non-financial) charting program** toward full Recharts par
 Trading and order-flow work was delivered by the trading expansion plan (batches B1–B9, completed
 2026-10-06 and removed after closure; the final text is `plan/Expansion.md` at commit `71b17a8`).
 Both programs share one `ChartEngine` and one frame contract, documented in
-[Architecture.md](../docs/Architecture.md).
+[architecture.md](../docs/architecture.md).
 
 How to read this file:
 
@@ -67,7 +67,7 @@ is retired.
   items and verification, then push `main`. Never commit a batch with a failing or skipped required
   gate.
 - **Update this file in the same commit.** Tick the checklist, update **Delivered work** and the
-  status table, and update `docs/Architecture.md` when ownership or execution paths changed.
+  status table, and update `docs/architecture.md` when ownership or execution paths changed.
 - **Manual evidence at phase closure, not per batch.** Screenshots, accessibility review,
   competitor comparisons and recorded benchmarks are collected once, when the phase closes.
 
@@ -80,8 +80,8 @@ G1 delivered the versioned Recharts 3.10.1 comparison matrix and executable priv
 general-first and mixed topology, stable atomic general handles, last-pane ownership, failed-install
 cleanup, series/row focus retention through reorder and relayout, live financial creation after
 retiring an empty general-first pane, and policy-v7 release baselines. Evidence lives in
-`examples/web_demo/tests/g1-foundations.spec.mjs`, the existing public general browser/native tests,
-and `benchmarks/baselines/g1-2026-10-10.json`.
+`examples/web_demo/tests/g1_foundations.spec.mjs`, the existing public general browser/native tests,
+and `benchmarks/baselines/g1_2026_10_10.json`.
 
 G2 closed the shared scale, axis and responsive-layout contract. Numeric, logarithmic, symmetric-log,
 UTC epoch-millisecond temporal, band and point transforms now share runtime views with geometry, hits,
@@ -91,7 +91,7 @@ identities. Multiple reversed axes and titles use bounded strip layout, and brow
 aspect-ratio, hidden/revealed and small-container paths retain hit/input alignment. Evidence lives in
 `crates/aeris_charts_engine/src/frame/tests.rs`,
 `crates/aeris_charts_render_gpui/tests/parity.rs`, and
-`examples/web_demo/tests/general-charts.spec.mjs`; the complete Rust/WASM/package/Playwright/GPUI and
+`examples/web_demo/tests/general_charts.spec.mjs`; the complete Rust/WASM/package/Playwright/GPUI and
 strict performance gates passed on 2026-10-10. The corrective package-size gate uses a WASM-only
 Cargo optimization level `z` before wasm-opt `-Oz`, while native release remains at optimization
 level 3. Policy-v7 artifact measurements are tarball 1,666,975 bytes, unpacked 5,230,364 bytes,
@@ -160,7 +160,7 @@ demo chart.
 - [x] Add reference fixtures for each matrix row and record intentional differences. Executable
       fixtures stay in existing test infrastructure; transient screenshots and reports stay out of
       committed documentation.
-- [x] Reconcile `General_charts_api.md`, `Public_api.md`, examples and architecture claims against
+- [x] Reconcile `general_charts_api.md`, `public_api.md`, examples and architecture claims against
       exports, manifests, scripts and actual call paths. Separate supported, experimental and
       proposed behavior.
 - [x] Capture clean release financial, general and combined baselines and the current enforced
@@ -248,9 +248,9 @@ fixtures demonstrate bounded work.
 - [ ] Selection.
 - [ ] Linked-chart synchronization, extending the shared contract delivered first for financial
       charts as PD5 (semantic crosshair and visible-range events with source and revision; see
-      the trading contract in [Architecture.md](../docs/Architecture.md)).
+      the trading contract in [architecture.md](../docs/architecture.md)).
 - [ ] Frame image export, extending the shared contract delivered first as PD6
-      (`capture_export_frame` and the native export path in Architecture.md).
+      (`capture_export_frame` and the native export path in architecture.md).
 - [ ] Localization, overflow and focus behavior.
 - [ ] G4 full gate green; batch committed and pushed.
 
@@ -368,7 +368,7 @@ Keep one public library, one `ChartEngine` and one ordered frame contract. Prese
 financial data and coordinate paths while completing general charting as a first-class capability.
 The browser package is `@aeristerminal/aeris-charts` with an optional `/react` entry. Package naming
 or distribution changes require a compatibility decision; this plan does not introduce another
-product. [Architecture.md](../docs/Architecture.md) describes current ownership and execution; this document
+product. [architecture.md](../docs/architecture.md) describes current ownership and execution; this document
 specifies the target and acceptance gates.
 
 The existing shared-engine direction is sound. Replacing it with a browser-only renderer or making
@@ -388,7 +388,7 @@ not a promise to implement every conceivable visualization.
 
 **References.** Reviewed on 2026-10-10. R0 pins Recharts 3.10.1 at source revision
 `ffb918798051ef040bb7f9922d3850c9c189f39f`; its package and source `LICENSE` files are MIT.
-The executable mappings are in `examples/web_demo/fixtures/g1/recharts-3.10.1/matrix.json`. A moving
+The executable mappings are in `examples/web_demo/fixtures/g1/recharts_3_10_1/matrix.json`. A moving
 documentation site is not the permanent test baseline.
 
 - [Recharts API catalog](https://recharts.github.io/en-US/api/) establishes Cartesian, polar, composed,
@@ -589,7 +589,7 @@ snapshot existence.
 
 Documentation-only revisions may skip runtime gates. Check diffs, links/paths, source consistency and
 documentation hygiene. This plan revision makes no production ownership or execution change; update
-`Architecture.md` in the same commit as future code that changes those contracts. Preserve unrelated working-tree changes and stage only task-owned
+`architecture.md` in the same commit as future code that changes those contracts. Preserve unrelated working-tree changes and stage only task-owned
 files.
 
 ## Definition of completion

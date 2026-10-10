@@ -137,7 +137,7 @@ Their snapshot record is therefore null for exact-index queries and until a fram
 latest mode exposes only the most recently recorded visible-frame value and may remain stale while
 the series is not rendered.
 
-The declaration manifest at `packages/charts/api/public-api-v1.json` records every supported
+The declaration manifest at `packages/charts/api/public_api_v1.json` records every supported
 declaration file. CI runs `npm run check:api`; after deliberate review, update it with
 `npm run update:api`.
 

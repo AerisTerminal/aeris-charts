@@ -301,8 +301,9 @@ deserializing JSON.
 
 Style reset is also owned at this shared boundary. `ChartEngine::reset_style_to_defaults()` restores
 canonical chart and live-series presentation in place, including semantic unset/follow values, while
-preserving data, pane/scale topology, drawings, indicator bindings, price formatting, and all
-time/price view state. Price-scale mode, ranges, margins and layout constraints are not style reset.
+preserving data, pane/scale topology, drawings, indicator bindings, histogram up/down coloring
+policy, price formatting, and all time/price view state. Price-scale mode, ranges, margins and
+layout constraints are not style reset.
 Advanced-series semantic geometry and footprint aggregation/representation likewise survive while
 their colors, strokes, fills and other visual styling return to Aeris defaults. The browser passes
 its selected light/dark theme through the WASM boundary because theme selection is package state.
@@ -549,7 +550,7 @@ Built-in frame geometry and series hit testing share one viewport-density query.
 The official advanced-series examples are engine-owned feature series, not browser drawing callbacks. Each retains its complete validated payload beside an OHLC-shaped canonical projection used by the shared time/price-scale and query machinery. Grouped bars, heatmap, HLC area, pretty histogram, background shade, stacked area/bars, and whisker boxes construct backend-neutral primitives in the same ordered series layer as built-in geometry. Their official defaults, visible-range rules, pixel snapping, autoscale semantics, and source-data lifecycle are therefore identical in browser and native hosts. Brushable Area is deliberately not an advanced-series data type: it is an ordinary built-in Area series plus transient engine-owned range styling, so data ingestion, retention, LOD, hit testing, price-scale ownership, and all ordinary Area APIs remain on the canonical Area path. The legacy browser input name `brushable_area` is only a compatibility alias and normalizes to `area` immediately. Area-like fills share one design token (`market.area_fill_strong_alpha` → `area_fill_faint_alpha`): an unset Area fill, both unset baseline halves, and the brushable range defaults all derive their gradient from their own stroke color at that strength, strong at the series extreme and faint at its base. Brush default styles are engine-owned (`area_brush_defaults`); hosts send only the fields they override plus each range's positive/negative tone. Native hosts compose the whole interaction with one call, `set_brushable_area(series, Some(options))`: the engine attaches the Delta Tooltip, restyles the area from its active range with those defaults after every gesture, clears the range on pane double-click and Escape, and drops the composition when the series stops being an Area series.
 
 Professional footprint / numbers-bar data has a chart-level tick-truth owner described in
-`Footprint.md`. `ChartEngine::add_trade_stream` retains one bounded keyed canonical microsecond tape;
+`footprint.md`. `ChartEngine::add_trade_stream` retains one bounded keyed canonical microsecond tape;
 footprints, CVD, delta histograms, big-trades indicators and auction markers hold dependent handles, not
 provider-event copies. The stream derives integer tick-grid levels, bid/ask/unknown/total volume, POC,
 final/session delta, delta percentage, running Max/Min Delta, and diagonal stacked imbalances. CVD
@@ -608,7 +609,7 @@ shifted index range; sealing alone leaves marks unchanged. Marks follow stream r
 and paint visible-only triangles, circles, framed labels and dashed revisitation rays in the same
 pane chrome beside big trades. They do not add frame primitives or backend-specific rendering.
 
-Level-two depth uses the parallel chart-side projection boundary documented in `Depth.md`.
+Level-two depth uses the parallel chart-side projection boundary documented in `depth.md`.
 `ChartEngine::add_depth_stream` owns one keyed, bounded book per host instrument publication. A
 validated full snapshot establishes sequence and tick-grid identity; incremental updates are
 atomic, and a gap fences all later deltas behind a typed resync request until the host supplies a
@@ -899,7 +900,7 @@ typed identities to their UI controls; they must not rebuild engine-owned groups
 `chart.value_snapshot(logical_index?)` crosses WebAssembly once and returns all live series. The package adds live handles to the engine records and derives legacy crosshair `series_data` by retaining only valued entries. Engine-owned feature series expose their scalar scale projection and retain the legacy scalar event shape. Arbitrary custom-series callbacks remain host-owned: exact snapshots are null, while latest snapshots can expose only the last value recorded during a visible frame and are explicitly render-state-dependent. Symbol/exchange metadata, volume association outside VWAP bindings, bar/day change math, session calendars, visibility settings, and legend DOM remain host-owned.
 
 The supported, experimental, internal-but-exposed, and legacy surfaces are classified in
-`Public_api.md`. Predictable browser failures use `AerisChartsError` with stable category codes;
+`public_api.md`. Predictable browser failures use `AerisChartsError` with stable category codes;
 clean ingestion retains a null diagnostics fast path. The generated WASM surface and benchmark/test
 hooks are internal even when visible to developer tools. A deterministic declaration manifest makes
 supported TypeScript surface changes explicit in CI.

@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
-import { crop_png, count_different, max_channel_delta } from "./parity-pixels.mjs";
+import { crop_png, count_different, max_channel_delta } from "./parity_pixels.mjs";
 
 test("custom SMA matches built-in values and dispatches tail updates", async ({ page }) => {
   await page.goto("/?backend=canvas2d");
@@ -721,7 +721,7 @@ test("structure zones and auction marks share Canvas2D and WebGPU geometry", asy
   // rect/zone/overlap rounding (4,032 at 1, 28 at 2); 282 are localized contour/glyph
   // coverage, max 84 on triangle/label edges. The 2,600/40 baseline from
   // primitives.spec.mjs covers a different scene without this many translucent rects.
-  // backend-parity.spec.mjs also accepts marker AA up to 66 when paint order is exact.
+  // backend_parity.spec.mjs also accepts marker AA up to 66 when paint order is exact.
   // Require the actual non-rounding residual with ~13% count and 6-unit edge margin,
   // rather than hiding a real fill/geometry divergence behind pixelmatch threshold 0.1.
   expect(coverage_pixels, "whole-chart AA/text residual").toBeLessThanOrEqual(320);

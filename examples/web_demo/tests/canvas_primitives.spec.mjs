@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { test, monitor_page, wait_for_chart } from "./page-ready.mjs";
+import { test, monitor_page, wait_for_chart } from "./page_ready.mjs";
 import { readFileSync } from "node:fs";
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";

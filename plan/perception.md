@@ -44,11 +44,11 @@ Created 2026-10-02. **Status: proposed. No batch may start until D1–D4 are dec
   studies into views of perception facts (see **One owner per fact**) so that structure has one
   implementation, not two.
 - **D2 — Typed strategy rules.** The completed expansion plan kept "a Pine-style scripting
-  language" out of scope, and [Architecture.md](../docs/Architecture.md) states that the engine does
+  language" out of scope, and [architecture.md](../docs/architecture.md) states that the engine does
   not evaluate alert conditions. P4 adds a typed, bounded rule
   specification that the engine evaluates. It is data (a validated tree of conditions over named
   facts), not a language: no loops, variables, functions or interpreter. Recommendation: accept
-  it and amend the Architecture.md alert boundary in the same commit that starts P4. Without engine-side
+  it and amend the architecture.md alert boundary in the same commit that starts P4. Without engine-side
   evaluation, each host re-implements rule semantics and the discipline guarantee disappears.
 - **D3 — Where evidence lives.** Recommendation: single-chart evidence (every occurrence of a setup
   on the retained history of one chart, with outcomes and summary statistics) is engine work,
@@ -60,7 +60,7 @@ Created 2026-10-02. **Status: proposed. No batch may start until D1–D4 are dec
 
 When D1–D4 are accepted: set this file's status to active, add the P batches to **Work cadence**
 in [AGENTS.md](../AGENTS.md), and record the D2 amendment in
-[Architecture.md](../docs/Architecture.md).
+[architecture.md](../docs/architecture.md).
 
 ## Why this program
 
@@ -229,7 +229,7 @@ human sees exactly what the agent saw.
 
 Work cadence follows [AGENTS.md](../AGENTS.md): implement a whole batch, use focused checks while
 building, run the complete gate once, then commit and push once per batch, with
-`docs/Architecture.md` updated in the same commit.
+`docs/architecture.md` updated in the same commit.
 
 ### P1 — Perception foundation
 
@@ -261,7 +261,7 @@ building, run the complete gate once, then commit and push once per batch, with
 - [ ] Fixtures: point-in-time equivalence (PX4), cross-executor parity of the layer, and
       deterministic brief bytes for versioned datasets. `perf_gate` budgets for tip update and
       brief generation.
-- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [ ] `docs/architecture.md` updated; full gate green; batch committed and pushed.
 
 **Exit:** for every fact kind, perception at any replay clock equals perception on truncated data.
 Briefs are byte-identical across native and browser builds, and the layer renders identically on
@@ -284,7 +284,7 @@ every executor within the existing parity tolerances.
 - [ ] Fair value gaps and order blocks as facts (absorbs the remaining I3 items), with documented,
       parameterized and deterministic rules.
 - [ ] Perception agreement study started (PX1) on a fixed annotated set.
-- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [ ] `docs/architecture.md` updated; full gate green; batch committed and pushed.
 
 **Exit:** every pattern's clauses are documented and fixture-tested on synthetic charts that pass
 and fail each clause. Triggers match the bar on which state actually changes in replay.
@@ -306,7 +306,7 @@ and fail each clause. Triggers match the bar on which state actually changes in 
       look-ahead.
 - [ ] Brief sections for order flow, liquidity and context. Every order-flow fact is labeled with
       its data source (tape or candle approximation).
-- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [ ] `docs/architecture.md` updated; full gate green; batch committed and pushed.
 
 **Exit:** order-flow and liquidity facts are point-in-time equivalent in replay. Higher-timeframe
 facts never reveal an unfinished higher-timeframe bar's future values.
@@ -333,7 +333,7 @@ facts never reveal an unfinished higher-timeframe bar's future values.
       trading-intent path, with stops and targets attached. The host and its user decide whether
       intents are executed. Events and intents project onto the perception layer.
 - [ ] Persistence and migration for setup specifications; replay equivalence for events.
-- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [ ] `docs/architecture.md` updated; full gate green; batch committed and pushed.
 
 **Exit:** a fixed suite of plain-language strategies has reference specifications whose events
 match hand-verified bars in replay, and unsupported phrasing is rejected with actionable paths.
@@ -357,7 +357,7 @@ match hand-verified bars in replay, and unsupported phrasing is rejected with ac
       PD6, with the perception layer and cited facts highlighted, for the host's journal.
 - [ ] Bounded work: evaluation cost is reported and capped, and it never disturbs live frame
       pacing.
-- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [ ] `docs/architecture.md` updated; full gate green; batch committed and pushed.
 
 **Exit:** evidence for a setup equals the result of stepping the replay clock bar by bar and
 recording live events. A deliberately look-ahead-contaminated specification is impossible to
@@ -369,7 +369,7 @@ express, and the ledger reports every trial.
 
 - [ ] Agent comprehension benchmark (PX2) and rule-translation fidelity benchmark (PX3) added to
       the evidence benchmark subsystem with versioned datasets and question sets.
-- [ ] [Public_api.md](../docs/Public_api.md) classifies the perception, setup and evidence surfaces.
+- [ ] [public_api.md](../docs/public_api.md) classifies the perception, setup and evidence surfaces.
 - [ ] Milestone evidence: perception-layer screenshots on every executor, the PX1 agreement
       report, PX2 and PX3 results, and recorded performance budgets.
 

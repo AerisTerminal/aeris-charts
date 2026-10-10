@@ -87,7 +87,7 @@ test("background shade retains behavior learned from the public example", async 
   for (const dpr of [1, 2]) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: dpr });
     const page = await context.newPage();
-    await page.goto("/reference-background-shade.html");
+    await page.goto("/reference_background_shade.html");
     await page.waitForFunction(() => document.getElementById("Aeris")?.__shade_parity?.metrics !== undefined);
 
     const initial = await fixture(page);

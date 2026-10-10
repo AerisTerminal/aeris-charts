@@ -36,7 +36,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import matrix from "./fixtures/g1/recharts-3.10.1/matrix.json";
+import matrix from "./fixtures/g1/recharts_3_10_1/matrix.json";
 
 const rows = [
   { name: "Jan", value: 12, alternate: 8, size: 90 },

@@ -1,6 +1,6 @@
 //! Finite capture of the shared D1 engine pane through official GPUI.
 //!
-//! This is the GPUI half of `examples/web_demo/tests/gpui-webgpu-matrix.spec.mjs`.
+//! This is the GPUI half of `examples/web_demo/tests/gpui_webgpu_matrix.spec.mjs`.
 //! It builds the same checked-in D1 fixture used by the browser, paints only the engine-owned pane
 //! frame, captures the presented client area through DWM, writes metadata, and exits.
 //!

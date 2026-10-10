@@ -20,7 +20,7 @@ volume studies, the I2 breadth tier (including KST, Klinger, regression channels
 KAMA, Choppiness Index and ATR bands), and seven I3 structure/session studies: swing points,
 market structure, fair value gaps, order blocks, session highs/lows, previous period levels and
 opening range. Session studies use UTC boundaries or a runtime-only host-supplied study calendar.
-See [Studies.md](docs/Studies.md) and the indicator sections of [Architecture.md](docs/Architecture.md).
+See [studies.md](docs/studies.md) and the indicator sections of [architecture.md](docs/architecture.md).
 
 Rust hosts can register typed custom studies with `ChartEngine::register_custom_study` and bind
 them with `add_custom_study`. The browser chart exposes `register_custom_study`,
@@ -30,7 +30,7 @@ calculation. A separate external-study path accepts values calculated by the hos
 
 The shared trade stream also supports footprint series and runtime-only auction markers for
 unfinished auctions, exhaustion and absorption. Rules, options and snapshot semantics are in
-[Footprint.md](docs/Footprint.md).
+[footprint.md](docs/footprint.md).
 
 ## Browser package
 
@@ -108,8 +108,8 @@ revenue.setData([{ id: "jan", x: "Jan", y: 42 }]);
 ```
 
 The supported Cartesian API and proposed later families are separated in
-[`docs/General_charts_api.md`](docs/General_charts_api.md). The versioned 17-row competitive status
-matrix lives at `examples/web_demo/fixtures/g1/recharts-3.10.1/matrix.json`.
+[`docs/general_charts_api.md`](docs/general_charts_api.md). The versioned 17-row competitive status
+matrix lives at `examples/web_demo/fixtures/g1/recharts_3_10_1/matrix.json`.
 
 The same engine is available as an optional React authoring layer. Install React in applications that
 use it, then import the adapter from the package subpath; framework-neutral applications do not load
@@ -283,8 +283,8 @@ for crosshair-label surfaces. Crosshair lines use the theme-independent `crossha
 - `docs` — architecture, public API, domain-model, and contribution documentation.
 - `plan` — active and proposed product plans.
 
-See [Architecture.md](docs/Architecture.md) for ownership, data flow, and backend boundaries.
-See [Public_api.md](docs/Public_api.md) for supported/experimental surfaces, persistence, errors, and
+See [architecture.md](docs/architecture.md) for ownership, data flow, and backend boundaries.
+See [public_api.md](docs/public_api.md) for supported/experimental surfaces, persistence, errors, and
 version policy.
 
 ## Development

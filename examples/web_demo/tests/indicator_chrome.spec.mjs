@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { test, wait_for_chart } from "./page-ready.mjs";
+import { test, wait_for_chart } from "./page_ready.mjs";
 
 // Platform indicator-chrome building blocks: series lifecycle events, indicator lineage,
 // per-pane geometry anchors (top-left chip placement), hover values for the main series and

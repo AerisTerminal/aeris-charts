@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aeris_charts.com/benchmarks/result-v1.schema.json",
+  "$id": "https://aeris_charts.com/benchmarks/result_v1.schema.json",
   "title": "Aeris Charts benchmark run",
   "type": "object",
   "required": ["schema_version", "product", "source", "build", "environment", "execution", "scenarios"],

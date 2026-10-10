@@ -1,6 +1,6 @@
 import { expect } from "@playwright/test";
 import { PNG } from "pngjs";
-import { test, wait_for_chart } from "./page-ready.mjs";
+import { test, wait_for_chart } from "./page_ready.mjs";
 
 // Engine-native indicators: Bollinger band fill, oscillator separate panes with channel strips,
 // MACD four-state histogram colors, and the full native set's placement/lineage.

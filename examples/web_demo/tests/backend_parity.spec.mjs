@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
-import { test, monitor_page, wait_for_chart } from "./page-ready.mjs";
+import { test, monitor_page, wait_for_chart } from "./page_ready.mjs";
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/d1/candles.json", import.meta.url), "utf8"));
-const reference_baseline = JSON.parse(readFileSync(new URL("../fixtures/d1/reference-baseline.json", import.meta.url), "utf8"));
-const reference_matrix = JSON.parse(readFileSync(new URL("../fixtures/d1/reference-matrix.json", import.meta.url), "utf8"));
-const reference_features = JSON.parse(readFileSync(new URL("../fixtures/d1/reference-features.json", import.meta.url), "utf8"));
+const reference_baseline = JSON.parse(readFileSync(new URL("../fixtures/d1/reference_baseline.json", import.meta.url), "utf8"));
+const reference_matrix = JSON.parse(readFileSync(new URL("../fixtures/d1/reference_matrix.json", import.meta.url), "utf8"));
+const reference_features = JSON.parse(readFileSync(new URL("../fixtures/d1/reference_features.json", import.meta.url), "utf8"));
 const repository_root = fileURLToPath(new URL("../../..", import.meta.url));
 const test_port = Number.parseInt(process.env.AERIS_CHARTS_TEST_PORT ?? "4174", 10);
 const test_base_url = `http://127.0.0.1:${test_port}`;
@@ -1212,7 +1212,7 @@ test("reference spacing, DPR, and theme matrix reports regional fidelity @machin
     }
     await context.close();
   }
-  await test_info.attach("aeris_charts-reference-matrix.json", {
+  await test_info.attach("aeris_charts-reference_matrix.json", {
     body: Buffer.from(JSON.stringify({ ref_version: "5.2.0", cases: matrix }, null, 2)),
     contentType: "application/json",
   });
@@ -1311,7 +1311,7 @@ test("reference marker and overlay-volume fixtures report regional fidelity @mac
     };
   }
   console.log(`feature footprints: ${JSON.stringify(footprints)}`);
-  await test_info.attach("aeris_charts-reference-features.json", {
+  await test_info.attach("aeris_charts-reference_features.json", {
     body: Buffer.from(JSON.stringify({ ref_version: "5.2.0", features: feature_reports, footprints }, null, 2)),
     contentType: "application/json",
   });

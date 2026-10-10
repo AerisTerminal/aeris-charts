@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const dist = join(root, "dist");
-const snapshot_path = join(root, "api", "public-api-v1.json");
+const snapshot_path = join(root, "api", "public_api_v1.json");
 assert.ok(existsSync(dist), "dist is missing; run npm run build first");
 
 const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

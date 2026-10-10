@@ -1207,7 +1207,8 @@ impl SeriesEntry {
 
     /// Restore engine-owned visual styling without replacing the live series or its semantic/runtime
     /// state. Data, visibility, title metadata, pane/scale binding, price formatting, quotes,
-    /// marker payloads, indicator semantics, retention, and transient interaction state survive.
+    /// marker payloads, histogram direction policy, indicator semantics, retention, and transient
+    /// interaction state survive.
     fn reset_style_to_defaults(&mut self) {
         let defaults = Self::new(self.id, self.kind);
         self.line_color = defaults.line_color;
@@ -1222,7 +1223,6 @@ impl SeriesEntry {
         self.line_width = defaults.line_width;
         self.area_top_color = defaults.area_top_color;
         self.area_bottom_color = defaults.area_bottom_color;
-        self.histogram_updown = defaults.histogram_updown;
         self.line_type = defaults.line_type;
         self.point_markers = defaults.point_markers;
         self.last_price_animation = defaults.last_price_animation;

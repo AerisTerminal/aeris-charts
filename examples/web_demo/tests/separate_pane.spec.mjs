@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { test, wait_for_chart } from "./page-ready.mjs";
+import { test, wait_for_chart } from "./page_ready.mjs";
 import { PNG } from "pngjs";
 
 // The demo's RSI(14) toggle exercises the separate-pane API end-to-end: move_to_pane stacks a

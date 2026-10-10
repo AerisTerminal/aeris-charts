@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 
 const matrix = JSON.parse(fs.readFileSync(
-  new URL("../fixtures/g1/recharts-3.10.1/matrix.json", import.meta.url),
+  new URL("../fixtures/g1/recharts_3_10_1/matrix.json", import.meta.url),
   "utf8",
 ));
 
@@ -45,7 +45,7 @@ test("versioned Recharts matrix has 17 scoped executable rows", async ({ page })
 test("public lifecycle fixture creates general-first and one-engine mixed panes", async ({ page }) => {
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  await page.goto("/g1-lifecycle.html");
+  await page.goto("/g1_lifecycle.html");
   await expect(page.locator("body")).toHaveAttribute("data-ready", "true");
   const initial = await page.evaluate(() => ({
     financialPanes: window.__g1Lifecycle.financial.panes().length,

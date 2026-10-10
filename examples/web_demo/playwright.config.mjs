@@ -5,7 +5,7 @@ const portable_browser = process.env.AERIS_CHARTS_PORTABLE_BROWSER === "1";
 
 export default defineConfig({
   testDir: "./tests",
-  globalSetup: "./global-setup.mjs",
+  globalSetup: "./global_setup.mjs",
   // GitHub's shared Windows runners are substantially slower than release developer machines.
   // Keep the local feedback ceiling tight while allowing the same assertions to finish in CI.
   timeout: process.env.CI ? 60_000 : 30_000,
@@ -29,7 +29,7 @@ export default defineConfig({
       // Timing budgets and the native GPUI matrix remain machine evidence. Deterministic
       // browser/backend pixel comparisons run in the portable publication gate.
       testIgnore: portable_browser
-        ? /(engine-bench|gpui-webgpu-matrix|perf-gate)\.spec\.mjs/
+        ? /(engine_bench|gpui_webgpu_matrix|perf_gate)\.spec\.mjs/
         : undefined,
       grepInvert: portable_browser ? /@machine/ : undefined,
       use: {
@@ -53,12 +53,12 @@ export default defineConfig({
       // smoke — confirming the library loads and renders on those engines.
       name: "firefox",
       use: { ...devices["Desktop Firefox"] },
-      testMatch: /(cross-browser|financial-compatibility|general-charts|g1-foundations|unified-interaction-accessibility|public-reference-interaction)\.spec\.mjs/,
+      testMatch: /(cross_browser|financial_compatibility|general_charts|g1_foundations|unified_interaction_accessibility|public_reference_interaction)\.spec\.mjs/,
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
-      testMatch: /(cross-browser|financial-compatibility|general-charts|g1-foundations|unified-interaction-accessibility|public-reference-interaction)\.spec\.mjs/,
+      testMatch: /(cross_browser|financial_compatibility|general_charts|g1_foundations|unified_interaction_accessibility|public_reference_interaction)\.spec\.mjs/,
     },
   ],
   webServer: {

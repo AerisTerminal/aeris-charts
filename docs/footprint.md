@@ -1,7 +1,7 @@
 # Footprint / Numbers Bars Design
 
 This document is the durable design contract for GitHub issue #23. It describes the tick-truth
-model that Aeris Charts uses for professional footprint series. `Architecture.md` remains the
+model that Aeris Charts uses for professional footprint series. `architecture.md` remains the
 authority for crate ownership and dependency direction.
 
 ## 1. Trade event and ordering model
@@ -299,7 +299,7 @@ Order-flow milestone evidence was captured on 2026-09-26. The GPUI pane capture 
 `AERIS_CHARTS_GPUI_FEATURE=footprint` at DPR 1.25 and produced a 1543×873 image for the dense
 12-bar fixture; the image was visually inspected for readable cell text, stable column alignment,
 and unclipped pane content. The browser accessibility review passed the focused
-`unified-interaction-accessibility.spec.mjs` contract: one bounded application surface, hidden
+`unified_interaction_accessibility.spec.mjs` contract: one bounded application surface, hidden
 canvas pixels, a silent live region during streaming, and keyboard drawing edits that roll back.
 The capture image remains a transient milestone artifact; the command and metadata are recorded
 here so the evidence can be reproduced without adding binary fixtures to the repository.

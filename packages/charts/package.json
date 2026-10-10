@@ -1,6 +1,6 @@
 {
   "name": "@aeristerminal/aeris-charts",
-  "version": "0.11.0",
+  "version": "0.11.8",
   "type": "module",
   "description": "Aeris all-in-one financial and general charting SDK powered by Rust and WebAssembly.",
   "license": "AGPL-3.0-only",
