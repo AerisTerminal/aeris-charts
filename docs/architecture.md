@@ -1211,6 +1211,8 @@ bars and their indicator dependents after source corrections. Browser hosts conf
 binding through WASM and may read its current aggregate rows. A separate histogram can supply
 volume and receive derived volume, but the engine rejects a binding that would overwrite its own
 volume input. Higher-timeframe candles and studies use ordinary series and indicator frame paths.
+Price-kind built-in indicators join their source's pane and price scale, inheriting an explicit
+scale format even when the source was moved to the left; oscillator outputs retain their own pane.
 The engine gives each newly created dedicated indicator pane the same 0.3 stretch, including
 financial oscillators, external studies, CVD, and delta. A study placed into an explicitly selected
 existing pane keeps that pane's user-selected height; every backend renders the shared layout.

@@ -3059,8 +3059,21 @@ impl ChartEngine {
             | IndicatorKind::SessionLevels { .. }
             | IndicatorKind::PreviousPeriodLevels { .. }
             | IndicatorKind::OpeningRange { .. }
-            | IndicatorKind::Wma { .. }
-            | IndicatorKind::Custom { .. } => {}
+            | IndicatorKind::Wma { .. } => {
+                if let Some((pane, target)) = self.series_price_scale(source) {
+                    for &id in &ids {
+                        if let Some((output_pane, output_target)) = self.series_price_scale(id) {
+                            if output_pane != pane {
+                                self.set_series_pane(id, pane, 1.0);
+                            }
+                            if output_target != target {
+                                self.set_series_price_scale(id, target);
+                            }
+                        }
+                    }
+                }
+            }
+            IndicatorKind::Custom { .. } => {}
         }
         ids
     }

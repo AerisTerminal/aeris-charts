@@ -5272,6 +5272,20 @@ fn a_selected_scale_price_format_carries_to_series_that_join_the_scale() {
     let late = chart.add_series(SeriesKind::Line);
     chart.set_series_price_scale(late, PriceScaleTarget::Left);
     assert_eq!(chart.series_entry(late).unwrap().price_format.precision, 0);
+    let ribbon = chart.add_indicator_kind(
+        0,
+        IndicatorKind::EmaRibbon {
+            periods: [2, 3, 4, 5, 6],
+        },
+        None,
+    );
+    assert_eq!(ribbon.len(), 5);
+    for id in ribbon {
+        let output = chart.series_entry(id).unwrap();
+        assert_eq!(output.pane_index, 0);
+        assert_eq!(output.price_scale_target, PriceScaleTarget::Left);
+        assert_eq!(output.price_format.precision, 0);
+    }
 }
 
 #[test]
