@@ -30,7 +30,8 @@ export * from "./offscreen.js";
 export * from "./shortcuts.js";
 export * from "./grid.js";
 import { chart_impl } from "./impl.js";
-import { ensure_init } from "./impl.js";
+import { ensure_init, restore_chart_host, snapshot_chart_host } from "./impl.js";
+import { AerisChartsError } from "./errors.js";
 import { enable_accessibility } from "./accessibility.js";
 import type { accessibility_options } from "./accessibility.js";
 import { default_theme_name, theme_options, theme_palette, type theme_name } from "./theme.js";
@@ -71,11 +72,7 @@ export async function create_chart(
   // state out of the headless engine. The plugin overlay is plain package-owned DOM (no wasm
   // involvement): it never takes input (gestures live on the top overlay), and the package
   // paints it after each engine frame.
-  const previous_container_position = container.style.position;
-  const assigned_relative_position = getComputedStyle(container).position === "static";
-  if (assigned_relative_position) {
-    container.style.position = "relative";
-  }
+  const host_snapshot = snapshot_chart_host(container);
   const gpu_pane = document.createElement("canvas");
   const fallback_pane = document.createElement("canvas");
   const plugin_canvas = document.createElement("canvas");
@@ -132,7 +129,15 @@ export async function create_chart(
     JSON.stringify(initial_horizontal_domain),
   ).catch((error: unknown) => {
     for (const canvas of [gpu_pane, fallback_pane, plugin_canvas, overlay]) canvas.remove();
-    if (assigned_relative_position) container.style.position = previous_container_position;
+    restore_chart_host(container, host_snapshot);
+    const message = typeof error === "string"
+      ? error
+      : error instanceof Error
+        ? error.message
+        : "";
+    if (message.startsWith("invalid initial horizontal domain:")) {
+      throw new AerisChartsError("invalid_options", message);
+    }
     throw error;
   });
   let chart: chart_impl | null = null;
@@ -175,6 +180,7 @@ export async function create_chart(
       auto_size,
       selected_theme,
       initialPane !== undefined && initial_horizontal_domain.type !== "financial_time",
+      host_snapshot,
     );
     if (
       handle_scroll !== undefined || handle_scale !== undefined || kinetic_scroll !== undefined ||
@@ -210,7 +216,7 @@ export async function create_chart(
       wasm.free();
       for (const canvas of [gpu_pane, fallback_pane, plugin_canvas, overlay]) canvas.remove();
     }
-    if (assigned_relative_position) container.style.position = previous_container_position;
+    restore_chart_host(container, host_snapshot);
     throw error;
   }
 }

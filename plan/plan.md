@@ -29,7 +29,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 
 | Batch | Phase | Scope | Status | Done so far | Next |
 | --- | --- | --- | --- | --- | --- |
-| G1 | R0 + R1 | Competitive baseline, lifecycle and mutable object foundations | **Complete** | Recharts 3.10.1 matrix and fixtures; general-first topology; atomic handles; cleanup; validated general-first V2 restore | G2 |
+| G1 | R0 + R1 | Competitive baseline, lifecycle and mutable object foundations | **Complete** | Recharts 3.10.1 matrix and rendered-mark fixtures; general-first topology; atomic handles; host cleanup; focus retention; validated general-first V2 restore | G2 |
 | G2 | R2 | Scales, axes and responsive layout | **Open** | — | Temporal ticks and views, grid and zero lines, multiple axes |
 | G3 | R3 | Cartesian visual and data semantics (remainder) | **In progress** | 9 delivered R3 slices (see **Delivered work**) | Resume after G2: bars and stacks, gradients, error bars, composition, per-item styling |
 | G4 | R4 | Components and interaction | **Open** | — | Legend, tooltip, brush, selection, sync (extends PD5), export (PD6) |
@@ -43,7 +43,7 @@ Notes:
 - R3 slices were delivered ahead of R0–R2. They count toward R3 only; R3 closes after R1–R2 land
   and its exit criteria pass.
 - G1 is complete after the corrective general-first V2 restore regression, declaration snapshot
-  correction, and full gates passed.
+  correction, user-surface/lifecycle regressions, and full gates passed.
   No full coverage-matrix row is yet Verified because each row includes later-phase behavior; the
   versioned matrix records those rows as Partial or Open.
 
@@ -78,7 +78,8 @@ must pass the full gate on its own.
 
 G1 delivered the versioned Recharts 3.10.1 comparison matrix and executable private fixtures,
 general-first and mixed topology, stable atomic general handles, last-pane ownership, failed-install
-cleanup, and policy-v7 release baselines. Evidence lives in
+cleanup, series/row focus retention through reorder and relayout, live financial creation after
+retiring an empty general-first pane, and policy-v7 release baselines. Evidence lives in
 `examples/web_demo/tests/g1-foundations.spec.mjs`, the existing public general browser/native tests,
 and `benchmarks/baselines/g1-2026-10-10.json`.
 
@@ -161,8 +162,8 @@ paths accompany future status changes. Unverified rows stay open.
 - [x] Atomic in-place axis and series mutations through all public boundaries.
 - [x] Failed installation and cleanup fixed.
 - [x] Visibility and ordering affect domains, legends, hits and exports consistently.
-- [x] G1 corrective general-first V2 restore and declaration snapshot gates green; corrective
-      commits pushed.
+- [x] G1 corrective general-first V2 restore, declaration snapshot and user-surface/lifecycle gates
+      green; corrective commits pushed.
 
 **Exit:** standalone general and mixed charts can create, update, rebind, reorder, hide, remove and
 restore through actual browser and native paths. Invalid operations leave prior state intact.

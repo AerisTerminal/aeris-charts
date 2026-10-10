@@ -3680,6 +3680,52 @@ type engine_alert_create_request = {
   frequency: alert_frequency;
 };
 
+export interface chart_host_snapshot {
+  readonly position_value: string;
+  readonly position_priority: string;
+  readonly assigned_position: boolean;
+  readonly role: string | null;
+  readonly aria_label: string | null;
+  owned_role: boolean;
+  owned_aria_label: string | null;
+}
+
+export function snapshot_chart_host(container: HTMLElement): chart_host_snapshot {
+  const snapshot: chart_host_snapshot = {
+    position_value: container.style.getPropertyValue("position"),
+    position_priority: container.style.getPropertyPriority("position"),
+    assigned_position: getComputedStyle(container).position === "static",
+    role: container.getAttribute("role"),
+    aria_label: container.getAttribute("aria-label"),
+    owned_role: false,
+    owned_aria_label: null,
+  };
+  if (snapshot.assigned_position) container.style.setProperty("position", "relative");
+  return snapshot;
+}
+
+export function restore_chart_host(container: HTMLElement, snapshot: chart_host_snapshot): void {
+  if (
+    snapshot.assigned_position
+    && container.style.getPropertyValue("position") === "relative"
+    && container.style.getPropertyPriority("position") === ""
+  ) {
+    if (snapshot.position_value === "") container.style.removeProperty("position");
+    else container.style.setProperty("position", snapshot.position_value, snapshot.position_priority);
+  }
+  if (snapshot.owned_role && container.getAttribute("role") === "group") {
+    if (snapshot.role === null) container.removeAttribute("role");
+    else container.setAttribute("role", snapshot.role);
+  }
+  if (
+    snapshot.owned_aria_label !== null
+    && container.getAttribute("aria-label") === snapshot.owned_aria_label
+  ) {
+    if (snapshot.aria_label === null) container.removeAttribute("aria-label");
+    else container.setAttribute("aria-label", snapshot.aria_label);
+  }
+}
+
 class alert_impl implements alert_api {
   constructor(private readonly chart: chart_impl) {}
 
@@ -4046,6 +4092,7 @@ export class chart_impl implements chart_api {
     auto_size: boolean,
     private selected_theme: theme_name = default_theme_name,
     initial_general = false,
+    private readonly host_snapshot: chart_host_snapshot,
   ) {
     this.wasm_instance = wasm;
     const plugin_ctx = plugin_canvas.getContext("2d");
@@ -4060,8 +4107,11 @@ export class chart_impl implements chart_api {
     this.last_ts_height = this.wasm.time_scale_height();
     this.auto_size = auto_size;
     this.container.setAttribute("role", "group");
+    this.host_snapshot.owned_role = true;
     if (!this.container.hasAttribute("aria-label")) {
-      this.container.setAttribute("aria-label", initial_general ? "General chart" : "Financial chart");
+      const label = initial_general ? "General chart" : "Financial chart";
+      this.container.setAttribute("aria-label", label);
+      this.host_snapshot.owned_aria_label = label;
     }
     this.detach_gestures = install_gestures(this);
     if (auto_size) {
@@ -4916,7 +4966,7 @@ export class chart_impl implements chart_api {
           `price scale '${requested_scale}' does not exist in pane ${pane}`,
         );
       }
-      const adopt_primary = !this.next_extra_series;
+      const adopt_primary = !this.next_extra_series && this.wasm.series_kind(0) !== undefined;
       const id = this.wasm.add_footprint_series(adopt_primary, JSON.stringify(financial_options ?? {}));
       if (id === 0xffffffff) {
         throw new AerisChartsError("invalid_options", "footprint series options were rejected by the engine");
@@ -4929,7 +4979,7 @@ export class chart_impl implements chart_api {
       return series;
     }
     if (is_feature_series_kind(kind)) {
-      const adopt_primary = !this.next_extra_series;
+      const adopt_primary = !this.next_extra_series && this.wasm.series_kind(0) !== undefined;
       this.next_extra_series = true;
       const id = this.wasm.add_feature_series(FEATURE_KIND_TO_U8[kind], adopt_primary, "{}");
       if (id === 0xffffffff) {
@@ -4941,14 +4991,15 @@ export class chart_impl implements chart_api {
       this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
       return series;
     }
-    // Series 0 is created by the engine at construction; the first add_series adopts it so the
-    // common "one chart, one series" path matches reference (add_series returns the primary series).
+    // Financial-default charts create series 0 at construction, so the first add_series adopts it.
+    // A retired general-first pane has no financial series; that path must allocate a live series.
     let id: number;
-    if (!this.next_extra_series) {
+    if (!this.next_extra_series && this.wasm.series_kind(0) !== undefined) {
       this.next_extra_series = true;
       this.wasm.set_series_type(KIND_TO_U8[kind]);
       id = 0;
     } else {
+      this.next_extra_series = true;
       id = this.wasm.add_series(KIND_TO_U8[kind]);
     }
     const series = new series_impl(id, kind, this);
@@ -4978,10 +5029,11 @@ export class chart_impl implements chart_api {
     // The first-series adoption mirrors add_series (the engine's construction-time series 0
     // converts to Custom instead of leaving an empty built-in behind).
     let id: number;
-    if (!this.next_extra_series) {
+    if (!this.next_extra_series && this.wasm.series_kind(0) !== undefined) {
       this.next_extra_series = true;
       id = this.wasm.add_custom_series(adapted, true);
     } else {
+      this.next_extra_series = true;
       id = this.wasm.add_custom_series(adapted, false);
     }
     if (id === 0xffffffff) {
@@ -7589,5 +7641,6 @@ export class chart_impl implements chart_api {
     this.fallback_pane.remove();
     this.plugin_canvas.remove();
     this.overlay.remove();
+    restore_chart_host(this.container, this.host_snapshot);
   }
 }

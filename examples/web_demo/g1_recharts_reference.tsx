@@ -218,7 +218,7 @@ function ReferenceScene({ id }: { id: string }) {
         <Sankey width={350} height={185} data={flow} node={{ fill: "#4c8bf5" }} link={{ stroke: "#8b6df6" }} />
       </Evidence>
       <Evidence api="SunburstChart">
-        <SunburstChart width={350} height={185} data={tree} dataKey="value" nameKey="name" fill="#28b7a4" />
+        <SunburstChart width={350} height={185} data={tree[0]} dataKey="value" nameKey="name" fill="#28b7a4" />
       </Evidence>
     </>;
   }

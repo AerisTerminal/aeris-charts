@@ -328,6 +328,7 @@ class PaneAccessibility {
   }
 
   sync_series(): void {
+    const active = this.active_series();
     const current = this.pane.get_series().filter(is_accessibility_series);
     for (const [series, handler] of this.subscriptions) {
       if (!current.includes(series)) {
@@ -347,7 +348,10 @@ class PaneAccessibility {
       this.subscriptions.set(series, handler);
     }
     this.series = current;
-    this.series_index = clamp(this.series_index, 0, Math.max(0, this.series.length - 1));
+    const active_index = active === undefined ? -1 : this.series.indexOf(active);
+    this.series_index = active_index >= 0
+      ? active_index
+      : clamp(this.series_index, 0, Math.max(0, this.series.length - 1));
     this.refresh_points();
     this.sync_focus_handle();
     this.layer.setAttribute("aria-label", this.pane_label());

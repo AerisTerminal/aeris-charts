@@ -353,20 +353,18 @@ support follows the separately documented persistence window and is a major comp
 
 ## Rust distribution
 
-The Rust crates are prepared as one coordinated release family. Version `0.3.0`
-publishes `aeris_charts_core`, `aeris_charts_indicators`, `aeris_charts_render`,
-`aeris_charts_engine`, `aeris_charts_render_wgpu`, `aeris_charts_native`, and
-`aeris_charts_wasm`. Workspace manifests retain local path dependencies with the same explicit
-version, so repository builds exercise the same dependency boundaries used by registry consumers.
+Every Rust crate is repository-only and has `publish = false`; Aeris does not publish Rust crates to
+crates.io. Rust hosts consume the crates through pinned Git revisions or local paths. Workspace
+manifests retain local path dependencies and exercise the same crate boundaries used by those hosts.
 
 The Rust API is below 1.0 and may evolve between minor releases. Patch releases preserve the public
 API within their minor line except where a correctness or security repair cannot do so safely; minor
-releases may add, change, or remove pre-1.0 Rust APIs. All published Aeris crates in one release use
-the same version, and consumers should keep direct Aeris dependencies aligned.
+releases may add, change, or remove pre-1.0 Rust APIs. Consumers should pin one repository revision
+for all direct Aeris dependencies.
 
-`aeris_charts_render_gpui` remains repository-only and experimental because it tracks a reviewed
-Zed Git revision whose API differs from the crates.io `gpui` release. Exact Git revisions are
-required for that backend; floating Git dependencies are unsupported.
+`aeris_charts_render_gpui` is experimental because it tracks a reviewed Zed Git revision whose API
+differs from the crates.io `gpui` release. Exact Git revisions are required for that backend;
+floating Git dependencies are unsupported.
 
 ## Release policy
 

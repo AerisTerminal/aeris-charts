@@ -29,7 +29,15 @@ test("versioned Recharts matrix has 17 scoped executable rows", async ({ page })
     await expect(page.locator(".chart svg.recharts-surface").last()).toBeVisible();
     expect(row.referenceEvidence.length, `${row.id}.referenceEvidence`).toBeGreaterThan(0);
     for (const api of row.referenceEvidence) {
-      await expect(page.locator(`[data-reference-api="${api}"]`), `${row.id}: ${api}`).toBeVisible();
+      const evidence = page.locator(`[data-reference-api="${api}"]`);
+      await expect(evidence, `${row.id}: ${api}`).toBeVisible();
+      const surface = evidence.locator("svg.recharts-surface");
+      if (await surface.count() > 0) {
+        await expect.poll(
+          () => surface.locator("path:not([fill='none']), rect, circle, polygon, polyline").count(),
+          { message: `${row.id}: ${api} must render visible marks`, timeout: 3_000 },
+        ).toBeGreaterThan(0);
+      }
     }
   }
 });

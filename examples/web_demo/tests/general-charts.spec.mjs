@@ -29,6 +29,24 @@ test("general charts can own the first pane and failed creation leaves no host r
     }
     initial.replacement_schema = chart.export_state().schema_version;
     initial.replacement_is_not_removable = chart.remove_pane(0) === false;
+    const first_financial = chart.addSeries("line");
+    first_financial.setData([
+      { time: 1, value: 10 },
+      { time: 2, value: 12 },
+    ]);
+    const second_financial = chart.addSeries("area");
+    second_financial.setData([
+      { time: 1, value: 9 },
+      { time: 2, value: 11 },
+    ]);
+    initial.financial_after_retirement = {
+      first_id: first_financial.id,
+      second_id: second_financial.id,
+      pane_series: chart.panes()[0].get_series().map((series) => series.id),
+      series_order: chart.series_order().map((series) => series.id),
+      first_value: first_financial.data_by_index(1, 0)?.value,
+      second_value: second_financial.data_by_index(1, 0)?.value,
+    };
     chart.remove();
 
     const rejected_host = document.createElement("div");
@@ -41,17 +59,24 @@ test("general charts can own the first pane and failed creation leaves no host r
         backend: "canvas2d",
         initialPane: { horizontal_domain: { type: "unsupported" } },
       });
-    } catch {
+    } catch (error) {
       rejected = true;
+      rejected_host.dataset.errorName = error.name;
+      rejected_host.dataset.errorCode = error.code;
     }
     const failed = {
       rejected,
       child_count: rejected_host.childElementCount,
       inline_position: rejected_host.style.position,
+      error_name: rejected_host.dataset.errorName,
+      error_code: rejected_host.dataset.errorCode,
+      role: rejected_host.getAttribute("role"),
+      aria_label: rejected_host.getAttribute("aria-label"),
     };
     const late_rejected_host = document.createElement("div");
-    late_rejected_host.style.width = "320px";
-    late_rejected_host.style.height = "180px";
+    late_rejected_host.style.cssText = "position: static !important; width: 320px; height: 180px";
+    late_rejected_host.setAttribute("role", "region");
+    late_rejected_host.setAttribute("aria-label", "Consumer chart host");
     document.body.appendChild(late_rejected_host);
     let late_rejected = false;
     try {
@@ -67,12 +92,70 @@ test("general charts can own the first pane and failed creation leaves no host r
     const late_failed = {
       rejected: late_rejected,
       child_count: late_rejected_host.childElementCount,
-      inline_position: late_rejected_host.style.position,
+      inline_position: late_rejected_host.style.getPropertyValue("position"),
+      inline_position_priority: late_rejected_host.style.getPropertyPriority("position"),
+      role: late_rejected_host.getAttribute("role"),
+      aria_label: late_rejected_host.getAttribute("aria-label"),
+    };
+    const disposed_host = document.createElement("div");
+    disposed_host.style.cssText = "width: 320px; height: 180px";
+    document.body.appendChild(disposed_host);
+    const disposed_chart = await create_chart(disposed_host, { backend: "canvas2d", autoSize: false });
+    disposed_host.setAttribute("role", "complementary");
+    disposed_host.setAttribute("aria-label", "User changed chart label");
+    disposed_host.style.setProperty("position", "sticky", "important");
+    disposed_chart.remove();
+    const disposed = {
+      child_count: disposed_host.childElementCount,
+      inline_position: disposed_host.style.getPropertyValue("position"),
+      inline_position_priority: disposed_host.style.getPropertyPriority("position"),
+      role: disposed_host.getAttribute("role"),
+      aria_label: disposed_host.getAttribute("aria-label"),
+    };
+    const restored_host = document.createElement("div");
+    restored_host.style.cssText = "position: static !important; width: 320px; height: 180px";
+    restored_host.setAttribute("role", "region");
+    restored_host.setAttribute("aria-label", "Existing chart host");
+    document.body.appendChild(restored_host);
+    const restored_chart = await create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+    restored_chart.remove();
+    const restored = {
+      child_count: restored_host.childElementCount,
+      inline_position: restored_host.style.getPropertyValue("position"),
+      inline_position_priority: restored_host.style.getPropertyPriority("position"),
+      role: restored_host.getAttribute("role"),
+      aria_label: restored_host.getAttribute("aria-label"),
+    };
+    const first_add_after_retirement = async (add) => {
+      const branch_host = document.createElement("div");
+      branch_host.style.cssText = "width: 320px; height: 180px";
+      document.body.appendChild(branch_host);
+      const branch_chart = await create_chart(branch_host, {
+        backend: "canvas2d",
+        autoSize: false,
+        initialPane: { horizontal_domain: { type: "category", scale: "band" } },
+      });
+      branch_chart.remove_pane(0);
+      const added = add(branch_chart);
+      const ids = branch_chart.panes()[0].get_series().map((series) => series.id);
+      branch_chart.remove();
+      branch_host.remove();
+      return { added: added.id, ids };
+    };
+    const analogous_first_adds = {
+      footprint: await first_add_after_retirement((branch_chart) => branch_chart.addSeries("footprint")),
+      feature: await first_add_after_retirement((branch_chart) => branch_chart.addSeries("grouped_bars")),
+      custom: await first_add_after_retirement((branch_chart) => branch_chart.add_custom_series({
+        price_value_builder: () => [1],
+        render() {},
+      })),
     };
     host.remove();
     rejected_host.remove();
     late_rejected_host.remove();
-    return { initial, failed, late_failed };
+    disposed_host.remove();
+    restored_host.remove();
+    return { initial, failed, late_failed, disposed, restored, analogous_first_adds };
   });
 
   expect(result).toEqual({
@@ -85,10 +168,128 @@ test("general charts can own the first pane and failed creation leaves no host r
       old_handle_stale: true,
       replacement_schema: 1,
       replacement_is_not_removable: true,
+      financial_after_retirement: {
+        first_id: 0,
+        second_id: 1,
+        pane_series: [0, 1],
+        series_order: [0, 1],
+        first_value: 12,
+        second_value: 11,
+      },
     },
-    failed: { rejected: true, child_count: 0, inline_position: "" },
-    late_failed: { rejected: true, child_count: 0, inline_position: "" },
+    failed: {
+      rejected: true,
+      child_count: 0,
+      inline_position: "",
+      error_name: "AerisChartsError",
+      error_code: "invalid_options",
+      role: null,
+      aria_label: null,
+    },
+    late_failed: {
+      rejected: true,
+      child_count: 0,
+      inline_position: "static",
+      inline_position_priority: "important",
+      role: "region",
+      aria_label: "Consumer chart host",
+    },
+    disposed: {
+      child_count: 0,
+      inline_position: "sticky",
+      inline_position_priority: "important",
+      role: "complementary",
+      aria_label: "User changed chart label",
+    },
+    restored: {
+      child_count: 0,
+      inline_position: "static",
+      inline_position_priority: "important",
+      role: "region",
+      aria_label: "Existing chart host",
+    },
+    analogous_first_adds: {
+      footprint: { added: 0, ids: [0] },
+      feature: { added: 0, ids: [0] },
+      custom: { added: 0, ids: [0] },
+    },
   });
+});
+
+test("general keyboard focus keeps series and explicit row identity across reorder and relayout", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "width: 720px; height: 420px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d",
+      autoSize: false,
+      initialPane: { horizontal_domain: { type: "continuous" } },
+    });
+    const pane = chart.panes()[0];
+    chart.addAxis({ id: "x", pane: 0, dimension: "x", scale: "linear" });
+    chart.addAxis({ id: "y", pane: 0, dimension: "y", scale: "linear" });
+    const add = (title, prefix, offset) => {
+      const series = chart.addSeries("scatter", {
+        pane: 0,
+        x_axis_id: "x",
+        y_axis_id: "y",
+        title,
+      });
+      series.setData([
+        { id: `${prefix}0`, x: 1, y: offset + 1 },
+        { id: `${prefix}1`, x: 2, y: offset + 2 },
+        { id: `${prefix}2`, x: 3, y: offset + 3 },
+      ]);
+      return series;
+    };
+    const a = add("A", "a", 0);
+    const b = add("B", "b", 10);
+    const c = add("C", "c", 20);
+    const accessibility = chart.accessibility();
+    accessibility.refresh();
+    accessibility.focus(0);
+    for (const key of ["ArrowDown", "ArrowDown", "ArrowRight", "ArrowRight"]) {
+      document.activeElement.dispatchEvent(new KeyboardEvent("keydown", {
+        key, bubbles: true, cancelable: true,
+      }));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const focused = () => chart.general_accessibility_focused_hit();
+    const before = focused();
+    const before_live = host.querySelector(".aeris_charts-a11y-live-region")?.textContent ?? "";
+    const reordered = chart.set_general_series_order([c, b, a], 0);
+    chart.resize(760, 440, 1);
+    chart.addAxis({ id: "y2", pane: 0, dimension: "y", scale: "linear" });
+    const after = focused();
+    const after_live = host.querySelector(".aeris_charts-a11y-live-region")?.textContent ?? "";
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "ArrowLeft", bubbles: true, cancelable: true,
+    }));
+    const after_key = focused();
+    const focus_chrome = chart.take_screenshot().toDataURL();
+    chart.remove();
+    host.remove();
+    return {
+      ids: { a: a.id, b: b.id, c: c.id },
+      reordered,
+      before,
+      after,
+      after_key,
+      before_live,
+      after_live,
+      focus_chrome_size: focus_chrome.length,
+    };
+  });
+  expect(result.reordered).toBe(true);
+  expect(result.before).toMatchObject({ series: result.ids.c, row_id: "c1" });
+  expect(result.after).toEqual(result.before);
+  expect(result.after_key).toMatchObject({ series: result.ids.c, row_id: "c0" });
+  expect(result.before_live).toContain("C");
+  expect(result.after_live).toContain("C");
+  expect(result.focus_chrome_size).toBeGreaterThan(100);
 });
 
 test("general dashboard showcases every released Cartesian example", async ({ page, browserName }) => {

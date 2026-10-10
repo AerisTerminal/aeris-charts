@@ -58,8 +58,9 @@ and pay no retained-memory cost for these foundations.
 ### `aeris_charts_engine` general-chart domain
 
 Each pane has one immutable horizontal-domain binding. Absence of a general binding means
-`financial_time` and continues to use the chart's established `TimeScaleCore`; this is the initial
-pane and every legacy `add_pane` call. Non-financial continuous, temporal, category, and polar
+`financial_time` and continues to use the chart's established `TimeScaleCore`; it is the default
+initial pane and the domain used by every legacy `add_pane` call. The constructor can instead create
+the first pane with an explicit non-financial domain. Continuous, temporal, category, and polar
 declarations live in a chart-owned registry that allocates only on first use, is capped at 64 live
 entries, uses monotonic internal identities, and releases entries with their panes. Pane moves and
 swaps carry the binding. Until compatible general series and axes are installed, financial series
@@ -245,6 +246,10 @@ registry is also the single ordering owner: exact global or pane-local permutati
 hit-test, React keyed-array, and persistence order while leaving other panes' relative order intact. React uses
 these mutations for ordinary prop and order changes and releases a new pane or series if initial data installation
 or a readiness callback throws.
+Browser installation snapshots only the host declarations it may own: `role`, `aria-label`, and the
+inline `position` value and priority. Failed installation and ordinary disposal restore a declaration
+only while it still has the package-assigned value, so pre-existing declarations return and later
+consumer changes are preserved.
 The browser structured tooltip and accessibility date strings call the chart's shared crosshair
 time formatter. That engine path owns the configured IANA time zone, date pattern, locale month
 names, and optional host formatter callback; the tooltip's data lookup remains engine-owned.
@@ -253,7 +258,8 @@ change, while general series use bounded engine accessibility snapshots.
 The shared browser accessibility
 controller recognizes financial and general handles but keeps their navigation math separate: financial
 series continue to query the time scale, while general series page through at most 512 Rust-owned
-accessibility rows at a time. General keyboard focus is a distinct engine interaction target rather than
+accessibility rows at a time. The controller remaps its active handle by series identity when engine order
+changes, rather than retaining the old array position. General keyboard focus is a distinct engine interaction target rather than
 an alias for hover or primary selection; explicit row identities follow reordered replacement batches,
 generated batch-local identities clear, and the shared frame paints the same focus chrome for every
 executor. Scatter and continuous-numeric `xy_line`/`xy_area` keyboard zoom mutate their bound general X

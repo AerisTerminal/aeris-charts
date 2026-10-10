@@ -334,7 +334,7 @@ copyleft and corresponding-source requirements, including its network-interactio
 Organizations that cannot comply with the AGPL may obtain a separate Aeris Terminal Commercial License
 for proprietary integration, redistribution, OEM/embedded use, white-label use, support, and custom
 engineering. The commercial option is a separate agreement; it does not add restrictions to the
-public AGPL grant. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
+public AGPL grant.
 
 ## Independent development and third-party references
 
@@ -346,4 +346,4 @@ engine, rendering, or state-management implementation.
 Development tests use Lightweight Charts as a pinned Apache-2.0 dependency through its public API.
 That dependency is not included in the published `@aeristerminal/aeris-charts` package. TradingView and
 Lightweight Charts are trademarks of their respective owners; Aeris Charts is not affiliated with
-or endorsed by TradingView. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+or endorsed by TradingView.

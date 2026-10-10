@@ -8848,6 +8848,38 @@ fn empty_preserved_last_pane_retires_into_a_fresh_default_pane() {
     assert_eq!(chart.general_horizontal_domains.len(), 0);
     assert!(!chart.pane_preserve_empty(0));
     assert!(!chart.remove_pane(0), "the replacement is not caller-owned");
+
+    let first = chart.add_series(SeriesKind::Line);
+    assert_eq!(
+        first, 0,
+        "the first post-retirement financial series is live"
+    );
+    chart
+        .set_series_data(
+            first,
+            &[1.0, 2.0],
+            &[10.0, 12.0],
+            &[10.0, 12.0],
+            &[10.0, 12.0],
+            &[10.0, 12.0],
+        )
+        .unwrap();
+    let second = chart.add_series(SeriesKind::Area);
+    assert_eq!(second, 1);
+    chart
+        .set_series_data(
+            second,
+            &[1.0, 2.0],
+            &[9.0, 11.0],
+            &[9.0, 11.0],
+            &[9.0, 11.0],
+            &[9.0, 11.0],
+        )
+        .unwrap();
+    assert_eq!(chart.pane_series_ids(0), vec![first, second]);
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    assert!(!chart.build_frame().panes[0].main.is_empty());
 }
 
 #[test]
