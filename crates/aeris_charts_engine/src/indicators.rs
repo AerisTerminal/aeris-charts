@@ -871,7 +871,8 @@ impl Default for IndicatorChromeOptions {
         Self {
             name_labels_visible: true,
             value_labels_visible: true,
-            price_lines_visible: true,
+            // A last-value line per indicator plot crowds the price pane; hosts opt in.
+            price_lines_visible: false,
         }
     }
 }
@@ -1120,7 +1121,6 @@ impl ChartEngine {
                     continue;
                 };
                 series.countdown_visible = false;
-                series.title_visible = true;
                 series.line_width = Some(indicator_default_line_width(&kind, output_index));
                 series.line_color = indicator_output_color(&kind, output_index).map(str::to_string);
                 if let Some(style) = custom_style {

@@ -10192,6 +10192,10 @@ fn a_partial_live_price_line_runs_toward_the_side_its_price_scale_is_on() {
 #[test]
 fn indicator_outputs_inherit_partial_live_price_lines() {
     let mut chart = two_identical_line_series();
+    chart.set_indicator_chrome_options(crate::IndicatorChromeOptions {
+        price_lines_visible: true,
+        ..crate::IndicatorChromeOptions::default()
+    });
     let sma = chart.add_sma(0, 2).expect("sma output");
     assert_eq!(
         chart

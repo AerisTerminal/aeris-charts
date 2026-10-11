@@ -4902,6 +4902,9 @@ impl ChartEngine {
             }
         }
         self.reset_indicator_output_styles_to_defaults();
+        // The per-series reset above restores plain-series label and price-line defaults; every
+        // indicator, study and tape output keeps following the chart-wide indicator chrome policy.
+        let _ = self.set_indicator_chrome_options(self.indicator_chrome);
 
         self.invalidate_frame_all();
     }

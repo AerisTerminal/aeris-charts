@@ -1285,8 +1285,10 @@ Indicator multi-input validation is engine-owned: VWAP and VWAP-band bindings re
 live scalar volume series, while missing volume remains the explicit unit-weight fallback. Financial
 indicator bindings are also the visibility, removal, and chrome ownership unit. One engine operation
 shows, hides, or removes every output in a binding, and the retained chart-wide indicator chrome
-policy applies name labels, value labels, and price lines to current and later outputs. Hosts choose
-that policy and render controls; they do not walk output series or predict output counts.
+policy applies name labels, value labels, and price lines to current and later outputs. Indicator
+price lines ship hidden and hosts opt in. A style reset to theme defaults reapplies the retained
+policy, so the chart never draws chrome the policy has switched off. Hosts choose that policy and
+render controls; they do not walk output series or predict output counts.
 OHLCV resampling is an engine-owned dependency from a host-fed candlestick/bar series to a
 host-created derived series. The host supplies disjoint UTC boundaries and an interval in seconds;
 the engine restarts buckets at each boundary, excludes rows outside them, and refreshes the derived

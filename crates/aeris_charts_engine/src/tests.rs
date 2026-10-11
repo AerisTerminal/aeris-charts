@@ -5257,6 +5257,52 @@ fn indicator_binding_owns_group_chrome_visibility_and_removal() {
 }
 
 #[test]
+fn indicator_price_lines_ship_hidden_and_a_style_reset_keeps_the_chrome_policy() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [1.0, 2.0, 3.0, 4.0, 5.0];
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    assert!(!chart.indicator_chrome_options().price_lines_visible);
+    let sma = chart.add_sma(0, 2).expect("valid SMA");
+    let defaults = chart.series_entry(sma).expect("SMA output exists");
+    assert!(defaults.title_visible && defaults.last_value_visible);
+    assert!(!defaults.price_line_visible);
+    assert!(
+        chart.series_entry(0).unwrap().price_line_visible,
+        "the symbol keeps its own price line"
+    );
+
+    let chrome = IndicatorChromeOptions {
+        name_labels_visible: false,
+        value_labels_visible: true,
+        price_lines_visible: false,
+    };
+    chart.set_indicator_chrome_options(chrome);
+    chart.reset_style_to_defaults();
+
+    let output = chart.series_entry(sma).expect("SMA output exists");
+    assert_eq!(chart.indicator_chrome_options(), chrome);
+    assert!(
+        !output.title_visible,
+        "reset must not bring back hidden names"
+    );
+    assert!(output.last_value_visible);
+    assert!(
+        !output.price_line_visible,
+        "reset must not bring back hidden indicator price lines"
+    );
+    assert!(chart.series_entry(0).unwrap().price_line_visible);
+}
+
+#[test]
 fn a_selected_scale_price_format_carries_to_series_that_join_the_scale() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let values = [10.0, 11.0, 12.0];
