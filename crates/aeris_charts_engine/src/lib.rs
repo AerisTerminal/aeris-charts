@@ -183,7 +183,7 @@ pub use host_layout::{
 pub use indicators::{
     EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS, INDICATOR_SCHEMA_REVISION,
     IndicatorBindingInfo, IndicatorChromeOptions, IndicatorInputSource, IndicatorKind,
-    IndicatorOutputDescriptor, IndicatorOutputStyle, IndicatorParameterDescriptor,
+    IndicatorOutputDescriptor, IndicatorOutputStyle, IndicatorPane, IndicatorParameterDescriptor,
     IndicatorParameterType, IndicatorSchema, OrderBlockZone, PreviousPeriod, StructureBreakOn,
     StructureMitigation, StructureMitigationPrice, StudyCalendarPolicy,
 };

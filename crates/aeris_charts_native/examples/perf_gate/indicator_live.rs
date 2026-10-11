@@ -242,7 +242,7 @@ fn case(label: &str, kind: IndicatorKind, input: IndicatorInputSource, volume: V
     }
 }
 
-/// One default-parameter case per built-in kind, the exponential Envelopes mode, derived input
+/// One default-parameter case per built-in kind, the exponential Envelopes and Volume modes, derived input
 /// sources, a volume series on its own timeline, and one Rust custom study.
 pub fn cases() -> Vec<Case> {
     let mut cases = DEFAULT_KIND_NAMES
@@ -272,6 +272,15 @@ pub fn cases() -> Vec<Case> {
             },
             IndicatorInputSource::Close,
             Volume::None,
+        ),
+        case(
+            "volume (exponential)",
+            IndicatorKind::Volume {
+                period: 20,
+                exponential: true,
+            },
+            IndicatorInputSource::Close,
+            Volume::Aligned,
         ),
         case(
             "sma (hlc3 input)",

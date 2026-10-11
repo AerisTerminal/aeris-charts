@@ -374,6 +374,10 @@ pub enum IndicatorKind {
     },
     Volume {
         period: usize,
+        /// Smooths the volume average exponentially instead of over a simple window. Earlier
+        /// saved definitions carry no flag and keep the simple average.
+        #[serde(default)]
+        exponential: bool,
     },
     VwapBands {
         reset: aeris_charts_indicators::VwapReset,
@@ -619,7 +623,10 @@ impl IndicatorKind {
             },
             "cmf" => Self::Cmf { period },
             "mfi" => Self::Mfi { period },
-            "volume" => Self::Volume { period },
+            "volume" => Self::Volume {
+                period,
+                exponential: false,
+            },
             "vwap_bands" => Self::VwapBands {
                 reset: VwapReset::Session,
                 // The legacy TS query supplies 2.0 even with no arguments, whereas the
@@ -848,6 +855,17 @@ pub struct IndicatorChromeOptions {
     pub price_lines_visible: bool,
 }
 
+/// Where an indicator binding draws relative to the series it is computed from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndicatorPane {
+    /// Over the source's pane on its overlay scale, without a price axis of its own. Volume
+    /// keeps to the bottom fifth of the pane so it never covers the bars it was traded in.
+    Source,
+    /// In a pane of its own below the chart.
+    Separate,
+}
+
 impl Default for IndicatorChromeOptions {
     fn default() -> Self {
         Self {
@@ -870,6 +888,9 @@ const MACD_DOWN_WEAK: u32 = rgb_u32(
     aeris_charts_core::style::MARKET_DOWN_RGB,
     aeris_charts_core::style::MARKET_VOLUME_ALPHA,
 );
+
+/// Share of the source pane kept clear above volume drawn over it.
+const VOLUME_OVERLAY_TOP_MARGIN: f64 = 0.8;
 
 const fn rgb_u32(rgb: (u8, u8, u8), alpha: u8) -> u32 {
     (rgb.0 as u32) << 24 | (rgb.1 as u32) << 16 | (rgb.2 as u32) << 8 | alpha as u32
@@ -1325,6 +1346,81 @@ impl ChartEngine {
             self.set_series_visible(output, visible);
         }
         changed
+    }
+
+    /// Where one binding currently draws: over its source's pane or in a pane of its own.
+    #[must_use]
+    pub fn indicator_binding_pane(&self, binding_id: SeriesId) -> Option<IndicatorPane> {
+        let binding = self
+            .indicators
+            .iter()
+            .find(|binding| binding.outputs.first() == Some(&binding_id))?;
+        let source_pane = self.series_entry(binding.source)?.pane_index;
+        let output_pane = self.series_entry(binding_id)?.pane_index;
+        Some(if output_pane == source_pane {
+            IndicatorPane::Source
+        } else {
+            IndicatorPane::Separate
+        })
+    }
+
+    /// Move every output of one binding over its source's pane or into a fresh pane of its own,
+    /// as one engine-owned operation. A pane the outputs leave empty collapses. Returns whether
+    /// the placement changed.
+    pub fn set_indicator_binding_pane(
+        &mut self,
+        binding_id: SeriesId,
+        pane: IndicatorPane,
+    ) -> bool {
+        let Some((source, outputs, volume)) = self
+            .indicators
+            .iter()
+            .find(|binding| binding.outputs.first() == Some(&binding_id))
+            .map(|binding| {
+                (
+                    binding.source,
+                    binding.outputs.clone(),
+                    matches!(binding.kind, IndicatorKind::Volume { .. }),
+                )
+            })
+        else {
+            return false;
+        };
+        if self.indicator_binding_pane(binding_id) == Some(pane) {
+            return false;
+        }
+        match pane {
+            IndicatorPane::Source => {
+                for &output in &outputs {
+                    // Collapsing the pane an output leaves renumbers the panes below it.
+                    let Some(source_pane) = self.series_entry(source).map(|s| s.pane_index) else {
+                        return false;
+                    };
+                    // The source pane exists, so no pane is created and no stretch applies.
+                    if !self.try_set_series_pane(output, source_pane, 1.0) {
+                        return false;
+                    }
+                    self.set_series_price_scale(output, PriceScaleTarget::Overlay);
+                }
+                if volume && let Some(source_pane) = self.series_entry(source).map(|s| s.pane_index)
+                {
+                    self.set_price_scale_margins_for(
+                        source_pane,
+                        PriceScaleTarget::Overlay,
+                        VOLUME_OVERLAY_TOP_MARGIN,
+                        0.0,
+                    );
+                }
+            }
+            IndicatorPane::Separate => {
+                self.place_outputs_in_oscillator_pane(&outputs);
+                for &output in &outputs {
+                    self.set_series_price_scale(output, PriceScaleTarget::Right);
+                }
+            }
+        }
+        self.invalidate_frame_layout_and_axis();
+        self.indicator_binding_pane(binding_id) == Some(pane)
     }
 
     /// Remove one complete indicator binding by its stable binding identity.
@@ -2079,12 +2175,16 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
-                        IndicatorKind::Volume { period } => (
+                        IndicatorKind::Volume {
+                            period,
+                            exponential,
+                        } => (
                             "volume",
                             period,
                             None,
                             IndicatorParameters {
                                 period: Some(period),
+                                exponential: Some(exponential),
                                 ..IndicatorParameters::default()
                             },
                         ),
@@ -2820,7 +2920,7 @@ impl ChartEngine {
             .next()
     }
 
-    /// Add an engine-owned volume histogram and moving-average line in one pane.
+    /// Add an engine-owned volume histogram and simple moving-average line in one pane.
     pub fn add_volume(
         &mut self,
         source: SeriesId,
@@ -2829,7 +2929,10 @@ impl ChartEngine {
     ) -> Vec<SeriesId> {
         self.add_indicator_kind(
             source,
-            IndicatorKind::Volume { period },
+            IndicatorKind::Volume {
+                period,
+                exponential: false,
+            },
             Some(volume_source),
         )
     }
@@ -3024,6 +3127,10 @@ impl ChartEngine {
             IndicatorKind::Volume { .. } => {
                 if let Some(&histogram) = ids.first() {
                     self.convert_series_kind(histogram, SeriesKind::Histogram);
+                    // Volume columns read in the direction of the bar that traded them.
+                    if let Some(series) = self.series_entry_mut(histogram) {
+                        series.histogram_updown = true;
+                    }
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
             }
@@ -3644,8 +3751,19 @@ impl ChartEngine {
                     options: None,
                 });
             }
-            IndicatorKind::Volume { period } => {
+            IndicatorKind::Volume {
+                period,
+                exponential,
+            } => {
                 parameters.push(integer("period", period));
+                parameters.push(IndicatorParameterDescriptor {
+                    name: "exponential".into(),
+                    parameter_type: IndicatorParameterType::Boolean,
+                    default: serde_json::json!(exponential),
+                    min: None,
+                    max: None,
+                    options: None,
+                });
                 parameters.push(IndicatorParameterDescriptor {
                     name: "volume_source".into(),
                     parameter_type: IndicatorParameterType::Series,
@@ -3934,7 +4052,7 @@ impl ChartEngine {
                 } => *short == 0 || *medium == 0 || *long == 0,
                 IndicatorKind::Cmf { period } => *period == 0,
                 IndicatorKind::Mfi { period } => *period == 0,
-                IndicatorKind::Volume { period } => *period == 0,
+                IndicatorKind::Volume { period, .. } => *period == 0,
                 IndicatorKind::VwapBands {
                     standard_deviation,
                     percent,
@@ -3964,7 +4082,12 @@ impl ChartEngine {
             .or_else(|| structure_output_count(&kind))
             .unwrap_or_else(|| runtime.output_count());
         let structure = structure_study_kind(&kind).map(StructureStudy::new);
-        let source_price_format = self.series_entry(source).map(|series| {
+        // Volume columns and their average are quantities, formatted like the volume they read.
+        let format_source = match kind {
+            IndicatorKind::Volume { .. } => volume_source.unwrap_or(source),
+            _ => source,
+        };
+        let source_price_format = self.series_entry(format_source).map(|series| {
             (
                 series.price_format.kind,
                 series.price_format.precision,
@@ -4977,9 +5100,10 @@ pub(crate) fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators
         } => aeris_charts_indicators::IncrementalState::ultimate_oscillator(short, medium, long),
         IndicatorKind::Cmf { period } => aeris_charts_indicators::IncrementalState::cmf(period),
         IndicatorKind::Mfi { period } => aeris_charts_indicators::IncrementalState::mfi(period),
-        IndicatorKind::Volume { period } => {
-            aeris_charts_indicators::IncrementalState::volume(period)
-        }
+        IndicatorKind::Volume {
+            period,
+            exponential,
+        } => aeris_charts_indicators::IncrementalState::volume(period, exponential),
         IndicatorKind::VwapBands {
             reset,
             standard_deviation,
@@ -5174,6 +5298,15 @@ fn indicator_output_title(kind: &IndicatorKind, output_index: usize) -> String {
             format!("Aroon {} {period}", ["Up", "Down"][output_index])
         }
         IndicatorKind::EmaRibbon { periods } => format!("EMA {}", periods[output_index]),
+        IndicatorKind::Volume {
+            period,
+            exponential,
+        } if output_index == 1 => {
+            format!(
+                "Volume {} {period}",
+                if *exponential { "EMA" } else { "SMA" }
+            )
+        }
         _ => indicator_title(kind),
     }
 }

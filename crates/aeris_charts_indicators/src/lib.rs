@@ -640,6 +640,113 @@ mod breadth_reference_tests {
     }
 
     #[test]
+    fn an_exponential_volume_average_seeds_on_the_simple_window_then_smooths() {
+        let close = [10.0, 11.0, 12.0, 13.0, 14.0];
+        let volume = [2.0, 4.0, 6.0, 12.0, -3.0];
+        let times = [0, 60, 120, 180, 240];
+        let mut state = IncrementalState::volume(3, true);
+        state.rebuild_from(
+            IndicatorInput {
+                times: &times,
+                open: &close,
+                high: &close,
+                low: &close,
+                close: &close,
+                volume: &volume,
+            },
+            0,
+        );
+        assert_eq!(state.output(0), &[2.0, 4.0, 6.0, 12.0, 0.0]);
+        assert_eq!(state.output_from(1), 2);
+        // Seed: SMA(2, 4, 6) = 4; then alpha 0.5 smooths 12 and the clamped zero.
+        assert_eq!(state.output(1), &[4.0, 8.0, 4.0]);
+        let expected = ema(&[2.0, 4.0, 6.0, 12.0, 0.0], 3);
+        assert_eq!(
+            state
+                .output(1)
+                .iter()
+                .copied()
+                .map(Some)
+                .collect::<Vec<_>>(),
+            expected[2..]
+        );
+    }
+
+    #[test]
+    fn an_exponential_volume_average_updates_and_repairs_like_a_fresh_rebuild() {
+        let mut close = (0..30)
+            .map(|row| {
+                if row == 11 {
+                    f64::NAN
+                } else {
+                    100.0 + row as f64
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut volume = (0..30)
+            .map(|row| (row % 7) as f64 * 10.0)
+            .collect::<Vec<_>>();
+        let mut times = (0..30).map(|row| row * 60).collect::<Vec<_>>();
+        let mut live = IncrementalState::volume(4, true);
+        let check =
+            |live: &mut IncrementalState, times: &[i64], close: &[f64], volume: &[f64], from| {
+                let input = IndicatorInput {
+                    times,
+                    open: close,
+                    high: close,
+                    low: close,
+                    close,
+                    volume,
+                };
+                live.rebuild_from(input, from);
+                let mut fresh = IncrementalState::volume(4, true);
+                fresh.rebuild_from(input, 0);
+                let tail = |state: &IncrementalState| {
+                    let start = close.len() - state.output(1).len();
+                    state.output(1)[from.max(start) - start..]
+                        .iter()
+                        .map(|value| value.to_bits())
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(tail(live), tail(&fresh), "average from row {from}");
+            };
+        check(&mut live, &times, &close, &volume, 0);
+        for row in 30..36 {
+            times.push(row * 60);
+            close.push(130.0 + row as f64);
+            volume.push(row as f64);
+            check(&mut live, &times, &close, &volume, row as usize);
+        }
+        for replacement in 0..20 {
+            let last = volume.len() - 1;
+            volume[last] = replacement as f64 * 3.0;
+            check(&mut live, &times, &close, &volume, last);
+        }
+        volume[9] = 500.0;
+        check(&mut live, &times, &close, &volume, 9);
+        let masked = close
+            .iter()
+            .zip(&volume)
+            .map(|(close, volume)| {
+                if close.is_finite() {
+                    volume.max(0.0)
+                } else {
+                    f64::NAN
+                }
+            })
+            .collect::<Vec<_>>();
+        let reference = ema(&masked, 4);
+        let average = live.output(1);
+        let start = close.len() - average.len();
+        for (offset, &actual) in average.iter().enumerate() {
+            match reference[start + offset] {
+                Some(expected) => assert!((actual - expected).abs() < 1e-9),
+                None => assert!(actual.is_nan()),
+            }
+        }
+    }
+
+    #[test]
     fn elder_force_smooths_close_change_weighted_by_volume() {
         let out = elder_force(&[10.0, 12.0, 11.0, 14.0], &[5.0, 10.0, 20.0, 10.0], 2);
         assert_eq!(out, vec![None, None, Some(0.0), Some(20.0)]);
@@ -4958,6 +5065,8 @@ enum IncrementalKind {
     },
     Volume {
         period: usize,
+        /// Present when the volume average is exponential; `None` keeps the simple window.
+        ema_state: Option<RecursiveHistory<EmaState>>,
     },
     VwapBands {
         reset: VwapReset,
@@ -5490,8 +5599,15 @@ impl IncrementalState {
         )
     }
 
-    pub fn volume(period: usize) -> Self {
-        Self::new(IncrementalKind::Volume { period }, 2)
+    /// Volume columns and their moving average, simple or exponential.
+    pub fn volume(period: usize, exponential: bool) -> Self {
+        Self::new(
+            IncrementalKind::Volume {
+                period,
+                ema_state: exponential.then(RecursiveHistory::new),
+            },
+            2,
+        )
     }
 
     pub fn vwap_bands(reset: VwapReset, standard_deviation: f64, percent: f64) -> Self {
@@ -5618,7 +5734,9 @@ impl IncrementalState {
             IncrementalKind::Mfi { state, .. } => state.bytes_with(|saved| {
                 saved.references.capacity() * std::mem::size_of::<Option<f64>>()
             }),
-            IncrementalKind::Volume { .. } => 0,
+            IncrementalKind::Volume { ema_state, .. } => {
+                ema_state.as_ref().map_or(0, RecursiveHistory::bytes)
+            }
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
             | IncrementalKind::Bollinger { .. }
@@ -7134,30 +7252,54 @@ impl IncrementalState {
                 }
                 state.finish(n, tail, before_tail);
             }
-            IncrementalKind::Volume { period } => {
+            IncrementalKind::Volume { period, ema_state } => {
                 let volume = input.volume;
                 let volume_start = self.output_from[0];
                 let average_start = self.output_from[1];
-                self.last_work_rows = n.saturating_sub(volume_start.min(average_start));
-                for row in volume_start..n {
-                    self.outputs[0].push(if input.close[row].is_finite() {
+                let column = |row: usize| {
+                    if input.close[row].is_finite() {
                         volume.get(row).copied().unwrap_or(0.0).max(0.0)
                     } else {
                         f64::NAN
-                    });
+                    }
+                };
+                for row in volume_start..n {
+                    self.outputs[0].push(column(row));
                 }
-                for row in average_start..n {
-                    let window = &volume[row + 1 - *period..=row];
-                    self.outputs[1].push(
-                        if input.close[row + 1 - *period..=row]
-                            .iter()
-                            .all(|v| v.is_finite())
-                        {
-                            window.iter().map(|value| value.max(0.0)).sum::<f64>() / *period as f64
-                        } else {
-                            f64::NAN
-                        },
-                    );
+                if let Some(state) = ema_state {
+                    let (start, mut accumulator) = state.begin(n, requested);
+                    self.last_work_rows = n.saturating_sub(volume_start.min(start));
+                    let mut tail = None;
+                    let mut before_tail = None;
+                    for row in start..n {
+                        let previous = accumulator;
+                        let value = ema_step(&mut accumulator, column(row), *period);
+                        state.checkpoint(row, accumulator);
+                        if row >= average_start {
+                            self.outputs[1].push(value.unwrap_or(f64::NAN));
+                        }
+                        if row + 1 == n {
+                            tail = Some(accumulator);
+                            before_tail = (row > 0).then_some(previous);
+                        }
+                    }
+                    state.finish(n, tail, before_tail);
+                } else {
+                    self.last_work_rows = n.saturating_sub(volume_start.min(average_start));
+                    for row in average_start..n {
+                        let window = &volume[row + 1 - *period..=row];
+                        self.outputs[1].push(
+                            if input.close[row + 1 - *period..=row]
+                                .iter()
+                                .all(|v| v.is_finite())
+                            {
+                                window.iter().map(|value| value.max(0.0)).sum::<f64>()
+                                    / *period as f64
+                            } else {
+                                f64::NAN
+                            },
+                        );
+                    }
                 }
             }
             IncrementalKind::VwapBands {
@@ -7430,7 +7572,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         ],
         IncrementalKind::Cmf { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::Mfi { period, .. } => [*period, 0, 0, 0, 0],
-        IncrementalKind::Volume { period } => [0, period.saturating_sub(1), 0, 0, 0],
+        IncrementalKind::Volume { period, .. } => [0, period.saturating_sub(1), 0, 0, 0],
         IncrementalKind::Vwap { .. }
         | IncrementalKind::Obv { .. }
         | IncrementalKind::AccumulationDistribution { .. }
@@ -10231,7 +10373,7 @@ mod tests {
                         }
                     })
                     .collect();
-                (vec![values, average], IncrementalState::volume(p))
+                (vec![values, average], IncrementalState::volume(p, false))
             }
             TestKind::ElderForce => single!(elder_force(c, v, p), IncrementalState::elder_force(p)),
             TestKind::ChaikinOscillator => single!(
@@ -10918,7 +11060,7 @@ mod tests {
             (TestKind::Vortex, IncrementalState::vortex(5)),
             (TestKind::Cmf, IncrementalState::cmf(5)),
             (TestKind::Mfi, IncrementalState::mfi(5)),
-            (TestKind::Volume, IncrementalState::volume(5)),
+            (TestKind::Volume, IncrementalState::volume(5, false)),
             (TestKind::Wma, IncrementalState::wma(5)),
         ]
     }
@@ -11768,8 +11910,8 @@ mod tests {
         assert_final("OBV", IncrementalState::obv(), 0, -220.0);
         assert_final("CMF", IncrementalState::cmf(5), 0, -0.12000000000000455);
         assert_final("MFI", IncrementalState::mfi(5), 0, 55.02457178668054);
-        assert_final("Volume", IncrementalState::volume(5), 0, 60.0);
-        assert_final("Volume MA", IncrementalState::volume(5), 1, 40.0);
+        assert_final("Volume", IncrementalState::volume(5, false), 0, 60.0);
+        assert_final("Volume MA", IncrementalState::volume(5, false), 1, 40.0);
         assert_final(
             "VWAP bands basis",
             IncrementalState::vwap_bands(VwapReset::Monthly, 1.0, 5.0),

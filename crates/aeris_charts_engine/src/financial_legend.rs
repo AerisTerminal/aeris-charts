@@ -126,31 +126,36 @@ impl ChartEngine {
                 continue;
             };
             let visible = outputs.iter().any(|series| series.visible);
-            let values = if visible {
-                outputs
-                    .iter()
-                    .filter(|series| series.visible)
-                    .filter_map(|series| {
-                        let output = self.indicator_info(series.id)?;
-                        let value = snapshot_value(&snapshots, series.id)?;
-                        Some(FinancialLegendValue {
-                            text: if output.output_count > 1 && output.kind != "ema_ribbon" {
-                                format!("{} {value}", output.output_name)
-                            } else {
-                                value
-                            },
-                            color: Some(
-                                series
-                                    .line_color
-                                    .clone()
-                                    .unwrap_or_else(|| crate::DEFAULT_LINE_COLOR.to_css()),
-                            ),
+            let values =
+                if visible {
+                    outputs
+                        .iter()
+                        .filter(|series| series.visible)
+                        .filter_map(|series| {
+                            let output = self.indicator_info(series.id)?;
+                            let value = snapshot_value(&snapshots, series.id)?;
+                            // Ribbon lines and volume columns read by their color alone.
+                            let unlabeled = matches!(output.kind.as_ref(), "ema_ribbon" | "volume");
+                            Some(FinancialLegendValue {
+                                text: if output.output_count > 1 && !unlabeled {
+                                    format!("{} {value}", output.output_name)
+                                } else {
+                                    value
+                                },
+                                color: Some(
+                                    histogram_value_color(self, &snapshots, series.id)
+                                        .unwrap_or_else(|| {
+                                            series.line_color.clone().unwrap_or_else(|| {
+                                                crate::DEFAULT_LINE_COLOR.to_css()
+                                            })
+                                        }),
+                                ),
+                            })
                         })
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+                        .collect()
+                } else {
+                    Vec::new()
+                };
             rows.push(FinancialLegendRow {
                 identity: FinancialLegendIdentity::Indicator(info.binding_id),
                 first_series_id: first.id,
@@ -244,13 +249,7 @@ fn append_host_rows(
         let Some(series) = chart.series_entry(descriptor.series_id) else {
             continue;
         };
-        // A histogram value reads in its column's hue, so an up/down volume legend follows the
-        // volume columns rather than the price bars. The column's fill alpha is a drawing
-        // strength, not part of the hue, and would leave the text faint.
-        let color = snapshot_for(snapshots, series.id)
-            .and_then(|snapshot| snapshot.logical_index)
-            .and_then(|index| chart.histogram_column_color_at(series.id, index))
-            .map(|color| color.to_hex());
+        let color = histogram_value_color(chart, snapshots, series.id);
         rows.push(FinancialLegendRow {
             identity: FinancialLegendIdentity::Host(descriptor.identity),
             first_series_id: series.id,
@@ -272,6 +271,20 @@ fn append_host_rows(
             settings_available: descriptor.settings_available,
         });
     }
+}
+
+/// A histogram value reads in its column's hue, so an up/down volume legend follows the volume
+/// columns rather than the price bars. The column's fill alpha is a drawing strength, not part of
+/// the hue, and would leave the text faint. `None` for any other series kind.
+fn histogram_value_color(
+    chart: &ChartEngine,
+    snapshots: &[SeriesValueSnapshot],
+    series_id: SeriesId,
+) -> Option<String> {
+    snapshot_for(snapshots, series_id)
+        .and_then(|snapshot| snapshot.logical_index)
+        .and_then(|index| chart.histogram_column_color_at(series_id, index))
+        .map(|color| color.to_hex())
 }
 
 fn snapshot_for(
@@ -446,6 +459,76 @@ mod tests {
             Some("#123456"),
             "a single-color histogram reads in its own color"
         );
+    }
+
+    #[test]
+    fn a_volume_indicator_reads_its_columns_and_average_in_their_own_colors() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0, 3.0],
+                &[10.0, 12.0, 11.0],
+                &[12.0, 13.0, 12.0],
+                &[9.0, 10.0, 9.0],
+                &[11.0, 11.0, 12.0],
+            )
+            .unwrap();
+        let weights = chart.add_series(SeriesKind::Histogram);
+        chart
+            .set_series_data(
+                weights,
+                &[1.0, 2.0, 3.0],
+                &[100.0, 200.0, 300.0],
+                &[100.0, 200.0, 300.0],
+                &[100.0, 200.0, 300.0],
+                &[100.0, 200.0, 300.0],
+            )
+            .unwrap();
+        let outputs = chart.add_indicator_kind(
+            0,
+            crate::IndicatorKind::Volume {
+                period: 2,
+                exponential: true,
+            },
+            Some(weights),
+        );
+        let [columns, average] = outputs[..] else {
+            panic!("volume has a column and an average output");
+        };
+        let mut style = chart.indicator_info(columns).unwrap().style;
+        style.up_color = Some("#00ff00".into());
+        style.down_color = Some("#ff00ff".into());
+        assert!(chart.set_indicator_output_style(columns, style));
+        let mut average_style = chart.indicator_info(average).unwrap().style;
+        average_style.line_color = Some("#123456".into());
+        assert!(chart.set_indicator_output_style(average, average_style));
+        let volume_row = |chart: &ChartEngine, logical_index| {
+            chart
+                .financial_legend(FinancialLegendRequest {
+                    logical_index,
+                    primary_title: "BTC",
+                    show_primary_ohlc: true,
+                    primary_values_series: None,
+                    leading_series: &[],
+                    trailing_series: &[],
+                })
+                .into_iter()
+                .find(|row| row.identity == FinancialLegendIdentity::Indicator(columns))
+                .expect("volume legend row")
+        };
+
+        let falling = volume_row(&chart, Some(1));
+        assert_eq!(falling.title, "Volume");
+        assert_eq!(falling.values.len(), 2, "columns and average, unlabeled");
+        assert_eq!(falling.values[0].color.as_deref(), Some("#ff00ff"));
+        assert_eq!(falling.values[1].color.as_deref(), Some("#123456"));
+        assert!(
+            !falling.values[1].text.starts_with("MA"),
+            "volume values read by color alone"
+        );
+        let rising = volume_row(&chart, Some(2));
+        assert_eq!(rising.values[0].color.as_deref(), Some("#00ff00"));
     }
 
     #[test]

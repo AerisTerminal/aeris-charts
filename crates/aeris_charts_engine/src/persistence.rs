@@ -661,7 +661,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         }
         IndicatorKind::Cmf { period } => *period > 0,
         IndicatorKind::Mfi { period } => *period > 0,
-        IndicatorKind::Volume { period } => *period > 0,
+        IndicatorKind::Volume { period, .. } => *period > 0,
         IndicatorKind::VwapBands {
             standard_deviation,
             percent,
@@ -3399,7 +3399,13 @@ mod tests {
             .unwrap();
         restored.import_state_json(&document).unwrap();
         let binding = &restored.indicator_bindings()[0];
-        assert_eq!(binding.kind, crate::IndicatorKind::Volume { period: 3 });
+        assert_eq!(
+            binding.kind,
+            crate::IndicatorKind::Volume {
+                period: 3,
+                exponential: false
+            }
+        );
         assert_eq!(binding.volume_source, Some(restored_volume));
         assert_eq!(binding.outputs, outputs);
     }

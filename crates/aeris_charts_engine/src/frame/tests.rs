@@ -12432,6 +12432,62 @@ fn updown_volume_retints_when_only_the_primary_series_changes() {
 }
 
 #[test]
+fn a_volume_indicator_draws_its_columns_in_its_own_up_and_down_colors() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [0.0, 60.0, 120.0, 180.0];
+    let open = [100.0; 4];
+    let close = [101.0, 99.0, 102.0, 98.0];
+    chart
+        .set_series_data(0, &times, &open, &[103.0; 4], &[97.0; 4], &close)
+        .unwrap();
+    let weights = chart.add_series(SeriesKind::Histogram);
+    let values = [10.0, 20.0, 30.0, 40.0];
+    chart
+        .set_series_data(weights, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.set_series_visible(weights, false);
+    let outputs = chart.add_indicator_kind(
+        0,
+        crate::IndicatorKind::Volume {
+            period: 2,
+            exponential: false,
+        },
+        Some(weights),
+    );
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let count = |chart: &mut ChartEngine, up: Color, down: Color| {
+        let frame = chart.build_frame();
+        let pane = chart.series_price_scale(outputs[0]).unwrap().0;
+        let prims = &frame.panes[pane].main;
+        (
+            prims
+                .iter()
+                .filter(|prim| matches!(prim, Prim::Rect { color, .. } if *color == up))
+                .count(),
+            prims
+                .iter()
+                .filter(|prim| matches!(prim, Prim::Rect { color, .. } if *color == down))
+                .count(),
+        )
+    };
+    assert_eq!(count(&mut chart, VOLUME_UP, VOLUME_DOWN), (2, 2));
+
+    let mut style = chart.indicator_info(outputs[0]).unwrap().style;
+    style.up_color = Some("#00ff00".into());
+    style.down_color = Some("#ff00ff".into());
+    assert!(chart.set_indicator_output_style(outputs[0], style));
+    assert_eq!(
+        count(
+            &mut chart,
+            Color::parse_css("#00ff00").unwrap(),
+            Color::parse_css("#ff00ff").unwrap()
+        ),
+        (2, 2)
+    );
+}
+
+#[test]
 fn style_reset_preserves_mixed_updown_volume_colors() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let times = [0.0, 60.0, 120.0, 180.0];

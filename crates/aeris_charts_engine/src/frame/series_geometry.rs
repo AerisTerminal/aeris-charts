@@ -288,21 +288,37 @@ fn bar_direction(plot: PlotListView<'_>, index: TimePointIndex) -> Option<bool> 
 /// carries no direction, so an up/down column there falls back to its solid color.
 fn histogram_column_color(
     point_color: Option<u32>,
-    histogram_updown: bool,
+    updown: Option<(Color, Color)>,
     direction: impl FnOnce() -> Option<bool>,
     solid: Color,
 ) -> Color {
     if let Some(color) = point_color {
         return Color(color);
     }
-    if !histogram_updown {
+    let Some((up, down)) = updown else {
         return solid;
-    }
+    };
     match direction() {
-        Some(true) => VOLUME_UP,
-        Some(false) => VOLUME_DOWN,
+        Some(true) => up,
+        Some(false) => down,
         None => solid,
     }
+}
+
+/// The up and down column colors of an up/down histogram: the series' own up/down colors when
+/// set, else the volume tint. `None` for a single-color histogram.
+fn histogram_updown_colors(series: &crate::SeriesEntry) -> Option<(Color, Color)> {
+    series.histogram_updown.then(|| {
+        let parse = |css: &Option<String>, fallback| {
+            css.as_deref()
+                .and_then(Color::parse_css)
+                .unwrap_or(fallback)
+        };
+        (
+            parse(&series.up_color, VOLUME_UP),
+            parse(&series.down_color, VOLUME_DOWN),
+        )
+    })
 }
 
 fn histogram_solid_color(stroke: Color) -> Color {
@@ -1012,7 +1028,7 @@ impl ChartEngine {
             self.data
                 .point_colors(id)
                 .and_then(|colors| colors.color(PointColorChannel::Body, row)),
-            series.histogram_updown,
+            histogram_updown_colors(series),
             || {
                 primary
                     .and_then(|id| bar_direction(self.data.plot(id), index))
@@ -1043,9 +1059,7 @@ impl ChartEngine {
         let main = primary.map(|id| self.data.plot(id));
         let presented = footprint.map(|id| self.data.plot(id));
         let point_colors = self.data.point_colors(rs.id);
-        let histogram_updown = self
-            .series_entry(rs.id)
-            .is_some_and(|series| series.histogram_updown);
+        let updown = self.series_entry(rs.id).and_then(histogram_updown_colors);
         let mut work = conflation::DensityWork::default();
         let visible = visible_histogram_rows_with_work(
             plot,
@@ -1068,7 +1082,7 @@ impl ChartEngine {
                 let r = item.source_row;
                 let color = histogram_column_color(
                     point_colors.and_then(|colors| colors.color(PointColorChannel::Body, r)),
-                    histogram_updown,
+                    updown,
                     || {
                         let index = plot.index_at(r).expect("histogram row index");
                         main.and_then(|m| bar_direction(m, index))

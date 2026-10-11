@@ -509,7 +509,10 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
             },
             IndicatorKind::Cmf { period: 14 },
             IndicatorKind::Mfi { period: 14 },
-            IndicatorKind::Volume { period: 14 },
+            IndicatorKind::Volume {
+                period: 14,
+                exponential: false,
+            },
             IndicatorKind::Wma { period: 9 },
         ]
     );
@@ -3277,7 +3280,10 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 source[1], source[2], source[3], &volume, period,
             )]
         }
-        IndicatorKind::Volume { period } => {
+        IndicatorKind::Volume {
+            period,
+            exponential,
+        } => {
             let volume = binding
                 .volume_source
                 .and_then(|id| chart.data.series_data(id))
@@ -3302,7 +3308,11 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 .collect::<Vec<_>>();
             vec![
                 masked.iter().copied().map(Some).collect(),
-                aeris_charts_indicators::sma(&masked, period),
+                if exponential {
+                    aeris_charts_indicators::ema(&masked, period)
+                } else {
+                    aeris_charts_indicators::sma(&masked, period)
+                },
             ]
         }
         IndicatorKind::VwapBands {
@@ -3536,7 +3546,14 @@ fn all_engine_indicator_kinds() -> Vec<IndicatorKind> {
         },
         IndicatorKind::Cmf { period: 5 },
         IndicatorKind::Mfi { period: 5 },
-        IndicatorKind::Volume { period: 5 },
+        IndicatorKind::Volume {
+            period: 5,
+            exponential: false,
+        },
+        IndicatorKind::Volume {
+            period: 5,
+            exponential: true,
+        },
         IndicatorKind::Wma { period: 5 },
         IndicatorKind::PivotPoints {
             variant: aeris_charts_indicators::PivotKind::Standard,
@@ -3682,7 +3699,11 @@ fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
         .into_iter()
         .map(|name| IndicatorKind::schema_definition(name, 5, 2.0).unwrap()),
     );
-    assert_eq!(kinds.len(), 71, "70 variants with both Envelopes modes");
+    assert_eq!(
+        kinds.len(),
+        72,
+        "70 variants with both Envelopes and both Volume average modes"
+    );
     // Rebuild each kind in a *different* engine, not merely via the dense
     // formula used by assert_indicator_binding_matches_full.
     for kind in kinds {
@@ -5506,6 +5527,64 @@ fn volume_oscillator_uses_one_pane_and_histogram_output() {
         chart.indicator_info(ids[2]).unwrap().output_name,
         "Histogram"
     );
+    assert_indicator_binding_matches_full(&chart, 0);
+}
+
+#[test]
+fn a_volume_binding_moves_between_the_price_pane_and_its_own_pane_as_one_unit() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [10.0, 20.0, 30.0, 20.0, 10.0, 30.0];
+    let times = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    let weights = chart.add_series(SeriesKind::Histogram);
+    chart
+        .set_series_data(weights, &times, &values, &values, &values, &values)
+        .unwrap();
+    let volume = chart.add_indicator_kind(
+        0,
+        IndicatorKind::Volume {
+            period: 3,
+            exponential: true,
+        },
+        Some(weights),
+    );
+    let rsi = chart.add_indicator_kind(0, IndicatorKind::Rsi { period: 2 }, None);
+    let binding = volume[0];
+    assert_eq!(
+        chart.indicator_binding_pane(binding),
+        Some(IndicatorPane::Separate)
+    );
+    assert_eq!(chart.panes.len(), 3);
+
+    assert!(chart.set_indicator_binding_pane(binding, IndicatorPane::Source));
+    assert_eq!(
+        chart.indicator_binding_pane(binding),
+        Some(IndicatorPane::Source)
+    );
+    for &output in &volume {
+        assert_eq!(
+            chart.series_price_scale(output),
+            Some((0, PriceScaleTarget::Overlay))
+        );
+    }
+    assert_eq!(chart.panes.len(), 2, "the emptied volume pane collapses");
+    assert_eq!(
+        chart.series_price_scale(rsi[0]).map(|(pane, _)| pane),
+        Some(1)
+    );
+    assert!(
+        !chart.set_indicator_binding_pane(binding, IndicatorPane::Source),
+        "an unchanged placement reports no change"
+    );
+
+    assert!(chart.set_indicator_binding_pane(binding, IndicatorPane::Separate));
+    let (pane, scale) = chart.series_price_scale(volume[0]).unwrap();
+    assert_ne!(pane, 0);
+    assert_eq!(scale, PriceScaleTarget::Right);
+    assert_eq!(chart.series_price_scale(volume[1]), Some((pane, scale)));
+    assert_eq!(chart.panes.len(), 3);
     assert_indicator_binding_matches_full(&chart, 0);
 }
 
