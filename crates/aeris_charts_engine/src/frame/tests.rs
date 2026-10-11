@@ -4414,6 +4414,380 @@ fn general_path_interpolation_drives_frame_geometry_and_exact_hits() {
 }
 
 #[test]
+fn path_families_expand_their_declared_interpolation_into_hittable_geometry() {
+    use aeris_charts_render::line::{LinePoint, expand_band, expand_line};
+
+    // One chart per family/order keeps the hit probe unoccluded by another series.
+    for (order, xs) in [
+        ("increasing", vec![0.5, 1.5, 2.5, 3.5]),
+        ("reversed", vec![3.5, 2.5, 1.5, 0.5]),
+        ("duplicate", vec![0.5, 1.5, 1.5, 3.5]),
+    ] {
+        let mut line_paths: Option<Vec<Vec<[f32; 2]>>> = None;
+        for family in ["line", "area", "range"] {
+            let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+            let pane = chart
+                .add_pane_with_domain(
+                    true,
+                    HorizontalDomain::Continuous {
+                        scale: ContinuousScaleType::Linear,
+                    },
+                )
+                .unwrap();
+            let mut x = GeneralAxisOptions::new(
+                "evidence-x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            );
+            x.domain = GeneralAxisDomain::Numeric([0.0, 4.0]);
+            chart.add_general_axis(x).unwrap();
+            let mut y = GeneralAxisOptions::new(
+                "evidence-y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            );
+            y.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+            chart.add_general_axis(y).unwrap();
+            let values = [3.0, 6.0, 4.0, 7.0];
+            let dataset = if family == "range" {
+                chart
+                    .create_general_xy_dataset(GeneralXyInput::RangeNumeric {
+                        ids: None,
+                        x: xs.clone(),
+                        low: values.iter().map(|value| value - 2.0).collect(),
+                        low_valid: None,
+                        high: values.to_vec(),
+                        high_valid: None,
+                    })
+                    .unwrap()
+            } else {
+                chart
+                    .create_general_xy_dataset(GeneralXyInput::Numeric {
+                        ids: None,
+                        x: xs.clone(),
+                        y: values.to_vec(),
+                        y_valid: None,
+                    })
+                    .unwrap()
+            };
+            let make_options = || match family {
+                "line" => GeneralSeriesOptions::xy_line(pane, dataset, "evidence-x", "evidence-y"),
+                "area" => GeneralSeriesOptions::xy_area(pane, dataset, "evidence-x", "evidence-y"),
+                _ => GeneralSeriesOptions::range_area(pane, dataset, "evidence-x", "evidence-y"),
+            };
+            let series = chart.add_general_series(make_options()).unwrap();
+            chart.recompute_layout_with_measure(
+                true,
+                |text, _| text.len() as f64 * 7.0,
+                |_, _| 0.0,
+            );
+
+            let mut family_paths = Vec::new();
+            for (interpolation, line_type) in [
+                (GeneralInterpolation::Linear, LineType::Simple),
+                (GeneralInterpolation::Step, LineType::WithSteps),
+                (GeneralInterpolation::StepBefore, LineType::StepBefore),
+                (GeneralInterpolation::StepMiddle, LineType::StepMiddle),
+                (GeneralInterpolation::StepAfter, LineType::WithSteps),
+                (GeneralInterpolation::Curved, LineType::Curved),
+                (GeneralInterpolation::Monotone, LineType::Monotone),
+                (GeneralInterpolation::Natural, LineType::Natural),
+            ] {
+                let mut options = make_options();
+                options.interpolation = interpolation;
+                chart
+                    .update_general_series_options(series, options)
+                    .unwrap();
+                let frame = chart.build_frame();
+                let pane_frame = &frame.panes[pane];
+                let (first, count) = pane_frame
+                    .main
+                    .iter()
+                    .find_map(|primitive| match (family, primitive) {
+                        (
+                            "line",
+                            Prim::Polyline {
+                                first_point,
+                                point_count,
+                                line_type: kind,
+                                ..
+                            },
+                        )
+                        | (
+                            "area",
+                            Prim::Polyline {
+                                first_point,
+                                point_count,
+                                line_type: kind,
+                                ..
+                            },
+                        ) if *kind == line_type => {
+                            Some((*first_point as usize, *point_count as usize))
+                        }
+                        (
+                            "range",
+                            Prim::BandFill {
+                                upper_first: first_point,
+                                point_count,
+                                line_type: kind,
+                                ..
+                            },
+                        ) if *kind == line_type => {
+                            Some((*first_point as usize, *point_count as usize))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("{family}/{order}/{interpolation:?}: missing frame path")
+                    });
+                assert_eq!(count, values.len());
+                family_paths.push(pane_frame.points[first..first + count].to_vec());
+                let upper = pane_frame.points[first..first + count]
+                    .iter()
+                    .map(|point| LinePoint {
+                        x: point[0] as f64,
+                        y: point[1] as f64,
+                    })
+                    .collect::<Vec<_>>();
+                let expanded = expand_line(&upper, line_type);
+                assert!(
+                    expanded.len() <= 3 * 16 + 1
+                        && expanded.iter().all(|p| p.x.is_finite() && p.y.is_finite()),
+                    "{family}/{order}/{interpolation:?}: expansion must stay finite and bounded"
+                );
+                if family == "area" {
+                    assert!(pane_frame.main.iter().any(|prim| matches!(
+                        prim, Prim::AreaFill { first_point, point_count, line_type: kind, .. }
+                        if *first_point as usize == first && *point_count as usize == count && *kind == line_type
+                    )));
+                }
+                if family == "range" {
+                    let lower = pane_frame.points[first + count..first + 2 * count]
+                        .iter()
+                        .map(|point| LinePoint {
+                            x: point[0] as f64,
+                            y: point[1] as f64,
+                        })
+                        .collect::<Vec<_>>();
+                    let (upper_band, lower_band) = expand_band(&upper, &lower, line_type);
+                    assert!(upper_band.len() <= 3 * 16 + 1);
+                    assert!(upper_band.iter().zip(&lower_band).all(|(u, l)| u.x == l.x));
+                    // Probe on each side of a join, including an interpolated interior seam.
+                    for index in 0..upper_band.len() - 1 {
+                        let left = upper_band[index];
+                        let right = upper_band[index + 1];
+                        if (left.x - right.x).abs() < 0.01 {
+                            continue;
+                        }
+                        let x = (left.x + right.x) * 0.5 - chart.general_plot_rect(pane).unwrap().x;
+                        let y = (left.y + right.y + lower_band[index].y + lower_band[index + 1].y)
+                            * 0.25;
+                        assert_eq!(
+                            chart
+                                .general_hit_test(pane, x, y, crate::GeneralHitMode::Exact)
+                                .map(|hit| hit.series),
+                            Some(series),
+                            "{family}/{order}/{interpolation:?}: band seam {index}"
+                        );
+                    }
+                } else {
+                    // The actual frame point pool is what executors expand; probe a displayed
+                    // subsegment, not an independently reconstructed data-space curve.
+                    let pair = expanded
+                        .windows(2)
+                        .find(|pair| {
+                            (pair[0].x - pair[1].x).abs() > 0.01 && pair[0].x.min(pair[1].x) > 1.0
+                        })
+                        .unwrap();
+                    let x =
+                        (pair[0].x + pair[1].x) * 0.5 - chart.general_plot_rect(pane).unwrap().x;
+                    let y = (pair[0].y + pair[1].y) * 0.5;
+                    assert_eq!(
+                        chart
+                            .general_hit_test(pane, x, y, crate::GeneralHitMode::Exact)
+                            .map(|hit| hit.series),
+                        Some(series),
+                        "{family}/{order}/{interpolation:?}: displayed segment ({x}, {y}), source {upper:?}, plot {:?}",
+                        chart.general_plot_rect(pane)
+                    );
+                }
+            }
+            if let Some(line_paths) = &line_paths {
+                assert_eq!(
+                    &family_paths, line_paths,
+                    "{family}/{order}: upper path must share line geometry across all interpolations"
+                );
+            } else {
+                line_paths = Some(family_paths);
+            }
+        }
+    }
+}
+
+#[test]
+fn path_missing_rows_bridge_but_log_invalid_rows_remain_hard_gaps() {
+    for family in ["line", "area", "range"] {
+        for invalid_log_row in [false, true] {
+            let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+            let pane = chart
+                .add_pane_with_domain(
+                    true,
+                    HorizontalDomain::Continuous {
+                        scale: ContinuousScaleType::Linear,
+                    },
+                )
+                .unwrap();
+            let mut x =
+                GeneralAxisOptions::new("gap-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+            x.domain = GeneralAxisDomain::Numeric([0.0, 5.0]);
+            chart.add_general_axis(x).unwrap();
+            let mut y = GeneralAxisOptions::new(
+                "gap-y",
+                pane,
+                AxisDimension::Y,
+                if invalid_log_row {
+                    GeneralScaleType::Logarithmic
+                } else {
+                    GeneralScaleType::Linear
+                },
+            );
+            y.domain = GeneralAxisDomain::Numeric([1.0, 10.0]);
+            chart.add_general_axis(y).unwrap();
+            let xs = vec![0.5, 1.5, 2.5, 3.5, 4.5];
+            let ids = Some(
+                ["first", "left", "gap", "right", "last"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect(),
+            );
+            let dataset = if family == "range" {
+                chart
+                    .create_general_xy_dataset(GeneralXyInput::RangeNumeric {
+                        ids,
+                        x: xs,
+                        low: vec![2.0, 3.0, if invalid_log_row { 0.0 } else { 4.0 }, 4.0, 5.0],
+                        low_valid: (!invalid_log_row).then_some(vec![1, 1, 0, 1, 1]),
+                        high: vec![4.0, 5.0, 6.0, 6.0, 7.0],
+                        high_valid: (!invalid_log_row).then_some(vec![1, 1, 0, 1, 1]),
+                    })
+                    .unwrap()
+            } else {
+                chart
+                    .create_general_xy_dataset(GeneralXyInput::Numeric {
+                        ids,
+                        x: xs,
+                        y: vec![4.0, 5.0, if invalid_log_row { 0.0 } else { 6.0 }, 6.0, 7.0],
+                        y_valid: (!invalid_log_row).then_some(vec![1, 1, 0, 1, 1]),
+                    })
+                    .unwrap()
+            };
+            let make_options = || match family {
+                "line" => GeneralSeriesOptions::xy_line(pane, dataset, "gap-x", "gap-y"),
+                "area" => GeneralSeriesOptions::xy_area(pane, dataset, "gap-x", "gap-y"),
+                _ => GeneralSeriesOptions::range_area(pane, dataset, "gap-x", "gap-y"),
+            };
+            let series = chart.add_general_series(make_options()).unwrap();
+            chart.recompute_layout_with_measure(
+                true,
+                |text, _| text.len() as f64 * 7.0,
+                |_, _| 0.0,
+            );
+            for connect in [false, true] {
+                let mut options = make_options();
+                options.connect_missing = connect;
+                chart
+                    .update_general_series_options(series, options)
+                    .unwrap();
+                let mut rows = Vec::new();
+                if family == "range" {
+                    chart.visit_general_range_points(
+                        chart.general_series(series).unwrap(),
+                        |point| {
+                            rows.push((
+                                point.row,
+                                point.x,
+                                (point.low_y + point.high_y) * 0.5,
+                                point.starts_new_run,
+                            ));
+                        },
+                    );
+                } else {
+                    chart.visit_general_path_points(
+                        chart.general_series(series).unwrap(),
+                        |point| {
+                            rows.push((point.row, point.x, point.y, point.starts_new_run));
+                        },
+                    );
+                }
+                assert_eq!(
+                    rows.iter().map(|row| row.0).collect::<Vec<_>>(),
+                    vec![0, 1, 3, 4]
+                );
+                let bridges = connect && !invalid_log_row;
+                assert_eq!(
+                    rows.iter().map(|row| row.3).collect::<Vec<_>>(),
+                    vec![true, false, !bridges, false],
+                    "{family}: connect={connect}, log-invalid={invalid_log_row}"
+                );
+                let frame = chart.build_frame();
+                let run_sizes = frame.panes[pane]
+                    .main
+                    .iter()
+                    .filter_map(|primitive| match (family, primitive) {
+                        ("line", Prim::Polyline { point_count, .. })
+                        | ("area", Prim::AreaFill { point_count, .. }) => Some(*point_count),
+                        ("range", Prim::BandFill { point_count, .. }) => Some(*point_count),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    run_sizes,
+                    if bridges { vec![4] } else { vec![2, 2] },
+                    "{family}: emitted runs"
+                );
+                let midpoint = ((rows[1].1 + rows[2].1) * 0.5, (rows[1].2 + rows[2].2) * 0.5);
+                let hit = chart.general_hit_test(
+                    pane,
+                    midpoint.0,
+                    midpoint.1,
+                    crate::GeneralHitMode::Exact,
+                );
+                assert_eq!(
+                    hit.map(|hit| hit.series),
+                    bridges.then_some(series),
+                    "{family}: gap hit"
+                );
+                let tooltip = chart.general_tooltip_snapshot(series, 2).unwrap();
+                assert_eq!(
+                    tooltip.row_id,
+                    GeneralRowIdentity::Explicit(GeneralRowId::Text("gap".into()))
+                );
+                assert_eq!(
+                    tooltip.value,
+                    if invalid_log_row {
+                        Some(if family == "range" { 6.0 } else { 0.0 })
+                    } else {
+                        None
+                    }
+                );
+                if family == "range" {
+                    assert_eq!(tooltip.low, if invalid_log_row { Some(0.0) } else { None });
+                }
+                assert_eq!(
+                    chart
+                        .general_accessibility_snapshot(series, 0, 10)
+                        .unwrap()
+                        .total_rows,
+                    5
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn xy_line_maps_temporal_and_category_domains_without_reinterpreting_x() {
     let mut temporal = ChartEngine::new(640.0, 400.0, 1.0);
     let temporal_pane = temporal
@@ -5092,6 +5466,36 @@ fn xy_area_stacks_by_x_identity_with_normal_and_percent_geometry() {
     mismatched.connect_missing = true;
     assert!(chart.add_general_series(mismatched).is_err());
 
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let before = chart.build_frame();
+    let before_row = chart.general_tooltip_snapshot(second, 1);
+    for (interpolation, connect_missing) in [
+        (GeneralInterpolation::Step, false),
+        (GeneralInterpolation::Curved, true),
+    ] {
+        let mut invalid =
+            GeneralSeriesOptions::xy_area(pane, second_dataset, "stack-area-x", "stack-area-y");
+        invalid.stack_id = Some("total".into());
+        invalid.interpolation = interpolation;
+        invalid.connect_missing = connect_missing;
+        assert!(
+            chart
+                .update_general_series_options(second, invalid)
+                .is_err()
+        );
+        assert_eq!(
+            chart.build_frame(),
+            before,
+            "rejected stack update changed paint"
+        );
+        assert_eq!(chart.general_tooltip_snapshot(second, 1), before_row);
+        assert_eq!(
+            chart.general_series(second).unwrap().interpolation(),
+            GeneralInterpolation::Curved
+        );
+        assert!(!chart.general_series(second).unwrap().connect_missing());
+    }
+
     assert_eq!(
         chart.general_axis_effective_domain("stack-area-y"),
         Some(GeneralAxisDomain::Numeric([-3.0, 5.0]))
@@ -5563,6 +5967,236 @@ fn row_symbols_drive_scatter_frame_and_exact_hits() {
         crate::GeneralHitMode::Exact,
     );
     assert_eq!(hit.map(|hit| hit.row), Some(1));
+}
+
+#[test]
+fn explicit_row_symbols_and_colors_match_scatter_and_path_marker_hits_after_typed_replace() {
+    fn mark_count(
+        primitives: &[Prim],
+        symbol: GeneralPointSymbol,
+        x: f64,
+        y: f64,
+        color: Color,
+    ) -> usize {
+        primitives
+            .iter()
+            .filter(|primitive| match (symbol, primitive) {
+                (GeneralPointSymbol::Circle, Prim::Circle { cx, cy, fill, .. }) => {
+                    (*cx as f64 - x).abs() < 0.01 && (*cy as f64 - y).abs() < 0.01 && *fill == color
+                }
+                (
+                    GeneralPointSymbol::Square,
+                    Prim::RoundRect {
+                        x: left,
+                        y: top,
+                        w,
+                        h,
+                        fill,
+                        ..
+                    },
+                ) => {
+                    (*left as f64 + *w as f64 * 0.5 - x).abs() < 0.01
+                        && (*top as f64 + *h as f64 * 0.5 - y).abs() < 0.01
+                        && *fill == color
+                }
+                (
+                    GeneralPointSymbol::Diamond | GeneralPointSymbol::Triangle,
+                    Prim::Triangle { a, color: fill, .. },
+                ) => {
+                    (a[0] as f64 - x).abs() < 0.01
+                        && (a[1] as f64 - (y - 10.0)).abs() < 0.01
+                        && *fill == color
+                }
+                _ => false,
+            })
+            .count()
+    }
+    let symbols = [
+        (
+            GeneralPointSymbol::Circle,
+            "circle",
+            (0.0, 9.0),
+            (0.0, 12.0),
+        ),
+        (
+            GeneralPointSymbol::Square,
+            "square",
+            (9.0, 9.0),
+            (12.0, 12.0),
+        ),
+        (
+            GeneralPointSymbol::Diamond,
+            "diamond",
+            (4.0, 4.0),
+            (7.0, 7.0),
+        ),
+        (
+            GeneralPointSymbol::Triangle,
+            "triangle",
+            (7.0, 7.0),
+            (10.0, 7.0),
+        ),
+    ];
+    for path in [false, true] {
+        for (index, (symbol, _, _, _)) in symbols.iter().enumerate() {
+            let override_symbol = symbols[(index + 1) % symbols.len()];
+            let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+            let pane = chart
+                .add_pane_with_domain(
+                    true,
+                    HorizontalDomain::Continuous {
+                        scale: ContinuousScaleType::Linear,
+                    },
+                )
+                .unwrap();
+            for (id, dimension) in [
+                ("marker-x", AxisDimension::X),
+                ("marker-y", AxisDimension::Y),
+            ] {
+                let mut axis =
+                    GeneralAxisOptions::new(id, pane, dimension, GeneralScaleType::Linear);
+                axis.domain = GeneralAxisDomain::Numeric([0.0, 4.0]);
+                chart.add_general_axis(axis).unwrap();
+            }
+            let ids = || {
+                ["a", "override", "c"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect()
+            };
+            let input = GeneralXyInput::Numeric {
+                ids: Some(ids()),
+                x: vec![0.5, 2.0, 3.5],
+                y: vec![2.0; 3],
+                y_valid: None,
+            };
+            let dataset = chart.create_general_xy_dataset(input.clone()).unwrap();
+            chart
+                .replace_general_xy_dataset_styled(
+                    dataset,
+                    input,
+                    None,
+                    Some(vec![None, Some("#f01020".into()), None]),
+                    Some(vec![None, Some(override_symbol.1.into()), None]),
+                )
+                .unwrap();
+            let mut options = if path {
+                GeneralSeriesOptions::xy_line(pane, dataset, "marker-x", "marker-y")
+            } else {
+                GeneralSeriesOptions::scatter(pane, dataset, "marker-x", "marker-y")
+            };
+            options.color = Some("#123456".into());
+            options.point_symbol = *symbol;
+            options.point_radius = 10.0;
+            options.point_markers = path;
+            let series = chart.add_general_series(options).unwrap();
+            chart.recompute_layout_with_measure(
+                true,
+                |text, _| text.len() as f64 * 7.0,
+                |_, _| 0.0,
+            );
+            let series_color = Color::rgb(0x12, 0x34, 0x56);
+            let override_color = Color::rgb(0xf0, 0x10, 0x20);
+            let check = |chart: &mut ChartEngine, expected_rows: &[usize; 3]| {
+                let frame = chart.build_frame();
+                let prims = &frame.panes[pane].main;
+                if path {
+                    assert_eq!(
+                        prims.iter().filter(|prim| matches!(prim, Prim::Polyline { color, .. } if *color == series_color)).count(),
+                        1,
+                        "row override must not recolor the path"
+                    );
+                }
+                let mut points = Vec::new();
+                if path {
+                    chart.visit_general_path_points(
+                        chart.general_series(series).unwrap(),
+                        |point| {
+                            points.push((point.row, point.x, point.y));
+                        },
+                    );
+                } else {
+                    chart.visit_general_scatter_points(
+                        chart.general_series(series).unwrap(),
+                        |point| {
+                            points.push((point.row, point.x, point.y));
+                        },
+                    );
+                }
+                for (row, expected_symbol, color) in [
+                    (expected_rows[0], *symbol, series_color),
+                    (expected_rows[1], override_symbol.0, override_color),
+                    (expected_rows[2], *symbol, series_color),
+                ] {
+                    let (_, x, y) = points.iter().find(|point| point.0 == row).unwrap();
+                    assert_eq!(
+                        mark_count(
+                            prims,
+                            expected_symbol,
+                            *x + chart.general_plot_rect(pane).unwrap().x,
+                            *y,
+                            color
+                        ),
+                        if expected_symbol == GeneralPointSymbol::Diamond {
+                            2
+                        } else {
+                            1
+                        },
+                        "path={path}, base={symbol:?}, row={row}"
+                    );
+                }
+                let (_, x, y) = points
+                    .iter()
+                    .find(|point| point.0 == expected_rows[1])
+                    .unwrap();
+                let (inside, outside) = (override_symbol.2, override_symbol.3);
+                let hit = chart
+                    .general_hit_test(
+                        pane,
+                        x + inside.0,
+                        y + inside.1,
+                        crate::GeneralHitMode::Exact,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    hit.row_id,
+                    GeneralRowIdentity::Explicit(GeneralRowId::Text("override".into()))
+                );
+                assert_eq!(hit.series, series);
+                assert_eq!(
+                    chart.general_hit_test(
+                        pane,
+                        x + outside.0,
+                        y + outside.1,
+                        crate::GeneralHitMode::Exact
+                    ),
+                    None,
+                    "symbol={:?} must not hit past its boundary",
+                    override_symbol.0
+                );
+            };
+            check(&mut chart, &[0, 1, 2]);
+            chart
+                .replace_general_xy_dataset_styled(
+                    dataset,
+                    GeneralXyInput::Numeric {
+                        ids: Some(vec![
+                            GeneralRowId::Text("override".into()),
+                            GeneralRowId::Text("a".into()),
+                            GeneralRowId::Text("c".into()),
+                        ]),
+                        x: vec![2.0, 0.5, 3.5],
+                        y: vec![2.0; 3],
+                        y_valid: None,
+                    },
+                    None,
+                    Some(vec![Some("#f01020".into()), None, None]),
+                    Some(vec![Some(override_symbol.1.into()), None, None]),
+                )
+                .unwrap();
+            check(&mut chart, &[1, 0, 2]);
+        }
+    }
 }
 
 #[test]
@@ -6944,6 +7578,10 @@ fn category_heatmap_grid_owns_two_category_axes_geometry_hits_and_retention() {
             .count(),
         3
     );
+    geometry.clear();
+    chart.visit_general_heatmap_cells(chart.general_series(series).unwrap(), |cell| {
+        geometry.push(cell)
+    });
     let first = geometry[0];
     let hit = chart
         .general_hit_test(
@@ -6954,6 +7592,171 @@ fn category_heatmap_grid_owns_two_category_axes_geometry_hits_and_retention() {
         )
         .unwrap();
     assert_eq!((hit.series, hit.row), (series, 0));
+    let center_x = (first.left + first.right) * 0.5;
+    let center_y = (first.top + first.bottom) * 0.5;
+    let cell_hit = |chart: &ChartEngine, x, y, mode| {
+        chart
+            .general_hit_test(pane, x, y, mode)
+            .map(|hit| (hit.series, hit.row_id))
+    };
+    assert_eq!(
+        cell_hit(
+            &chart,
+            first.left + 0.25,
+            center_y,
+            crate::GeneralHitMode::Exact
+        )
+        .map(|hit| hit.1),
+        Some(GeneralRowIdentity::Explicit(GeneralRowId::Text(
+            "jan-north".into()
+        ))),
+        "the visible cell edge must be an exact hit"
+    );
+    assert_eq!(
+        cell_hit(
+            &chart,
+            first.right + 0.25,
+            center_y,
+            crate::GeneralHitMode::Exact
+        ),
+        None,
+        "band padding after the cell must not be claimed as painted"
+    );
+    let missing_center = (
+        (geometry[2].left + geometry[2].right) * 0.5,
+        (geometry[1].top + geometry[1].bottom) * 0.5,
+    );
+    assert_eq!(
+        cell_hit(
+            &chart,
+            missing_center.0,
+            missing_center.1,
+            crate::GeneralHitMode::Exact
+        ),
+        None,
+        "the queryable missing Feb/South row paints no cell"
+    );
+    let north = geometry[0];
+    let south = geometry[1];
+    let (upper, lower) = if north.top < south.top {
+        (north, south)
+    } else {
+        (south, north)
+    };
+    assert!(
+        lower.top > upper.bottom,
+        "adjacent category bands must have a gap"
+    );
+    let expected_id = |row: usize| {
+        GeneralRowIdentity::Explicit(GeneralRowId::Text(
+            if row == 0 { "jan-north" } else { "jan-south" }.into(),
+        ))
+    };
+    let near_upper = upper.bottom + (lower.top - upper.bottom) * 0.2;
+    let near_lower = upper.bottom + (lower.top - upper.bottom) * 0.8;
+    for (y, row) in [(near_upper, upper.row), (near_lower, lower.row)] {
+        assert_eq!(
+            cell_hit(&chart, center_x, y, crate::GeneralHitMode::Exact),
+            None,
+            "unpainted space between rows has no exact cell: upper={upper:?}, lower={lower:?}, y={y}"
+        );
+        assert_eq!(
+            cell_hit(
+                &chart,
+                center_x,
+                y,
+                crate::GeneralHitMode::Nearest { max_distance: 20.0 }
+            )
+            .map(|hit| hit.1),
+            Some(expected_id(row)),
+            "nearest must choose the adjacent row's stable ID"
+        );
+    }
+    let other = chart
+        .add_general_series(GeneralSeriesOptions::heatmap_grid(
+            pane, dataset, "heat-x", "heat-y",
+        ))
+        .unwrap();
+    for (order, top_series) in [(vec![series, other], other), (vec![other, series], series)] {
+        assert!(chart.set_general_series_order(Some(pane), order));
+        for (y, row) in [(near_upper, upper.row), (near_lower, lower.row)] {
+            assert_eq!(
+                cell_hit(
+                    &chart,
+                    center_x,
+                    y,
+                    crate::GeneralHitMode::Nearest { max_distance: 20.0 }
+                ),
+                Some((top_series, expected_id(row))),
+                "nearest ties use paint order but retain row identity"
+            );
+        }
+    }
+    // A changed effective view must invalidate cell geometry and preserve surviving IDs.
+    chart
+        .zoom_general_category_axis("heat-x", 2.0, "Jan")
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut viewed = Vec::new();
+    chart.visit_general_heatmap_cells(chart.general_series(series).unwrap(), |cell| {
+        viewed.push(cell)
+    });
+    assert_eq!(
+        viewed.iter().map(|cell| cell.row).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    let viewed_first = viewed.iter().find(|cell| cell.row == 0).unwrap();
+    assert_ne!(
+        cell_hit(
+            &chart,
+            (geometry[2].left + geometry[2].right) * 0.5,
+            (viewed_first.top + viewed_first.bottom) * 0.5,
+            crate::GeneralHitMode::Exact
+        )
+        .map(|hit| hit.1),
+        Some(GeneralRowIdentity::Explicit(GeneralRowId::Text(
+            "feb-north".into()
+        ))),
+        "a cell removed from the view must not keep its old exact target"
+    );
+    assert_eq!(
+        cell_hit(
+            &chart,
+            (viewed_first.left + viewed_first.right) * 0.5,
+            (viewed_first.top + viewed_first.bottom) * 0.5,
+            crate::GeneralHitMode::Nearest { max_distance: 20.0 }
+        ),
+        Some((series, expected_id(0))),
+    );
+    let viewed_south = viewed.iter().find(|cell| cell.row == 1).unwrap();
+    let (upper, lower) = if viewed_first.top < viewed_south.top {
+        (viewed_first, viewed_south)
+    } else {
+        (viewed_south, viewed_first)
+    };
+    for (fraction, row) in [(0.2, upper.row), (0.8, lower.row)] {
+        assert_eq!(
+            cell_hit(
+                &chart,
+                (upper.left + upper.right) * 0.5,
+                upper.bottom + (lower.top - upper.bottom) * fraction,
+                crate::GeneralHitMode::Nearest { max_distance: 20.0 }
+            ),
+            Some((series, expected_id(row))),
+            "adjacent nearest identities must survive the changed view"
+        );
+    }
+    let plot = chart.general_plot_rect(pane).unwrap();
+    assert_eq!(
+        cell_hit(
+            &chart,
+            plot.width + 0.25,
+            center_y,
+            crate::GeneralHitMode::Exact
+        ),
+        None,
+        "a mark clipped by the plot cannot be an exact hit"
+    );
     let tooltip = chart.general_tooltip_snapshot(series, 0).unwrap();
     assert_eq!(tooltip.x_label, "Jan");
     assert_eq!(tooltip.y_label.as_deref(), Some("North"));

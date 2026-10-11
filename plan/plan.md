@@ -199,8 +199,28 @@ six-ceiling size, strict native performance and GPUI structural/replay gates pas
 the rebuilt portable Chromium/Firefox/WebKit suite passed 584 tests with 20
 platform-intended skips. This correction does not reclassify the optional
 machine-specific GPUI image failure or the non-official 100k upload diagnostic; a
-separate G3 evidence follow-up owns the remaining interpolation/gap/style/hit fixtures
-identified in that same user-testing round.
+separate G3 evidence follow-up addresses the remaining interpolation/gap/style/hit
+fixtures identified in that same user-testing round. Deterministic frame fixtures now
+compare line, area, and range-area upper paths and exact hits across all eight supported
+interpolations on increasing, reversed, and duplicate X; coupled band probes cover
+interior joins and the shared render expansion remains finite and bounded. Each path
+family distinguishes queryable missing-row split/bridge from logarithmic hard gaps with
+connection off/on; stacked-area add and update rejections leave frame and rows unchanged.
+Scatter and enabled line markers exercise all four symbols, a single explicit-ID
+color/symbol override, unaffected series-colored strokes and rows, symbol-edge hits,
+and typed styled replacement. Heatmap fixtures probe cell edges, absent and clipped
+exact targets, adjacent-row nearest identities through series reorder and category
+view change. These fixtures extend `crates/aeris_charts_engine/src/frame/tests.rs` and
+`crates/aeris_charts_render/src/line.rs` without a new audit harness or production
+ownership change. The 2026-10-11 follow-up gate passed locked workspace tests,
+formatting, warning-denying workspace/wasm32 Clippy, package install/lint/build/
+typecheck/pack/API/namespace/release guards, all six policy-v7 artifact-size
+ceilings, native frame/golden tests, GPUI structural parity/replay, strict native
+performance, and 584 portable Chromium/Firefox/WebKit tests (20 platform-intended
+skips) on rebuilt assets. One initial native performance run had a noisy unrelated
+order-flow Target P p99 at 8.82 ms versus 8.00 ms; an immediate repeat passed
+at 5.31 ms without code or threshold change. Optional calibrated GPUI pixels
+and clean official browser startup/upload evidence remain separately pending.
 
 The rebuilt-assets `general-dashboard-100k` local diagnostic on 2026-10-11 used dirty
 `ba4723d` plus the G3 worktree, Chromium 153, 1280×720 at DPR 1, WebGPU, one warm-up and five

@@ -2351,6 +2351,43 @@ mod tests {
     }
 
     #[test]
+    fn reversed_and_duplicate_band_knots_keep_both_edges_finite_and_coupled() {
+        for xs in [[20.0, 10.0, 0.0], [0.0, 0.0, 20.0]] {
+            let upper = [
+                LinePoint { x: xs[0], y: 20.0 },
+                LinePoint { x: xs[1], y: 10.0 },
+                LinePoint { x: xs[2], y: 15.0 },
+            ];
+            let lower = [
+                LinePoint { x: xs[0], y: 40.0 },
+                LinePoint { x: xs[1], y: 35.0 },
+                LinePoint { x: xs[2], y: 45.0 },
+            ];
+            for interpolation in [
+                LineType::Simple,
+                LineType::WithSteps,
+                LineType::StepBefore,
+                LineType::StepMiddle,
+                LineType::Curved,
+                LineType::Monotone,
+                LineType::Natural,
+            ] {
+                let (top, bottom) = expand_band(&upper, &lower, interpolation);
+                assert_eq!(top.len(), bottom.len(), "{xs:?}/{interpolation:?}");
+                assert!(top.len() <= 2 * CURVE_SEGMENTS + 1);
+                assert!(top.iter().zip(&bottom).all(|(top, bottom)| {
+                    top.x == bottom.x
+                        && top.x.is_finite()
+                        && top.y.is_finite()
+                        && bottom.y.is_finite()
+                }));
+                assert_eq!(top.first().unwrap().x, xs[0]);
+                assert_eq!(top.last().unwrap().x, xs[2]);
+            }
+        }
+    }
+
+    #[test]
     fn nearly_collinear_strokes_skip_round_joins() {
         // A dense, almost straight brush stroke: no turn opens a visible wedge, so the mesh is
         // exactly two triangles per segment with no join fans.
