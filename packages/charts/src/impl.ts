@@ -1164,6 +1164,7 @@ class general_series_impl implements general_series_api {
     );
     this.x_axis_id = options.x_axis_id;
     this.y_axis_id = options.y_axis_id;
+    this.chart.notify_general_legend_change();
     this.chart.repaint();
   }
 
@@ -1172,6 +1173,7 @@ class general_series_impl implements general_series_api {
     if (!this.chart.wasm.set_general_series_visible(this.id, visible)) {
       throw new AerisChartsError("stale_handle", "this general series has been removed");
     }
+    this.chart.notify_general_legend_change();
     this.chart.repaint();
   }
 
@@ -3839,6 +3841,8 @@ export class chart_impl implements chart_api {
   private readonly series_removed_subs = new Set<series_change_handler>();
   private readonly options_change_subs = new Set<options_change_handler>();
   private readonly delta_tooltip_range_listeners = new Set<() => void>();
+  private readonly general_brush_change_subs = new Set<() => void>();
+  private readonly general_legend_change_subs = new Set<() => void>();
   private last_visible_logical_range: logical_range | null;
   private last_visible_time_range: time_range | null;
   private last_ts_width: number;
@@ -5151,6 +5155,7 @@ export class chart_impl implements chart_api {
     if (ordered.some((series) => this.general_series_by_id.get(series.id) !== series)) return false;
     const ids = new Uint32Array(ordered.map((series) => series.id));
     if (!this.wasm.set_general_series_order(pane ?? -1, ids)) return false;
+    this.notify_general_legend_change();
     this.repaint();
     return true;
   }
@@ -7046,7 +7051,8 @@ export class chart_impl implements chart_api {
 
   /**
    * Forward a key pressed on an accessibility focus target (`price-axis:<pane>`, `time-axis`,
-   * `separator:<pane>`, `drawing:<id>`) to the engine input controller. Returns whether it was
+   * `separator:<pane>`, `drawing:<id>`, `general-row:<series>:<row>`) to the engine input
+   * controller. Returns whether it was
    * consumed.
    */
   input_target_key(target: string, event: KeyboardEvent): boolean {
@@ -7173,7 +7179,8 @@ export class chart_impl implements chart_api {
       | { kind: "remove_series"; id: number }
       | { kind: "crosshair_left" }
       | { kind: "context_menu"; x: number; y: number }
-      | { kind: "delta_tooltip_changed" };
+      | { kind: "delta_tooltip_changed" }
+      | { kind: "general_brush_changed" };
     const events = JSON.parse(this.wasm.take_input_events_json()) as controller_event[];
     for (const event of events) {
       switch (event.kind) {
@@ -7202,6 +7209,9 @@ export class chart_impl implements chart_api {
           break;
         case "delta_tooltip_changed":
           this.notify_delta_tooltip_ranges();
+          break;
+        case "general_brush_changed":
+          this.notify_general_brush_change();
           break;
       }
     }
@@ -7377,6 +7387,18 @@ export class chart_impl implements chart_api {
     return JSON.parse(this.wasm.general_legend_snapshot_json(pane ?? -1)) as general_legend_snapshot;
   }
 
+  subscribe_general_legend_change(handler: () => void): void {
+    this.general_legend_change_subs.add(handler);
+  }
+
+  unsubscribe_general_legend_change(handler: () => void): void {
+    this.general_legend_change_subs.delete(handler);
+  }
+
+  notify_general_legend_change(): void {
+    for (const handler of this.general_legend_change_subs) handler();
+  }
+
   general_shared_tooltip(
     series: number | general_series_api,
     row: number,
@@ -7418,6 +7440,36 @@ export class chart_impl implements chart_api {
       this.wasm.set_general_brush_result_json(axis_id, from_coordinate, to_coordinate),
     );
     this.repaint();
+    this.notify_general_brush_change();
+    return snapshot;
+  }
+
+  set_general_brush_input_axis(axis?: string | general_axis_api): void {
+    const axis_id = typeof axis === "string" ? axis : axis?.id ?? "";
+    parse_general_result<null>(this.wasm.set_general_brush_input_axis_result_json(axis_id));
+    this.repaint();
+    this.notify_general_brush_change();
+  }
+
+  select_full_general_brush(axis: string | general_axis_api): general_brush_snapshot {
+    const axis_id = typeof axis === "string" ? axis : axis.id;
+    const snapshot = parse_general_result<general_brush_snapshot>(
+      this.wasm.select_full_general_brush_result_json(axis_id),
+    );
+    this.repaint();
+    this.notify_general_brush_change();
+    return snapshot;
+  }
+
+  nudge_general_brush(endpoint: "start" | "end", direction: -1 | 1): general_brush_snapshot {
+    if ((endpoint !== "start" && endpoint !== "end") || (direction !== -1 && direction !== 1)) {
+      throw new AerisChartsError("invalid_options", "general brush nudge requires a start/end endpoint and -1/1 direction");
+    }
+    const snapshot = parse_general_result<general_brush_snapshot>(
+      this.wasm.nudge_general_brush_result_json(endpoint === "start", direction),
+    );
+    this.repaint();
+    this.notify_general_brush_change();
     return snapshot;
   }
 
@@ -7428,6 +7480,19 @@ export class chart_impl implements chart_api {
   clear_general_brush(): void {
     this.wasm.clear_general_brush();
     this.repaint();
+    this.notify_general_brush_change();
+  }
+
+  subscribe_general_brush_change(handler: () => void): void {
+    this.general_brush_change_subs.add(handler);
+  }
+
+  unsubscribe_general_brush_change(handler: () => void): void {
+    this.general_brush_change_subs.delete(handler);
+  }
+
+  private notify_general_brush_change(): void {
+    for (const handler of this.general_brush_change_subs) handler();
   }
 
   general_hit_test(
@@ -7525,6 +7590,12 @@ export class chart_impl implements chart_api {
 
   take_sync_events(): chart_sync_event[] {
     return JSON.parse(this.wasm.take_sync_events_json()) as chart_sync_event[];
+  }
+
+  apply_external_sync_event(event: chart_sync_event): boolean {
+    const changed = this.wasm.apply_external_sync_event_json(JSON.stringify(event));
+    if (changed) this.repaint();
+    return changed;
   }
 
   resize(width: number, height: number, dpr?: number): void {
@@ -7648,6 +7719,8 @@ export class chart_impl implements chart_api {
     this.series_removed_subs.clear();
     this.options_change_subs.clear();
     this.delta_tooltip_range_listeners.clear();
+    this.general_brush_change_subs.clear();
+    this.general_legend_change_subs.clear();
     this.tool_listener = null;
     this.tool_change_subs.clear();
     this.drawing_created_subs.clear();

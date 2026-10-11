@@ -260,6 +260,14 @@ General interaction/configuration state stays in the same engine registry. Share
 rows by the anchor row's exact horizontal datum in stable series/row order, including duplicate-X heatmap cells.
 The transient general brush converts host CSS-pixel endpoints immediately into semantic numeric, temporal, or
 category ranges, returns bounded selected row identities, and reprojects from semantic values after view changes.
+An armed general brush axis routes mouse and single-touch pane drags through the shared engine input
+controller. Motion updates only the semantic range; selected-row enumeration happens when a host
+requests a snapshot. Capture cancellation restores the prior range, and touch drag ownership keeps
+the browser's page-scroll arbitration from taking an active brush. The public browser brush
+control binds that axis once and presents native buttons for full-range selection, semantic
+endpoint steps, and clearing. The engine owns transformed numeric/temporal steps and category
+identity steps; one bounded input event notifies the browser after a gesture commits or cancels,
+so the controls update without polling or reimplementing the gesture.
 General reference lines, dots, and regions bind explicit axes and lower into existing shared primitives; each
 reference independently declares whether its values extend automatic domains. Reference lifecycle and V2
 persistence are engine-owned, while brush/hover/selection remain transient and are not serialized.
@@ -295,6 +303,15 @@ bounded accessibility, exact/nearest hit, brush, reference-component, and legend
 directly from the live series registry in stable engine order, optionally filtered by pane, and retains hidden
 series with their visibility state rather than maintaining a parallel host registry. Shared tooltip grouping,
 semantic brush selection, and reference domain extension likewise do not create browser-owned semantic mirrors.
+The browser package's `create_general_legend`, `create_general_tooltip`, and
+`create_general_brush_controls` present those snapshots as default DOM controls. Legend buttons
+mutate stable series handles; the tooltip follows engine-arbitrated crosshair hits; brush buttons
+call semantic engine operations. Hosts attach and detach these DOM components, and may supply
+localized labels, language attributes, and display formatting. The tooltip wraps long content
+inside the host bounds. The shared accessibility sweep leaves these package-owned interactive
+components keyboard reachable even when mounted inside the chart host. DOM tooltip content is
+outside the ordered frame and frame-image exports;
+engine-rendered marks, references, and labels remain in that export path.
 Axis and series handles mutate visibility in place through the engine registry, preserving handle, data, view,
 selection, and ordering identity while shared invalidation updates domains, hits, legends, persistence, and frames.
 Their browser `apply_options` transactions also update mutable axis configuration and series presentation in
@@ -591,10 +608,21 @@ The host retains renderer-cache invalidation and paint scheduling, but neither r
 preparation sequence nor clears frames by hand to force a rebuild.
 
 Linked-chart ingress is source-aware. Local mutations publish into the bounded synchronization queue;
-`apply_external_sync_event` applies host-supplied crosshair and visible-range state without
+`apply_external_sync_event` applies host-supplied crosshair, financial visible-range, and general
+axis viewport state without
 echoing it and without draining unrelated local events already awaiting delivery. Hosts coordinate
 chart groups and transport events, but they never clear the engine queue to manufacture no-echo
-behavior.
+behavior. General axis events use a numeric or temporal interval, or category endpoint identities,
+so linked charts can retain their own data rows and categories between shared endpoints. A target
+ignores an axis event when its scale family or required category endpoint is absent. The browser
+package exposes the same ingress with a typed source/revision envelope. The engine keeps a bounded
+64-source revision ledger and rejects stale or duplicate envelopes before applying them.
+General item hover emits an X/Y semantic value with its axis IDs. The receiving chart projects
+those values through its own axis domains and pane geometry, locating the target pane by axis ID;
+missing categories or out-of-view
+values are ignored. The hover event is emitted when the hovered row changes, and pointer leave
+emits the shared clear-crosshair event. The shared frame draws crosshair rules directly at general
+pane coordinates; it does not snap them to the financial bar index.
 
 Secondary clicks use the engine-owned Chart Context query. It resolves chart-space coordinates,
 pane, time, logical index, hit series, and price on that series' exact scale (or the pane's canonical

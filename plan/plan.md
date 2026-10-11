@@ -32,7 +32,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G1 | R0 + R1 | Competitive baseline, lifecycle and mutable object foundations | **Complete** | Recharts 3.10.1 matrix and rendered-mark fixtures; general-first topology; atomic handles; host cleanup; focus retention; validated general-first V2 restore | G2 |
 | G2 | R2 | Scales, axes and responsive layout | **Complete** | Numeric/log/symlog, UTC temporal and category views; typed ticks; grids/zero rules; multi-axis titles; padding; bounded responsive layout | G3 |
 | G3 | R3 | Cartesian visual and data semantics (remainder) | **Complete** | Cartesian families, stack offsets, gradients, composition, per-item styles and required portable gates delivered | G4; calibrated GPUI images and official browser benchmark remain separately pending |
-| G4 | R4 | Components and interaction | **Open** | — | Legend, tooltip, brush, selection, sync (extends PD5), export (PD6) |
+| G4 | R4 | Components and interaction | **Complete** | Default legend, tooltip and brush controls; engine selection and semantic linked sync; shared-frame export coverage | G5; manual assistive-technology and calibrated GPUI image evidence remain pending |
 | G5 | R5 | React and framework-neutral authoring | **Open** | — | Composable components over complete mutations |
 | G6 | R6 | Polar families and transitions | **Open** | — | Polar transforms, pie/donut, radar, radial bar, polar area, animation |
 | G7 | R7 | Hierarchy and flow families | **Open** | — | Funnel, treemap, Sankey, sunburst |
@@ -236,6 +236,23 @@ startup/upload evidence and any needed remediation remain due at phase closure/G
 and photon-visible presentation were unsupported; repeat-frame/disposal metrics were not
 measured by this scenario. Strict native line/mixed/error targets passed independently.
 
+G4 adds package-owned default legends, tooltips, and brush controls to the existing general
+series, axes, titles, labels, and references. The dashboard uses these public components rather
+than maintaining its own legend and tooltip semantics. Legend actions retain series handles and
+focus through visibility and reorder changes; the tooltip uses engine hits and bounded shared
+snapshots. The engine input controller owns mouse and touch brush drags, cancellation, keyboard
+selection, and semantic endpoint steps. Linked general charts exchange source/revision guarded
+axis views and crosshair values; category identities and axis IDs allow unequal datasets and pane
+orders without feedback loops. General crosshair rules now render from the shared frame, and a
+native regression checks general image export against the live frame and view restoration. Public
+browser tests cover localization, overflow, focus, keyboard and touch controls, synchronization,
+and resize. The portable Chromium/Firefox/WebKit gate passed 603 tests with 22 intended skips;
+locked workspace tests, formatting, warning-denying workspace/wasm32 Clippy, package
+install/lint/build/typecheck/pack, public API/namespace/release guards, and all six policy-v7
+package-size thresholds passed on 2026-10-11. Structural GPUI parity/replay and strict native
+release performance passed. Calibrated GPUI window pixels and an assistive-technology session
+remain separate manual evidence.
+
 ## Known gaps
 
 Source-confirmed gaps and review risks from the 2026-09-23 review. Each is owned by a phase. The
@@ -399,20 +416,20 @@ fixtures demonstrate bounded work.
 
 ### R4 — Chart components and interaction
 
-**Batch:** G4. **Depends on:** R1–R3. **Status:** open.
+**Batch:** G4. **Depends on:** R1–R3. **Status:** complete.
 
-- [ ] Usable default legends and tooltips.
-- [ ] Titles and labels.
-- [ ] References.
-- [ ] Keyboard and touch brush controls.
-- [ ] Selection.
-- [ ] Linked-chart synchronization, extending the shared contract delivered first for financial
+- [x] Usable default legends and tooltips.
+- [x] Titles and labels.
+- [x] References.
+- [x] Keyboard and touch brush controls.
+- [x] Selection.
+- [x] Linked-chart synchronization, extending the shared contract delivered first for financial
       charts as PD5 (semantic crosshair and visible-range events with source and revision; see
       the trading contract in [architecture.md](../docs/architecture.md)).
-- [ ] Frame image export, extending the shared contract delivered first as PD6
+- [x] Frame image export, extending the shared contract delivered first as PD6
       (`capture_export_frame` and the native export path in architecture.md).
-- [ ] Localization, overflow and focus behavior.
-- [ ] G4 full gate green; batch committed and pushed.
+- [x] Localization, overflow and focus behavior.
+- [x] G4 full gate green; batch committed and pushed.
 
 R4 extends the PD5 and PD6 contracts to general domains and chrome; it does not build a second
 synchronization or export path.

@@ -12,6 +12,7 @@
 //! here once and every native host inherits it without wiring.
 
 use super::*;
+use crate::general_series::GeneralBrushSelection;
 
 /// Manhattan distance before a press becomes a drag (reference CancelClickManhattanDistance).
 /// Hosts that arbitrate page scrolling before the engine sees a gesture wait for this distance.
@@ -273,6 +274,10 @@ pub enum ChartFocusTarget {
     /// The divider below pane `index`.
     Separator(usize),
     Drawing(DrawingId),
+    GeneralDatum {
+        series: GeneralSeriesId,
+        row: usize,
+    },
 }
 
 /// Paint layer of a host primitive hit, lowest first (reference `zOrder`).
@@ -347,6 +352,8 @@ pub enum ChartInputEvent {
     RemoveSeries(SeriesId),
     /// Delta-tooltip comparison state changed; the host notifies its range subscribers.
     DeltaTooltipChanged,
+    /// A committed or cancelled general brush gesture changed its semantic range.
+    GeneralBrushChanged,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -377,6 +384,7 @@ enum PressMode {
     DrawingDrag,
     TouchTracking,
     DeltaTooltip,
+    GeneralBrush,
     /// A press inside the label being edited; the typing session keeps it.
     TextEditor,
     /// A press with no gesture: inert chrome or an already-handled double-click.
@@ -394,9 +402,11 @@ impl PressMode {
             Self::Measure | Self::DrawingCreation { .. } | Self::DrawingDrag | Self::TextEditor => {
                 InputTarget::Drawing
             }
-            Self::Pane { .. } | Self::TouchTracking | Self::DeltaTooltip | Self::Inert => {
-                InputTarget::Pane
-            }
+            Self::Pane { .. }
+            | Self::TouchTracking
+            | Self::DeltaTooltip
+            | Self::GeneralBrush
+            | Self::Inert => InputTarget::Pane,
         }
     }
 }
@@ -442,6 +452,9 @@ pub(crate) struct InputController {
     options: InteractionOptions,
     resolver: GestureResolver,
     press: Option<Press>,
+    general_brush_axis: Option<String>,
+    general_brush_dimension: Option<AxisDimension>,
+    general_brush_before: Option<Option<GeneralBrushSelection>>,
     last_click: Option<(f64, f64, f64)>,
     pointer: Option<(f64, f64)>,
     modifiers: InputModifiers,
@@ -493,6 +506,85 @@ impl ChartEngine {
             self.stop_input_motion();
         }
         self.input.options = options;
+    }
+
+    /// Arm an existing Cartesian general axis for mouse and single-touch range brushing.
+    /// The axis is configuration; the semantic range remains transient chart state.
+    pub fn set_general_brush_input_axis(
+        &mut self,
+        axis_id: Option<&str>,
+    ) -> Result<(), ChartError> {
+        let next = if let Some(id) = axis_id {
+            let axis = self.general_axis(id).ok_or_else(|| {
+                ChartError::new(
+                    ErrorCode::InvalidHandle,
+                    "general brush input axis is stale",
+                )
+            })?;
+            if !matches!(axis.dimension(), AxisDimension::X | AxisDimension::Y)
+                || self.general_series.is_none()
+            {
+                return Err(ChartError::new(
+                    ErrorCode::InvalidOptions,
+                    "general brush input requires a Cartesian axis and general series",
+                ));
+            }
+            Some((id.to_owned(), axis.dimension()))
+        } else {
+            None
+        };
+        if self
+            .input
+            .press
+            .is_some_and(|press| press.mode == PressMode::GeneralBrush)
+        {
+            self.abandon_press();
+        }
+        self.input.general_brush_axis = next.as_ref().map(|(id, _)| id.clone());
+        self.input.general_brush_dimension = next.map(|(_, dimension)| dimension);
+        self.refresh_input_cursor();
+        Ok(())
+    }
+
+    pub(crate) fn disarm_general_brush_input_for_axis(&mut self, axis_id: &str) {
+        if self.input.general_brush_axis.as_deref() == Some(axis_id) {
+            self.set_general_brush_input_axis(None)
+                .expect("disarming a brush axis cannot fail");
+        }
+    }
+
+    fn update_input_general_brush(&mut self, start: (f64, f64), end: (f64, f64)) {
+        let Some(axis_id) = self.input.general_brush_axis.take() else {
+            return;
+        };
+        let coordinate = |point: (f64, f64)| match self.input.general_brush_dimension {
+            Some(AxisDimension::X) => point.0,
+            _ => point.1,
+        };
+        let from = coordinate(start);
+        let to = coordinate(end);
+        let result = self.update_general_brush_from_pixels(&axis_id, from, to);
+        self.input.general_brush_axis = Some(axis_id);
+        if result.is_err() {
+            // Axis removal or an invalid transform during a drag cancels the gesture and restores
+            // the preceding semantic range; the next press may be rearmed against a live axis.
+            if let Some(prior) = self.input.general_brush_before.take()
+                && self.restore_general_brush_state(prior)
+            {
+                self.push_input_event(ChartInputEvent::GeneralBrushChanged);
+            }
+            self.abandon_press();
+            self.input.general_brush_axis = None;
+            self.input.general_brush_dimension = None;
+        }
+    }
+
+    fn general_brush_input_active_at(&self, y: f64) -> bool {
+        self.input.general_brush_axis.as_deref().is_some_and(|id| {
+            self.general_axis(id).is_some_and(|axis| {
+                self.pane_index_for_id(axis.pane_id()) == Some(self.pane_index_at_y(y))
+            })
+        })
     }
 
     /// The cursor the platform should present for the current pointer state.
@@ -817,7 +909,7 @@ impl ChartEngine {
             .pointer_down(Self::mouse_sample(input, mode.target()));
         self.input.press = Some(press(
             mode,
-            (click_count >= 2 || repeated) && sequence_or_idle,
+            (click_count >= 2 || repeated) && sequence_or_idle && mode != PressMode::GeneralBrush,
         ));
         self.input.touch_longpress_deadline_ms = (input.device == InputDevice::Touch
             && matches!(mode, PressMode::Pane { .. })
@@ -976,6 +1068,11 @@ impl ChartEngine {
                 };
                 self.drawing_drag_to(x, y, modifiers);
             }
+            Some(PressMode::GeneralBrush) if dragging => {
+                if let Some(start) = self.input.press.map(|press| press.start) {
+                    self.update_input_general_brush(start, (x, y));
+                }
+            }
             Some(PressMode::Pane { price_pan, panning }) if primary_pressed => {
                 self.continue_pan(input, update.kind, price_pan, panning);
             }
@@ -1127,6 +1224,7 @@ impl ChartEngine {
                 | PressMode::Separator { .. }
                 | PressMode::TouchTracking
                 | PressMode::DeltaTooltip
+                | PressMode::GeneralBrush
                 | PressMode::TextEditor
                 | PressMode::Inert => {}
             }
@@ -1154,6 +1252,13 @@ impl ChartEngine {
             | PressMode::Inert
             | PressMode::TouchTracking => {}
             PressMode::DeltaTooltip => {}
+            PressMode::GeneralBrush => {
+                if moved {
+                    self.update_input_general_brush(press.start, (x, y));
+                    self.push_input_event(ChartInputEvent::GeneralBrushChanged);
+                }
+                self.input.general_brush_before = None;
+            }
             PressMode::TimeAxis => self.time_axis_end_scale(),
             PressMode::PriceAxis { pane, target } => self.price_axis_end_scale(pane, target),
             PressMode::Measure => {
@@ -1467,6 +1572,15 @@ impl ChartEngine {
                 self.set_selected_drawing(None);
                 cancelled |= self.clear_volume_profile_selection();
                 cancelled |= self.clear_brushable_ranges();
+                if self.general_selected_hit().is_some() {
+                    self.clear_general_selection();
+                    cancelled = true;
+                }
+                if self.general_brush_state().is_some() {
+                    self.clear_general_brush();
+                    self.push_input_event(ChartInputEvent::GeneralBrushChanged);
+                    cancelled = true;
+                }
                 // Escape always drops hover so crosshair subscribers hear the cursor leave, but
                 // hover alone is not consumed: the host's own Escape handling still runs.
                 self.clear_pointer_hover();
@@ -1596,6 +1710,24 @@ impl ChartEngine {
             }
             ChartFocusTarget::Separator(_) => false,
             ChartFocusTarget::Drawing(id) => self.drawing_target_key(id, key, modifiers),
+            ChartFocusTarget::GeneralDatum { .. } if key == ChartKey::Escape => {
+                self.input_key_down(key, modifiers, false, 0.0)
+            }
+            ChartFocusTarget::GeneralDatum { series, row }
+                if key == ChartKey::Enter
+                    && !modifiers.alt
+                    && !modifiers.control
+                    && !modifiers.meta =>
+            {
+                if !self.select_general_row(series, row) {
+                    return false;
+                }
+                self.set_selected_drawing(None);
+                self.set_selected_series(None);
+                self.clear_volume_profile_selection();
+                true
+            }
+            ChartFocusTarget::GeneralDatum { .. } => false,
         };
         if handled {
             self.stop_input_motion();
@@ -1815,6 +1947,13 @@ impl ChartEngine {
                 }
                 PressMode::DrawingDrag => self.drawing_drag_cancel(),
                 PressMode::DrawingCreation { capture: true, .. } => self.cancel_drawing_creation(),
+                PressMode::GeneralBrush => {
+                    if let Some(prior) = self.input.general_brush_before.take()
+                        && self.restore_general_brush_state(prior)
+                    {
+                        self.push_input_event(ChartInputEvent::GeneralBrushChanged);
+                    }
+                }
                 _ => {}
             }
         }
@@ -1926,6 +2065,10 @@ impl ChartEngine {
         }
         if input.modifiers.shift && self.measure_pointer_down(x, y, true, magnet_only) {
             return PressMode::Measure;
+        }
+        if self.general_brush_input_active_at(y) {
+            self.input.general_brush_before = Some(self.general_brush_state());
+            return PressMode::GeneralBrush;
         }
         let price_pan = self
             .input
@@ -2155,8 +2298,12 @@ impl ChartEngine {
     }
 
     fn clear_pointer_hover(&mut self) {
+        let was_general = self.input.hover == ChartHover::General;
         self.clear_crosshair_at();
         self.clear_hover();
+        if was_general {
+            self.queue_sync_event(ChartSyncEventKind::ClearCrosshair);
+        }
     }
 
     /// Hover arbitration, topmost owner first (reference `hitTestPane`): a `Top` host primitive,
@@ -2271,11 +2418,24 @@ impl ChartEngine {
         }
         let x = x.clamp(0.0, self.pane_w.max(0.0));
         let y = y.clamp(0.0, self.pane_h.max(0.0));
+        let previous_general = self.general_hovered_key();
+        let was_general = self.input.hover == ChartHover::General;
         self.set_crosshair_at(x, y);
         // Host primitives are re-arbitrated by hosts that own them through
         // `resolve_pointer_hover`; the built-in candidates resolve here.
         self.input.host_primitive_cursor = false;
         self.input.hover = self.arbitrate_hover(x, y, None);
+        if self.input.hover == ChartHover::General {
+            let current_general = self.general_hovered_key();
+            if (!was_general || previous_general != current_general)
+                && let Some(pane) = self.pane_at_y(y)
+                && let Some(position) = self.general_crosshair_sync_at(pane)
+            {
+                self.queue_sync_event(ChartSyncEventKind::GeneralCrosshair { position });
+            }
+        } else if was_general {
+            self.queue_sync_event(ChartSyncEventKind::ClearCrosshair);
+        }
         // A live measure or an armed tool claims every press, so trading objects show no hover
         // feedback that would promise a drag or click they will not receive. Otherwise only a
         // changed trading hover restarts the dwell; holding still lets it elapse.
@@ -2316,7 +2476,8 @@ impl ChartEngine {
                 PressMode::Measure
                 | PressMode::DrawingCreation { .. }
                 | PressMode::TouchTracking
-                | PressMode::DeltaTooltip => {
+                | PressMode::DeltaTooltip
+                | PressMode::GeneralBrush => {
                     return ChartCursor::Crosshair;
                 }
                 PressMode::Pane { panning: false, .. } | PressMode::Inert => {}
@@ -2362,6 +2523,9 @@ impl ChartEngine {
         if let Some((_, name)) = self.drawing_hover_at(x, y) {
             return ChartCursor::from_hit_name(name);
         }
+        if self.general_brush_input_active_at(y) {
+            return ChartCursor::Crosshair;
+        }
         if self.hovered_series().is_some() || self.hovered_volume_profile_indicator().is_some() {
             return ChartCursor::Pointer;
         }
@@ -2401,6 +2565,142 @@ mod tests {
             y,
             ..PointerInput::default()
         }
+    }
+
+    fn general_brush_chart() -> ChartEngine {
+        let mut chart = ChartEngine::new_with_initial_domain(
+            640.0,
+            400.0,
+            1.0,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                0,
+                AxisDimension::X,
+                GeneralScaleType::Band,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                0,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["A".into(), "B".into(), "C".into(), "D".into()],
+                category_indices: vec![0, 1, 2, 3],
+                y: vec![1.0, 2.0, 3.0, 4.0],
+                y_valid: None,
+            })
+            .unwrap();
+        chart
+            .add_general_series(GeneralSeriesOptions::column(0, dataset, "x", "y"))
+            .unwrap();
+        relayout(&mut chart);
+        chart
+    }
+
+    #[test]
+    fn general_brush_drag_uses_engine_input_for_mouse_touch_and_capture_cancel() {
+        let mut chart = general_brush_chart();
+        let plot = chart.general_plot_rect(0).unwrap();
+        let y = plot.y + plot.height / 2.0;
+        let from = plot.width * 0.2;
+        let to = plot.width * 0.8;
+        chart.set_general_brush_input_axis(Some("x")).unwrap();
+        let scroll = chart.scroll_position();
+        chart.input_pointer_down(at(from, y), 1);
+        chart.input_pointer_move(at(to, y), true);
+        chart.input_pointer_up(at(to, y));
+        let prior = chart.general_brush_snapshot().unwrap();
+        assert!(matches!(prior.range, GeneralBrushRange::Category(_)));
+        assert!(prior.items.len() >= 2);
+        assert_eq!(chart.scroll_position(), scroll, "a brush drag cannot pan");
+
+        let touch = |x| PointerInput {
+            id: 7,
+            device: InputDevice::Touch,
+            x,
+            y,
+            ..PointerInput::default()
+        };
+        chart.input_pointer_down(touch(plot.width * 0.5), 1);
+        assert!(!chart.input_touch_page_scroll_candidate(7));
+        chart.input_pointer_move(touch(plot.width * 0.95), true);
+        assert_ne!(chart.general_brush_snapshot(), Some(prior.clone()));
+        chart.input_cancel_pointer(7);
+        assert_eq!(chart.general_brush_snapshot(), Some(prior));
+
+        let full = chart.select_full_general_brush("x").unwrap();
+        assert_eq!(
+            full.range,
+            GeneralBrushRange::Category(["A".into(), "D".into()])
+        );
+        let moved = chart
+            .nudge_general_brush(GeneralBrushEndpoint::Start, 1)
+            .unwrap();
+        assert_eq!(
+            moved.range,
+            GeneralBrushRange::Category(["B".into(), "D".into()])
+        );
+        assert!(
+            chart
+                .nudge_general_brush(GeneralBrushEndpoint::End, 0)
+                .is_err()
+        );
+        assert_eq!(chart.general_brush_snapshot(), Some(moved));
+        chart.take_input_events();
+        assert!(chart.input_key_down(ChartKey::Escape, InputModifiers::default(), false, 0.0,));
+        assert!(chart.general_brush_snapshot().is_none());
+        assert!(
+            chart
+                .take_input_events()
+                .iter()
+                .any(|event| matches!(event, ChartInputEvent::GeneralBrushChanged))
+        );
+    }
+
+    #[test]
+    fn general_vertical_brush_uses_chart_y_coordinates() {
+        let mut chart = general_brush_chart();
+        let plot = chart.general_plot_rect(0).unwrap();
+        let x = plot.width * 0.5;
+        let from = plot.y + plot.height * 0.2;
+        let to = plot.y + plot.height * 0.8;
+        chart.set_general_brush_input_axis(Some("y")).unwrap();
+        chart.input_pointer_down(at(x, from), 1);
+        chart.input_pointer_move(at(x, to), true);
+        chart.input_pointer_up(at(x, to));
+        let snapshot = chart.general_brush_snapshot().unwrap();
+        assert_eq!(snapshot.dimension, AxisDimension::Y);
+        assert!(matches!(snapshot.range, GeneralBrushRange::Numeric([low, high]) if low < high));
+        assert!(!snapshot.items.is_empty());
+    }
+
+    #[test]
+    fn focused_general_row_selects_by_identity_and_escape_clears_it() {
+        let mut chart = general_brush_chart();
+        let series = chart.general_series_order(Some(0))[0];
+        let target = ChartFocusTarget::GeneralDatum { series, row: 2 };
+        assert!(chart.input_target_key_down(target, ChartKey::Enter, InputModifiers::default(),));
+        assert_eq!(chart.general_selected_hit().unwrap().row, 2);
+        assert!(!chart.input_target_key_down(
+            ChartFocusTarget::GeneralDatum { series, row: 99 },
+            ChartKey::Enter,
+            InputModifiers::default(),
+        ));
+        assert_eq!(chart.general_selected_hit().unwrap().row, 2);
+        assert!(chart.input_key_down(ChartKey::Escape, InputModifiers::default(), false, 0.0,));
+        assert!(chart.general_selected_hit().is_none());
     }
 
     fn shifted(x: f64, y: f64) -> PointerInput {

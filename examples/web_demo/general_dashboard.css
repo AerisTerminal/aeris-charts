@@ -178,27 +178,6 @@
   background: var(--surface);
 }
 
-#general_workspace .general-chart-tooltip {
-  position: absolute;
-  z-index: 4;
-  display: none;
-  min-width: 112px;
-  max-width: 190px;
-  padding: 8px 9px;
-  border: var(--border-width) solid var(--border-secondary);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
-  box-shadow: 0 6px 24px rgba(0,0,0,.18);
-  pointer-events: none;
-  color: var(--text-primary);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-#general_workspace .general-chart-tooltip[data-visible="true"] { display: block; }
-#general_workspace .general-chart-tooltip strong { display: block; margin-bottom: 2px; font-weight: 650; }
-#general_workspace .general-chart-tooltip span { color: var(--text-secondary); }
-
 #general_workspace .general-card-footer {
   display: flex;
   gap: 8px;
@@ -217,8 +196,6 @@
   flex-wrap: wrap;
 }
 
-#general_workspace .general-legend-chip { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
-#general_workspace .general-legend-dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
 #general_workspace .general-card-footer .general-spacer { flex: 1; }
 #general_workspace .general-ready-state { font-variant-numeric: tabular-nums; }
 

@@ -169,15 +169,16 @@ pub use general_data::{
 #[doc(hidden)]
 pub use general_series::{
     DEFAULT_GENERAL_FILL_OPACITY, GeneralAccessibilityItem, GeneralAccessibilitySnapshot,
-    GeneralAreaBaseline, GeneralBrushRange, GeneralBrushSnapshot, GeneralHitMode,
-    GeneralInterpolation, GeneralLegendItem, GeneralLegendSnapshot, GeneralLineStyle,
-    GeneralPointSymbol, GeneralReference, GeneralReferenceId, GeneralReferenceOptions,
-    GeneralReferenceValue, GeneralSeries, GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind,
-    GeneralSeriesOptions, GeneralSharedTooltipSnapshot, GeneralStackMode, GeneralTooltipSnapshot,
-    MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_BRUSH_ITEMS, MAX_GENERAL_POINT_RADIUS,
-    MAX_GENERAL_REFERENCES, MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES,
-    MAX_GENERAL_SERIES_GROUP_ID_BYTES, MAX_GENERAL_SERIES_STACK_ID_BYTES,
-    MAX_GENERAL_SERIES_TITLE_BYTES, MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
+    GeneralAreaBaseline, GeneralBrushEndpoint, GeneralBrushRange, GeneralBrushSnapshot,
+    GeneralHitMode, GeneralInterpolation, GeneralLegendItem, GeneralLegendSnapshot,
+    GeneralLineStyle, GeneralPointSymbol, GeneralReference, GeneralReferenceId,
+    GeneralReferenceOptions, GeneralReferenceValue, GeneralSeries, GeneralSeriesHit,
+    GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions, GeneralSharedTooltipSnapshot,
+    GeneralStackMode, GeneralTooltipSnapshot, MAX_GENERAL_ACCESSIBILITY_ITEMS,
+    MAX_GENERAL_BRUSH_ITEMS, MAX_GENERAL_POINT_RADIUS, MAX_GENERAL_REFERENCES, MAX_GENERAL_SERIES,
+    MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_GROUP_ID_BYTES,
+    MAX_GENERAL_SERIES_STACK_ID_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES,
+    MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub use host_layout::{
@@ -1730,11 +1731,47 @@ pub struct VisibleTimeRangeSync {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GeneralAxisSyncDomain {
+    Numeric { from: f64, to: f64 },
+    Temporal { from: i64, to: i64 },
+    Category { from: String, to: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GeneralAxisSyncValue {
+    Numeric { value: f64 },
+    Temporal { value: i64 },
+    Category { value: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GeneralCrosshairSyncPosition {
+    pub pane_index: usize,
+    pub x_axis_id: String,
+    pub y_axis_id: String,
+    pub x: GeneralAxisSyncValue,
+    pub y: GeneralAxisSyncValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ChartSyncEventKind {
-    Crosshair { position: CrosshairSyncPosition },
+    Crosshair {
+        position: CrosshairSyncPosition,
+    },
     ClearCrosshair,
-    VisibleTimeRange { range: VisibleTimeRangeSync },
+    VisibleTimeRange {
+        range: VisibleTimeRangeSync,
+    },
+    GeneralAxisView {
+        axis_id: String,
+        domain: Option<GeneralAxisSyncDomain>,
+    },
+    GeneralCrosshair {
+        position: GeneralCrosshairSyncPosition,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1871,6 +1908,7 @@ pub struct ChartEngine {
     pub drawing_interval: Option<DrawingInterval>,
     sync_events: VecDeque<ChartSyncEvent>,
     sync_revision: u64,
+    sync_received: VecDeque<(String, u64)>,
     sync_mismatch_policy: SyncMismatchPolicy,
     pub pane_w: f64,
     pub pane_h: f64,
@@ -2119,6 +2157,7 @@ impl ChartEngine {
             drawing_interval: None,
             sync_events: VecDeque::new(),
             sync_revision: 0,
+            sync_received: VecDeque::new(),
             sync_mismatch_policy: SyncMismatchPolicy::Nearest,
             pane_w: css_width,
             pane_h: css_height,
@@ -4601,7 +4640,7 @@ impl ChartEngine {
         self.queue_sync_event(ChartSyncEventKind::ClearCrosshair);
     }
 
-    fn queue_sync_event(&mut self, kind: ChartSyncEventKind) {
+    pub(crate) fn queue_sync_event(&mut self, kind: ChartSyncEventKind) {
         self.sync_revision = self.sync_revision.wrapping_add(1).max(1);
         if self.sync_events.len() >= 64 {
             self.sync_events.pop_front();
@@ -4671,7 +4710,37 @@ impl ChartEngine {
             ChartSyncEventKind::VisibleTimeRange { range } => {
                 self.set_visible_time_range_impl(range.from, range.to, false)
             }
+            ChartSyncEventKind::GeneralAxisView { axis_id, domain } => {
+                self.apply_external_general_axis_view(axis_id, domain.as_ref())
+            }
+            ChartSyncEventKind::GeneralCrosshair { position } => {
+                self.apply_external_general_crosshair(position)
+            }
         }
+    }
+
+    /// Apply a routed event once per source revision. The bounded source ledger rejects stale
+    /// packets while leaving pending local events untouched.
+    pub fn apply_external_sync_envelope(&mut self, event: &ChartSyncEvent) -> bool {
+        if event.source.is_empty() || event.source.len() > 128 || event.revision == 0 {
+            return false;
+        }
+        if let Some(index) = self
+            .sync_received
+            .iter()
+            .position(|(source, _)| source == &event.source)
+        {
+            if event.revision <= self.sync_received[index].1 {
+                return false;
+            }
+            self.sync_received.remove(index);
+        }
+        if self.sync_received.len() == 64 {
+            self.sync_received.pop_front();
+        }
+        self.sync_received
+            .push_back((event.source.clone(), event.revision));
+        self.apply_external_sync_event(&event.kind)
     }
 
     #[must_use]

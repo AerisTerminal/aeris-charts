@@ -1738,7 +1738,7 @@ fn general_shared_tooltip_groups_visible_rows_by_exact_horizontal_datum() {
     let mut hidden_options = GeneralSeriesOptions::xy_area(pane, hidden_data, "x", "y");
     hidden_options.visible = false;
     hidden_options.title = "Hidden".into();
-    chart.add_general_series(hidden_options).unwrap();
+    let hidden = chart.add_general_series(hidden_options).unwrap();
 
     let snapshot = chart.general_shared_tooltip_snapshot(first, 0).unwrap();
     assert_eq!(snapshot.pane, pane);
@@ -1757,6 +1757,69 @@ fn general_shared_tooltip_groups_visible_rows_by_exact_horizontal_datum() {
         ]
     );
     assert!(chart.general_shared_tooltip_snapshot(first, 99).is_none());
+    assert!(chart.general_shared_tooltip_snapshot(hidden, 0).is_none());
+}
+
+#[test]
+fn general_shared_tooltip_matches_category_identity_across_dataset_registries() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let first_data = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["A".into(), "B".into()],
+            category_indices: vec![0, 1],
+            y: vec![1.0, 2.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let second_data = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["B".into(), "A".into()],
+            category_indices: vec![0, 1, 1],
+            y: vec![3.0, 4.0, 5.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let first = chart
+        .add_general_series(GeneralSeriesOptions::xy_line(pane, first_data, "x", "y"))
+        .unwrap();
+    let second = chart
+        .add_general_series(GeneralSeriesOptions::xy_line(pane, second_data, "x", "y"))
+        .unwrap();
+    let snapshot = chart.general_shared_tooltip_snapshot(first, 0).unwrap();
+    assert_eq!(
+        snapshot
+            .items
+            .iter()
+            .map(|item| (item.series, item.row, item.x_label.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(first, 0, "A"), (second, 1, "A"), (second, 2, "A")]
+    );
 }
 
 #[test]
@@ -1844,8 +1907,101 @@ fn general_brush_keeps_semantic_range_and_returns_bounded_visible_rows() {
         "semantic brush reprojects after zoom"
     );
 
+    let nudged = chart
+        .nudge_general_brush(crate::GeneralBrushEndpoint::Start, 1)
+        .unwrap();
+    let crate::GeneralBrushRange::Numeric([start, end]) = nudged.range else {
+        panic!("numeric brush must retain its range kind");
+    };
+    assert!(start > 1.0 && start < end);
+    assert_eq!(end, 3.0);
+    let full = chart.select_full_general_brush("brush-x").unwrap();
+    assert_eq!(full.range, crate::GeneralBrushRange::Numeric([1.0, 3.0]));
+
     chart.clear_general_brush();
     assert!(chart.general_brush_snapshot().is_none());
+}
+
+#[test]
+fn general_brush_keyboard_steps_follow_log_and_temporal_transforms() {
+    let mut log = ChartEngine::new_with_initial_domain(
+        640.0,
+        400.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Logarithmic,
+        },
+    )
+    .unwrap();
+    let mut log_x =
+        GeneralAxisOptions::new("x", 0, AxisDimension::X, GeneralScaleType::Logarithmic);
+    log_x.domain = GeneralAxisDomain::Numeric([1.0, 1_000.0]);
+    log.add_general_axis(log_x).unwrap();
+    log.add_general_axis(GeneralAxisOptions::new(
+        "y",
+        0,
+        AxisDimension::Y,
+        GeneralScaleType::Linear,
+    ))
+    .unwrap();
+    let log_data = log
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0, 10.0, 100.0, 1_000.0],
+            y: vec![1.0, 2.0, 3.0, 4.0],
+            y_valid: None,
+        })
+        .unwrap();
+    log.add_general_series(GeneralSeriesOptions::xy_line(0, log_data, "x", "y"))
+        .unwrap();
+    log.select_full_general_brush("x").unwrap();
+    let start = log
+        .nudge_general_brush(crate::GeneralBrushEndpoint::Start, 1)
+        .unwrap();
+    assert!(
+        matches!(start.range, crate::GeneralBrushRange::Numeric([from, to]) if from > 1.0 && from < 2.0 && to == 1_000.0)
+    );
+
+    let mut temporal =
+        ChartEngine::new_with_initial_domain(640.0, 400.0, 1.0, HorizontalDomain::Temporal)
+            .unwrap();
+    let mut time_x = GeneralAxisOptions::new("x", 0, AxisDimension::X, GeneralScaleType::Temporal);
+    time_x.domain = GeneralAxisDomain::Temporal([0, 100_000]);
+    temporal.add_general_axis(time_x).unwrap();
+    temporal
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            0,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let time_data = temporal
+        .create_general_xy_dataset(GeneralXyInput::Temporal {
+            ids: None,
+            x_epoch_ms: vec![0, 50_000, 100_000],
+            y: vec![1.0, 2.0, 3.0],
+            y_valid: None,
+        })
+        .unwrap();
+    temporal
+        .add_general_series(GeneralSeriesOptions::xy_line(0, time_data, "x", "y"))
+        .unwrap();
+    temporal.select_full_general_brush("x").unwrap();
+    let start = temporal
+        .nudge_general_brush(crate::GeneralBrushEndpoint::Start, 1)
+        .unwrap();
+    assert_eq!(
+        start.range,
+        crate::GeneralBrushRange::Temporal([1_000, 100_000])
+    );
+    let end = temporal
+        .nudge_general_brush(crate::GeneralBrushEndpoint::End, -1)
+        .unwrap();
+    assert_eq!(
+        end.range,
+        crate::GeneralBrushRange::Temporal([1_000, 99_000])
+    );
 }
 
 #[test]

@@ -25,6 +25,7 @@ export * from "./custom_series.js";
 export * from "./feature_series.js";
 export * from "./builtin_plugins.js";
 export * from "./primitive_features.js";
+export * from "./general_components.js";
 export * from "./accessibility.js";
 export * from "./offscreen.js";
 export * from "./shortcuts.js";

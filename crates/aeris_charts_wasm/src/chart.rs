@@ -4667,6 +4667,28 @@ impl AerisChart {
             .set_general_brush_result_json(axis_id, from_css, to_css)
     }
 
+    pub fn set_general_brush_input_axis_result_json(&mut self, axis_id: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_brush_input_axis_result_json(axis_id)
+    }
+
+    pub fn select_full_general_brush_result_json(&mut self, axis_id: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .select_full_general_brush_result_json(axis_id)
+    }
+
+    pub fn nudge_general_brush_result_json(
+        &mut self,
+        endpoint_start: bool,
+        direction: i32,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .nudge_general_brush_result_json(endpoint_start, direction)
+    }
+
     pub fn general_brush_snapshot_json(&self) -> String {
         self.inner.borrow().general_brush_snapshot_json()
     }
@@ -5290,23 +5312,47 @@ impl AerisChart {
     }
 
     /// Route a key from a focused accessibility target through the engine's target bindings.
-    /// `target` is `price-axis:<pane>`, `time-axis`, `separator:<pane>`, or `drawing:<id>`.
+    /// `target` is `price-axis:<pane>`, `time-axis`, `separator:<pane>`, `drawing:<id>`,
+    /// or `general-row:<series>:<row>`.
     pub fn input_target_key_down(&mut self, target: &str, key: &str, modifier_bits: u8) -> bool {
         use aeris_charts_engine::ChartFocusTarget;
         let (kind, index) = target.split_once(':').unwrap_or((target, ""));
-        let index = index.parse::<usize>().ok();
-        let target = match (kind, index) {
-            ("price-axis", Some(pane)) => ChartFocusTarget::PriceAxis {
-                pane,
-                target: aeris_charts_engine::PriceScaleTarget::Right,
-            },
-            ("time-axis", _) => ChartFocusTarget::TimeAxis,
-            ("separator", Some(pane)) => ChartFocusTarget::Separator(pane),
-            ("drawing", Some(id)) => ChartFocusTarget::Drawing(id as DrawingId),
-            _ => return false,
+        let target = if kind == "general-row" {
+            let Some((series, row)) = index.split_once(':') else {
+                return false;
+            };
+            let Some(series) = series
+                .parse::<u32>()
+                .ok()
+                .and_then(aeris_charts_engine::GeneralSeriesId::from_raw)
+            else {
+                return false;
+            };
+            let Ok(row) = row.parse::<usize>() else {
+                return false;
+            };
+            ChartFocusTarget::GeneralDatum { series, row }
+        } else {
+            let index = index.parse::<usize>().ok();
+            match (kind, index) {
+                ("price-axis", Some(pane)) => ChartFocusTarget::PriceAxis {
+                    pane,
+                    target: aeris_charts_engine::PriceScaleTarget::Right,
+                },
+                ("time-axis", _) => ChartFocusTarget::TimeAxis,
+                ("separator", Some(pane)) => ChartFocusTarget::Separator(pane),
+                ("drawing", Some(id)) => ChartFocusTarget::Drawing(id as DrawingId),
+                _ => return false,
+            }
         };
         let modifiers = input_modifiers_from_u8(modifier_bits);
-        let Some(chart_key) = chart_key_from_dom(key, modifiers) else {
+        let Some(chart_key) =
+            (if matches!(target, ChartFocusTarget::GeneralDatum { .. }) && key == " " {
+                Some(aeris_charts_engine::ChartKey::Enter)
+            } else {
+                chart_key_from_dom(key, modifiers)
+            })
+        else {
             return false;
         };
         self.inner
@@ -5396,6 +5442,9 @@ impl AerisChart {
                 ChartInputEvent::CrosshairLeft => serde_json::json!({"kind":"crosshair_left"}),
                 ChartInputEvent::DeltaTooltipChanged => {
                     serde_json::json!({"kind":"delta_tooltip_changed"})
+                }
+                ChartInputEvent::GeneralBrushChanged => {
+                    serde_json::json!({"kind":"general_brush_changed"})
                 }
                 ChartInputEvent::ContextMenu(menu) => {
                     let region = match menu.region {
@@ -6079,6 +6128,17 @@ impl AerisChart {
     pub fn take_sync_events_json(&mut self) -> String {
         serde_json::to_string(&self.inner.borrow_mut().take_sync_events())
             .unwrap_or_else(|_| "[]".to_string())
+    }
+
+    pub fn apply_external_sync_event_json(&mut self, event_json: &str) -> bool {
+        let Ok(event) = serde_json::from_str::<aeris_charts_engine::ChartSyncEvent>(event_json)
+        else {
+            return false;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .apply_external_sync_envelope(&event)
     }
     pub fn bar_spacing(&self) -> f64 {
         self.inner.borrow().bar_spacing()

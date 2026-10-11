@@ -424,7 +424,25 @@ class PaneAccessibility {
       case "-":
       case "_": this.zoom(false); break;
       case "Enter":
-      case " ": this.writer.write(this.describe_chart()); break;
+      case " ": {
+        const active = this.active_series();
+        const item = is_general_series(active) ? this.general_item(this.point_index) : undefined;
+        if (is_general_series(active) && item !== undefined
+          && this.engine_target_key(event, `general-row:${active.id}:${item.row}`)) {
+          this.writer.write(`Selected ${this.describe_point(this.point_index)}`);
+        } else {
+          this.writer.write(this.describe_chart());
+        }
+        break;
+      }
+      case "Escape": {
+        const active = this.active_series();
+        if (!is_general_series(active)) return;
+        const item = this.general_item(this.point_index);
+        if (item === undefined || !this.engine_target_key(event, `general-row:${active.id}:${item.row}`)) return;
+        this.writer.write("Selection cleared.");
+        break;
+      }
       case "h":
       case "H":
         this.writer.write(this.controller.options.messages.help(this.series.length > 1, this.controller.options.page_step));
@@ -1350,7 +1368,7 @@ class AccessibilityController implements accessibility_handle {
     }
     const selector = "a[href],button,input,select,textarea,iframe,[tabindex],[contenteditable=true],audio[controls],video[controls]";
     for (const element of this.host.querySelectorAll<HTMLElement>(selector)) {
-      if (element.closest(".aeris_charts-a11y-layer") !== null) continue;
+      if (element.closest(".aeris_charts-a11y-layer,.aeris_charts-general-component") !== null) continue;
       if (this.neutralised.has(element)) continue;
       const previous_hidden = element instanceof HTMLCanvasElement
         ? this.hidden_canvases.get(element) ?? null

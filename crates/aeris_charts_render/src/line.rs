@@ -1011,13 +1011,13 @@ impl<'a> StrokeSimplify<'a> {
 
     /// The last index the run starting at `anchor` may end on.
     fn run_end(&self, anchor: usize) -> usize {
-        let origin = self.at(anchor);
+        let start = self.at(anchor);
         let mut end: Option<usize> = None;
         let mut reach = 0.0f32;
         let (mut low, mut high) = (f32::NEG_INFINITY, f32::INFINITY);
         for index in anchor + 1..self.points.len() {
             let [x, y] = self.at(index);
-            let (dx, dy) = (x - origin[0], y - origin[1]);
+            let (dx, dy) = (x - start[0], y - start[1]);
             let distance = (dx * dx + dy * dy).sqrt();
             if !distance.is_finite() {
                 return end.unwrap_or(index);

@@ -470,6 +470,117 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
   await expect(page.locator("#general_workspace")).toBeHidden();
 });
 
+test("default general legend toggles visibility with keyboard focus intact", async ({ page }) => {
+  await page.goto("/?theme=dark&demo=general&backend=canvas2d");
+  await page.waitForFunction(() => window.__generalDashboard?.ready === true);
+  const first = page.locator("#general_workspace .general-chart-card").first();
+  await expect(first).toHaveAttribute("data-mounted", "true");
+  const button = first.getByRole("button", { name: "Hide Revenue" });
+  await expect(button).toHaveAttribute("aria-pressed", "true");
+  await button.focus();
+  await page.keyboard.press("Space");
+  const show = first.getByRole("button", { name: "Show Revenue" });
+  await expect(show).toHaveAttribute("aria-pressed", "false");
+  await expect(show).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(first.getByRole("button", { name: "Hide Revenue" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("default legend follows programmatic series changes and localized action labels", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.evaluate(async () => {
+    const { create_chart, create_general_legend } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:480px;height:300px;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "category", scale: "band" } },
+    });
+    chart.resize(480, 300, 1);
+    chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "band" });
+    chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear" });
+    const series = chart.add_series("column", { pane: 0, x_axis_id: "x", y_axis_id: "y", title: "Revenue" });
+    series.set_data([{ x: "A", y: 1 }]);
+    const legend = create_general_legend(chart, host, {
+      lang: "fr-FR", label: "Légende", format_action: (visible, title) => `${visible ? "Masquer" : "Afficher"} ${title}`,
+    });
+    window.__legendProgrammatic = { chart, host, series, legend };
+  });
+  const legend = page.getByRole("group", { name: "Légende" });
+  await expect(legend).toHaveAttribute("lang", "fr-FR");
+  await expect(legend.getByRole("button", { name: "Masquer Revenue" })).toHaveAttribute("aria-pressed", "true");
+  await page.evaluate(() => window.__legendProgrammatic.series.set_visible(false));
+  await expect(legend.getByRole("button", { name: "Afficher Revenue" })).toHaveAttribute("aria-pressed", "false");
+  await page.evaluate(() => window.__legendProgrammatic.series.apply_options({ title: "Bookings", visible: true }));
+  await expect(legend.getByRole("button", { name: "Masquer Bookings" })).toHaveAttribute("aria-pressed", "true");
+  await page.evaluate(() => {
+    const fixture = window.__legendProgrammatic;
+    fixture.legend.detach(); fixture.chart.remove(); fixture.host.remove();
+    delete window.__legendProgrammatic;
+  });
+});
+
+test("default general tooltip follows public engine hits and detaches cleanly", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const point = await page.evaluate(async () => {
+    const { create_chart, create_general_tooltip } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:480px;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "category", scale: "band" } },
+    });
+    chart.resize(720, 480, 1);
+    const pane = chart.panes()[0];
+    chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "band" });
+    chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear" });
+    const first = chart.add_series("column", { pane: 0, x_axis_id: "x", y_axis_id: "y", title: "Revenue" });
+    const second = chart.add_series("column", { pane: 0, x_axis_id: "x", y_axis_id: "y", title: "Margin" });
+    first.set_data([{ x: "A", y: 42 }, { x: "B", y: 55 }]);
+    second.set_data([{ x: "A", y: 21 }, { x: "B", y: 28 }]);
+    chart.render();
+    const tooltip = create_general_tooltip(chart, host);
+    window.__generalTooltipFixture = { chart, host, tooltip };
+    const geometry = pane.get_geometry();
+    for (let y = Math.ceil(geometry.top); y < geometry.top + geometry.height; y += 5) {
+      for (let x = 0; x < geometry.width; x += 5) {
+        const hit = chart.general_hit_test(0, x, y);
+        if (hit?.series === first.id && hit.row === 0) return { x: x + geometry.left, y };
+      }
+    }
+    throw new Error("the first public column has no exact hit");
+  });
+  await page.mouse.move(point.x, point.y);
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toContainText("Revenue: 42");
+  await expect(tooltip).toContainText("Margin: 21");
+  await page.evaluate(async () => {
+    const { create_general_tooltip } = await import("/dist/aeris_charts_financial.js");
+    const fixture = window.__generalTooltipFixture;
+    fixture.tooltip.detach();
+    fixture.tooltip = create_general_tooltip(fixture.chart, fixture.host, {
+      lang: "fr-FR", format_detail: (item) => `${item.value} unités`,
+    });
+  });
+  await page.mouse.move(point.x + 2, point.y + 2);
+  await page.mouse.move(point.x, point.y);
+  await expect(tooltip).toHaveAttribute("lang", "fr-FR");
+  await expect(tooltip).toContainText("42 unités");
+  await expect(tooltip).toHaveCSS("overflow-wrap", "anywhere");
+  await page.mouse.move(750, 500);
+  await expect(tooltip).toBeHidden();
+  await page.evaluate(() => {
+    const fixture = window.__generalTooltipFixture;
+    fixture.tooltip.detach();
+    fixture.chart.remove();
+    fixture.host.remove();
+  });
+  await expect(tooltip).toHaveCount(0);
+});
+
 test("general dashboard keeps rendering when WebGPU has no adapter and does not retry on each card", async ({ page, browserName }) => {
   test.skip(browserName !== "chromium", "WebGPU adapter interception is Chromium-specific");
   const fallback_warnings = [];
@@ -1551,6 +1662,115 @@ test("public category axes zoom by identity, pan by visible window, and reset", 
   });
 });
 
+test("general axis view sync crosses the public browser boundary without echoes", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const make = async (categories) => {
+      const host = document.createElement("div");
+      host.style.cssText = "width:480px;height:300px";
+      document.body.appendChild(host);
+      const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+      chart.resize(480, 300, 1);
+      const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "category", scale: "point" } });
+      const axis = chart.add_axis({ id: "x", pane: pane.pane_index(), dimension: "x", scale: "point", domain: categories });
+      chart.add_axis({ id: "y", pane: pane.pane_index(), dimension: "y", scale: "linear", domain: [0, 10] });
+      const series = chart.add_series("xy_line", { pane: pane.pane_index(), x_axis_id: "x", y_axis_id: "y" });
+      series.set_data(categories.map((x, i) => ({ x, y: i + 1 })));
+      return { chart, axis, host };
+    };
+    const source = await make(["A", "B", "C", "D", "E"]);
+    const target = await make(["A", "X", "B", "C", "D", "Y", "E"]);
+    const before = target.chart.take_screenshot().toDataURL();
+    source.axis.zoom(2, "C");
+    const events = source.chart.take_sync_events();
+    const routed = { ...events[0], source: "source-chart" };
+    const applied = target.chart.apply_external_sync_event(routed);
+    const duplicate = target.chart.apply_external_sync_event(routed);
+    const after = target.chart.take_screenshot().toDataURL();
+    const echoes = target.chart.take_sync_events();
+    source.axis.reset_view();
+    const reset = source.chart.take_sync_events();
+    const reset_applied = target.chart.apply_external_sync_event({ ...reset[0], source: "source-chart" });
+    const stale = target.chart.apply_external_sync_event(routed);
+    const invalid = target.chart.apply_external_sync_event({ ...events[0], source: "source-chart", revision: reset[0].revision + 1, domain: { type: "category", from: "missing", to: "C" } });
+    const output = { events, applied, duplicate, changed: before !== after, echoes, reset_applied, stale, invalid };
+    for (const item of [source, target]) { item.chart.remove(); item.host.remove(); }
+    return output;
+  });
+  expect(result.events).toHaveLength(1);
+  expect(result.events[0]).toMatchObject({ kind: "general_axis_view", axis_id: "x", domain: { type: "category", from: "B", to: "D" } });
+  expect(result).toMatchObject({ applied: true, duplicate: false, changed: true, echoes: [], reset_applied: true, stale: false, invalid: false });
+});
+
+test("general point crosshair sync uses semantic values across unequal categories", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const point = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const make = async (categories, top) => {
+      const host = document.createElement("div");
+      host.style.cssText = `position:fixed;left:0;top:${top}px;width:640px;height:300px;z-index:10000`;
+      document.body.appendChild(host);
+      const chart = await create_chart(host, {
+        backend: "canvas2d", autoSize: false,
+        initialPane: { horizontal_domain: { type: "category", scale: "band" } },
+      });
+      chart.resize(640, 300, 1);
+      chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "band", domain: categories });
+      chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear", domain: [0, 10] });
+      const series = chart.add_series("column", { pane: 0, x_axis_id: "x", y_axis_id: "y" });
+      series.set_data(categories.map((x, row) => ({ x, y: row + 1 })));
+      chart.render();
+      return { chart, host, series };
+    };
+    const source = await make(["A", "B", "C"], 0);
+    const target = await make(["A", "X", "B", "C"], 320);
+    window.__generalSyncFixture = { source, target, target_before: target.chart.take_screenshot().toDataURL() };
+    const geometry = source.chart.panes()[0].get_geometry();
+    for (let y = Math.ceil(geometry.top); y < geometry.top + geometry.height; y += 4) {
+      for (let x = 0; x < geometry.width; x += 4) {
+        const hit = source.chart.general_hit_test(0, x, y);
+        if (hit?.series === source.series.id && hit.row === 1) {
+          return { x: x + geometry.left, y };
+        }
+      }
+    }
+    throw new Error("the source B column has no exact hit");
+  });
+  await page.mouse.move(point.x, point.y);
+  const moved = await page.evaluate(() => {
+    const { source, target, target_before } = window.__generalSyncFixture;
+    const events = source.chart.take_sync_events();
+    const crosshair = events.find((event) => event.kind === "general_crosshair");
+    const applied = crosshair === undefined ? false : target.chart.apply_external_sync_event({ ...crosshair, source: "source-chart" });
+    return {
+      events,
+      applied,
+      changed: target_before !== target.chart.take_screenshot().toDataURL(),
+      echoes: target.chart.take_sync_events(),
+    };
+  });
+  expect(moved.events).toContainEqual(expect.objectContaining({
+    kind: "general_crosshair",
+    position: expect.objectContaining({ x: { type: "category", value: "B" } }),
+  }));
+  expect(moved).toMatchObject({ applied: true, changed: true, echoes: [] });
+  await page.mouse.move(700, 650);
+  const left = await page.evaluate(() => {
+    const { source, target, target_before } = window.__generalSyncFixture;
+    const events = source.chart.take_sync_events();
+    const clear = events.find((event) => event.kind === "clear_crosshair");
+    const applied = clear === undefined ? false : target.chart.apply_external_sync_event({ ...clear, source: "source-chart" });
+    const cleared = target.chart.take_screenshot().toDataURL() === target_before;
+    for (const item of [source, target]) { item.chart.remove(); item.host.remove(); }
+    delete window.__generalSyncFixture;
+    return { events, applied, cleared };
+  });
+  expect(left.events).toContainEqual(expect.objectContaining({ kind: "clear_crosshair" }));
+  expect(left.applied).toBe(true);
+  expect(left.cleared).toBe(true);
+});
+
 test("multiple reversed axes stay aligned through aspect resize, DPR, and font changes", async ({ page }) => {
   const page_errors = [];
   page.on("pageerror", (error) => page_errors.push(error.message));
@@ -1967,13 +2187,15 @@ test("general shared tooltips group visible series by the exact horizontal datum
     }
     const snapshot = chart.general_shared_tooltip(line, 0);
     const missing = chart.general_shared_tooltip(line, 99);
+    const hidden_anchor = chart.general_shared_tooltip(hidden, 0);
     chart.remove();
     host.remove();
-    return { invalid_row, snapshot, missing };
+    return { invalid_row, snapshot, missing, hidden_anchor };
   });
 
   expect(result.invalid_row).toBe("invalid_options");
   expect(result.missing).toBeNull();
+  expect(result.hidden_anchor).toBeNull();
   expect(result.snapshot).toMatchObject({ pane: 1, anchor_row: 0 });
   expect(result.snapshot.items).toMatchObject([
     { row: 0, row_id: "line-1", x_label: "1", value: 10, title: "Line" },
@@ -2044,6 +2266,124 @@ test("general brushes retain semantic ranges, select visible rows, reproject, an
   expect(result.after_zoom.items.map((item) => item.row_id)).toEqual(["one", "two", "three"]);
   expect(result.cleared).toBeNull();
   expect(result.screenshot).toBeGreaterThan(1000);
+});
+
+test("general brush pointer drag is routed by the engine and survives resize", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const drag = await page.evaluate(async () => {
+    const { create_chart, create_general_brush_controls } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:480px;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "category", scale: "band" } },
+    });
+    chart.resize(720, 480, 1);
+    chart.add_axis({ id: "brush-x", pane: 0, dimension: "x", scale: "band" });
+    chart.add_axis({ id: "brush-y", pane: 0, dimension: "y", scale: "linear" });
+    const series = chart.add_series("column", {
+      pane: 0, x_axis_id: "brush-x", y_axis_id: "brush-y",
+    });
+    series.set_data([{ x: "A", y: 1 }, { x: "B", y: 2 }, { x: "C", y: 3 }, { x: "D", y: 4 }]);
+    chart.render();
+    const controls_host = document.createElement("div");
+    controls_host.style.cssText = "position:fixed;left:0;top:490px;z-index:10000";
+    document.body.appendChild(controls_host);
+    const controls = create_general_brush_controls(chart, controls_host, { axis: "brush-x" });
+    window.__brushInputFixture = { chart, host, controls, controls_host };
+    const geometry = chart.panes()[0].get_geometry();
+    return {
+      from: { x: geometry.left + geometry.width * 0.2, y: geometry.top + geometry.height * 0.5 },
+      to: { x: geometry.left + geometry.width * 0.8, y: geometry.top + geometry.height * 0.5 },
+    };
+  });
+  const controls = page.getByRole("group", { name: "Chart range brush" });
+  await expect(controls.locator("output")).toHaveText("No range selected");
+  await controls.getByRole("button", { name: "Select all" }).click();
+  await expect(controls.locator("output")).toContainText("A – D");
+  await controls.getByRole("button", { name: "Start +" }).focus();
+  await page.keyboard.press("Space");
+  await expect(controls.locator("output")).toContainText("B – D");
+  await page.mouse.move(drag.from.x, drag.from.y);
+  await page.mouse.down();
+  await page.mouse.move(drag.to.x, drag.to.y, { steps: 4 });
+  await page.mouse.up();
+  await expect(controls.locator("output")).toContainText("A – D");
+  await page.evaluate(async () => {
+    const { create_general_brush_controls } = await import("/dist/aeris_charts_financial.js");
+    const fixture = window.__brushInputFixture;
+    fixture.controls.detach();
+    fixture.controls = create_general_brush_controls(fixture.chart, fixture.controls_host, {
+      axis: "brush-x", locale: "es-ES", label: "Filtro de rango",
+      labels: { select_all: "Todo", clear: "Borrar", no_range: "Sin selección" },
+    });
+  });
+  const localized = page.getByRole("group", { name: "Filtro de rango" });
+  await expect(localized).toHaveAttribute("lang", "es-ES");
+  await localized.getByRole("button", { name: "Borrar" }).click();
+  await expect(localized.locator("output")).toHaveText("Sin selección");
+  await localized.getByRole("button", { name: "Todo" }).click();
+  await expect(localized.locator("output")).toContainText("A – D");
+  const result = await page.evaluate(() => {
+    const { chart, host, controls, controls_host } = window.__brushInputFixture;
+    const before = chart.general_brush_snapshot();
+    chart.resize(640, 420, 1);
+    const after = chart.general_brush_snapshot();
+    controls.detach();
+    chart.remove();
+    host.remove();
+    controls_host.remove();
+    return { before, after };
+  });
+  expect(result.before?.range.type).toBe("category");
+  expect(result.before?.items.length).toBeGreaterThan(0);
+  expect(result.after?.range).toEqual(result.before?.range);
+});
+
+test("general brush single-touch drag stays with the chart", async ({ browser, browserName }) => {
+  test.skip(browserName !== "chromium", "Chromium CDP sends deterministic touch drag samples");
+  const context = await browser.newContext({ viewport: { width: 900, height: 700 }, hasTouch: true });
+  const page = await context.newPage();
+  try {
+    await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+    const drag = await page.evaluate(async () => {
+      const { create_chart } = await import("/dist/aeris_charts_financial.js");
+      const host = document.createElement("div");
+      host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:480px;z-index:10000";
+      document.body.appendChild(host);
+      const chart = await create_chart(host, {
+        backend: "canvas2d", autoSize: false,
+        initialPane: { horizontal_domain: { type: "category", scale: "band" } },
+      });
+      chart.resize(720, 480, 1);
+      chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "band" });
+      chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear" });
+      const series = chart.add_series("column", { pane: 0, x_axis_id: "x", y_axis_id: "y" });
+      series.set_data([{ x: "A", y: 1 }, { x: "B", y: 2 }, { x: "C", y: 3 }, { x: "D", y: 4 }]);
+      chart.render();
+      chart.set_general_brush_input_axis("x");
+      window.__touchBrushChart = chart;
+      const geometry = chart.panes()[0].get_geometry();
+      return {
+        from: { x: geometry.left + geometry.width * 0.2, y: geometry.top + geometry.height * 0.5 },
+        to: { x: geometry.left + geometry.width * 0.8, y: geometry.top + geometry.height * 0.5 },
+      };
+    });
+    const cdp = await context.newCDPSession(page);
+    const touch = (type, point) => cdp.send("Input.dispatchTouchEvent", {
+      type,
+      touchPoints: point === null ? [] : [{ id: 1, x: point.x, y: point.y, radiusX: 1, radiusY: 1 }],
+    });
+    await touch("touchStart", drag.from);
+    await touch("touchMove", drag.to);
+    await touch("touchEnd", null);
+    const snapshot = await page.evaluate(() => window.__touchBrushChart.general_brush_snapshot());
+    expect(snapshot?.range).toEqual({ type: "category", from: "A", to: "D" });
+    expect(snapshot?.items.length).toBeGreaterThan(0);
+  } finally {
+    await context.close();
+  }
 });
 
 test("general reference lines, dots, and regions survive lifecycle and V2 restore", async ({ page }) => {
@@ -4608,6 +4948,12 @@ test("general columns, points, lines, and ranges participate in the shared keybo
   expect(scatter_text).toContain("10");
   expect(scatter_text).toContain("Point 3 of 3");
 
+  await page.keyboard.press("Space");
+  await expect(scatter_region).toContainText("Selected");
+  expect(await page.evaluate(() => window.__general_keyboard.chart.general_selected_hit()?.row)).toBe(2);
+  await page.keyboard.press("Escape");
+  expect(await page.evaluate(() => window.__general_keyboard.chart.general_selected_hit())).toBeNull();
+
   const before_zoom = await page.evaluate(() => window.__general_keyboard.chart.take_screenshot().toDataURL());
   await page.keyboard.press("+");
   await page.waitForTimeout(30);
@@ -4615,7 +4961,8 @@ test("general columns, points, lines, and ranges participate in the shared keybo
   expect(after_zoom).not.toBe(before_zoom);
 
   await page.keyboard.press("Enter");
-  await expect(scatter_region).toContainText("data points");
+  await expect(scatter_region).toContainText("Selected Keyboard samples");
+  expect(await page.evaluate(() => window.__general_keyboard.chart.general_selected_hit()?.row)).toBe(2);
 
   await layers.nth(3).focus();
   await page.keyboard.press("Home");

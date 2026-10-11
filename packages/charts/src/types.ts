@@ -3307,10 +3307,27 @@ export interface crosshair_sync_position {
   price: number;
   pane_index: number;
 }
+export type general_axis_sync_domain =
+  | { type: "numeric"; from: number; to: number }
+  | { type: "temporal"; from: number; to: number }
+  | { type: "category"; from: string; to: string };
+export type general_axis_sync_value =
+  | { type: "numeric"; value: number }
+  | { type: "temporal"; value: number }
+  | { type: "category"; value: string };
+export interface general_crosshair_sync_position {
+  pane_index: number;
+  x_axis_id: string;
+  y_axis_id: string;
+  x: general_axis_sync_value;
+  y: general_axis_sync_value;
+}
 export type chart_sync_event =
   | { source: string; revision: number; kind: "crosshair"; position: crosshair_sync_position }
   | { source: string; revision: number; kind: "clear_crosshair" }
-  | { source: string; revision: number; kind: "visible_time_range"; range: { from: number; to: number } };
+  | { source: string; revision: number; kind: "visible_time_range"; range: { from: number; to: number } }
+  | { source: string; revision: number; kind: "general_axis_view"; axis_id: string; domain: general_axis_sync_domain | null }
+  | { source: string; revision: number; kind: "general_crosshair"; position: general_crosshair_sync_position };
 
 export interface trading_snapshot {
   instrument?: instrument_metadata;
@@ -3915,6 +3932,9 @@ export interface chart_api {
    * `visible: false`; pass a pane index to filter without changing chart state.
    */
   general_legend_snapshot(pane?: number): general_legend_snapshot;
+  /** Notify default legends when general series presentation or order changes. */
+  subscribe_general_legend_change(handler: () => void): void;
+  unsubscribe_general_legend_change(handler: () => void): void;
   /**
    * Engine-owned cross-series tooltip values for the exact horizontal datum of `series`/`row`.
    * Hidden series and other panes are excluded. Returns `null` for a stale series/row.
@@ -3930,8 +3950,17 @@ export interface chart_api {
     from_coordinate: number,
     to_coordinate: number,
   ): general_brush_snapshot;
+  /** Arm one general axis for engine-owned mouse and single-touch range drag; omit to disarm. */
+  set_general_brush_input_axis(axis?: string | general_axis_api): void;
+  /** Select the whole resolved domain, including for keyboard-only brush use. */
+  select_full_general_brush(axis: string | general_axis_api): general_brush_snapshot;
+  /** Move one semantic endpoint by one transformed-percent step or one category. */
+  nudge_general_brush(endpoint: "start" | "end", direction: -1 | 1): general_brush_snapshot;
   general_brush_snapshot(): general_brush_snapshot | null;
   clear_general_brush(): void;
+  /** Notify browser controls after pointer/touch and programmatic brush changes. */
+  subscribe_general_brush_change(handler: () => void): void;
+  unsubscribe_general_brush_change(handler: () => void): void;
   /**
    * Engine-owned exact hit when `max_distance` is omitted, nearest hit otherwise.
    * `x` is a CSS pixel offset from the pane plot's left edge (not the chart/container left);
@@ -3988,6 +4017,8 @@ export interface chart_api {
   apply_external_crosshair(position: crosshair_sync_position | null): void;
   /** Drain bounded semantic synchronization events; callers route them with source/revision. */
   take_sync_events(): chart_sync_event[];
+  /** Apply a routed semantic event without emitting an echo. */
+  apply_external_sync_event(event: chart_sync_event): boolean;
   /** Fire on every crosshair move (and once with `point: null` when the cursor leaves). */
   subscribe_crosshair_move(handler: mouse_event_handler): void;
   unsubscribe_crosshair_move(handler: mouse_event_handler): void;

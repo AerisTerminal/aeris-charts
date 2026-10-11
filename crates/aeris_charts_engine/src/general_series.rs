@@ -1020,6 +1020,12 @@ pub enum GeneralBrushRange {
     Category([String; 2]),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeneralBrushEndpoint {
+    Start,
+    End,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct GeneralBrushSnapshot {
     pub pane: usize,
@@ -1198,7 +1204,7 @@ impl GeneralReference {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct GeneralBrushSelection {
+pub(crate) struct GeneralBrushSelection {
     pane_id: PaneId,
     axis_id: String,
     dimension: AxisDimension,
@@ -5499,6 +5505,14 @@ impl ChartEngine {
             .map(GeneralInteractionTarget::hit)
     }
 
+    pub(crate) fn general_hovered_key(&self) -> Option<(GeneralSeriesId, usize)> {
+        self.general_series
+            .as_ref()?
+            .hovered
+            .as_ref()
+            .map(|target| (target.series, target.row))
+    }
+
     #[doc(hidden)]
     pub fn select_general_hovered(&mut self) -> bool {
         let Some(registry) = self.general_series.as_mut() else {
@@ -5533,6 +5547,36 @@ impl ChartEngine {
             .map(GeneralInteractionTarget::hit)
     }
 
+    pub(crate) fn select_general_row(&mut self, series_id: GeneralSeriesId, row: usize) -> bool {
+        let Some(series) = self
+            .general_series(series_id)
+            .filter(|series| series.visible)
+        else {
+            return false;
+        };
+        let Some(row_id) = self
+            .general_dataset(series.dataset)
+            .and_then(|dataset| dataset.row_identity(row))
+            .cloned()
+        else {
+            return false;
+        };
+        let next = Some(GeneralInteractionTarget {
+            series: series_id,
+            row,
+            row_id,
+            distance: 0.0,
+        });
+        let Some(registry) = self.general_series.as_mut() else {
+            return false;
+        };
+        if registry.selected != next {
+            registry.selected = next;
+            self.invalidate_frame_overlay();
+        }
+        true
+    }
+
     #[doc(hidden)]
     pub fn set_general_brush_from_pixels(
         &mut self,
@@ -5540,6 +5584,18 @@ impl ChartEngine {
         from_css: f64,
         to_css: f64,
     ) -> Result<GeneralBrushSnapshot, ChartError> {
+        self.update_general_brush_from_pixels(axis_id, from_css, to_css)?;
+        self.general_brush_snapshot()
+            .ok_or_else(|| invalid("general brush could not resolve its snapshot"))
+    }
+
+    /// Update the semantic brush during an input gesture without enumerating selected rows.
+    pub(crate) fn update_general_brush_from_pixels(
+        &mut self,
+        axis_id: &str,
+        from_css: f64,
+        to_css: f64,
+    ) -> Result<(), ChartError> {
         if !from_css.is_finite() || !to_css.is_finite() {
             return Err(invalid(
                 "general brush coordinates must be finite CSS-pixel values",
@@ -5682,8 +5738,7 @@ impl ChartEngine {
             range,
         });
         self.invalidate_frame_overlay();
-        self.general_brush_snapshot()
-            .ok_or_else(|| invalid("general brush could not resolve its snapshot"))
+        Ok(())
     }
 
     #[doc(hidden)]
@@ -5695,6 +5750,160 @@ impl ChartEngine {
         if changed {
             self.invalidate_frame_overlay();
         }
+    }
+
+    pub(crate) fn general_brush_state(&self) -> Option<GeneralBrushSelection> {
+        self.general_series.as_ref()?.brush.clone()
+    }
+
+    pub(crate) fn restore_general_brush_state(
+        &mut self,
+        prior: Option<GeneralBrushSelection>,
+    ) -> bool {
+        let Some(registry) = self.general_series.as_mut() else {
+            return false;
+        };
+        if registry.brush != prior {
+            registry.brush = prior;
+            self.invalidate_frame_overlay();
+            return true;
+        }
+        false
+    }
+
+    /// Start an accessible brush at the full current axis domain without host projection math.
+    pub fn select_full_general_brush(
+        &mut self,
+        axis_id: &str,
+    ) -> Result<GeneralBrushSnapshot, ChartError> {
+        let axis = self.general_axis(axis_id).ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidHandle, "general brush axis is stale")
+        })?;
+        if !matches!(axis.dimension(), AxisDimension::X | AxisDimension::Y) {
+            return Err(invalid("general brushes require a Cartesian X or Y axis"));
+        }
+        let pane_id = axis.pane_id();
+        let dimension = axis.dimension();
+        let range = match self
+            .effective_general_axis_domain(axis)
+            .ok_or_else(|| invalid("general brush axis has no effective domain"))?
+        {
+            GeneralAxisDomain::Numeric(bounds) => GeneralBrushRange::Numeric(bounds),
+            GeneralAxisDomain::Temporal(bounds) => GeneralBrushRange::Temporal(bounds),
+            GeneralAxisDomain::Category(categories) => GeneralBrushRange::Category([
+                categories
+                    .first()
+                    .ok_or_else(|| invalid("general brush category axis has no categories"))?
+                    .clone(),
+                categories
+                    .last()
+                    .expect("the first category exists")
+                    .clone(),
+            ]),
+            GeneralAxisDomain::Auto => return Err(invalid("general brush axis has no domain")),
+        };
+        let registry = self
+            .general_series
+            .as_mut()
+            .ok_or_else(|| invalid("general brush requires at least one general series"))?;
+        registry.brush = Some(GeneralBrushSelection {
+            pane_id,
+            axis_id: axis_id.to_owned(),
+            dimension,
+            range,
+        });
+        self.invalidate_frame_overlay();
+        self.general_brush_snapshot()
+            .ok_or_else(|| invalid("general brush could not resolve its snapshot"))
+    }
+
+    /// Move one brush endpoint by one percent of the current transformed span, or one category.
+    pub fn nudge_general_brush(
+        &mut self,
+        endpoint: GeneralBrushEndpoint,
+        direction: i8,
+    ) -> Result<GeneralBrushSnapshot, ChartError> {
+        if !matches!(direction, -1 | 1) {
+            return Err(invalid("general brush nudge direction must be -1 or 1"));
+        }
+        let mut brush = self
+            .general_brush_state()
+            .ok_or_else(|| invalid("general brush has no active range"))?;
+        let axis = self.general_axis(&brush.axis_id).ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidHandle, "general brush axis is stale")
+        })?;
+        let domain = self
+            .effective_general_axis_domain(axis)
+            .ok_or_else(|| invalid("general brush axis has no effective domain"))?;
+        match (&mut brush.range, domain) {
+            (GeneralBrushRange::Numeric(range), GeneralAxisDomain::Numeric(domain)) => {
+                let scale = NumericAxisScale::new(axis.scale(), domain, 0.0, 1.0)
+                    .ok_or_else(|| invalid("general brush numeric transform is invalid"))?;
+                let index = usize::from(endpoint == GeneralBrushEndpoint::End);
+                let position = scale.coordinate(range[index]).ok_or_else(|| {
+                    invalid("general brush endpoint is outside the numeric transform")
+                })?;
+                let next = scale
+                    .invert((position + f64::from(direction) * 0.01).clamp(0.0, 1.0))
+                    .ok_or_else(|| invalid("general brush nudge exceeds the numeric transform"))?;
+                range[index] = if index == 0 {
+                    next.min(range[1])
+                } else {
+                    next.max(range[0])
+                };
+            }
+            (GeneralBrushRange::Temporal(range), GeneralAxisDomain::Temporal(domain)) => {
+                let scale = LinearScale::new(domain[0] as f64, domain[1] as f64, 0.0, 1.0)
+                    .map_err(|_| invalid("general brush temporal transform is invalid"))?;
+                let index = usize::from(endpoint == GeneralBrushEndpoint::End);
+                let position = scale.coordinate(range[index] as f64).ok_or_else(|| {
+                    invalid("general brush endpoint is outside the temporal transform")
+                })?;
+                let next = scale
+                    .invert((position + f64::from(direction) * 0.01).clamp(0.0, 1.0))
+                    .ok_or_else(|| invalid("general brush nudge exceeds the temporal transform"))?
+                    .round() as i64;
+                range[index] = if index == 0 {
+                    next.min(range[1])
+                } else {
+                    next.max(range[0])
+                };
+            }
+            (GeneralBrushRange::Category(range), GeneralAxisDomain::Category(_)) => {
+                let GeneralAxisDomain::Category(categories) =
+                    self.base_general_axis_domain(axis)
+                        .ok_or_else(|| invalid("general brush category axis has no base domain"))?
+                else {
+                    return Err(invalid("general brush category axis has no base domain"));
+                };
+                let index = usize::from(endpoint == GeneralBrushEndpoint::End);
+                let current = categories
+                    .iter()
+                    .position(|value| value == &range[index])
+                    .ok_or_else(|| {
+                        invalid("general brush endpoint category is no longer present")
+                    })?;
+                let other = categories
+                    .iter()
+                    .position(|value| value == &range[1 - index])
+                    .ok_or_else(|| {
+                        invalid("general brush endpoint category is no longer present")
+                    })?;
+                let next = current
+                    .saturating_add_signed(isize::from(direction))
+                    .min(categories.len() - 1);
+                let next = if index == 0 {
+                    next.min(other)
+                } else {
+                    next.max(other)
+                };
+                range[index] = categories[next].clone();
+            }
+            _ => return Err(invalid("general brush range no longer matches its axis")),
+        }
+        self.restore_general_brush_state(Some(brush));
+        self.general_brush_snapshot()
+            .ok_or_else(|| invalid("general brush could not resolve its snapshot"))
     }
 
     #[doc(hidden)]
@@ -6066,6 +6275,9 @@ impl ChartEngine {
         row: usize,
     ) -> Option<GeneralSharedTooltipSnapshot> {
         let anchor_series = self.general_series(series_id)?;
+        if !anchor_series.visible {
+            return None;
+        }
         let anchor_dataset = self.general_dataset(anchor_series.dataset)?;
         anchor_dataset.row_identity(row)?;
         let pane = self.pane_index_for_id(anchor_series.pane_id)?;
@@ -7032,8 +7244,16 @@ fn general_rows_share_horizontal_datum(
                     .and_then(|values| values.get(right_row)),
             )
             .is_some_and(|(left, right)| left == right),
-        GeneralXKind::Category => general_x_label(left, left_row)
-            .zip(general_x_label(right, right_row))
+        GeneralXKind::Category => left
+            .category_indices()
+            .and_then(|indices| indices.get(left_row))
+            .and_then(|index| left.categories()?.get(*index as usize))
+            .zip(
+                right
+                    .category_indices()
+                    .and_then(|indices| indices.get(right_row))
+                    .and_then(|index| right.categories()?.get(*index as usize)),
+            )
             .is_some_and(|(left, right)| left == right),
     }
 }

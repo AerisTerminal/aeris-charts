@@ -13,8 +13,9 @@ use aeris_charts_render::draw_list::{LineStyle, Prim};
 
 use crate::{
     AxisBand, AxisFrame, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,
-    AxisTextMidpoint, CategoryScaleType, ChartEngine, ChartError, ContinuousScaleType, ErrorCode,
-    HorizontalDomain, PaneId, PriceScaleSide,
+    AxisTextMidpoint, CategoryScaleType, ChartEngine, ChartError, ChartSyncEventKind,
+    ContinuousScaleType, ErrorCode, GeneralAxisSyncDomain, GeneralAxisSyncValue,
+    GeneralCrosshairSyncPosition, GeneralSeriesKind, HorizontalDomain, PaneId, PriceScaleSide,
     axis_metrics::{AXIS_FONT_SCALE, AxisMetrics},
 };
 
@@ -1016,7 +1017,7 @@ impl ChartEngine {
         self.base_general_axis_domain(axis)
     }
 
-    fn base_general_axis_domain(&self, axis: &GeneralAxis) -> Option<GeneralAxisDomain> {
+    pub(crate) fn base_general_axis_domain(&self, axis: &GeneralAxis) -> Option<GeneralAxisDomain> {
         if axis.domain != GeneralAxisDomain::Auto {
             return padded_axis_domain(axis, axis.domain.clone());
         }
@@ -1325,8 +1326,12 @@ impl ChartEngine {
             .general_axes
             .get_mut(id)
             .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "general axis is stale"))?;
+        if axis.view_domain.as_ref() == Some(&view) {
+            return Ok(());
+        }
         axis.view_domain = Some(view);
         self.invalidate_frame_all();
+        self.publish_general_axis_view(id);
         Ok(())
     }
 
@@ -1414,8 +1419,12 @@ impl ChartEngine {
             .general_axes
             .get_mut(id)
             .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "general axis is stale"))?;
+        if axis.view_domain.as_ref() == Some(&view) {
+            return Ok(());
+        }
         axis.view_domain = Some(view);
         self.invalidate_frame_all();
+        self.publish_general_axis_view(id);
         Ok(())
     }
 
@@ -1470,11 +1479,16 @@ impl ChartEngine {
             .general_axes
             .get_mut(id)
             .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "general axis is stale"))?;
-        axis.view_domain = Some(GeneralAxisView::Category {
+        let view = GeneralAxisView::Category {
             start: proposed_start.round().clamp(0.0, max_start as f64) as usize,
             len: next_len,
-        });
+        };
+        if axis.view_domain.as_ref() == Some(&view) {
+            return Ok(());
+        }
+        axis.view_domain = Some(view);
         self.invalidate_frame_all();
+        self.publish_general_axis_view(id);
         Ok(())
     }
 
@@ -1485,8 +1499,290 @@ impl ChartEngine {
         };
         if axis.view_domain.take().is_some() {
             self.invalidate_frame_all();
+            self.publish_general_axis_view(id);
         }
         true
+    }
+
+    fn publish_general_axis_view(&mut self, id: &str) {
+        let Some(domain) = self.general_axis(id).and_then(|axis| {
+            axis.view_domain
+                .as_ref()
+                .and_then(|_| self.effective_general_axis_domain(axis))
+        }) else {
+            self.queue_sync_event(ChartSyncEventKind::GeneralAxisView {
+                axis_id: id.to_owned(),
+                domain: None,
+            });
+            return;
+        };
+        let domain = match domain {
+            GeneralAxisDomain::Numeric([from, to]) => GeneralAxisSyncDomain::Numeric { from, to },
+            GeneralAxisDomain::Temporal([from, to]) => GeneralAxisSyncDomain::Temporal { from, to },
+            GeneralAxisDomain::Category(values) => {
+                let (Some(from), Some(to)) = (values.first(), values.last()) else {
+                    return;
+                };
+                GeneralAxisSyncDomain::Category {
+                    from: from.clone(),
+                    to: to.clone(),
+                }
+            }
+            GeneralAxisDomain::Auto => return,
+        };
+        self.queue_sync_event(ChartSyncEventKind::GeneralAxisView {
+            axis_id: id.to_owned(),
+            domain: Some(domain),
+        });
+    }
+
+    pub(crate) fn apply_external_general_axis_view(
+        &mut self,
+        id: &str,
+        domain: Option<&GeneralAxisSyncDomain>,
+    ) -> bool {
+        let next = match domain {
+            None => None,
+            Some(GeneralAxisSyncDomain::Numeric { from, to }) => {
+                let axis = match self.general_axis(id) {
+                    Some(axis) => axis,
+                    None => return false,
+                };
+                if !matches!(
+                    axis.scale,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                        | GeneralScaleType::RadialLinear
+                ) || NumericAxisScale::new(axis.scale, [*from, *to], 0.0, 1.0).is_none()
+                {
+                    return false;
+                }
+                Some(GeneralAxisView::Numeric([*from, *to]))
+            }
+            Some(GeneralAxisSyncDomain::Temporal { from, to }) => {
+                let axis = match self.general_axis(id) {
+                    Some(axis) => axis,
+                    None => return false,
+                };
+                if axis.scale != GeneralScaleType::Temporal
+                    || validate_domain(axis.scale, &GeneralAxisDomain::Temporal([*from, *to]))
+                        .is_err()
+                {
+                    return false;
+                }
+                Some(GeneralAxisView::Temporal([*from, *to]))
+            }
+            Some(GeneralAxisSyncDomain::Category { from, to }) => {
+                let axis = match self.general_axis(id) {
+                    Some(axis) => axis,
+                    None => return false,
+                };
+                if !matches!(
+                    axis.scale,
+                    GeneralScaleType::Band
+                        | GeneralScaleType::Point
+                        | GeneralScaleType::AngularCategory
+                ) {
+                    return false;
+                }
+                let Some(GeneralAxisDomain::Category(base)) = self.base_general_axis_domain(axis)
+                else {
+                    return false;
+                };
+                let (Some(start), Some(end)) = (
+                    base.iter().position(|value| value == from),
+                    base.iter().position(|value| value == to),
+                ) else {
+                    return false;
+                };
+                if start > end {
+                    return false;
+                }
+                Some(GeneralAxisView::Category {
+                    start,
+                    len: end - start + 1,
+                })
+            }
+        };
+        let Some(axis) = self.general_axes.get_mut(id) else {
+            return false;
+        };
+        if axis.view_domain == next {
+            return false;
+        }
+        axis.view_domain = next;
+        self.invalidate_frame_all();
+        true
+    }
+}
+
+impl ChartEngine {
+    pub(crate) fn general_crosshair_sync_at(
+        &self,
+        pane_index: usize,
+    ) -> Option<GeneralCrosshairSyncPosition> {
+        let (series_id, row) = self.general_hovered_key()?;
+        let series = self.general_series(series_id)?;
+        let dataset = self.general_dataset(series.dataset())?;
+        let x_axis = self.general_axis(series.x_axis_id())?;
+        let y_axis = self.general_axis(series.y_axis_id())?;
+        if self.general_axis_pane_index(x_axis.id()) != Some(pane_index)
+            || self.general_axis_pane_index(y_axis.id()) != Some(pane_index)
+        {
+            return None;
+        }
+        let category_x = || {
+            let index = usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
+            Some(GeneralAxisSyncValue::Category {
+                value: dataset.categories()?.get(index)?.clone(),
+            })
+        };
+        let x = if series.kind() == GeneralSeriesKind::HorizontalBar {
+            dataset
+                .y_is_valid(row)
+                .then(|| GeneralAxisSyncValue::Numeric {
+                    value: dataset.y()[row],
+                })
+        } else if let Some(values) = dataset.numeric_x() {
+            values
+                .get(row)
+                .map(|value| GeneralAxisSyncValue::Numeric { value: *value })
+        } else if let Some(values) = dataset.temporal_x_epoch_ms() {
+            values
+                .get(row)
+                .map(|value| GeneralAxisSyncValue::Temporal { value: *value })
+        } else {
+            category_x()
+        }?;
+        let y = if series.kind() == GeneralSeriesKind::HorizontalBar {
+            category_x()
+        } else if series.kind() == GeneralSeriesKind::HeatmapGrid {
+            if let Some(values) = dataset.heatmap_y_numeric() {
+                values
+                    .get(row)
+                    .map(|value| GeneralAxisSyncValue::Numeric { value: *value })
+            } else {
+                let index =
+                    usize::try_from(*dataset.heatmap_y_category_indices()?.get(row)?).ok()?;
+                Some(GeneralAxisSyncValue::Category {
+                    value: dataset.heatmap_y_categories()?.get(index)?.clone(),
+                })
+            }
+        } else {
+            dataset
+                .y_is_valid(row)
+                .then(|| GeneralAxisSyncValue::Numeric {
+                    value: dataset.y()[row],
+                })
+        }?;
+        Some(GeneralCrosshairSyncPosition {
+            pane_index,
+            x_axis_id: x_axis.id().to_owned(),
+            y_axis_id: y_axis.id().to_owned(),
+            x,
+            y,
+        })
+    }
+
+    pub(crate) fn apply_external_general_crosshair(
+        &mut self,
+        position: &GeneralCrosshairSyncPosition,
+    ) -> bool {
+        let Some(pane_index) = self.general_axis_pane_index(&position.x_axis_id) else {
+            return false;
+        };
+        let Some(plot) = self.general_plot_rect(pane_index) else {
+            return false;
+        };
+        let Some(x_axis) = self.general_axis(&position.x_axis_id) else {
+            return false;
+        };
+        let Some(y_axis) = self.general_axis(&position.y_axis_id) else {
+            return false;
+        };
+        if self.general_axis_pane_index(y_axis.id()) != Some(pane_index) {
+            return false;
+        }
+        let Some(x) = self.general_sync_coordinate(x_axis, &position.x, &plot) else {
+            return false;
+        };
+        let Some(y) = self.general_sync_coordinate(y_axis, &position.y, &plot) else {
+            return false;
+        };
+        if self.crosshair == Some((x, y)) {
+            return false;
+        }
+        self.crosshair = Some((x, y));
+        self.invalidate_frame_overlay();
+        true
+    }
+
+    fn general_sync_coordinate(
+        &self,
+        axis: &GeneralAxis,
+        value: &GeneralAxisSyncValue,
+        plot: &GeneralPlotRect,
+    ) -> Option<f64> {
+        let (from, to) = general_sync_axis_range(axis, plot)?;
+        let coordinate = match (self.effective_general_axis_domain(axis)?, value) {
+            (GeneralAxisDomain::Numeric(bounds), GeneralAxisSyncValue::Numeric { value }) => {
+                NumericAxisScale::new(axis.scale, bounds, from, to)?.coordinate(*value)?
+            }
+            (GeneralAxisDomain::Temporal(bounds), GeneralAxisSyncValue::Temporal { value }) => {
+                temporal_linear_scale(bounds, from, to)?.coordinate(*value as f64)?
+            }
+            (GeneralAxisDomain::Category(values), GeneralAxisSyncValue::Category { value }) => {
+                let index = values.iter().position(|candidate| candidate == value)?;
+                general_sync_category_coordinate(axis, values.len(), from, to, index)?
+            }
+            _ => return None,
+        };
+        (coordinate >= from.min(to) && coordinate <= from.max(to)).then_some(coordinate)
+    }
+}
+
+fn general_sync_axis_range(axis: &GeneralAxis, plot: &GeneralPlotRect) -> Option<(f64, f64)> {
+    match axis.dimension {
+        AxisDimension::X => Some(if axis.reverse {
+            (plot.width, 0.0)
+        } else {
+            (0.0, plot.width)
+        }),
+        AxisDimension::Y => {
+            let bottom = plot.y + plot.height;
+            Some(if axis.reverse {
+                (plot.y, bottom)
+            } else {
+                (bottom, plot.y)
+            })
+        }
+        AxisDimension::Angle | AxisDimension::Radius => None,
+    }
+}
+
+fn general_sync_category_coordinate(
+    axis: &GeneralAxis,
+    count: usize,
+    from: f64,
+    to: f64,
+    index: usize,
+) -> Option<f64> {
+    match axis.scale {
+        GeneralScaleType::Band => BandScale::new(
+            count,
+            from,
+            to,
+            axis.band_padding_inner,
+            axis.band_padding_outer,
+            0.5,
+        )
+        .ok()?
+        .center(index),
+        GeneralScaleType::Point => PointScale::new(count, from, to, axis.band_padding_outer, 0.5)
+            .ok()?
+            .coordinate(index),
+        _ => None,
     }
 }
 
@@ -2643,6 +2939,7 @@ impl ChartEngine {
         }
         let removed = self.general_axes.remove(id);
         if removed {
+            self.disarm_general_brush_input_for_axis(id);
             self.invalidate_frame_all();
         }
         removed
@@ -3291,6 +3588,163 @@ mod tests {
                     .collect(),
             ))
         );
+    }
+
+    #[test]
+    fn general_axis_sync_uses_category_identity_and_does_not_echo() {
+        use crate::{GeneralSeriesOptions, GeneralXyInput, PointerInput};
+        let make_chart = |categories: &[&str]| {
+            let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+            let pane = chart
+                .add_pane_with_domain(
+                    true,
+                    HorizontalDomain::Category {
+                        scale: CategoryScaleType::Point,
+                    },
+                )
+                .unwrap();
+            let mut options = GeneralAxisOptions::new(
+                "category-x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Point,
+            );
+            options.domain =
+                GeneralAxisDomain::Category(categories.iter().map(|s| (*s).into()).collect());
+            chart.add_general_axis(options).unwrap();
+            let mut y =
+                GeneralAxisOptions::new("y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+            y.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+            chart.add_general_axis(y).unwrap();
+            chart.recompute_layout_with_measure(
+                true,
+                |text, _| text.len() as f64 * 7.0,
+                |_, _| 0.0,
+            );
+            chart
+        };
+        let mut source = make_chart(&["A", "B", "C", "D", "E"]);
+        let mut target = make_chart(&["A", "X", "B", "C", "D", "Y", "E"]);
+        source
+            .zoom_general_category_axis("category-x", 2.0, "C")
+            .unwrap();
+        let events = source.take_sync_events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].kind,
+            ChartSyncEventKind::GeneralAxisView { .. }
+        ));
+        assert!(target.apply_external_sync_envelope(&events[0]));
+        assert!(!target.apply_external_sync_envelope(&events[0]));
+        assert_eq!(
+            target.general_axis_effective_domain("category-x"),
+            Some(GeneralAxisDomain::Category(vec![
+                "B".into(),
+                "C".into(),
+                "D".into()
+            ])),
+        );
+        assert!(target.take_sync_events().is_empty());
+        assert!(source.reset_general_axis_view("category-x"));
+        let reset = source.take_sync_events();
+        assert!(target.apply_external_sync_envelope(&reset[0]));
+        assert!(!target.apply_external_sync_envelope(&events[0]));
+        assert!(target.take_sync_events().is_empty());
+        assert_eq!(
+            target.general_axis_effective_domain("category-x"),
+            target
+                .general_axis("category-x")
+                .map(|axis| axis.domain().clone())
+        );
+        let pane = source.general_axis_pane_index("category-x").unwrap();
+        let dataset = source
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: None,
+                categories: ["A", "B", "C", "D", "E"].map(str::to_owned).to_vec(),
+                category_indices: vec![0, 1, 2, 3, 4],
+                y: vec![1.0, 3.0, 5.0, 7.0, 9.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let mut series = GeneralSeriesOptions::xy_line(pane, dataset, "category-x", "y");
+        series.point_markers = true;
+        source.add_general_series(series).unwrap();
+        source.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let plot = source.general_plot_rect(pane).unwrap();
+        let axis = source.general_axis("category-x").unwrap();
+        let x = PointScale::new(5, 0.0, plot.width, axis.band_padding_outer, 0.5)
+            .unwrap()
+            .coordinate(2)
+            .unwrap();
+        let y = NumericAxisScale::new(
+            GeneralScaleType::Linear,
+            [0.0, 10.0],
+            plot.y + plot.height,
+            plot.y,
+        )
+        .unwrap()
+        .coordinate(5.0)
+        .unwrap();
+        source.input_pointer_move(
+            PointerInput {
+                x,
+                y,
+                ..PointerInput::default()
+            },
+            false,
+        );
+        let crosshair_events = source.take_sync_events();
+        assert_eq!(crosshair_events.len(), 1);
+        assert!(
+            matches!(&crosshair_events[0].kind, ChartSyncEventKind::GeneralCrosshair { position }
+            if position.x == GeneralAxisSyncValue::Category { value: "C".into() }
+                && position.y == GeneralAxisSyncValue::Numeric { value: 5.0 })
+        );
+        let mut routed_crosshair = crosshair_events[0].clone();
+        if let ChartSyncEventKind::GeneralCrosshair { position } = &mut routed_crosshair.kind {
+            position.pane_index = 0;
+        }
+        assert!(target.apply_external_sync_envelope(&routed_crosshair));
+        assert!(target.crosshair.is_some());
+        let frame = target.build_frame();
+        let general_pane = target.general_axis_pane_index("category-x").unwrap();
+        let general_segments = target.frame_pane_segments(general_pane).unwrap();
+        assert!(
+            frame.panes[general_pane].main
+                [general_segments.trading_end..general_segments.overlay_end]
+                .iter()
+                .any(|prim| matches!(prim, Prim::VLine { .. }))
+        );
+        let financial_segments = target.frame_pane_segments(0).unwrap();
+        assert!(
+            !frame.panes[0].main[financial_segments.trading_end..financial_segments.overlay_end]
+                .iter()
+                .any(|prim| matches!(prim, Prim::VLine { .. }))
+        );
+        assert!(!target.apply_external_sync_envelope(&routed_crosshair));
+        assert!(target.take_sync_events().is_empty());
+        source.input_pointer_move(
+            PointerInput {
+                x,
+                y,
+                ..PointerInput::default()
+            },
+            false,
+        );
+        assert!(source.take_sync_events().is_empty());
+        source.input_pointer_move(
+            PointerInput {
+                x: -20.0,
+                y: -20.0,
+                ..PointerInput::default()
+            },
+            false,
+        );
+        let leave = source.take_sync_events();
+        assert_eq!(leave.len(), 1);
+        assert!(matches!(leave[0].kind, ChartSyncEventKind::ClearCrosshair));
+        assert!(target.apply_external_sync_envelope(&leave[0]));
+        assert!(target.crosshair.is_none());
     }
 
     #[test]

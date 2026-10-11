@@ -2036,6 +2036,114 @@ mod tests {
     }
 
     #[test]
+    fn general_chart_image_export_matches_shared_live_frame_and_restores_view() {
+        if test_face("sans-serif").is_none() {
+            return;
+        }
+        let mut chart = ChartEngine::new(260.0, 180.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+            let mut axis = GeneralAxisOptions::new(id, pane, dimension, GeneralScaleType::Linear);
+            axis.title = Some(format!("{id} axis"));
+            chart.add_general_axis(axis).unwrap();
+        }
+        let dataset = chart
+            .create_general_xy_dataset(GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![1.0, 2.0, 3.0],
+                y: vec![-3.0, 2.0, 7.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let mut options = GeneralSeriesOptions::scatter(pane, dataset, "x", "y");
+        options.color = Some("#2f7d8c".into());
+        options.point_radius = 5.0;
+        chart.add_general_series(options).unwrap();
+        let family = chart.options.get().layout.font_family.clone();
+        let axis_size = chart.axis_font_size();
+        let countdown_size = chart.countdown_font_size();
+        chart.recompute_layout_with_measure(
+            true,
+            |text, bold| axis_text_width(text, bold, axis_size, &family),
+            |text, bold| axis_text_width(text, bold, countdown_size, &family),
+        );
+        let live_before = render_live_host(&mut chart, 1.0).pixmap().data().to_vec();
+        let repeated = render_live_host(&mut chart, 1.0);
+        assert_eq!(
+            live_before
+                .iter()
+                .zip(repeated.pixmap().data())
+                .filter(|(a, b)| a != b)
+                .count(),
+            0,
+            "live general frame must be stable before export"
+        );
+        let geometry_before = (chart.pane_left, chart.pane_w, chart.axis_w, chart.pane_h);
+        let export = render_engine_rgba(
+            &mut chart,
+            ImageExportOptions {
+                scale: 2.0,
+                ..ImageExportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!((export.width, export.height), (520, 360));
+        assert_eq!(
+            (chart.pane_left, chart.pane_w, chart.axis_w, chart.pane_h),
+            geometry_before
+        );
+        let live_after = render_live_host(&mut chart, 1.0);
+        assert_eq!(
+            (chart.pane_left, chart.pane_w, chart.axis_w, chart.pane_h),
+            geometry_before
+        );
+        assert_eq!(
+            live_before
+                .iter()
+                .zip(live_after.pixmap().data())
+                .filter(|(a, b)| a != b)
+                .count(),
+            0,
+            "general export must restore the live chart; first mismatch {:?}",
+            live_before
+                .iter()
+                .zip(live_after.pixmap().data())
+                .position(|(a, b)| a != b)
+        );
+        let live_at_export_scale = render_live_host(&mut chart, 2.0);
+        let live_2x = live_at_export_scale.pixmap().data();
+        assert_eq!(
+            export
+                .pixels
+                .iter()
+                .zip(live_2x)
+                .filter(|(a, b)| a != b)
+                .count(),
+            0,
+            "general export and live 2x mismatch at {:?}",
+            export.pixels.iter().zip(live_2x).position(|(a, b)| a != b)
+        );
+        let resized = render_engine_rgba(
+            &mut chart,
+            ImageExportOptions {
+                width: 320,
+                height: 220,
+                scale: 2.0,
+                ..ImageExportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!((resized.width, resized.height), (640, 440));
+    }
+
+    #[test]
     fn prepared_export_renders_off_thread_with_host_overlay_on_top() {
         fn assert_send<T: Send + 'static>(_: &T) {}
         let mut chart = ChartEngine::new(120.0, 80.0, 1.0);

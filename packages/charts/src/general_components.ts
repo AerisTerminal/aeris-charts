@@ -1,0 +1,284 @@
+/** Browser presentation for engine-owned general chart components. */
+import type {
+  chart_api,
+  general_axis_api,
+  general_brush_snapshot,
+  general_series_api,
+  general_tooltip_snapshot,
+  mouse_event_params,
+} from "./types.js";
+
+export interface general_legend_options {
+  pane?: number;
+  format_title?: (title: string, series: general_series_api) => string;
+  label?: string;
+  lang?: string;
+  format_action?: (visible: boolean, title: string) => string;
+}
+
+export interface general_brush_controls_options {
+  axis: string | general_axis_api;
+  label?: string;
+  locale?: string;
+  labels?: Partial<{
+    select_all: string;
+    start_lower: string;
+    start_higher: string;
+    end_lower: string;
+    end_higher: string;
+    clear: string;
+    no_range: string;
+  }>;
+}
+
+/** Keyboard and touch controls for the engine's semantic brush and pointer gesture. */
+export function create_general_brush_controls(
+  chart: chart_api,
+  container: HTMLElement,
+  options: general_brush_controls_options,
+): general_component_handle {
+  const axis_id = typeof options.axis === "string" ? options.axis : options.axis.id;
+  chart.set_general_brush_input_axis(axis_id);
+  const root = document.createElement("div");
+  root.className = "aeris_charts-general-component";
+  root.setAttribute("role", "group");
+  root.setAttribute("aria-label", options.label ?? "Chart range brush");
+  if (options.locale !== undefined) root.lang = options.locale;
+  root.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:4px";
+  const status = document.createElement("output");
+  status.setAttribute("aria-live", "polite");
+  status.style.cssText = "min-width:8ch;max-width:100%;padding:0 4px;overflow-wrap:anywhere";
+  const button = (label: string, action: () => void): HTMLButtonElement => {
+    const element = document.createElement("button");
+    element.type = "button";
+    element.textContent = label;
+    element.style.cssText = "min-height:28px;padding:2px 6px;border:1px solid currentColor;border-radius:4px;background:transparent;color:inherit;cursor:pointer";
+    element.addEventListener("click", action);
+    root.appendChild(element);
+    return element;
+  };
+  const labels = {
+    select_all: "Select all", start_lower: "Start −", start_higher: "Start +",
+    end_lower: "End −", end_higher: "End +", clear: "Clear", no_range: "No range selected",
+    ...options.labels,
+  };
+  const select = button(labels.select_all, () => chart.select_full_general_brush(axis_id));
+  const start_lower = button(labels.start_lower, () => chart.nudge_general_brush("start", -1));
+  const start_higher = button(labels.start_higher, () => chart.nudge_general_brush("start", 1));
+  const end_lower = button(labels.end_lower, () => chart.nudge_general_brush("end", -1));
+  const end_higher = button(labels.end_higher, () => chart.nudge_general_brush("end", 1));
+  const clear = button(labels.clear, () => chart.clear_general_brush());
+  root.appendChild(status);
+  container.appendChild(root);
+  let detached = false;
+  const range_text = (snapshot: general_brush_snapshot): string => {
+    const { range } = snapshot;
+    if (range.type === "category") return `${range.from} – ${range.to}`;
+    if (range.type === "temporal") {
+      const format = (value: number): string => {
+        const date = new Date(value);
+        return Number.isNaN(date.valueOf()) ? String(value) : date.toLocaleString(options.locale);
+      };
+      return `${format(range.from)} – ${format(range.to)}`;
+    }
+    return `${range.from} – ${range.to}`;
+  };
+  const refresh = (): void => {
+    if (detached) return;
+    const snapshot = chart.general_brush_snapshot();
+    const active = snapshot !== null && snapshot.axis_id === axis_id;
+    status.textContent = active ? range_text(snapshot) : labels.no_range;
+    for (const control of [start_lower, start_higher, end_lower, end_higher, clear]) {
+      control.disabled = !active;
+    }
+    select.disabled = chart.axis(axis_id) === null;
+  };
+  chart.subscribe_general_brush_change(refresh);
+  refresh();
+  return {
+    refresh,
+    detach(): void {
+      if (detached) return;
+      detached = true;
+      chart.unsubscribe_general_brush_change(refresh);
+      chart.set_general_brush_input_axis();
+      root.remove();
+    },
+  };
+}
+
+export interface general_component_handle {
+  /** Re-read engine state after external style, visibility, data, or view changes. */
+  refresh(): void;
+  detach(): void;
+}
+
+/** Accessible default legend. Its buttons toggle engine visibility by stable series identity. */
+export function create_general_legend(
+  chart: chart_api,
+  container: HTMLElement,
+  options: general_legend_options = {},
+): general_component_handle {
+  const root = document.createElement("div");
+  root.className = "aeris_charts-general-component";
+  root.setAttribute("role", "group");
+  root.setAttribute("aria-label", options.label ?? "Chart legend");
+  if (options.lang !== undefined) root.lang = options.lang;
+  root.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;align-items:center";
+  container.appendChild(root);
+  let detached = false;
+
+  const refresh = (): void => {
+    if (detached) return;
+    const focused_series = root.contains(document.activeElement)
+      ? (document.activeElement as HTMLElement).dataset.series
+      : undefined;
+    const series = new Map(chart.general_series_order(options.pane).map((item) => [item.id, item]));
+    const snapshot = chart.general_legend_snapshot(options.pane);
+    root.replaceChildren();
+    for (const item of snapshot.items) {
+      const handle = series.get(item.series);
+      if (handle === undefined) continue;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.series = String(item.series);
+      button.setAttribute("aria-pressed", String(item.visible));
+      button.setAttribute("aria-label", options.format_action?.(item.visible, item.title)
+        ?? `${item.visible ? "Hide" : "Show"} ${item.title}`);
+      button.style.cssText = "display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:2px 8px;border:1px solid currentColor;border-radius:4px;background:transparent;color:inherit;cursor:pointer";
+      button.style.opacity = item.visible ? "1" : "0.55";
+      const swatch = document.createElement("span");
+      swatch.setAttribute("aria-hidden", "true");
+      swatch.style.cssText = "display:inline-block;width:10px;height:10px;border-radius:50%;background:currentColor";
+      if (item.color !== null) swatch.style.color = item.color;
+      const label = document.createElement("span");
+      label.textContent = options.format_title?.(item.title, handle) ?? item.title;
+      button.append(swatch, label);
+      button.addEventListener("click", () => {
+        handle.set_visible(!handle.options().visible);
+        refresh();
+      });
+      root.appendChild(button);
+    }
+    if (focused_series !== undefined) {
+      for (const button of root.querySelectorAll<HTMLButtonElement>("button")) {
+        if (button.dataset.series === focused_series) {
+          button.focus();
+          break;
+        }
+      }
+    }
+  };
+  chart.subscribe_series_added(refresh);
+  chart.subscribe_series_removed(refresh);
+  chart.subscribe_general_legend_change(refresh);
+  refresh();
+  return {
+    refresh,
+    detach(): void {
+      if (detached) return;
+      detached = true;
+      chart.unsubscribe_series_added(refresh);
+      chart.unsubscribe_series_removed(refresh);
+      chart.unsubscribe_general_legend_change(refresh);
+      root.remove();
+    },
+  };
+}
+
+export interface general_tooltip_options {
+  mode?: "item" | "shared";
+  format_value?: (value: number) => string;
+  format_detail?: (item: general_tooltip_snapshot) => string;
+  lang?: string;
+}
+
+function tooltip_detail(item: general_tooltip_snapshot, format: (value: number) => string): string {
+  const parts: string[] = [];
+  if (item.value !== null) parts.push(format(item.value));
+  if (item.low !== null || item.high !== null) {
+    parts.push(`${item.low === null ? "—" : format(item.low)}–${item.high === null ? "—" : format(item.high)}`);
+  }
+  if (item.q1 !== null || item.q3 !== null) {
+    parts.push(`Q1 ${item.q1 === null ? "—" : format(item.q1)} · Q3 ${item.q3 === null ? "—" : format(item.q3)}`);
+  }
+  if (item.size !== null) parts.push(`size ${format(item.size)}`);
+  if (item.y_label !== null) parts.push(item.y_label);
+  return parts.join(" · ") || item.label || "No value";
+}
+
+/** Default pointer tooltip driven by engine hits and engine-owned item/shared snapshots. */
+export function create_general_tooltip(
+  chart: chart_api,
+  chart_container: HTMLElement,
+  options: general_tooltip_options = {},
+): general_component_handle {
+  const element = document.createElement("div");
+  element.setAttribute("role", "tooltip");
+  if (options.lang !== undefined) element.lang = options.lang;
+  element.style.cssText = "position:absolute;z-index:5;display:none;pointer-events:none;max-width:min(280px,100%);max-height:100%;overflow:hidden;overflow-wrap:anywhere;padding:7px 10px;border:1px solid #7778;border-radius:5px;background:var(--aeris-tooltip-background,#171c28);color:var(--aeris-tooltip-color,#fff);font:12px/1.4 system-ui,sans-serif;box-shadow:0 3px 12px #0004";
+  const original_position = chart_container.style.position;
+  if (getComputedStyle(chart_container).position === "static") chart_container.style.position = "relative";
+  chart_container.appendChild(element);
+  let last_event: mouse_event_params | null = null;
+  let pending_frame = 0;
+  let detached = false;
+  const format = options.format_value ?? ((value: number) => String(value));
+
+  const refresh = (): void => {
+    if (detached) return;
+    const event = last_event;
+    const hit = event?.general_hit;
+    if (hit == null || event?.point == null) {
+      element.style.display = "none";
+      return;
+    }
+    const items = options.mode === "item"
+      ? [chart.general_series_order().find((series) => series.id === hit.series)?.data_at(hit.row)].filter(
+          (item): item is general_tooltip_snapshot => item != null,
+        )
+      : chart.general_shared_tooltip(hit.series, hit.row)?.items;
+    if (items == null || items.length === 0) {
+      element.style.display = "none";
+      return;
+    }
+    const heading = document.createElement("strong");
+    heading.textContent = items[0]?.label ?? items[0]?.x_label ?? "";
+    element.replaceChildren(heading);
+    for (const item of items) {
+      const row = document.createElement("div");
+      row.textContent = `${item.title}: ${options.format_detail?.(item) ?? tooltip_detail(item, format)}`;
+      element.appendChild(row);
+    }
+    element.style.display = "block";
+    const width = chart_container.clientWidth;
+    const height = chart_container.clientHeight;
+    element.style.left = `${Math.max(0, Math.min(event.point.x + 12, width - element.offsetWidth - 4))}px`;
+    element.style.top = `${Math.max(0, Math.min(event.point.y + 12, height - element.offsetHeight - 4))}px`;
+  };
+  const on_crosshair = (event: mouse_event_params): void => {
+    last_event = event;
+    if (event.point === null) {
+      if (pending_frame !== 0) cancelAnimationFrame(pending_frame);
+      pending_frame = 0;
+      refresh();
+    } else if (pending_frame === 0) {
+      pending_frame = requestAnimationFrame(() => {
+        pending_frame = 0;
+        refresh();
+      });
+    }
+  };
+  chart.subscribe_crosshair_move(on_crosshair);
+  return {
+    refresh,
+    detach(): void {
+      if (detached) return;
+      detached = true;
+      if (pending_frame !== 0) cancelAnimationFrame(pending_frame);
+      chart.unsubscribe_crosshair_move(on_crosshair);
+      element.remove();
+      chart_container.style.position = original_position;
+    },
+  };
+}

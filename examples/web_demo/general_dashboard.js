@@ -1,4 +1,4 @@
-import { create_chart } from "./dist/aeris_charts_financial.js";
+import { create_chart, create_general_legend, create_general_tooltip } from "./dist/aeris_charts_financial.js";
 
 let dashboard_root = null;
 let chart_grid = null;
@@ -165,18 +165,6 @@ const examples = [
   },
 ];
 
-function tooltip_text(series, row) {
-  const snapshot = series.data_at(row);
-  if (snapshot === null) return null;
-  const detail = [];
-  if (snapshot.value !== null) detail.push(`value ${Number(snapshot.value).toLocaleString()}`);
-  if (snapshot.low !== null || snapshot.high !== null) detail.push(`range ${snapshot.low ?? "—"}–${snapshot.high ?? "—"}`);
-  if (snapshot.q1 !== null || snapshot.q3 !== null) detail.push(`q1 ${snapshot.q1 ?? "—"} · q3 ${snapshot.q3 ?? "—"}`);
-  if (snapshot.size !== null) detail.push(`size ${snapshot.size}`);
-  if (snapshot.y_label !== null) detail.push(`y ${snapshot.y_label}`);
-  return { title: snapshot.label ?? snapshot.x_label ?? series.kind, detail: detail.join(" · ") || "No value" };
-}
-
 function create_card(example, index) {
   const card = document.createElement("article");
   card.className = "general-chart-card";
@@ -187,22 +175,14 @@ function create_card(example, index) {
       <div class="general-card-copy"><h2>${example.title}</h2><p>${example.description}</p></div>
       <span class="general-kind-pill">${example.label}</span>
     </div>
-    <div class="general-chart-host" role="group" aria-label="${example.title} chart"><div class="general-chart-tooltip"></div></div>
+    <div class="general-chart-host" role="group" aria-label="${example.title} chart"></div>
     <div class="general-card-footer"><div class="general-card-legends"></div><span class="general-spacer"></span><span class="general-ready-state">loading</span></div>`;
-  const legends = card.querySelector(".general-card-legends");
-  for (const spec of example.series) {
-    const chip = document.createElement("span");
-    chip.className = "general-legend-chip";
-    chip.style.color = spec.color ?? palette.blue;
-    chip.innerHTML = `<span class="general-legend-dot"></span><span style="color:var(--text-secondary)">${spec.title}</span>`;
-    legends.appendChild(chip);
-  }
   return card;
 }
 
 async function mount_example(example, card) {
   const host = card.querySelector(".general-chart-host");
-  const tooltip = card.querySelector(".general-chart-tooltip");
+  const legends = card.querySelector(".general-card-legends");
   const ready_state = card.querySelector(".general-ready-state");
   const chart = await create_chart(host, {
     autoSize: true,
@@ -232,7 +212,6 @@ async function mount_example(example, card) {
   const pane_index = pane.pane_index();
   for (const axis of example.axes) chart.add_axis({ ...axis, pane: pane_index });
 
-  const series_by_id = new Map();
   const series_handles = [];
   for (const spec of example.series) {
     const handle = chart.add_series(spec.kind, {
@@ -248,9 +227,12 @@ async function mount_example(example, card) {
       stack_mode: spec.stack_mode,
     });
     handle.set_data(spec.data);
-    series_by_id.set(handle.id, handle);
     series_handles.push(handle);
   }
+  const legend = create_general_legend(chart, legends, { pane: pane_index });
+  const tooltip = create_general_tooltip(chart, host, {
+    format_value: (value) => Number(value).toLocaleString(),
+  });
   chart.render();
   const backend_status = chart.backend_status();
   ready_state.textContent = chart.backend() === "webgpu"
@@ -258,40 +240,6 @@ async function mount_example(example, card) {
     : backend_status.requested_backend === "auto" ? "Canvas2D fallback" : "Canvas2D";
   ready_state.title = backend_status.detail ?? "";
 
-  let pointer_frame = 0;
-  let pointer_xy = null;
-  const paint_tooltip = () => {
-    pointer_frame = 0;
-    if (pointer_xy === null) return;
-    const { x, y, width, height } = pointer_xy;
-    const hit = chart.general_hit_test(pane.pane_index(), x, y);
-    const hit_series = hit === null ? null : series_by_id.get(hit.series);
-    const content = hit === null || hit_series === undefined ? null : tooltip_text(hit_series, hit.row);
-    if (content === null) {
-      tooltip.dataset.visible = "false";
-      return;
-    }
-    tooltip.innerHTML = `<strong>${content.title}</strong><span>${content.detail}</span>`;
-    tooltip.style.left = `${Math.min(Math.max(8, x + 12), Math.max(8, width - 200))}px`;
-    tooltip.style.top = `${Math.min(Math.max(8, y + 12), Math.max(8, height - 64))}px`;
-    tooltip.dataset.visible = "true";
-  };
-  const on_pointer_move = (event) => {
-    const rect = host.getBoundingClientRect();
-    pointer_xy = {
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      width: rect.width,
-      height: rect.height,
-    };
-    if (pointer_frame === 0) pointer_frame = requestAnimationFrame(paint_tooltip);
-  };
-  const on_pointer_leave = () => {
-    pointer_xy = null;
-    tooltip.dataset.visible = "false";
-  };
-  host.addEventListener("pointermove", on_pointer_move);
-  host.addEventListener("pointerleave", on_pointer_leave);
   return {
     chart,
     pane,
@@ -299,10 +247,8 @@ async function mount_example(example, card) {
     card,
     example,
     dispose() {
-      host.removeEventListener("pointermove", on_pointer_move);
-      host.removeEventListener("pointerleave", on_pointer_leave);
-      if (pointer_frame !== 0) cancelAnimationFrame(pointer_frame);
-      tooltip.dataset.visible = "false";
+      tooltip.detach();
+      legend.detach();
       chart.remove();
       ready_state.textContent = "paused";
     },

@@ -3,11 +3,11 @@
 use aeris_charts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
     DEFAULT_GENERAL_FILL_OPACITY, GeneralAreaBaseline, GeneralAxisDomain, GeneralAxisOptions,
-    GeneralAxisTick, GeneralBrushRange, GeneralBrushSnapshot, GeneralDatasetId, GeneralHitMode,
-    GeneralInterpolation, GeneralLineStyle, GeneralPointSymbol, GeneralReferenceId,
-    GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId,
-    GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode, GeneralTooltipSnapshot,
-    GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    GeneralAxisTick, GeneralBrushEndpoint, GeneralBrushRange, GeneralBrushSnapshot,
+    GeneralDatasetId, GeneralHitMode, GeneralInterpolation, GeneralLineStyle, GeneralPointSymbol,
+    GeneralReferenceId, GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity,
+    GeneralScaleType, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode,
+    GeneralTooltipSnapshot, GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use js_sys::{Float64Array, Uint8Array, Uint32Array};
 use serde::Deserialize;
@@ -2595,6 +2595,42 @@ impl ChartInner {
             .engine
             .set_general_brush_from_pixels(axis_id, from_css, to_css)
         {
+            Ok(snapshot) => result_ok(general_brush_value(snapshot)),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn set_general_brush_input_axis_result_json(&mut self, axis_id: &str) -> String {
+        match self
+            .engine
+            .set_general_brush_input_axis((!axis_id.is_empty()).then_some(axis_id))
+        {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn select_full_general_brush_result_json(&mut self, axis_id: &str) -> String {
+        match self.engine.select_full_general_brush(axis_id) {
+            Ok(snapshot) => result_ok(general_brush_value(snapshot)),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn nudge_general_brush_result_json(
+        &mut self,
+        endpoint_start: bool,
+        direction: i32,
+    ) -> String {
+        let Ok(direction) = i8::try_from(direction) else {
+            return input_error("general brush nudge direction must be -1 or 1");
+        };
+        let endpoint = if endpoint_start {
+            GeneralBrushEndpoint::Start
+        } else {
+            GeneralBrushEndpoint::End
+        };
+        match self.engine.nudge_general_brush(endpoint, direction) {
             Ok(snapshot) => result_ok(general_brush_value(snapshot)),
             Err(error) => result_error(&error),
         }
