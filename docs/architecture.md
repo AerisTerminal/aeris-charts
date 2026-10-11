@@ -966,7 +966,9 @@ A host histogram's value carries the opaque hue of the column it reads out, reso
 per-point, up/down volume and solid color rule the frame draws with, so a volume legend follows the
 volume columns rather than the price bars. Native indicator histograms use the same rule, so the
 Volume indicator's columns and legend honor its output `up_color`/`down_color` (falling back to the
-volume tint) and its simple or exponential average line reads in its own line color.
+volume tint) and its simple or exponential average line reads in its own line color. Unlike the
+other volume studies, a Volume binding may name its volume series as its source too, so its columns
+follow traded volume where a presentation (a footprint) leaves the price rows as whitespace.
 
 `set_indicator_binding_pane` moves every output of one binding as one engine operation, either over
 its source pane on the overlay scale (Volume keeps its bottom-fifth overlay margins) or into a fresh

@@ -5589,6 +5589,51 @@ fn a_volume_binding_moves_between_the_price_pane_and_its_own_pane_as_one_unit() 
 }
 
 #[test]
+fn a_volume_binding_over_its_own_weights_keeps_columns_where_price_rows_are_whitespace() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [1.0, 2.0, 3.0, 4.0];
+    let price = [10.0, f64::NAN, 12.0, f64::NAN];
+    chart
+        .set_series_data(0, &times, &price, &price, &price, &price)
+        .unwrap();
+    let weights = chart.add_series(SeriesKind::Histogram);
+    let volume = [5.0, 7.0, 9.0, 11.0];
+    chart
+        .set_series_data(weights, &times, &volume, &volume, &volume, &volume)
+        .unwrap();
+    let kind = IndicatorKind::Volume {
+        period: 2,
+        exponential: false,
+    };
+    let drawn = |chart: &ChartEngine, id| {
+        chart.data.series_data(id).unwrap().1[3]
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite())
+            .collect::<Vec<_>>()
+    };
+
+    let over_price = chart.add_indicator_kind(0, kind.clone(), Some(weights));
+    assert_eq!(
+        drawn(&chart, over_price[0]),
+        [5.0, 9.0],
+        "a price source drops the columns of its whitespace rows"
+    );
+
+    let over_weights = chart.add_indicator_kind(weights, kind, Some(weights));
+    assert_eq!(over_weights.len(), 2);
+    assert_eq!(drawn(&chart, over_weights[0]), volume);
+    assert_eq!(drawn(&chart, over_weights[1]), [6.0, 8.0, 10.0]);
+    assert!(
+        chart
+            .add_indicator_kind(weights, IndicatorKind::Obv, Some(weights))
+            .is_empty(),
+        "other volume studies still need a distinct volume series"
+    );
+    assert_indicator_binding_matches_full(&chart, 1);
+}
+
+#[test]
 fn ease_of_movement_requires_positive_divisor_and_uses_oscillator_pane() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let values = [10.0, 20.0, 30.0];

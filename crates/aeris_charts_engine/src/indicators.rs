@@ -3911,12 +3911,17 @@ impl ChartEngine {
                 | IndicatorKind::ElderForce { .. }
                 | IndicatorKind::EaseOfMovement { .. }
                 | IndicatorKind::Cmf { .. }
-                | IndicatorKind::Mfi { .. }
-                | IndicatorKind::Volume { .. } => volume_source.is_none_or(|id| {
+                | IndicatorKind::Mfi { .. } => volume_source.is_none_or(|id| {
                     id == source
                         || self
                             .series_entry(id)
                             .is_none_or(|series| !series.kind.stores_scalar_values())
+                }),
+                // The volume series may also be the source: its columns then follow traded
+                // volume even where a presentation leaves the price rows as whitespace.
+                IndicatorKind::Volume { .. } => volume_source.is_none_or(|id| {
+                    self.series_entry(id)
+                        .is_none_or(|series| !series.kind.stores_scalar_values())
                 }),
                 IndicatorKind::Vwap
                 | IndicatorKind::VwapBands { .. }
