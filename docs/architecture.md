@@ -903,7 +903,10 @@ widths. The engine caps time-axis labels using the resolved painted axis font si
 axis primitives in that operation; the browser inserts host plugin labels into the returned base
 axis frame first, then lowers the final axis layer. Browser public API mutations use that same
 operation's layout-only phase when synchronous getters need settled geometry before render;
-incremental render layout grows axes without shrinking them.
+incremental render layout grows axes without shrinking them. An eager layout-only resize
+invalidates coordinate-dependent retained layers after settling layout, even when the size
+was already installed by the host; the following full frame rebuilds marks and axes at
+the new size without requiring a data mutation or repeating the layout pass.
 Axis label text and trading readouts share the engine's `set_text_cap_center` metric. The engine
 requests it at each painted run's exact size, family, and weight and applies the correction before
 device-pixel encoding. Browser Canvas2D measures a capital's ink against its `middle` baseline; GPUI
@@ -1010,6 +1013,12 @@ that handle, so later index reuse cannot retarget it to another pane or scale. P
 separate stable pane identity and intentionally issues fresh live IDs during restore.
 
 The ordered frame contract contains pane backgrounds and grids, idle indicator geometry, idle drawings, ordinary series geometry, active series/drawings/previews, custom-series contributions spliced at their paint marks, pane chrome, trading regions, trading/alerts, crosshair overlays, axes, labels, and text, plus per-series and per-drawing segment ranges for retained backend groups. `series_order`/`drawings` stay the stable saved orders; the frame derives the effective paint order without rewriting them, and series/drawing hit tests tie-break on stable order so promotion cannot oscillate hover. Backends preserve ordering, clipping, blending, and coordinate conversion. A backend may batch compatible adjacent primitives only when visible output is unchanged.
+General-domain panes additionally carry a device-pixel plot scissor and the contiguous
+range of general marks, references, labels and interaction ink inside `main` to which
+it applies. Canvas2D, WebGPU, GPUI and native use that shared range and scissor;
+financial panes retain the original pane clip, while pane underlay/chrome and the
+unscissored axis layer remain visible outside the general plot. Exact and nearest
+general hits reject positions outside the same plot bounds before testing any mark.
 
 Trend-line labels are owned by the trend-line feature rather than by `DrawingKind::Text`: the
 engine owns their text state, dedicated hover affordance and hit region, edit-session identity,

@@ -628,6 +628,10 @@ impl ChartInner {
             // Splice at the series' paint mark (shifted by prims already spliced into this
             // pane), preserving the chart z-order between built-in series.
             let insert_at = (p.mark + shifts[p.pane]).min(frame_pane.main.len());
+            if frame_pane.plot_scissor.is_some() && insert_at <= frame_pane.plot_range[0] {
+                frame_pane.plot_range[0] += decoded.prims.len();
+                frame_pane.plot_range[1] += decoded.prims.len();
+            }
             shifts[p.pane] += decoded.prims.len();
             frame_pane.main.splice(insert_at..insert_at, decoded.prims);
         }

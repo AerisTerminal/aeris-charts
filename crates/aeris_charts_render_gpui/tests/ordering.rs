@@ -231,6 +231,8 @@ fn pane(scissor: [u32; 4], under: Vec<Prim>, main: Vec<Prim>, top: Vec<Prim>) ->
         top: 0.0,
         height: 100.0,
         scissor,
+        plot_scissor: None,
+        plot_range: [0, 0],
         under,
         main,
         top_prims: top,

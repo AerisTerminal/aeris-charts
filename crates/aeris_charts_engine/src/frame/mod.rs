@@ -219,6 +219,11 @@ pub struct FramePane {
     pub top: f64,
     pub height: f64,
     pub scissor: [u32; 4],
+    /// Only `main[plot_range[0]..plot_range[1]]` uses this narrower device-pixel clip.
+    /// Pane backgrounds, financial geometry and chrome keep the pane scissor; axes are
+    /// drawn in the separate unscissored axis layer.
+    pub plot_scissor: Option<[u32; 4]>,
+    pub plot_range: [usize; 2],
     pub under: Vec<Prim>,
     pub main: Vec<Prim>,
     /// Primitive z-order `top` layer (reference `PrimitivePaneViewZOrder` "top" — above everything,
@@ -344,7 +349,7 @@ impl FrameInvalidation {
         self.autoscale = generation;
     }
 
-    fn coordinates(&mut self) {
+    pub(crate) fn coordinates(&mut self) {
         let generation = self.tick();
         self.coordinate = generation;
         self.scene = generation;
@@ -2177,6 +2182,8 @@ impl ChartEngine {
             out.top = cache.top;
             out.height = cache.height;
             out.scissor = cache.scissor;
+            out.plot_scissor = None;
+            out.plot_range = [0, 0];
             out.under.clear();
             out.main.clear();
             out.top_prims.clear();
@@ -2423,6 +2430,16 @@ impl ChartEngine {
                     revision: self.frame_invalidation.overlay,
                     coordinate_revision: self.frame_invalidation.coordinate,
                 });
+            }
+            if !self.pane_uses_financial_time(pi)
+                && let Some(plot) = self.general_plot_rect(pi)
+            {
+                let left = (plot.x * hpr).round().max(0.0) as u32;
+                let top = (plot.y * vpr).round().max(0.0) as u32;
+                let right = ((plot.x + plot.width) * hpr).round().max(left as f64) as u32;
+                let bottom = ((plot.y + plot.height) * vpr).round().max(top as f64) as u32;
+                out.plot_scissor = Some([left, top, right - left, bottom - top]);
+                out.plot_range = [general_start, out.main.len()];
             }
             // Trailing creation previews (brush + pending) from retained, topmost among chart
             // content but still below chrome/trading (protected layers) and clipped to the pane.

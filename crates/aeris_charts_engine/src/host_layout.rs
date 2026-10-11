@@ -80,6 +80,11 @@ impl ChartEngine {
             self.css_width = request.width;
             self.css_height = request.height;
             self.dpr = request.dpr;
+            // A layout-only resize updates coordinates before the next host paint. Keep the
+            // retained frame invalid until that full paint has rebuilt its pane and axis lists.
+            if !request.layout_only {
+                self.invalidate_frame_all();
+            }
         }
         self.begin_frame_build();
         let (input_frame, input_layout) = self.input.take_frame_invalidation();
@@ -115,6 +120,13 @@ impl ChartEngine {
             }
         }
         if request.layout_only {
+            if layout_recomputed {
+                // A host may update dimensions before asking for an eager layout pass. That
+                // pass marks its layout generation current but does not rebuild the retained
+                // frame. Rebuild coordinate-dependent layers and axes at the next full paint
+                // without repeating this already completed layout/autoscale negotiation.
+                self.frame_invalidation.coordinates();
+            }
             return FinancialFramePreparation {
                 frame_built: false,
                 axis_rebuilt: false,
@@ -814,5 +826,56 @@ mod tests {
         );
         assert!(rendered.frame_built);
         assert!(!rendered.layout_recomputed);
+
+        // WASM resize first prepares only layout so pointer geometry can be queried
+        // synchronously. The next paint must not reuse the previous viewport's frame.
+        let old_frame = frame.clone();
+        let old_axis = axis.clone();
+        let resized_layout = chart.prepare_financial_frame_with_measure(
+            FinancialFrameRequest {
+                width: 520.0,
+                height: 320.0,
+                dpr: 2.0,
+                force_layout: true,
+                allow_axis_shrink: true,
+                force_frame: false,
+                force_axis: false,
+                layout_only: true,
+                fit_content: false,
+                frame: &mut frame,
+                axis_frame: None,
+                axis_primitives: None,
+            },
+            |text, _| text.len() as f64 * 7.0,
+            |text, _| text.len() as f64 * 6.0,
+        );
+        assert!(resized_layout.layout_recomputed);
+        assert_eq!(frame, old_frame);
+        let resized = chart.prepare_financial_frame_with_measure(
+            FinancialFrameRequest {
+                width: 520.0,
+                height: 320.0,
+                dpr: 2.0,
+                force_layout: false,
+                allow_axis_shrink: false,
+                force_frame: false,
+                force_axis: false,
+                layout_only: false,
+                fit_content: false,
+                frame: &mut frame,
+                axis_frame: None,
+                axis_primitives: Some(&mut axis),
+            },
+            |text, _| text.len() as f64 * 7.0,
+            |text, _| text.len() as f64 * 6.0,
+        );
+        assert!(resized.frame_built);
+        assert!(resized.axis_rebuilt);
+        assert_ne!(frame, old_frame);
+        assert_ne!(axis, old_axis);
+        assert_eq!(
+            (frame.width, frame.height),
+            (chart.pane_left + chart.pane_w, 320.0)
+        );
     }
 }

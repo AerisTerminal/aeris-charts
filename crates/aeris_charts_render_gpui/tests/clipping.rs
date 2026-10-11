@@ -26,6 +26,8 @@ fn pane(scissor: [u32; 4], main: Vec<Prim>) -> FramePane {
         top: 0.0,
         height: 100.0,
         scissor,
+        plot_scissor: None,
+        plot_range: [0, 0],
         under: Vec::new(),
         main,
         top_prims: Vec::new(),
@@ -191,6 +193,43 @@ fn the_axis_layer_is_outside_every_clip() {
         depths[axis_index], 0,
         "the axis layer must paint at clip depth 0"
     );
+}
+
+#[test]
+fn general_plot_clips_only_its_marks_and_keeps_pane_chrome_and_axes() {
+    let mut general = pane(
+        [0, 0, 400, 100],
+        vec![rect_at(1, 1), rect_at(2, 95), rect_at(3, 95)],
+    );
+    general.plot_scissor = Some([0, 10, 400, 70]);
+    general.plot_range = [1, 2];
+    let plan = plan_frame(&frame(vec![general]), &[rect_at(4, 110)]);
+    let depths = clip_depths(&plan).expect("balanced nested clips");
+    let clips: Vec<_> = plan
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            SceneOp::PushClip(rect) => Some(*rect),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        clips,
+        vec![
+            DeviceRect::new(0.0, 0.0, 400.0, 100.0),
+            DeviceRect::new(0.0, 10.0, 400.0, 70.0),
+        ]
+    );
+    let quad_depths: Vec<_> = plan
+        .ops
+        .iter()
+        .zip(depths)
+        .filter_map(|(op, depth)| match op {
+            SceneOp::Quad { rect, .. } => Some((rect.x, depth)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(quad_depths, vec![(1.0, 1), (2.0, 2), (3.0, 1), (4.0, 0)]);
 }
 
 #[test]

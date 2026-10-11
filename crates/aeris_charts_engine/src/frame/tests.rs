@@ -3347,7 +3347,7 @@ fn wiggle_areas_align_boundaries_with_the_auto_domain_and_exact_hit() {
     let hit = chart
         .general_hit_test(
             pane,
-            second[1].x,
+            second[1].x - 0.5,
             (second[1].low_y + second[1].high_y) * 0.5,
             crate::GeneralHitMode::Exact,
         )
@@ -4091,7 +4091,12 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
     assert_eq!(hit.distance, 0.0);
 
     let marker_only_hit = chart
-        .general_hit_test(pane, first.x - 6.0, first.y, crate::GeneralHitMode::Exact)
+        .general_hit_test(
+            pane,
+            first.x + 0.5,
+            first.y - 0.5,
+            crate::GeneralHitMode::Exact,
+        )
         .unwrap();
     assert_eq!(marker_only_hit.row, 0, "marker geometry must be hittable");
 
@@ -4609,6 +4614,167 @@ fn xy_line_log_axes_retain_non_positive_rows_as_geometry_gaps() {
     assert_eq!(snapshot.total_rows, 5);
     assert_eq!(snapshot.items[2].x_label, "0");
     assert_eq!(snapshot.items[3].value, Some(0.0));
+}
+
+#[test]
+fn general_paths_do_not_hit_axis_strips_after_y_view_changes() {
+    let mut chart = ChartEngine::new(520.0, 320.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    let mut x = GeneralAxisOptions::new("clip-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+    x.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+    chart.add_general_axis(x).unwrap();
+    let mut y = GeneralAxisOptions::new("clip-y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y.domain = GeneralAxisDomain::Numeric([0.0, 20.0]);
+    chart.add_general_axis(y).unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![0.0, 5.0, 10.0],
+            y: vec![10.0, 10.0, 10.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let mut area = GeneralSeriesOptions::xy_area(pane, dataset, "clip-x", "clip-y");
+    area.baseline_value = Some(5.0);
+    chart.add_general_series(area).unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::xy_line(
+            pane, dataset, "clip-x", "clip-y",
+        ))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    chart.zoom_general_axis("clip-y", 3.0, 5.0).unwrap();
+    let frame = chart.build_frame();
+    let plot = chart.general_plot_rect(pane).unwrap();
+    assert!(
+        frame.panes[0].plot_scissor.is_none(),
+        "financial pane keeps its original scissor"
+    );
+    let plot_clip = frame.panes[pane].plot_scissor.expect("general plot clip");
+    assert_eq!(plot_clip[1], plot.y.round() as u32);
+    assert_eq!(
+        plot_clip[3],
+        (plot.y + plot.height).round() as u32 - plot_clip[1]
+    );
+    let [start, end] = frame.panes[pane].plot_range;
+    assert!(end > start);
+    assert!(
+        frame.panes[pane].main[start..end]
+            .iter()
+            .any(|prim| matches!(prim, Prim::Polyline { .. } | Prim::AreaFill { .. }))
+    );
+    assert!(
+        plot_clip[1] + plot_clip[3] < frame.panes[pane].scissor[1] + frame.panes[pane].scissor[3]
+    );
+    let x = plot.width / 2.0;
+    let below = plot.y + plot.height + 8.0;
+    assert!(below < chart.panes[pane].top + chart.panes[pane].height);
+    assert!(
+        chart
+            .general_hit_test(
+                pane,
+                x,
+                plot.y + plot.height / 2.0,
+                crate::GeneralHitMode::Exact
+            )
+            .is_some()
+    );
+    for mode in [
+        crate::GeneralHitMode::Exact,
+        crate::GeneralHitMode::Nearest { max_distance: 50.0 },
+    ] {
+        assert_eq!(
+            chart.general_hit_test(pane, x, below, mode),
+            None,
+            "painted geometry and hits must stop at the plot, before axis chrome"
+        );
+    }
+}
+
+#[test]
+fn general_resize_after_layout_only_rebuilds_retained_bars_and_axes() {
+    let mut chart = ChartEngine::new(640.0, 360.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "resize-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "resize-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["A".into(), "B".into()],
+            category_indices: vec![0, 1],
+            y: vec![8.0, 6.0],
+            y_valid: None,
+        })
+        .unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::column(
+            pane, dataset, "resize-x", "resize-y",
+        ))
+        .unwrap();
+    let mut frame = ChartFrame::default();
+    let mut axis = Vec::new();
+    let prepare = |chart: &mut ChartEngine,
+                   frame: &mut ChartFrame,
+                   axis: &mut Vec<Prim>,
+                   width,
+                   height,
+                   layout_only| {
+        chart.prepare_financial_frame_with_measure(
+            crate::FinancialFrameRequest {
+                width,
+                height,
+                dpr: 1.0,
+                force_layout: layout_only,
+                allow_axis_shrink: layout_only,
+                force_frame: false,
+                force_axis: false,
+                layout_only,
+                fit_content: false,
+                frame,
+                axis_frame: None,
+                axis_primitives: if layout_only { None } else { Some(axis) },
+            },
+            |text, _| text.len() as f64 * 7.0,
+            |text, _| text.len() as f64 * 6.0,
+        )
+    };
+    assert!(prepare(&mut chart, &mut frame, &mut axis, 640.0, 360.0, true).layout_recomputed);
+    assert!(prepare(&mut chart, &mut frame, &mut axis, 640.0, 360.0, false).frame_built);
+    let original = frame.clone();
+    assert!(prepare(&mut chart, &mut frame, &mut axis, 400.0, 240.0, true).layout_recomputed);
+    let result = prepare(&mut chart, &mut frame, &mut axis, 400.0, 240.0, false);
+    assert!(result.frame_built && result.axis_rebuilt);
+    assert_ne!(frame, original);
+    assert_eq!(frame.height, chart.pane_h);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
 }
 
 #[test]
@@ -5201,7 +5367,12 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
     assert_eq!(geometry.len(), 3, "missing Y rows emit no scatter mark");
     let first = geometry[0];
     let hit = chart
-        .general_hit_test(pane, first.x, first.y, crate::GeneralHitMode::Exact)
+        .general_hit_test(
+            pane,
+            first.x + 0.5,
+            first.y - 0.5,
+            crate::GeneralHitMode::Exact,
+        )
         .unwrap();
     assert_eq!(hit.series, series);
     assert_eq!(hit.row, 0);
@@ -5210,7 +5381,7 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
         .general_hit_test(
             pane,
             first.x + first.radius * 0.9,
-            first.y + first.radius * 0.9,
+            first.y - first.radius * 0.9,
             crate::GeneralHitMode::Exact,
         )
         .unwrap();
@@ -5222,7 +5393,7 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
         .general_hit_test(
             pane,
             first.x + first.radius + 2.0,
-            first.y,
+            first.y - 0.5,
             crate::GeneralHitMode::Nearest { max_distance: 3.0 },
         )
         .unwrap();
@@ -6364,7 +6535,7 @@ fn category_error_bars_share_band_and_point_axes_without_numeric_x_bounds() {
             .general_hit_test(
                 pane,
                 geometry[0].x,
-                geometry[0].y_low.unwrap(),
+                geometry[0].y_low.unwrap() - 0.5,
                 crate::GeneralHitMode::Exact,
             )
             .unwrap();

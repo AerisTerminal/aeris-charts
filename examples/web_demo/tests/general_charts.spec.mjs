@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { PNG } from "pngjs";
 
 test("general charts can own the first pane and failed creation leaves no host resources", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
@@ -3951,6 +3952,233 @@ test("range_area spans numeric, temporal, and category domains through the brows
   expect(result.screenshot).toBeGreaterThan(1000);
 });
 
+for (const backend of ["canvas2d", "webgpu"]) {
+  test(`manual resize matches fresh general bar layout and click (${backend})`, async ({ page, browserName }, testInfo) => {
+    test.skip(backend === "webgpu" && browserName !== "chromium", "SwiftShader WebGPU uses the Chromium project flags");
+    await page.goto(`/?backend=${backend}${backend === "canvas2d" ? "&forceFallbackAdapter=1" : ""}`);
+    const result = await page.evaluate(async (backend) => {
+      const { create_chart } = await import("/dist/aeris_charts_financial.js");
+      const create = async (left, width, height) => {
+        const host = document.createElement("div");
+        host.style.cssText = `position:fixed;left:${left}px;top:0;width:${width}px;height:${height}px;z-index:10000`;
+        document.body.appendChild(host);
+        const chart = await create_chart(host, {
+          backend, autoSize: false,
+          initialPane: { horizontal_domain: { type: "category", scale: "band" } },
+        });
+        chart.resize(width, height, 1);
+        chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "band" });
+        chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear", domain: [0, 10] });
+        const series = chart.add_series("column", {
+          pane: 0, x_axis_id: "x", y_axis_id: "y", color: "#ff0000",
+          bar_gap: 18, bar_max_width: 32,
+        });
+        series.set_data([
+          { id: "a", x: "A", y: 8 },
+          { id: "b", x: "B", y: 6 },
+          { id: "c", x: "C", y: 4 },
+        ]);
+        return { host, chart, series };
+      };
+      const resized = await create(0, 640, 360);
+      resized.host.style.width = "400px";
+      resized.host.style.height = "240px";
+      resized.chart.resize(400, 240, 1);
+      const fresh = await create(500, 400, 240);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const screenshot_pixels = (chart) => {
+        const screenshot = chart.take_screenshot();
+        const data = screenshot.getContext("2d").getImageData(0, 0, 400, 240).data;
+        const red = [];
+        for (let y = 0; y < 240; y++) {
+          for (let x = 0; x < 400; x++) {
+            const i = (y * 400 + x) * 4;
+            if (data[i] > data[i + 1] + 80 && data[i] > data[i + 2] + 80) red.push([x, y]);
+          }
+        }
+        return { red, data };
+      };
+      const old = screenshot_pixels(resized.chart);
+      const current = screenshot_pixels(fresh.chart);
+      const geometry = resized.chart.panes()[0].get_geometry();
+      const picked = old.red[Math.floor(old.red.length / 2)];
+      const direct_hit = picked && resized.chart.general_hit_test(0, picked[0] - geometry.left, picked[1]);
+      let axis_pixels_match = true;
+      for (let y = 0; y < 240 && axis_pixels_match; y++) {
+        for (let x = 0; x < 400; x++) {
+          if (x >= geometry.left && y < 215) continue; // Left Y strip and bottom X strip.
+          const i = (y * 400 + x) * 4;
+          if (old.data[i] !== current.data[i] || old.data[i + 1] !== current.data[i + 1] ||
+              old.data[i + 2] !== current.data[i + 2] || old.data[i + 3] !== current.data[i + 3]) {
+            axis_pixels_match = false;
+            break;
+          }
+        }
+      }
+      window.__resize_regression = { resized, fresh };
+      return {
+        backend: resized.chart.backend(),
+        old_pixel_count: old.red.length,
+        fresh_pixel_count: current.red.length,
+        pixels_match: old.red.length === current.red.length &&
+          old.red.every(([x, y], i) => x === current.red[i][0] && y === current.red[i][1]),
+        axis_pixels_match,
+        picked, direct_hit,
+        geometry,
+      };
+    }, backend);
+    expect(result.backend).toBe(backend);
+    expect(result.old_pixel_count).toBeGreaterThan(100);
+    expect(result.direct_hit).toMatchObject({ series: expect.any(Number), row_id: expect.any(String) });
+    const image = await page.screenshot({ clip: { x: 0, y: 0, width: 900, height: 240 } });
+    await testInfo.attach(`resized-bars-${backend}.png`, { body: image, contentType: "image/png" });
+    const png = PNG.sync.read(image);
+    const scale = png.width / 900;
+    let resized_dom_bars = 0;
+    let fresh_dom_bars = 0;
+    let differing_dom_bars = 0;
+    for (let y = 0; y < 240; y++) {
+      for (let x = 0; x < 400; x++) {
+        const red = (cssX) => {
+          const offset = (Math.floor((y + 0.5) * scale) * png.width +
+            Math.floor((cssX + 0.5) * scale)) * 4;
+          return png.data[offset] > png.data[offset + 1] + 80 &&
+            png.data[offset] > png.data[offset + 2] + 80;
+        };
+        const resized_red = red(x);
+        const fresh_red = red(500 + x);
+        if (resized_red) resized_dom_bars++;
+        if (fresh_red) fresh_dom_bars++;
+        if (resized_red !== fresh_red) differing_dom_bars++;
+      }
+    }
+    expect(resized_dom_bars, `${backend} presented red bars`).toBeGreaterThan(100);
+    expect(fresh_dom_bars).toBe(resized_dom_bars);
+    expect(differing_dom_bars, `${backend} presented resized/fresh pixel masks`).toBe(0);
+    await page.mouse.click(result.picked[0], result.picked[1]);
+    const selected = await page.evaluate(() => {
+      const { resized, fresh } = window.__resize_regression;
+      const hit = resized.chart.general_selected_hit();
+      resized.chart.remove();
+      resized.host.remove();
+      fresh.chart.remove();
+      fresh.host.remove();
+      delete window.__resize_regression;
+      return hit;
+    });
+    expect(selected).toMatchObject({ row_id: result.direct_hit.row_id });
+    expect(result.pixels_match, `resized/fresh red bar pixels (${result.old_pixel_count}/${result.fresh_pixel_count})`).toBe(true);
+    expect(result.axis_pixels_match, "resized/fresh axis pixels").toBe(true);
+  });
+}
+
+for (const backend of ["canvas2d", "webgpu"]) {
+test(`XY lines and areas clip the explicit Y view in pixels and exact hits (${backend})`, async ({ page, browserName }, testInfo) => {
+  test.skip(backend === "webgpu" && browserName !== "chromium", "SwiftShader WebGPU uses the Chromium project flags");
+  await page.goto(`/?backend=${backend}${backend === "canvas2d" ? "&forceFallbackAdapter=1" : ""}`);
+  const result = await page.evaluate(async (backend) => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const cases = [];
+    window.__clip_regression = [];
+    for (const [index, kind] of ["xy_line", "xy_area"].entries()) {
+      const host = document.createElement("div");
+      host.style.cssText = `position:fixed;left:${index * 540}px;top:0;width:520px;height:320px;background:#fff;z-index:10000`;
+      document.body.appendChild(host);
+      const chart = await create_chart(host, {
+        backend, autoSize: false,
+        initialPane: { horizontal_domain: { type: "continuous", scale: "linear" } },
+      });
+      window.__clip_regression.push({ chart, host });
+      chart.resize(520, 320, 1);
+      const pane = chart.panes()[0];
+      chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "linear", domain: [0, 10], title: "Bottom axis" });
+      const y_axis = chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear", domain: [0, 20] });
+      const series = chart.add_series(kind, {
+        pane: 0, x_axis_id: "x", y_axis_id: "y", color: "#ff0000", line_width: 3,
+        ...(kind === "xy_area" ? { baseline_value: 5, fill_opacity: 1 } : {}),
+      });
+      series.set_data([
+        { id: "left", x: -10, y: -10 },
+        { id: "middle", x: 5, y: 10 },
+        { id: "right", x: 20, y: 30 },
+      ]);
+      y_axis.zoom(2, 10); // Explicit Y view [5, 15]; both ends cross plot edges and axis strips.
+      chart.resize(520, 320, 1);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const g = pane.get_geometry();
+      const screenshot = chart.take_screenshot();
+      const pixels = screenshot.getContext("2d").getImageData(0, 0, 520, 320).data;
+      const red = (x, y) => {
+        const offset = (Math.floor(y) * 520 + Math.floor(x)) * 4;
+        return pixels[offset] > pixels[offset + 1] + 35 && pixels[offset] > pixels[offset + 2] + 35;
+      };
+      const middle_x = Math.floor(g.width / 2);
+      const scan = (x) => {
+        const result = [];
+        for (let y = g.top + 20; y < g.top + g.height - 50; y++) {
+          if (red(x, y)) result.push(y);
+        }
+        return result;
+      };
+      const inside_pixels = scan(Math.floor(g.left + middle_x));
+      const outside_pixels = scan(Math.floor(g.left - 8));
+      const inside_y = inside_pixels[Math.floor(inside_pixels.length / 2)];
+      let axis_strip_ink = 0;
+      for (let y = Math.floor(g.top + g.height - 20); y < g.top + g.height; y++) {
+        for (let x = Math.floor(g.left + 8); x < g.left + g.width - 8; x++) {
+          if (red(x, y)) axis_strip_ink++;
+        }
+      }
+      cases.push({
+        kind,
+        backend: chart.backend(),
+        pane: g,
+        axis_strip_ink,
+        inside_pixels: inside_pixels.length,
+        outside_pixels: outside_pixels.length,
+        inside_hit: chart.general_hit_test(0, middle_x, inside_y),
+        outside_left_hit: chart.general_hit_test(0, -8, inside_y),
+        outside_right_hit: chart.general_hit_test(0, g.width + 8, inside_y),
+        outside_bottom_hit: chart.general_hit_test(0, middle_x, g.top + g.height - 8),
+      });
+    }
+    return cases;
+  }, backend);
+  const image = await page.screenshot({ clip: { x: 0, y: 0, width: 1060, height: 320 } });
+  await testInfo.attach(`plot-clip-${backend}.png`, { body: image, contentType: "image/png" });
+  const png = PNG.sync.read(image);
+  const screenshot_scale = png.width / 1060;
+  for (const entry of result) {
+    expect(entry.backend).toBe(backend);
+    expect(entry.inside_pixels, entry.kind).toBeGreaterThan(0);
+    expect(entry.outside_pixels, entry.kind).toBe(0);
+    expect(entry.axis_strip_ink, entry.kind).toBe(0);
+    expect(entry.inside_hit, entry.kind).toMatchObject({ row_id: expect.any(String) });
+    expect(entry.outside_left_hit, entry.kind).toBeNull();
+    expect(entry.outside_right_hit, entry.kind).toBeNull();
+    expect(entry.outside_bottom_hit, entry.kind).toBeNull();
+  }
+  // The actual presented backend, not only the Canvas2D screenshot path, must keep
+  // the reserved X-axis strip clear of series-colored ink while retaining its labels.
+  for (const [index, entry] of result.entries()) {
+    let ink = 0;
+    let labels = 0;
+    for (let y = Math.floor(entry.pane.top + entry.pane.height - 20); y < entry.pane.top + entry.pane.height; y++) {
+      for (let x = Math.floor(entry.pane.left + index * 540 + 8); x < entry.pane.left + index * 540 + entry.pane.width - 8; x++) {
+        const offset = (Math.floor((y + 0.5) * screenshot_scale) * png.width +
+          Math.floor((x + 0.5) * screenshot_scale)) * 4;
+        if (png.data[offset] > png.data[offset + 1] + 35 && png.data[offset] > png.data[offset + 2] + 35) ink++;
+        if (png.data[offset] < 130 && png.data[offset + 1] < 130 &&
+            png.data[offset + 2] < 130 && png.data[offset + 3] > 200) labels++;
+      }
+    }
+    expect(ink, `${entry.kind} presented ${backend} axis strip`).toBe(0);
+    expect(labels, `${entry.kind} keeps axis labels outside plot clip`).toBeGreaterThan(12);
+  }
+  await page.evaluate(() => { for (const { chart, host } of window.__clip_regression) { chart.remove(); host.remove(); } });
+});
+}
+
 test("range_bar renders category low/high rectangles with exact browser hits", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
@@ -3972,6 +4200,14 @@ test("range_bar renders category low/high rectangles with exact browser hits", a
     ]);
     chart.resize(640, 420, 1);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const geometry = pane.get_geometry();
+    const exact_rows = new Set();
+    for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2 && exact_rows.size < 2; y += 2) {
+      for (let x = 2; x < geometry.width - 2; x += 2) {
+        const hit = chart.general_hit_test(pane.pane_index(), x, y);
+        if (hit?.series === series.id) exact_rows.add(hit.row_id);
+      }
+    }
     const snapshot = series.data_at(0);
     const state = chart.export_state();
     const restored_host = document.createElement("div");
@@ -3987,10 +4223,11 @@ test("range_bar renders category low/high rectangles with exact browser hits", a
     restored_host.remove();
     chart.remove();
     host.remove();
-    return { kind: series.kind, snapshot, restore_version: restore_result.schema_version, restored_kind: restored_series?.kind, restored_snapshot };
+    return { kind: series.kind, snapshot, exact_rows: [...exact_rows].sort(), restore_version: restore_result.schema_version, restored_kind: restored_series?.kind, restored_snapshot };
   });
   expect(result.kind).toBe("range_bar");
   expect(result.snapshot).toMatchObject({ low: 1, high: 3 });
+  expect(result.exact_rows).toEqual(["a", "b"]);
   expect(result.restore_version).toBe(2);
   expect(result.restored_kind).toBe("range_bar");
   expect(result.restored_snapshot).toMatchObject({ low: 1, high: 3 });

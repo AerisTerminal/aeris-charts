@@ -789,6 +789,26 @@ pub fn render_prims(
     canvas
 }
 
+fn execute_plot_clipped(
+    canvas: &mut TinySkiaCanvas,
+    prims: &[Prim],
+    points: &[[f32; 2]],
+    viewport: Viewport,
+    plot_scissor: Option<[u32; 4]>,
+    [start, end]: [usize; 2],
+) {
+    if let Some([x, y, w, h]) = plot_scissor {
+        execute(&prims[..start], points, canvas, viewport);
+        canvas.save();
+        canvas.clip_rect(x as f32, y as f32, w as f32, h as f32);
+        execute(&prims[start..end], points, canvas, viewport);
+        canvas.restore();
+        execute(&prims[end..], points, canvas, viewport);
+    } else {
+        execute(prims, points, canvas, viewport);
+    }
+}
+
 /// Render a real headless chart instance through the same Prim frame consumed by browser hosts.
 /// This intentionally covers the chart pane layer; browser-only axis text remains a host concern.
 pub fn render_engine(chart: &mut ChartEngine) -> TinySkiaCanvas {
@@ -813,7 +833,14 @@ pub fn render_engine(chart: &mut ChartEngine) -> TinySkiaCanvas {
         let [x, y, w, h] = pane.scissor;
         canvas.clip_rect(x as f32, y as f32, w as f32, h as f32);
         execute(&pane.under, &pane.points, &mut canvas, viewport);
-        execute(&pane.main, &pane.points, &mut canvas, viewport);
+        execute_plot_clipped(
+            &mut canvas,
+            &pane.main,
+            &pane.points,
+            viewport,
+            pane.plot_scissor,
+            pane.plot_range,
+        );
         execute(&pane.top_prims, &pane.points, &mut canvas, viewport);
         canvas.restore();
     }
@@ -857,6 +884,8 @@ pub struct RgbaImage {
 #[derive(Clone, Debug)]
 struct PreparedPane {
     scissor: [u32; 4],
+    plot_scissor: Option<[u32; 4]>,
+    plot_range: [usize; 2],
     prims: Vec<Prim>,
     points: Vec<[f32; 2]>,
 }
@@ -1004,7 +1033,14 @@ impl PreparedChartImage {
             canvas.save();
             let [x, y, w, h] = pane.scissor;
             canvas.clip_rect(x as f32, y as f32, w as f32, h as f32);
-            execute(&pane.prims, &pane.points, &mut canvas, viewport);
+            execute_plot_clipped(
+                &mut canvas,
+                &pane.prims,
+                &pane.points,
+                viewport,
+                pane.plot_scissor,
+                pane.plot_range,
+            );
             canvas.restore();
         }
         execute(&self.axis, &[], &mut canvas, viewport);
@@ -1075,6 +1111,11 @@ pub fn prepare_engine_image(
         } else {
             segments.series_end
         };
+        let under_len = pane.under.len();
+        let plot_range = [
+            under_len + pane.plot_range[0].min(base_end),
+            under_len + pane.plot_range[1].min(base_end),
+        ];
         let mut prims = pane.under;
         prims.extend_from_slice(&pane.main[..base_end.min(main_len)]);
         if options.include_crosshair {
@@ -1085,6 +1126,8 @@ pub fn prepare_engine_image(
         }
         panes.push(PreparedPane {
             scissor: pane.scissor,
+            plot_scissor: pane.plot_scissor,
+            plot_range,
             prims,
             points: pane.points,
         });
@@ -1175,8 +1218,8 @@ mod tests {
     use super::*;
     use aeris_charts_engine::{
         AxisDimension, CategoryScaleType, ContinuousScaleType, DrawingKind, DrawingPoint,
-        GeneralAxisOptions, GeneralScaleType, GeneralSeriesOptions, GeneralXyInput,
-        HorizontalDomain, SeriesKind,
+        GeneralAxisDomain, GeneralAxisOptions, GeneralScaleType, GeneralSeriesOptions,
+        GeneralXyInput, HorizontalDomain, SeriesKind,
     };
     use aeris_charts_render::draw_list::{Gradient, IRect};
     use std::sync::Arc;
@@ -1233,7 +1276,14 @@ mod tests {
             let [x, y, w, h] = pane.scissor;
             canvas.clip_rect(x as f32, y as f32, w as f32, h as f32);
             execute(&pane.under, &pane.points, &mut canvas, viewport);
-            execute(&pane.main, &pane.points, &mut canvas, viewport);
+            execute_plot_clipped(
+                &mut canvas,
+                &pane.main,
+                &pane.points,
+                viewport,
+                pane.plot_scissor,
+                pane.plot_range,
+            );
             execute(&pane.top_prims, &pane.points, &mut canvas, viewport);
             canvas.restore();
         }
@@ -1614,6 +1664,75 @@ mod tests {
             painted > 30,
             "expected native scatter pixels, got {painted}"
         );
+    }
+
+    #[test]
+    fn native_general_plot_clip_keeps_area_and_line_out_of_axis_strip() {
+        for area in [false, true] {
+            let mut chart = ChartEngine::new(520.0, 320.0, 1.0);
+            let pane = chart
+                .add_pane_with_domain(
+                    true,
+                    HorizontalDomain::Continuous {
+                        scale: ContinuousScaleType::Linear,
+                    },
+                )
+                .unwrap();
+            let mut x =
+                GeneralAxisOptions::new("x", pane, AxisDimension::X, GeneralScaleType::Linear);
+            x.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+            x.title = Some("Bottom axis".into());
+            chart.add_general_axis(x).unwrap();
+            let mut y =
+                GeneralAxisOptions::new("y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+            y.domain = GeneralAxisDomain::Numeric([0.0, 20.0]);
+            chart.add_general_axis(y).unwrap();
+            let dataset = chart
+                .create_general_xy_dataset(GeneralXyInput::Numeric {
+                    ids: None,
+                    x: vec![-10.0, 5.0, 20.0],
+                    y: vec![-10.0, 10.0, 30.0],
+                    y_valid: None,
+                })
+                .unwrap();
+            let mut options = if area {
+                GeneralSeriesOptions::xy_area(pane, dataset, "x", "y")
+            } else {
+                GeneralSeriesOptions::xy_line(pane, dataset, "x", "y")
+            };
+            options.color = Some("#ff0000".into());
+            options.line_width = 3.0;
+            chart.add_general_series(options).unwrap();
+            chart.zoom_general_axis("y", 2.0, 10.0).unwrap();
+
+            let canvas = render_live_host(&mut chart, 1.0);
+            let frame = chart.build_frame();
+            let [_, plot_top, _, plot_height] =
+                frame.panes[pane].plot_scissor.expect("general plot clip");
+            let plot_bottom = (plot_top + plot_height) as usize;
+            let pane_bottom =
+                (frame.panes[pane].scissor[1] + frame.panes[pane].scissor[3]) as usize;
+            assert!(pane_bottom > plot_bottom + 10);
+            let pixels = canvas.pixmap().data();
+            let width = canvas.pixmap().width() as usize;
+            let red_pixels = |from: usize, to: usize| {
+                (from..to)
+                    .flat_map(|row| (80..width - 80).map(move |column| row * width + column))
+                    .filter(|&index| {
+                        let rgba = &pixels[index * 4..index * 4 + 4];
+                        i16::from(rgba[0]) > i16::from(rgba[1]) + 60
+                            && i16::from(rgba[0]) > i16::from(rgba[2]) + 60
+                    })
+                    .count()
+            };
+            assert!(red_pixels(plot_top as usize + 5, plot_bottom - 5) > 20);
+            assert_eq!(
+                red_pixels(plot_bottom, pane_bottom),
+                0,
+                "native {} ink entered the X-axis strip",
+                if area { "area" } else { "line" }
+            );
+        }
     }
 
     #[test]

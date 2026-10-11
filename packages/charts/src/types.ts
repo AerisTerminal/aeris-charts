@@ -3932,7 +3932,12 @@ export interface chart_api {
   ): general_brush_snapshot;
   general_brush_snapshot(): general_brush_snapshot | null;
   clear_general_brush(): void;
-  /** Engine-owned exact hit when `max_distance` is omitted, nearest hit otherwise. */
+  /**
+   * Engine-owned exact hit when `max_distance` is omitted, nearest hit otherwise.
+   * `x` is a CSS pixel offset from the pane plot's left edge (not the chart/container left);
+   * `y` is a CSS pixel offset from the chart/container top (not the pane or plot top).
+   * For a chart-relative pointer, subtract `pane.get_geometry().left` from its X only.
+   */
   general_hit_test(pane: number, x: number, y: number, max_distance?: number): general_series_hit | null;
   /** The mark selected by the most recent primary click/tap in a general-domain pane. */
   general_selected_hit(): general_series_hit | null;

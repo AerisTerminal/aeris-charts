@@ -4946,6 +4946,12 @@ impl ChartEngine {
             GeneralHitMode::Nearest { .. } => return None,
         };
         let pane_id = self.pane_stable_id(pane_index)?;
+        let plot = self.general_plot_rect(pane_index)?;
+        // X is plot-local; Y is chart-space. Neither exact nor nearest hits may return ink
+        // outside the plot, even when a path or its baseline extends through axis chrome.
+        if x_css < 0.0 || x_css >= plot.width || y_css < plot.y || y_css >= plot.y + plot.height {
+            return None;
+        }
         let registry = self.general_series.as_ref()?;
         let mut best: Option<GeneralSeriesHit> = None;
 

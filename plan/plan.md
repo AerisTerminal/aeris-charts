@@ -183,6 +183,25 @@ Chromium/Firefox/WebKit tests (16 intended skips). The first browser run had one
 entire portable suite passed. Calibrated GPUI pixels and clean official dashboard upload
 evidence remain pending as above.
 
+The first independent G3 user-testing round at `68f336c` found two real public-path defects
+despite those historical green gates: XY line/area ink and exact hits entered the general
+X-axis strip after a narrowed Y view, and a manual resize left bar/axis pixels at the old
+size while the layout and exact hits moved. The corrective feature now scopes general
+marks, references, labels and interaction ink to the engine-resolved plot scissor in the
+shared ordered frame; financial panes, underlay, chrome and axis labels keep their
+original clips. A layout-only browser resize leaves coordinate-dependent retained
+layers and axes invalid until the next full paint, even when the host installed the
+size before eager layout. Engine frame/hit, GPUI clip-plan, native pixels and rebuilt
+Canvas2D/WebGPU screenshots, pixels, exact hits and real bar clicks exercise the defects.
+The public hit coordinate origins are documented and the `range_bar` browser case now
+actually calls exact hit testing. Its complete workspace, WASM Clippy, package,
+six-ceiling size, strict native performance and GPUI structural/replay gates passed;
+the rebuilt portable Chromium/Firefox/WebKit suite passed 584 tests with 20
+platform-intended skips. This correction does not reclassify the optional
+machine-specific GPUI image failure or the non-official 100k upload diagnostic; a
+separate G3 evidence follow-up owns the remaining interpolation/gap/style/hit fixtures
+identified in that same user-testing round.
+
 The rebuilt-assets `general-dashboard-100k` local diagnostic on 2026-10-11 used dirty
 `ba4723d` plus the G3 worktree, Chromium 153, 1280×720 at DPR 1, WebGPU, one warm-up and five
 measured runs. The command was

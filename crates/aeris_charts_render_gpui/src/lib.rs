@@ -340,15 +340,55 @@ impl GpuiChartRenderer {
             let [x, y, w, h] = pane.scissor;
             let clip = DeviceRect::new(x as f32, y as f32, w as f32, h as f32);
             let clipped = executor::push_clip(&mut self.plan, &mut metrics, clip);
-            for layer in [&pane.under, &pane.main, &pane.top_prims] {
+            if let Some([x, y, w, h]) = pane.plot_scissor {
+                let [start, end] = pane.plot_range;
+                for layer in [&pane.under[..], &pane.main[..start]] {
+                    executor::execute_layer(
+                        layer,
+                        &pane.points,
+                        self.options,
+                        &mut self.scratch,
+                        &mut self.plan,
+                        &mut metrics,
+                    );
+                }
+                let plot_clipped = executor::push_clip(
+                    &mut self.plan,
+                    &mut metrics,
+                    DeviceRect::new(x as f32, y as f32, w as f32, h as f32),
+                );
                 executor::execute_layer(
-                    layer,
+                    &pane.main[start..end],
                     &pane.points,
                     self.options,
                     &mut self.scratch,
                     &mut self.plan,
                     &mut metrics,
                 );
+                if plot_clipped {
+                    executor::pop_clip(&mut self.plan, &mut metrics);
+                }
+                for layer in [&pane.main[end..], &pane.top_prims[..]] {
+                    executor::execute_layer(
+                        layer,
+                        &pane.points,
+                        self.options,
+                        &mut self.scratch,
+                        &mut self.plan,
+                        &mut metrics,
+                    );
+                }
+            } else {
+                for layer in [&pane.under, &pane.main, &pane.top_prims] {
+                    executor::execute_layer(
+                        layer,
+                        &pane.points,
+                        self.options,
+                        &mut self.scratch,
+                        &mut self.plan,
+                        &mut metrics,
+                    );
+                }
             }
             if clipped {
                 executor::pop_clip(&mut self.plan, &mut metrics);
@@ -445,6 +485,8 @@ mod tests {
             top: 0.0,
             height: 100.0,
             scissor,
+            plot_scissor: None,
+            plot_range: [0, 0],
             under: Vec::new(),
             main,
             top_prims: Vec::new(),

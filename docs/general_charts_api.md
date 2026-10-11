@@ -35,6 +35,13 @@ the transient selection. `general_brush_snapshot()` returns that semantic range 
 row identities on the selected axis. Zoom/resize therefore reprojects the stored range instead of retaining stale
 pixels. `clear_general_brush()` removes it.
 
+Public coordinate origins are intentionally different by dimension: `chart.general_hit_test(pane, x, y)`
+accepts plot-local CSS pixels for `x` (zero at `pane.get_geometry().left`) and chart-top CSS pixels
+for `y` (zero at the chart container's top, including panes above the target pane). An exact hit omits
+`max_distance`; passing it requests a nearest hit. Convert a pointer's chart-relative X by subtracting
+`pane.get_geometry().left`, but do not subtract `pane.get_geometry().top` from Y. The coordinates
+passed to `set_general_brush` follow the same X/Y origins for the chosen axis.
+
 Reference components are first-class engine state. `chart.add_general_reference(...)` creates a line, dot, or
 rectangular region bound to explicit general axes. Each reference declares `extend_domain`; automatic domains
 include its coordinates only when that flag is true. References lower into the same backend-neutral frame,

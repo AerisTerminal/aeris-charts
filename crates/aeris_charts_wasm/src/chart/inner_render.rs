@@ -133,8 +133,12 @@ impl ChartInner {
         let pane_outcome = if self.gfx.is_some() {
             let engine_frame = &self.frame;
             let pane_count = engine_frame.panes.len();
-            let pane_group_count = if plugin_active {
-                pane_count
+            let pane_group_count: usize = if plugin_active {
+                engine_frame
+                    .panes
+                    .iter()
+                    .map(|pane| if pane.plot_scissor.is_some() { 3 } else { 1 })
+                    .sum()
             } else {
                 (0..pane_count)
                     .map(|pane| {
@@ -208,13 +212,40 @@ impl ChartInner {
                 }));
             let mut text_failed = known_text_failure;
             if !known_text_failure && plugin_active {
+                let mut group_index = 0;
                 for (pane, pane_frame) in engine_frame.panes.iter().enumerate() {
-                    let group = &mut self.gpu_groups[pane];
-                    group.key = 0x1000_0000 | pane as u64;
-                    group.scissor = Some(pane_frame.scissor);
-                    group.clear();
-                    for layer in [&pane_frame.under, &pane_frame.main, &pane_frame.top_prims] {
-                        text_failed |= lowering.lower(group, layer, &pane_frame.points);
+                    if let Some(plot_scissor) = pane_frame.plot_scissor {
+                        let [start, end] = pane_frame.plot_range;
+                        let (before, rest) = pane_frame.main.split_at(start);
+                        let (plot, after) = rest.split_at(end - start);
+                        for part in 0..3 {
+                            let group = &mut self.gpu_groups[group_index];
+                            group_index += 1;
+                            group.key = 0x1000_0000 | (pane as u64) << 2 | part as u64;
+                            group.scissor = Some(if part == 1 {
+                                plot_scissor
+                            } else {
+                                pane_frame.scissor
+                            });
+                            group.clear();
+                            let layers: &[&[Prim]] = match part {
+                                0 => &[&pane_frame.under, before],
+                                1 => &[plot],
+                                _ => &[after, &pane_frame.top_prims],
+                            };
+                            for layer in layers {
+                                text_failed |= lowering.lower(group, layer, &pane_frame.points);
+                            }
+                        }
+                    } else {
+                        let group = &mut self.gpu_groups[group_index];
+                        group_index += 1;
+                        group.key = 0x1000_0000 | pane as u64;
+                        group.scissor = Some(pane_frame.scissor);
+                        group.clear();
+                        for layer in [&pane_frame.under, &pane_frame.main, &pane_frame.top_prims] {
+                            text_failed |= lowering.lower(group, layer, &pane_frame.points);
+                        }
                     }
                 }
             } else if !known_text_failure {
@@ -428,7 +459,17 @@ impl ChartInner {
             let [x, y, w, h] = pane.scissor;
             target.clip_rect(x as f32, y as f32, w as f32, h as f32);
             execute_canvas2d(&pane.under, &pane.points, &mut target, viewport);
-            execute_canvas2d(&pane.main, &pane.points, &mut target, viewport);
+            if let Some([x, y, w, h]) = pane.plot_scissor {
+                let [start, end] = pane.plot_range;
+                execute_canvas2d(&pane.main[..start], &pane.points, &mut target, viewport);
+                target.save();
+                target.clip_rect(x as f32, y as f32, w as f32, h as f32);
+                execute_canvas2d(&pane.main[start..end], &pane.points, &mut target, viewport);
+                target.restore();
+                execute_canvas2d(&pane.main[end..], &pane.points, &mut target, viewport);
+            } else {
+                execute_canvas2d(&pane.main, &pane.points, &mut target, viewport);
+            }
             execute_canvas2d(&pane.top_prims, &pane.points, &mut target, viewport);
             target.restore();
         }
@@ -529,10 +570,18 @@ fn for_each_retained_group<'a>(
                     Some(id) => 0x3000_0000 | (pane as u64) << 32 | u64::from(id),
                     None => 0x4000_0000 | pane as u64,
                 };
+                let series_scissor = pane_frame
+                    .plot_scissor
+                    .filter(|_| {
+                        series.start >= pane_frame.plot_range[0]
+                            && series.end <= pane_frame.plot_range[1]
+                            && series.start < series.end
+                    })
+                    .unwrap_or(scissor);
                 emit(
                     key,
                     series.revision,
-                    scissor,
+                    series_scissor,
                     range(series.start, series.end),
                     points,
                 );
