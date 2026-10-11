@@ -244,15 +244,21 @@ fn append_host_rows(
         let Some(series) = chart.series_entry(descriptor.series_id) else {
             continue;
         };
+        // A histogram value reads in its column's hue, so an up/down volume legend follows the
+        // volume columns rather than the price bars. The column's fill alpha is a drawing
+        // strength, not part of the hue, and would leave the text faint.
+        let color = snapshot_for(snapshots, series.id)
+            .and_then(|snapshot| snapshot.logical_index)
+            .and_then(|index| chart.histogram_column_color_at(series.id, index))
+            .map(|color| color.to_hex());
         rows.push(FinancialLegendRow {
             identity: FinancialLegendIdentity::Host(descriptor.identity),
             first_series_id: series.id,
             pane: series.pane_index,
             title: descriptor.title.to_string(),
             values: if series.visible {
-                snapshot_value(snapshots, series.id).map_or_else(Vec::new, |text| {
-                    vec![FinancialLegendValue { text, color: None }]
-                })
+                snapshot_value(snapshots, series.id)
+                    .map_or_else(Vec::new, |text| vec![FinancialLegendValue { text, color }])
             } else {
                 Vec::new()
             },
@@ -364,6 +370,82 @@ mod tests {
         assert_eq!(rows[1].identity, FinancialLegendIdentity::Host(7));
         assert_eq!(rows[1].first_series_id, volume);
         assert_eq!(rows[2].identity, FinancialLegendIdentity::Indicator(sma));
+    }
+
+    #[test]
+    fn a_volume_value_reads_in_its_column_hue_not_the_price_bar_colors() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0],
+                &[10.0, 12.0],
+                &[12.0, 13.0],
+                &[9.0, 10.0],
+                &[11.0, 11.0],
+            )
+            .unwrap();
+        chart
+            .series_entry_mut(0)
+            .unwrap()
+            .down_color
+            .replace("#ffffff".to_string());
+        let volume = chart.add_series(SeriesKind::Histogram);
+        chart
+            .set_series_data(
+                volume,
+                &[1.0, 2.0],
+                &[100.0, 120.0],
+                &[100.0, 120.0],
+                &[100.0, 120.0],
+                &[100.0, 120.0],
+            )
+            .unwrap();
+        chart.series_entry_mut(volume).unwrap().histogram_updown = true;
+        let volume_row = |chart: &ChartEngine, logical_index| {
+            chart
+                .financial_legend(FinancialLegendRequest {
+                    logical_index,
+                    primary_title: "BTC",
+                    show_primary_ohlc: true,
+                    primary_values_series: None,
+                    leading_series: &[HostLegendSeries {
+                        identity: 7,
+                        series_id: volume,
+                        title: "Volume",
+                        settings_available: false,
+                        tone_from_primary: false,
+                    }],
+                    trailing_series: &[],
+                })
+                .remove(1)
+        };
+        let hue = |rgb: (u8, u8, u8)| Some(crate::Color::rgb(rgb.0, rgb.1, rgb.2).to_hex());
+
+        let falling = volume_row(&chart, None);
+        assert_eq!(falling.tone, FinancialLegendTone::Neutral);
+        assert_eq!(
+            falling.values[0].color,
+            hue(aeris_charts_core::style::MARKET_DOWN_RGB),
+            "a falling bar's volume reads in the volume down hue, not the custom candle color"
+        );
+        let rising = volume_row(&chart, Some(0));
+        assert_eq!(
+            rising.values[0].color,
+            hue(aeris_charts_core::style::MARKET_UP_RGB)
+        );
+
+        chart.series_entry_mut(volume).unwrap().histogram_updown = false;
+        chart
+            .series_entry_mut(volume)
+            .unwrap()
+            .line_color
+            .replace("#123456".to_string());
+        assert_eq!(
+            volume_row(&chart, None).values[0].color.as_deref(),
+            Some("#123456"),
+            "a single-color histogram reads in its own color"
+        );
     }
 
     #[test]

@@ -283,6 +283,32 @@ fn bar_direction(plot: PlotListView<'_>, index: TimePointIndex) -> Option<bool> 
     (close.is_finite() && open.is_finite()).then_some(close >= open)
 }
 
+/// reference data-item color (series-bar-colorer.ts Histogram arm): a per-point `color` wins
+/// over both the series `color` and the up/down volume tint. A slot no presented bar covers
+/// carries no direction, so an up/down column there falls back to its solid color.
+fn histogram_column_color(
+    point_color: Option<u32>,
+    histogram_updown: bool,
+    direction: impl FnOnce() -> Option<bool>,
+    solid: Color,
+) -> Color {
+    if let Some(color) = point_color {
+        return Color(color);
+    }
+    if !histogram_updown {
+        return solid;
+    }
+    match direction() {
+        Some(true) => VOLUME_UP,
+        Some(false) => VOLUME_DOWN,
+        None => solid,
+    }
+}
+
+fn histogram_solid_color(stroke: Color) -> Color {
+    if stroke != LINE { stroke } else { HISTOGRAM }
+}
+
 fn mix_area_brush_color(low: Color, high: Color, amount: f64) -> Color {
     let t = amount.clamp(0.0, 1.0);
     let channel = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * t).round() as u8;
@@ -967,6 +993,35 @@ impl ChartEngine {
         (Some(primary.id), footprint.map(|s| s.id))
     }
 
+    /// The color a histogram series draws its column at `index` with; `None` for another series
+    /// kind or a missing or whitespace row.
+    pub(crate) fn histogram_column_color_at(
+        &self,
+        id: SeriesId,
+        index: TimePointIndex,
+    ) -> Option<Color> {
+        let series = self
+            .series_entry(id)
+            .filter(|series| series.kind == SeriesKind::Histogram)?;
+        let plot = self.data.plot(id);
+        let row = plot
+            .search(index, MismatchDirection::None)
+            .filter(|&row| !plot.is_whitespace_row(row))?;
+        let (primary, footprint) = self.volume_direction_sources();
+        Some(histogram_column_color(
+            self.data
+                .point_colors(id)
+                .and_then(|colors| colors.color(PointColorChannel::Body, row)),
+            series.histogram_updown,
+            || {
+                primary
+                    .and_then(|id| bar_direction(self.data.plot(id), index))
+                    .or_else(|| footprint.and_then(|id| bar_direction(self.data.plot(id), index)))
+            },
+            histogram_solid_color(series_stroke_color(series)),
+        ))
+    }
+
     #[allow(clippy::too_many_arguments)] // mirrors the reference renderer-data signature
     pub(super) fn build_histogram_frame(
         &self,
@@ -983,11 +1038,7 @@ impl ChartEngine {
         // reference HistogramStyleOptions.base (histogram-renderer.ts): columns grow from this price
         // level (default 0).
         let base = scale.price_to_coordinate(rs.base, rs.base_value);
-        let solid = if rs.color != LINE {
-            rs.color
-        } else {
-            HISTOGRAM
-        };
+        let solid = histogram_solid_color(rs.color);
         let (primary, footprint) = self.volume_direction_sources();
         let main = primary.map(|id| self.data.plot(id));
         let presented = footprint.map(|id| self.data.plot(id));
@@ -1015,30 +1066,16 @@ impl ChartEngine {
             .into_iter()
             .map(|item| {
                 let r = item.source_row;
-                // reference data-item color (series-bar-colorer.ts Histogram arm): a per-point
-                // `color` wins over both the series `color` and the up/down volume tint.
-                let color = match point_colors
-                    .and_then(|colors| colors.color(PointColorChannel::Body, r))
-                {
-                    Some(c) => Color(c),
-                    None => {
-                        if histogram_updown {
-                            // A slot no presented bar covers carries no direction — the column
-                            // falls back to its solid color.
-                            let index = plot.index_at(r).expect("histogram row index");
-                            let direction = main
-                                .and_then(|m| bar_direction(m, index))
-                                .or_else(|| presented.and_then(|m| bar_direction(m, index)));
-                            match direction {
-                                Some(true) => VOLUME_UP,
-                                Some(false) => VOLUME_DOWN,
-                                None => solid,
-                            }
-                        } else {
-                            solid
-                        }
-                    }
-                };
+                let color = histogram_column_color(
+                    point_colors.and_then(|colors| colors.color(PointColorChannel::Body, r)),
+                    histogram_updown,
+                    || {
+                        let index = plot.index_at(r).expect("histogram row index");
+                        main.and_then(|m| bar_direction(m, index))
+                            .or_else(|| presented.and_then(|m| bar_direction(m, index)))
+                    },
+                    solid,
+                );
                 HistogramItem {
                     x: item.x_px / hpr,
                     y: scale.price_to_coordinate(c[r], rs.base_value),
