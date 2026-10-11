@@ -5237,6 +5237,18 @@ impl ChartEngine {
 
     /// Lay out stacked panes inside the chart content area. This is shared by hosts that need
     /// pane bounds before frame submission (for example, to draw axis separators).
+    /// The stretch a fresh separate pane needs to take the share of the layout that
+    /// `SEPARATE_INDICATOR_PANE_STRETCH` expresses against the main pane. Separator drags store
+    /// pane heights as pixel-sized stretch factors, so a bare constant would collapse the new
+    /// pane against a resized main pane.
+    pub(crate) fn separate_pane_stretch(&self) -> f64 {
+        let main = self
+            .panes
+            .first()
+            .map_or(1.0, |pane| pane.stretch_factor.max(0.01));
+        SEPARATE_INDICATOR_PANE_STRETCH * main
+    }
+
     pub fn layout_panes(&mut self, content_h: f64) {
         let usable =
             (content_h - PANE_SEPARATOR * self.panes.len().saturating_sub(1) as f64).max(1.0);

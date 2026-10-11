@@ -1296,9 +1296,12 @@ volume and receive derived volume, but the engine rejects a binding that would o
 volume input. Higher-timeframe candles and studies use ordinary series and indicator frame paths.
 Price-kind built-in indicators join their source's pane and price scale, inheriting an explicit
 scale format even when the source was moved to the left; oscillator outputs retain their own pane.
-The engine gives each newly created dedicated indicator pane the same 0.3 stretch, including
-financial oscillators, external studies, CVD, and delta. A study placed into an explicitly selected
-existing pane keeps that pane's user-selected height; every backend renders the shared layout.
+The engine gives each newly created dedicated indicator pane a 0.3 stretch relative to the main
+pane, including financial oscillators, external studies, CVD, and delta; because a separator drag
+stores pane heights as pixel-sized stretch factors, the new pane's stretch scales with the main
+pane's current factor so a recreated pane keeps its share instead of collapsing. A study placed
+into an explicitly selected existing pane keeps that pane's user-selected height; every backend
+renders the shared layout. The volume average draws as a 1px guide line over the columns.
 Host-computed scalar studies cross the same boundary through the external-study transaction. The
 host supplies a stable study/output identity, generation, semantic presentation, stream requirement
 metadata, timestamps, and nullable values. The engine validates the complete publication before

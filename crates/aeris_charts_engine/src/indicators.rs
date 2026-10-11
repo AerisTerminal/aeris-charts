@@ -962,7 +962,11 @@ pub struct IndicatorParameters {
     pub custom: Option<BTreeMap<String, serde_json::Value>>,
 }
 
-fn indicator_default_line_width(kind: &IndicatorKind) -> f64 {
+fn indicator_default_line_width(kind: &IndicatorKind, output_index: usize) -> f64 {
+    // The volume average is a thin guide over the columns, like the exponential family.
+    if matches!(kind, IndicatorKind::Volume { .. }) && output_index == 1 {
+        return 1.0;
+    }
     if matches!(
         kind,
         IndicatorKind::Ema { .. }
@@ -1117,7 +1121,7 @@ impl ChartEngine {
                 };
                 series.countdown_visible = false;
                 series.title_visible = true;
-                series.line_width = Some(indicator_default_line_width(&kind));
+                series.line_width = Some(indicator_default_line_width(&kind, output_index));
                 series.line_color = indicator_output_color(&kind, output_index).map(str::to_string);
                 if let Some(style) = custom_style {
                     series.visible = style.visible;
@@ -3841,11 +3845,12 @@ impl ChartEngine {
         let Some(pane) = restored_pane.or_else(|| self.add_pane(false)) else {
             return;
         };
+        let stretch = self.separate_pane_stretch();
         if let Some(p) = self.panes.get_mut(pane) {
-            p.stretch_factor = crate::SEPARATE_INDICATOR_PANE_STRETCH;
+            p.stretch_factor = stretch;
         }
         for &id in ids {
-            self.set_series_pane(id, pane, crate::SEPARATE_INDICATOR_PANE_STRETCH);
+            self.set_series_pane(id, pane, stretch);
         }
     }
 
@@ -4117,7 +4122,7 @@ impl ChartEngine {
                 s.last_value_visible = self.indicator_chrome.value_labels_visible;
                 s.price_line_visible = self.indicator_chrome.price_lines_visible;
                 s.title = indicator_output_title(&kind, output_index);
-                s.line_width = Some(indicator_default_line_width(&kind));
+                s.line_width = Some(indicator_default_line_width(&kind, output_index));
                 if matches!(
                     kind,
                     IndicatorKind::SwingPoints { .. }

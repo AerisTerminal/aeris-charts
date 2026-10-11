@@ -5634,6 +5634,75 @@ fn a_volume_binding_over_its_own_weights_keeps_columns_where_price_rows_are_whit
 }
 
 #[test]
+fn the_volume_average_defaults_to_a_thin_line_over_thicker_columns() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [1.0, 2.0, 3.0, 4.0];
+    let price = [10.0, 11.0, 12.0, 13.0];
+    chart
+        .set_series_data(0, &times, &price, &price, &price, &price)
+        .unwrap();
+    let weights = chart.add_series(SeriesKind::Histogram);
+    chart
+        .set_series_data(weights, &times, &price, &price, &price, &price)
+        .unwrap();
+    let outputs = chart.add_indicator_kind(
+        weights,
+        IndicatorKind::Volume {
+            period: 2,
+            exponential: false,
+        },
+        Some(weights),
+    );
+    let width = |chart: &ChartEngine, id| {
+        chart
+            .series
+            .iter()
+            .find(|series| series.id == id)
+            .and_then(|series| series.line_width)
+    };
+    assert_eq!(width(&chart, outputs[0]), Some(2.0));
+    assert_eq!(width(&chart, outputs[1]), Some(1.0));
+}
+
+#[test]
+fn a_recreated_indicator_pane_keeps_its_share_after_a_separator_drag() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let price = [1.0, 2.0, 3.0, 4.0, 5.0];
+    chart
+        .set_series_data(0, &times, &price, &price, &price, &price)
+        .unwrap();
+    let rsi = chart.add_rsi(0, 2).expect("valid rsi");
+    chart.layout_panes(400.0);
+    chart.drag_pane_separator(0, 40.0);
+    chart.layout_panes(400.0);
+    let main_stretch = chart.panes[0].stretch_factor;
+    assert!(
+        main_stretch > 100.0,
+        "a separator drag stores pane heights as pixel-sized stretch factors"
+    );
+
+    // Replacing an indicator, as a volume settings change does, drops and recreates its pane.
+    assert!(chart.remove_indicator_binding(rsi));
+    assert_eq!(chart.panes.len(), 1);
+    let rsi = chart.add_rsi(0, 2).expect("valid rsi");
+    assert_eq!(chart.panes.len(), 2);
+    assert!(
+        (chart.panes[1].stretch_factor - crate::SEPARATE_INDICATOR_PANE_STRETCH * main_stretch)
+            .abs()
+            < 1e-9
+    );
+    chart.layout_panes(400.0);
+    assert!(
+        chart.panes[1].height > 400.0 * 0.2,
+        "the recreated pane keeps its share of the layout: {}",
+        chart.panes[1].height
+    );
+    let entry = chart.series.iter().find(|s| s.id == rsi).unwrap();
+    assert_eq!(entry.pane_index, 1);
+}
+
+#[test]
 fn ease_of_movement_requires_positive_divisor_and_uses_oscillator_pane() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let values = [10.0, 20.0, 30.0];

@@ -11,9 +11,7 @@ use aeris_charts_core::model::data_validation::{MAX_SAFE_VALUE, MIN_SAFE_VALUE};
 use aeris_charts_core::style::{MARKET_DOWN_RGB, MARKET_UP_RGB};
 use aeris_charts_render::color::Color;
 
-use crate::{
-    ChartEngine, PriceFormatKind, SEPARATE_INDICATOR_PANE_STRETCH, SeriesKind, SeriesPriceFormat,
-};
+use crate::{ChartEngine, PriceFormatKind, SeriesKind, SeriesPriceFormat};
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
 const REPLAY_CHECKPOINT_INTERVAL: usize = 1_024;
@@ -2309,7 +2307,8 @@ impl ChartEngine {
             return Err(FootprintError::InvalidAggregation);
         }
         let id = self.add_series(SeriesKind::Line);
-        self.set_series_pane(id, pane_index, SEPARATE_INDICATOR_PANE_STRETCH);
+        let stretch = self.separate_pane_stretch();
+        self.set_series_pane(id, pane_index, stretch);
         if let Some(series) = self.series_entry_mut(id) {
             series.title = "CVD".to_string();
         }
@@ -2329,7 +2328,8 @@ impl ChartEngine {
         self.trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
         let id = self.add_series(SeriesKind::Histogram);
-        self.set_series_pane(id, pane_index, SEPARATE_INDICATOR_PANE_STRETCH);
+        let stretch = self.separate_pane_stretch();
+        self.set_series_pane(id, pane_index, stretch);
         if let Some(series) = self.series_entry_mut(id) {
             series.title = "Delta".to_string();
         }
@@ -2534,7 +2534,7 @@ impl ChartEngine {
         let pane = self
             .add_pane(false)
             .ok_or(FootprintError::InvalidAggregation)?;
-        self.panes[pane].stretch_factor = SEPARATE_INDICATOR_PANE_STRETCH;
+        self.panes[pane].stretch_factor = self.separate_pane_stretch();
         let id = match kind {
             TradeStudyKind::CumulativeDelta => {
                 self.add_cvd_series(stream_id, pane, TradeStudyOptions::default())
