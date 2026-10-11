@@ -778,8 +778,11 @@ mod tests {
 
     #[test]
     fn an_oversized_mesh_is_chunked_into_bounded_paths() {
-        // 1100 collinear points: 1099 segments of 12 vertices plus caps, past MAX_MESH_VERTICES.
-        let points: Vec<[f32; 2]> = (0..1100).map(|i| [i as f32, 0.0]).collect();
+        // A 1100-point zigzag: every turn is visible, so no point simplifies away and the
+        // segments plus joins exceed MAX_MESH_VERTICES.
+        let points: Vec<[f32; 2]> = (0..1100)
+            .map(|i| [i as f32 * 4.0, (i % 2) as f32 * 3.0])
+            .collect();
         let (plan, metrics) = run(
             &[Prim::Polyline {
                 first_point: 0,
@@ -791,7 +794,7 @@ mod tests {
             }],
             &points,
         );
-        assert_eq!(metrics.paths, 2, "the mesh splits into bounded chunks");
+        assert!(metrics.paths >= 2, "the mesh splits into bounded chunks");
         let total: u32 = plan
             .ops
             .iter()

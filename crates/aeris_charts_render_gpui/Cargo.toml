@@ -75,3 +75,7 @@ required-features = ["gpui-backend"]
 [[example]]
 name = "gpui_fixture_view"
 required-features = ["gpui-backend"]
+
+[[example]]
+name = "gpui_dense_hover"
+required-features = ["gpui-backend"]

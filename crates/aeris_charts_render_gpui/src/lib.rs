@@ -56,6 +56,7 @@ pub mod fixtures;
 pub mod geometry;
 pub mod image_cache;
 pub mod metrics;
+pub mod quad_batch;
 pub mod scene;
 pub mod text;
 
@@ -217,6 +218,8 @@ pub struct GpuiChartRenderer {
     shaped_text: backend::ShapedTextCache,
     #[cfg(feature = "gpui-backend")]
     images: backend::RasterImageCache,
+    #[cfg(feature = "gpui-backend")]
+    quad_batcher: quad_batch::QuadBatcher,
     /// Reusable tessellation buffers. Held here rather than rebuilt per frame: see
     /// [`geometry::Scratch`].
     scratch: geometry::Scratch,
@@ -242,6 +245,8 @@ impl GpuiChartRenderer {
             shaped_text: backend::ShapedTextCache::default(),
             #[cfg(feature = "gpui-backend")]
             images: backend::RasterImageCache::default(),
+            #[cfg(feature = "gpui-backend")]
+            quad_batcher: quad_batch::QuadBatcher::default(),
             scratch: geometry::Scratch::default(),
         }
     }

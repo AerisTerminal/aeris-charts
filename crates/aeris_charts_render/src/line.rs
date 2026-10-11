@@ -819,6 +819,10 @@ impl StrokeAaVertex {
 /// round join where the turn opens a visible wedge, and both ends get a fading butt-cap strip.
 /// Triangles are emitted through `tri`, so each backend chooses its coverage encoding (vertex
 /// alpha for WebGPU, the path-shader `st` channel for GPUI) over identical geometry.
+///
+/// The centerline first passes through [`StrokeSimplify`] at [`STROKE_SIMPLIFY_TOLERANCE_PX`]:
+/// a zoomed-out series puts several points in every device pixel, and tessellating each of them
+/// costs ~30 vertices while moving no edge by a visible amount.
 pub fn stroke_aa(points: &[LinePoint], width: f32, mut tri: impl FnMut([StrokeAaVertex; 3])) {
     let half = (width / 2.0).max(0.0);
     if points.len() < 2 || half <= 0.0 {
@@ -847,21 +851,25 @@ pub fn stroke_aa(points: &[LinePoint], width: f32, mut tri: impl FnMut([StrokeAa
     let solid = STROKE_AA_SOLID;
     let mut prev_dir: Option<[f32; 2]> = None;
     let mut prev_b = [0.0f32; 2];
-    let mut segments = points.windows(2).filter_map(|pair| {
-        let a = [pair[0].x as f32, pair[0].y as f32];
-        let b = [pair[1].x as f32, pair[1].y as f32];
-        let dx = b[0] - a[0];
-        let dy = b[1] - a[1];
-        let len = (dx * dx + dy * dy).sqrt();
-        if len < 1e-6 {
-            return None;
+    let mut centerline = StrokeSimplify::new(points, STROKE_SIMPLIFY_TOLERANCE_PX);
+    let mut segment_start = centerline.next();
+    let mut segments = std::iter::from_fn(|| {
+        loop {
+            let b = centerline.next()?;
+            let a = segment_start.replace(b)?;
+            let dx = b[0] - a[0];
+            let dy = b[1] - a[1];
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 1e-6 {
+                continue;
+            }
+            return Some(StrokeSegment {
+                a,
+                b,
+                dir: [dx / len, dy / len],
+                len,
+            });
         }
-        Some(StrokeSegment {
-            a,
-            b,
-            dir: [dx / len, dy / len],
-            len,
-        })
     });
     // A four-segment window decides each joint's clipping without allocating: a joint's
     // validity depends on both neighbors and on how far their other ends are clipped.
@@ -963,6 +971,88 @@ struct StrokeSegment {
     b: [f32; 2],
     dir: [f32; 2],
     len: f32,
+}
+
+/// Largest distance (device px) between a stroked centerline and any point it dropped.
+///
+/// A quarter pixel keeps every edge inside the 1 px coverage ramp of [`STROKE_AA_HALF_PX`]: the
+/// shift is below what an anti-aliased edge can show, while a zoomed-out series with a few
+/// points per pixel column loses most of its points.
+pub const STROKE_SIMPLIFY_TOLERANCE_PX: f32 = 0.25;
+
+/// Streaming sleeve simplification of a device-space polyline.
+///
+/// Each output segment starts at the previous output point and covers a run of input points
+/// that all lie within `tolerance` of it. A candidate run end is accepted while its direction
+/// stays inside every earlier point's tolerance wedge and it is at least as far from the anchor
+/// as all of them, so every covered point projects onto the segment instead of past its end
+/// (a spike that turns back is never cut off). Anything else ends the run, which only costs a
+/// kept point. The first and last points are always kept exactly, and no allocation is made.
+pub struct StrokeSimplify<'a> {
+    points: &'a [LinePoint],
+    tolerance: f32,
+    /// Index of the next point to emit; `None` before the first point.
+    anchor: Option<usize>,
+}
+
+impl<'a> StrokeSimplify<'a> {
+    pub fn new(points: &'a [LinePoint], tolerance: f32) -> Self {
+        Self {
+            points,
+            tolerance,
+            anchor: None,
+        }
+    }
+
+    fn at(&self, index: usize) -> [f32; 2] {
+        let point = self.points[index];
+        [point.x as f32, point.y as f32]
+    }
+
+    /// The last index the run starting at `anchor` may end on.
+    fn run_end(&self, anchor: usize) -> usize {
+        let origin = self.at(anchor);
+        let mut end: Option<usize> = None;
+        let mut reach = 0.0f32;
+        let (mut low, mut high) = (f32::NEG_INFINITY, f32::INFINITY);
+        for index in anchor + 1..self.points.len() {
+            let [x, y] = self.at(index);
+            let (dx, dy) = (x - origin[0], y - origin[1]);
+            let distance = (dx * dx + dy * dy).sqrt();
+            if !distance.is_finite() {
+                return end.unwrap_or(index);
+            }
+            if end.is_none() && distance <= self.tolerance {
+                continue;
+            }
+            let angle = dy.atan2(dx);
+            if end.is_some() && (distance < reach || angle < low || angle > high) {
+                break;
+            }
+            let spread = (self.tolerance / distance).min(1.0).asin();
+            low = low.max(angle - spread);
+            high = high.min(angle + spread);
+            reach = distance;
+            end = Some(index);
+        }
+        end.unwrap_or(self.points.len() - 1)
+    }
+}
+
+impl Iterator for StrokeSimplify<'_> {
+    type Item = [f32; 2];
+
+    fn next(&mut self) -> Option<[f32; 2]> {
+        let index = match self.anchor {
+            None if self.points.is_empty() => return None,
+            None => 0,
+            Some(anchor) if anchor + 1 >= self.points.len() => return None,
+            Some(anchor) if self.tolerance > 0.0 => self.run_end(anchor),
+            Some(anchor) => anchor + 1,
+        };
+        self.anchor = Some(index);
+        Some(self.at(index))
+    }
 }
 
 /// Whether the bisector at the joint between `incoming` and `outgoing` may clip both segments.
@@ -1673,6 +1763,134 @@ mod tests {
                 assert_eq!(coverage(point), expected, "at {point:?}");
             }
         }
+    }
+
+    fn segment_distance(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let length = dx * dx + dy * dy;
+        let t = if length > 0.0 {
+            (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let (x, y) = (a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
+        (x * x + y * y).sqrt()
+    }
+
+    /// A random walk in device px, exponentially smoothed over `period` points like an EMA
+    /// indicator (`period` 1 is the raw walk).
+    fn dense_walk(count: usize, spacing: f64, period: usize) -> Vec<LinePoint> {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let alpha = 2.0 / (period as f64 + 1.0);
+        let (mut raw, mut y) = (300.0, 300.0);
+        (0..count)
+            .map(|index| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                raw += ((state >> 11) as f64 / (1u64 << 53) as f64 - 0.5) * 3.0;
+                y += alpha * (raw - y);
+                LinePoint {
+                    x: index as f64 * spacing,
+                    y,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn simplified_centerline_stays_within_tolerance_of_every_input_point() {
+        for (points, tolerance) in [
+            (dense_walk(4_000, 0.37, 1), STROKE_SIMPLIFY_TOLERANCE_PX),
+            (dense_walk(4_000, 0.37, 21), STROKE_SIMPLIFY_TOLERANCE_PX),
+            (dense_walk(4_000, 0.37, 21), 1.0),
+            (dense_walk(500, 6.0, 1), STROKE_SIMPLIFY_TOLERANCE_PX),
+        ] {
+            let kept: Vec<[f32; 2]> = StrokeSimplify::new(&points, tolerance).collect();
+            let first = [points[0].x as f32, points[0].y as f32];
+            let last = points[points.len() - 1];
+            assert_eq!(kept.first(), Some(&first));
+            assert_eq!(kept.last(), Some(&[last.x as f32, last.y as f32]));
+            assert!(kept.windows(2).all(|pair| pair[0][0] <= pair[1][0]));
+            for point in &points {
+                let p = [point.x as f32, point.y as f32];
+                let nearest = kept
+                    .windows(2)
+                    .map(|pair| segment_distance(p, pair[0], pair[1]))
+                    .fold(f32::INFINITY, f32::min);
+                assert!(
+                    nearest <= tolerance * 1.001 + 1e-3,
+                    "{p:?} is {nearest} px from the simplified line"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dense_indicator_lines_lose_most_points_and_sparse_ones_keep_their_shape() {
+        let dense = dense_walk(4_000, 0.37, 21);
+        let kept = StrokeSimplify::new(&dense, STROKE_SIMPLIFY_TOLERANCE_PX).count();
+        assert!(
+            kept * 2 < dense.len(),
+            "{kept} of {} points kept",
+            dense.len()
+        );
+
+        let zigzag: Vec<LinePoint> = (0..200)
+            .map(|index| LinePoint {
+                x: index as f64 * 6.0,
+                y: if index % 2 == 0 { 100.0 } else { 101.0 },
+            })
+            .collect();
+        assert_eq!(
+            StrokeSimplify::new(&zigzag, STROKE_SIMPLIFY_TOLERANCE_PX).count(),
+            zigzag.len(),
+            "every visible turn is kept"
+        );
+    }
+
+    #[test]
+    fn a_spike_that_turns_back_inside_one_column_is_kept() {
+        let points = [
+            LinePoint { x: 0.0, y: 50.0 },
+            LinePoint { x: 0.1, y: 10.0 },
+            LinePoint { x: 0.2, y: 40.0 },
+            LinePoint { x: 1.0, y: 40.0 },
+        ];
+        let kept: Vec<[f32; 2]> = StrokeSimplify::new(&points, 0.25).collect();
+        assert!(kept.contains(&[0.1, 10.0]), "{kept:?}");
+    }
+
+    #[test]
+    fn collinear_and_duplicate_points_collapse_to_the_endpoints() {
+        let points: Vec<LinePoint> = (0..=20)
+            .flat_map(|index| {
+                let point = LinePoint {
+                    x: index as f64,
+                    y: index as f64 * 0.5,
+                };
+                [point, point]
+            })
+            .collect();
+        let kept: Vec<[f32; 2]> = StrokeSimplify::new(&points, 0.25).collect();
+        assert_eq!(kept, vec![[0.0, 0.0], [20.0, 10.0]]);
+        assert_eq!(
+            StrokeSimplify::new(&points[..1], 0.25).collect::<Vec<_>>(),
+            vec![[0.0, 0.0]]
+        );
+        assert_eq!(StrokeSimplify::new(&[], 0.25).count(), 0);
+    }
+
+    #[test]
+    fn dense_strokes_tessellate_from_the_simplified_centerline() {
+        let dense = dense_walk(4_000, 0.37, 21);
+        let mut triangles = 0usize;
+        stroke_aa(&dense, 1.0, |_| triangles += 1);
+        assert!(
+            triangles < dense.len() * 4,
+            "{triangles} triangles for {} points",
+            dense.len()
+        );
     }
 
     #[test]

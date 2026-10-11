@@ -34,6 +34,7 @@ use smallvec::SmallVec;
 use aeris_charts_render::color::Color;
 
 use crate::metrics::GpuiFrameMetrics;
+use crate::quad_batch::{QUAD_BATCH_THRESHOLD, QuadBatcher, plain_quad_run};
 use crate::scene::{DeviceRect, Paint, SceneOp, ScenePlan, TextRun};
 use crate::text::{self, TextKey, TextMetrics};
 use crate::{AerisViewport, GpuiChartRenderer, GpuiRenderError, PreparedAerisFrame};
@@ -511,6 +512,7 @@ impl GpuiChartRenderer {
             &mut self.text,
             &mut self.shaped_text,
             &mut self.images,
+            &mut self.quad_batcher,
             viewport,
             scale_factor,
             window,
@@ -550,6 +552,7 @@ impl GpuiChartRenderer {
             &mut self.text,
             &mut self.shaped_text,
             &mut self.images,
+            &mut self.quad_batcher,
             viewport,
             scale_factor,
             window,
@@ -576,6 +579,7 @@ fn paint_plan(
     text_cache: &mut crate::text::TextCache,
     shaped_text: &mut ShapedTextCache,
     images: &mut RasterImageCache,
+    quad_batcher: &mut QuadBatcher,
     viewport: AerisViewport,
     scale_factor: f32,
     window: &mut Window,
@@ -591,6 +595,7 @@ fn paint_plan(
         text_cache,
         shaped_text,
         images,
+        quad_batcher,
         window,
         cx,
         metrics,
@@ -607,6 +612,7 @@ fn paint_range(
     text_cache: &mut crate::text::TextCache,
     shaped_text: &mut ShapedTextCache,
     images: &mut RasterImageCache,
+    quad_batcher: &mut QuadBatcher,
     window: &mut Window,
     cx: &mut App,
     metrics: &mut GpuiFrameMetrics,
@@ -629,6 +635,7 @@ fn paint_range(
                         text_cache,
                         shaped_text,
                         images,
+                        quad_batcher,
                         window,
                         cx,
                         metrics,
@@ -641,44 +648,34 @@ fn paint_range(
                 // Only reachable for an unbalanced plan, which the executor never produces.
                 i += 1;
             }
-            SceneOp::Quad {
-                rect,
-                fill: paint,
-                corner_radii,
-                border_width,
-                border_color,
-            } => {
-                // Batch a run of identically-filled plain opaque quads into one GPUI Path.
-                // Each `paint_quad` inserts into the bounds tree and stores the primitive. Collapse
-                // long homogeneous runs to keep submission work bounded; see `batchable_run` for
-                // why this cannot change the output.
-                let run = batchable_run(plan, i, end);
-                if run >= QUAD_BATCH_THRESHOLD
-                    && let Some(path) = build_quad_run_path(plan, i, i + run, transform)
-                {
-                    window.paint_path(path, to_background(*paint));
-                    metrics.batched_quads += run as u32;
-                    metrics.quad_batches += 1;
-                    i += run;
+            SceneOp::Quad { .. } => {
+                // Each `paint_quad` inserts into GPUI's bounds tree, and quads interleaved with
+                // paths split the paths into separately rasterized batches. Long runs of plain
+                // quads are therefore submitted as one path per order-safe group; see
+                // `quad_batch` for why the regrouping cannot change the output.
+                let run = plain_quad_run(&plan.ops, i, end);
+                if run < QUAD_BATCH_THRESHOLD {
+                    paint_single_quad(&plan.ops[i], transform, window);
+                    i += 1;
                     continue;
                 }
-                let bounds = transform.bounds(*rect);
-                let mut quad = fill(bounds, to_background(*paint));
-                let [lt, rt, rb, lb] = *corner_radii;
-                if lt != 0.0 || rt != 0.0 || rb != 0.0 || lb != 0.0 {
-                    quad.corner_radii = gpui::Corners {
-                        top_left: transform.len(lt),
-                        top_right: transform.len(rt),
-                        bottom_right: transform.len(rb),
-                        bottom_left: transform.len(lb),
-                    };
+                let ops = &plan.ops[i..i + run];
+                quad_batcher.group(ops);
+                for group in quad_batcher.groups() {
+                    let members = quad_batcher.members(group);
+                    if members.len() >= QUAD_BATCH_THRESHOLD
+                        && let Some(path) = build_quad_group_path(ops, members, transform)
+                    {
+                        window.paint_path(path, to_background(group.paint));
+                        metrics.batched_quads += members.len() as u32;
+                        metrics.quad_batches += 1;
+                    } else {
+                        for &member in members {
+                            paint_single_quad(&ops[member as usize], transform, window);
+                        }
+                    }
                 }
-                if *border_width > 0.0 {
-                    quad.border_widths = gpui::Edges::all(transform.len(*border_width));
-                    quad.border_color = to_hsla(*border_color);
-                }
-                window.paint_quad(quad);
-                i += 1;
+                i += run;
             }
             SceneOp::Mesh {
                 first_vertex,
@@ -918,73 +915,44 @@ fn paint_rotated_text(
     }
 }
 
-/// Minimum run length worth collapsing into one path. Below this the per-path overhead (an atlas
-/// tile plus a second compositing pass) outweighs the saved `paint_quad` calls.
-const QUAD_BATCH_THRESHOLD: usize = 8;
-
-/// Length of the run of quads starting at `start` that may be collapsed into a single path.
-///
-/// A quad joins the run only if it is a *plain* quad — no corner radii, no border — with a **solid,
-/// fully opaque** fill identical to the run's. Those conditions are what make the collapse
-/// output-preserving:
-///
-/// - **Order is untouched.** Only a contiguous run is merged, so nothing is reordered relative to
-///   anything else. The merged path takes the run's position in the stream.
-/// - **Overlap is irrelevant.** Every quad in the run paints the same fully opaque colour, so a
-///   pixel covered once and a pixel covered twice both end up exactly that colour — whether the
-///   overlap composites inside GPUI's path atlas or between two separate quads.
-/// - **No blending is skipped.** Opaque-only means the run cannot be one where alpha accumulation
-///   would be observable; translucent quads are never batched.
-///
-/// Gradients are excluded because a GPUI gradient is resolved against the primitive's own bounds:
-/// merging two gradient quads would restretch the ramp over the union.
-fn batchable_run(plan: &ScenePlan, start: usize, end: usize) -> usize {
-    let Some(SceneOp::Quad {
-        fill: first_fill,
+fn paint_single_quad(op: &SceneOp, transform: Transform, window: &mut Window) {
+    let SceneOp::Quad {
+        rect,
+        fill: paint,
         corner_radii,
         border_width,
-        ..
-    }) = plan.ops.get(start)
+        border_color,
+    } = op
     else {
-        return 0;
+        return;
     };
-    if !is_plain_opaque(first_fill, corner_radii, border_width) {
-        return 0;
+    let mut quad = fill(transform.bounds(*rect), to_background(*paint));
+    let [lt, rt, rb, lb] = *corner_radii;
+    if lt != 0.0 || rt != 0.0 || rb != 0.0 || lb != 0.0 {
+        quad.corner_radii = gpui::Corners {
+            top_left: transform.len(lt),
+            top_right: transform.len(rt),
+            bottom_right: transform.len(rb),
+            bottom_left: transform.len(lb),
+        };
     }
-    let mut n = 1;
-    while start + n < end {
-        match &plan.ops[start + n] {
-            SceneOp::Quad {
-                fill,
-                corner_radii,
-                border_width,
-                ..
-            } if fill == first_fill && is_plain_opaque(fill, corner_radii, border_width) => n += 1,
-            _ => break,
-        }
+    if *border_width > 0.0 {
+        quad.border_widths = gpui::Edges::all(transform.len(*border_width));
+        quad.border_color = to_hsla(*border_color);
     }
-    n
+    window.paint_quad(quad);
 }
 
-/// Whether a quad is a plain, fully opaque, solid-filled rectangle.
-fn is_plain_opaque(fill: &Paint, corner_radii: &[f32; 4], border_width: &f32) -> bool {
-    let Paint::Solid(color) = fill else {
-        return false;
-    };
-    color.a() == 0xff && *border_width <= 0.0 && corner_radii.iter().all(|r| *r == 0.0)
-}
-
-/// Two triangles per quad, in one path.
-fn build_quad_run_path(
-    plan: &ScenePlan,
-    start: usize,
-    end: usize,
+/// Two solid triangles per member quad of `ops`, in one path.
+fn build_quad_group_path(
+    ops: &[SceneOp],
+    members: &[u32],
     transform: Transform,
 ) -> Option<Path<Pixels>> {
     let solid = point(0.0, 1.0);
     let mut path: Option<Path<Pixels>> = None;
-    for op in &plan.ops[start..end] {
-        let SceneOp::Quad { rect, .. } = op else {
+    for &member in members {
+        let Some(SceneOp::Quad { rect, .. }) = ops.get(member as usize) else {
             continue;
         };
         let (x0, y0) = (rect.x, rect.y);
@@ -1263,15 +1231,7 @@ mod tests {
         }
     }
 
-    fn plan_of(ops: Vec<SceneOp>) -> ScenePlan {
-        ScenePlan {
-            ops,
-            ..Default::default()
-        }
-    }
-
     const OPAQUE: Color = Color::rgb(0x26, 0xa6, 0x9a);
-    const OPAQUE2: Color = Color::rgb(0xef, 0x53, 0x50);
 
     #[test]
     fn rotated_label_sprite_leaves_ink_room_without_moving_the_run() {
@@ -1286,113 +1246,12 @@ mod tests {
     }
 
     #[test]
-    fn a_run_of_identical_opaque_quads_is_batchable() {
-        let plan = plan_of(vec![plain_quad(OPAQUE); 10]);
-        assert_eq!(batchable_run(&plan, 0, plan.ops.len()), 10);
-    }
-
-    #[test]
-    fn a_run_stops_at_a_different_colour() {
-        let mut ops = vec![plain_quad(OPAQUE); 5];
-        ops.push(plain_quad(OPAQUE2));
-        ops.extend(vec![plain_quad(OPAQUE); 3]);
-        let plan = plan_of(ops);
-        assert_eq!(batchable_run(&plan, 0, plan.ops.len()), 5);
-    }
-
-    #[test]
-    fn translucent_quads_are_never_batched() {
-        // Overlapping translucent quads accumulate alpha; merging them into one path would composite
-        // the overlap once instead of twice, which is observable.
-        let plan = plan_of(vec![plain_quad(Color::rgba(0x26, 0xa6, 0x9a, 0x80)); 10]);
-        assert_eq!(batchable_run(&plan, 0, plan.ops.len()), 0);
-    }
-
-    #[test]
-    fn gradient_quads_are_never_batched() {
-        // A GPUI gradient resolves against the primitive's own bounds, so merging would restretch
-        // the ramp over the union of the run.
-        let plan = plan_of(vec![
-            SceneOp::Quad {
-                rect: DeviceRect::new(0.0, 0.0, 4.0, 4.0),
-                fill: Paint::VGradient {
-                    top: OPAQUE,
-                    bottom: OPAQUE2,
-                },
-                corner_radii: [0.0; 4],
-                border_width: 0.0,
-                border_color: Color::rgba(0, 0, 0, 0),
-            };
-            10
-        ]);
-        assert_eq!(batchable_run(&plan, 0, plan.ops.len()), 0);
-    }
-
-    #[test]
-    fn rounded_or_bordered_quads_are_never_batched() {
-        let rounded = SceneOp::Quad {
-            rect: DeviceRect::new(0.0, 0.0, 4.0, 4.0),
-            fill: Paint::Solid(OPAQUE),
-            corner_radii: [2.0; 4],
-            border_width: 0.0,
-            border_color: Color::rgba(0, 0, 0, 0),
-        };
-        assert_eq!(batchable_run(&plan_of(vec![rounded; 10]), 0, 10), 0);
-
-        let bordered = SceneOp::Quad {
-            rect: DeviceRect::new(0.0, 0.0, 4.0, 4.0),
-            fill: Paint::Solid(OPAQUE),
-            corner_radii: [0.0; 4],
-            border_width: 1.0,
-            border_color: OPAQUE2,
-        };
-        assert_eq!(batchable_run(&plan_of(vec![bordered; 10]), 0, 10), 0);
-    }
-
-    #[test]
-    fn a_run_never_crosses_a_clip_boundary_or_another_op_kind() {
-        let mut ops = vec![plain_quad(OPAQUE); 4];
-        ops.push(SceneOp::PopClip);
-        ops.extend(vec![plain_quad(OPAQUE); 4]);
-        let plan = plan_of(ops);
-        assert_eq!(batchable_run(&plan, 0, plan.ops.len()), 4);
-
-        let mut ops = vec![plain_quad(OPAQUE); 3];
-        ops.push(SceneOp::Mesh {
-            first_vertex: 0,
-            vertex_count: 3,
-            fill: Paint::Solid(OPAQUE),
-        });
-        let plan = plan_of(ops);
-        assert_eq!(batchable_run(&plan, 0, plan.ops.len()), 3);
-    }
-
-    #[test]
-    fn a_run_is_clamped_to_the_range_end() {
-        // `end` is the enclosing clip block's end; a run must never read past it.
-        let plan = plan_of(vec![plain_quad(OPAQUE); 10]);
-        assert_eq!(batchable_run(&plan, 0, 4), 4);
-        assert_eq!(batchable_run(&plan, 8, 10), 2);
-    }
-
-    #[test]
-    fn the_batch_path_has_two_triangles_per_quad() {
-        let plan = plan_of(vec![plain_quad(OPAQUE); 5]);
+    fn the_batch_path_has_two_triangles_per_member_quad() {
+        let ops = vec![plain_quad(OPAQUE); 5];
         let t = Transform::new(AerisViewport::new(0.0, 0.0, 100.0, 100.0), 1.0);
-        let path = build_quad_run_path(&plan, 0, 5, t).expect("a path");
-        // 5 quads x 2 triangles x 3 vertices
-        assert_eq!(format!("{path:?}").matches("PathVertex").count(), 30);
-    }
-
-    #[test]
-    fn a_run_exactly_at_the_threshold_is_reported_in_full() {
-        // The threshold gates whether batching is *worth* it; the predicate still reports the true
-        // run length, so an off-by-one there would silently drop a quad from the frame.
-        let plan = plan_of(vec![plain_quad(OPAQUE); QUAD_BATCH_THRESHOLD]);
-        assert_eq!(
-            batchable_run(&plan, 0, plan.ops.len()),
-            QUAD_BATCH_THRESHOLD
-        );
+        let path = build_quad_group_path(&ops, &[0, 2, 4], t).expect("a path");
+        // 3 members x 2 triangles x 3 vertices
+        assert_eq!(format!("{path:?}").matches("PathVertex").count(), 18);
     }
 
     #[test]

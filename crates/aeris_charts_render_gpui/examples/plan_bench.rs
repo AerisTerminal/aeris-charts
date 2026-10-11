@@ -22,6 +22,7 @@ use aeris_charts_engine::{
     DepthSnapshot, DepthUpdate, FootprintAggregationOptions, FootprintBarAggregation,
     FootprintSeriesOptions, FootprintTrade, SeriesKind,
 };
+use aeris_charts_render_gpui::fixtures::dense_indicator_chart;
 use aeris_charts_render_gpui::{GpuiChartRenderer, PreparedAerisFrame};
 
 /// Chart size and DPR the gate is quoted at: a dense visible range on a fractional DPR.
@@ -31,6 +32,12 @@ const DPR: f64 = 1.5;
 
 /// The scene-construction performance target.
 const P99_BUDGET_MS: f64 = 2.0;
+
+/// Bars of the zoomed-out indicator fixture, all visible.
+const DENSE_BARS: usize = 4_000;
+/// Mesh vertices that fixture may lower to. Every vertex is converted, uploaded and rasterized
+/// by GPUI on each crosshair move; without stroke simplification it lowers to ~500k.
+const DENSE_VERTEX_BUDGET: u32 = 200_000;
 
 struct Fixture {
     engine: ChartEngine,
@@ -406,6 +413,50 @@ fn main() {
         "dense depth      {:>7} prims  {:>6} images p50 {:>7.3} ms  p95 {:>7.3} ms  p99 {:>7.3} ms  {:>6}",
         first.prims,
         first.image_runs,
+        percentile(&samples, 0.50),
+        percentile(&samples, 0.95),
+        p99,
+        if pass { "PASS" } else { "FAIL" }
+    );
+
+    // Zoomed-out candles, overlay volume and a five-line EMA ribbon: several points of every line
+    // share each device pixel column, so the stroke simplification bounds the mesh size.
+    let mut dense = dense_indicator_chart(DENSE_BARS, CSS_W, CSS_H, DPR);
+    dense.css_width = CSS_W;
+    dense.css_height = CSS_H;
+    dense.dpr = DPR;
+    let content_h = (CSS_H - dense.time_axis_height()).max(1.0);
+    dense.layout_panes(content_h);
+    dense.time_scale.set_width(CSS_W);
+    dense.fit_content();
+    dense.crosshair = Some((CSS_W / 2.0, CSS_H / 2.0));
+    let frame = dense.build_frame();
+    let prepared = PreparedAerisFrame::new(&frame);
+    let mut renderer = GpuiChartRenderer::new();
+    let first = renderer
+        .plan_frame(&prepared, DPR as f32)
+        .expect("dense indicator frame plans");
+    for _ in 0..10 {
+        renderer.plan_frame(&prepared, DPR as f32).unwrap();
+    }
+    let mut samples = Vec::with_capacity(iters);
+    for _ in 0..iters {
+        let started = Instant::now();
+        let metrics = renderer.plan_frame(&prepared, DPR as f32).unwrap();
+        samples.push(started.elapsed().as_nanos() as u64);
+        assert_eq!(
+            metrics.prims, first.prims,
+            "dense indicator prim count drifted"
+        );
+    }
+    samples.sort_unstable();
+    let p99 = percentile(&samples, 0.99);
+    let pass = p99 <= P99_BUDGET_MS && first.mesh_vertices <= DENSE_VERTEX_BUDGET;
+    all_pass &= pass;
+    println!(
+        "dense indicators {:>7} prims  {:>6} verts (budget {DENSE_VERTEX_BUDGET})  p50 {:>7.3} ms  p95 {:>7.3} ms  p99 {:>7.3} ms  {:>6}",
+        first.prims,
+        first.mesh_vertices,
         percentile(&samples, 0.50),
         percentile(&samples, 0.95),
         p99,

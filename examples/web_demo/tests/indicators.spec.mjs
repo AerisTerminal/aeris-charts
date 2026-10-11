@@ -839,7 +839,7 @@ test("indicator chips: auto-name on, no countdown, 2px default, style overrides"
     title_visible: true,
     countdown: false,
     width: 2,
-    price_line_visible: true,
+    price_line_visible: false,
     price_line_extent: "partial",
     price_line_width: 1,
     price_line_style: 1,
@@ -1212,7 +1212,7 @@ test("browser schemas retain every multi-parameter Rust canonical default", asyn
     volume_oscillator: { fast: 12, slow: 26, signal: 9, volume_source: null },
     cmf: { period: 14, volume_source: null },
     mfi: { period: 14, volume_source: null },
-    volume: { period: 14, volume_source: null },
+    volume: { period: 14, exponential: false, volume_source: null },
     vwma: { period: 14, volume_source: null },
     vwap_bands: { reset: "session", standard_deviation: 1, percent: 10, volume_source: null },
   };

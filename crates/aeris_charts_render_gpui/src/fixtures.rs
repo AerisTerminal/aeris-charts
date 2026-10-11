@@ -1,4 +1,5 @@
-//! Deterministic pixel-parity fixtures, shared by the capture harness and the parity tests.
+//! Deterministic pixel-parity fixtures, shared by the capture harness and the parity tests, plus
+//! the dense engine chart shared by the performance bench and the dense hover measurement.
 //!
 //! These exist so the *same* `Prim` list can be rendered by official GPUI (through
 //! [`crate::backend`]) and by `aeris_charts_native`'s tiny-skia rasterizer, and the two rasterizations
@@ -12,6 +13,7 @@
 //! residual: geometry that both backends fill as axis-aligned rectangles is separable from
 //! antialiased triangle edges, which is separable from gradients, which is separable from glyphs.
 
+use aeris_charts_engine::{ChartEngine, PriceScaleTarget, SeriesKind};
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{
     Gradient, IRect, LineStyle, LineType, Prim, RasterImage, TextAlign,
@@ -766,6 +768,90 @@ pub fn translucent_joins(dpr: f32) -> Fixture {
         height,
         background: BG,
     }
+}
+
+/// EMA periods and colors of [`dense_indicator_chart`]'s indicator ribbon.
+pub const DENSE_EMA_PERIODS: [usize; 5] = [8, 13, 21, 55, 200];
+const DENSE_EMA_COLORS: [&str; 5] = ["#2962ff", "#ff9800", "#ab47bc", "#ec407a", "#f44336"];
+
+/// The zoomed-out workload a trading host shows: `bars` hourly candles from a deterministic random
+/// walk, an overlay volume histogram with per-bar up/down colors, and a five-line EMA ribbon. The
+/// caller sizes the chart and picks the visible range; with thousands of bars visible every
+/// device pixel column holds several points of each line.
+pub fn dense_indicator_chart(bars: usize, css_w: f64, css_h: f64, dpr: f64) -> ChartEngine {
+    let bars = bars.max(2);
+    let mut engine = ChartEngine::new(css_w, css_h, dpr);
+    let mut times = Vec::with_capacity(bars);
+    let (mut open, mut high, mut low, mut close) = (
+        Vec::with_capacity(bars),
+        Vec::with_capacity(bars),
+        Vec::with_capacity(bars),
+        Vec::with_capacity(bars),
+    );
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut price = 100.0_f64;
+    for i in 0..bars {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let step = ((state >> 11) as f64 / (1u64 << 53) as f64 - 0.5) * 2.4;
+        let drift = (i as f64 * 0.004).sin() * 0.35;
+        let next = (price + step + drift).max(5.0);
+        times.push(1_700_000_000.0 + i as f64 * 3_600.0);
+        open.push(price);
+        high.push(price.max(next) + (state % 97) as f64 / 97.0);
+        low.push(price.min(next) - (state % 89) as f64 / 89.0);
+        close.push(next);
+        price = next;
+    }
+    engine
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .expect("dense candles load");
+    engine.series[0].kind = SeriesKind::Candlestick;
+
+    let volume: Vec<f64> = high
+        .iter()
+        .zip(&low)
+        .map(|(h, l)| (h - l) * 10_000.0)
+        .collect();
+    let volume_id = engine.add_series(SeriesKind::Histogram);
+    engine
+        .set_series_data(volume_id, &times, &volume, &volume, &volume, &volume)
+        .expect("dense volume loads");
+    engine.set_series_price_scale(volume_id, PriceScaleTarget::Overlay);
+    let colors = open
+        .iter()
+        .zip(&close)
+        .map(|(o, c)| if c >= o { 0x26a6_9a80 } else { 0xef53_5080 })
+        .collect();
+    assert!(
+        engine.set_series_point_colors(volume_id, Some(colors), None, None),
+        "volume colors match the volume rows"
+    );
+
+    for (period, color) in DENSE_EMA_PERIODS.into_iter().zip(DENSE_EMA_COLORS) {
+        let alpha = 2.0 / (period as f64 + 1.0);
+        let mut value = close[0];
+        let ema: Vec<f64> = close
+            .iter()
+            .map(|c| {
+                value += alpha * (c - value);
+                value
+            })
+            .collect();
+        let id = engine.add_series(SeriesKind::Line);
+        engine
+            .set_series_data(id, &times, &ema, &ema, &ema, &ema)
+            .expect("dense ema loads");
+        let series = engine
+            .series
+            .iter_mut()
+            .find(|series| series.id == id)
+            .expect("ema series is live");
+        series.line_color = Some(color.into());
+        series.line_width = Some(1.0);
+    }
+    engine
 }
 
 #[cfg(test)]
