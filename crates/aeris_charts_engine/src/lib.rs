@@ -150,6 +150,9 @@ pub use frame::{
     AxisTextMidpoint, ChartFrame, FrameBuildStats, FrameDrawingSegment, FramePane,
     FramePaneSegments, FrameSeriesSegment,
 };
+/// Default up/down volume column tints: the market colors at the volume fill strength. An up/down
+/// histogram without its own `up_color`/`down_color` draws in these.
+pub use frame::{VOLUME_DOWN as DEFAULT_VOLUME_DOWN_COLOR, VOLUME_UP as DEFAULT_VOLUME_UP_COLOR};
 pub use general_axes::{
     AxisDimension, AxisPosition, GeneralAxis, GeneralAxisDomain, GeneralAxisOptions,
     GeneralAxisTick, GeneralScaleType, MAX_GENERAL_AXES, MAX_GENERAL_AXIS_CATEGORIES,

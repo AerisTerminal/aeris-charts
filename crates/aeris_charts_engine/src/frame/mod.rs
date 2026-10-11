@@ -96,13 +96,13 @@ const HISTOGRAM: Color = Color::rgba(
     MARKET_UP_RGB.2,
     MARKET_VOLUME_ALPHA,
 );
-const VOLUME_UP: Color = Color::rgba(
+pub const VOLUME_UP: Color = Color::rgba(
     MARKET_UP_RGB.0,
     MARKET_UP_RGB.1,
     MARKET_UP_RGB.2,
     MARKET_VOLUME_ALPHA,
 );
-const VOLUME_DOWN: Color = Color::rgba(
+pub const VOLUME_DOWN: Color = Color::rgba(
     MARKET_DOWN_RGB.0,
     MARKET_DOWN_RGB.1,
     MARKET_DOWN_RGB.2,
