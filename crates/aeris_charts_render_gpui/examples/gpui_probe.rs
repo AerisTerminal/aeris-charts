@@ -3854,8 +3854,9 @@ mod tests {
         assert!(!probe.engine.measure_active());
     }
 
-    /// Moving from a trend line onto its `+ Add text` prompt keeps the prompt hovered with the
-    /// text cursor (the browser's engine-owned arbitration), so the label stays clickable.
+    /// A selected trend line's `+ Add text` prompt is hovered with the text cursor (the
+    /// browser's engine-owned arbitration), so the label stays clickable. An unselected line
+    /// shows no prompt to hover.
     #[test]
     fn trend_label_prompt_stays_hovered_with_a_text_cursor() {
         let mut probe = Probe::new(64, Some(1));
@@ -3880,9 +3881,15 @@ mod tests {
         let (x, y, _) = probe.engine.drawing_text_transform(id).unwrap();
         let (label_x, label_y) = (x - 20.0, y);
         assert!(probe.engine.hit_test_drawing(label_x, label_y).is_none());
+        probe.engine.set_selected_drawing(None);
         probe
             .engine
             .input_pointer_move(pointer(label_x, label_y), false);
+        assert_eq!(probe.engine.hovered_text(), None);
+        probe.engine.set_selected_drawing(Some(id));
+        probe
+            .engine
+            .input_pointer_move(pointer(label_x + 1.0, label_y), false);
         assert_eq!(probe.engine.hovered_text(), Some(id));
         assert_eq!(
             cursor_style(probe.engine.input_cursor()),

@@ -225,6 +225,8 @@ pub fn input_modifiers(modifiers: &Modifiers) -> InputModifiers {
 const CHART_KEY_NAMES: &[(&str, ChartKey)] = &[
     ("left", ChartKey::ArrowLeft),
     ("right", ChartKey::ArrowRight),
+    ("up", ChartKey::ArrowUp),
+    ("down", ChartKey::ArrowDown),
     ("pageup", ChartKey::PageUp),
     ("pagedown", ChartKey::PageDown),
     ("+", ChartKey::ZoomIn),
@@ -726,6 +728,8 @@ mod key_tests {
         let bindings = [
             ("left", ChartKey::ArrowLeft),
             ("right", ChartKey::ArrowRight),
+            ("up", ChartKey::ArrowUp),
+            ("down", ChartKey::ArrowDown),
             ("pageup", ChartKey::PageUp),
             ("pagedown", ChartKey::PageDown),
             ("+", ChartKey::ZoomIn),

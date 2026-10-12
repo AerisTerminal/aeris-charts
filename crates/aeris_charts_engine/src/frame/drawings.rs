@@ -307,13 +307,10 @@ impl ChartEngine {
         if !drawing.text.is_empty() {
             return Some((drawing.display_text(), false));
         }
-        (drawing.kind == DrawingKind::TrendLine
-            && self.hovered_text == Some(drawing.id)
-            && self.editing_drawing != Some(drawing.id))
-        .then_some((TREND_TEXT_PLACEHOLDER, true))
+        (self.trend_text_prompt() == Some(drawing.id)).then_some((TREND_TEXT_PLACEHOLDER, true))
     }
 
-    /// Width source for the middle-line cutout. Hover reserves the full prompt; once editing
+    /// Width source for the middle-line cutout. Selection reserves the full prompt; once editing
     /// begins, an empty value uses the editor's one-em caret opening and measured text expands it.
     fn drawing_frame_gap_text<'a>(&self, drawing: &'a Drawing) -> Option<&'a str> {
         if drawing.kind == DrawingKind::TrendLine && self.editing_drawing == Some(drawing.id) {
@@ -322,8 +319,7 @@ impl ChartEngine {
         if !drawing.text.is_empty() {
             return Some(drawing.display_text());
         }
-        (drawing.kind == DrawingKind::TrendLine && self.hovered_text == Some(drawing.id))
-            .then_some(TREND_TEXT_PLACEHOLDER)
+        (self.trend_text_prompt() == Some(drawing.id)).then_some(TREND_TEXT_PLACEHOLDER)
     }
 
     fn measure_drawing_frame_text(&self, drawing: &Drawing, text: &str, size: f64) -> f64 {
@@ -3903,7 +3899,8 @@ impl ChartEngine {
                     out,
                     points,
                     &progress_path,
-                    vpr.max(1.0) as f32,
+                    // A hairline: one whole device pixel, never a fractional-DPR widened stroke.
+                    vpr.floor().max(1.0) as f32,
                     LineStyle::Dashed,
                     LineType::Simple,
                     POSITION_ENTRY,

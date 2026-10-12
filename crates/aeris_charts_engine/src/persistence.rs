@@ -2060,6 +2060,7 @@ impl ChartEngine {
         self.general_series = None;
         self.drawings = state.drawings;
         self.drawing_anchor_times = state.drawing_anchor_times;
+        self.drawing_time_anchors.clear();
         self.next_pane_id = next_runtime;
         self.next_persistent_pane_id = state.max_persistent_pane_id + 1;
         self.next_drawing_id = state.max_drawing_id + 1;
@@ -2524,6 +2525,7 @@ impl ChartEngine {
         self.general_series = staged.general_series;
         self.drawings = staged.drawings;
         self.drawing_anchor_times = staged.drawing_anchor_times;
+        self.drawing_time_anchors.clear();
         self.next_pane_id = staged.next_pane_id;
         self.next_persistent_pane_id = staged.next_persistent_pane_id;
         self.next_drawing_id = staged.next_drawing_id;

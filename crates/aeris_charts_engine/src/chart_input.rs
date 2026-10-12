@@ -168,11 +168,13 @@ pub struct PointerInput {
 /// Keys the chart binds. Hosts translate platform key names; the bindings live here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChartKey {
+    /// Moves the selected drawing one bar left, else pans.
     ArrowLeft,
+    /// Moves the selected drawing one bar right, else pans.
     ArrowRight,
-    /// Bound only on focused targets ([`ChartEngine::input_target_key_down`]).
+    /// Moves the selected drawing up; consumed chart-wide only while a drawing is selected.
     ArrowUp,
-    /// Bound only on focused targets ([`ChartEngine::input_target_key_down`]).
+    /// Moves the selected drawing down; consumed chart-wide only while a drawing is selected.
     ArrowDown,
     /// Cycles drawing anchors during a focused drawing edit; never consumed chart-wide.
     Tab,
@@ -220,6 +222,10 @@ pub const CHART_KEY_BINDINGS: &[ChartKeyBinding] = &[
     binding(ChartKey::ArrowRight, false, false, false),
     binding(ChartKey::ArrowRight, true, false, false),
     binding(ChartKey::ArrowRight, false, true, false),
+    binding(ChartKey::ArrowUp, false, false, false),
+    binding(ChartKey::ArrowUp, true, false, false),
+    binding(ChartKey::ArrowDown, false, false, false),
+    binding(ChartKey::ArrowDown, true, false, false),
     binding(ChartKey::PageUp, false, false, false),
     binding(ChartKey::PageDown, false, false, false),
     // `+` and `_` need Shift on common layouts.
@@ -429,6 +435,14 @@ struct KeyboardPan {
     delta: f64,
 }
 
+/// A held chart-wide arrow moving the selected drawing. Auto-repeat steps apply live and the whole
+/// hold commits as one undo entry on release.
+#[derive(Clone, Debug)]
+struct KeyboardNudge {
+    key: ChartKey,
+    before: Drawing,
+}
+
 /// A keyboard drawing edit: every nudge applies live, and the whole edit commits as one undo entry
 /// or cancels back to `before`.
 #[derive(Clone, Debug)]
@@ -462,6 +476,7 @@ pub(crate) struct InputController {
     host_primitive_cursor: bool,
     kinetic_active: bool,
     keyboard_pan: Option<KeyboardPan>,
+    keyboard_nudge: Option<KeyboardNudge>,
     /// Newest captured freehand sample since the last frame. Native platforms may deliver motion
     /// at device cadence (Wayland: per HID report); the stroke samples display cadence instead.
     pending_capture: Option<(f64, f64, DrawingModifiers)>,
@@ -1509,15 +1524,33 @@ impl ChartEngine {
         } else {
             1.0
         };
+        if !(repeat
+            && self
+                .input
+                .keyboard_nudge
+                .as_ref()
+                .is_some_and(|nudge| nudge.key == key))
+        {
+            self.commit_keyboard_nudge();
+        }
         let edit_cancelled = if key == ChartKey::Escape {
             self.cancel_drawing_edit_session()
         } else {
             self.commit_drawing_edit_session();
             false
         };
+        let arrow = matches!(
+            key,
+            ChartKey::ArrowLeft | ChartKey::ArrowRight | ChartKey::ArrowUp | ChartKey::ArrowDown
+        );
+        let mut panned = false;
         let handled = match key {
+            _ if arrow && !modifiers.control && self.keyboard_nudge_drawing().is_some() => {
+                self.keyboard_nudge_selected_drawing(key, modifiers.shift)
+            }
             ChartKey::ArrowUp | ChartKey::ArrowDown | ChartKey::Tab => false,
             ChartKey::ArrowLeft | ChartKey::ArrowRight => {
+                panned = true;
                 let delta = if key == ChartKey::ArrowLeft {
                     -step
                 } else {
@@ -1593,7 +1626,7 @@ impl ChartEngine {
             ChartKey::Redo => self.redo_drawing(),
         };
         if handled {
-            if !matches!(key, ChartKey::ArrowLeft | ChartKey::ArrowRight) {
+            if !panned {
                 self.stop_kinetic_coast();
             }
             self.input.frame_dirty = true;
@@ -1602,8 +1635,17 @@ impl ChartEngine {
         handled
     }
 
-    /// Key release. Only a held arrow pan reacts.
+    /// Key release. Only a held arrow pan or drawing nudge reacts.
     pub fn input_key_up(&mut self, key: ChartKey) -> bool {
+        if self
+            .input
+            .keyboard_nudge
+            .as_ref()
+            .is_some_and(|nudge| nudge.key == key)
+        {
+            self.commit_keyboard_nudge();
+            return true;
+        }
         if self.input.keyboard_pan.is_none_or(|pan| pan.key != key) {
             return false;
         }
@@ -1846,15 +1888,7 @@ impl ChartEngine {
             | ChartKey::ArrowDown
                 if editing =>
             {
-                let step = if modifiers.shift { 10.0 } else { 1.0 };
-                // Horizontal steps are bars (drawings move bar by bar); vertical steps are px.
-                let bar_step = step * self.time_scale.bar_spacing();
-                let (dx, dy) = match key {
-                    ChartKey::ArrowLeft => (-bar_step, 0.0),
-                    ChartKey::ArrowRight => (bar_step, 0.0),
-                    ChartKey::ArrowUp => (0.0, -step),
-                    _ => (0.0, step),
-                };
+                let (dx, dy) = self.drawing_nudge_delta(key, modifiers.shift);
                 let anchor = self
                     .input
                     .drawing_edit
@@ -1863,6 +1897,51 @@ impl ChartEngine {
                 self.nudge_selected_drawing_with_history(dx, dy, anchor, false)
             }
             _ => false,
+        }
+    }
+
+    /// One arrow step for a drawing: horizontal steps are bars (drawings move bar by bar), vertical
+    /// steps are px that the nudge widens to at least one price tick. Shift steps ten.
+    fn drawing_nudge_delta(&self, key: ChartKey, shift: bool) -> (f64, f64) {
+        let step = if shift { 10.0 } else { 1.0 };
+        let bar_step = step * self.time_scale.bar_spacing();
+        match key {
+            ChartKey::ArrowLeft => (-bar_step, 0.0),
+            ChartKey::ArrowRight => (bar_step, 0.0),
+            ChartKey::ArrowUp => (0.0, -step),
+            _ => (0.0, step),
+        }
+    }
+
+    /// The selected drawing chart-wide arrows move: visible and unlocked.
+    fn keyboard_nudge_drawing(&self) -> Option<&Drawing> {
+        self.selected_drawing()
+            .and_then(|id| self.drawing(id))
+            .filter(|drawing| drawing.visible && !drawing.locked)
+    }
+
+    /// Move the selected drawing one arrow step, joining a held key's open nudge.
+    fn keyboard_nudge_selected_drawing(&mut self, key: ChartKey, shift: bool) -> bool {
+        let Some(drawing) = self.keyboard_nudge_drawing() else {
+            return false;
+        };
+        if self.input.keyboard_nudge.is_none() {
+            self.input.keyboard_nudge = Some(KeyboardNudge {
+                key,
+                before: drawing.clone(),
+            });
+        }
+        let (dx, dy) = self.drawing_nudge_delta(key, shift);
+        self.nudge_selected_drawing_with_history(dx, dy, None, false);
+        // A selected drawing owns the arrows even when a step cannot move it (off-screen anchors),
+        // so the chart never pans underneath it.
+        true
+    }
+
+    /// Record a held arrow nudge as one undo entry.
+    fn commit_keyboard_nudge(&mut self) {
+        if let Some(nudge) = self.input.keyboard_nudge.take() {
+            self.record_drawing_edit(nudge.before);
         }
     }
 
@@ -1893,11 +1972,12 @@ impl ChartEngine {
         self.push_input_event(ChartInputEvent::DrawingCreated(id));
     }
 
-    /// Stop every motion owned by an earlier gesture: kinetic coast, held keyboard pan, animated
-    /// scroll, and any stale scroll snapshot.
+    /// Stop every motion owned by an earlier gesture: kinetic coast, held keyboard pan or drawing
+    /// nudge (committed), animated scroll, and any stale scroll snapshot.
     fn stop_input_motion(&mut self) {
         self.stop_kinetic_coast();
         self.input.keyboard_pan = None;
+        self.commit_keyboard_nudge();
         self.cancel_keyboard_scroll();
         self.cancel_scroll_animation();
     }
@@ -2019,10 +2099,21 @@ impl ChartEngine {
         }
     }
 
-    /// Pane-press arbitration, topmost owner first: a live measure, an armed drawing tool, trading
-    /// controls, the crosshair action chip, an existing drawing, the delta tooltip, a Shift
-    /// measure, then pan. An armed tool places its anchor anywhere in the pane, including on an
-    /// order or position line, exactly as its crosshair cursor promises.
+    /// The selected, unlocked drawing's anchor handle under a pane point. Handles paint above every
+    /// chart object, so they win presses, hover, and the cursor over trading lines too: a
+    /// position tool's entry anchor resting on an order line stays draggable.
+    fn selected_drawing_anchor_at(&self, x: f64, y: f64) -> Option<DrawingHit> {
+        self.hit_test_drawing(x, y).filter(|hit| {
+            matches!(hit.part, DrawingDragPart::Anchor(_))
+                && self.drawing(hit.id).is_some_and(|drawing| !drawing.locked)
+        })
+    }
+
+    /// Pane-press arbitration, topmost owner first: a live measure, an armed drawing tool, the
+    /// selected drawing's anchor handles, trading controls, the crosshair action chip, an existing
+    /// drawing, the delta tooltip, a Shift measure, then pan. An armed tool places its anchor
+    /// anywhere in the pane, including on an order or position line, exactly as its crosshair
+    /// cursor promises.
     fn begin_pane_press(&mut self, input: PointerInput) -> PressMode {
         let (x, y) = (input.x, input.y);
         let modifiers = drawing_modifiers(input.modifiers);
@@ -2034,7 +2125,12 @@ impl ChartEngine {
             return PressMode::Measure;
         }
         let tool_armed = self.active_drawing_tool().is_some();
-        if !tool_armed && self.trading_hit_at(x, y).is_some() {
+        // Only a trading object a press can act on claims it. A static line, such as a filled
+        // position's entry, leaves the press to drawings, Shift measure, and pan.
+        if !tool_armed
+            && self.selected_drawing_anchor_at(x, y).is_none()
+            && self.trading_cursor_at(x, y).is_some()
+        {
             self.set_trading_pressed(x, y);
             let dragging = self.trading_drag_start_at(x, y);
             return PressMode::Trading { dragging };
@@ -2187,7 +2283,10 @@ impl ChartEngine {
         };
         let id = drawing.id;
         let open_editor = if drawing.kind == DrawingKind::TrendLine {
+            // An empty line's prompt appears only once the line is selected, so the click that
+            // selects it must not also open the editor under the prompt it just revealed.
             trend_text_hit == Some(id)
+                && (!drawing.text.is_empty() || text_press_selected == Some(id))
         } else {
             (drawing.kind == DrawingKind::Text || drawing.kind.is_text_annotation())
                 && (drawing.text.trim().is_empty() || text_press_selected == Some(id))
@@ -2439,7 +2538,10 @@ impl ChartEngine {
         // A live measure or an armed tool claims every press, so trading objects show no hover
         // feedback that would promise a drag or click they will not receive. Otherwise only a
         // changed trading hover restarts the dwell; holding still lets it elapse.
-        if self.measure_active() || self.active_drawing_tool().is_some() {
+        if self.measure_active()
+            || self.active_drawing_tool().is_some()
+            || (!captured && self.selected_drawing_anchor_at(x, y).is_some())
+        {
             if self.clear_trading_hover() {
                 self.input.tooltip_deadline_ms = None;
             }
@@ -2507,6 +2609,9 @@ impl ChartEngine {
         }
         if self.trading_preview().is_some() {
             return ChartCursor::VerticalGrabbing;
+        }
+        if let Some(hit) = self.selected_drawing_anchor_at(x, y) {
+            return ChartCursor::from_hit_name(hit.cursor);
         }
         if let Some(cursor) = self.trading_cursor_at(x, y) {
             return match cursor {
@@ -3319,9 +3424,109 @@ mod tests {
         for key in [ChartKey::ArrowUp, ChartKey::ArrowDown, ChartKey::Tab] {
             assert!(
                 !chart.input_key_down(key, none, false, 0.0),
-                "{key:?} is bound only on focused targets"
+                "{key:?} does nothing chart-wide without a selected drawing"
             );
         }
+    }
+
+    #[test]
+    fn an_empty_trend_line_shows_its_text_prompt_on_selection_and_edits_on_the_next_click() {
+        let mut chart = chart();
+        let id = chart
+            .add_drawing(
+                DrawingKind::TrendLine,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 10.0,
+                        price: 104.0,
+                    },
+                    DrawingPoint {
+                        logical: 40.0,
+                        price: 104.0,
+                    },
+                ],
+                Some(r#"{"text_h_align":"center","text_v_align":"middle"}"#),
+            )
+            .unwrap();
+        chart.set_selected_drawing(None);
+        chart.build_frame();
+        let (x, y) = chart.drawing_text_coordinate(id).unwrap();
+
+        chart.input_pointer_move(at(x, y), false);
+        assert_eq!(
+            chart.drawing_text_hit_at(x, y),
+            None,
+            "hover reveals no prompt"
+        );
+        assert_eq!(chart.trend_text_prompt(), None);
+        click(&mut chart, x, y);
+        assert_eq!(chart.selected_drawing(), Some(id));
+        assert_eq!(chart.trend_text_prompt(), Some(id));
+        assert!(
+            chart.drawing_text_edit().is_none(),
+            "the selecting click only reveals the prompt"
+        );
+        click(&mut chart, x, y);
+        assert!(
+            chart.drawing_text_edit().is_some(),
+            "the prompt click edits"
+        );
+    }
+
+    #[test]
+    fn arrows_move_the_selected_drawing_instead_of_panning() {
+        let mut chart = chart();
+        let none = InputModifiers::default();
+        let shift = InputModifiers {
+            shift: true,
+            ..InputModifiers::default()
+        };
+        chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None);
+        click(&mut chart, 120.0, 120.0);
+        click(&mut chart, 300.0, 220.0);
+        let id = chart.drawings()[0].id;
+        chart.set_selected_drawing(Some(id));
+        let original = chart.drawing(id).unwrap().points.clone();
+        let scroll = chart.scroll_position();
+
+        assert!(chart.input_key_down(ChartKey::ArrowRight, none, false, 0.0));
+        assert!(chart.input_key_down(ChartKey::ArrowRight, none, true, 30.0));
+        assert!(
+            !chart.input_animating(),
+            "a selected drawing owns the arrows"
+        );
+        assert!(chart.input_key_up(ChartKey::ArrowRight));
+        let moved = chart.drawing(id).unwrap().points.clone();
+        assert_eq!(moved[0].logical, original[0].logical + 2.0);
+        assert_eq!(moved[1].logical, original[1].logical + 2.0);
+        assert_eq!(moved[0].price, original[0].price);
+
+        assert!(chart.input_key_down(ChartKey::ArrowUp, shift, false, 0.0));
+        assert!(chart.input_key_up(ChartKey::ArrowUp));
+        let raised = chart.drawing(id).unwrap().points.clone();
+        assert!(raised[0].price > moved[0].price);
+        assert_eq!(raised[0].logical, moved[0].logical);
+        assert_eq!(chart.scroll_position(), scroll, "the chart never pans");
+
+        assert!(chart.undo_drawing());
+        assert_eq!(chart.drawing(id).unwrap().points, moved);
+        assert!(chart.undo_drawing());
+        assert_eq!(
+            chart.drawing(id).unwrap().points,
+            original,
+            "a held arrow is one undo entry"
+        );
+
+        chart.set_drawing_locked(id, true);
+        assert!(!chart.input_key_down(ChartKey::ArrowUp, none, false, 0.0));
+        assert!(chart.input_key_down(ChartKey::ArrowLeft, none, false, 0.0));
+        assert!(
+            chart.input_animating(),
+            "a locked drawing leaves Left/Right to panning"
+        );
+        assert!(chart.input_key_up(ChartKey::ArrowLeft));
+        assert_eq!(chart.drawing(id).unwrap().points, original);
     }
 
     #[test]
@@ -3462,6 +3667,42 @@ mod tests {
     }
 
     #[test]
+    fn a_selected_position_anchor_on_an_order_line_drags_the_drawing_on_both_axes() {
+        let (mut chart, y) = chart_with_stop_on_its_entry();
+        assert!(chart.set_drawing_tool(Some(DrawingKind::LongPosition), None, None));
+        click(&mut chart, 200.0, y);
+        let id = chart.drawings()[0].id;
+        chart.set_selected_drawing(Some(id));
+        chart.build_frame();
+        let before = chart.drawing(id).unwrap().points.clone();
+        let (ax, ay) = chart.drawing_point_to_coordinate(id, 0).unwrap();
+        assert!(
+            hit_order(&chart, ax, ay).is_some(),
+            "the entry rests on the order line"
+        );
+
+        chart.input_pointer_move(at(ax, ay), false);
+        assert_eq!(chart.input_cursor(), ChartCursor::Move);
+        assert!(
+            chart.trading_state.feedback_hover.is_none(),
+            "the handle, not the order line, owns the hover"
+        );
+        drag(&mut chart, (ax, ay), (ax + 60.0, ay + 40.0));
+        let after = chart.drawing(id).unwrap().points.clone();
+        assert!(after[0].logical > before[0].logical, "entry moves in time");
+        assert!(after[0].price < before[0].price, "entry moves in price");
+        assert!(chart.take_trading_intents().is_empty());
+
+        chart.set_selected_drawing(None);
+        chart.input_pointer_move(at(ax + 300.0, y), false);
+        assert_eq!(
+            chart.input_cursor(),
+            ChartCursor::VerticalGrab,
+            "away from handles the order line still owns the pointer"
+        );
+    }
+
+    #[test]
     fn a_stop_on_its_entry_line_is_the_one_the_pointer_hovers_and_drags() {
         let (mut chart, y) = chart_with_stop_on_its_entry();
         let line_x = 200.0;
@@ -3546,6 +3787,44 @@ mod tests {
         chart.input_pointer_move(at(x, y), false);
         assert_ne!(chart.input_cursor(), ChartCursor::VerticalGrabbing);
         assert!(chart.trading_drag_start_at(x, y), "a fresh drag can start");
+    }
+
+    #[test]
+    fn shift_click_on_a_filled_position_line_starts_a_measure() {
+        let mut chart = chart();
+        let snapshot: TradingSnapshot = serde_json::from_str(
+            r#"{"instrument":{"tick_size":0.25},
+                "positions":[{"id":"position-1","pane_index":0,"price_scale":"right",
+                    "side":"long","average_price":103.0,"quantity":2.0}]}"#,
+        )
+        .unwrap();
+        chart.set_trading_snapshot(snapshot).unwrap();
+        chart.build_frame();
+        let y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 103.0)
+            .unwrap();
+        let x = 200.0;
+        assert!(
+            chart.trading_hit_at(x, y).is_some(),
+            "the press is on the line"
+        );
+        assert!(
+            chart.trading_cursor_at(x, y).is_none(),
+            "and the line is static"
+        );
+
+        chart.input_pointer_down(shifted(x, y), 1);
+        chart.input_pointer_up(shifted(x, y));
+        assert!(
+            chart.measure_active(),
+            "Shift measures from the fixed entry"
+        );
+
+        assert!(chart.input_key_down(ChartKey::Escape, InputModifiers::default(), false, 0.0));
+        let start = chart.scroll_position();
+        drag(&mut chart, (x, y), (x + 40.0, y));
+        assert_ne!(chart.scroll_position(), start, "a plain drag pans");
+        assert!(chart.take_trading_intents().is_empty());
     }
 
     #[test]

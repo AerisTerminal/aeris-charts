@@ -110,10 +110,11 @@ pub use drawing_contract::{
 };
 pub use drawing_text_edit::{DrawingTextEditKey, DrawingTextEditLayout};
 pub use drawings::{
-    BuiltinDrawingIcon, DRAWING_DEFAULT_COLOR, Drawing, DrawingCreationUpdate, DrawingDragPart,
-    DrawingHit, DrawingId, DrawingKind, DrawingModifiers, DrawingPoint, DrawingPriceScale,
-    DrawingWorkStats, MAX_DRAWING_ICON_NAME_BYTES, MAX_DRAWING_ICON_SIZE, MAX_DRAWING_ICONS,
-    TextCapCenterFn, TextCapMetrics, TextMeasureFn,
+    BuiltinDrawingIcon, DRAWING_DEFAULT_COLOR, DRAWINGS_DOCUMENT_SCHEMA, DRAWINGS_DOCUMENT_VERSION,
+    Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId, DrawingKind,
+    DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats, ImportedDrawing,
+    MAX_DRAWING_ICON_NAME_BYTES, MAX_DRAWING_ICON_SIZE, MAX_DRAWING_ICONS, TextCapCenterFn,
+    TextCapMetrics, TextMeasureFn,
 };
 pub(crate) use drawings::{
     DrawingAnchorTime, DrawingController, DrawingDrag, DrawingHistory, DrawingIconRegistry,
@@ -1820,6 +1821,10 @@ pub struct ChartEngine {
     /// sequence. Entries are bounded by the persistence anchor limits and are consumed when they
     /// resolve to a live sequence point.
     drawing_anchor_times: HashMap<DrawingId, Vec<Option<DrawingAnchorTime>>>,
+    /// Imported time-axis drawing anchors (UTC seconds) waiting for the first bars: a document
+    /// restored onto an empty chart resolves by time once data arrives instead of keeping the
+    /// saved bar indices. Bounded like `drawing_anchor_times`.
+    drawing_time_anchors: HashMap<DrawingId, Vec<Option<f64>>>,
     pub series: SeriesStore,
     tick_marks: TimeTickMarks,
     next_pane_id: u32,
@@ -2109,6 +2114,7 @@ impl ChartEngine {
             next_depth_event_layer_id: 1,
             pending_sequence_mapping: None,
             drawing_anchor_times: HashMap::new(),
+            drawing_time_anchors: HashMap::new(),
             series,
             tick_marks: TimeTickMarks::new(),
             next_pane_id: 2,
@@ -4096,7 +4102,11 @@ impl ChartEngine {
         self.pending_sequence_mapping = previous_sequence
             .as_deref()
             .map(|old| BarSequenceMapping::between_points(old, &points));
+        // The row keys synchronized below are not chart time, so pending time anchors must not
+        // resolve against them.
+        let pending_time_anchors = std::mem::take(&mut self.drawing_time_anchors);
         let installed = self.install_series_data_inner(id, times, open, high, low, close);
+        self.drawing_time_anchors = pending_time_anchors;
         if installed {
             let retained_len = self
                 .data
@@ -5350,6 +5360,7 @@ impl ChartEngine {
         } else if let Some(mapping) = merged_time_mapping.as_ref() {
             self.rebase_drawing_logicals(mapping);
         }
+        self.resolve_pending_drawing_times();
         // Port of reference `ChartModel.updateTimeScale` (chart-model.ts:953-984): decide the
         // right-offset compensation BEFORE the new points/base index land on the scale.
         let old_first_time = self.synced_first_time;

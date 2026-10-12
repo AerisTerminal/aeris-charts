@@ -763,8 +763,14 @@ test("an empty trend line offers direct inline text entry at its configured slot
   const idle = await capture(page);
   await page.mouse.move(slot.x, slot.y);
   await settle_frames(page);
+  const gap_free = await capture(page);
+  // Hover alone never opens the prompt; the first click selects the line and shows it.
+  await page.mouse.click(slot.x, slot.y);
+  await expect(page.locator("#aeris_charts-text-input")).toHaveCount(0);
+  await page.mouse.move(slot.x + 1, slot.y);
+  await settle_frames(page);
   const hovered = await capture(page);
-  expect(pixel_diff(idle, hovered), "hover paints the low-opacity Add text affordance").toBeGreaterThan(20);
+  expect(pixel_diff(idle, hovered), "selection paints the low-opacity Add text affordance").toBeGreaterThan(20);
 
   const gap_width = (png) => {
     const center = slot.x * PR;
@@ -784,6 +790,7 @@ test("an empty trend line offers direct inline text entry at its configured slot
     return Math.min(...candidates);
   };
   const prompt_gap = gap_width(hovered);
+  expect(gap_width(gap_free), "a hovered, unselected line stays unbroken").toBeLessThan(3);
 
   await page.mouse.click(slot.x, slot.y);
   const editor = page.locator("#aeris_charts-text-input");
@@ -1072,7 +1079,7 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
   // (the regression fixture measured 201), so 128 separates raster coverage from wrong paint.
   // Rotated browser text is the one intentional exception: Canvas2D rotates during fillText,
   // while WebGPU rotates the cached unrotated glyph-atlas quad. Verify both canonical transforms
-  // exactly above, including the empty trend line's "+ Add text" prompt, then bound high-coverage
+  // exactly above, including any shown "+ Add text" prompt, then bound high-coverage
   // differences to those measured glyph rectangles only.
   let ordering_diff = 0;
   let rotated_glyph_diff = 0;
@@ -1111,9 +1118,10 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
     await test_info.attach("diff.png", { body: PNG.sync.write(visual), contentType: "image/png" });
   }
   // Windows SwiftShader measurement: 49 rotated-glyph pixels above the 128-step classifier,
-  // 39 inside the "trend" label and 10 inside the hovered "+ Add text" prompt. The prompt's
-  // pixels lie on its glyph rows (|local y| <= 2 px) with deltas of 135-148 at its 0x99 alpha,
-  // the same rotate-before versus rotate-after raster residual as the label, not paint order.
+  // 39 inside the "trend" label and 10 inside a "+ Add text" prompt (then shown on hover; it now
+  // follows selection). The prompt's pixels lie on its glyph rows (|local y| <= 2 px) with deltas
+  // of 135-148 at its 0x99 alpha, the same rotate-before versus rotate-after raster residual as
+  // the label, not paint order.
   expect(rotated_glyph_diff, "rotated glyph raster residual stays bounded").toBeLessThanOrEqual(64);
   expect(ordering_diff, "drawing geometry/paint order must match (only AA coverage steps may differ)").toBe(0);
 });

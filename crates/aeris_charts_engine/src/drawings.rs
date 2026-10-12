@@ -25,11 +25,13 @@ use aeris_charts_render::draw_list::{LineStyle, LineType, RasterImage};
 use super::*;
 
 mod annotations;
+mod document;
 mod geometry;
 mod icons;
 mod tools;
 
 pub(crate) use annotations::{SIGNPOST_PRESET_HEIGHT, annotation_text_weight};
+pub use document::{DRAWINGS_DOCUMENT_SCHEMA, DRAWINGS_DOCUMENT_VERSION, ImportedDrawing};
 pub(crate) use geometry::{
     DrawingBodyGeometry, DrawingGeometryOptions, FibonacciGeometry, MeasureAxes, MeasureGeometry,
     PositionGeometry, PositionZone, anchor_handle_points, arc_segments, ellipse_segments,
@@ -2629,7 +2631,7 @@ impl ChartEngine {
     fn remove_drawing_snapshot(&mut self, id: DrawingId) -> Option<(Drawing, usize)> {
         let index = self.drawings.iter().position(|drawing| drawing.id == id)?;
         let drawing = self.drawings.remove(index);
-        self.drawing_anchor_times.remove(&id);
+        self.forget_persisted_anchors(id);
         self.drawing_runtime.borrow_mut().remove(id, &self.drawings);
         if self.selected_drawing == Some(id) {
             self.selected_drawing = None;
@@ -2659,7 +2661,7 @@ impl ChartEngine {
             return false;
         };
         *drawing = snapshot.clone();
-        self.drawing_anchor_times.remove(&snapshot.id);
+        self.forget_persisted_anchors(snapshot.id);
         self.update_drawing_runtime(snapshot.id);
         true
     }
@@ -4273,7 +4275,7 @@ impl ChartEngine {
         }
         let after = self.drawings[index].clone();
         if before.points != after.points {
-            self.drawing_anchor_times.remove(&id);
+            self.forget_persisted_anchors(id);
         }
         self.update_drawing_runtime(id);
         if before != after {
@@ -4306,6 +4308,7 @@ impl ChartEngine {
         }
         let drawings = std::mem::take(&mut self.drawings);
         self.drawing_anchor_times.clear();
+        self.drawing_time_anchors.clear();
         self.drawing_runtime.borrow_mut().clear();
         self.selected_drawing = None;
         self.drawing_drag = None;
@@ -4813,10 +4816,15 @@ impl ChartEngine {
             {
                 return None;
             }
-            let text = if drawing.text.is_empty() {
+            let text = if !drawing.text.is_empty() {
+                drawing.display_text()
+            } else if self.selected_drawing == Some(drawing.id)
+                || self.editing_drawing == Some(drawing.id)
+            {
+                // An empty line's prompt is only a target once selection shows it.
                 TREND_TEXT_PLACEHOLDER
             } else {
-                drawing.display_text()
+                return None;
             };
             let px = self.drawing_px(drawing)?;
             let pane = self.panes.get(drawing.pane_index)?;
@@ -4855,8 +4863,8 @@ impl ChartEngine {
         hit
     }
 
-    /// The drawing under a media-px pointer and the cursor it shows. A trend label or its
-    /// `+ Add text` prompt wins with the text cursor, so moving from the line onto the label
+    /// The drawing under a media-px pointer and the cursor it shows. A trend label or a selected
+    /// line's `+ Add text` prompt wins with the text cursor, so moving from the line onto the label
     /// keeps the affordance; otherwise the body/handle hit and its drag cursor. Pure: hosts use
     /// it to resolve cursors without changing hover state.
     pub fn drawing_hover_at(&self, x: f64, y: f64) -> Option<(DrawingId, &'static str)> {
@@ -4867,8 +4875,8 @@ impl ChartEngine {
     }
 
     /// Canonical drawing hover for every host: resolves [`Self::drawing_hover_at`] and applies
-    /// the generic hover promotion plus the text hover ring / trend `+ Add text` prompt, or
-    /// clears both. Returns the hovered drawing and its cursor.
+    /// the generic hover promotion plus the text hover ring, or clears both. Returns the hovered
+    /// drawing and its cursor.
     pub fn update_drawing_hover(&mut self, x: f64, y: f64) -> Option<(DrawingId, &'static str)> {
         let hover = self.drawing_hover_at(x, y);
         let id = hover.map(|(id, _)| id);
@@ -4963,7 +4971,7 @@ impl ChartEngine {
     }
 
     /// Mark a text drawing or trend line under the host pointer. Text drawings paint their
-    /// hover ring; empty trend lines paint their inline `+ Add text` affordance.
+    /// hover ring; an empty trend line's `+ Add text` prompt follows selection, not hover.
     pub fn set_hovered_text(&mut self, id: Option<DrawingId>) {
         let valid = id.filter(|&hid| {
             self.drawings.iter().any(|d| {
@@ -4973,18 +4981,22 @@ impl ChartEngine {
             })
         });
         if valid != self.hovered_text {
-            let changes_placeholder = [self.hovered_text, valid].into_iter().flatten().any(|id| {
-                self.drawing(id).is_some_and(|drawing| {
-                    drawing.kind == DrawingKind::TrendLine && drawing.text.is_empty()
-                })
-            });
-            if changes_placeholder {
-                self.invalidate_frame_drawings();
-            } else {
-                self.invalidate_frame_overlay();
-            }
+            self.invalidate_frame_overlay();
             self.hovered_text = valid;
         }
+    }
+
+    /// The empty trend line showing its `+ Add text` prompt: only the selected one, while it can
+    /// be edited and is not already being edited. Hover alone never shows it.
+    pub(crate) fn trend_text_prompt(&self) -> Option<DrawingId> {
+        let id = self.selected_drawing?;
+        let drawing = self.drawing(id)?;
+        (drawing.kind == DrawingKind::TrendLine
+            && drawing.text.is_empty()
+            && drawing.visible
+            && !drawing.locked
+            && self.editing_drawing != Some(id))
+        .then_some(id)
     }
 
     pub fn hovered_text(&self) -> Option<DrawingId> {
@@ -6212,7 +6224,7 @@ impl ChartEngine {
                 before.bars_pattern = drag.history_bars_pattern;
                 before.icon_size = drag.history_icon_size;
                 if before != after {
-                    self.drawing_anchor_times.remove(&id);
+                    self.forget_persisted_anchors(id);
                     self.record_drawing_command(DrawingCommand::Update {
                         before,
                         after: Box::new(after),
@@ -6368,7 +6380,7 @@ impl ChartEngine {
             return;
         };
         if before != after {
-            self.drawing_anchor_times.remove(&before.id);
+            self.forget_persisted_anchors(before.id);
             self.record_drawing_command(DrawingCommand::Update {
                 before,
                 after: Box::new(after),

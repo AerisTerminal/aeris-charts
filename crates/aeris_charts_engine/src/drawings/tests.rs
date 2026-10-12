@@ -4239,11 +4239,15 @@ fn selection_crosshair_and_one_drawing_drag_keep_unrelated_geometry_retained() {
     }
     chart.build_frame();
 
+    chart.reset_drawing_work_stats();
     chart.set_selected_drawing(Some(first));
     chart.build_frame();
     let frame = chart.frame_build_stats();
-    assert_eq!(frame.drawing_rebuilds, 0);
+    // Selecting an empty trend line opens its `+ Add text` prompt in the drawings layer; the
+    // other lines keep their retained geometry.
+    assert_eq!(frame.drawing_rebuilds, 1);
     assert_eq!(frame.overlay_rebuilds, 1);
+    assert!(chart.drawing_work_stats().geometry_rebuilds <= 1);
 
     chart.reset_drawing_work_stats();
     chart.set_crosshair_at(400.0, 250.0);

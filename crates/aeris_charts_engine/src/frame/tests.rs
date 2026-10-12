@@ -15485,6 +15485,12 @@ fn middle_trend_label_gap_shrinks_to_the_caret_then_expands_with_text() {
         )
         .unwrap();
     chart.set_hovered_text(Some(id));
+    assert_eq!(
+        orange_segments(&mut chart).len(),
+        1,
+        "hover alone shows no prompt and opens no gap"
+    );
+    chart.set_selected_drawing(Some(id));
     let hovered = orange_segments(&mut chart);
     assert_eq!(hovered.len(), 2);
     let prompt_color = chart.build_frame().panes[0]
@@ -15517,6 +15523,7 @@ fn middle_trend_label_gap_shrinks_to_the_caret_then_expands_with_text() {
     );
     chart.set_editing_drawing(None);
     chart.set_hovered_text(None);
+    chart.set_selected_drawing(None);
     assert_eq!(orange_segments(&mut chart), typing);
 }
 
@@ -15688,12 +15695,21 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
     let initial = border_frames(&mut chart);
     assert!(initial.is_empty(), "unexpected chrome: {initial:?}");
 
-    // An empty trend line owns a borderless, low-opacity inline affordance at its configured
-    // text slot. Its measured box is also the direct-edit hit target.
+    // A selected empty trend line owns a borderless, low-opacity inline affordance at its
+    // configured text slot. Its measured box is also the direct-edit hit target. Hover alone
+    // shows nothing and is no edit target.
     chart.set_hovered_text(Some(line));
     assert!(border_frames(&mut chart).is_empty());
     assert_eq!(chart.hovered_text(), Some(line));
     let (text_x, text_y) = chart.drawing_text_coordinate(line).unwrap();
+    assert_eq!(chart.drawing_text_hit_at(text_x, text_y), None);
+    assert!(
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .all(|prim| !matches!(prim, Prim::RotatedText { text, .. } if text == "+ Add text"))
+    );
+    chart.set_selected_drawing(Some(line));
     assert_eq!(chart.drawing_text_hit_at(text_x, text_y), Some(line));
     let placeholder = chart.build_frame().panes[0]
         .main
@@ -15712,6 +15728,7 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
             .all(|prim| !matches!(prim, Prim::RotatedText { text, .. } if text == "+ Add text"))
     );
     chart.set_editing_drawing(None);
+    chart.set_selected_drawing(None);
     chart.set_hovered_text(None);
     chart.set_hovered_text(Some(text));
     assert_eq!(chart.hovered_text(), Some(text));
