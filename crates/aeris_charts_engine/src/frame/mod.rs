@@ -509,7 +509,7 @@ pub(crate) struct RetainedFrame {
     last_selected_drawing: Option<crate::DrawingId>,
     /// Trend line whose `+ Add text` prompt the retained drawings layer paints. The prompt follows
     /// selection and editing, which do not otherwise rebuild that layer.
-    last_trend_text_prompt: Option<crate::DrawingId>,
+    last_line_text_prompt: Option<crate::DrawingId>,
     /// Invalidation clock observed by the last prepared host frame.
     prepared_clock: u64,
 }
@@ -1440,9 +1440,9 @@ impl ChartEngine {
                 self.frame_invalidation.chrome();
             }
         }
-        let trend_text_prompt = self.trend_text_prompt();
-        if self.retained_frame.last_trend_text_prompt != trend_text_prompt {
-            self.retained_frame.last_trend_text_prompt = trend_text_prompt;
+        let line_text_prompt = self.line_text_prompt();
+        if self.retained_frame.last_line_text_prompt != line_text_prompt {
+            self.retained_frame.last_line_text_prompt = line_text_prompt;
             self.frame_invalidation.drawings();
         }
         self.retained_frame.last_layout_key = Some(layout_key);

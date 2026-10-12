@@ -1170,7 +1170,7 @@ pub const TEXT_TOOL_DEFAULT_SIZE: f64 = 14.0;
 /// hit area and the hover/focus borders all use this box so selection, hovering, and typing
 /// mode land on exactly the same outline.
 pub(crate) const TEXT_CHROME_PAD: f64 = TEXT_PAD + 2.0;
-pub(crate) const TREND_TEXT_PLACEHOLDER: &str = "+ Add text";
+pub(crate) const LINE_TEXT_PLACEHOLDER: &str = "+ Add text";
 
 fn default_gann_level(value: f64) -> crate::DrawingLevel {
     crate::DrawingLevel {
@@ -1204,10 +1204,9 @@ impl Drawing {
         mut points: Vec<DrawingPoint>,
     ) -> Self {
         Self::normalize_position_points(kind, &mut points);
-        let (text_h_align, text_v_align) = if matches!(
-            kind,
-            DrawingKind::TrendLine | DrawingKind::Callout | DrawingKind::PriceNote
-        ) {
+        let (text_h_align, text_v_align) = if kind.has_line_text()
+            || matches!(kind, DrawingKind::Callout | DrawingKind::PriceNote)
+        {
             (DrawingTextHAlign::Right, DrawingTextVAlign::Top)
         } else {
             (DrawingTextHAlign::Center, DrawingTextVAlign::Middle)
@@ -3803,19 +3802,14 @@ impl ChartEngine {
             }
             return Some((entry.text_width + 48.0, entry.text_size + 16.0));
         }
-        if drawing.text.is_empty()
-            && drawing.kind != DrawingKind::Text
-            && drawing.kind != DrawingKind::TrendLine
-            && !drawing.kind.is_text_annotation()
-        {
+        if drawing.text.is_empty() && !drawing.kind.edits_text_inline() {
             return None;
         }
         if entry.text_key != key {
             let size = drawing.resolved_text_size(font_size);
-            entry.text_width = if drawing.kind == DrawingKind::TrendLine && drawing.text.is_empty()
-            {
+            entry.text_width = if drawing.kind.has_line_text() && drawing.text.is_empty() {
                 self.measure_text_run(
-                    TREND_TEXT_PLACEHOLDER,
+                    LINE_TEXT_PLACEHOLDER,
                     size,
                     font_family,
                     drawing.text_weight.unwrap_or(400),
@@ -4110,8 +4104,9 @@ impl ChartEngine {
         size: f64,
         pad: f64,
     ) -> (f64, f64, DrawingTextHAlign, f64) {
-        if drawing.kind == DrawingKind::TrendLine && px.len() >= 2 {
-            let (mut start, mut end) = (px[0], px[1]);
+        if let Some((mut start, mut end)) =
+            Self::line_text_axis(drawing, px, pane_w, pane_top, pane_h)
+        {
             let mut dx = end.0 - start.0;
             let mut dy = end.1 - start.1;
             let length = dx.hypot(dy);
@@ -4149,6 +4144,41 @@ impl ChartEngine {
         }
         let reference = Self::text_box(drawing.kind, px, pane_w, pane_top, pane_h);
         Self::text_placement(drawing, &reference, size, pad)
+    }
+
+    /// The stretch a line label is laid out along: a straight line's two anchors, or the
+    /// visible run of a horizontal or vertical line. `None` for kinds without line text.
+    fn line_text_axis(
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        pane_w: f64,
+        pane_top: f64,
+        pane_h: f64,
+    ) -> Option<((f64, f64), (f64, f64))> {
+        if drawing.kind.is_straight_line() {
+            return Some((*px.first()?, *px.get(1)?));
+        }
+        if !drawing.kind.has_line_text() {
+            return None;
+        }
+        let geometry = resolve_drawing_geometry(
+            drawing.kind,
+            px,
+            pane_w,
+            pane_top,
+            pane_h,
+            DrawingGeometryOptions {
+                line_width: 1.0,
+                device_scale: 1.0,
+                extend_left: drawing.extend_left,
+                ..Default::default()
+            },
+        )?;
+        match geometry.body {
+            DrawingBodyGeometry::Horizontal { y, x0, x1 } => Some(((x0, y), (x1, y))),
+            DrawingBodyGeometry::Vertical { x, y0, y1 } => Some(((x, y0), (x, y1))),
+            _ => None,
+        }
     }
 
     /// Measure (or estimate) a label's width in the same px units as `size`. Empty text tools
@@ -4589,6 +4619,19 @@ impl ChartEngine {
     /// an unknown id.
     pub fn drawing_options_json(&self, id: DrawingId) -> Option<String> {
         Some(self.drawing(id)?.options_json().to_string())
+    }
+
+    /// The colors the drawing actually paints for its color properties, as a JSON object of CSS
+    /// colors keyed by property name. Unset options follow the theme or the drawing's own stroke;
+    /// this resolves them, so a swatch can show the painted color while patches keep writing the
+    /// stored options. Properties without one painted color are omitted. `None` for an unknown id.
+    pub fn drawing_painted_colors_json(&self, id: DrawingId) -> Option<String> {
+        let colors = self
+            .drawing_painted_colors(self.drawing(id)?)
+            .into_iter()
+            .map(|(name, color)| (name, serde_json::Value::String(color.to_css())))
+            .collect::<serde_json::Map<_, _>>();
+        Some(serde_json::Value::Object(colors).to_string())
     }
 
     /// Typed schema for a drawing's generic property panel.  The schema is deterministic and
@@ -5073,15 +5116,15 @@ impl ChartEngine {
         Some((x, y, angle))
     }
 
-    /// Topmost trend-line label/placeholder at a media-px point. This keeps the browser host
-    /// from duplicating text measurement or 3×3 segment placement when opening inline edit.
+    /// Topmost line label/placeholder at a media-px point. This keeps the browser host from
+    /// duplicating text measurement or 3×3 line placement when opening inline edit.
     pub fn drawing_text_hit_at(&self, x: f64, y: f64) -> Option<DrawingId> {
         let layout = &self.options.get().layout;
         let pane_index = self.pane_at_y(y)?;
         let candidates = self.take_drawing_candidates(pane_index, Some((x, y)));
         let hit = candidates.iter().rev().find_map(|&id| {
             let drawing = self.drawing(id)?;
-            if drawing.kind != DrawingKind::TrendLine
+            if !drawing.kind.has_line_text()
                 || !drawing.visible
                 || drawing.locked
                 || !drawing.interval_visibility.allows(self.drawing_interval)
@@ -5094,7 +5137,7 @@ impl ChartEngine {
                 || self.editing_drawing == Some(drawing.id)
             {
                 // An empty line's prompt is only a target once selection shows it.
-                TREND_TEXT_PLACEHOLDER
+                LINE_TEXT_PLACEHOLDER
             } else {
                 return None;
             };
@@ -5209,20 +5252,19 @@ impl ChartEngine {
                     && !d.locked
                     && d.visible
                     && d.interval_visibility.allows(self.drawing_interval)
-                    && (matches!(d.kind, DrawingKind::Text | DrawingKind::TrendLine)
-                        || d.kind.is_text_annotation())
+                    && d.kind.edits_text_inline()
             })
         });
-        let changes_trend_placeholder =
+        let changes_line_placeholder =
             [self.editing_drawing, valid]
                 .into_iter()
                 .flatten()
                 .any(|id| {
                     self.drawing(id).is_some_and(|drawing| {
-                        drawing.kind == DrawingKind::TrendLine && drawing.text.is_empty()
+                        drawing.kind.has_line_text() && drawing.text.is_empty()
                     })
                 });
-        if changes_trend_placeholder {
+        if changes_line_placeholder {
             self.invalidate_frame_drawings();
         } else {
             self.invalidate_frame_overlay();
@@ -5242,15 +5284,13 @@ impl ChartEngine {
         self.editing_drawing
     }
 
-    /// Mark a text drawing or trend line under the host pointer. Text drawings paint their
-    /// hover ring; an empty trend line's `+ Add text` prompt follows selection, not hover.
+    /// Mark a text drawing or line under the host pointer. Text drawings paint their hover
+    /// ring; an empty line's `+ Add text` prompt follows selection, not hover.
     pub fn set_hovered_text(&mut self, id: Option<DrawingId>) {
         let valid = id.filter(|&hid| {
-            self.drawings.iter().any(|d| {
-                d.id == hid
-                    && (matches!(d.kind, DrawingKind::Text | DrawingKind::TrendLine)
-                        || d.kind.is_text_annotation())
-            })
+            self.drawings
+                .iter()
+                .any(|d| d.id == hid && d.kind.edits_text_inline())
         });
         if valid != self.hovered_text {
             self.invalidate_frame_overlay();
@@ -5258,12 +5298,12 @@ impl ChartEngine {
         }
     }
 
-    /// The empty trend line showing its `+ Add text` prompt: only the selected one, while it can
-    /// be edited and is not already being edited. Hover alone never shows it.
-    pub(crate) fn trend_text_prompt(&self) -> Option<DrawingId> {
+    /// The empty line showing its `+ Add text` prompt: only the selected one, while it can be
+    /// edited and is not already being edited. Hover alone never shows it.
+    pub(crate) fn line_text_prompt(&self) -> Option<DrawingId> {
         let id = self.selected_drawing?;
         let drawing = self.drawing(id)?;
-        (drawing.kind == DrawingKind::TrendLine
+        (drawing.kind.has_line_text()
             && drawing.text.is_empty()
             && drawing.visible
             && !drawing.locked

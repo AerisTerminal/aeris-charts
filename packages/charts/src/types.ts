@@ -4063,6 +4063,12 @@ export interface chart_api {
   drawings(): drawing_api[];
   /** Return the typed common property schema for a live drawing. */
   drawing_property_schema(drawing: drawing_api | number): drawing_property_schema;
+  /**
+   * The CSS color the drawing paints for each color property, keyed by property name, with
+   * unset (theme-following) options resolved. Swatches show these; option patches still write
+   * the stored values. Properties without one painted color are omitted.
+   */
+  drawing_painted_colors(drawing: drawing_api | number): Record<string, string>;
   drawing_kind_options(drawing: drawing_api | number): drawing_kind_options;
   /** Register a bounded chart-local RGBA8 stamp by name. Re-register to replace its pixels. */
   register_drawing_icon(name: string, width: number, height: number, pixels: Uint8Array): void;

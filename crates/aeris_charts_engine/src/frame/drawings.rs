@@ -5,9 +5,11 @@
 //! scaled by the exact horizontal ratio (the trailing `translate_prims_x` shifts everything
 //! when a left axis reserves space), y is chart-top-relative media px scaled by the vertical
 //! ratio — the same space the price-line/series geometry uses, so a drawing's prims land
-//! exactly on its converted anchors. Standalone drawing text uses `Prim::Text`; trend labels
+//! exactly on its converted anchors. Standalone drawing text uses `Prim::Text`; line labels
 //! use the backend-neutral `Prim::RotatedText` contract so every executor receives the same
-//! aligned anchor and segment-normalized angle.
+//! aligned anchor and line-normalized angle. A label that sits on its own stroke (a line's
+//! middle slot, a centered level label) cuts the stroke under its padded box
+//! (`text_box_cutout`), so every kind opens the same gap around its text.
 
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
@@ -17,8 +19,8 @@ use super::{POSITION_ENTRY, PRIMARY};
 use crate::ChartEngine;
 use crate::drawings::{
     Drawing, DrawingBodyGeometry, DrawingGeometryOptions, DrawingHandleMode, DrawingId,
-    DrawingKind, DrawingPoint, DrawingTextHAlign, MEASURE_LABEL_GAP, MeasureAxes, MeasureGeometry,
-    PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD, TREND_TEXT_PLACEHOLDER,
+    DrawingKind, DrawingPoint, DrawingTextHAlign, LINE_TEXT_PLACEHOLDER, MEASURE_LABEL_GAP,
+    MeasureAxes, MeasureGeometry, PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD,
     annotation_text_weight, arc_segments, arrow_marker_icon, builtin_icon, ellipse_segments,
     gann_arc_segments, path_arrow_points, resolve_drawing_geometry,
 };
@@ -42,10 +44,81 @@ const POSITION_PROGRESS_ALPHA: u8 = 96;
 /// The hover ring's dimmed variant of the focus border (the public reference shows the same border at
 /// roughly half strength until the drawing is actually selected).
 const HOVER_BORDER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
-const TREND_TEXT_PLACEHOLDER_ALPHA: u8 = 0x99;
+const LINE_TEXT_PLACEHOLDER_ALPHA: u8 = 0x99;
 
 fn point_on_segment(a: (f64, f64), b: (f64, f64), t: f64) -> (f64, f64) {
     (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)
+}
+
+const fn text_align(align: DrawingTextHAlign) -> TextAlign {
+    match align {
+        DrawingTextHAlign::Left => TextAlign::Left,
+        DrawingTextHAlign::Center => TextAlign::Center,
+        DrawingTextHAlign::Right => TextAlign::Right,
+    }
+}
+
+/// A text run's padded box around its aligned anchor, in the run's own axes: the advance
+/// extent `(start, end)` along the run and the half height across it (the 1.2em line box).
+fn padded_text_box(align: TextAlign, width: f64, size: f64, pad: f64) -> ((f64, f64), f64) {
+    let run = match align {
+        TextAlign::Left => (-pad, width + pad),
+        TextAlign::Center => (-width / 2.0 - pad, width / 2.0 + pad),
+        TextAlign::Right => (-width - pad, pad),
+    };
+    (run, size * 0.6 + pad)
+}
+
+/// The stretch of segment `a→b`, as parameters in `[0, 1]`, inside a label's padded box. The
+/// box is anchored at `anchor`, rotated by `angle`, and spans `run` along the label and
+/// `±half_height` across it. A stroke a label sits on opens over this stretch, so text never
+/// crosses its own line whatever the drawing kind or the line's direction.
+fn text_box_cutout(
+    a: (f64, f64),
+    b: (f64, f64),
+    anchor: (f64, f64),
+    angle: f64,
+    (run, half_height): ((f64, f64), f64),
+) -> Option<(f64, f64)> {
+    let (sin, cos) = angle.sin_cos();
+    let local = |point: (f64, f64)| {
+        let (dx, dy) = (point.0 - anchor.0, point.1 - anchor.1);
+        (dx * cos + dy * sin, -dx * sin + dy * cos)
+    };
+    let (from, to) = (local(a), local(b));
+    let (mut start, mut end) = (0.0_f64, 1.0_f64);
+    for (origin, delta, low, high) in [
+        (from.0, to.0 - from.0, run.0, run.1),
+        (from.1, to.1 - from.1, -half_height, half_height),
+    ] {
+        if delta.abs() <= f64::EPSILON {
+            if origin < low || origin > high {
+                return None;
+            }
+        } else {
+            let (enter, exit) = ((low - origin) / delta, (high - origin) / delta);
+            start = start.max(enter.min(exit));
+            end = end.min(enter.max(exit));
+        }
+    }
+    (start < end).then_some((start, end))
+}
+
+/// Segment `a→b` with the parameter stretch `cutout` removed: the whole segment, or the
+/// pieces either side of the cut.
+fn cut_segment(
+    a: (f64, f64),
+    b: (f64, f64),
+    cutout: Option<(f64, f64)>,
+) -> impl Iterator<Item = ((f64, f64), (f64, f64))> {
+    let pieces = match cutout {
+        Some((start, end)) => [
+            Some((a, point_on_segment(a, b, start))),
+            Some((point_on_segment(a, b, end), b)),
+        ],
+        None => [Some((a, b)), None],
+    };
+    pieces.into_iter().flatten()
 }
 
 fn push_segment(
@@ -307,19 +380,19 @@ impl ChartEngine {
         if !drawing.text.is_empty() {
             return Some((drawing.display_text(), false));
         }
-        (self.trend_text_prompt() == Some(drawing.id)).then_some((TREND_TEXT_PLACEHOLDER, true))
+        (self.line_text_prompt() == Some(drawing.id)).then_some((LINE_TEXT_PLACEHOLDER, true))
     }
 
     /// Width source for the middle-line cutout. Selection reserves the full prompt; once editing
     /// begins, an empty value uses the editor's one-em caret opening and measured text expands it.
     fn drawing_frame_gap_text<'a>(&self, drawing: &'a Drawing) -> Option<&'a str> {
-        if drawing.kind == DrawingKind::TrendLine && self.editing_drawing == Some(drawing.id) {
+        if self.editing_drawing == Some(drawing.id) {
             return Some(drawing.display_text());
         }
         if !drawing.text.is_empty() {
             return Some(drawing.display_text());
         }
-        (self.trend_text_prompt() == Some(drawing.id)).then_some(TREND_TEXT_PLACEHOLDER)
+        (self.line_text_prompt() == Some(drawing.id)).then_some(LINE_TEXT_PLACEHOLDER)
     }
 
     fn measure_drawing_frame_text(&self, drawing: &Drawing, text: &str, size: f64) -> f64 {
@@ -330,6 +403,40 @@ impl ChartEngine {
             &layout.font_family,
             drawing.text_weight.unwrap_or(400),
             drawing.text_italic,
+        )
+    }
+
+    /// The stretch of a line's stroke `a→b` (bitmap px) that its middle-aligned label covers,
+    /// so the stroke opens around the text. Lines without line text or with the label above or
+    /// below the stroke stay whole.
+    fn line_text_cutout(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        pane_w_px: i32,
+        vpr: f64,
+        a: (f64, f64),
+        b: (f64, f64),
+    ) -> Option<(f64, f64)> {
+        if !drawing.kind.has_line_text()
+            || drawing.text_v_align != crate::drawings::DrawingTextVAlign::Middle
+        {
+            return None;
+        }
+        let text = self.drawing_frame_gap_text(drawing)?;
+        let (size, x, y, align, angle) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
+        let mut width = self.measure_drawing_frame_text(drawing, text, size);
+        if self.editing_drawing == Some(drawing.id) {
+            // Match the host editor's one-em empty/minimum width. This leaves a compact caret
+            // slot and then grows from actual shaped advance.
+            width = width.max(size);
+        }
+        text_box_cutout(
+            a,
+            b,
+            (x, y),
+            angle,
+            padded_text_box(text_align(align), width, size, TEXT_PAD * vpr),
         )
     }
 
@@ -808,63 +915,9 @@ impl ChartEngine {
                 self.build_annotation_prims(drawing, px, color, vpr, out, points);
             }
             DrawingBodyGeometry::Segment { a, b } => {
-                let label_gap = self
-                    .drawing_frame_gap_text(drawing)
-                    .filter(|_| {
-                        drawing.kind == DrawingKind::TrendLine
-                            && drawing.text_v_align == crate::drawings::DrawingTextVAlign::Middle
-                    })
-                    .and_then(|text| {
-                        let (size, x, y, align, angle) =
-                            self.text_run_geometry(drawing, px, pane_w_px, vpr);
-                        let mut width = self.measure_drawing_frame_text(drawing, text, size);
-                        if self.editing_drawing == Some(drawing.id) {
-                            // Match the host editor's one-em empty/minimum width. This leaves a
-                            // compact caret slot and then grows from actual shaped advance.
-                            width = width.max(size);
-                        }
-                        let gap = TEXT_PAD * vpr;
-                        let (local_start, local_end) = match align {
-                            DrawingTextHAlign::Left => (-gap, width + gap),
-                            DrawingTextHAlign::Center => (-width / 2.0 - gap, width / 2.0 + gap),
-                            DrawingTextHAlign::Right => (-width - gap, gap),
-                        };
-                        let length_sq = (b.0 - a.0).powi(2) + (b.1 - a.1).powi(2);
-                        if length_sq <= f64::EPSILON {
-                            return None;
-                        }
-                        let project = |distance: f64| {
-                            let px = x + angle.cos() * distance;
-                            let py = y + angle.sin() * distance;
-                            ((px - a.0) * (b.0 - a.0) + (py - a.1) * (b.1 - a.1)) / length_sq
-                        };
-                        let first = project(local_start);
-                        let second = project(local_end);
-                        let start = first.min(second).clamp(0.0, 1.0);
-                        let end = first.max(second).clamp(0.0, 1.0);
-                        (start < end).then_some((start, end))
-                    });
-                if let Some((gap_start, gap_end)) = label_gap {
-                    push_segment(
-                        a,
-                        point_on_segment(a, b, gap_start),
-                        drawing,
-                        color,
-                        vpr,
-                        out,
-                        points,
-                    );
-                    push_segment(
-                        point_on_segment(a, b, gap_end),
-                        b,
-                        drawing,
-                        color,
-                        vpr,
-                        out,
-                        points,
-                    );
-                } else {
-                    push_segment(a, b, drawing, color, vpr, out, points);
+                let cutout = self.line_text_cutout(drawing, px, pane_w_px, vpr, a, b);
+                for (from, to) in cut_segment(a, b, cutout) {
+                    push_segment(from, to, drawing, color, vpr, out, points);
                 }
                 push_drawing_cap(
                     drawing.stroke_start,
@@ -898,28 +951,36 @@ impl ChartEngine {
                 }
             }
             DrawingBodyGeometry::Horizontal { y, x0, x1 } => {
-                let x0 = (x0.round() as i32).clamp(0, pane_w_px);
-                let x1 = (x1.round() as i32).clamp(0, pane_w_px);
-                if x0 != x1 {
-                    out.push(Prim::HLine {
-                        y: y.round() as i32,
-                        x0: x0.min(x1),
-                        x1: x0.max(x1),
+                let (a, b) = ((x0, y), (x1, y));
+                let cutout = self.line_text_cutout(drawing, px, pane_w_px, vpr, a, b);
+                for ((x0, _), (x1, _)) in cut_segment(a, b, cutout) {
+                    let x0 = (x0.round() as i32).clamp(0, pane_w_px);
+                    let x1 = (x1.round() as i32).clamp(0, pane_w_px);
+                    if x0 != x1 {
+                        out.push(Prim::HLine {
+                            y: y.round() as i32,
+                            x0: x0.min(x1),
+                            x1: x0.max(x1),
+                            width: crisp_width,
+                            style: drawing.style,
+                            color,
+                        });
+                    }
+                }
+            }
+            DrawingBodyGeometry::Vertical { x, y0, y1 } => {
+                let (a, b) = ((x, y0), (x, y1));
+                let cutout = self.line_text_cutout(drawing, px, pane_w_px, vpr, a, b);
+                for ((_, y0), (_, y1)) in cut_segment(a, b, cutout) {
+                    out.push(Prim::VLine {
+                        x: x.round() as i32,
+                        y0: y0.round().max(0.0) as i32,
+                        y1: y1.round().max(0.0) as i32,
                         width: crisp_width,
                         style: drawing.style,
                         color,
                     });
                 }
-            }
-            DrawingBodyGeometry::Vertical { x, y0, y1 } => {
-                out.push(Prim::VLine {
-                    x: x.round() as i32,
-                    y0: y0.round().max(0.0) as i32,
-                    y1: y1.round().max(0.0) as i32,
-                    width: crisp_width,
-                    style: drawing.style,
-                    color,
-                });
             }
             DrawingBodyGeometry::Cross {
                 x,
@@ -947,11 +1008,7 @@ impl ChartEngine {
             }
             DrawingBodyGeometry::Channel { first, second } => {
                 if drawing.fill_enabled {
-                    let fill = drawing
-                        .fill_color
-                        .as_deref()
-                        .and_then(Color::parse_css)
-                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
+                    let fill = area_fill(drawing, color);
                     if drawing.kind == DrawingKind::DisjointChannel {
                         let a = [first[0].0 as f32, first[0].1 as f32];
                         let b = [first[1].0 as f32, first[1].1 as f32];
@@ -992,11 +1049,7 @@ impl ChartEngine {
                 lower,
             } => {
                 if drawing.fill_enabled {
-                    let fill = drawing
-                        .fill_color
-                        .as_deref()
-                        .and_then(Color::parse_css)
-                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 35));
+                    let fill = area_fill(drawing, color);
                     let upper_first = points.len() as u32;
                     points.extend(upper.map(|(x, y)| [x as f32, y as f32]));
                     let lower_first = points.len() as u32;
@@ -1093,30 +1146,17 @@ impl ChartEngine {
                         "dashed" | "large_dashed" => LineStyle::Dashed,
                         _ => LineStyle::Solid,
                     };
-                    if (y0 - y1).abs() <= f64::EPSILON {
-                        out.push(Prim::HLine {
-                            y: y0.round() as i32,
-                            x0: x0.min(x1).round() as i32,
-                            x1: x0.max(x1).round() as i32,
-                            width: crisp_width,
-                            style,
-                            color: level_color,
-                        });
-                    } else {
-                        let first_point = points.len() as u32;
-                        points.extend([[x0 as f32, y0 as f32], [x1 as f32, y1 as f32]]);
-                        out.push(Prim::Polyline {
-                            first_point,
-                            point_count: 2,
-                            width: (drawing.width * vpr) as f32,
-                            style,
-                            line_type: LineType::Simple,
-                            color: level_color,
-                        });
-                    }
-                    if level.label_visible {
-                        let price = self.drawing_level_price_at(drawing, y1, vpr);
-                        if let Some(text) = self.drawing_level_label(drawing, level.value, price) {
+                    let layout = &self.options.get().layout;
+                    let size = drawing.resolved_text_size(layout.font_size) * vpr;
+                    let horizontal = (y1 - y0).abs() <= vpr;
+                    let label = level
+                        .label_visible
+                        .then(|| {
+                            let price = self.drawing_level_price_at(drawing, y1, vpr);
+                            self.drawing_level_label(drawing, level.value, price)
+                        })
+                        .flatten()
+                        .map(|text| {
                             let label_x = match drawing.level_label_align.as_str() {
                                 "left" => x0,
                                 "center" => (x0 + x1) / 2.0,
@@ -1124,8 +1164,6 @@ impl ChartEngine {
                             };
                             // The label sits on the line's own height at its x and clears the
                             // line everywhere under its run, so a sloped level never cuts it.
-                            let layout = &self.options.get().layout;
-                            let size = drawing.resolved_text_size(layout.font_size) * vpr;
                             let width = self.measure_text_run(
                                 &text,
                                 size,
@@ -1145,7 +1183,6 @@ impl ChartEngine {
                                 "center" => (label_x - width / 2.0, label_x + width / 2.0),
                                 _ => (label_x - width, label_x),
                             };
-                            let horizontal = (y1 - y0).abs() <= vpr;
                             let (label_x, label_y, align) = if horizontal {
                                 let clearance = POINT_LABEL_GAP_CSS * vpr + size * 0.6;
                                 let label_y = match drawing.level_label_v_align {
@@ -1184,18 +1221,65 @@ impl ChartEngine {
                                     _ => (right_end.0 + gap, right_end.1, TextAlign::Left),
                                 }
                             };
-                            out.push(Prim::Text {
-                                x: label_x as f32,
-                                y: label_y as f32,
-                                text,
+                            (text, label_x, label_y, align, width)
+                        });
+                    // A label centered on its level opens the level's stroke under it.
+                    let cutout = label
+                        .as_ref()
+                        .filter(|_| {
+                            horizontal
+                                && drawing.level_label_v_align
+                                    == crate::drawings::DrawingTextVAlign::Middle
+                        })
+                        .and_then(|&(_, label_x, label_y, align, width)| {
+                            text_box_cutout(
+                                (x0, y0),
+                                (x1, y1),
+                                (label_x, label_y),
+                                0.0,
+                                padded_text_box(align, width, size, TEXT_PAD * vpr),
+                            )
+                        });
+                    for ((x0, y0), (x1, y1)) in cut_segment((x0, y0), (x1, y1), cutout) {
+                        if (y0 - y1).abs() <= f64::EPSILON {
+                            let (left, right) =
+                                (x0.min(x1).round() as i32, x0.max(x1).round() as i32);
+                            if cutout.is_some() && left == right {
+                                continue;
+                            }
+                            out.push(Prim::HLine {
+                                y: y0.round() as i32,
+                                x0: left,
+                                x1: right,
+                                width: crisp_width,
+                                style,
                                 color: level_color,
-                                size: size as f32,
-                                family: layout.font_family.clone(),
-                                align,
-                                weight: drawing.text_weight.unwrap_or(400),
-                                italic: drawing.text_italic,
+                            });
+                        } else {
+                            let first_point = points.len() as u32;
+                            points.extend([[x0 as f32, y0 as f32], [x1 as f32, y1 as f32]]);
+                            out.push(Prim::Polyline {
+                                first_point,
+                                point_count: 2,
+                                width: (drawing.width * vpr) as f32,
+                                style,
+                                line_type: LineType::Simple,
+                                color: level_color,
                             });
                         }
+                    }
+                    if let Some((text, label_x, label_y, align, _)) = label {
+                        out.push(Prim::Text {
+                            x: label_x as f32,
+                            y: label_y as f32,
+                            text,
+                            color: level_color,
+                            size: size as f32,
+                            family: layout.font_family.clone(),
+                            align,
+                            weight: drawing.text_weight.unwrap_or(400),
+                            italic: drawing.text_italic,
+                        });
                     }
                 }
             }
@@ -1252,32 +1336,65 @@ impl ChartEngine {
                         "dashed" | "large_dashed" => LineStyle::Dashed,
                         _ => LineStyle::Solid,
                     };
-                    out.push(Prim::VLine {
-                        x: x.round() as i32,
-                        y0: time.pane_top.round().max(0.0) as i32,
-                        y1: time.pane_bottom.round().max(0.0) as i32,
-                        width: crisp_width,
-                        style,
-                        color: level_color,
-                    });
-                    if level.label_visible
-                        && let Some(text) = self.drawing_level_label(drawing, level.value, None)
-                    {
+                    let layout = &self.options.get().layout;
+                    let size = drawing.resolved_text_size(layout.font_size) * vpr;
+                    let align = Self::drawing_level_align(drawing);
+                    let label = level
+                        .label_visible
+                        .then(|| self.drawing_level_label(drawing, level.value, None))
+                        .flatten()
+                        .map(|text| {
+                            let label_x = x + match align {
+                                TextAlign::Left => 4.0 * vpr,
+                                TextAlign::Right => -4.0 * vpr,
+                                TextAlign::Center => 0.0,
+                            };
+                            (text, label_x, time.pane_top + 14.0 * vpr)
+                        });
+                    // A centered label straddles its level; the level opens under it.
+                    let (top, bottom) = ((x, time.pane_top), (x, time.pane_bottom));
+                    let cutout = label
+                        .as_ref()
+                        .filter(|_| align == TextAlign::Center)
+                        .and_then(|(text, label_x, label_y)| {
+                            let width = self.measure_text_run(
+                                text,
+                                size,
+                                &layout.font_family,
+                                drawing.text_weight.unwrap_or(400),
+                                drawing.text_italic,
+                            );
+                            text_box_cutout(
+                                top,
+                                bottom,
+                                (*label_x, *label_y),
+                                0.0,
+                                padded_text_box(align, width, size, TEXT_PAD * vpr),
+                            )
+                        });
+                    for ((_, y0), (_, y1)) in cut_segment(top, bottom, cutout) {
+                        let (y0, y1) = (y0.round().max(0.0) as i32, y1.round().max(0.0) as i32);
+                        if cutout.is_some() && y0 == y1 {
+                            continue;
+                        }
+                        out.push(Prim::VLine {
+                            x: x.round() as i32,
+                            y0,
+                            y1,
+                            width: crisp_width,
+                            style,
+                            color: level_color,
+                        });
+                    }
+                    if let Some((text, label_x, label_y)) = label {
                         out.push(Prim::Text {
-                            x: (x + if drawing.level_label_align == "left" {
-                                4.0 * vpr
-                            } else if drawing.level_label_align == "right" {
-                                -4.0 * vpr
-                            } else {
-                                0.0
-                            }) as f32,
-                            y: (time.pane_top + 14.0 * vpr) as f32,
+                            x: label_x as f32,
+                            y: label_y as f32,
                             text,
                             color: level_color,
-                            size: (drawing.resolved_text_size(self.options.get().layout.font_size)
-                                * vpr) as f32,
-                            family: self.options.get().layout.font_family.clone(),
-                            align: Self::drawing_level_align(drawing),
+                            size: size as f32,
+                            family: layout.font_family.clone(),
+                            align,
                             weight: drawing.text_weight.unwrap_or(400),
                             italic: drawing.text_italic,
                         });
@@ -1520,11 +1637,7 @@ impl ChartEngine {
                 }
             }
             DrawingBodyGeometry::Cycles(cycles) => {
-                let fill = drawing
-                    .fill_color
-                    .as_deref()
-                    .and_then(Color::parse_css)
-                    .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 24));
+                let fill = area_fill(drawing, color);
                 let mut previous_x: Option<f64> = None;
                 cycles.for_each_visible_line(|index, x| {
                     if drawing.fill_enabled
@@ -1689,11 +1802,7 @@ impl ChartEngine {
             DrawingBodyGeometry::GannGrid(grid) => {
                 let box_bounds = grid.bounds();
                 if drawing.fill_enabled {
-                    let fill = drawing
-                        .fill_color
-                        .as_deref()
-                        .and_then(Color::parse_css)
-                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 24));
+                    let fill = area_fill(drawing, color);
                     out.push(Prim::Rect {
                         rect: IRect {
                             x: box_bounds.left.round() as i32,
@@ -1921,11 +2030,7 @@ impl ChartEngine {
             }
             DrawingBodyGeometry::Quad { corners } => {
                 if drawing.fill_enabled {
-                    let fill = drawing
-                        .fill_color
-                        .as_deref()
-                        .and_then(Color::parse_css)
-                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
+                    let fill = area_fill(drawing, color);
                     let a = [corners[0].0 as f32, corners[0].1 as f32];
                     let b = [corners[1].0 as f32, corners[1].1 as f32];
                     let c = [corners[2].0 as f32, corners[2].1 as f32];
@@ -1962,11 +2067,7 @@ impl ChartEngine {
                     let segments = ellipse_segments(rx, ry);
                     let half = segments / 2;
                     if drawing.fill_enabled {
-                        let fill = drawing
-                            .fill_color
-                            .as_deref()
-                            .and_then(Color::parse_css)
-                            .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
+                        let fill = area_fill(drawing, color);
                         let upper_first = points.len() as u32;
                         for step in 0..=half {
                             let theta = std::f64::consts::PI * f64::from(step) / f64::from(half);
@@ -2011,11 +2112,7 @@ impl ChartEngine {
             }
             DrawingBodyGeometry::Circle { center, radius } => {
                 let fill = if drawing.fill_enabled {
-                    drawing
-                        .fill_color
-                        .as_deref()
-                        .and_then(Color::parse_css)
-                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51))
+                    area_fill(drawing, color)
                 } else {
                     Color::rgba(0, 0, 0, 0)
                 };
@@ -2049,11 +2146,7 @@ impl ChartEngine {
             }
             DrawingBodyGeometry::Triangle { corners } => {
                 if drawing.fill_enabled {
-                    let fill = drawing
-                        .fill_color
-                        .as_deref()
-                        .and_then(Color::parse_css)
-                        .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
+                    let fill = area_fill(drawing, color);
                     out.push(Prim::Triangle {
                         a: [corners[0].0 as f32, corners[0].1 as f32],
                         b: [corners[1].0 as f32, corners[1].1 as f32],
@@ -2121,11 +2214,7 @@ impl ChartEngine {
                 let height = (bottom - top).abs() + 1;
                 // reference rectangle-drawing-tool default: the fill is the border color washed
                 // out (its `previewFillColor`/`fillColor` alpha pattern) — 20% here.
-                let fill = drawing
-                    .fill_color
-                    .as_deref()
-                    .and_then(Color::parse_css)
-                    .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
+                let fill = area_fill(drawing, color);
                 if drawing.fill_enabled {
                     out.push(Prim::Rect {
                         rect: IRect {
@@ -2271,11 +2360,7 @@ impl ChartEngine {
                     });
                 }
                 if let Some(labels) = drawing.kind.vertex_labels() {
-                    let label_color = drawing
-                        .text_color
-                        .as_deref()
-                        .and_then(Color::parse_css)
-                        .unwrap_or(color);
+                    let label_color = vertex_label_color(drawing, color);
                     let size =
                         drawing.resolved_text_size(self.options.get().layout.font_size) * vpr;
                     let family = &self.options.get().layout.font_family;
@@ -2601,14 +2686,16 @@ impl ChartEngine {
     /// The text run's resolved glyph size (bitmap px, placeholder floor included), aligned
     /// anchor point, and horizontal alignment — shared by the label prim, the container box,
     /// and the focus/hover chrome so every consumer draws the same geometry.
-    /// Label ink: explicit text color, then a trend label's line color, then chart foreground.
-    fn drawing_text_color(&self, drawing: &Drawing) -> Color {
+    /// Label ink: explicit text color, then a line label's line color, then chart foreground.
+    pub(crate) fn drawing_text_color(&self, drawing: &Drawing) -> Color {
         drawing
             .text_color
             .as_deref()
             .and_then(Color::parse_css)
             .or_else(|| {
-                (drawing.kind == DrawingKind::TrendLine)
+                drawing
+                    .kind
+                    .has_line_text()
                     .then(|| Color::parse_css(&drawing.color))
                     .flatten()
             })
@@ -2617,6 +2704,53 @@ impl ChartEngine {
                 let fallback = aeris_charts_core::style::DEFAULT_FOREGROUND_RGB;
                 Color::rgb(fallback.0, fallback.1, fallback.2)
             })
+    }
+
+    /// The colors the frame paints for a drawing's color properties, keyed by property name, with
+    /// unset (theme-following) values resolved the way the frame resolves them. A property with
+    /// no single painted color is omitted: a position's labels contrast with each zone, and a box
+    /// without a border color paints no border.
+    pub(crate) fn drawing_painted_colors(&self, drawing: &Drawing) -> Vec<(String, Color)> {
+        let stroke = Color::parse_css(&drawing.color).unwrap_or(PRIMARY);
+        let area_stroke = if drawing.kind.is_measure() {
+            self.measure_color(drawing)
+        } else {
+            stroke
+        };
+        let position = matches!(
+            drawing.kind,
+            DrawingKind::LongPosition | DrawingKind::ShortPosition
+        );
+        let annotation = drawing
+            .kind
+            .is_annotation()
+            .then(|| self.annotation_palette(drawing, stroke));
+        let (profit, loss) = position_colors(drawing);
+        crate::drawing_contract::drawing_property_schema(drawing.kind)
+            .properties
+            .into_iter()
+            .filter(|property| {
+                property.property_type == crate::drawing_contract::DrawingPropertyType::Color
+            })
+            .filter_map(|property| {
+                let color = match (property.name.as_str(), annotation) {
+                    ("color", _) => stroke,
+                    ("position_profit_color", _) => profit,
+                    ("position_loss_color", _) => loss,
+                    ("fill_color", _) => area_fill(drawing, area_stroke),
+                    ("box_color", Some((fill, ..))) => fill,
+                    ("box_border_color", Some((_, border, ..))) => border?,
+                    ("text_color", Some((_, _, ink, _))) => ink,
+                    ("text_color", None) if position => return None,
+                    ("text_color", None) if drawing.kind.vertex_labels().is_some() => {
+                        vertex_label_color(drawing, stroke)
+                    }
+                    ("text_color", None) => self.drawing_text_color(drawing),
+                    _ => return None,
+                };
+                Some((property.name, color))
+            })
+            .collect()
     }
 
     /// The engine-painted caret of an open drawing text session (native hosts). It sits on the
@@ -2757,12 +2891,12 @@ impl ChartEngine {
     }
 
     /// One drawing's text label (every tool can carry one): the placement resolves the 3×3
-    /// alignment against the tool's reference box, except trend lines, whose slots follow the
-    /// actual segment and whose middle slot opens a measured stroke gap. Trend labels emit
+    /// alignment against the tool's reference box, except lines, whose slots follow the line
+    /// itself and whose middle slot opens a measured stroke gap. Line labels emit
     /// `Prim::RotatedText`; other drawing text emits `Prim::Text`. In either contract x is the
     /// aligned edge and y is the vertical center (the IR's middle-baseline convention). Empty
-    /// standalone text paints nothing; an empty hovered trend label paints its dedicated
-    /// prompt at the canonical label transform. A text tool
+    /// standalone text paints nothing; an empty selected line paints its dedicated prompt at
+    /// the canonical label transform. A text tool
     /// with a `box_color`/`box_border_color` gets its container (crisp integer-snapped
     /// `Rect`/`RectFrame` prims behind the run — the public reference's text-box background/border).
     fn build_drawing_text(
@@ -2793,7 +2927,7 @@ impl ChartEngine {
                 color.r(),
                 color.g(),
                 color.b(),
-                color.a().min(TREND_TEXT_PLACEHOLDER_ALPHA),
+                color.a().min(LINE_TEXT_PLACEHOLDER_ALPHA),
             );
         }
 
@@ -2842,16 +2976,12 @@ impl ChartEngine {
             color,
             size: size as f32,
             family: layout.font_family.clone(),
-            align: match align {
-                DrawingTextHAlign::Left => TextAlign::Left,
-                DrawingTextHAlign::Center => TextAlign::Center,
-                DrawingTextHAlign::Right => TextAlign::Right,
-            },
+            align: text_align(align),
             weight: drawing.text_weight.unwrap_or(400),
             italic: drawing.text_italic,
             angle: angle as f32,
         };
-        if drawing.kind == DrawingKind::TrendLine {
+        if drawing.kind.has_line_text() {
             out.push(text_prim);
         } else if let Prim::RotatedText {
             x,
@@ -3247,10 +3377,8 @@ impl ChartEngine {
     }
 
     /// A box annotation from the shared layout (annotations.rs): its connector, the rounded box
-    /// (the callout's box and tail as one outlined shape), then the text. Unset box colors follow
-    /// the painted theme's tokens (note, signpost) or the drawing color (comment and price-note
-    /// fills, the callout's opaque tint and border); the text contrasts with its fill unless
-    /// `text_color` is set.
+    /// (the callout's box and tail as one outlined shape), then the text, all in the colors of
+    /// [`Self::annotation_palette`].
     fn build_annotation_prims(
         &self,
         drawing: &Drawing,
@@ -3263,52 +3391,7 @@ impl ChartEngine {
         let Some(layout) = self.annotation_layout(drawing, px, vpr) else {
             return;
         };
-        let tokens = ChromeTokens::for_theme(self.surface_theme());
-        let parse = |css: &Option<String>| css.as_deref().and_then(Color::parse_css);
-        let (box_fill, box_border) = (parse(&drawing.box_color), parse(&drawing.box_border_color));
-        let (fill, border, ink, muted) = match drawing.kind {
-            DrawingKind::Note => (
-                box_fill.unwrap_or(tokens.accent),
-                box_border,
-                tokens.foreground,
-                tokens.muted,
-            ),
-            DrawingKind::Signpost => (
-                box_fill.unwrap_or(tokens.surface),
-                Some(box_border.unwrap_or(tokens.border)),
-                tokens.foreground,
-                tokens.muted,
-            ),
-            // An opaque tint of the drawing color over the chart background: the box and its
-            // tail fill as one surface, so their overlap never doubles any alpha.
-            DrawingKind::Callout => (
-                box_fill.unwrap_or_else(|| {
-                    let background = Color::parse_css(&self.options.get().layout.background.color)
-                        .unwrap_or(tokens.surface);
-                    let mix = |a: u8, b: u8| {
-                        ((f64::from(a) * 0.55) + (f64::from(b) * 0.45)).round() as u8
-                    };
-                    Color::rgb(
-                        mix(background.r(), color.r()),
-                        mix(background.g(), color.g()),
-                        mix(background.b(), color.b()),
-                    )
-                }),
-                Some(box_border.unwrap_or(color)),
-                tokens.foreground,
-                tokens.muted,
-            ),
-            _ => {
-                let fill = box_fill.unwrap_or(color);
-                let ink = fill.contrast_text();
-                (
-                    fill,
-                    box_border,
-                    ink,
-                    Color::rgba(ink.r(), ink.g(), ink.b(), 170),
-                )
-            }
-        };
+        let (fill, border, ink, muted) = self.annotation_palette(drawing, color);
         let border_width = if drawing.kind == DrawingKind::Callout {
             (2.0 * vpr).round().max(1.0)
         } else {
@@ -3391,15 +3474,7 @@ impl ChartEngine {
                 border_color: border.unwrap_or(fill),
             });
         }
-        let text_color = if layout.placeholder {
-            muted
-        } else {
-            drawing
-                .text_color
-                .as_deref()
-                .and_then(Color::parse_css)
-                .unwrap_or(ink)
-        };
+        let text_color = if layout.placeholder { muted } else { ink };
         out.push(Prim::Text {
             x: layout.text_x as f32,
             y: layout.text_y as f32,
@@ -3411,6 +3486,69 @@ impl ChartEngine {
             weight: annotation_text_weight(drawing),
             italic: drawing.text_italic,
         });
+    }
+
+    /// A box annotation's painted (box fill, box border, text ink, placeholder ink). Unset box
+    /// colors follow the painted theme's tokens (note, signpost) or the drawing `color` (comment
+    /// and price-note fills, the callout's opaque tint and border); the ink is `text_color`, else
+    /// a token or the contrast of the fill. `None` border: the box paints no border.
+    fn annotation_palette(
+        &self,
+        drawing: &Drawing,
+        color: Color,
+    ) -> (Color, Option<Color>, Color, Color) {
+        let tokens = ChromeTokens::for_theme(self.surface_theme());
+        let parse = |css: &Option<String>| css.as_deref().and_then(Color::parse_css);
+        let (box_fill, box_border) = (parse(&drawing.box_color), parse(&drawing.box_border_color));
+        let (fill, border, ink, muted) = match drawing.kind {
+            DrawingKind::Note => (
+                box_fill.unwrap_or(tokens.accent),
+                box_border,
+                tokens.foreground,
+                tokens.muted,
+            ),
+            DrawingKind::Signpost => (
+                box_fill.unwrap_or(tokens.surface),
+                Some(box_border.unwrap_or(tokens.border)),
+                tokens.foreground,
+                tokens.muted,
+            ),
+            // An opaque tint of the drawing color over the chart background: the box and its
+            // tail fill as one surface, so their overlap never doubles any alpha.
+            DrawingKind::Callout => (
+                box_fill.unwrap_or_else(|| {
+                    let background = Color::parse_css(&self.options.get().layout.background.color)
+                        .unwrap_or(tokens.surface);
+                    let mix = |a: u8, b: u8| {
+                        ((f64::from(a) * 0.55) + (f64::from(b) * 0.45)).round() as u8
+                    };
+                    Color::rgb(
+                        mix(background.r(), color.r()),
+                        mix(background.g(), color.g()),
+                        mix(background.b(), color.b()),
+                    )
+                }),
+                Some(box_border.unwrap_or(color)),
+                tokens.foreground,
+                tokens.muted,
+            ),
+            _ => {
+                let fill = box_fill.unwrap_or(color);
+                let ink = fill.contrast_text();
+                (
+                    fill,
+                    box_border,
+                    ink,
+                    Color::rgba(ink.r(), ink.g(), ink.b(), 170),
+                )
+            }
+        };
+        let ink = drawing
+            .text_color
+            .as_deref()
+            .and_then(Color::parse_css)
+            .unwrap_or(ink);
+        (fill, border, ink, muted)
     }
 
     /// A straight line's optional midpoint dot and anchor price labels (above an anchor that
@@ -3586,16 +3724,7 @@ impl ChartEngine {
         );
         let (end_x, end_y) = (measure.end.0.round() as i32, measure.end.1.round() as i32);
         if drawing.fill_enabled {
-            let fill = drawing
-                .fill_color
-                .as_deref()
-                .and_then(Color::parse_css)
-                .unwrap_or(Color::rgba(
-                    color.r(),
-                    color.g(),
-                    color.b(),
-                    MEASURE_FILL_ALPHA,
-                ));
+            let fill = area_fill(drawing, color);
             // Both endpoint pixels belong to the area, matching the rectangle tool's box.
             out.push(Prim::Rect {
                 rect: IRect {
@@ -4381,8 +4510,6 @@ struct MeasureStats {
     seconds: Option<i64>,
 }
 
-/// Default measured-area wash: the tool color at 20% alpha, like the rectangle tool.
-const MEASURE_FILL_ALPHA: u8 = 51;
 /// Arrowhead wing reach along and across the shaft, in CSS px.
 const MEASURE_ARROW_CSS: f64 = 5.0;
 
@@ -4632,6 +4759,29 @@ pub(crate) fn stat_label_size(layout_font_size: f64) -> f64 {
 /// Statistic label container height in CSS px: `lines` line boxes plus 3 px padding per side.
 pub(crate) fn stat_label_height(layout_font_size: f64, lines: usize) -> f64 {
     lines as f64 * stat_label_size(layout_font_size) * 1.25 + 6.0
+}
+
+/// A pattern's vertex label ink: its `text_color`, else its stroke.
+fn vertex_label_color(drawing: &Drawing, stroke: Color) -> Color {
+    drawing
+        .text_color
+        .as_deref()
+        .and_then(Color::parse_css)
+        .unwrap_or(stroke)
+}
+
+/// The area fill a drawing paints: its `fill_color`, else `stroke` at the kind's default alpha.
+fn area_fill(drawing: &Drawing, stroke: Color) -> Color {
+    drawing
+        .fill_color
+        .as_deref()
+        .and_then(Color::parse_css)
+        .unwrap_or(Color::rgba(
+            stroke.r(),
+            stroke.g(),
+            stroke.b(),
+            drawing.kind.default_fill_alpha(),
+        ))
 }
 
 /// A position's (profit, stop) colors: the drawing's own, else the market up/down tokens.

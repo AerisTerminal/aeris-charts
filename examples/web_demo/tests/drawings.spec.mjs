@@ -1055,7 +1055,8 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
   const canvas = await run_scenario("canvas2d");
   expect(canvas.backend).toBe("canvas2d");
   const gpu = await run_scenario("auto");
-  expect(gpu.rotated_labels.length).toBe(2);
+  // Both trend lines and the vertical line, whose label runs along it.
+  expect(gpu.rotated_labels.length).toBe(3);
   expect(gpu.rotated_labels).toEqual(canvas.rotated_labels);
   expect(gpu.backend).toBe("webgpu");
   expect([canvas.png.width, canvas.png.height]).toEqual([gpu.png.width, gpu.png.height]);

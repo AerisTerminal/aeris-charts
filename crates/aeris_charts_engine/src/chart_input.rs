@@ -2209,15 +2209,12 @@ impl ChartEngine {
                     self.note_drawing_created(update.created);
                     return;
                 }
-                // A double-click on an already-selected text or trend drawing opens its editor.
+                // A double-click on an already-selected text drawing or line opens its editor.
                 let selected = self.selected_drawing();
                 let editable = selected.is_some() && selected == text_press_selected && {
                     selected
                         .and_then(|id| self.drawing(id))
-                        .is_some_and(|drawing| {
-                            matches!(drawing.kind, DrawingKind::Text | DrawingKind::TrendLine)
-                                || drawing.kind.is_text_annotation()
-                        })
+                        .is_some_and(|drawing| drawing.kind.edits_text_inline())
                 };
                 if editable {
                     self.input_primary_click(x, y, text_press_selected);
@@ -2259,9 +2256,9 @@ impl ChartEngine {
     }
 
     fn input_primary_click(&mut self, x: f64, y: f64, text_press_selected: Option<DrawingId>) {
-        let trend_text_hit = self.drawing_text_hit_at(x, y);
-        let drawing_hit = trend_text_hit.is_some() || self.select_drawing_at(x, y);
-        if let Some(id) = trend_text_hit {
+        let line_text_hit = self.drawing_text_hit_at(x, y);
+        let drawing_hit = line_text_hit.is_some() || self.select_drawing_at(x, y);
+        if let Some(id) = line_text_hit {
             self.set_selected_drawing(Some(id));
         }
         if let Some(id) = (!drawing_hit)
@@ -2293,10 +2290,10 @@ impl ChartEngine {
             return;
         };
         let id = drawing.id;
-        let open_editor = if drawing.kind == DrawingKind::TrendLine {
+        let open_editor = if drawing.kind.has_line_text() {
             // An empty line's prompt appears only once the line is selected, so the click that
             // selects it must not also open the editor under the prompt it just revealed.
-            trend_text_hit == Some(id)
+            line_text_hit == Some(id)
                 && (!drawing.text.is_empty() || text_press_selected == Some(id))
         } else {
             (drawing.kind == DrawingKind::Text || drawing.kind.is_text_annotation())
@@ -3504,10 +3501,10 @@ mod tests {
             None,
             "hover reveals no prompt"
         );
-        assert_eq!(chart.trend_text_prompt(), None);
+        assert_eq!(chart.line_text_prompt(), None);
         click(&mut chart, x, y);
         assert_eq!(chart.selected_drawing(), Some(id));
-        assert_eq!(chart.trend_text_prompt(), Some(id));
+        assert_eq!(chart.line_text_prompt(), Some(id));
         assert!(
             chart.drawing_text_edit().is_none(),
             "the selecting click only reveals the prompt"

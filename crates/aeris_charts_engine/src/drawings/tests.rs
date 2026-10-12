@@ -8304,6 +8304,110 @@ fn custom_position_colors_and_fibonacci_trend_line_reach_the_frame() {
 }
 
 #[test]
+fn painted_colors_report_what_the_frame_paints_for_unset_options() {
+    use aeris_charts_render::color::Color;
+
+    let mut chart = settled_chart();
+    let painted = |chart: &ChartEngine, id: DrawingId| {
+        let json: serde_json::Value =
+            serde_json::from_str(&chart.drawing_painted_colors_json(id).unwrap()).unwrap();
+        move |name: &str| {
+            json.get(name)
+                .and_then(|css| Color::parse_css(css.as_str()?))
+        }
+    };
+    let rgb = |color: Color| (color.r(), color.g(), color.b());
+    let rect_rgbs = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Rect { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let long = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 11.5,
+                },
+                DrawingPoint {
+                    logical: 7.0,
+                    price: 12.5,
+                },
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.5,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let options: serde_json::Value =
+        serde_json::from_str(&chart.drawing_options_json(long).unwrap()).unwrap();
+    assert_eq!(
+        (
+            &options["position_profit_color"],
+            &options["position_loss_color"]
+        ),
+        (&serde_json::json!(""), &serde_json::json!("")),
+        "a new position follows the theme"
+    );
+    let colors = painted(&chart, long);
+    let (profit, loss) = (
+        colors("position_profit_color").expect("painted profit"),
+        colors("position_loss_color").expect("painted stop"),
+    );
+    let zones = rect_rgbs(&mut chart);
+    assert!(zones.iter().any(|zone| rgb(*zone) == rgb(profit)));
+    assert!(zones.iter().any(|zone| rgb(*zone) == rgb(loss)));
+    assert_eq!(
+        colors("text_color"),
+        None,
+        "position labels contrast per zone"
+    );
+    assert!(chart.drawing_apply_options(long, r##"{"position_profit_color":"#112233"}"##));
+    assert_eq!(
+        painted(&chart, long)("position_profit_color"),
+        Some(Color::rgb(0x11, 0x22, 0x33))
+    );
+    assert!(chart.remove_drawing(long));
+
+    let rectangle = chart
+        .add_drawing(
+            DrawingKind::Rectangle,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.5,
+                },
+                DrawingPoint {
+                    logical: 7.0,
+                    price: 12.5,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    assert!(chart.drawing_apply_options(rectangle, r##"{"color":"#ff9900","fill_enabled":true}"##));
+    let colors = painted(&chart, rectangle);
+    let fill = colors("fill_color").expect("painted fill");
+    assert_eq!(colors("color"), Some(Color::rgb(0xff, 0x99, 0x00)));
+    assert_eq!((rgb(fill), fill.a()), ((0xff, 0x99, 0x00), 51));
+    assert!(
+        rect_rgbs(&mut chart).contains(&fill),
+        "the frame paints that fill"
+    );
+}
+
+#[test]
 fn trend_line_stats_card_follows_its_visibility_setting() {
     let mut chart = settled_chart();
     let id = add_trend(&mut chart);

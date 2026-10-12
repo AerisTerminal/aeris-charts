@@ -1,4 +1,4 @@
-//! Engine-owned typing session for text-capable drawings (standalone text and trend-line labels).
+//! Engine-owned typing session for text-capable drawings (standalone text and line labels).
 //!
 //! The session owns the product rules every host shares: live text updates, caret position,
 //! Enter/Escape semantics, and the empty lifecycle (an empty standalone text drawing is removed;
@@ -44,6 +44,8 @@ pub struct DrawingTextEditLayout<'a> {
     pub left_edge: f64,
     pub advance: f64,
     pub caret_x: f64,
+    /// The ink the frame paints the label with, for a host-drawn caret.
+    pub ink: aeris_charts_render::color::Color,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -200,6 +202,7 @@ impl ChartEngine {
             left_edge: anchor_x + start,
             advance,
             caret_x: anchor_x + start + measure(&prefix).ceil(),
+            ink: self.drawing_text_color(drawing),
         })
     }
 
@@ -512,13 +515,16 @@ mod tests {
         let times = (0..20)
             .map(|i| 1_700_000_000.0 + f64::from(i) * 60.0)
             .collect::<Vec<_>>();
-        let values = vec![100.0; 20];
+        // Bars span 96..104 so the 99..101 anchors land inside the pane.
+        let values = (0..20)
+            .map(|i| if i % 2 == 0 { 96.0 } else { 104.0 })
+            .collect::<Vec<_>>();
         chart
             .set_series_data(0, &times, &values, &values, &values, &values)
             .expect("valid bars");
         chart.time_scale.set_width(800.0);
         chart.fit_content();
-        let points = match kind {
+        let mut points = match kind {
             DrawingKind::Text => vec![DrawingPoint {
                 logical: 5.0,
                 price: 100.0,
@@ -534,6 +540,7 @@ mod tests {
                 },
             ],
         };
+        points.truncate(kind.anchor_count());
         let id = chart.add_drawing(kind, 0, points, None).expect("drawing");
         if !text.is_empty() {
             let patch = serde_json::json!({ "text": text }).to_string();
@@ -583,6 +590,38 @@ mod tests {
             assert_eq!(
                 geometry.caret_x,
                 geometry.left_edge + geometry.advance.ceil()
+            );
+            assert!(chart.cancel_drawing_text_edit());
+        }
+    }
+
+    #[test]
+    fn every_line_kind_types_its_label_in_place_with_the_line_ink() {
+        use aeris_charts_render::color::Color;
+
+        for kind in [
+            DrawingKind::TrendLine,
+            DrawingKind::Ray,
+            DrawingKind::ExtendedLine,
+            DrawingKind::HorizontalLine,
+            DrawingKind::HorizontalRay,
+            DrawingKind::VerticalLine,
+        ] {
+            let (mut chart, id) = chart_with(kind, "Level");
+            assert!(chart.drawing_apply_options(id, r##"{"color":"#ff9900"}"##));
+            chart.build_frame();
+            let (x, y, _) = chart.drawing_text_transform(id).expect("text transform");
+            assert_eq!(chart.drawing_text_hit_at(x, y), Some(id), "{kind:?}");
+            assert!(chart.begin_drawing_text_edit(id, false), "{kind:?}");
+            let layout = chart.drawing_text_edit_layout().expect("live layout");
+            assert_eq!(layout.ink, Color::rgb(0xff, 0x99, 0x00), "{kind:?}");
+            assert!(chart.cancel_drawing_text_edit());
+            assert!(chart.drawing_apply_options(id, r##"{"text_color":"#3366ff"}"##));
+            assert!(chart.begin_drawing_text_edit(id, false));
+            assert_eq!(
+                chart.drawing_text_edit_layout().expect("live layout").ink,
+                Color::rgb(0x33, 0x66, 0xff),
+                "{kind:?}: an explicit text color wins"
             );
             assert!(chart.cancel_drawing_text_edit());
         }

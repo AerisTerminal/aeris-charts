@@ -5632,6 +5632,10 @@ impl AerisChart {
     pub fn drawing_options_json(&self, id: u32) -> String {
         self.inner.borrow().drawing_options_json(id)
     }
+    /// The CSS colors the drawing paints per color property ("" for an unknown id).
+    pub fn drawing_painted_colors_json(&self, id: u32) -> String {
+        self.inner.borrow().drawing_painted_colors_json(id)
+    }
     pub fn drawing_property_schema_json(&self, id: u32) -> String {
         self.inner.borrow().drawing_property_schema_json(id)
     }
@@ -5817,6 +5821,7 @@ impl AerisChart {
             "left_edge": layout.left_edge,
             "advance": layout.advance,
             "caret_x": layout.caret_x,
+            "ink": layout.ink.to_css(),
         })
         .to_string()
     }

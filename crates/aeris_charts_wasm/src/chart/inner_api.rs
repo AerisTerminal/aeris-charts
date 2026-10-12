@@ -2940,6 +2940,11 @@ impl ChartInner {
     pub fn drawing_options_json(&self, id: u32) -> String {
         self.engine.drawing_options_json(id).unwrap_or_default()
     }
+    pub fn drawing_painted_colors_json(&self, id: u32) -> String {
+        self.engine
+            .drawing_painted_colors_json(id)
+            .unwrap_or_default()
+    }
     pub fn drawing_property_schema_json(&self, id: u32) -> String {
         self.engine
             .drawing_property_schema_json(id)

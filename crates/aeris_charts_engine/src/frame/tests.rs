@@ -15236,6 +15236,191 @@ fn trend_line_middle_label_follows_the_segment_and_opens_a_gap() {
 }
 
 #[test]
+fn every_line_kind_runs_its_middle_label_along_the_line_and_opens_a_gap() {
+    use crate::{DrawingKind, DrawingPoint};
+
+    let ink = Color::rgb(0xff, 0x99, 0x00);
+    for kind in [
+        DrawingKind::Ray,
+        DrawingKind::ExtendedLine,
+        DrawingKind::HorizontalLine,
+        DrawingKind::HorizontalRay,
+        DrawingKind::VerticalLine,
+    ] {
+        let mut chart = anchor_chart();
+        let points = [
+            DrawingPoint {
+                logical: 1.0,
+                price: 10.0,
+            },
+            DrawingPoint {
+                logical: 4.0,
+                price: 12.5,
+            },
+        ];
+        let id = chart
+            .add_drawing(kind, 0, points[..kind.anchor_count()].to_vec(), None)
+            .unwrap();
+        // No text color: a line label takes its line's ink.
+        assert!(chart.drawing_apply_options(
+            id,
+            r##"{"color":"#ff9900","text":"Pivot","text_h_align":"center","text_v_align":"middle"}"##,
+        ));
+        let frame = chart.build_frame();
+        let pane = &frame.panes[0];
+        let (label_x, label_y, label_color) = pane
+            .main
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::RotatedText {
+                    x, y, text, color, ..
+                } if text == "Pivot" => Some((f64::from(*x), f64::from(*y), *color)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{kind:?}: the label runs along the line"));
+        assert_eq!(label_color, ink, "{kind:?}");
+        // Each stroke piece as (start, end) along the line's own axis, label on that axis.
+        let (pieces, label_at) = match kind {
+            DrawingKind::HorizontalLine | DrawingKind::HorizontalRay => (
+                pane.main
+                    .iter()
+                    .filter_map(|prim| match prim {
+                        Prim::HLine { x0, x1, color, .. } if *color == ink => {
+                            Some((f64::from(*x0), f64::from(*x1)))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                label_x,
+            ),
+            DrawingKind::VerticalLine => (
+                pane.main
+                    .iter()
+                    .filter_map(|prim| match prim {
+                        Prim::VLine { y0, y1, color, .. } if *color == ink => {
+                            Some((f64::from(*y0), f64::from(*y1)))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                label_y,
+            ),
+            _ => (
+                pane.main
+                    .iter()
+                    .filter_map(|prim| match prim {
+                        Prim::Polyline {
+                            first_point,
+                            point_count: 2,
+                            color,
+                            ..
+                        } if *color == ink => {
+                            let run =
+                                &pane.points[*first_point as usize..*first_point as usize + 2];
+                            Some((f64::from(run[0][0]), f64::from(run[1][0])))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                label_x,
+            ),
+        };
+        assert_eq!(pieces.len(), 2, "{kind:?}: the label must split its line");
+        let (first, second) = (pieces[0], pieces[1]);
+        let gap = (first.0.max(first.1), second.0.min(second.1));
+        assert!(
+            gap.0 < label_at && label_at < gap.1,
+            "{kind:?}: label at {label_at} outside the gap {gap:?}"
+        );
+    }
+}
+
+#[test]
+fn fibonacci_labels_centered_on_their_levels_open_the_level_lines() {
+    use crate::{DrawingKind, DrawingPoint};
+
+    let mut chart = anchor_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::FibonacciRetracement,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 4.0,
+                    price: 12.5,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    // Levels without their own color take the drawing's.
+    let ink = Color::rgb(0xff, 0x99, 0x00);
+    assert!(chart.drawing_apply_options(id, r##"{"color":"#ff9900"}"##));
+    let level_colors = [ink];
+    let level_runs = |chart: &mut ChartEngine| {
+        let frame = chart.build_frame();
+        let pane = &frame.panes[0];
+        let labels = pane
+            .main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Text { x, y, color, .. } if level_colors.contains(color) => {
+                    Some((f64::from(*x), y.round() as i32, *color))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        labels
+            .into_iter()
+            .map(|(x, y, label_color)| {
+                let runs = pane
+                    .main
+                    .iter()
+                    .filter_map(|prim| match prim {
+                        Prim::HLine {
+                            y: line_y,
+                            x0,
+                            x1,
+                            color,
+                            ..
+                        } if *line_y == y && *color == label_color => {
+                            Some((f64::from(*x0), f64::from(*x1)))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                (x, runs)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert!(chart.drawing_apply_options(
+        id,
+        r#"{"level_label_align":"center","level_label_v_align":"middle"}"#,
+    ));
+    let centered = level_runs(&mut chart);
+    assert!(centered.len() >= 2, "every visible level paints its label");
+    for (label_x, runs) in &centered {
+        assert_eq!(runs.len(), 2, "a centered label splits its level: {runs:?}");
+        assert!(runs[0].1 < *label_x && *label_x < runs[1].0, "{runs:?}");
+    }
+
+    // A label above its level leaves the level whole.
+    assert!(chart.drawing_apply_options(id, r#"{"level_label_v_align":"top"}"#));
+    let frame = chart.build_frame();
+    let whole = frame.panes[0]
+        .main
+        .iter()
+        .filter(|prim| matches!(prim, Prim::HLine { color, .. } if level_colors.contains(color)))
+        .count();
+    assert_eq!(whole, centered.len(), "one unbroken line per level");
+}
+
+#[test]
 fn tilted_trend_label_keeps_its_line_box_clear_of_the_stroke() {
     use crate::{DrawingKind, DrawingPoint};
 
