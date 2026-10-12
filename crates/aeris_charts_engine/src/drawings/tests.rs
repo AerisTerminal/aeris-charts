@@ -4741,15 +4741,16 @@ fn geometric_shape_catalog_emits_frame_primitives_and_property_defaults() {
         }
         let schema: serde_json::Value =
             serde_json::from_str(&chart.drawing_property_schema_json(id).unwrap()).unwrap();
-        assert!(
-            schema["properties"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|property| {
-                    property["name"] == "fill_enabled" && property["default"] == filled
-                })
-        );
+        // Open curves paint no area, so their schema must not offer a background toggle.
+        let fill = schema["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|property| property["name"] == "fill_enabled");
+        assert_eq!(fill.is_some(), filled, "{kind:?}");
+        if let Some(fill) = fill {
+            assert_eq!(fill["default"], true, "{kind:?}");
+        }
         assert!(chart.remove_drawing(id));
     }
 }
@@ -7830,4 +7831,448 @@ fn idle_position_progress_keeps_its_drawing_z_order() {
         segment(&chart, position).revision,
         position_segment.revision
     );
+}
+
+fn all_kinds() -> impl Iterator<Item = DrawingKind> {
+    (0..=u8::MAX).filter_map(DrawingKind::from_u8)
+}
+
+#[test]
+fn every_schema_property_is_a_live_option_that_accepts_its_default() {
+    use crate::DrawingPropertyGroup as Group;
+    for kind in all_kinds() {
+        let schema = crate::drawing_property_schema(kind);
+        assert_eq!(schema.revision, crate::DRAWING_CONTRACT_REVISION);
+        let mut drawing = Drawing::new(0, kind, 0, Vec::new());
+        let options = drawing.options_json();
+        let mut names = std::collections::HashSet::new();
+        for property in &schema.properties {
+            let name = property.name.as_str();
+            assert!(names.insert(name), "{kind:?} lists {name} twice");
+            assert_eq!(
+                options.get(name),
+                Some(&property.default),
+                "{kind:?} schema property {name} must be a stored option"
+            );
+            let patch: DrawingPatch =
+                serde_json::from_value(serde_json::json!({ name: property.default.clone() }))
+                    .unwrap_or_else(|error| panic!("{kind:?} {name}: {error}"));
+            assert!(
+                drawing.apply_patch(patch),
+                "{kind:?} rejects its own {name} default"
+            );
+            if let (Some(value), Some(min), Some(max)) =
+                (property.default.as_f64(), property.min, property.max)
+            {
+                assert!(
+                    (min..=max).contains(&value),
+                    "{kind:?} {name} default {value} is outside [{min}, {max}]"
+                );
+            }
+            if property.toolbar {
+                assert!(
+                    matches!(property.group, Group::Style | Group::Text),
+                    "{kind:?} toolbar property {name} must be a style or text property"
+                );
+            }
+        }
+        assert_eq!(drawing.options_json(), options, "{kind:?}");
+        match kind.anchor_axes() {
+            Some(axes) => {
+                assert_eq!(schema.anchors.len(), kind.anchor_count(), "{kind:?}");
+                assert_eq!(axes.len(), schema.anchors.len(), "{kind:?}");
+            }
+            None => assert!(schema.anchors.is_empty(), "{kind:?}"),
+        }
+    }
+}
+
+#[test]
+fn schema_lists_only_what_each_kind_paints() {
+    let names = |kind| {
+        crate::drawing_property_schema(kind)
+            .properties
+            .into_iter()
+            .map(|property| property.name)
+            .collect::<Vec<_>>()
+    };
+    let trend = names(DrawingKind::TrendLine);
+    for name in [
+        "color",
+        "width",
+        "style",
+        "stroke_end",
+        "extend_right",
+        "middle_point_visible",
+        "price_labels_visible",
+        "labels",
+        "stats_position",
+        "text",
+    ] {
+        assert!(trend.iter().any(|property| property == name), "{name}");
+    }
+    assert!(!trend.iter().any(|property| property == "fill_enabled"));
+
+    let long = crate::drawing_property_schema(DrawingKind::LongPosition);
+    let toolbar = long
+        .properties
+        .iter()
+        .filter(|property| property.toolbar)
+        .map(|property| property.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        toolbar,
+        ["position_profit_color", "position_loss_color", "text_color"]
+    );
+    let anchors = long
+        .anchors
+        .iter()
+        .map(|anchor| (anchor.label.as_str(), anchor.price, anchor.time))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        anchors,
+        [
+            ("Entry", true, true),
+            ("Target", true, true),
+            ("Stop", true, false)
+        ]
+    );
+
+    let fib = names(DrawingKind::FibonacciRetracement);
+    for name in [
+        "level_trend_line",
+        "level_label_v_align",
+        "levels",
+        "text_size",
+    ] {
+        assert!(fib.iter().any(|property| property == name), "{name}");
+    }
+    assert!(!fib.iter().any(|property| property == "text_color"));
+    assert!(
+        crate::drawing_property_schema(DrawingKind::Brush)
+            .anchors
+            .is_empty()
+    );
+}
+
+#[test]
+fn settings_session_commits_one_undo_step_and_cancel_restores_the_drawing() {
+    let mut chart = settled_chart();
+    let id = add_trend(&mut chart);
+    let original = chart.drawing(id).unwrap().clone();
+
+    assert!(chart.begin_drawing_options_edit(id));
+    assert_eq!(chart.drawing_options_edit(), Some(id));
+    assert!(chart.drawing_apply_options(id, r##"{"color":"#ff0000"}"##));
+    assert!(chart.drawing_apply_options(id, r#"{"width":4}"#));
+    assert!(chart.set_drawing_anchor(id, 1, 13.0, None));
+    assert!(chart.commit_drawing_options_edit());
+    assert_eq!(chart.drawing_options_edit(), None);
+    let edited = chart.drawing(id).unwrap().clone();
+    assert_ne!(edited, original);
+    assert_eq!(edited.points[1].price, 13.0);
+    assert!(chart.undo_drawing());
+    assert_eq!(
+        chart.drawing(id),
+        Some(&original),
+        "one undo reverts the whole session"
+    );
+    assert!(chart.redo_drawing());
+    assert_eq!(chart.drawing(id), Some(&edited));
+
+    assert!(chart.begin_drawing_options_edit(id));
+    assert!(chart.drawing_apply_options(id, r#"{"width":9}"#));
+    assert_eq!(chart.drawing(id).unwrap().width, 9.0, "edits preview live");
+    assert!(chart.cancel_drawing_options_edit());
+    assert_eq!(chart.drawing(id), Some(&edited));
+    assert!(chart.undo_drawing(), "cancel adds no history entry");
+    assert_eq!(chart.drawing(id), Some(&original));
+
+    // Undo during an open session commits it first, then reverts it.
+    assert!(chart.begin_drawing_options_edit(id));
+    assert!(chart.drawing_apply_options(id, r#"{"width":3}"#));
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawing_options_edit(), None);
+    assert_eq!(chart.drawing(id), Some(&original));
+
+    // Removing the edited drawing commits the session, so both steps stay undoable.
+    assert!(chart.begin_drawing_options_edit(id));
+    assert!(chart.drawing_apply_options(id, r#"{"width":6}"#));
+    assert!(chart.remove_drawing(id));
+    assert_eq!(chart.drawing_options_edit(), None);
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawing(id).unwrap().width, 6.0);
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawing(id), Some(&original));
+}
+
+#[test]
+fn templates_carry_style_but_never_identity_content_or_state() {
+    let mut chart = settled_chart();
+    let source = add_trend(&mut chart);
+    assert!(chart.drawing_apply_options(
+        source,
+        r##"{"color":"#00ff00","width":3,"text":"source text","locked":true,"name":"Source"}"##
+    ));
+    let template: serde_json::Value =
+        serde_json::from_str(&chart.drawing_template_json(source, "Green").unwrap()).unwrap();
+    for key in [
+        "name", "text", "locked", "visible", "revision", "z_order", "group_id",
+    ] {
+        assert!(template["options"].get(key).is_none(), "{key}");
+    }
+    assert_eq!(template["options"]["width"], 3.0);
+
+    let target = add_trend(&mut chart);
+    let mut foreign = template.clone();
+    foreign["options"]["text"] = serde_json::json!("injected");
+    foreign["options"]["visible"] = serde_json::json!(false);
+    assert!(chart.apply_drawing_template_json(target, &foreign.to_string()));
+    let target = chart.drawing(target).unwrap();
+    assert_eq!(target.width, 3.0);
+    assert_eq!(target.color, chart.drawing(source).unwrap().color);
+    assert!(target.text.is_empty());
+    assert!(target.visible);
+    assert!(!target.locked);
+}
+
+#[test]
+fn line_position_and_fibonacci_style_fields_round_trip_through_persistence() {
+    let mut chart = settled_chart();
+    let trend = add_trend(&mut chart);
+    assert!(chart.drawing_apply_options(
+        trend,
+        r#"{"middle_point_visible":true,"price_labels_visible":true,"stats_position":"left","stats_always_visible":true,"text_size":null}"#
+    ));
+    let fib = chart
+        .add_drawing(
+            DrawingKind::FibonacciRetracement,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.5,
+                },
+                DrawingPoint {
+                    logical: 7.0,
+                    price: 12.5,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    assert!(chart.drawing_apply_options(
+        fib,
+        r#"{"level_label_v_align":"bottom","level_trend_line":true}"#
+    ));
+    assert!(!chart.drawing_apply_options(fib, r#"{"level_label_v_align":"sideways"}"#));
+    assert!(!chart.drawing_apply_options(trend, r#"{"level_trend_line":true}"#));
+    let long = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 11.5,
+                },
+                DrawingPoint {
+                    logical: 7.0,
+                    price: 12.5,
+                },
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.5,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    assert!(chart.drawing_apply_options(
+        long,
+        r##"{"position_profit_color":"#112233","position_loss_color":"#445566","text_color":"#ffffff"}"##
+    ));
+
+    let saved = chart.export_state_json().unwrap();
+    let mut restored = settled_chart();
+    restored.import_state_json(&saved).unwrap();
+    for id in [trend, fib, long] {
+        let (before, after) = (chart.drawing(id).unwrap(), restored.drawing(id).unwrap());
+        assert_eq!(
+            after.options_json(),
+            before.options_json(),
+            "{:?}",
+            before.kind
+        );
+    }
+    let restored_fib = restored.drawing(fib).unwrap();
+    assert_eq!(restored_fib.level_label_v_align, DrawingTextVAlign::Bottom);
+    assert!(restored_fib.level_trend_line);
+    assert_eq!(
+        restored.drawing(trend).unwrap().stats_position,
+        DrawingTextHAlign::Left
+    );
+}
+
+#[test]
+fn widths_are_bounded_and_null_text_size_resets_to_the_follow_default() {
+    let mut chart = settled_chart();
+    let id = add_trend(&mut chart);
+    assert!(chart.drawing_apply_options(id, r#"{"width":500,"text_size":20}"#));
+    let drawing = chart.drawing(id).unwrap();
+    assert_eq!(drawing.width, MAX_DRAWING_WIDTH);
+    assert_eq!(drawing.text_size, Some(20.0));
+    assert!(chart.drawing_apply_options(id, r#"{"text_size":null}"#));
+    assert_eq!(chart.drawing(id).unwrap().text_size, None);
+}
+
+#[test]
+fn interval_ranges_show_a_drawing_only_inside_the_listed_span() {
+    use crate::{DrawingInterval, DrawingIntervalRange, DrawingIntervalUnit as Unit};
+    let visibility = crate::DrawingIntervalVisibility {
+        enabled: true,
+        intervals: vec![DrawingInterval {
+            unit: Unit::Days,
+            value: 1.0,
+        }],
+        ranges: vec![DrawingIntervalRange {
+            unit: Unit::Minutes,
+            min: 1.0,
+            max: 15.0,
+        }],
+    };
+    assert!(visibility.validate());
+    let at = |unit, value| visibility.allows(Some(DrawingInterval { unit, value }));
+    assert!(at(Unit::Minutes, 1.0));
+    assert!(at(Unit::Minutes, 15.0));
+    assert!(!at(Unit::Minutes, 30.0));
+    assert!(!at(Unit::Hours, 5.0));
+    assert!(at(Unit::Days, 1.0));
+    assert!(
+        !crate::DrawingIntervalVisibility {
+            ranges: vec![DrawingIntervalRange {
+                unit: Unit::Hours,
+                min: 4.0,
+                max: 1.0,
+            }],
+            ..visibility.clone()
+        }
+        .validate()
+    );
+}
+
+#[test]
+fn anchor_coordinates_read_and_write_utc_time() {
+    let mut chart = settled_chart();
+    let id = add_trend(&mut chart);
+    let (price, time) = chart.drawing_anchor(id, 0).unwrap();
+    assert_eq!(price, 10.5);
+    assert_eq!(time, Some(2.0 * 3600.0));
+    assert!(chart.set_drawing_anchor(id, 0, 11.25, Some(4.5 * 3600.0)));
+    let point = chart.drawing(id).unwrap().points[0];
+    assert_eq!(point.price, 11.25);
+    assert!((point.logical - 4.5).abs() < 1e-9);
+    assert!(!chart.set_drawing_anchor(id, 5, 11.0, None));
+    assert!(!chart.set_drawing_anchor(id, 0, f64::NAN, None));
+}
+
+#[test]
+fn custom_position_colors_and_fibonacci_trend_line_reach_the_frame() {
+    use aeris_charts_render::draw_list::LineStyle;
+    let mut chart = settled_chart();
+    let long = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 11.5,
+                },
+                DrawingPoint {
+                    logical: 7.0,
+                    price: 12.5,
+                },
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.5,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    assert!(chart.drawing_apply_options(long, r##"{"position_profit_color":"#112233"}"##));
+    let frame = chart.build_frame();
+    assert!(frame.panes[0].main.iter().any(|prim| matches!(
+        prim,
+        Prim::Rect { color, .. } if (color.r(), color.g(), color.b()) == (0x11, 0x22, 0x33)
+    )));
+    assert!(chart.remove_drawing(long));
+
+    let fib = chart
+        .add_drawing(
+            DrawingKind::FibonacciRetracement,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.5,
+                },
+                DrawingPoint {
+                    logical: 7.0,
+                    price: 12.5,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let dashed = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter(|prim| {
+                matches!(
+                    prim,
+                    Prim::Polyline {
+                        style: LineStyle::Dashed,
+                        ..
+                    }
+                )
+            })
+            .count()
+    };
+    let before = dashed(&mut chart);
+    assert!(chart.drawing_apply_options(fib, r#"{"level_trend_line":true}"#));
+    assert_eq!(dashed(&mut chart), before + 1);
+}
+
+#[test]
+fn trend_line_stats_card_follows_its_visibility_setting() {
+    let mut chart = settled_chart();
+    let id = add_trend(&mut chart);
+    let cards = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::RoundRect { .. }))
+            .count()
+    };
+    let baseline = cards(&mut chart);
+    chart.set_selected_drawing(Some(id));
+    let selected_baseline = cards(&mut chart);
+    chart.set_selected_drawing(None);
+    assert!(chart.drawing_apply_options(
+        id,
+        r#"{"labels":[{"metric":"price_change","visible":true,"position":"on"}],"stats_always_visible":false}"#
+    ));
+    assert_eq!(
+        cards(&mut chart),
+        baseline,
+        "a selection-only card hides while unselected"
+    );
+    chart.set_selected_drawing(Some(id));
+    assert_eq!(cards(&mut chart), selected_baseline + 1);
+    chart.set_selected_drawing(None);
+    assert!(chart.drawing_apply_options(id, r#"{"stats_always_visible":true}"#));
+    assert_eq!(cards(&mut chart), baseline + 1);
 }

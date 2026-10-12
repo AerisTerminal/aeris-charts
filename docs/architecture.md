@@ -878,6 +878,23 @@ Named templates are validated data rather than host-side drawing copies. V1/V2 p
 these fields optional for lossless migration of existing layouts, while browser/WASM exposes the
 same schema, template, object-tree, and payload operations as the native engine.
 
+The property schema (contract revision 2) is the single description a host settings surface and
+floating drawing toolbar render from. `drawing_property_schema(kind)` lists only the options that
+kind paints, each with a label, a settings group (inputs, style, text, coordinates, visibility, or
+general identity/state), bounds or choices, a toolbar flag, and a default read from the kind's
+factory options, plus per-anchor price/time editability for a coordinates editor. A test holds
+every listed property to being a stored option that accepts its own default, so the schema cannot
+advertise a control the engine ignores. Hosts therefore never switch on concrete kinds. Templates
+carry style only: identity, content, state, and data bindings (name, text, lock, visibility,
+z-order, intervals, positions, sources) are stripped on save and apply. A settings session
+(`begin_drawing_options_edit`, then commit or cancel) applies option and anchor edits live but
+records one undo entry on commit, and cancel restores the opening snapshot without history; undo,
+redo, removal, or opening another session commits it first. `set_drawing_anchor` moves one anchor
+by price and UTC time through the same validation as point replacement. A double-click on the
+selected drawing that opens no text editor queues `DrawingSettingsRequested` for the host. The
+settings session and anchor operations are native engine APIs; the browser package does not
+expose them yet and ignores the settings-request event.
+
 Versioned persistence is an engine-owned semantic DTO boundary, never serialization of live engine
 structs. Financial-only charts continue to export V1 with ordered pane topology and built-in
 drawings only. V2 adds pane horizontal domains, general axes, typed general datasets (including

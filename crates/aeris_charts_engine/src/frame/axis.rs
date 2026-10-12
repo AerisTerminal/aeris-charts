@@ -2169,6 +2169,8 @@ impl ChartEngine {
                         drawing.kind,
                         DrawingKind::HorizontalLine | DrawingKind::HorizontalRay
                     )
+                    || !drawing.visible
+                    || !drawing.interval_visibility.allows(self.drawing_interval)
                 {
                     continue;
                 }

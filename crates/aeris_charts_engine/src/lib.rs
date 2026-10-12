@@ -100,13 +100,14 @@ pub use domains::{
 };
 pub use drawing_contract::drawing_property_schema;
 pub use drawing_contract::{
-    DRAWING_CONTRACT_REVISION, DrawingClipboardItem, DrawingClipboardPayload,
-    DrawingCommonSnapshot, DrawingInterval, DrawingIntervalUnit, DrawingIntervalVisibility,
-    DrawingKindOptions, DrawingLabelMetric, DrawingLabelOptions, DrawingLabelPosition,
-    DrawingLevel, DrawingLineCap, DrawingMagnetMode, DrawingPropertyDescriptor,
-    DrawingPropertySchema, DrawingPropertyType, DrawingSyncPayload, DrawingTemplate,
-    MAX_DRAWING_GROUP_BYTES, MAX_DRAWING_LABELS, MAX_DRAWING_LEVELS, MAX_DRAWING_NAME_BYTES,
-    MAX_DRAWING_OBJECTS, MAX_DRAWING_TEMPLATE_BYTES, MAX_DRAWING_TEMPLATES,
+    DRAWING_CONTRACT_REVISION, DrawingAnchorDescriptor, DrawingClipboardItem,
+    DrawingClipboardPayload, DrawingCommonSnapshot, DrawingInterval, DrawingIntervalRange,
+    DrawingIntervalUnit, DrawingIntervalVisibility, DrawingKindOptions, DrawingLabelMetric,
+    DrawingLabelOptions, DrawingLabelPosition, DrawingLevel, DrawingLineCap, DrawingMagnetMode,
+    DrawingPropertyDescriptor, DrawingPropertyGroup, DrawingPropertySchema, DrawingPropertyType,
+    DrawingSyncPayload, DrawingTemplate, MAX_DRAWING_GROUP_BYTES, MAX_DRAWING_LABELS,
+    MAX_DRAWING_LEVELS, MAX_DRAWING_NAME_BYTES, MAX_DRAWING_OBJECTS, MAX_DRAWING_TEMPLATE_BYTES,
+    MAX_DRAWING_TEMPLATES,
 };
 pub use drawing_text_edit::{DrawingTextEditKey, DrawingTextEditLayout};
 pub use drawings::{

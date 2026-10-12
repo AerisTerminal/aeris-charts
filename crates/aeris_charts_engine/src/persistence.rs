@@ -362,6 +362,22 @@ struct DrawingStyleV1 {
     box_border_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     box_border_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    position_profit_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    position_loss_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    level_label_v_align: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    level_trend_line: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    middle_point_visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    price_labels_visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stats_position: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stats_always_visible: Option<bool>,
 }
 
 fn pane_wire_id(id: u32) -> String {
@@ -1018,6 +1034,20 @@ impl ChartEngine {
                         box_color: drawing.box_color.clone(),
                         box_border_color: drawing.box_border_color.clone(),
                         box_border_width: Some(drawing.box_border_width),
+                        position_profit_color: drawing.position_profit_color.clone(),
+                        position_loss_color: drawing.position_loss_color.clone(),
+                        level_label_v_align: (drawing.kind.has_levels()
+                            && drawing.level_label_v_align != DrawingTextVAlign::Top)
+                            .then(|| drawing.level_label_v_align.name().to_string()),
+                        level_trend_line: (drawing.kind.has_levels() && drawing.level_trend_line)
+                            .then_some(true),
+                        middle_point_visible: drawing.middle_point_visible.then_some(true),
+                        price_labels_visible: drawing.price_labels_visible.then_some(true),
+                        stats_position: (drawing.stats_position != DrawingTextHAlign::Right)
+                            .then(|| drawing.stats_position.name().to_string()),
+                        stats_always_visible: (drawing.stats_always_visible
+                            != (drawing.kind == DrawingKind::InfoLine))
+                            .then_some(drawing.stats_always_visible),
                     },
                 })
             })
@@ -1901,7 +1931,7 @@ impl ChartEngine {
             }
             if let Some(width) = style.width {
                 validate_positive_number(width, "drawing width")?;
-                drawing.width = width;
+                drawing.width = width.min(crate::drawings::MAX_DRAWING_WIDTH);
             }
             if let Some(value) = style.line_style {
                 drawing.style = parse_line_style(&value)
@@ -1984,6 +2014,44 @@ impl ChartEngine {
             if let Some(width) = style.box_border_width {
                 validate_positive_number(width, "box_border_width")?;
                 drawing.box_border_width = width;
+            }
+            if let Some(color) = style.position_profit_color {
+                validate_color(&color, "position_profit_color")?;
+                drawing.position_profit_color = (!color.is_empty()).then_some(color);
+            }
+            if let Some(color) = style.position_loss_color {
+                validate_color(&color, "position_loss_color")?;
+                drawing.position_loss_color = (!color.is_empty()).then_some(color);
+            }
+            if style.level_label_v_align.is_some() || style.level_trend_line.is_some() {
+                if !drawing.kind.has_levels() {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid level options",
+                        item.id
+                    )));
+                }
+                if let Some(align) = style.level_label_v_align {
+                    drawing.level_label_v_align =
+                        DrawingTextVAlign::from_name(&align).ok_or_else(|| {
+                            invalid(format!("unknown level label alignment {align:?}"))
+                        })?;
+                }
+                if let Some(value) = style.level_trend_line {
+                    drawing.level_trend_line = value;
+                }
+            }
+            if let Some(value) = style.middle_point_visible {
+                drawing.middle_point_visible = value;
+            }
+            if let Some(value) = style.price_labels_visible {
+                drawing.price_labels_visible = value;
+            }
+            if let Some(align) = style.stats_position {
+                drawing.stats_position = DrawingTextHAlign::from_name(&align)
+                    .ok_or_else(|| invalid(format!("unknown stats position {align:?}")))?;
+            }
+            if let Some(value) = style.stats_always_visible {
+                drawing.stats_always_visible = value;
             }
             max_drawing_id = max_drawing_id.max(item.id);
             if drawing.kind == DrawingKind::BarsPattern && drawing.bars_pattern.is_empty() {

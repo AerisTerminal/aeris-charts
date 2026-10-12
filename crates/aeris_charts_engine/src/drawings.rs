@@ -1069,6 +1069,19 @@ pub struct Drawing {
     pub level_show_percents: bool,
     /// `left`, `center`, or `right`.
     pub level_label_align: String,
+    /// Where a horizontal Fibonacci level label sits against its line: above (`Top`), centered
+    /// on it, or below.
+    pub level_label_v_align: DrawingTextVAlign,
+    /// Fibonacci retracement's dashed connector between its two anchors.
+    pub level_trend_line: bool,
+    /// A dot at a straight line's midpoint.
+    pub middle_point_visible: bool,
+    /// The anchor prices printed beside a straight line's endpoints.
+    pub price_labels_visible: bool,
+    /// Horizontal placement of a line's statistics card (from `labels`) around its midpoint.
+    pub stats_position: DrawingTextHAlign,
+    /// Show the statistics card at all times; otherwise only while the line is selected.
+    pub stats_always_visible: bool,
     /// Elliott wave label degree; used only by the five Elliott tools.
     pub wave_degree: String,
     /// Normalized pane position of screen anchored text, independent of time and price scales.
@@ -1091,6 +1104,10 @@ pub struct Drawing {
     pub position_account_size: f64,
     /// Percentage of the hypothetical balance risked at the stop (0..=100).
     pub position_risk_percent: f64,
+    /// Position reward zone and target label CSS color; `None` follows the market-up token.
+    pub position_profit_color: Option<String>,
+    /// Position risk zone and stop label CSS color; `None` follows the market-down token.
+    pub position_loss_color: Option<String>,
     /// Optional explicit source for regression trend; `None` follows the pane's primary series.
     pub regression_source_id: Option<u32>,
     /// Number of residual standard deviations on each side of the regression center.
@@ -1399,6 +1416,12 @@ impl Drawing {
                 "right"
             }
             .to_string(),
+            level_label_v_align: DrawingTextVAlign::Top,
+            level_trend_line: false,
+            middle_point_visible: false,
+            price_labels_visible: false,
+            stats_position: DrawingTextHAlign::Right,
+            stats_always_visible: kind == DrawingKind::InfoLine,
             screen_x: 0.5,
             screen_y: 0.5,
             icon_name: None,
@@ -1411,6 +1434,8 @@ impl Drawing {
             profile: None,
             position_account_size: 1000.0,
             position_risk_percent: 25.0,
+            position_profit_color: None,
+            position_loss_color: None,
             regression_source_id: None,
             regression_deviations: 2.0,
             color: DRAWING_DEFAULT_COLOR.to_string(),
@@ -1560,6 +1585,8 @@ impl Drawing {
                     levels: self.levels.clone(),
                     account_size: self.position_account_size,
                     risk_percent: self.position_risk_percent,
+                    profit_color: self.position_profit_color.clone(),
+                    loss_color: self.position_loss_color.clone(),
                 }
             }
             DrawingKind::RegressionTrend => crate::DrawingKindOptions::RegressionTrend {
@@ -1589,6 +1616,8 @@ impl Drawing {
                 show_values: self.level_show_values,
                 show_percents: self.level_show_percents,
                 label_align: self.level_label_align.clone(),
+                label_v_align: self.level_label_v_align.name().to_string(),
+                trend_line: self.level_trend_line,
             },
             _ => crate::DrawingKindOptions::Generic,
         }
@@ -1781,12 +1810,17 @@ impl DrawingCommand {
 pub(crate) struct DrawingHistory {
     undo: Vec<DrawingCommand>,
     redo: Vec<DrawingCommand>,
+    /// Snapshot taken when a settings session opened (`begin_drawing_options_edit`). While set,
+    /// updates to that drawing are live previews that coalesce into one entry on commit. It lives
+    /// with the stack so every history reset also ends a session whose baseline it invalidated.
+    options_edit: Option<Drawing>,
 }
 
 impl DrawingHistory {
     pub(crate) fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
+        self.options_edit = None;
     }
 
     fn rebase_logical_with<F>(&mut self, map: F)
@@ -1952,6 +1986,18 @@ pub(crate) struct DrawingPatch {
     level_show_percents: Option<bool>,
     #[serde(alias = "levelLabelAlign")]
     level_label_align: Option<String>,
+    #[serde(alias = "levelLabelVAlign")]
+    level_label_v_align: Option<String>,
+    #[serde(alias = "levelTrendLine")]
+    level_trend_line: Option<bool>,
+    #[serde(alias = "middlePointVisible")]
+    middle_point_visible: Option<bool>,
+    #[serde(alias = "priceLabelsVisible")]
+    price_labels_visible: Option<bool>,
+    #[serde(alias = "statsPosition")]
+    stats_position: Option<String>,
+    #[serde(alias = "statsAlwaysVisible")]
+    stats_always_visible: Option<bool>,
     #[serde(alias = "waveDegree")]
     wave_degree: Option<String>,
     #[serde(alias = "screenX")]
@@ -1993,8 +2039,9 @@ pub(crate) struct DrawingPatch {
     text: Option<String>,
     #[serde(alias = "textColor")]
     text_color: Option<String>,
-    #[serde(alias = "textSize")]
-    text_size: Option<f64>,
+    /// `null` resets to the follow default; absent keeps the current size.
+    #[serde(default, alias = "textSize", deserialize_with = "deserialize_present")]
+    text_size: Option<Option<f64>>,
     #[serde(alias = "textWeight")]
     text_weight: Option<u16>,
     #[serde(alias = "textItalic")]
@@ -2026,23 +2073,18 @@ pub(crate) struct DrawingPatch {
     position_account_size: Option<f64>,
     #[serde(alias = "positionRiskPercent")]
     position_risk_percent: Option<f64>,
+    #[serde(alias = "positionProfitColor")]
+    position_profit_color: Option<String>,
+    #[serde(alias = "positionLossColor")]
+    position_loss_color: Option<String>,
     #[serde(
         default,
         alias = "regressionSourceId",
-        deserialize_with = "deserialize_regression_source_patch"
+        deserialize_with = "deserialize_present"
     )]
     regression_source_id: Option<Option<u32>>,
     #[serde(alias = "regressionDeviations")]
     regression_deviations: Option<f64>,
-}
-
-fn deserialize_regression_source_patch<'de, D>(
-    deserializer: D,
-) -> Result<Option<Option<u32>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    <Option<u32> as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
 /// A patch's `style`: the TS string form (`solid`/`dotted`/`dashed`), or the reference numeric
@@ -2077,6 +2119,45 @@ fn update_css_slot(slot: &mut Option<String>, value: String) {
     } else if Color::parse_css(&value).is_some() {
         *slot = Some(value);
     }
+}
+
+/// Option keys that describe a drawing's identity, content, state or data binding rather than
+/// its style. Templates never carry or apply them.
+const NON_STYLE_OPTION_KEYS: &[&str] = &[
+    "name",
+    "group_id",
+    "revision",
+    "visible",
+    "locked",
+    "z_order",
+    "interval_visibility",
+    "text",
+    "screen_x",
+    "screen_y",
+    "icon_name",
+    "profile",
+    "regression_source_id",
+    "price_scale_id",
+];
+
+fn strip_non_style_options(options: &mut serde_json::Value) {
+    if let serde_json::Value::Object(map) = options {
+        for key in NON_STYLE_OPTION_KEYS {
+            map.remove(*key);
+        }
+    }
+}
+
+/// Largest accepted stroke width in CSS px (the highlighter's broad mark included).
+pub(crate) const MAX_DRAWING_WIDTH: f64 = 64.0;
+
+/// Distinguishes an explicit JSON `null` (reset to the follow default) from an absent key.
+fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
 impl Drawing {
@@ -2145,13 +2226,26 @@ impl Drawing {
             || patch.level_show_prices.is_some()
             || patch.level_show_values.is_some()
             || patch.level_show_percents.is_some()
-            || patch.level_label_align.is_some())
+            || patch.level_label_align.is_some()
+            || patch.level_label_v_align.is_some()
+            || patch.level_trend_line.is_some())
             && (!self.kind.has_levels()
                 || (patch.level_log_scale == Some(true) && !self.kind.supports_log_levels())
                 || patch
                     .level_label_align
                     .as_deref()
-                    .is_some_and(|align| !matches!(align, "left" | "center" | "right")))
+                    .is_some_and(|align| !matches!(align, "left" | "center" | "right"))
+                || patch
+                    .level_label_v_align
+                    .as_deref()
+                    .is_some_and(|align| DrawingTextVAlign::from_name(align).is_none()))
+        {
+            return false;
+        }
+        if patch
+            .stats_position
+            .as_deref()
+            .is_some_and(|align| DrawingTextHAlign::from_name(align).is_none())
         {
             return false;
         }
@@ -2267,6 +2361,32 @@ impl Drawing {
         if let Some(value) = patch.level_label_align {
             self.level_label_align = value;
         }
+        if let Some(align) = patch
+            .level_label_v_align
+            .as_deref()
+            .and_then(DrawingTextVAlign::from_name)
+        {
+            self.level_label_v_align = align;
+        }
+        if let Some(value) = patch.level_trend_line {
+            self.level_trend_line = value;
+        }
+        if let Some(value) = patch.middle_point_visible {
+            self.middle_point_visible = value;
+        }
+        if let Some(value) = patch.price_labels_visible {
+            self.price_labels_visible = value;
+        }
+        if let Some(align) = patch
+            .stats_position
+            .as_deref()
+            .and_then(DrawingTextHAlign::from_name)
+        {
+            self.stats_position = align;
+        }
+        if let Some(value) = patch.stats_always_visible {
+            self.stats_always_visible = value;
+        }
         if let Some(degree) = patch.wave_degree {
             self.wave_degree = degree;
         }
@@ -2307,7 +2427,7 @@ impl Drawing {
             && width.is_finite()
             && width > 0.0
         {
-            self.width = width;
+            self.width = width.min(MAX_DRAWING_WIDTH);
         }
         if let Some(style) = patch.style.as_ref().and_then(parse_drawing_style) {
             self.style = style;
@@ -2342,11 +2462,10 @@ impl Drawing {
         if let Some(css) = patch.text_color {
             update_css_slot(&mut self.text_color, css);
         }
-        if let Some(size) = patch.text_size
-            && size.is_finite()
-            && size > 0.0
-        {
-            self.text_size = Some(size);
+        match patch.text_size {
+            Some(None) => self.text_size = None,
+            Some(Some(size)) if size.is_finite() && size > 0.0 => self.text_size = Some(size),
+            _ => {}
         }
         // Explicit weight wins; the legacy `text_bold` shorthand maps onto it (true → 700,
         // false → normal).
@@ -2392,6 +2511,12 @@ impl Drawing {
         if let Some(value) = patch.position_risk_percent {
             self.position_risk_percent = value;
         }
+        if let Some(css) = patch.position_profit_color {
+            update_css_slot(&mut self.position_profit_color, css);
+        }
+        if let Some(css) = patch.position_loss_color {
+            update_css_slot(&mut self.position_loss_color, css);
+        }
         if let Some(source_id) = patch.regression_source_id {
             self.regression_source_id = source_id;
         }
@@ -2404,7 +2529,7 @@ impl Drawing {
         true
     }
 
-    fn options_json(&self) -> serde_json::Value {
+    pub(crate) fn options_json(&self) -> serde_json::Value {
         let mut options = serde_json::json!({
             "name": self.name,
             "group_id": self.group_id.as_deref().unwrap_or(""),
@@ -2448,6 +2573,14 @@ impl Drawing {
             "box_border_color": self.box_border_color.as_deref().unwrap_or(""),
             "box_border_width": self.box_border_width,
         });
+        options["position_profit_color"] =
+            serde_json::json!(self.position_profit_color.as_deref().unwrap_or(""));
+        options["position_loss_color"] =
+            serde_json::json!(self.position_loss_color.as_deref().unwrap_or(""));
+        options["middle_point_visible"] = serde_json::json!(self.middle_point_visible);
+        options["price_labels_visible"] = serde_json::json!(self.price_labels_visible);
+        options["stats_position"] = serde_json::json!(self.stats_position.name());
+        options["stats_always_visible"] = serde_json::json!(self.stats_always_visible);
         if self.kind == DrawingKind::RegressionTrend {
             options["regression_source_id"] = serde_json::json!(self.regression_source_id);
             options["regression_deviations"] = serde_json::json!(self.regression_deviations);
@@ -2459,6 +2592,8 @@ impl Drawing {
             options["level_show_values"] = serde_json::json!(self.level_show_values);
             options["level_show_percents"] = serde_json::json!(self.level_show_percents);
             options["level_label_align"] = serde_json::json!(self.level_label_align);
+            options["level_label_v_align"] = serde_json::json!(self.level_label_v_align.name());
+            options["level_trend_line"] = serde_json::json!(self.level_trend_line);
         }
         if matches!(
             self.kind,
@@ -2599,6 +2734,15 @@ impl ChartEngine {
     }
 
     fn record_drawing_command(&mut self, command: DrawingCommand) {
+        if let DrawingCommand::Update { before, .. } = &command
+            && self
+                .drawing_history
+                .options_edit
+                .as_ref()
+                .is_some_and(|session| session.id == before.id)
+        {
+            return;
+        }
         if self.drawing_history.undo.len() == DRAWING_HISTORY_LIMIT {
             self.drawing_history.undo.remove(0);
         }
@@ -2630,6 +2774,14 @@ impl ChartEngine {
 
     fn remove_drawing_snapshot(&mut self, id: DrawingId) -> Option<(Drawing, usize)> {
         let index = self.drawings.iter().position(|drawing| drawing.id == id)?;
+        if self
+            .drawing_history
+            .options_edit
+            .as_ref()
+            .is_some_and(|session| session.id == id)
+        {
+            self.commit_drawing_options_edit();
+        }
         let drawing = self.drawings.remove(index);
         self.forget_persisted_anchors(id);
         self.drawing_runtime.borrow_mut().remove(id, &self.drawings);
@@ -2719,6 +2871,7 @@ impl ChartEngine {
 
     /// Undo one committed drawing-semantic operation for this chart only.
     pub fn undo_drawing(&mut self) -> bool {
+        self.commit_drawing_options_edit();
         let Some(command) = self.drawing_history.undo.pop() else {
             return false;
         };
@@ -2734,6 +2887,7 @@ impl ChartEngine {
 
     /// Redo one previously undone drawing-semantic operation for this chart only.
     pub fn redo_drawing(&mut self) -> bool {
+        self.commit_drawing_options_edit();
         let Some(command) = self.drawing_history.redo.pop() else {
             return false;
         };
@@ -2749,6 +2903,11 @@ impl ChartEngine {
 
     pub fn can_undo_drawing(&self) -> bool {
         !self.drawing_history.undo.is_empty()
+            || self
+                .drawing_history
+                .options_edit
+                .as_ref()
+                .is_some_and(|before| self.drawing(before.id) != Some(before))
     }
 
     pub fn can_redo_drawing(&self) -> bool {
@@ -4204,6 +4363,62 @@ impl ChartEngine {
         true
     }
 
+    /// Open a settings session on one drawing. Until it is committed or cancelled, every
+    /// options/points change to that drawing applies live (frame, sync and revision as usual)
+    /// but enters history only once, as a single undo step on commit. Opening a session on
+    /// another drawing commits the previous one. Returns false for an unknown id.
+    pub fn begin_drawing_options_edit(&mut self, id: DrawingId) -> bool {
+        if self
+            .drawing_history
+            .options_edit
+            .as_ref()
+            .is_some_and(|before| before.id == id)
+        {
+            return true;
+        }
+        let Some(before) = self.drawing(id).cloned() else {
+            return false;
+        };
+        self.commit_drawing_options_edit();
+        self.drawing_history.options_edit = Some(before);
+        true
+    }
+
+    /// The drawing whose settings session is open, if any.
+    pub fn drawing_options_edit(&self) -> Option<DrawingId> {
+        self.drawing_history
+            .options_edit
+            .as_ref()
+            .map(|before| before.id)
+    }
+
+    /// Close the open settings session, recording its net change as one undo step. Returns
+    /// whether a session was open.
+    pub fn commit_drawing_options_edit(&mut self) -> bool {
+        let Some(before) = self.drawing_history.options_edit.take() else {
+            return false;
+        };
+        self.record_drawing_edit(before);
+        true
+    }
+
+    /// Close the open settings session and restore the drawing exactly as it was when the session
+    /// opened, without a history entry. Returns whether a session was open.
+    pub fn cancel_drawing_options_edit(&mut self) -> bool {
+        let Some(before) = self.drawing_history.options_edit.take() else {
+            return false;
+        };
+        if self
+            .drawing(before.id)
+            .is_some_and(|current| *current != before)
+        {
+            self.replace_drawing_snapshot(&before);
+            self.invalidate_frame_drawings();
+            self.bump_drawing_sync_revision();
+        }
+        true
+    }
+
     pub(crate) fn set_drawing_profile_options(
         &mut self,
         id: DrawingId,
@@ -4230,9 +4445,51 @@ impl ChartEngine {
     /// for malformed JSON, a wrong count for the kind, non-finite values, or an unknown id.
     pub fn drawing_set_points(&mut self, id: DrawingId, json: &str) -> bool {
         self.invalidate_frame_drawings();
-        let Ok(mut points) = serde_json::from_str::<Vec<DrawingPoint>>(json) else {
+        let Ok(points) = serde_json::from_str::<Vec<DrawingPoint>>(json) else {
             return false;
         };
+        self.replace_drawing_points(id, points)
+    }
+
+    /// One anchor as `(price, UTC seconds)` for a coordinates editor. The time is `None` when
+    /// the chart has no bars to resolve the anchor's logical index against.
+    pub fn drawing_anchor(&self, id: DrawingId, index: usize) -> Option<(f64, Option<f64>)> {
+        let point = self.drawing(id)?.points.get(index)?;
+        Some((point.price, self.drawing_time_at_logical(point.logical)))
+    }
+
+    /// Move one anchor to `price` and, when given, to the UTC `time` (projected past the data
+    /// edge like a dragged anchor). Uses the same validation, position normalization, history
+    /// and settings-session handling as [`Self::drawing_set_points`].
+    pub fn set_drawing_anchor(
+        &mut self,
+        id: DrawingId,
+        index: usize,
+        price: f64,
+        time: Option<f64>,
+    ) -> bool {
+        self.invalidate_frame_drawings();
+        let logical = match time {
+            Some(time) => match self.drawing_logical_at_time(time) {
+                Some(logical) => Some(logical),
+                None => return false,
+            },
+            None => None,
+        };
+        let Some(mut points) = self.drawing(id).map(|drawing| drawing.points.clone()) else {
+            return false;
+        };
+        let Some(point) = points.get_mut(index) else {
+            return false;
+        };
+        point.price = price;
+        if let Some(logical) = logical {
+            point.logical = logical;
+        }
+        self.replace_drawing_points(id, points)
+    }
+
+    fn replace_drawing_points(&mut self, id: DrawingId, mut points: Vec<DrawingPoint>) -> bool {
         let Some(index) = self.drawings.iter().position(|drawing| drawing.id == id) else {
             return false;
         };
@@ -4623,8 +4880,11 @@ impl ChartEngine {
         removed
     }
 
+    /// Apply a named style template of the same kind. Only style keys apply: identity, content,
+    /// state and data bindings in the template (for example text, lock or visibility) are
+    /// ignored, so a template restyles a drawing without rewriting what it says or where it is.
     pub fn apply_drawing_template_json(&mut self, id: DrawingId, json: &str) -> bool {
-        let Ok(template) = serde_json::from_str::<crate::DrawingTemplate>(json) else {
+        let Ok(mut template) = serde_json::from_str::<crate::DrawingTemplate>(json) else {
             return false;
         };
         if !template.validate()
@@ -4634,19 +4894,23 @@ impl ChartEngine {
         {
             return false;
         }
+        strip_non_style_options(&mut template.options);
         let options = template.options.to_string();
         self.drawing_apply_options(id, &options)
     }
 
+    /// The drawing's style as a named template (see [`Self::apply_drawing_template_json`]).
     pub fn drawing_template_json(&self, id: DrawingId, name: &str) -> Option<String> {
         if name.is_empty() || name.len() > crate::MAX_DRAWING_NAME_BYTES {
             return None;
         }
         let drawing = self.drawing(id)?;
+        let mut options = drawing.options_json();
+        strip_non_style_options(&mut options);
         serde_json::to_string(&crate::DrawingTemplate {
             name: name.to_string(),
             kind: drawing.kind,
-            options: drawing.options_json(),
+            options,
         })
         .ok()
     }

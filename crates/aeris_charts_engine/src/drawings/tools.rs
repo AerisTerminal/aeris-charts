@@ -958,6 +958,50 @@ impl DrawingKind {
         )
     }
 
+    /// Editable `(price, time)` axes of each defining anchor, for a Coordinates editor. `None`
+    /// for variable-length freehand/multi-click paths and the screen-anchored text, whose
+    /// position is not a price/time pair.
+    pub(crate) fn anchor_axes(self) -> Option<Vec<(bool, bool)>> {
+        let spec = self.spec();
+        if spec.placement.is_sequence()
+            || spec.placement.is_freehand()
+            || self == Self::AnchoredText
+        {
+            return None;
+        }
+        if matches!(self, Self::LongPosition | Self::ShortPosition) {
+            // Entry, target (also the zone's right edge), stop (shares the entry's time).
+            return Some(vec![(true, true), (true, true), (true, false)]);
+        }
+        let axes = match spec.movement_axis {
+            DrawingMovementAxis::Both => (true, true),
+            DrawingMovementAxis::HorizontalOnly => (false, true),
+            DrawingMovementAxis::VerticalOnly => (true, false),
+        };
+        Some(vec![axes; self.anchor_count()])
+    }
+
+    /// Straight two-anchor lines: line caps, middle point and endpoint price labels.
+    pub(crate) const fn is_straight_line(self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::InfoLine
+                | Self::TrendAngle
+                | Self::ArrowLine
+        )
+    }
+
+    /// Lines that paint the statistics card selected by `labels`.
+    pub(crate) const fn has_stats_card(self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine | Self::Ray | Self::ExtendedLine | Self::InfoLine | Self::ArrowLine
+        )
+    }
+
     pub(crate) fn valid_wave_degree(name: &str) -> bool {
         matches!(
             name,

@@ -1420,6 +1420,9 @@ impl Probe {
                 ChartInputEvent::Click { x, y } => format!("click at {x:.0}, {y:.0}"),
                 ChartInputEvent::DoubleClick { x, y } => format!("double click at {x:.0}, {y:.0}"),
                 ChartInputEvent::TextEditorOpened(id) => format!("editing drawing #{id}"),
+                ChartInputEvent::DrawingSettingsRequested(id) => {
+                    format!("settings requested for drawing #{id}")
+                }
                 ChartInputEvent::DrawingCreated(id) => format!("created drawing #{id}"),
                 ChartInputEvent::ContextMenu(menu) => match menu.context {
                     Some(context) => format!(

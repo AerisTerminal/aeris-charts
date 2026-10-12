@@ -349,6 +349,9 @@ pub enum ChartInputEvent {
     },
     /// Open the platform text-entry surface for an engine-owned editing session.
     TextEditorOpened(DrawingId),
+    /// A double-click on a selected drawing that opened no text editor: the host shows that
+    /// drawing's settings surface.
+    DrawingSettingsRequested(DrawingId),
     /// The host must notify crosshair subscribers that a keyboard cancel cleared hover.
     CrosshairLeft,
     /// A drawing tool committed a drawing. One-shot tools are already disarmed.
@@ -2221,6 +2224,14 @@ impl ChartEngine {
                 } else {
                     self.clear_brushable_ranges();
                 }
+                // Any other double-click on the selected drawing's body asks for its settings.
+                if let Some(id) = selected.filter(|&id| {
+                    selected == text_press_selected
+                        && self.drawing_text_edit().is_none()
+                        && self.hit_test_drawing(x, y).is_some_and(|hit| hit.id == id)
+                }) {
+                    self.push_input_event(ChartInputEvent::DrawingSettingsRequested(id));
+                }
                 self.push_input_event(ChartInputEvent::DoubleClick { x, y });
             }
             _ => {}
@@ -3038,6 +3049,40 @@ mod tests {
         assert_eq!(
             chart.take_input_events(),
             vec![ChartInputEvent::DoubleClick { x, y }]
+        );
+    }
+
+    #[test]
+    fn double_click_on_a_drawing_requests_its_settings_but_empty_space_does_not() {
+        let mut chart = chart();
+        chart.set_drawing_tool(Some(DrawingKind::HorizontalLine), None, None);
+        click(&mut chart, 200.0, 150.0);
+        let id = chart.drawings()[0].id;
+        chart.take_input_events();
+        let sample = |x, y, timestamp_ms| PointerInput {
+            timestamp_ms,
+            ..at(x, y)
+        };
+        chart.input_pointer_down(sample(260.0, 150.0, 1_000.0), 1);
+        chart.input_pointer_up(sample(260.0, 150.0, 1_001.0));
+        chart.input_pointer_down(sample(260.0, 150.0, 1_100.0), 2);
+        chart.input_pointer_up(sample(260.0, 150.0, 1_101.0));
+        let events = chart.take_input_events();
+        assert!(
+            events.contains(&ChartInputEvent::DrawingSettingsRequested(id)),
+            "{events:?}"
+        );
+
+        let (x, y) = empty_pane_point(&chart);
+        chart.input_pointer_down(sample(x, y, 5_000.0), 1);
+        chart.input_pointer_up(sample(x, y, 5_001.0));
+        chart.input_pointer_down(sample(x, y, 5_100.0), 2);
+        chart.input_pointer_up(sample(x, y, 5_101.0));
+        assert!(
+            chart
+                .take_input_events()
+                .iter()
+                .all(|event| !matches!(event, ChartInputEvent::DrawingSettingsRequested(_)))
         );
     }
 

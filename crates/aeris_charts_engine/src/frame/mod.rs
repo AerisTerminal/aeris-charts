@@ -2120,6 +2120,7 @@ impl ChartEngine {
                     hpr,
                     vpr,
                     &mut cache.overlay.prims,
+                    &mut cache.overlay.points,
                 );
                 self.build_crosshair_frame(
                     pi,

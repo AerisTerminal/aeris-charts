@@ -5433,6 +5433,9 @@ impl AerisChart {
                 ChartInputEvent::TextEditorOpened(id) => {
                     serde_json::json!({"kind":"text_editor_opened","id":id})
                 }
+                ChartInputEvent::DrawingSettingsRequested(id) => {
+                    serde_json::json!({"kind":"drawing_settings_requested","id":id})
+                }
                 ChartInputEvent::DrawingCreated(id) => {
                     serde_json::json!({"kind":"drawing_created","id":id})
                 }

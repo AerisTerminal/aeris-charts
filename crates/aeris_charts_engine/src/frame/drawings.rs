@@ -623,6 +623,7 @@ impl ChartEngine {
         hpr: f64,
         vpr: f64,
         out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
     ) {
         let Some(id) = self.selected_drawing else {
             return;
@@ -630,6 +631,12 @@ impl ChartEngine {
         let Some(drawing) = self.drawing(id) else {
             return;
         };
+        if drawing.kind.has_stats_card()
+            && !drawing.stats_always_visible
+            && let Some(px) = self.overlay_drawing_px(pane_index, id, hpr, vpr)
+        {
+            self.build_info_line_prims(drawing, &px, pane_w_px, vpr, out, points);
+        }
         // Text and anchored text show a focus frame; box annotations show their handles.
         if matches!(drawing.kind, DrawingKind::Text | DrawingKind::AnchoredText) {
             let Some(px) = self.overlay_drawing_px(pane_index, id, hpr, vpr) else {
@@ -879,14 +886,15 @@ impl ChartEngine {
                     out,
                     points,
                 );
-                match drawing.kind {
-                    DrawingKind::TrendAngle => {
-                        self.build_trend_angle_prims(drawing, px, color, vpr, out, points);
-                    }
-                    DrawingKind::InfoLine => {
-                        self.build_info_line_prims(drawing, px, pane_w_px, vpr, out, points);
-                    }
-                    _ => {}
+                if drawing.kind == DrawingKind::TrendAngle {
+                    self.build_trend_angle_prims(drawing, px, color, vpr, out, points);
+                }
+                if drawing.kind.is_straight_line() {
+                    self.build_line_point_marks(drawing, px, color, vpr, out);
+                }
+                // A selection-only card is overlay chrome (build_selected_drawing_handles_frame).
+                if drawing.kind.has_stats_card() && drawing.stats_always_visible {
+                    self.build_info_line_prims(drawing, px, pane_w_px, vpr, out, points);
                 }
             }
             DrawingBodyGeometry::Horizontal { y, x0, x1 } => {
@@ -1006,6 +1014,21 @@ impl ChartEngine {
                 }
             }
             DrawingBodyGeometry::Fibonacci(fib) => {
+                if drawing.kind == DrawingKind::FibonacciRetracement && drawing.level_trend_line {
+                    let first_point = points.len() as u32;
+                    points.extend([
+                        [fib.start.0 as f32, fib.start.1 as f32],
+                        [fib.end.0 as f32, fib.end.1 as f32],
+                    ]);
+                    out.push(Prim::Polyline {
+                        first_point,
+                        point_count: 2,
+                        width: (drawing.width * vpr) as f32,
+                        style: LineStyle::Dashed,
+                        line_type: LineType::Simple,
+                        color,
+                    });
+                }
                 let mut previous: Option<((f64, f64), (f64, f64))> = None;
                 for level in &drawing.levels {
                     if !level.visible {
@@ -1102,7 +1125,7 @@ impl ChartEngine {
                             // The label sits on the line's own height at its x and clears the
                             // line everywhere under its run, so a sloped level never cuts it.
                             let layout = &self.options.get().layout;
-                            let size = layout.font_size * vpr;
+                            let size = drawing.resolved_text_size(layout.font_size) * vpr;
                             let width = self.measure_text_run(
                                 &text,
                                 size,
@@ -1124,13 +1147,17 @@ impl ChartEngine {
                             };
                             let horizontal = (y1 - y0).abs() <= vpr;
                             let (label_x, label_y, align) = if horizontal {
-                                (
-                                    label_x,
-                                    line_y(run_left).min(line_y(run_right))
-                                        - POINT_LABEL_GAP_CSS * vpr
-                                        - size * 0.6,
-                                    Self::drawing_level_align(drawing),
-                                )
+                                let clearance = POINT_LABEL_GAP_CSS * vpr + size * 0.6;
+                                let label_y = match drawing.level_label_v_align {
+                                    crate::drawings::DrawingTextVAlign::Top => {
+                                        line_y(run_left).min(line_y(run_right)) - clearance
+                                    }
+                                    crate::drawings::DrawingTextVAlign::Middle => line_y(label_x),
+                                    crate::drawings::DrawingTextVAlign::Bottom => {
+                                        line_y(run_left).max(line_y(run_right)) + clearance
+                                    }
+                                };
+                                (label_x, label_y, Self::drawing_level_align(drawing))
                             } else {
                                 // A sloped level (a channel's parallels) labels outside its own
                                 // end, beside it: every parallel stops at the same x extent, so a
@@ -1247,7 +1274,8 @@ impl ChartEngine {
                             y: (time.pane_top + 14.0 * vpr) as f32,
                             text,
                             color: level_color,
-                            size: (self.options.get().layout.font_size * vpr) as f32,
+                            size: (drawing.resolved_text_size(self.options.get().layout.font_size)
+                                * vpr) as f32,
                             family: self.options.get().layout.font_family.clone(),
                             align: Self::drawing_level_align(drawing),
                             weight: drawing.text_weight.unwrap_or(400),
@@ -1348,7 +1376,7 @@ impl ChartEngine {
                         if let Some(text) = self.drawing_level_label(drawing, level.value, price) {
                             // Outside the arc where its radius runs vertically, never on a stroke.
                             let layout = &self.options.get().layout;
-                            let size = layout.font_size * vpr;
+                            let size = drawing.resolved_text_size(layout.font_size) * vpr;
                             let width = self.measure_text_run(
                                 &text,
                                 size,
@@ -1455,7 +1483,7 @@ impl ChartEngine {
                             // Clear of the tine (both ways: the median runs back to the pivot)
                             // and of the base line it starts on.
                             let layout = &self.options.get().layout;
-                            let size = layout.font_size * vpr;
+                            let size = drawing.resolved_text_size(layout.font_size) * vpr;
                             let width = self.measure_text_run(
                                 &text,
                                 size,
@@ -1807,7 +1835,7 @@ impl ChartEngine {
                         // fill: the price level left of the left edge (with its price), the time
                         // level under the bottom edge.
                         let layout = &self.options.get().layout;
-                        let size = layout.font_size * vpr;
+                        let size = drawing.resolved_text_size(layout.font_size) * vpr;
                         let gap = POINT_LABEL_GAP_CSS * vpr;
                         let edges = grid.bounds();
                         let mut push_label = |text: String, x: f64, y: f64, align: TextAlign| {
@@ -2150,10 +2178,7 @@ impl ChartEngine {
                 }
             }
             DrawingBodyGeometry::Position(position) => {
-                let reward = Color::parse_css(aeris_charts_core::style::MARKET_UP_CSS)
-                    .unwrap_or(Color::rgb(8, 153, 129));
-                let risk = Color::parse_css(aeris_charts_core::style::MARKET_DOWN_CSS)
-                    .unwrap_or(Color::rgb(247, 82, 95));
+                let (reward, risk) = position_colors(drawing);
                 push_position_zone(out, position.reward_zone(), reward);
                 push_position_zone(out, position.risk_zone(), risk);
 
@@ -3388,9 +3413,57 @@ impl ChartEngine {
         });
     }
 
-    /// The Info Line's statistics card: a rounded panel beside the segment's midpoint, on the
-    /// side the line leaves free (above-right of a falling line, below-right of a rising one),
-    /// kept inside the pane.
+    /// A straight line's optional midpoint dot and anchor price labels (above an anchor that
+    /// sits higher than the other end, below the lower one, so neither covers the line).
+    fn build_line_point_marks(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        color: Color,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        let (Some(&a), Some(&b)) = (px.first(), px.get(1)) else {
+            return;
+        };
+        if drawing.middle_point_visible {
+            let mid = point_on_segment(a, b, 0.5);
+            out.push(Prim::Circle {
+                cx: mid.0 as f32,
+                cy: mid.1 as f32,
+                radius: ((drawing.width / 2.0 + 2.0) * vpr) as f32,
+                fill: color,
+                stroke_width: 0.0,
+                stroke: color,
+            });
+        }
+        let (Some(&start), Some(&end)) = (drawing.points.first(), drawing.points.get(1)) else {
+            return;
+        };
+        if !drawing.price_labels_visible {
+            return;
+        }
+        let layout = &self.options.get().layout;
+        let size = drawing.resolved_text_size(layout.font_size) * vpr;
+        let offset = POINT_LABEL_GAP_CSS * vpr + size * 0.6;
+        for ((x, y), other, point) in [(a, b.1, start), (b, a.1, end)] {
+            out.push(Prim::Text {
+                x: x as f32,
+                y: (if y <= other { y - offset } else { y + offset }) as f32,
+                text: self.format_drawing_price(drawing, point.price),
+                color,
+                size: size as f32,
+                family: layout.font_family.clone(),
+                align: TextAlign::Center,
+                weight: drawing.text_weight.unwrap_or(400),
+                italic: drawing.text_italic,
+            });
+        }
+    }
+
+    /// A line's statistics card: a rounded panel beside the segment's midpoint (right of it,
+    /// left of it, or centered per `stats_position`), on the vertical side the line leaves free
+    /// (above a falling line, below a rising one), kept inside the pane.
     fn build_info_line_prims(
         &self,
         drawing: &Drawing,
@@ -3435,10 +3508,14 @@ impl ChartEngine {
         let gap_y = 16.0 * vpr;
         let pane_top = pane.top * vpr;
         let pane_bottom = (pane.top + pane.height) * vpr;
-        let left = (mid.0 + gap_x)
-            .min(f64::from(pane_w_px) - width)
-            .max(0.0)
-            .round();
+        let left = match drawing.stats_position {
+            DrawingTextHAlign::Left => mid.0 - gap_x - width,
+            DrawingTextHAlign::Center => mid.0 - width / 2.0,
+            DrawingTextHAlign::Right => mid.0 + gap_x,
+        }
+        .min(f64::from(pane_w_px) - width)
+        .max(0.0)
+        .round();
         let top = if (b.0 - a.0) * (b.1 - a.1) >= 0.0 {
             mid.1 - gap_y - height
         } else {
@@ -3606,7 +3683,7 @@ impl ChartEngine {
         } else {
             measure.bottom() + gap + half_height
         };
-        self.push_stat_label_block(out, (center_x, center_y), &lines, color, vpr);
+        self.push_stat_label_block(out, (center_x, center_y), &lines, (color, None), vpr);
     }
 
     /// A price-valued drawing statistic in the bound scale's price format.
@@ -3664,10 +3741,10 @@ impl ChartEngine {
         drawing: &Drawing,
         position: PositionGeometry,
         vpr: f64,
-        reward: Color,
-        risk: Color,
         out: &mut Vec<Prim>,
     ) {
+        let (reward, risk) = position_colors(drawing);
+        let ink = drawing.text_color.as_deref().and_then(Color::parse_css);
         let (Some(entry), Some(target), Some(stop)) = (
             drawing.points.first(),
             drawing.points.get(1),
@@ -3775,14 +3852,32 @@ impl ChartEngine {
         } else {
             position.stop_y + label_offset
         };
-        self.push_stat_label_block(out, (center_x, target_label_y), &[target_text], reward, vpr);
-        self.push_stat_label_block(out, (center_x, stop_label_y), &[stop_text], risk, vpr);
+        self.push_stat_label_block(
+            out,
+            (center_x, target_label_y),
+            &[target_text],
+            (reward, ink),
+            vpr,
+        );
+        self.push_stat_label_block(
+            out,
+            (center_x, stop_label_y),
+            &[stop_text],
+            (risk, ink),
+            vpr,
+        );
         let pnl_color = if pnl.is_some_and(|value| value < 0.0) {
             risk
         } else {
             reward
         };
-        self.push_stat_label_block(out, (center_x, position.entry_y), &middle, pnl_color, vpr);
+        self.push_stat_label_block(
+            out,
+            (center_x, position.entry_y),
+            &middle,
+            (pnl_color, ink),
+            vpr,
+        );
     }
 
     /// Dynamic position progress is rebuilt with pane chrome rather than retained drawing
@@ -3860,15 +3955,10 @@ impl ChartEngine {
             let start_x = (start_x * hpr).clamp(position.left, position.right);
             let run_x = (run_x * hpr).clamp(position.left, position.right);
             let run_y = run_y * vpr;
+            let (reward, risk) = position_colors(drawing);
             let semantic = match run.side {
-                PositionRunSide::Reward => {
-                    Color::parse_css(aeris_charts_core::style::MARKET_UP_CSS)
-                        .unwrap_or(Color::rgb(8, 153, 129))
-                }
-                PositionRunSide::Risk => {
-                    Color::parse_css(aeris_charts_core::style::MARKET_DOWN_CSS)
-                        .unwrap_or(Color::rgb(247, 82, 95))
-                }
+                PositionRunSide::Reward => reward,
+                PositionRunSide::Risk => risk,
             };
 
             // Stronger opacity represents only the price/time space actually travelled since the
@@ -4149,10 +4239,6 @@ impl ChartEngine {
         hpr: f64,
         vpr: f64,
     ) {
-        let reward = Color::parse_css(aeris_charts_core::style::MARKET_UP_CSS)
-            .unwrap_or(Color::rgb(8, 153, 129));
-        let risk = Color::parse_css(aeris_charts_core::style::MARKET_DOWN_CSS)
-            .unwrap_or(Color::rgb(247, 82, 95));
         // Statistic labels belong to the active position only; idle positions show their zones.
         for drawing in self.drawings.iter().filter(|drawing| {
             self.selected_drawing == Some(drawing.id)
@@ -4191,7 +4277,7 @@ impl ChartEngine {
             let DrawingBodyGeometry::Position(position) = geometry.body else {
                 continue;
             };
-            self.build_position_labels(drawing, position, vpr, reward, risk, out);
+            self.build_position_labels(drawing, position, vpr, out);
         }
     }
 
@@ -4200,7 +4286,7 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
         center: (f64, f64),
         lines: &[String],
-        background: Color,
+        (background, ink): (Color, Option<Color>),
         vpr: f64,
     ) {
         let (x, y) = center;
@@ -4235,7 +4321,7 @@ impl ChartEngine {
             border_width: 0.0,
             border_color: background.solid(),
         });
-        let text_color = background.contrast_text();
+        let text_color = ink.unwrap_or_else(|| background.contrast_text());
         let first_y = y - ((lines.len() as f64 - 1.0) * line_height) / 2.0;
         for (index, text) in lines.iter().enumerate() {
             out.push(Prim::Text {
@@ -4546,6 +4632,28 @@ pub(crate) fn stat_label_size(layout_font_size: f64) -> f64 {
 /// Statistic label container height in CSS px: `lines` line boxes plus 3 px padding per side.
 pub(crate) fn stat_label_height(layout_font_size: f64, lines: usize) -> f64 {
     lines as f64 * stat_label_size(layout_font_size) * 1.25 + 6.0
+}
+
+/// A position's (profit, stop) colors: the drawing's own, else the market up/down tokens.
+fn position_colors(drawing: &Drawing) -> (Color, Color) {
+    let resolve = |custom: Option<&str>, token: &str, fallback: Color| {
+        custom
+            .and_then(Color::parse_css)
+            .or_else(|| Color::parse_css(token))
+            .unwrap_or(fallback)
+    };
+    (
+        resolve(
+            drawing.position_profit_color.as_deref(),
+            aeris_charts_core::style::MARKET_UP_CSS,
+            Color::rgb(8, 153, 129),
+        ),
+        resolve(
+            drawing.position_loss_color.as_deref(),
+            aeris_charts_core::style::MARKET_DOWN_CSS,
+            Color::rgb(247, 82, 95),
+        ),
+    )
 }
 
 fn push_position_zone(out: &mut Vec<Prim>, zone: PositionZone, color: Color) {
