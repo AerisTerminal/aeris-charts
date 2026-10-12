@@ -86,7 +86,9 @@ multiple axes stack in insertion order, vertical widths use the existing grow-fa
 policy, and the resulting rules, titles, and collision-filtered ticks are emitted through the common
 `AxisFrame`. Each side may reserve at most 45% of the space remaining after financial axes; complete
 strips that do not fit are omitted, preserving a nonzero plot and keeping unscissored axis chrome inside
-the chart. Category selection and numeric tick generation are capped at 512 candidates. Explicit
+the chart. Financial strip measurement excludes general-axis labels, which negotiate their own
+strips, so an eager empty-chart layout cannot pin a populated general chart to an oversized
+financial gutter. Category selection and numeric tick generation are capped at 512 candidates. Explicit
 Cartesian numeric, temporal, and category ticks share that cap, reject duplicate or scale-incompatible values,
 and retain optional preformatted labels as portable engine state; out-of-view ticks are clipped by
 the same transform that places generated ticks and grid rules. Automatic band

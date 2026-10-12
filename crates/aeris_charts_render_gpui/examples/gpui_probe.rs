@@ -1437,6 +1437,7 @@ impl Probe {
                 }
                 ChartInputEvent::CrosshairLeft => "crosshair left".into(),
                 ChartInputEvent::DeltaTooltipChanged => "delta tooltip changed".into(),
+                ChartInputEvent::GeneralBrushChanged => "general brush changed".into(),
             };
         }
     }

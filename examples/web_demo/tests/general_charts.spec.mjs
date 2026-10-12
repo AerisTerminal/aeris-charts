@@ -3313,6 +3313,76 @@ test("xy_area percent stacks through browser hits and V2 persistence", async ({ 
   expect(result.screenshot).toBeGreaterThan(1000);
 });
 
+test("horizontal bars resolve the same plot, ink and exact hits regardless of resize order or autoSize", async ({ page }, testInfo) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const results = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const cases = [];
+    window.__hbar_cleanup = [];
+    const raf = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    for (const [index, order] of ["after", "before", "auto"].entries()) {
+      const host = document.createElement("div");
+      host.style.cssText = `position:fixed;left:${10 + index * 425}px;top:0;width:356px;height:330px;background:white;z-index:10000`;
+      document.body.appendChild(host);
+      const chart = await create_chart(host, {
+        backend: "canvas2d", autoSize: order === "auto",
+        initialPane: { horizontal_domain: { type: "continuous", scale: "linear" } },
+      });
+      window.__hbar_cleanup.push({ chart, host });
+      if (order === "before") chart.resize(356, 330, 1);
+      chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "linear", title: "horizontal_bar" });
+      chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "band" });
+      const series = chart.add_series("horizontal_bar", {
+        pane: 0, x_axis_id: "x", y_axis_id: "y", color: "#e41a1c",
+      });
+      series.set_data([
+        { id: "a", x: "Jan", y: 6 },
+        { id: "b", x: "Feb", y: -3 },
+        { id: "c", x: "Mar", y: 4 },
+      ]);
+      if (order === "after") chart.resize(356, 330, 1);
+      await raf();
+      const plot = chart.panes()[0].get_geometry();
+      const canvas = chart.take_screenshot();
+      const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+      const dpr = canvas.width / 356;
+      const bounds = [Infinity, -Infinity, Infinity, -Infinity];
+      let point = null;
+      for (let y = Math.ceil(plot.top + 5); y < Math.floor(plot.top + plot.height - 5); y++) {
+        for (let x = Math.ceil(plot.left + 5); x < Math.floor(plot.left + plot.width - 5); x++) {
+          const p = (Math.floor(y * dpr) * canvas.width + Math.floor(x * dpr)) * 4;
+          if (pixels[p] > pixels[p + 1] + 70 && pixels[p] > pixels[p + 2] + 70) {
+            bounds[0] = Math.min(bounds[0], x);
+            bounds[1] = Math.max(bounds[1], x);
+            bounds[2] = Math.min(bounds[2], y);
+            bounds[3] = Math.max(bounds[3], y);
+            point ??= [x, y];
+          }
+        }
+      }
+      cases.push({
+        order,
+        plot: [plot.left, plot.top, plot.width, plot.height],
+        ink_bounds: bounds,
+        hit: point && chart.general_hit_test(0, point[0] - plot.left + 10, point[1] + 2),
+      });
+    }
+    return cases;
+  });
+  const image = await page.screenshot({ clip: { x: 0, y: 0, width: 1280, height: 330 } });
+  await testInfo.attach("horizontal-bar-layout-orders.png", { body: image, contentType: "image/png" });
+  expect(results[0].ink_bounds[0]).toBeLessThan(Infinity);
+  for (const result of results) {
+    expect(result.plot, result.order).toEqual(results[0].plot);
+    result.ink_bounds.forEach((edge, index) => {
+      expect(Math.abs(edge - results[0].ink_bounds[index]), `${result.order} ink edge ${index}`).toBeLessThanOrEqual(2);
+    });
+    expect(result.hit, result.order).toMatchObject({ row_id: expect.any(String) });
+    expect(result.hit.row_id, result.order).toBe(results[0].hit.row_id);
+  }
+  await page.evaluate(() => { for (const { chart, host } of window.__hbar_cleanup) { chart.remove(); host.remove(); } });
+});
+
 test("bubble size data drives marks, hits, updates, accessibility, and V2 restore", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
@@ -4443,7 +4513,6 @@ test(`XY lines and areas clip the explicit Y view in pixels and exact hits (${ba
         { id: "right", x: 20, y: 30 },
       ]);
       y_axis.zoom(2, 10); // Explicit Y view [5, 15]; both ends cross plot edges and axis strips.
-      chart.resize(520, 320, 1);
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const g = pane.get_geometry();
       const screenshot = chart.take_screenshot();

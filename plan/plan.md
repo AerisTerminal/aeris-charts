@@ -416,7 +416,7 @@ fixtures demonstrate bounded work.
 
 ### R4 — Chart components and interaction
 
-**Batch:** G4. **Depends on:** R1–R3. **Status:** complete.
+**Batch:** G4. **Depends on:** R1–R3. **Status:** complete with independently gated correction after `1a2318b`.
 
 - [x] Usable default legends and tooltips.
 - [x] Titles and labels.
@@ -429,10 +429,29 @@ fixtures demonstrate bounded work.
 - [x] Frame image export, extending the shared contract delivered first as PD6
       (`capture_export_frame` and the native export path in architecture.md).
 - [x] Localization, overflow and focus behavior.
-- [x] G4 full gate green; batch committed and pushed.
+- [x] Original G4 gate green; `1a2318b` committed and pushed.
+- [x] Construction-order correction: same horizontal-bar plot, ink and exact hits at 356×330
+      for resize-before-populate, populate-before-resize and autoSize, with engine and rebuilt
+      browser regressions. The G3 Y-view clip pixel/hit test must run without a post-zoom resize.
+- [x] G4 corrective snapshot's complete applicable gate green; reviewed G4-only follow-up
+      committed and pushed without provisional G5 work.
 
 R4 extends the PD5 and PD6 contracts to general domains and chrome; it does not build a second
 synchronization or export path.
+
+The 2026-10-12 corrective gate used a clean `1a2318b` snapshot plus only G4-owned changes,
+not the shared worktree's provisional G5 files. A new engine regression failed first at
+356×330 (264 versus 284 px with fixture text metrics); the rebuilt public Canvas2D regression
+failed first at 264 versus 288 px. After financial/general axis-label measurement was separated,
+the engine test and the public resize-before/after/autoSize pixel-and-hit check passed.
+The G3 Y-view clip test now probes visible pixels and exact hits before any post-zoom resize,
+and passed on both Canvas2D and WebGPU. Complete locked Rust/WASM lint and workspace tests,
+package lint/build/typecheck/pack/API/namespace/release guards and policy-v7 artifact ceilings,
+native image/frame tests, GPUI structural parity/replay, strict native performance, and the
+fresh-asset portable browser matrix passed (606 pass, 22 intended browser/platform skips).
+The GPUI example also consumes the G4 brush-change event so its all-targets gate compiles.
+Machine-specific GPUI pixels and the clean official browser benchmark remain separate pending
+phase-closure evidence, not portable gate passes.
 
 **Exit:** consumers build an interactive dashboard from published APIs without demo-owned semantic
 logic. Legend toggles preserve identity, brushing survives resize, synchronization handles unequal

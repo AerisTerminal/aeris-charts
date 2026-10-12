@@ -369,6 +369,7 @@ impl ChartEngine {
             measure,
             countdown_measure,
             request.include_crosshair,
+            true,
         );
         let mut axis_primitives = Vec::new();
         chart.build_axis_primitives_into(&axis_frame, &mut axis_primitives);

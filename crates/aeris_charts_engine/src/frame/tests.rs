@@ -3986,6 +3986,84 @@ fn horizontal_bars_use_category_y_geometry_and_stack_on_numeric_x() {
 }
 
 #[test]
+fn horizontal_bar_layout_and_hits_do_not_depend_on_eager_resize_order() {
+    let measure = |text: &str, _bold| text.len() as f64 * 7.0;
+    let countdown = |_: &str, _bold| 0.0;
+    let make_chart = |resize_first: bool| {
+        let mut chart = ChartEngine::new_with_initial_domain(
+            356.0,
+            330.0,
+            1.0,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+        if resize_first {
+            chart.recompute_layout_with_measure(true, measure, countdown);
+        }
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                0,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                0,
+                AxisDimension::Y,
+                GeneralScaleType::Band,
+            ))
+            .unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["Jan".into(), "Feb".into(), "Mar".into()],
+                category_indices: vec![0, 1, 2],
+                y: vec![6.0, -3.0, 4.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let series = chart
+            .add_general_series(GeneralSeriesOptions::horizontal_bar(0, dataset, "x", "y"))
+            .unwrap();
+        chart.recompute_layout_with_measure(!resize_first, measure, countdown);
+        chart.build_frame();
+        let plot = chart.general_plot_rect(0).unwrap();
+        let mut bars = Vec::new();
+        chart.visit_general_horizontal_bars(chart.general_series(series).unwrap(), |bar| {
+            bars.push(bar);
+        });
+        let hits = bars
+            .iter()
+            .map(|bar| {
+                chart
+                    .general_hit_test(
+                        0,
+                        (bar.left + bar.right) / 2.0,
+                        (bar.top + bar.bottom) / 2.0,
+                        crate::GeneralHitMode::Exact,
+                    )
+                    .unwrap()
+                    .row_id
+            })
+            .collect::<Vec<_>>();
+        (plot, bars, hits)
+    };
+    let after = make_chart(false);
+    let before = make_chart(true);
+    assert_eq!(
+        before.0, after.0,
+        "plot geometry must not retain an empty-chart gutter"
+    );
+    assert_eq!(before.1, after.1, "bar ink must use the resolved plot");
+    assert_eq!(before.2, after.2, "exact hits must agree with visible bars");
+}
+
+#[test]
 fn horizontal_bar_groups_split_band_and_percent_stacks_normalize() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     let pane = chart

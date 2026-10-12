@@ -604,20 +604,23 @@ impl ChartEngine {
         G: Fn(&str, bool) -> f64,
     {
         self.sync_frame_input_invalidation();
-        let frame = self.build_axis_frame_impl(max_label_width, measure, countdown_measure, true);
+        let frame =
+            self.build_axis_frame_impl(max_label_width, measure, countdown_measure, true, true);
         self.retained_frame.axis_generation = self.frame_invalidation.axis;
         frame
     }
 
     /// `include_transient` gates the crosshair labels: they paint per frame, but the axis-width
     /// negotiation must never see them — a wide hovered price would inflate the strip and the
-    /// grow-fast/shrink-lazy policy would pin that width forever.
+    /// grow-fast/shrink-lazy policy would pin that width forever. Financial strip measurement
+    /// likewise excludes general-axis labels: they negotiate their own strips separately.
     pub(crate) fn build_axis_frame_impl<F, G>(
         &mut self,
         max_label_width: f64,
         measure: F,
         countdown_measure: G,
         include_transient: bool,
+        include_general: bool,
     ) -> AxisFrame
     where
         F: Fn(&str, bool) -> f64,
@@ -856,7 +859,9 @@ impl ChartEngine {
             self.append_crosshair_labels(&mut out.labels, &measure);
             self.append_alert_create_chip(&mut out);
         }
-        self.append_general_axis_frame(&mut out, &measure);
+        if include_general {
+            self.append_general_axis_frame(&mut out, &measure);
+        }
         out.separators = self
             .panes
             .iter()
@@ -1650,7 +1655,7 @@ impl ChartEngine {
         F: Fn(&str, bool) -> f64,
         G: Fn(&str, bool) -> f64,
     {
-        let frame = self.build_axis_frame_impl(80.0, &measure, &countdown_measure, false);
+        let frame = self.build_axis_frame_impl(80.0, &measure, &countdown_measure, false, false);
         let target_side = self
             .panes
             .iter()
