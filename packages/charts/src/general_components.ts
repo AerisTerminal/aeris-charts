@@ -188,6 +188,8 @@ export function create_general_legend(
 
 export interface general_tooltip_options {
   mode?: "item" | "shared";
+  /** Restrict pointer tooltips to one pane; omitted uses every general pane. */
+  pane?: number;
   format_value?: (value: number) => string;
   format_detail?: (item: general_tooltip_snapshot) => string;
   lang?: string;
@@ -229,7 +231,8 @@ export function create_general_tooltip(
     if (detached) return;
     const event = last_event;
     const hit = event?.general_hit;
-    if (hit == null || event?.point == null) {
+    if (hit == null || event?.point == null ||
+      (options.pane !== undefined && event.pane_index !== options.pane)) {
       element.style.display = "none";
       return;
     }

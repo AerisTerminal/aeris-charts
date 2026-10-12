@@ -270,9 +270,15 @@ control binds that axis once and presents native buttons for full-range selectio
 endpoint steps, and clearing. The engine owns transformed numeric/temporal steps and category
 identity steps; one bounded input event notifies the browser after a gesture commits or cancels,
 so the controls update without polling or reimplementing the gesture.
+The engine also accepts a validated semantic brush range directly. React controlled brushes use
+that operation to apply a parent value and restore it after an unaccepted gesture; uncontrolled
+brushes retain engine state and report bounded snapshots. No host converts a controlled value
+through pixels.
 General reference lines, dots, and regions bind explicit axes and lower into existing shared primitives; each
 reference independently declares whether its values extend automatic domains. Reference lifecycle and V2
 persistence are engine-owned, while brush/hover/selection remain transient and are not serialized.
+Validated reference option replacement retains the reference identity and ordered frame slot;
+failed replacements leave the prior reference and its domain contribution intact.
 The release perf harness
 includes a 100k-point general-only line target with a 16.67 ms frame budget and 8 ms nearest-hit budget.
 It also keeps the current line, area, range, scatter, and bubble paths in one 100k-row mixed-general
@@ -1005,6 +1011,22 @@ Auto-size keeps `ResizeObserver`'s exact device-pixel path. A resolution media-q
 The package also ships `aeris_charts.css` as the portable host design system. Its complete brand token contract remains intact even when a token is currently consumed only by Terminal or the website; Charts consumes the applicable surface, border, text, status, control, interaction, icon, action, focus, radius, shadow, and market roles without renaming them. Host chrome uses the system UI font stack and may use `color-mix`. The published package does not include a webfont. Native CPU text selects installed faces for the requested family, weight, and italic style; the native golden scene masks its text region for the exact bitmap comparison and separately requires visible glyph ink across system fonts. Backend-facing roles — the primary surface for chart panes, primary text for axes, border for axis rules and pane separators, canonical border width, muted text, separator interaction, focus/primary interaction, positive/negative market semantics, and shared radii — have deterministic opaque-sRGB projections in `crates/aeris_charts_core/style_tokens.json`. `aeris_charts_core` owns and compiles that file into the defaults used by every engine and backend. Axis borders and visible pane separators both project the engine's 1 CSS px border width onto the device-pixel grid; the host CSS `--border-width` is 0.5 px for DOM chrome and does not change chart geometry; the separator hover target stays independently expanded for interaction. The TypeScript package imports the same source at build time for host theming and workspace divider projection. The core crate therefore remains independently packageable without reaching into a browser-package directory, and the tokens resolve before frame construction rather than through demo or renderer overrides. Canonical engine grid lines retain their dashed style and border color but ship disabled; hosts and deterministic parity fixtures may opt either family in explicitly. A `v*` tag matching the package version publishes the verified artifact to GitHub Packages.
 
 The package preserves its complete `snake_case` surface and adds camel-case aliases for the common JavaScript chart/series/scale lifecycle without creating parallel state or handles. Financial and general series use the same chart object and ordered frame. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. Typed update batches transfer their sanitized owned columns to the engine's batch entry point; the browser wrapper never loops through the single-row engine API. The published artifact exports the optimized WASM asset explicitly and the generated glue also resolves that sibling asset by `import.meta.url`; source-tree `pkg/`, crate, benchmark, and demo paths are not runtime dependencies. `examples/web_demo` remains an integration and parity test host, while `examples/all_in_one` contains consumer-facing framework-neutral and React compositions.
+
+`GeneralPane` still accepts keyed axis/series arrays. Its React child declarations add axes,
+canonical or mapped series, data labels, and keyed references through the same reconciliation.
+Mapping application records happens once per changed source or mapper identity in the committed
+effect, outside frame and hit loops. Default legend, tooltip, and brush React controls mount the
+browser package's existing DOM components and detach their subscriptions with the pane. The pane
+retains chart/series/reference handles across ordinary option and data changes; structural axis
+or kind changes replace only dependent objects. React maps input rows, packs them without applying
+semantic rules, and sends one complete pane proposal to the engine before removing dependencies.
+That non-mutating engine dry-run validates proposed axes, series column shape, kind and axis
+compatibility, logarithmic domains, and references against the proposed axis set. An optional
+validation-error callback retains the prior pane and receives the same engine error as imperative
+callers after a rejected proposal. Chart and financial-series readiness failures
+release newly acquired handles. Importing the React entry remains SSR-safe; it creates no chart
+until mounted in a browser. The package smoke gate installs an npm tarball into a clean consumer
+directory and bundles standalone, mixed, linked, and React examples from that installed package.
 
 Financial appearance keeps theme provenance typed in the engine. Canvas background, chart text
 (layout and price-axis labels), grid, crosshair, bullish, bearish, wick, and border colors are either

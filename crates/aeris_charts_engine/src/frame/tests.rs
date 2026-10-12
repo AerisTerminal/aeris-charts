@@ -8,8 +8,9 @@ use super::*;
 use crate::{
     AxisDimension, AxisPosition, CategoryScaleType, ContinuousScaleType, GeneralAreaBaseline,
     GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralInterpolation, GeneralLineStyle,
-    GeneralPointSymbol, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesKind,
-    GeneralSeriesOptions, GeneralStackMode, GeneralXyInput, HorizontalDomain,
+    GeneralPaneProposal, GeneralPointSymbol, GeneralReferenceOptions, GeneralReferenceValue,
+    GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesKind, GeneralSeriesOptions,
+    GeneralSeriesProposal, GeneralStackMode, GeneralXyInput, HorizontalDomain,
 };
 use aeris_charts_core::model::data_layer::DataLayer;
 use aeris_charts_core::model::plot_list::{PlotList, PlotValues};
@@ -1918,6 +1919,25 @@ fn general_brush_keeps_semantic_range_and_returns_bounded_visible_rows() {
     let full = chart.select_full_general_brush("brush-x").unwrap();
     assert_eq!(full.range, crate::GeneralBrushRange::Numeric([1.0, 3.0]));
 
+    let semantic = chart
+        .set_general_brush_range("brush-x", crate::GeneralBrushRange::Numeric([1.5, 2.5]))
+        .unwrap();
+    assert_eq!(
+        semantic.range,
+        crate::GeneralBrushRange::Numeric([1.5, 2.5])
+    );
+    assert_eq!(semantic.items.len(), 1);
+    assert!(
+        chart
+            .set_general_brush_range("brush-x", crate::GeneralBrushRange::Numeric([3.0, 1.0]))
+            .is_err()
+    );
+    assert_eq!(
+        chart.general_brush_snapshot().unwrap().range,
+        semantic.range,
+        "an invalid controlled range must not change the brush"
+    );
+
     chart.clear_general_brush();
     assert!(chart.general_brush_snapshot().is_none());
 }
@@ -2002,6 +2022,294 @@ fn general_brush_keyboard_steps_follow_log_and_temporal_transforms() {
         end.range,
         crate::GeneralBrushRange::Temporal([1_000, 99_000])
     );
+}
+
+fn proposal_state(chart: &ChartEngine, pane: usize) -> (Vec<String>, usize, usize) {
+    (
+        chart
+            .general_axes(Some(pane))
+            .into_iter()
+            .map(|axis| axis.id().to_owned())
+            .collect(),
+        chart.general_series_ids_in_pane(pane).len(),
+        chart.general_reference_count(),
+    )
+}
+
+fn numeric_proposal(
+    pane: usize,
+    x_scale: GeneralScaleType,
+    y_scale: GeneralScaleType,
+    kind: GeneralSeriesKind,
+    data: GeneralXyInput,
+) -> GeneralPaneProposal {
+    GeneralPaneProposal {
+        pane,
+        axes: vec![
+            GeneralAxisOptions::new("x", pane, AxisDimension::X, x_scale),
+            GeneralAxisOptions::new("y", pane, AxisDimension::Y, y_scale),
+        ],
+        series: vec![GeneralSeriesProposal {
+            kind,
+            x_axis_id: "x".into(),
+            y_axis_id: "y".into(),
+            data,
+        }],
+        references: vec![],
+    }
+}
+
+#[test]
+fn general_pane_proposal_dry_run_accepts_complete_graph_without_mutation() {
+    let chart = ChartEngine::new_with_initial_domain(
+        640.0,
+        400.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    let before = proposal_state(&chart, 0);
+    let mut proposal = numeric_proposal(
+        0,
+        GeneralScaleType::Linear,
+        GeneralScaleType::Linear,
+        GeneralSeriesKind::XyLine,
+        GeneralXyInput::Numeric {
+            ids: Some(vec![GeneralRowId::Text("a".into())]),
+            x: vec![1.0],
+            y: vec![2.0],
+            y_valid: None,
+        },
+    );
+    proposal.references.push(GeneralReferenceOptions::Line {
+        pane: 0,
+        axis_id: "y".into(),
+        value: GeneralReferenceValue::Numeric(2.0),
+        color: None,
+        line_width: 1.0,
+        extend_domain: false,
+    });
+    chart.validate_general_pane_proposal(&proposal).unwrap();
+    assert_eq!(proposal_state(&chart, 0), before);
+}
+
+#[test]
+fn general_pane_proposal_rejects_stale_and_incompatible_axes_without_mutation() {
+    let chart = ChartEngine::new_with_initial_domain(
+        640.0,
+        400.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    let before = proposal_state(&chart, 0);
+    let stale = GeneralPaneProposal {
+        pane: 99,
+        axes: vec![],
+        series: vec![],
+        references: vec![],
+    };
+    assert!(
+        chart
+            .validate_general_pane_proposal(&stale)
+            .unwrap_err()
+            .to_string()
+            .contains("stale pane")
+    );
+    let incompatible = numeric_proposal(
+        0,
+        GeneralScaleType::Band,
+        GeneralScaleType::Linear,
+        GeneralSeriesKind::XyLine,
+        GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0],
+            y: vec![2.0],
+            y_valid: None,
+        },
+    );
+    assert!(chart.validate_general_pane_proposal(&incompatible).is_err());
+    assert_eq!(proposal_state(&chart, 0), before);
+}
+
+#[test]
+fn general_pane_proposal_rejects_kind_and_row_shape_without_mutation() {
+    let chart = ChartEngine::new_with_initial_domain(
+        640.0,
+        400.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    let before = proposal_state(&chart, 0);
+    let kind_mismatch = numeric_proposal(
+        0,
+        GeneralScaleType::Linear,
+        GeneralScaleType::Linear,
+        GeneralSeriesKind::Column,
+        GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0],
+            y: vec![2.0],
+            y_valid: None,
+        },
+    );
+    assert!(
+        chart
+            .validate_general_pane_proposal(&kind_mismatch)
+            .is_err()
+    );
+    let row_shape = numeric_proposal(
+        0,
+        GeneralScaleType::Linear,
+        GeneralScaleType::Linear,
+        GeneralSeriesKind::Scatter,
+        GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0, 2.0],
+            y: vec![2.0],
+            y_valid: None,
+        },
+    );
+    assert!(chart.validate_general_pane_proposal(&row_shape).is_err());
+    assert_eq!(proposal_state(&chart, 0), before);
+}
+
+#[test]
+fn general_pane_proposal_rejects_all_live_log_data_classes_without_mutation() {
+    let continuous = || {
+        ChartEngine::new_with_initial_domain(
+            640.0,
+            400.0,
+            1.0,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Logarithmic,
+            },
+        )
+        .unwrap()
+    };
+    for data in [
+        GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![0.0],
+            y: vec![1.0],
+            y_valid: None,
+        },
+        GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0],
+            y: vec![0.0],
+            y_valid: None,
+        },
+    ] {
+        let chart = continuous();
+        let before = proposal_state(&chart, 0);
+        let proposal = numeric_proposal(
+            0,
+            GeneralScaleType::Logarithmic,
+            GeneralScaleType::Logarithmic,
+            GeneralSeriesKind::Scatter,
+            data,
+        );
+        assert!(chart.validate_general_pane_proposal(&proposal).is_err());
+        assert_eq!(proposal_state(&chart, 0), before);
+    }
+
+    for (x, y) in [(vec![0.0], vec![1.0]), (vec![1.0], vec![0.0])] {
+        let chart = continuous();
+        let before = proposal_state(&chart, 0);
+        let proposal = numeric_proposal(
+            0,
+            GeneralScaleType::Logarithmic,
+            GeneralScaleType::Logarithmic,
+            GeneralSeriesKind::HeatmapGrid,
+            GeneralXyInput::HeatmapNumericNumeric {
+                ids: None,
+                x,
+                y_coordinate: y,
+                value: vec![1.0],
+                value_valid: None,
+            },
+        );
+        assert!(chart.validate_general_pane_proposal(&proposal).is_err());
+        assert_eq!(proposal_state(&chart, 0), before);
+    }
+
+    let chart = ChartEngine::new_with_initial_domain(
+        640.0,
+        400.0,
+        1.0,
+        HorizontalDomain::Category {
+            scale: CategoryScaleType::Band,
+        },
+    )
+    .unwrap();
+    let before = proposal_state(&chart, 0);
+    let proposal = numeric_proposal(
+        0,
+        GeneralScaleType::Band,
+        GeneralScaleType::Logarithmic,
+        GeneralSeriesKind::BoxPlot,
+        GeneralXyInput::BoxCategory {
+            ids: None,
+            categories: vec!["A".into()],
+            category_indices: vec![0],
+            min: vec![0.0],
+            min_valid: None,
+            q1: vec![1.0],
+            q1_valid: None,
+            median: vec![2.0],
+            median_valid: None,
+            q3: vec![3.0],
+            q3_valid: None,
+            max: vec![4.0],
+            max_valid: None,
+        },
+    );
+    assert!(chart.validate_general_pane_proposal(&proposal).is_err());
+    assert_eq!(proposal_state(&chart, 0), before);
+}
+
+#[test]
+fn general_pane_proposal_validates_references_against_proposed_axes_without_mutation() {
+    let chart = ChartEngine::new_with_initial_domain(
+        640.0,
+        400.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Logarithmic,
+        },
+    )
+    .unwrap();
+    let before = proposal_state(&chart, 0);
+    let mut proposal = numeric_proposal(
+        0,
+        GeneralScaleType::Logarithmic,
+        GeneralScaleType::Logarithmic,
+        GeneralSeriesKind::Scatter,
+        GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0],
+            y: vec![2.0],
+            y_valid: None,
+        },
+    );
+    proposal.references.push(GeneralReferenceOptions::Line {
+        pane: 0,
+        axis_id: "y".into(),
+        value: GeneralReferenceValue::Numeric(0.0),
+        color: None,
+        line_width: 1.0,
+        extend_domain: false,
+    });
+    assert!(chart.validate_general_pane_proposal(&proposal).is_err());
+    assert_eq!(proposal_state(&chart, 0), before);
 }
 
 #[test]
@@ -2125,6 +2433,42 @@ fn general_references_render_all_kinds_and_extend_domains_only_when_requested() 
         main.iter()
             .any(|primitive| matches!(primitive, Prim::VLine { .. }))
     );
+
+    let before = chart.general_reference_options(ignored).unwrap();
+    let invalid = crate::GeneralReferenceOptions::Line {
+        pane,
+        axis_id: "ref-x".into(),
+        value: crate::GeneralReferenceValue::Category("wrong scale".into()),
+        color: Some("#445566".into()),
+        line_width: 2.0,
+        extend_domain: true,
+    };
+    assert!(
+        chart
+            .update_general_reference_options(ignored, invalid)
+            .is_err()
+    );
+    assert_eq!(chart.general_reference_options(ignored), Some(before));
+    chart
+        .update_general_reference_options(
+            ignored,
+            crate::GeneralReferenceOptions::Line {
+                pane,
+                axis_id: "ref-x".into(),
+                value: crate::GeneralReferenceValue::Numeric(50.0),
+                color: Some("#445566".into()),
+                line_width: 3.0,
+                extend_domain: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(chart.general_reference_ids(Some(pane))[0], ignored);
+    let GeneralAxisDomain::Numeric(updated_domain) =
+        chart.general_axis_effective_domain("ref-x").unwrap()
+    else {
+        panic!("reference X axis must remain numeric");
+    };
+    assert!(updated_domain[1] >= 50.0);
 
     assert!(chart.remove_general_reference(ignored));
     assert_eq!(

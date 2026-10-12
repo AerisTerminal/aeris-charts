@@ -3779,6 +3779,12 @@ impl AerisChart {
             .update_general_axis_result_json(options_json)
     }
 
+    pub fn validate_general_pane_proposal_result_json(&self, options_json: &str) -> String {
+        self.inner
+            .borrow()
+            .validate_general_pane_proposal_result_json(options_json)
+    }
+
     pub fn general_axis_json(&self, id: &str) -> String {
         self.inner.borrow().general_axis_json(id)
     }
@@ -3806,6 +3812,16 @@ impl AerisChart {
 
     pub fn general_reference_options_json(&self, id: u32) -> String {
         self.inner.borrow().general_reference_options_json(id)
+    }
+
+    pub fn update_general_reference_options_result_json(
+        &mut self,
+        id: u32,
+        options_json: &str,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .update_general_reference_options_result_json(id, options_json)
     }
 
     pub fn general_reference_ids_json(&self, pane: i32) -> String {
@@ -4665,6 +4681,16 @@ impl AerisChart {
         self.inner
             .borrow_mut()
             .set_general_brush_result_json(axis_id, from_css, to_css)
+    }
+
+    pub fn set_general_brush_range_result_json(
+        &mut self,
+        axis_id: &str,
+        range_json: &str,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_brush_range_result_json(axis_id, range_json)
     }
 
     pub fn set_general_brush_input_axis_result_json(&mut self, axis_id: &str) -> String {

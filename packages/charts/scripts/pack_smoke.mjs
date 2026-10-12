@@ -14,12 +14,14 @@
  */
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { build } from "esbuild";
 
 const pkg_dir = fileURLToPath(new URL("..", import.meta.url));
+const examples_dir = fileURLToPath(new URL("../../../examples/all_in_one/", import.meta.url));
 const scratch = mkdtempSync(join(tmpdir(), "aeris_charts-pack-smoke-"));
 
 // When invoked from `npm publish --dry-run` (prepublishOnly), the parent leaks its dry-run
@@ -85,7 +87,26 @@ try {
   assert.equal(pkg.exports["./react"].import, "./dist/react.js");
   assert.equal(pkg.exports["./wasm"], "./dist/aeris_charts_wasm_bg.wasm");
 
-  console.log(`pack smoke OK: ${tgz} (${files.length} files, wasm ${(wasm.size / 1024).toFixed(0)} kB)`);
+  // Compile the checked-in standalone, mixed, linked, and React recipes from the installed
+  // tarball, so package exports and consumer resolution are exercised without repository paths.
+  const examples = ["standalone.mjs", "vanilla.mjs", "linked.mjs", "react.tsx"];
+  for (const name of examples) copyFileSync(join(examples_dir, name), join(scratch, name));
+  await build({
+    entryPoints: examples.map((name) => join(scratch, name)),
+    outdir: join(scratch, "bundled"),
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    jsx: "automatic",
+    external: ["react", "react/*"],
+    logLevel: "silent",
+  });
+  for (const name of examples) {
+    const output = join(scratch, "bundled", name.replace(/\.(mjs|tsx)$/, ".js"));
+    assert.ok(statSync(output).size > 10_000, `packed consumer bundle is incomplete: ${name}`);
+  }
+
+  console.log(`pack smoke OK: ${tgz} (${files.length} files, wasm ${(wasm.size / 1024).toFixed(0)} kB; four consumer bundles)`);
   rmSync(join(pkg_dir, tgz), { force: true });
 } finally {
   rmSync(scratch, { recursive: true, force: true });

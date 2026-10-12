@@ -29,7 +29,7 @@ import type {
   structure_break_on, structure_zone_options, study_calendar_policy, previous_period,
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
-  general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_snapshot, general_legend_snapshot, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
+  general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_range, general_brush_snapshot, general_legend_snapshot, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
   general_series_kind, general_series_options, general_shared_tooltip_snapshot, general_tooltip_snapshot, general_update_options, general_xy_row,
   box_plot_row, bubble_columns, bubble_row, category_box_columns, category_error_columns, category_heatmap_columns, category_range_columns, category_xy_columns, numeric_error_columns, numeric_heatmap_columns, numeric_range_columns, numeric_xy_columns,
   error_bar_row, heatmap_grid_row, range_area_row, temporal_error_columns, temporal_heatmap_columns, temporal_range_columns, temporal_xy_columns,
@@ -878,6 +878,22 @@ function pack_general_rows(
   return { ids, labels, colors, symbols, categories, category_indices, y, y_valid };
 }
 
+function proposal_columns(
+  kind: general_series_kind,
+  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[],
+  x_scale: general_axis_options["scale"],
+): Record<string, unknown> {
+  const packed = pack_general_rows(kind, data, x_scale) as unknown as Record<string, unknown>;
+  const columns: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(packed)) {
+    if (name === "labels" || name === "colors" || name === "symbols") continue;
+    columns[name] = ArrayBuffer.isView(value)
+      ? Array.from(value as unknown as ArrayLike<number>)
+      : value;
+  }
+  return columns;
+}
+
 function normalize_general_axis_options(options: general_axis_options): general_axis_options {
   const normalized = { ...options } as general_axis_options & { domain?: unknown };
   if (Array.isArray(options.domain) && options.scale === "temporal") {
@@ -995,15 +1011,17 @@ function general_reference_wire_value(
   chart: chart_impl,
   axis_id: string,
   value: general_reference_value,
+  axes?: readonly general_axis_options[],
 ): general_reference_wire_value {
-  const axis = chart.axis(axis_id);
-  if (axis === null) {
+  const scale = axes === undefined
+    ? chart.axis(axis_id)?.options().scale
+    : axes.find((axis) => axis.id === axis_id)?.scale;
+  if (scale === undefined) {
     throw new AerisChartsError(
       "invalid_options",
       "general reference axis \"" + axis_id + "\" does not exist",
     );
   }
-  const scale = axis.options().scale;
   if (scale === "temporal") {
     const epoch_ms = value instanceof Date ? value.getTime() : value;
     if (typeof epoch_ms !== "number" || !Number.isSafeInteger(epoch_ms)) {
@@ -1032,26 +1050,27 @@ function general_reference_wire_value(
 function encode_general_reference_options(
   chart: chart_impl,
   options: general_reference_options,
+  axes?: readonly general_axis_options[],
 ): general_reference_wire_options {
   switch (options.kind) {
     case "line":
       return {
         ...options,
-        value: general_reference_wire_value(chart, options.axis_id, options.value),
+        value: general_reference_wire_value(chart, options.axis_id, options.value, axes),
       };
     case "dot":
       return {
         ...options,
-        x: general_reference_wire_value(chart, options.x_axis_id, options.x),
-        y: general_reference_wire_value(chart, options.y_axis_id, options.y),
+        x: general_reference_wire_value(chart, options.x_axis_id, options.x, axes),
+        y: general_reference_wire_value(chart, options.y_axis_id, options.y, axes),
       };
     case "region":
       return {
         ...options,
-        x_from: general_reference_wire_value(chart, options.x_axis_id, options.x_from),
-        x_to: general_reference_wire_value(chart, options.x_axis_id, options.x_to),
-        y_from: general_reference_wire_value(chart, options.y_axis_id, options.y_from),
-        y_to: general_reference_wire_value(chart, options.y_axis_id, options.y_to),
+        x_from: general_reference_wire_value(chart, options.x_axis_id, options.x_from, axes),
+        x_to: general_reference_wire_value(chart, options.x_axis_id, options.x_to, axes),
+        y_from: general_reference_wire_value(chart, options.y_axis_id, options.y_from, axes),
+        y_to: general_reference_wire_value(chart, options.y_axis_id, options.y_to, axes),
       };
   }
 }
@@ -1098,6 +1117,15 @@ class general_reference_impl implements general_reference_api {
 
   options(): general_reference_options {
     return decode_general_reference_options(this.current());
+  }
+
+  apply_options(options: general_reference_options): void {
+    this.current();
+    const encoded = encode_general_reference_options(this.chart, options);
+    parse_general_result<null>(
+      this.chart.wasm.update_general_reference_options_result_json(this.id, JSON.stringify(encoded)),
+    );
+    this.chart.repaint();
   }
 
   remove(): boolean {
@@ -7341,6 +7369,41 @@ export class chart_impl implements chart_api {
     return new general_axis_impl(created.id, created.handle_token, this);
   }
 
+  validate_general_pane_proposal(
+    pane: number,
+    axes: readonly (Omit<general_axis_options, "pane"> & { pane?: number })[],
+    series: readonly {
+      kind: general_series_kind;
+      options: Omit<general_series_options, "pane"> & { pane?: number };
+      data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[];
+    }[],
+    references: readonly general_reference_options[],
+  ): void {
+    const proposed_axes = axes.map((axis) => normalize_general_axis_options({ ...axis, pane }));
+    const axes_by_id = new Map(proposed_axes.map((axis) => [axis.id, axis] as const));
+    parse_general_result<null>(this.wasm.validate_general_pane_proposal_result_json(JSON.stringify({
+      pane,
+      axes: proposed_axes,
+      series: series.map((item) => {
+        const x_axis = axes_by_id.get(item.options.x_axis_id);
+        if (x_axis === undefined) {
+          throw new AerisChartsError("invalid_options", `general series axis "${item.options.x_axis_id}" does not exist`);
+        }
+        return {
+          kind: item.kind,
+          x_axis_id: item.options.x_axis_id,
+          y_axis_id: item.options.y_axis_id,
+          columns: proposal_columns(item.kind, item.data, x_axis.scale),
+        };
+      }),
+      references: references.map((reference) => encode_general_reference_options(
+        this,
+        { ...reference, pane } as general_reference_options,
+        proposed_axes,
+      )),
+    })));
+  }
+
   axis(id: string): general_axis_api | null {
     const handle_token = this.wasm.general_axis_handle_token(id);
     return handle_token === 0 ? null : new general_axis_impl(id, handle_token, this);
@@ -7438,6 +7501,19 @@ export class chart_impl implements chart_api {
     }
     const snapshot = parse_general_result<general_brush_snapshot>(
       this.wasm.set_general_brush_result_json(axis_id, from_coordinate, to_coordinate),
+    );
+    this.repaint();
+    this.notify_general_brush_change();
+    return snapshot;
+  }
+
+  set_general_brush_range(axis: string | general_axis_api, range: general_brush_range): general_brush_snapshot {
+    const axis_id = typeof axis === "string" ? axis : axis.id;
+    if (axis_id.length === 0) {
+      throw new AerisChartsError("invalid_options", "general brush axis id must not be empty");
+    }
+    const snapshot = parse_general_result<general_brush_snapshot>(
+      this.wasm.set_general_brush_range_result_json(axis_id, JSON.stringify(range)),
     );
     this.repaint();
     this.notify_general_brush_change();

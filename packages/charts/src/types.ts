@@ -398,6 +398,8 @@ export type general_reference_options =
 export interface general_reference_api {
   readonly id: number;
   options(): general_reference_options;
+  /** Replace validated reference options while retaining this handle and its ordered frame slot. */
+  apply_options(options: general_reference_options): void;
   remove(): boolean;
 }
 
@@ -3920,6 +3922,17 @@ export interface chart_api {
   /** Add a pane bound to an explicit engine-owned horizontal domain. */
   add_pane(options: general_pane_options): pane_api;
   add_axis(options: general_axis_options): general_axis_api;
+  /** Validate a complete proposed pane graph and packed data without mutating the chart. */
+  validate_general_pane_proposal(
+    pane: number,
+    axes: readonly (Omit<general_axis_options, "pane"> & { pane?: number })[],
+    series: readonly {
+      kind: general_series_kind;
+      options: Omit<general_series_options, "pane"> & { pane?: number };
+      data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[];
+    }[],
+    references: readonly general_reference_options[],
+  ): void;
   axis(id: string): general_axis_api | null;
   axes(pane?: number): general_axis_api[];
   remove_axis(id: string): boolean;
@@ -3950,6 +3963,8 @@ export interface chart_api {
     from_coordinate: number,
     to_coordinate: number,
   ): general_brush_snapshot;
+  /** Set a validated semantic range directly, without host pixel projection. */
+  set_general_brush_range(axis: string | general_axis_api, range: general_brush_range): general_brush_snapshot;
   /** Arm one general axis for engine-owned mouse and single-touch range drag; omit to disarm. */
   set_general_brush_input_axis(axis?: string | general_axis_api): void;
   /** Select the whole resolved domain, including for keyboard-only brush use. */

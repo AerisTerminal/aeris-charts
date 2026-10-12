@@ -2835,14 +2835,25 @@ impl Default for GeneralAxisRegistry {
 }
 
 impl ChartEngine {
-    pub fn add_general_axis(&mut self, options: GeneralAxisOptions) -> Result<(), ChartError> {
-        let pane_id = self
-            .pane_stable_id(options.pane)
+    /// Validate one axis definition against its pane without inserting or replacing it.
+    pub fn validate_general_axis_definition(
+        &self,
+        options: &GeneralAxisOptions,
+    ) -> Result<(), ChartError> {
+        self.pane_stable_id(options.pane)
             .ok_or_else(|| invalid("general axis references a stale pane"))?;
         let horizontal_domain = self
             .pane_horizontal_domain(options.pane)
             .ok_or_else(|| invalid("general axis pane has no horizontal domain"))?;
-        validate_compatibility(horizontal_domain, &options)?;
+        validate_options(options)?;
+        validate_compatibility(horizontal_domain, options)
+    }
+
+    pub fn add_general_axis(&mut self, options: GeneralAxisOptions) -> Result<(), ChartError> {
+        let pane_id = self
+            .pane_stable_id(options.pane)
+            .ok_or_else(|| invalid("general axis references a stale pane"))?;
+        self.validate_general_axis_definition(&options)?;
         self.general_axes.insert(pane_id, options)?;
         self.invalidate_frame_all();
         Ok(())
@@ -2901,11 +2912,7 @@ impl ChartEngine {
                 "general axis pane, dimension, and scale are structural",
             ));
         }
-        let horizontal_domain = self
-            .pane_horizontal_domain(pane)
-            .ok_or_else(|| invalid("general axis pane has no horizontal domain"))?;
-        validate_options(&options)?;
-        validate_compatibility(horizontal_domain, &options)?;
+        self.validate_general_axis_definition(&options)?;
 
         let axis = self
             .general_axes

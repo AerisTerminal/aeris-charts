@@ -58,8 +58,8 @@
     },
     {
       "path": "react.d.ts",
-      "bytes": 76818,
-      "sha256": "be854162de4ce4cffb34c8aad4267e2d00a6088a7e21aedc99ad7e96a7a69ad3"
+      "bytes": 80892,
+      "sha256": "ab04639290dbed83865a753a7c67bae3137e3aab97089a0bc89035e62563f61f"
     },
     {
       "path": "shortcuts.d.ts",
@@ -73,8 +73,8 @@
     },
     {
       "path": "types.d.ts",
-      "bytes": 191547,
-      "sha256": "f1d72c786196ff0f5a84d0cb74face4b4e8deba239d088d964ad286a438babc6"
+      "bytes": 192479,
+      "sha256": "f93d51702ebae30f8e15d5ae4091fe92d1cadf735a3b2a0e8a82564b4542ed45"
     }
   ]
 }

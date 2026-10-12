@@ -1,4 +1,9 @@
-import { createChart } from "@aeristerminal/aeris-charts";
+import {
+  createChart,
+  create_general_brush_controls,
+  create_general_legend,
+  create_general_tooltip,
+} from "@aeristerminal/aeris-charts";
 
 const container = document.querySelector("#chart");
 if (!(container instanceof HTMLElement)) throw new Error("missing #chart container");
@@ -24,6 +29,7 @@ const revenue = chart.addSeries("column", {
   x_axis_id: "month",
   y_axis_id: "revenue",
   title: "Revenue",
+  data_labels: true,
 });
 revenue.setData([
   { id: "jan", x: "Jan", y: 42 },
@@ -32,3 +38,21 @@ revenue.setData([
 ]);
 
 chart.timeScale().fitContent();
+
+chart.add_general_reference({
+  kind: "line",
+  pane: summaryPaneIndex,
+  axis_id: "revenue",
+  value: 50,
+  color: "#f59e0b",
+});
+
+const legendHost = document.createElement("div");
+legendHost.style.cssText = "position:absolute;top:8px;left:8px;z-index:6";
+container.appendChild(legendHost);
+const brushHost = document.createElement("div");
+brushHost.style.cssText = "position:absolute;bottom:8px;left:8px;z-index:6";
+container.appendChild(brushHost);
+create_general_legend(chart, legendHost, { pane: summaryPaneIndex });
+create_general_tooltip(chart, container, { pane: summaryPaneIndex });
+create_general_brush_controls(chart, brushHost, { axis: "month" });

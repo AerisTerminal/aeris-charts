@@ -4,10 +4,11 @@ use aeris_charts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
     DEFAULT_GENERAL_FILL_OPACITY, GeneralAreaBaseline, GeneralAxisDomain, GeneralAxisOptions,
     GeneralAxisTick, GeneralBrushEndpoint, GeneralBrushRange, GeneralBrushSnapshot,
-    GeneralDatasetId, GeneralHitMode, GeneralInterpolation, GeneralLineStyle, GeneralPointSymbol,
-    GeneralReferenceId, GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity,
-    GeneralScaleType, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode,
-    GeneralTooltipSnapshot, GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    GeneralDatasetId, GeneralHitMode, GeneralInterpolation, GeneralLineStyle, GeneralPaneProposal,
+    GeneralPointSymbol, GeneralReferenceId, GeneralReferenceOptions, GeneralRowId,
+    GeneralRowIdentity, GeneralScaleType, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
+    GeneralSeriesProposal, GeneralStackMode, GeneralTooltipSnapshot, GeneralXyInput,
+    HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use js_sys::{Float64Array, Uint8Array, Uint32Array};
 use serde::Deserialize;
@@ -56,6 +57,14 @@ enum CategoryInput {
 }
 
 #[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum BrushRangeInput {
+    Numeric { from: f64, to: f64 },
+    Temporal { from: i64, to: i64 },
+    Category { from: String, to: String },
+}
+
+#[derive(Deserialize)]
 struct AxisInput {
     id: String,
     pane: usize,
@@ -87,6 +96,31 @@ struct AxisInput {
     zero_line: bool,
     #[serde(default = "default_true")]
     grid_visible: bool,
+}
+
+fn axis_options_from_input(input: AxisInput) -> Result<GeneralAxisOptions, String> {
+    let dimension =
+        dimension(&input.dimension).ok_or_else(|| input_error("unknown general axis dimension"))?;
+    let position = position(input.position.as_deref())
+        .ok_or_else(|| input_error("unknown general axis position"))?;
+    let scale = scale(&input.scale).ok_or_else(|| input_error("unknown general axis scale"))?;
+    let domain = axis_domain(scale, input.domain)
+        .ok_or_else(|| input_error("general axis domain does not match its scale"))?;
+    let mut options = GeneralAxisOptions::new(input.id, input.pane, dimension, scale);
+    options.position = position;
+    options.domain = domain;
+    options.reverse = input.reverse;
+    options.visible = input.visible;
+    options.title = input.title;
+    options.tick_count = input.tick_count;
+    options.ticks = input.ticks;
+    options.min_tick_gap = input.min_tick_gap;
+    options.domain_padding = input.domain_padding;
+    options.band_padding_inner = input.band_padding_inner;
+    options.band_padding_outer = input.band_padding_outer;
+    options.zero_line = input.zero_line;
+    options.grid_visible = input.grid_visible;
+    Ok(options)
 }
 
 #[derive(Deserialize)]
@@ -146,6 +180,66 @@ struct SeriesInput {
     stack_id: Option<String>,
     #[serde(default)]
     stack_mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PaneProposalInput {
+    pane: usize,
+    axes: Vec<AxisInput>,
+    series: Vec<SeriesProposalInput>,
+    references: Vec<GeneralReferenceOptions>,
+}
+
+#[derive(Deserialize)]
+struct SeriesProposalInput {
+    kind: String,
+    x_axis_id: String,
+    y_axis_id: String,
+    columns: PackedColumnsInput,
+}
+
+#[derive(Default, Deserialize)]
+struct PackedColumnsInput {
+    ids: Option<Vec<Value>>,
+    x: Option<Vec<f64>>,
+    x_epoch_ms: Option<Vec<i64>>,
+    y: Option<Vec<f64>>,
+    y_valid: Option<Vec<u8>>,
+    size: Option<Vec<f64>>,
+    size_valid: Option<Vec<u8>>,
+    low: Option<Vec<f64>>,
+    low_valid: Option<Vec<u8>>,
+    high: Option<Vec<f64>>,
+    high_valid: Option<Vec<u8>>,
+    x_low: Option<Vec<f64>>,
+    x_low_valid: Option<Vec<u8>>,
+    x_high: Option<Vec<f64>>,
+    x_high_valid: Option<Vec<u8>>,
+    x_low_epoch_ms: Option<Vec<f64>>,
+    x_high_epoch_ms: Option<Vec<f64>>,
+    y_low: Option<Vec<f64>>,
+    y_low_valid: Option<Vec<u8>>,
+    y_high: Option<Vec<f64>>,
+    y_high_valid: Option<Vec<u8>>,
+    categories: Option<Vec<String>>,
+    category_indices: Option<Vec<u32>>,
+    min: Option<Vec<f64>>,
+    min_valid: Option<Vec<u8>>,
+    q1: Option<Vec<f64>>,
+    q1_valid: Option<Vec<u8>>,
+    median: Option<Vec<f64>>,
+    median_valid: Option<Vec<u8>>,
+    q3: Option<Vec<f64>>,
+    q3_valid: Option<Vec<u8>>,
+    max: Option<Vec<f64>>,
+    max_valid: Option<Vec<u8>>,
+    x_categories: Option<Vec<String>>,
+    x_category_indices: Option<Vec<u32>>,
+    y_categories: Option<Vec<String>>,
+    y_category_indices: Option<Vec<u32>>,
+    y_coordinate: Option<Vec<f64>>,
+    value: Option<Vec<f64>>,
+    value_valid: Option<Vec<u8>>,
 }
 
 #[derive(Deserialize)]
@@ -214,6 +308,229 @@ fn default_line_width() -> f64 {
 
 fn default_fill_opacity() -> f64 {
     DEFAULT_GENERAL_FILL_OPACITY
+}
+
+fn proposal_series(input: SeriesProposalInput) -> Result<GeneralSeriesProposal, String> {
+    let kind = match input.kind.as_str() {
+        "xy_line" => GeneralSeriesKind::XyLine,
+        "xy_area" => GeneralSeriesKind::XyArea,
+        "range_area" => GeneralSeriesKind::RangeArea,
+        "range_bar" => GeneralSeriesKind::RangeBar,
+        "column" => GeneralSeriesKind::Column,
+        "horizontal_bar" => GeneralSeriesKind::HorizontalBar,
+        "scatter" => GeneralSeriesKind::Scatter,
+        "bubble" => GeneralSeriesKind::Bubble,
+        "error_bar" => GeneralSeriesKind::ErrorBar,
+        "box_plot" => GeneralSeriesKind::BoxPlot,
+        "heatmap_grid" => GeneralSeriesKind::HeatmapGrid,
+        _ => return Err(input_error("unsupported general series kind")),
+    };
+    let mut columns = input.columns;
+    let ids = parse_id_values(columns.ids.take())?;
+    let missing = |name: &str| input_error(format!("general proposal is missing {name} columns"));
+    let data = match kind {
+        GeneralSeriesKind::Bubble => GeneralXyInput::Bubble {
+            ids,
+            x: columns.x.take().ok_or_else(|| missing("numeric X"))?,
+            y: columns.y.take().ok_or_else(|| missing("Y"))?,
+            y_valid: columns.y_valid.take(),
+            size: columns.size.take().ok_or_else(|| missing("bubble size"))?,
+            size_valid: columns.size_valid.take(),
+        },
+        GeneralSeriesKind::BoxPlot => GeneralXyInput::BoxCategory {
+            ids,
+            categories: columns
+                .categories
+                .take()
+                .ok_or_else(|| missing("category"))?,
+            category_indices: columns
+                .category_indices
+                .take()
+                .ok_or_else(|| missing("category index"))?,
+            min: columns.min.take().ok_or_else(|| missing("box min"))?,
+            min_valid: columns.min_valid.take(),
+            q1: columns.q1.take().ok_or_else(|| missing("box q1"))?,
+            q1_valid: columns.q1_valid.take(),
+            median: columns.median.take().ok_or_else(|| missing("box median"))?,
+            median_valid: columns.median_valid.take(),
+            q3: columns.q3.take().ok_or_else(|| missing("box q3"))?,
+            q3_valid: columns.q3_valid.take(),
+            max: columns.max.take().ok_or_else(|| missing("box max"))?,
+            max_valid: columns.max_valid.take(),
+        },
+        GeneralSeriesKind::HeatmapGrid => {
+            if let (Some(x_categories), Some(x_category_indices)) = (
+                columns.x_categories.take(),
+                columns.x_category_indices.take(),
+            ) {
+                GeneralXyInput::HeatmapCategoryCategory {
+                    ids,
+                    x_categories,
+                    x_category_indices,
+                    y_categories: columns
+                        .y_categories
+                        .take()
+                        .ok_or_else(|| missing("heatmap Y category"))?,
+                    y_category_indices: columns
+                        .y_category_indices
+                        .take()
+                        .ok_or_else(|| missing("heatmap Y category index"))?,
+                    value: columns
+                        .value
+                        .take()
+                        .ok_or_else(|| missing("heatmap value"))?,
+                    value_valid: columns.value_valid.take(),
+                }
+            } else if let Some(x_epoch_ms) = columns.x_epoch_ms.take() {
+                GeneralXyInput::HeatmapTemporalNumeric {
+                    ids,
+                    x_epoch_ms,
+                    y_coordinate: columns
+                        .y_coordinate
+                        .take()
+                        .ok_or_else(|| missing("heatmap Y coordinate"))?,
+                    value: columns
+                        .value
+                        .take()
+                        .ok_or_else(|| missing("heatmap value"))?,
+                    value_valid: columns.value_valid.take(),
+                }
+            } else {
+                GeneralXyInput::HeatmapNumericNumeric {
+                    ids,
+                    x: columns.x.take().ok_or_else(|| missing("heatmap X"))?,
+                    y_coordinate: columns
+                        .y_coordinate
+                        .take()
+                        .ok_or_else(|| missing("heatmap Y coordinate"))?,
+                    value: columns
+                        .value
+                        .take()
+                        .ok_or_else(|| missing("heatmap value"))?,
+                    value_valid: columns.value_valid.take(),
+                }
+            }
+        }
+        GeneralSeriesKind::ErrorBar => {
+            if let Some(x_epoch_ms) = columns.x_epoch_ms.take() {
+                GeneralXyInput::ErrorTemporal {
+                    ids,
+                    x_epoch_ms,
+                    y: columns.y.take().ok_or_else(|| missing("Y"))?,
+                    y_valid: columns.y_valid.take(),
+                    x_low_epoch_ms: columns
+                        .x_low_epoch_ms
+                        .take()
+                        .ok_or_else(|| missing("temporal X-low"))?,
+                    x_low_valid: columns.x_low_valid.take(),
+                    x_high_epoch_ms: columns
+                        .x_high_epoch_ms
+                        .take()
+                        .ok_or_else(|| missing("temporal X-high"))?,
+                    x_high_valid: columns.x_high_valid.take(),
+                    y_low: columns.y_low.take().ok_or_else(|| missing("Y-low"))?,
+                    y_low_valid: columns.y_low_valid.take(),
+                    y_high: columns.y_high.take().ok_or_else(|| missing("Y-high"))?,
+                    y_high_valid: columns.y_high_valid.take(),
+                }
+            } else if let (Some(categories), Some(category_indices)) =
+                (columns.categories.take(), columns.category_indices.take())
+            {
+                GeneralXyInput::ErrorCategory {
+                    ids,
+                    categories,
+                    category_indices,
+                    y: columns.y.take().ok_or_else(|| missing("Y"))?,
+                    y_valid: columns.y_valid.take(),
+                    y_low: columns.y_low.take().ok_or_else(|| missing("Y-low"))?,
+                    y_low_valid: columns.y_low_valid.take(),
+                    y_high: columns.y_high.take().ok_or_else(|| missing("Y-high"))?,
+                    y_high_valid: columns.y_high_valid.take(),
+                }
+            } else {
+                GeneralXyInput::ErrorNumeric {
+                    ids,
+                    x: columns.x.take().ok_or_else(|| missing("numeric X"))?,
+                    y: columns.y.take().ok_or_else(|| missing("Y"))?,
+                    y_valid: columns.y_valid.take(),
+                    x_low: columns.x_low.take().ok_or_else(|| missing("X-low"))?,
+                    x_low_valid: columns.x_low_valid.take(),
+                    x_high: columns.x_high.take().ok_or_else(|| missing("X-high"))?,
+                    x_high_valid: columns.x_high_valid.take(),
+                    y_low: columns.y_low.take().ok_or_else(|| missing("Y-low"))?,
+                    y_low_valid: columns.y_low_valid.take(),
+                    y_high: columns.y_high.take().ok_or_else(|| missing("Y-high"))?,
+                    y_high_valid: columns.y_high_valid.take(),
+                }
+            }
+        }
+        GeneralSeriesKind::RangeArea | GeneralSeriesKind::RangeBar => {
+            if let Some(x_epoch_ms) = columns.x_epoch_ms.take() {
+                GeneralXyInput::RangeTemporal {
+                    ids,
+                    x_epoch_ms,
+                    low: columns.low.take().ok_or_else(|| missing("range low"))?,
+                    low_valid: columns.low_valid.take(),
+                    high: columns.high.take().ok_or_else(|| missing("range high"))?,
+                    high_valid: columns.high_valid.take(),
+                }
+            } else if let (Some(categories), Some(category_indices)) =
+                (columns.categories.take(), columns.category_indices.take())
+            {
+                GeneralXyInput::RangeCategory {
+                    ids,
+                    categories,
+                    category_indices,
+                    low: columns.low.take().ok_or_else(|| missing("range low"))?,
+                    low_valid: columns.low_valid.take(),
+                    high: columns.high.take().ok_or_else(|| missing("range high"))?,
+                    high_valid: columns.high_valid.take(),
+                }
+            } else {
+                GeneralXyInput::RangeNumeric {
+                    ids,
+                    x: columns.x.take().ok_or_else(|| missing("numeric X"))?,
+                    low: columns.low.take().ok_or_else(|| missing("range low"))?,
+                    low_valid: columns.low_valid.take(),
+                    high: columns.high.take().ok_or_else(|| missing("range high"))?,
+                    high_valid: columns.high_valid.take(),
+                }
+            }
+        }
+        _ => {
+            if let Some(x_epoch_ms) = columns.x_epoch_ms.take() {
+                GeneralXyInput::Temporal {
+                    ids,
+                    x_epoch_ms,
+                    y: columns.y.take().ok_or_else(|| missing("Y"))?,
+                    y_valid: columns.y_valid.take(),
+                }
+            } else if let (Some(categories), Some(category_indices)) =
+                (columns.categories.take(), columns.category_indices.take())
+            {
+                GeneralXyInput::Category {
+                    ids,
+                    categories,
+                    category_indices,
+                    y: columns.y.take().ok_or_else(|| missing("Y"))?,
+                    y_valid: columns.y_valid.take(),
+                }
+            } else {
+                GeneralXyInput::Numeric {
+                    ids,
+                    x: columns.x.take().ok_or_else(|| missing("numeric X"))?,
+                    y: columns.y.take().ok_or_else(|| missing("Y"))?,
+                    y_valid: columns.y_valid.take(),
+                }
+            }
+        }
+    };
+    Ok(GeneralSeriesProposal {
+        kind,
+        x_axis_id: input.x_axis_id,
+        y_axis_id: input.y_axis_id,
+        data,
+    })
 }
 
 fn line_style(value: Option<&str>) -> Result<GeneralLineStyle, ChartError> {
@@ -632,39 +949,18 @@ impl ChartInner {
             Ok(input) => input,
             Err(error) => return error,
         };
-        let Some(dimension) = dimension(&input.dimension) else {
-            return input_error("unknown general axis dimension");
+        let id = input.id.clone();
+        let options = match axis_options_from_input(input) {
+            Ok(options) => options,
+            Err(error) => return error,
         };
-        let Some(position) = position(input.position.as_deref()) else {
-            return input_error("unknown general axis position");
-        };
-        let Some(scale) = scale(&input.scale) else {
-            return input_error("unknown general axis scale");
-        };
-        let Some(domain) = axis_domain(scale, input.domain) else {
-            return input_error("general axis domain does not match its scale");
-        };
-        let mut options = GeneralAxisOptions::new(input.id.clone(), input.pane, dimension, scale);
-        options.position = position;
-        options.domain = domain;
-        options.reverse = input.reverse;
-        options.visible = input.visible;
-        options.title = input.title;
-        options.tick_count = input.tick_count;
-        options.ticks = input.ticks;
-        options.min_tick_gap = input.min_tick_gap;
-        options.domain_padding = input.domain_padding;
-        options.band_padding_inner = input.band_padding_inner;
-        options.band_padding_outer = input.band_padding_outer;
-        options.zero_line = input.zero_line;
-        options.grid_visible = input.grid_visible;
         match self.engine.add_general_axis(options) {
             Ok(()) => {
                 let handle_token = self
                     .engine
-                    .general_axis(&input.id)
+                    .general_axis(&id)
                     .map_or(0, aeris_charts_engine::GeneralAxis::handle_token);
-                result_ok(json!({ "id": input.id, "handle_token": handle_token }))
+                result_ok(json!({ "id": id, "handle_token": handle_token }))
             }
             Err(error) => result_error(&error),
         }
@@ -675,33 +971,46 @@ impl ChartInner {
             Ok(input) => input,
             Err(error) => return error,
         };
-        let Some(dimension) = dimension(&input.dimension) else {
-            return input_error("unknown general axis dimension");
+        let options = match axis_options_from_input(input) {
+            Ok(options) => options,
+            Err(error) => return error,
         };
-        let Some(position) = position(input.position.as_deref()) else {
-            return input_error("unknown general axis position");
-        };
-        let Some(scale) = scale(&input.scale) else {
-            return input_error("unknown general axis scale");
-        };
-        let Some(domain) = axis_domain(scale, input.domain) else {
-            return input_error("general axis domain does not match its scale");
-        };
-        let mut options = GeneralAxisOptions::new(input.id, input.pane, dimension, scale);
-        options.position = position;
-        options.domain = domain;
-        options.reverse = input.reverse;
-        options.visible = input.visible;
-        options.title = input.title;
-        options.tick_count = input.tick_count;
-        options.ticks = input.ticks;
-        options.min_tick_gap = input.min_tick_gap;
-        options.domain_padding = input.domain_padding;
-        options.band_padding_inner = input.band_padding_inner;
-        options.band_padding_outer = input.band_padding_outer;
-        options.zero_line = input.zero_line;
-        options.grid_visible = input.grid_visible;
         match self.engine.update_general_axis_options(options) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn validate_general_pane_proposal_result_json(&self, options_json: &str) -> String {
+        let input = match parse_json::<PaneProposalInput>(options_json) {
+            Ok(input) => input,
+            Err(error) => return error,
+        };
+        let axes = match input
+            .axes
+            .into_iter()
+            .map(axis_options_from_input)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(axes) => axes,
+            Err(error) => return error,
+        };
+        let series = match input
+            .series
+            .into_iter()
+            .map(proposal_series)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(series) => series,
+            Err(error) => return error,
+        };
+        let proposal = GeneralPaneProposal {
+            pane: input.pane,
+            axes,
+            series,
+            references: input.references,
+        };
+        match self.engine.validate_general_pane_proposal(&proposal) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -802,6 +1111,24 @@ impl ChartInner {
             .general_reference_options(id)
             .and_then(|options| serde_json::to_string(&options).ok())
             .unwrap_or_else(|| "null".to_owned())
+    }
+
+    pub fn update_general_reference_options_result_json(
+        &mut self,
+        id: u32,
+        options_json: &str,
+    ) -> String {
+        let Some(id) = GeneralReferenceId::from_raw(id) else {
+            return input_error("general reference handle is stale");
+        };
+        let options = match parse_json::<GeneralReferenceOptions>(options_json) {
+            Ok(options) => options,
+            Err(error) => return error,
+        };
+        match self.engine.update_general_reference_options(id, options) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
     }
 
     pub fn general_reference_ids_json(&self, pane: i32) -> String {
@@ -2595,6 +2922,26 @@ impl ChartInner {
             .engine
             .set_general_brush_from_pixels(axis_id, from_css, to_css)
         {
+            Ok(snapshot) => result_ok(general_brush_value(snapshot)),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn set_general_brush_range_result_json(
+        &mut self,
+        axis_id: &str,
+        range_json: &str,
+    ) -> String {
+        let input = match parse_json::<BrushRangeInput>(range_json) {
+            Ok(input) => input,
+            Err(error) => return error,
+        };
+        let range = match input {
+            BrushRangeInput::Numeric { from, to } => GeneralBrushRange::Numeric([from, to]),
+            BrushRangeInput::Temporal { from, to } => GeneralBrushRange::Temporal([from, to]),
+            BrushRangeInput::Category { from, to } => GeneralBrushRange::Category([from, to]),
+        };
+        match self.engine.set_general_brush_range(axis_id, range) {
             Ok(snapshot) => result_ok(general_brush_value(snapshot)),
             Err(error) => result_error(&error),
         }

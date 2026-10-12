@@ -28,6 +28,24 @@ pub const DEFAULT_GENERAL_FILL_OPACITY: f64 = 72.0 / 255.0;
 const SCATTER_GRID_BASE_CELL_CSS: f64 = 32.0;
 const MAX_SCATTER_GRID_CELLS: usize = 65_536;
 
+/// One proposed series and its packed columns for a non-mutating pane validation.
+#[derive(Clone, Debug)]
+pub struct GeneralSeriesProposal {
+    pub kind: GeneralSeriesKind,
+    pub x_axis_id: String,
+    pub y_axis_id: String,
+    pub data: GeneralXyInput,
+}
+
+/// Complete proposed general-pane graph. Validation never installs any of these objects.
+#[derive(Clone, Debug)]
+pub struct GeneralPaneProposal {
+    pub pane: usize,
+    pub axes: Vec<crate::GeneralAxisOptions>,
+    pub series: Vec<GeneralSeriesProposal>,
+    pub references: Vec<GeneralReferenceOptions>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GeneralSeriesKind {
     XyLine,
@@ -1457,6 +1475,15 @@ impl GeneralSeriesRegistry {
         self.references.iter().find(|reference| reference.id == id)
     }
 
+    pub(crate) fn reference_get_mut(
+        &mut self,
+        id: GeneralReferenceId,
+    ) -> Option<&mut GeneralReference> {
+        self.references
+            .iter_mut()
+            .find(|reference| reference.id == id)
+    }
+
     pub(crate) fn reference_insert(
         &mut self,
         pane_id: PaneId,
@@ -1683,6 +1710,77 @@ impl Default for GeneralSeriesRegistry {
 }
 
 impl ChartEngine {
+    /// Validate a complete proposed general pane without changing live state.
+    pub fn validate_general_pane_proposal(
+        &self,
+        proposal: &GeneralPaneProposal,
+    ) -> Result<(), ChartError> {
+        let pane = proposal.pane;
+        let pane_id = self
+            .pane_stable_id(pane)
+            .ok_or_else(|| invalid("general pane proposal references a stale pane"))?;
+        let pane_domain = self
+            .pane_horizontal_domain(pane)
+            .ok_or_else(|| invalid("general pane proposal has no horizontal domain"))?;
+        let mut axis_ids = std::collections::HashSet::with_capacity(proposal.axes.len());
+        for axis in &proposal.axes {
+            if axis.pane != pane {
+                return Err(invalid("proposed general axes must belong to their pane"));
+            }
+            if !axis_ids.insert(axis.id.as_str()) {
+                return Err(invalid("general axis IDs must be unique"));
+            }
+            self.validate_general_axis_definition(axis)?;
+        }
+
+        let axis = |id: &str| {
+            proposal
+                .axes
+                .iter()
+                .find(|axis| axis.id == id)
+                .ok_or_else(|| invalid(format!("general series axis {id:?} does not exist")))
+        };
+        let mut data = crate::general_data::GeneralDataStore::new();
+        for series in &proposal.series {
+            let x_axis = axis(&series.x_axis_id)?;
+            let y_axis = axis(&series.y_axis_id)?;
+            if x_axis.dimension != AxisDimension::X || y_axis.dimension != AxisDimension::Y {
+                return Err(invalid("general series axis dimensions are incompatible"));
+            }
+            validate_general_series_axis_compatibility(
+                series.kind,
+                pane_domain,
+                series.data.x_kind(),
+                x_axis.scale,
+                y_axis.scale,
+                matches!(series.data, GeneralXyInput::HeatmapCategoryCategory { .. }),
+                matches!(
+                    series.data,
+                    GeneralXyInput::HeatmapNumericNumeric { .. }
+                        | GeneralXyInput::HeatmapTemporalNumeric { .. }
+                ),
+            )?;
+            let dataset_id = data.insert(series.data.clone())?;
+            let dataset = data
+                .get(dataset_id)
+                .ok_or_else(|| invalid("proposed general dataset could not be validated"))?;
+            validate_dataset_for_series(series.kind, dataset, x_axis.scale, y_axis.scale)?;
+        }
+
+        let axis_info = |id: &str| {
+            let axis = proposal
+                .axes
+                .iter()
+                .find(|axis| axis.id == id)
+                .ok_or_else(|| invalid(format!("general reference axis {id:?} does not exist")))?;
+            Ok((pane_id, axis.dimension, axis.scale))
+        };
+        for reference in &proposal.references {
+            validate_general_reference_options(pane_id, reference, axis_info)?;
+        }
+        Ok(())
+    }
+
     #[doc(hidden)]
     pub fn add_general_series(
         &mut self,
@@ -1713,223 +1811,16 @@ impl ChartEngine {
         if x_axis.dimension() != AxisDimension::X || y_axis.dimension() != AxisDimension::Y {
             return Err(invalid("general series axis dimensions are incompatible"));
         }
-        match options.kind {
-            GeneralSeriesKind::XyLine
-            | GeneralSeriesKind::XyArea
-            | GeneralSeriesKind::RangeArea => {
-                let compatible_x = matches!(
-                    (pane_domain, dataset_kind, x_axis.scale()),
-                    (
-                        HorizontalDomain::Continuous { .. },
-                        GeneralXKind::Numeric,
-                        GeneralScaleType::Linear
-                            | GeneralScaleType::Logarithmic
-                            | GeneralScaleType::SymmetricLog
-                    ) | (
-                        HorizontalDomain::Temporal,
-                        GeneralXKind::Temporal,
-                        GeneralScaleType::Temporal
-                    ) | (
-                        HorizontalDomain::Category {
-                            scale: crate::CategoryScaleType::Band
-                        },
-                        GeneralXKind::Category,
-                        GeneralScaleType::Band
-                    ) | (
-                        HorizontalDomain::Category {
-                            scale: crate::CategoryScaleType::Point
-                        },
-                        GeneralXKind::Category,
-                        GeneralScaleType::Point
-                    )
-                );
-                if !compatible_x
-                    || !matches!(
-                        y_axis.scale(),
-                        GeneralScaleType::Linear
-                            | GeneralScaleType::Logarithmic
-                            | GeneralScaleType::SymmetricLog
-                    )
-                {
-                    return Err(invalid(
-                        "xy_line/xy_area/range_area requires X data/axis semantics matching its continuous, temporal, or category pane and a numeric Y axis",
-                    ));
-                }
-            }
-            GeneralSeriesKind::RangeBar => {
-                if pane_domain
-                    != (HorizontalDomain::Category {
-                        scale: crate::CategoryScaleType::Band,
-                    })
-                    || dataset_kind != GeneralXKind::Category
-                    || x_axis.scale() != GeneralScaleType::Band
-                    || !matches!(
-                        y_axis.scale(),
-                        GeneralScaleType::Linear
-                            | GeneralScaleType::Logarithmic
-                            | GeneralScaleType::SymmetricLog
-                    )
-                {
-                    return Err(invalid(
-                        "range_bar requires a category-band pane, category X data, a band X axis, and a numeric Y axis",
-                    ));
-                }
-            }
-            GeneralSeriesKind::Column => {
-                if pane_domain
-                    != (HorizontalDomain::Category {
-                        scale: crate::CategoryScaleType::Band,
-                    })
-                    || dataset_kind != GeneralXKind::Category
-                    || x_axis.scale() != GeneralScaleType::Band
-                    || y_axis.scale() != GeneralScaleType::Linear
-                {
-                    return Err(invalid(
-                        "the initial column series requires a category-band pane, category X data, a band X axis, and a linear Y axis",
-                    ));
-                }
-            }
-            GeneralSeriesKind::HorizontalBar => {
-                if pane_domain
-                    != (HorizontalDomain::Continuous {
-                        scale: crate::ContinuousScaleType::Linear,
-                    })
-                    || dataset_kind != GeneralXKind::Category
-                    || x_axis.scale() != GeneralScaleType::Linear
-                    || y_axis.scale() != GeneralScaleType::Band
-                {
-                    return Err(invalid(
-                        "horizontal_bar requires a continuous-linear pane, category/value data, a linear X axis, and a band Y axis",
-                    ));
-                }
-            }
-            GeneralSeriesKind::BoxPlot => {
-                if pane_domain
-                    != (HorizontalDomain::Category {
-                        scale: crate::CategoryScaleType::Band,
-                    })
-                    || dataset_kind != GeneralXKind::Category
-                    || x_axis.scale() != GeneralScaleType::Band
-                    || !matches!(
-                        y_axis.scale(),
-                        GeneralScaleType::Linear
-                            | GeneralScaleType::Logarithmic
-                            | GeneralScaleType::SymmetricLog
-                    )
-                {
-                    return Err(invalid(
-                        "box_plot requires a category-band pane, category data, a band X axis, and a numeric Y axis",
-                    ));
-                }
-            }
-            GeneralSeriesKind::HeatmapGrid => {
-                let compatible = match dataset_kind {
-                    GeneralXKind::Category => {
-                        pane_domain
-                            == (HorizontalDomain::Category {
-                                scale: crate::CategoryScaleType::Band,
-                            })
-                            && x_axis.scale() == GeneralScaleType::Band
-                            && y_axis.scale() == GeneralScaleType::Band
-                            && dataset.heatmap_y_categories().is_some()
-                    }
-                    GeneralXKind::Numeric => {
-                        matches!(pane_domain, HorizontalDomain::Continuous { .. })
-                            && matches!(
-                                x_axis.scale(),
-                                GeneralScaleType::Linear
-                                    | GeneralScaleType::Logarithmic
-                                    | GeneralScaleType::SymmetricLog
-                            )
-                            && matches!(
-                                y_axis.scale(),
-                                GeneralScaleType::Linear
-                                    | GeneralScaleType::Logarithmic
-                                    | GeneralScaleType::SymmetricLog
-                            )
-                            && dataset.heatmap_y_numeric().is_some()
-                    }
-                    GeneralXKind::Temporal => {
-                        pane_domain == HorizontalDomain::Temporal
-                            && x_axis.scale() == GeneralScaleType::Temporal
-                            && matches!(
-                                y_axis.scale(),
-                                GeneralScaleType::Linear
-                                    | GeneralScaleType::Logarithmic
-                                    | GeneralScaleType::SymmetricLog
-                            )
-                            && dataset.heatmap_y_numeric().is_some()
-                    }
-                };
-                if !compatible {
-                    return Err(invalid(
-                        "heatmap_grid requires category/category band axes, numeric/numeric axes, or temporal-X/numeric-Y axes matching its data",
-                    ));
-                }
-            }
-            GeneralSeriesKind::Scatter | GeneralSeriesKind::Bubble => {
-                if !matches!(pane_domain, HorizontalDomain::Continuous { .. })
-                    || dataset_kind != GeneralXKind::Numeric
-                    || !matches!(
-                        x_axis.scale(),
-                        GeneralScaleType::Linear
-                            | GeneralScaleType::Logarithmic
-                            | GeneralScaleType::SymmetricLog
-                    )
-                    || !matches!(
-                        y_axis.scale(),
-                        GeneralScaleType::Linear
-                            | GeneralScaleType::Logarithmic
-                            | GeneralScaleType::SymmetricLog
-                    )
-                {
-                    return Err(invalid(
-                        "scatter/bubble requires a continuous pane, numeric X data, and numeric X/Y axes",
-                    ));
-                }
-            }
-            GeneralSeriesKind::ErrorBar => {
-                let compatible_x = matches!(
-                    (pane_domain, dataset_kind, x_axis.scale()),
-                    (
-                        HorizontalDomain::Continuous { .. },
-                        GeneralXKind::Numeric,
-                        GeneralScaleType::Linear
-                            | GeneralScaleType::Logarithmic
-                            | GeneralScaleType::SymmetricLog
-                    ) | (
-                        HorizontalDomain::Temporal,
-                        GeneralXKind::Temporal,
-                        GeneralScaleType::Temporal
-                    ) | (
-                        HorizontalDomain::Category {
-                            scale: crate::CategoryScaleType::Band
-                        },
-                        GeneralXKind::Category,
-                        GeneralScaleType::Band
-                    ) | (
-                        HorizontalDomain::Category {
-                            scale: crate::CategoryScaleType::Point
-                        },
-                        GeneralXKind::Category,
-                        GeneralScaleType::Point
-                    )
-                );
-                if !compatible_x
-                    || !matches!(
-                        y_axis.scale(),
-                        GeneralScaleType::Linear
-                            | GeneralScaleType::Logarithmic
-                            | GeneralScaleType::SymmetricLog
-                    )
-                {
-                    return Err(invalid(
-                        "error_bar requires matching numeric/temporal/category X pane, data, and axis semantics with a numeric Y axis",
-                    ));
-                }
-            }
-        }
-        validate_dataset_for_series(options.kind, dataset, &x_axis, &y_axis)?;
+        validate_general_series_axis_compatibility(
+            options.kind,
+            pane_domain,
+            dataset_kind,
+            x_axis.scale(),
+            y_axis.scale(),
+            dataset.heatmap_y_categories().is_some(),
+            dataset.heatmap_y_numeric().is_some(),
+        )?;
+        validate_dataset_for_series(options.kind, dataset, x_axis.scale(), y_axis.scale())?;
         validate_presentation(&options)?;
         self.validate_layout_compatibility(pane_id, &options, None)?;
         let id = if let Some(registry) = self.general_series.as_mut() {
@@ -2217,10 +2108,10 @@ impl ChartEngine {
         &mut self,
         options: GeneralReferenceOptions,
     ) -> Result<GeneralReferenceId, ChartError> {
+        self.validate_general_reference_definition(&options)?;
         let pane_id = self
             .pane_stable_id(options.pane())
-            .ok_or_else(|| invalid("general reference references a stale pane"))?;
-        validate_general_reference_options(self, pane_id, &options)?;
+            .expect("validated general reference pane remains present");
         let id = if let Some(registry) = self.general_series.as_mut() {
             registry.reference_insert(pane_id, options)?
         } else {
@@ -2233,6 +2124,46 @@ impl ChartEngine {
         Ok(id)
     }
 
+    /// Validate a proposed reference against current axes without mutating the chart.
+    pub fn validate_general_reference_definition(
+        &self,
+        options: &GeneralReferenceOptions,
+    ) -> Result<(), ChartError> {
+        let pane_id = self
+            .pane_stable_id(options.pane())
+            .ok_or_else(|| invalid("general reference references a stale pane"))?;
+        validate_general_reference_options(pane_id, options, |id| {
+            let axis = self
+                .general_axis(id)
+                .ok_or_else(|| invalid(format!("general reference axis {id:?} is stale")))?;
+            Ok((axis.pane_id(), axis.dimension(), axis.scale()))
+        })
+    }
+
+    /// Validate a reference against the proposed axes for a pane before replacing live axes.
+    pub fn validate_general_reference_with_axes(
+        &self,
+        options: &GeneralReferenceOptions,
+        axes: &[crate::GeneralAxisOptions],
+    ) -> Result<(), ChartError> {
+        let pane_id = self
+            .pane_stable_id(options.pane())
+            .ok_or_else(|| invalid("general reference references a stale pane"))?;
+        for axis in axes {
+            self.validate_general_axis_definition(axis)?;
+        }
+        validate_general_reference_options(pane_id, options, |id| {
+            let axis = axes
+                .iter()
+                .find(|axis| axis.id == id)
+                .ok_or_else(|| invalid(format!("general reference axis {id:?} is stale")))?;
+            let axis_pane = self
+                .pane_stable_id(axis.pane)
+                .ok_or_else(|| invalid("general reference axis pane is stale"))?;
+            Ok((axis_pane, axis.dimension, axis.scale))
+        })
+    }
+
     #[doc(hidden)]
     pub fn general_reference_options(
         &self,
@@ -2243,6 +2174,40 @@ impl ChartEngine {
         let mut options = reference.options.clone();
         options.set_pane(pane);
         Some(options)
+    }
+
+    #[doc(hidden)]
+    pub fn update_general_reference_options(
+        &mut self,
+        id: GeneralReferenceId,
+        options: GeneralReferenceOptions,
+    ) -> Result<(), ChartError> {
+        if self
+            .general_series
+            .as_ref()
+            .and_then(|registry| registry.reference_get(id))
+            .is_none()
+        {
+            return Err(ChartError::new(
+                ErrorCode::InvalidHandle,
+                "general reference is stale",
+            ));
+        }
+        self.validate_general_reference_definition(&options)?;
+        let pane_id = self
+            .pane_stable_id(options.pane())
+            .expect("validated general reference pane remains present");
+        let reference = self
+            .general_series
+            .as_mut()
+            .and_then(|registry| registry.reference_get_mut(id))
+            .expect("validated live general reference remains present");
+        if reference.pane_id != pane_id || reference.options != options {
+            reference.pane_id = pane_id;
+            reference.options = options;
+            self.invalidate_frame_all();
+        }
+        Ok(())
     }
 
     #[doc(hidden)]
@@ -5817,6 +5782,62 @@ impl ChartEngine {
             .ok_or_else(|| invalid("general brush could not resolve its snapshot"))
     }
 
+    /// Set a validated semantic range without host pixel projection. Useful for controlled
+    /// authoring and for restoring a range after a viewport change.
+    pub fn set_general_brush_range(
+        &mut self,
+        axis_id: &str,
+        range: GeneralBrushRange,
+    ) -> Result<GeneralBrushSnapshot, ChartError> {
+        let axis = self.general_axis(axis_id).ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidHandle, "general brush axis is stale")
+        })?;
+        if !matches!(axis.dimension(), AxisDimension::X | AxisDimension::Y) {
+            return Err(invalid("general brushes require a Cartesian X or Y axis"));
+        }
+        let domain = self
+            .effective_general_axis_domain(axis)
+            .ok_or_else(|| invalid("general brush axis has no effective domain"))?;
+        let valid = match (&range, domain) {
+            (GeneralBrushRange::Numeric([from, to]), GeneralAxisDomain::Numeric(_)) => {
+                from.is_finite()
+                    && to.is_finite()
+                    && from <= to
+                    && (axis.scale() != GeneralScaleType::Logarithmic || *from > 0.0)
+            }
+            (GeneralBrushRange::Temporal([from, to]), GeneralAxisDomain::Temporal(_)) => {
+                from <= to
+                    && from.unsigned_abs() <= crate::MAX_GENERAL_TEMPORAL_MILLISECONDS as u64
+                    && to.unsigned_abs() <= crate::MAX_GENERAL_TEMPORAL_MILLISECONDS as u64
+            }
+            (GeneralBrushRange::Category([from, to]), GeneralAxisDomain::Category(_)) => {
+                let Some(GeneralAxisDomain::Category(categories)) =
+                    self.base_general_axis_domain(axis)
+                else {
+                    return Err(invalid("general brush category axis has no base domain"));
+                };
+                let start = categories.iter().position(|value| value == from);
+                let end = categories.iter().position(|value| value == to);
+                matches!((start, end), (Some(start), Some(end)) if start <= end)
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(invalid(
+                "general brush range must match its axis and be ordered",
+            ));
+        }
+        let next = Some(GeneralBrushSelection {
+            pane_id: axis.pane_id(),
+            axis_id: axis_id.to_owned(),
+            dimension: axis.dimension(),
+            range,
+        });
+        self.restore_general_brush_state(next);
+        self.general_brush_snapshot()
+            .ok_or_else(|| invalid("general brush could not resolve its snapshot"))
+    }
+
     /// Move one brush endpoint by one percent of the current transformed span, or one category.
     pub fn nudge_general_brush(
         &mut self,
@@ -7348,11 +7369,237 @@ fn general_heatmap_y_label(dataset: &crate::GeneralDataset, row: usize) -> Optio
     dataset.heatmap_y_categories()?.get(category_index).cloned()
 }
 
+fn validate_general_series_axis_compatibility(
+    kind: GeneralSeriesKind,
+    pane_domain: HorizontalDomain,
+    dataset_kind: GeneralXKind,
+    x_scale: GeneralScaleType,
+    y_scale: GeneralScaleType,
+    heatmap_y_category: bool,
+    heatmap_y_numeric: bool,
+) -> Result<(), ChartError> {
+    match kind {
+        GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea | GeneralSeriesKind::RangeArea => {
+            let compatible_x = matches!(
+                (pane_domain, dataset_kind, x_scale),
+                (
+                    HorizontalDomain::Continuous { .. },
+                    GeneralXKind::Numeric,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                ) | (
+                    HorizontalDomain::Temporal,
+                    GeneralXKind::Temporal,
+                    GeneralScaleType::Temporal
+                ) | (
+                    HorizontalDomain::Category {
+                        scale: crate::CategoryScaleType::Band
+                    },
+                    GeneralXKind::Category,
+                    GeneralScaleType::Band
+                ) | (
+                    HorizontalDomain::Category {
+                        scale: crate::CategoryScaleType::Point
+                    },
+                    GeneralXKind::Category,
+                    GeneralScaleType::Point
+                )
+            );
+            if !compatible_x
+                || !matches!(
+                    y_scale,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                )
+            {
+                return Err(invalid(
+                    "xy_line/xy_area/range_area requires X data/axis semantics matching its continuous, temporal, or category pane and a numeric Y axis",
+                ));
+            }
+        }
+        GeneralSeriesKind::RangeBar => {
+            if pane_domain
+                != (HorizontalDomain::Category {
+                    scale: crate::CategoryScaleType::Band,
+                })
+                || dataset_kind != GeneralXKind::Category
+                || x_scale != GeneralScaleType::Band
+                || !matches!(
+                    y_scale,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                )
+            {
+                return Err(invalid(
+                    "range_bar requires a category-band pane, category X data, a band X axis, and a numeric Y axis",
+                ));
+            }
+        }
+        GeneralSeriesKind::Column => {
+            if pane_domain
+                != (HorizontalDomain::Category {
+                    scale: crate::CategoryScaleType::Band,
+                })
+                || dataset_kind != GeneralXKind::Category
+                || x_scale != GeneralScaleType::Band
+                || y_scale != GeneralScaleType::Linear
+            {
+                return Err(invalid(
+                    "the initial column series requires a category-band pane, category X data, a band X axis, and a linear Y axis",
+                ));
+            }
+        }
+        GeneralSeriesKind::HorizontalBar => {
+            if pane_domain
+                != (HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                })
+                || dataset_kind != GeneralXKind::Category
+                || x_scale != GeneralScaleType::Linear
+                || y_scale != GeneralScaleType::Band
+            {
+                return Err(invalid(
+                    "horizontal_bar requires a continuous-linear pane, category/value data, a linear X axis, and a band Y axis",
+                ));
+            }
+        }
+        GeneralSeriesKind::BoxPlot => {
+            if pane_domain
+                != (HorizontalDomain::Category {
+                    scale: crate::CategoryScaleType::Band,
+                })
+                || dataset_kind != GeneralXKind::Category
+                || x_scale != GeneralScaleType::Band
+                || !matches!(
+                    y_scale,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                )
+            {
+                return Err(invalid(
+                    "box_plot requires a category-band pane, category data, a band X axis, and a numeric Y axis",
+                ));
+            }
+        }
+        GeneralSeriesKind::HeatmapGrid => {
+            let compatible = match dataset_kind {
+                GeneralXKind::Category => {
+                    pane_domain
+                        == (HorizontalDomain::Category {
+                            scale: crate::CategoryScaleType::Band,
+                        })
+                        && x_scale == GeneralScaleType::Band
+                        && y_scale == GeneralScaleType::Band
+                        && heatmap_y_category
+                }
+                GeneralXKind::Numeric => {
+                    matches!(pane_domain, HorizontalDomain::Continuous { .. })
+                        && matches!(
+                            x_scale,
+                            GeneralScaleType::Linear
+                                | GeneralScaleType::Logarithmic
+                                | GeneralScaleType::SymmetricLog
+                        )
+                        && matches!(
+                            y_scale,
+                            GeneralScaleType::Linear
+                                | GeneralScaleType::Logarithmic
+                                | GeneralScaleType::SymmetricLog
+                        )
+                        && heatmap_y_numeric
+                }
+                GeneralXKind::Temporal => {
+                    pane_domain == HorizontalDomain::Temporal
+                        && x_scale == GeneralScaleType::Temporal
+                        && matches!(
+                            y_scale,
+                            GeneralScaleType::Linear
+                                | GeneralScaleType::Logarithmic
+                                | GeneralScaleType::SymmetricLog
+                        )
+                        && heatmap_y_numeric
+                }
+            };
+            if !compatible {
+                return Err(invalid(
+                    "heatmap_grid requires category/category band axes, numeric/numeric axes, or temporal-X/numeric-Y axes matching its data",
+                ));
+            }
+        }
+        GeneralSeriesKind::Scatter | GeneralSeriesKind::Bubble => {
+            if !matches!(pane_domain, HorizontalDomain::Continuous { .. })
+                || dataset_kind != GeneralXKind::Numeric
+                || !matches!(
+                    x_scale,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                )
+                || !matches!(
+                    y_scale,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                )
+            {
+                return Err(invalid(
+                    "scatter/bubble requires a continuous pane, numeric X data, and numeric X/Y axes",
+                ));
+            }
+        }
+        GeneralSeriesKind::ErrorBar => {
+            let compatible_x = matches!(
+                (pane_domain, dataset_kind, x_scale),
+                (
+                    HorizontalDomain::Continuous { .. },
+                    GeneralXKind::Numeric,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                ) | (
+                    HorizontalDomain::Temporal,
+                    GeneralXKind::Temporal,
+                    GeneralScaleType::Temporal
+                ) | (
+                    HorizontalDomain::Category {
+                        scale: crate::CategoryScaleType::Band
+                    },
+                    GeneralXKind::Category,
+                    GeneralScaleType::Band
+                ) | (
+                    HorizontalDomain::Category {
+                        scale: crate::CategoryScaleType::Point
+                    },
+                    GeneralXKind::Category,
+                    GeneralScaleType::Point
+                )
+            );
+            if !compatible_x
+                || !matches!(
+                    y_scale,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                )
+            {
+                return Err(invalid(
+                    "error_bar requires matching numeric/temporal/category X pane, data, and axis semantics with a numeric Y axis",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_dataset_for_series(
     kind: GeneralSeriesKind,
     dataset: &crate::GeneralDataset,
-    x_axis: &crate::GeneralAxis,
-    y_axis: &crate::GeneralAxis,
+    x_scale: GeneralScaleType,
+    y_scale: GeneralScaleType,
 ) -> Result<(), ChartError> {
     match kind {
         GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar => {
@@ -7361,7 +7608,7 @@ fn validate_dataset_for_series(
             }
         }
         GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
-            let expected_x = match x_axis.scale() {
+            let expected_x = match x_scale {
                 GeneralScaleType::Linear
                 | GeneralScaleType::Logarithmic
                 | GeneralScaleType::SymmetricLog => GeneralXKind::Numeric,
@@ -7378,7 +7625,7 @@ fn validate_dataset_for_series(
             }
         }
         GeneralSeriesKind::RangeArea | GeneralSeriesKind::RangeBar => {
-            let expected_x = match x_axis.scale() {
+            let expected_x = match x_scale {
                 GeneralScaleType::Linear
                 | GeneralScaleType::Logarithmic
                 | GeneralScaleType::SymmetricLog => GeneralXKind::Numeric,
@@ -7446,7 +7693,7 @@ fn validate_dataset_for_series(
             let q3 = dataset
                 .x_high()
                 .ok_or_else(|| invalid("box-plot series require a q3 channel"))?;
-            if y_axis.scale() == GeneralScaleType::Logarithmic {
+            if y_scale == GeneralScaleType::Logarithmic {
                 for row in 0..dataset.len() {
                     for (valid, value) in [
                         (dataset.low_is_valid(row), min[row]),
@@ -7489,7 +7736,7 @@ fn validate_dataset_for_series(
                         "heatmap-grid numeric Y coordinates must stay aligned with the dataset",
                     ));
                 }
-                if y_axis.scale() == GeneralScaleType::Logarithmic
+                if y_scale == GeneralScaleType::Logarithmic
                     && y_coordinates.iter().any(|value| *value <= 0.0)
                 {
                     return Err(invalid(
@@ -7497,7 +7744,7 @@ fn validate_dataset_for_series(
                     ));
                 }
                 if dataset.x_kind() == GeneralXKind::Numeric
-                    && x_axis.scale() == GeneralScaleType::Logarithmic
+                    && x_scale == GeneralScaleType::Logarithmic
                     && dataset
                         .numeric_x()
                         .is_some_and(|values| values.iter().any(|value| *value <= 0.0))
@@ -7512,12 +7759,11 @@ fn validate_dataset_for_series(
             let values = dataset
                 .numeric_x()
                 .ok_or_else(|| invalid("scatter series require numeric X data"))?;
-            if x_axis.scale() == GeneralScaleType::Logarithmic
-                && values.iter().any(|value| *value <= 0.0)
+            if x_scale == GeneralScaleType::Logarithmic && values.iter().any(|value| *value <= 0.0)
             {
                 return Err(invalid("logarithmic scatter X values must be positive"));
             }
-            validate_logarithmic_general_y(dataset, y_axis)?;
+            validate_logarithmic_general_y(dataset, y_scale)?;
         }
         GeneralSeriesKind::Bubble => {
             dataset
@@ -7533,9 +7779,9 @@ fn validate_dataset_for_series(
 
 fn validate_logarithmic_general_y(
     dataset: &crate::GeneralDataset,
-    y_axis: &crate::GeneralAxis,
+    y_scale: GeneralScaleType,
 ) -> Result<(), ChartError> {
-    if y_axis.scale() == GeneralScaleType::Logarithmic
+    if y_scale == GeneralScaleType::Logarithmic
         && dataset
             .y()
             .iter()
@@ -7550,22 +7796,20 @@ fn validate_logarithmic_general_y(
 }
 
 fn validate_general_reference_options(
-    engine: &ChartEngine,
     pane_id: PaneId,
     options: &GeneralReferenceOptions,
+    axis_info: impl Fn(&str) -> Result<(PaneId, AxisDimension, GeneralScaleType), ChartError>,
 ) -> Result<(), ChartError> {
     let validate_axis = |id: &str,
                          dimension: AxisDimension|
-     -> Result<&crate::GeneralAxis, ChartError> {
-        let axis = engine
-            .general_axis(id)
-            .ok_or_else(|| invalid(format!("general reference axis {id:?} is stale")))?;
-        if axis.pane_id() != pane_id || axis.dimension() != dimension {
+     -> Result<GeneralScaleType, ChartError> {
+        let (axis_pane, axis_dimension, scale) = axis_info(id)?;
+        if axis_pane != pane_id || axis_dimension != dimension {
             return Err(invalid(format!(
                 "general reference axis {id:?} must belong to its pane and have {dimension:?} dimension"
             )));
         }
-        Ok(axis)
+        Ok(scale)
     };
     let validate_color = |color: &Option<String>| -> Result<(), ChartError> {
         if let Some(color) = color {
@@ -7591,17 +7835,15 @@ fn validate_general_reference_options(
             line_width,
             ..
         } => {
-            let axis = engine
-                .general_axis(axis_id)
-                .ok_or_else(|| invalid(format!("general reference axis {axis_id:?} is stale")))?;
-            if axis.pane_id() != pane_id
-                || !matches!(axis.dimension(), AxisDimension::X | AxisDimension::Y)
+            let (axis_pane, axis_dimension, scale) = axis_info(axis_id)?;
+            if axis_pane != pane_id
+                || !matches!(axis_dimension, AxisDimension::X | AxisDimension::Y)
             {
                 return Err(invalid(
                     "general reference line axis must be an X or Y axis on its pane",
                 ));
             }
-            validate_general_reference_value(value, axis)?;
+            validate_general_reference_value(value, scale)?;
             validate_color(color)?;
             if !line_width.is_finite() || *line_width <= 0.0 || *line_width > 64.0 {
                 return Err(invalid(
@@ -7658,9 +7900,9 @@ fn validate_general_reference_options(
 
 fn validate_general_reference_value(
     value: &GeneralReferenceValue,
-    axis: &crate::GeneralAxis,
+    scale: GeneralScaleType,
 ) -> Result<(), ChartError> {
-    match (value, axis.scale()) {
+    match (value, scale) {
         (
             GeneralReferenceValue::Numeric(value),
             GeneralScaleType::Linear
@@ -7670,7 +7912,7 @@ fn validate_general_reference_value(
             if !value.is_finite() {
                 return Err(invalid("general reference numeric values must be finite"));
             }
-            if axis.scale() == GeneralScaleType::Logarithmic && *value <= 0.0 {
+            if scale == GeneralScaleType::Logarithmic && *value <= 0.0 {
                 return Err(invalid(
                     "general reference values on logarithmic axes must be positive",
                 ));

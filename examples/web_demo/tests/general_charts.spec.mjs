@@ -657,6 +657,172 @@ test("React adapter keeps chart and series identities across rerenders and dispo
   });
 });
 
+test("React general declarations map records once per changed input and retain engine handles", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactDeclarations();
+  });
+  expect(result).toEqual({
+    same_chart: true,
+    same_series: true,
+    initial_calls: 2,
+    retained_calls: 2,
+    changed_calls: 4,
+    axis_count: 2,
+    data_value: 27,
+  });
+});
+
+test("React references and default controls follow the retained general pane", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactComponents();
+  });
+  expect(result).toMatchObject({
+    same_chart: true,
+    same_series: true,
+    same_reference: true,
+    reference_count: 1,
+    reference_value: 16,
+    toggled: true,
+    labels: true,
+    brush: { type: "category", from: "Jan", to: "Feb" },
+    tooltip_count: 1,
+  });
+});
+
+test("React brush accepts semantic controlled values and reports uncontrolled changes", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactControlledBrush();
+  });
+  expect(result).toEqual({
+    first: { type: "category", from: "Feb", to: "Feb" },
+    callback: { type: "category", from: "Jan", to: "Feb" },
+    held: { type: "category", from: "Feb", to: "Feb" },
+    updated: { type: "category", from: "Jan", to: "Feb" },
+    uncontrolled: null,
+    change_count: 2,
+  });
+});
+
+test("React chart readiness failure disposes its chart and permits a clean retry", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactChartReadyFailure();
+  });
+  expect(result).toEqual({
+    failure: "expected chart readiness failure",
+    stale: true,
+    retry_live: true,
+  });
+});
+
+test("React financial readiness failure does not strand its series", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactFinancialFailure();
+  });
+  expect(result.failure).toBe("expected financial readiness failure");
+  expect(result).toMatchObject({ after_failure: 0, after_retry: 1, retry_live: true });
+});
+
+test("React hydrates its empty server host and commits the latest concurrent render", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactHydration();
+  });
+  expect(result).toEqual({
+    server_has_canvas: false,
+    same_chart: true,
+    same_series: true,
+    value: 27,
+    errors: [],
+  });
+});
+
+test("React rejects an invalid structural axis render before changing live handles", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactAxisPreflight();
+  });
+  expect(result.error).toContain("incompatible with the pane domain");
+  expect(result).toMatchObject({
+    after_invalid: {
+      same_axis: true,
+      same_series: true,
+      axis_scale: "band",
+      series_title: "Sales",
+      pane_count: 2,
+    },
+    recovered: true,
+  });
+});
+
+test("React rejects an invalid reference render before changing series or reference state", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactReferencePreflight();
+  });
+  expect(result.error).toContain("numeric reference values must be finite numbers");
+  expect(result).toMatchObject({
+    after_invalid: { series_title: "Sales", reference_value: 14, reference_count: 1 },
+    same_series: true,
+    same_reference: true,
+  });
+});
+
+test("React rejects invalid data on a kind change before removing the prior series", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactSeriesPreflight();
+  });
+  expect(result.row_error).toContain("range_bar rows require low and high fields");
+  expect(result.axis_error).toContain("scatter/bubble requires a continuous pane");
+  expect(result).toMatchObject({
+    retained: { same_series: true, kind: "column", value: 12 },
+    after_axis_error: { same_series: true, kind: "column", value: 12 },
+    recovered: true,
+    valid_transition: { replaced: true, old_stale: true, new_kind: "range_bar", new_value: 15 },
+  });
+});
+
+test("React validates a reference against a proposed structural axis before replacement", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactReferenceAxisPreflight();
+  });
+  expect(result.error).toContain("general reference values on logarithmic axes must be positive");
+  expect(result).toMatchObject({
+    retained: { same_series: true, same_reference: true, axis_scale: "linear" },
+    applied: { axis_scale: "log", reference_value: 20, series_replaced: true },
+  });
+});
+
+test("React rejects scatter data incompatible with a proposed logarithmic axis", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactLogDataPreflight();
+  });
+  expect(result.error).toContain("logarithmic general-series Y values must be positive");
+  expect(result.imperative_error).toBe(result.error);
+  expect(result).toMatchObject({
+    retained: { same_series: true, axis_scale: "linear", value: -5 },
+    applied: { axis_scale: "log", value: 5 },
+  });
+});
+
 test("React general-series installation rolls back rejected initial data", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
