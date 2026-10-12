@@ -49,11 +49,18 @@ reference option changes. A changed series kind or axis dimension/scale is struc
 replaces its dependent object. `mapRow` runs when the source array or mapper function identity
 changes, not in frame or hit loops; keep mapper functions stable when their meaning is stable.
 Typed columns remain the imperative bulk-ingestion path for high-rate updates.
-Framework-neutral callers can use `validate_general_pane_proposal(...)` to dry-run a complete pane
-graph. The engine validates proposed axes, packed series data, bindings, and references without
-mutating chart state. `GeneralPane` uses this operation before removing dependent objects. Pass `onValidationError`
-to report a mapper failure or rejected definition while retaining the last
+Both React and framework-neutral callers use `compose_general_pane(...)` to apply a complete pane
+graph in one engine transaction. The operation accepts ordered axes, keyed series with data and
+visibility, and keyed references. Pass each prior result handle as `current` on the next call to
+retain its identity. The engine validates the complete final graph before applying dependency-ordered
+removals and upserts; any failure retains the prior graph and handle counters.
+`validate_general_pane_proposal(...)` remains available for an optional non-mutating dry run, but
+React does not need a separate validation call. Pass `onValidationError`
+to report a mapper failure or rejected composition while retaining the last
 committed pane; without it, the error reaches the nearest React error boundary.
+`onSeriesReady` and `onReferenceReady` run after the composition commits. If one throws, the pane
+keeps the complete new graph, every other new handle still receives its callback, and the failure
+is reported once (several failures arrive together as an `AggregateError`).
 
 Row `id` values make focus and selection survive replacement and reorder. A row's `label` is the
 portable text for `GeneralDataLabels`; a React formatter cannot run inside native or WebGPU
@@ -66,7 +73,13 @@ callers. The complete mixed financial/general example is
 `GeneralBrushControls` is uncontrolled when `range` is omitted. `defaultRange` sets its initial
 semantic range. `onChange` reports a bounded engine snapshot after changes. Supplying
 `range` makes it controlled: the component applies that value, reports attempted changes, and
-keeps the current parent value until a new value is rendered. `null` clears the range. Numeric,
+keeps the current parent value until a new value is rendered. A chart holds one transient brush at a
+time. `null` clears only the component's axis and cannot clear a brush currently owned by another
+axis. When a composition removes the brushed axis or replaces it structurally (dimension or scale
+change), the engine clears the range and notifies brush subscribers. Controls bound to that axis ID
+stay mounted and can start a new range on the replacement axis. `onChange` reports only its own
+axis: it receives `null` once when another axis takes the brush, and a controlled control does not
+take the brush back. Numeric,
 temporal, and category ranges keep their own value types; category endpoints are identities.
 
 ```tsx
@@ -86,8 +99,31 @@ IDs, category identities, and values against each target chart. See
 
 ## Imperative equivalent
 
-`add_pane`, `add_axis`, `add_series`, `set_data`, `add_general_reference`, and
-`set_general_brush_range` own the same engine objects that React declares. The default controls
+`compose_general_pane` is the framework-neutral equivalent of `GeneralPane`:
+
+```ts
+const composed = chart.compose_general_pane({
+  pane,
+  axes: [
+    { id: "month", dimension: "x", scale: "band" },
+    { id: "amount", dimension: "y", scale: "linear" },
+  ],
+  series: [{
+    key: "sales",
+    kind: "column",
+    options: { x_axis_id: "month", y_axis_id: "amount", title: "Sales" },
+    data: [{ id: "jan", x: "Jan", y: 42 }],
+  }],
+  references: [{
+    key: "goal",
+    options: { kind: "line", axis_id: "amount", value: 50 },
+  }],
+});
+// On the next composition, pass `current: composed.series[0].handle`.
+```
+
+The lower-level `add_axis`, `add_series`, `set_data`, and `add_general_reference` operations remain
+available for isolated mutations. The default controls
 are available through `create_general_legend`, `create_general_tooltip`, and
 `create_general_brush_controls`; detach each returned handle during host cleanup. See
 [standalone.mjs](../examples/all_in_one/standalone.mjs) and

@@ -6,10 +6,11 @@ import type {
   general_series_api,
   general_tooltip_snapshot,
   mouse_event_params,
+  pane_api,
 } from "./types.js";
 
 export interface general_legend_options {
-  pane?: number;
+  pane?: number | pane_api;
   format_title?: (title: string, series: general_series_api) => string;
   label?: string;
   lang?: string;
@@ -67,7 +68,7 @@ export function create_general_brush_controls(
   const start_higher = button(labels.start_higher, () => chart.nudge_general_brush("start", 1));
   const end_lower = button(labels.end_lower, () => chart.nudge_general_brush("end", -1));
   const end_higher = button(labels.end_higher, () => chart.nudge_general_brush("end", 1));
-  const clear = button(labels.clear, () => chart.clear_general_brush());
+  const clear = button(labels.clear, () => chart.clear_general_brush(axis_id));
   root.appendChild(status);
   container.appendChild(root);
   let detached = false;
@@ -113,6 +114,10 @@ export interface general_component_handle {
   detach(): void;
 }
 
+function pane_index(pane: number | pane_api | undefined): number | undefined {
+  return typeof pane === "number" ? pane : pane?.pane_index();
+}
+
 /** Accessible default legend. Its buttons toggle engine visibility by stable series identity. */
 export function create_general_legend(
   chart: chart_api,
@@ -133,8 +138,9 @@ export function create_general_legend(
     const focused_series = root.contains(document.activeElement)
       ? (document.activeElement as HTMLElement).dataset.series
       : undefined;
-    const series = new Map(chart.general_series_order(options.pane).map((item) => [item.id, item]));
-    const snapshot = chart.general_legend_snapshot(options.pane);
+    const pane = pane_index(options.pane);
+    const series = new Map(chart.general_series_order(pane).map((item) => [item.id, item]));
+    const snapshot = chart.general_legend_snapshot(pane);
     root.replaceChildren();
     for (const item of snapshot.items) {
       const handle = series.get(item.series);
@@ -189,9 +195,9 @@ export function create_general_legend(
 export interface general_tooltip_options {
   mode?: "item" | "shared";
   /** Restrict pointer tooltips to one pane; omitted uses every general pane. */
-  pane?: number;
+  pane?: number | pane_api;
   format_value?: (value: number) => string;
-  format_detail?: (item: general_tooltip_snapshot) => string;
+  format_detail?: (item: general_tooltip_snapshot) => string | undefined;
   lang?: string;
 }
 
@@ -232,7 +238,7 @@ export function create_general_tooltip(
     const event = last_event;
     const hit = event?.general_hit;
     if (hit == null || event?.point == null ||
-      (options.pane !== undefined && event.pane_index !== options.pane)) {
+      (options.pane !== undefined && event.pane_index !== pane_index(options.pane))) {
       element.style.display = "none";
       return;
     }

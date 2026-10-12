@@ -1016,14 +1016,23 @@ The package preserves its complete `snake_case` surface and adds camel-case alia
 canonical or mapped series, data labels, and keyed references through the same reconciliation.
 Mapping application records happens once per changed source or mapper identity in the committed
 effect, outside frame and hit loops. Default legend, tooltip, and brush React controls mount the
-browser package's existing DOM components and detach their subscriptions with the pane. The pane
+browser package's existing DOM components and detach their subscriptions with the pane. Those
+components retain the pane handle and resolve its current stable pane ID/index when they refresh,
+so removing an earlier pane cannot retarget them. A controlled brush clear is conditional on its
+axis ID and cannot clear another axis's active brush. A composition that removes or structurally
+replaces the brushed axis clears the engine brush in the same transaction and reports it so the
+package notifies brush subscribers. The pane
 retains chart/series/reference handles across ordinary option and data changes; structural axis
 or kind changes replace only dependent objects. React maps input rows, packs them without applying
-semantic rules, and sends one complete pane proposal to the engine before removing dependencies.
-That non-mutating engine dry-run validates proposed axes, series column shape, kind and axis
-compatibility, logarithmic domains, and references against the proposed axis set. An optional
-validation-error callback retains the prior pane and receives the same engine error as imperative
-callers after a rejected proposal. Chart and financial-series readiness failures
+semantic rules, then sends exactly one `compose_general_pane` operation for the complete desired
+axis, series, data, reference, label, visibility, and order graph. The engine validates and stages
+that graph as one transaction, applies dependency-ordered removals and upserts only after validation,
+and restores the prior registries, handle counters, and frame invalidation on any apply failure.
+Framework-neutral callers use the same operation. Stable composition keys preserve handles across
+data, presentation, visibility, binding, and reorder changes; kind, key, or structural-axis changes
+replace only affected objects. Semantically unchanged React declarations skip packing, validation,
+the WASM call, and repaint. An optional validation-error callback retains the prior pane and receives
+the same engine error as imperative callers after a rejected composition. Chart and financial-series readiness failures
 release newly acquired handles. Importing the React entry remains SSR-safe; it creates no chart
 until mounted in a browser. The package smoke gate installs an npm tarball into a clean consumer
 directory and bundles standalone, mixed, linked, and React examples from that installed package.

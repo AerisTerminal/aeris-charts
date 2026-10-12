@@ -64,6 +64,9 @@ The supported root surface is:
   names remain compatible;
 - `AerisChartsError` and its machine-readable error codes;
 - chart-state persistence V1, V2, and V3 through `chart.export_state()` and `chart.import_state()`.
+- atomic framework-neutral general-pane reconciliation through `chart.compose_general_pane(...)`;
+  it validates and applies the complete keyed axis, series, data, visibility, order, label, and
+  reference graph as one engine transaction, retaining compatible handles;
 - camel-case aliases for the common JavaScript lifecycle (`createChart`, `initWasm`, chart/series/scale
   creation and data methods) while every existing snake-case entry remains supported on the same handles;
 - canonical presentation reset through `chart.reset_style_to_defaults()`. It restores Aeris-owned

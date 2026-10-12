@@ -53,6 +53,8 @@ container.appendChild(legendHost);
 const brushHost = document.createElement("div");
 brushHost.style.cssText = "position:absolute;bottom:8px;left:8px;z-index:6";
 container.appendChild(brushHost);
-create_general_legend(chart, legendHost, { pane: summaryPaneIndex });
-create_general_tooltip(chart, container, { pane: summaryPaneIndex });
+// Pass the pane handle, not its index, so the controls keep targeting this pane after earlier
+// panes are removed.
+create_general_legend(chart, legendHost, { pane: summaryPane });
+create_general_tooltip(chart, container, { pane: summaryPane });
 create_general_brush_controls(chart, brushHost, { axis: "month" });

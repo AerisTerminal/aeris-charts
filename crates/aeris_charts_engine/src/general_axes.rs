@@ -355,6 +355,7 @@ impl GeneralAxis {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct GeneralAxisRegistry {
     axes: Vec<GeneralAxis>,
     next_handle: u32,
@@ -430,7 +431,7 @@ impl GeneralAxisRegistry {
         self.axes.iter_mut().find(|axis| axis.id == id)
     }
 
-    fn remove(&mut self, id: &str) -> bool {
+    pub(crate) fn remove(&mut self, id: &str) -> bool {
         let Some(index) = self.axes.iter().position(|axis| axis.id == id) else {
             return false;
         };
@@ -451,6 +452,32 @@ impl GeneralAxisRegistry {
 
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut GeneralAxis> {
         self.axes.iter_mut()
+    }
+
+    pub(crate) fn set_pane_order(&mut self, pane_id: PaneId, ids: &[String]) -> bool {
+        let positions = self
+            .axes
+            .iter()
+            .enumerate()
+            .filter(|(_, axis)| axis.pane_id == pane_id)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if positions.len() != ids.len() {
+            return false;
+        }
+        let mut current = positions
+            .iter()
+            .map(|&index| (self.axes[index].id.clone(), self.axes[index].clone()))
+            .collect::<HashMap<_, _>>();
+        if current.len() != ids.len() || ids.iter().any(|id| !current.contains_key(id)) {
+            return false;
+        }
+        for (index, id) in positions.into_iter().zip(ids) {
+            self.axes[index] = current
+                .remove(id)
+                .expect("a validated general axis order contains only live ids");
+        }
+        true
     }
 
     pub(crate) fn estimated_bytes(&self) -> usize {

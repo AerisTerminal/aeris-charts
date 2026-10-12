@@ -1754,6 +1754,7 @@ fn normalize_validity(validity: Option<Vec<u8>>) -> Option<Vec<u8>> {
     validity.and_then(|values| values.contains(&0).then_some(values))
 }
 
+#[derive(Clone)]
 pub(crate) struct GeneralDataStore {
     datasets: Vec<GeneralDataset>,
     next_dataset_id: u64,
@@ -1794,6 +1795,16 @@ impl GeneralDataStore {
         input: GeneralXyInput,
         labels: Option<Vec<Option<String>>>,
     ) -> Result<GeneralDatasetId, ChartError> {
+        self.insert_styled(input, labels, None, None)
+    }
+
+    pub(crate) fn insert_styled(
+        &mut self,
+        input: GeneralXyInput,
+        labels: Option<Vec<Option<String>>>,
+        colors: Option<Vec<Option<String>>>,
+        symbols: Option<Vec<Option<String>>>,
+    ) -> Result<GeneralDatasetId, ChartError> {
         if self.datasets.len() >= MAX_GENERAL_DATASETS {
             return Err(resource(format!(
                 "a chart supports at most {MAX_GENERAL_DATASETS} general datasets"
@@ -1801,6 +1812,8 @@ impl GeneralDataStore {
         }
         let validated = input.validate()?;
         let labels = labels_for_rows(labels, validated.y.len())?;
+        let colors = colors_for_rows(colors, validated.y.len())?;
+        let symbols = symbols_for_rows(symbols, validated.y.len())?;
         let raw_id = u32::try_from(self.next_dataset_id)
             .ok()
             .and_then(NonZeroU32::new)
@@ -1833,8 +1846,8 @@ impl GeneralDataStore {
             heatmap_y_categories: validated.heatmap_y_categories,
             heatmap_y_category_indices: validated.heatmap_y_category_indices,
             labels,
-            colors: HashMap::new(),
-            symbols: HashMap::new(),
+            colors,
+            symbols,
         });
         self.next_dataset_id = next_dataset_id;
         self.next_generated_row_id = next_generated_row_id;

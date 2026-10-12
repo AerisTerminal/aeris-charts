@@ -29,7 +29,7 @@ import type {
   structure_break_on, structure_zone_options, study_calendar_policy, previous_period,
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
-  general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_range, general_brush_snapshot, general_legend_snapshot, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
+  general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_range, general_brush_snapshot, general_legend_snapshot, general_pane_composition, general_pane_composition_result, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
   general_series_kind, general_series_options, general_shared_tooltip_snapshot, general_tooltip_snapshot, general_update_options, general_xy_row,
   box_plot_row, bubble_columns, bubble_row, category_box_columns, category_error_columns, category_heatmap_columns, category_range_columns, category_xy_columns, numeric_error_columns, numeric_heatmap_columns, numeric_range_columns, numeric_xy_columns,
   error_bar_row, heatmap_grid_row, range_area_row, temporal_error_columns, temporal_heatmap_columns, temporal_range_columns, temporal_xy_columns,
@@ -886,7 +886,6 @@ function proposal_columns(
   const packed = pack_general_rows(kind, data, x_scale) as unknown as Record<string, unknown>;
   const columns: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(packed)) {
-    if (name === "labels" || name === "colors" || name === "symbols") continue;
     columns[name] = ArrayBuffer.isView(value)
       ? Array.from(value as unknown as ArrayLike<number>)
       : value;
@@ -1163,6 +1162,11 @@ class general_series_impl implements general_series_api {
   mark_removed(): void {
     this.removed = true;
     this.data_changed_subs.clear();
+  }
+
+  retarget(x_axis_id: string, y_axis_id: string): void {
+    this.x_axis_id = x_axis_id;
+    this.y_axis_id = y_axis_id;
   }
 
   private assert_live(): void {
@@ -7404,6 +7408,97 @@ export class chart_impl implements chart_api {
     })));
   }
 
+  compose_general_pane(composition: general_pane_composition): general_pane_composition_result {
+    const pane = typeof composition.pane === "number"
+      ? composition.pane
+      : composition.pane.pane_index();
+    const axes = composition.axes.map((axis) =>
+      normalize_general_axis_options({ ...axis, pane })
+    );
+    const axes_by_id = new Map(axes.map((axis) => [axis.id, axis] as const));
+    const previous_series = this.general_series_order(pane) as general_series_impl[];
+    const result = parse_general_result<{
+      series: { key: string; id: number; dataset: number }[];
+      references: { key: string; id: number }[];
+      axis_handle_tokens: Record<string, number>;
+      brush_cleared: boolean;
+    }>(this.wasm.compose_general_pane_result_json(JSON.stringify({
+      pane,
+      axes,
+      series: composition.series.map((item) => {
+        const x_axis = axes_by_id.get(item.options.x_axis_id);
+        if (x_axis === undefined) {
+          throw new AerisChartsError(
+            "invalid_options",
+            `general series axis "${item.options.x_axis_id}" does not exist`,
+          );
+        }
+        return {
+          key: item.key,
+          current_series_id: item.current?.id,
+          kind: item.kind,
+          options: { ...item.options, pane },
+          columns: proposal_columns(item.kind, item.data, x_axis.scale),
+        };
+      }),
+      references: (composition.references ?? []).map((item) => ({
+        key: item.key,
+        current_reference_id: item.current?.id,
+        options: encode_general_reference_options(
+          this,
+          { ...item.options, pane } as general_reference_options,
+          axes,
+        ),
+      })),
+    })));
+    const composed: general_pane_composition_result = {
+      axes: axes.map((axis) => {
+        const token = result.axis_handle_tokens[axis.id];
+        if (token === undefined || token === 0) {
+          throw new AerisChartsError("invalid_handle", `composed general axis "${axis.id}" is missing`);
+        }
+        return new general_axis_impl(axis.id, token, this);
+      }),
+      series: result.series.map((item, index) => {
+        const desired = composition.series[index];
+        if (desired === undefined || desired.key !== item.key) {
+          throw new AerisChartsError("invalid_handle", "engine returned an invalid general series composition");
+        }
+        let handle = this.general_series_by_id.get(item.id);
+        if (handle === undefined) {
+          handle = new general_series_impl(
+            item.id,
+            item.dataset,
+            desired.kind,
+            desired.options.x_axis_id,
+            desired.options.y_axis_id,
+            this,
+          );
+          this.general_series_by_id.set(item.id, handle);
+          this.emit_series_change(this.series_added_subs, handle, pane);
+        } else {
+          handle.retarget(desired.options.x_axis_id, desired.options.y_axis_id);
+        }
+        return { key: item.key, handle };
+      }),
+      references: result.references.map((item) => ({
+        key: item.key,
+        handle: new general_reference_impl(item.id, this),
+      })),
+    };
+    const retained_ids = new Set(result.series.map((item) => item.id));
+    for (const removed of previous_series) {
+      if (retained_ids.has(removed.id)) continue;
+      removed.mark_removed();
+      this.general_series_by_id.delete(removed.id);
+      this.emit_series_change(this.series_removed_subs, removed, pane);
+    }
+    this.notify_general_legend_change();
+    if (result.brush_cleared) this.notify_general_brush_change();
+    this.repaint();
+    return composed;
+  }
+
   axis(id: string): general_axis_api | null {
     const handle_token = this.wasm.general_axis_handle_token(id);
     return handle_token === 0 ? null : new general_axis_impl(id, handle_token, this);
@@ -7553,7 +7648,11 @@ export class chart_impl implements chart_api {
     return JSON.parse(this.wasm.general_brush_snapshot_json()) as general_brush_snapshot | null;
   }
 
-  clear_general_brush(): void {
+  clear_general_brush(axis?: string | general_axis_api): void {
+    if (axis !== undefined) {
+      const axis_id = typeof axis === "string" ? axis : axis.id;
+      if (this.general_brush_snapshot()?.axis_id !== axis_id) return;
+    }
     this.wasm.clear_general_brush();
     this.repaint();
     this.notify_general_brush_change();

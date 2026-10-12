@@ -20,6 +20,7 @@ import {
 } from "./index.js";
 import type {
   general_brush_controls_options,
+  general_component_handle,
   general_legend_options,
   general_tooltip_options,
 } from "./general_components.js";
@@ -242,15 +243,29 @@ export function GeneralLegend({ options = {} }: { options?: Omit<general_legend_
   const chart = useAerisChart();
   const pane = useContext(general_pane_context);
   const container = useRef<HTMLDivElement | null>(null);
-  const signature = stable_signature(options);
+  const options_ref = useRef(options);
+  options_ref.current = options;
+  const component_ref = useRef<general_component_handle | null>(null);
+  const signature = stable_signature({ ...options, format_action: undefined, format_title: undefined });
   useEffect(() => {
     if (pane === null || container.current === null) return;
     const component = create_general_legend(chart, container.current, {
       ...options,
-      pane: pane.pane_index(),
+      pane,
+      format_action: (...args) => options_ref.current.format_action?.(...args)
+        ?? `${args[0] ? "Hide" : "Show"} ${args[1]}`,
+      format_title: (...args) => options_ref.current.format_title?.(...args) ?? args[0],
     });
-    return () => component.detach();
-  }, [chart, pane, signature, options.format_action, options.format_title]);
+    component_ref.current = component;
+    return () => {
+      if (component_ref.current === component) component_ref.current = null;
+      component.detach();
+    };
+  }, [chart, pane, signature]);
+  // Formatters are read through the ref, so a new formatter only needs a redraw, not a remount.
+  useEffect(() => {
+    component_ref.current?.refresh();
+  }, [options.format_action, options.format_title]);
   return createElement("div", { ref: container, style: {
     position: "absolute", top: 8, left: 8, zIndex: 6, maxWidth: "calc(100% - 16px)",
   } });
@@ -261,15 +276,28 @@ export function GeneralTooltip({ options = {} }: { options?: general_tooltip_opt
   const chart = useAerisChart();
   const host = useContext(chart_host_context);
   const pane = useContext(general_pane_context);
-  const signature = stable_signature(options);
+  const options_ref = useRef(options);
+  options_ref.current = options;
+  const component_ref = useRef<general_component_handle | null>(null);
+  const signature = stable_signature({ ...options, format_value: undefined, format_detail: undefined });
   useEffect(() => {
     if (host === null) return;
     const component = create_general_tooltip(chart, host, {
       ...options,
-      pane: pane?.pane_index() ?? options.pane,
+      pane: pane ?? options.pane,
+      format_value: (value) => options_ref.current.format_value?.(value) ?? String(value),
+      format_detail: (item) => options_ref.current.format_detail?.(item),
     });
-    return () => component.detach();
-  }, [chart, host, pane, signature, options.format_value, options.format_detail]);
+    component_ref.current = component;
+    return () => {
+      if (component_ref.current === component) component_ref.current = null;
+      component.detach();
+    };
+  }, [chart, host, pane, signature]);
+  // A visible tooltip redraws with the latest formatters without remounting its element.
+  useEffect(() => {
+    component_ref.current?.refresh();
+  }, [options.format_value, options.format_detail]);
   return null;
 }
 
@@ -292,15 +320,17 @@ export function GeneralBrushControls({ options, range, defaultRange, onChange }:
   const range_ref = useRef(range);
   const on_change_ref = useRef(onChange);
   const updating_ref = useRef(false);
+  const owns_ref = useRef(false);
   range_ref.current = range;
   on_change_ref.current = onChange;
   const apply_range = (next: general_brush_range | null): void => {
     updating_ref.current = true;
     try {
-      if (next === null) chart.clear_general_brush();
+      if (next === null) chart.clear_general_brush(axis_id);
       else chart.set_general_brush_range(axis_id, next);
     } finally {
       updating_ref.current = false;
+      owns_ref.current = chart.general_brush_snapshot()?.axis_id === axis_id;
     }
   };
   useEffect(() => {
@@ -310,8 +340,17 @@ export function GeneralBrushControls({ options, range, defaultRange, onChange }:
     else if (defaultRange !== undefined) apply_range(defaultRange);
     const changed = (): void => {
       if (updating_ref.current) return;
-      on_change_ref.current?.(chart.general_brush_snapshot());
-      if (range_ref.current !== undefined) apply_range(range_ref.current);
+      const snapshot = chart.general_brush_snapshot();
+      const owned = snapshot?.axis_id === axis_id;
+      const owned_before = owns_ref.current;
+      owns_ref.current = owned;
+      // The chart has one brush. A brush on another axis is not this control's range; report
+      // losing it once, and never re-apply the controlled value over the other axis.
+      if (!owned && !owned_before) return;
+      on_change_ref.current?.(owned ? snapshot : null);
+      if ((owned || snapshot === null) && range_ref.current !== undefined) {
+        apply_range(range_ref.current);
+      }
     };
     chart.subscribe_general_brush_change(changed);
     return () => {
@@ -399,52 +438,37 @@ export interface GeneralPaneProps {
 interface axis_runtime {
   handle: general_axis_api;
   structure_signature: string;
-  presentation_signature: string;
 }
 
 interface series_runtime {
   handle: general_series_api;
-  binding_signature: string;
-  presentation_signature: string;
-  data: GeneralSeriesSpec["data"];
 }
 
 interface pane_runtime {
   pane: pane_api;
   axes: Map<string, axis_runtime>;
   series: Map<string, series_runtime>;
-  references: Map<string, { handle: general_reference_api; signature: string }>;
+  references: Map<string, { handle: general_reference_api }>;
 }
 
 function stable_signature(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) => item instanceof Date ? item.getTime() : item);
 }
 
-function general_series_bindings(options: GeneralSeriesSpec["options"]): object {
-  return { x_axis_id: options.x_axis_id, y_axis_id: options.y_axis_id };
+const object_identity = new WeakMap<object, number>();
+let next_object_identity = 1;
+
+function identity_signature(value: object): number {
+  let identity = object_identity.get(value);
+  if (identity === undefined) {
+    identity = next_object_identity++;
+    object_identity.set(value, identity);
+  }
+  return identity;
 }
 
 function general_axis_structure(axis: GeneralAxisSpec): object {
   return { dimension: axis.dimension, scale: axis.scale };
-}
-
-function general_axis_presentation(
-  axis: GeneralAxisSpec,
-): Omit<GeneralAxisSpec, "id" | "dimension" | "scale"> {
-  const { id, dimension, scale, ...presentation } = axis;
-  void id;
-  void dimension;
-  void scale;
-  return presentation;
-}
-
-function general_series_presentation(
-  options: GeneralSeriesSpec["options"],
-): Omit<GeneralSeriesSpec["options"], "x_axis_id" | "y_axis_id"> {
-  const { x_axis_id, y_axis_id, ...presentation } = options;
-  void x_axis_id;
-  void y_axis_id;
-  return presentation;
 }
 
 function dispose_pane_runtime(chart: chart_api, runtime: pane_runtime): void {
@@ -454,15 +478,14 @@ function dispose_pane_runtime(chart: chart_api, runtime: pane_runtime): void {
     // React may dispose the parent chart before child effect cleanup under Strict Mode/unmount.
     return;
   }
-  for (const item of runtime.series.values()) {
-    item.handle.remove();
-  }
+  chart.compose_general_pane({
+    pane: runtime.pane,
+    axes: [],
+    series: [],
+    references: [],
+  });
   runtime.series.clear();
-  for (const item of runtime.references.values()) item.handle.remove();
   runtime.references.clear();
-  for (const item of Array.from(runtime.axes.values()).reverse()) {
-    if (!item.handle.remove()) throw new Error(`general axis ${item.handle.id} could not be removed during cleanup`);
-  }
   runtime.axes.clear();
   const removed = chart.remove_pane(runtime.pane.pane_index());
   if (!removed) throw new Error("general pane could not be removed during cleanup");
@@ -528,6 +551,21 @@ export function GeneralPane({ options, axes: axis_specs = [], series: series_spe
     if (reference_keys.has(item.key)) throw new Error(`duplicate general reference key: ${item.key}`);
     reference_keys.add(item.key);
   }
+  const composition_signature = stable_signature({
+    axes,
+    series: series.map((item) => ({
+      key: item.key,
+      kind: item.kind,
+      options: item.options,
+      data: identity_signature(item.data),
+    })),
+    mapped: declared.mapped.map((item) => ({
+      key: item.seriesKey,
+      data: identity_signature(item.data),
+      mapRow: identity_signature(item.mapRow),
+    })),
+    references,
+  });
 
   useEffect(() => {
     const pane = chart.addPane({ preserve_empty: true, horizontal_domain: options.horizontal_domain });
@@ -551,12 +589,7 @@ export function GeneralPane({ options, axes: axis_specs = [], series: series_spe
   useEffect(() => {
     const runtime = runtime_ref.current;
     if (runtime === null) return;
-    const pane = runtime.pane.pane_index();
-    const desired_axes = new Map(axes.map((axis) => [axis.id, axis] as const));
-    const desired_series = new Map(series.map((item) => [item.key, item] as const));
-    const desired_references = new Map(references.map((item) => [item.key, item] as const));
     const desired_data = new Map<string, GeneralSeriesSpec["data"]>();
-    const changed_axes = new Set<string>();
     try {
       for (const key of mapped_cache_ref.current.keys()) {
         if (!mapped_by_key.has(key)) mapped_cache_ref.current.delete(key);
@@ -578,159 +611,75 @@ export function GeneralPane({ options, axes: axis_specs = [], series: series_spe
         });
         desired_data.set(desired.key, data);
       }
-      chart.validate_general_pane_proposal(
-        pane,
+      const composed = chart.compose_general_pane({
+        pane: runtime.pane,
         axes,
-        series.map((desired) => ({
+        series: series.map((desired) => ({
+          key: desired.key,
           kind: desired.kind,
           options: desired.options,
           data: desired_data.get(desired.key) ?? desired.data,
+          current: runtime.series.get(desired.key)?.handle,
         })),
-        references.map((reference) => ({ ...reference.options, pane }) as general_reference_options),
-      );
-      for (const [id, current] of runtime.axes) {
-        const desired = desired_axes.get(id);
-        if (desired === undefined
-          || stable_signature(general_axis_structure(desired)) !== current.structure_signature) {
-          changed_axes.add(id);
+        references: references.map((reference) => ({
+          key: reference.key,
+          options: reference.options,
+          current: runtime.references.get(reference.key)?.handle,
+        })),
+      });
+      const previous_axes = runtime.axes;
+      const previous_series = runtime.series;
+      const previous_references = runtime.references;
+      runtime.axes = new Map(composed.axes.map((handle, index) => {
+        const desired = axes[index];
+        if (desired === undefined) throw new Error("engine returned an invalid general axis composition");
+        const structure_signature = stable_signature(general_axis_structure(desired));
+        const previous = previous_axes.get(desired.id);
+        return [desired.id, {
+          handle: previous?.structure_signature === structure_signature ? previous.handle : handle,
+          structure_signature,
+        }];
+      }));
+      runtime.series = new Map(composed.series.map(({ key, handle }) => {
+        const previous = previous_series.get(key)?.handle;
+        return [key, { handle: previous?.id === handle.id ? previous : handle }];
+      }));
+      runtime.references = new Map(composed.references.map(({ key, handle }) => {
+        const previous = previous_references.get(key)?.handle;
+        return [key, {
+          handle: previous?.id === handle.id ? previous : handle,
+        }];
+      }));
+      // The composition is already committed, so one throwing callback must not deny later new
+      // handles their only ready notification.
+      const ready_failures: unknown[] = [];
+      for (const { key, handle } of composed.series) {
+        if (previous_series.get(key)?.handle.id !== handle.id) {
+          try {
+            series_ready_ref.current?.(key, runtime.series.get(key)?.handle ?? handle);
+          } catch (error) {
+            ready_failures.push(error);
+          }
         }
+      }
+      for (const { key, handle } of composed.references) {
+        if (previous_references.get(key)?.handle.id !== handle.id) {
+          try {
+            reference_ready_ref.current?.(key, runtime.references.get(key)?.handle ?? handle);
+          } catch (error) {
+            ready_failures.push(error);
+          }
+        }
+      }
+      if (ready_failures.length === 1) throw ready_failures[0];
+      if (ready_failures.length > 1) {
+        throw new AggregateError(ready_failures, "general pane ready callbacks failed");
       }
     } catch (error) {
       if (validation_error_ref.current === undefined) throw error;
       validation_error_ref.current(error);
-      return;
     }
-    for (const [id, current] of runtime.axes) {
-      const desired = desired_axes.get(id);
-      if (!changed_axes.has(id) && desired !== undefined) {
-        const presentation = general_axis_presentation(desired);
-        const presentation_signature = stable_signature(presentation);
-        if (presentation_signature !== current.presentation_signature) {
-          current.handle.applyOptions(presentation);
-          current.presentation_signature = presentation_signature;
-        }
-      }
-    }
-
-    for (const [key, current] of runtime.series) {
-      const desired = desired_series.get(key);
-      const depends_on_changed_axis = desired !== undefined
-        && (changed_axes.has(desired.options.x_axis_id) || changed_axes.has(desired.options.y_axis_id));
-      const changed = desired === undefined
-        || desired.kind !== current.handle.kind
-        || depends_on_changed_axis;
-      if (changed) {
-        current.handle.remove();
-        runtime.series.delete(key);
-      } else {
-        const binding_signature = stable_signature(general_series_bindings(desired.options));
-        const presentation = general_series_presentation(desired.options);
-        const presentation_signature = stable_signature(presentation);
-        if (
-          binding_signature !== current.binding_signature
-          || presentation_signature !== current.presentation_signature
-        ) {
-          current.handle.applyOptions({
-            ...presentation,
-            pane,
-            x_axis_id: desired.options.x_axis_id,
-            y_axis_id: desired.options.y_axis_id,
-          });
-          current.binding_signature = binding_signature;
-          current.presentation_signature = presentation_signature;
-        }
-      }
-    }
-
-    for (const [key, current] of runtime.references) {
-      const desired = desired_references.get(key);
-      const bound_to_changed_axis = desired !== undefined && (
-        "axis_id" in desired.options
-          ? changed_axes.has(desired.options.axis_id)
-          : changed_axes.has(desired.options.x_axis_id) || changed_axes.has(desired.options.y_axis_id)
-      );
-      if (desired === undefined || bound_to_changed_axis) {
-        current.handle.remove();
-        runtime.references.delete(key);
-      }
-    }
-
-    for (const id of changed_axes) {
-      const current = runtime.axes.get(id);
-      if (current !== undefined) {
-        if (!current.handle.remove()) throw new Error(`general axis ${id} could not be reconciled`);
-        runtime.axes.delete(id);
-      }
-    }
-
-    for (const axis of axes) {
-      if (runtime.axes.has(axis.id)) continue;
-      const handle = chart.addAxis({ ...axis, pane });
-      runtime.axes.set(axis.id, {
-        handle,
-        structure_signature: stable_signature(general_axis_structure(axis)),
-        presentation_signature: stable_signature(general_axis_presentation(axis)),
-      });
-    }
-
-    for (const desired of series) {
-      let current = runtime.series.get(desired.key);
-      const data = desired_data.get(desired.key);
-      if (data === undefined) throw new Error(`general series ${desired.key} has no data`);
-      if (current === undefined) {
-        const handle = chart.addSeries(desired.kind, { ...desired.options, pane });
-        try {
-          handle.setData(data);
-          current = {
-            handle,
-            binding_signature: stable_signature(general_series_bindings(desired.options)),
-            presentation_signature: stable_signature(general_series_presentation(desired.options)),
-            data,
-          };
-          runtime.series.set(desired.key, current);
-          series_ready_ref.current?.(desired.key, handle);
-        } catch (error) {
-          runtime.series.delete(desired.key);
-          handle.remove();
-          throw error;
-        }
-      } else if (current.data !== data) {
-        current.handle.setData(data);
-        current.data = data;
-      }
-    }
-
-    for (const desired of references) {
-      const options = { ...desired.options, pane } as general_reference_options;
-      const signature = stable_signature(options);
-      const current = runtime.references.get(desired.key);
-      if (current === undefined) {
-        const handle = chart.add_general_reference(options);
-        runtime.references.set(desired.key, { handle, signature });
-        try {
-          reference_ready_ref.current?.(desired.key, handle);
-        } catch (error) {
-          runtime.references.delete(desired.key);
-          handle.remove();
-          throw error;
-        }
-      } else if (current.signature !== signature) {
-        current.handle.apply_options(options);
-        current.signature = signature;
-      }
-    }
-
-    const desired_order = series
-      .map((item) => runtime.series.get(item.key)?.handle)
-      .filter((handle): handle is general_series_api => handle !== undefined);
-    const current_order = chart.general_series_order(pane);
-    if (
-      desired_order.length === current_order.length
-      && desired_order.some((handle, index) => handle !== current_order[index])
-    ) {
-      chart.set_general_series_order(desired_order, pane);
-    }
-  }, [chart, generation, axes, series, references]);
+  }, [chart, generation, composition_signature]);
 
   const pane = runtime_ref.current?.pane;
   return pane === undefined ? null : createElement(

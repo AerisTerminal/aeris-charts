@@ -299,7 +299,7 @@ pub struct FrameDrawingSegment {
     pub coordinate_revision: u64,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct FrameInvalidation {
     clock: u64,
     layout: u64,

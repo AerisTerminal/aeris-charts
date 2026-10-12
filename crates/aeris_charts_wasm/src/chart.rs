@@ -3785,6 +3785,13 @@ impl AerisChart {
             .validate_general_pane_proposal_result_json(options_json)
     }
 
+    /// Atomically replace one general pane's complete axes, series, datasets, and references.
+    pub fn compose_general_pane_result_json(&mut self, options_json: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .compose_general_pane_result_json(options_json)
+    }
+
     pub fn general_axis_json(&self, id: &str) -> String {
         self.inner.borrow().general_axis_json(id)
     }

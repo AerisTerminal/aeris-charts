@@ -3122,6 +3122,38 @@ export interface pane_api {
   price_scale(id: string): price_scale_api;
 }
 
+export interface general_pane_series_composition {
+  /** Stable host key. Reuse it with `current` to retain the engine identity. */
+  key: string;
+  kind: general_series_kind;
+  options: Omit<general_series_options, "pane"> & { pane?: number };
+  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[];
+  current?: general_series_api;
+}
+
+export interface general_pane_reference_composition {
+  /** Stable host key. Reuse it with `current` to retain the engine identity. */
+  key: string;
+  options: general_reference_options extends infer Option
+    ? Option extends general_reference_options ? Omit<Option, "pane"> & { pane?: number } : never
+    : never;
+  current?: general_reference_api;
+}
+
+/** Complete desired graph for one atomic general-pane composition. */
+export interface general_pane_composition {
+  pane: number | pane_api;
+  axes: readonly (Omit<general_axis_options, "pane"> & { pane?: number })[];
+  series: readonly general_pane_series_composition[];
+  references?: readonly general_pane_reference_composition[];
+}
+
+export interface general_pane_composition_result {
+  axes: readonly general_axis_api[];
+  series: readonly { key: string; handle: general_series_api }[];
+  references: readonly { key: string; handle: general_reference_api }[];
+}
+
 export type alert_price_scale = "right" | "left" | "overlay";
 export type alert_condition =
   | "crossing"
@@ -3933,6 +3965,11 @@ export interface chart_api {
     }[],
     references: readonly general_reference_options[],
   ): void;
+  /**
+   * Atomically reconcile one pane's complete ordered axes, series, data, references, and labels.
+   * Invalid input leaves the pane and all existing handles unchanged.
+   */
+  compose_general_pane(composition: general_pane_composition): general_pane_composition_result;
   axis(id: string): general_axis_api | null;
   axes(pane?: number): general_axis_api[];
   remove_axis(id: string): boolean;
@@ -3972,7 +4009,8 @@ export interface chart_api {
   /** Move one semantic endpoint by one transformed-percent step or one category. */
   nudge_general_brush(endpoint: "start" | "end", direction: -1 | 1): general_brush_snapshot;
   general_brush_snapshot(): general_brush_snapshot | null;
-  clear_general_brush(): void;
+  /** Clear the active brush, optionally only when it belongs to `axis`. */
+  clear_general_brush(axis?: string | general_axis_api): void;
   /** Notify browser controls after pointer/touch and programmatic brush changes. */
   subscribe_general_brush_change(handler: () => void): void;
   unsubscribe_general_brush_change(handler: () => void): void;

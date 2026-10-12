@@ -46,6 +46,58 @@ pub struct GeneralPaneProposal {
     pub references: Vec<GeneralReferenceOptions>,
 }
 
+/// One keyed series in a complete pane composition.
+#[derive(Clone, Debug)]
+pub struct GeneralPaneSeriesComposition {
+    pub key: String,
+    pub current: Option<GeneralSeriesId>,
+    pub options: GeneralSeriesOptions,
+    pub data: GeneralXyInput,
+    /// Optional per-row label, CSS color, and point-symbol columns, one entry per data row.
+    pub labels: Option<Vec<Option<String>>>,
+    pub colors: Option<Vec<Option<String>>>,
+    pub symbols: Option<Vec<Option<String>>>,
+}
+
+/// One keyed reference in a complete pane composition.
+#[derive(Clone, Debug)]
+pub struct GeneralPaneReferenceComposition {
+    pub key: String,
+    pub current: Option<GeneralReferenceId>,
+    pub options: GeneralReferenceOptions,
+}
+
+/// Complete desired general graph for one pane.
+#[derive(Clone, Debug)]
+pub struct GeneralPaneComposition {
+    pub pane: usize,
+    pub axes: Vec<crate::GeneralAxisOptions>,
+    pub series: Vec<GeneralPaneSeriesComposition>,
+    pub references: Vec<GeneralPaneReferenceComposition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GeneralPaneComposedSeries {
+    pub key: String,
+    pub id: GeneralSeriesId,
+    pub dataset: GeneralDatasetId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GeneralPaneComposedReference {
+    pub key: String,
+    pub id: GeneralReferenceId,
+}
+
+/// Stable handles resulting from a successful pane composition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GeneralPaneCompositionResult {
+    pub series: Vec<GeneralPaneComposedSeries>,
+    pub references: Vec<GeneralPaneComposedReference>,
+    /// The brush was cleared because its axis was removed or structurally replaced.
+    pub brush_cleared: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GeneralSeriesKind {
     XyLine,
@@ -652,6 +704,7 @@ pub struct GeneralSeries {
     group_id: Option<String>,
     stack_id: Option<String>,
     stack_mode: GeneralStackMode,
+    composition_key: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -777,6 +830,7 @@ struct AxisScanEntry {
 /// A series binds one X and one Y axis; a small bound still covers scale-type changes.
 const MAX_AXIS_SCANS_PER_SERIES: usize = 4;
 
+#[derive(Clone)]
 struct ScatterSpatialIndex {
     key: ScatterGeometryKey,
     origin_y: f64,
@@ -1154,6 +1208,7 @@ pub struct GeneralReference {
     id: GeneralReferenceId,
     pane_id: PaneId,
     options: GeneralReferenceOptions,
+    composition_key: Option<String>,
 }
 
 impl GeneralReference {
@@ -1176,48 +1231,51 @@ impl GeneralReference {
                 GeneralReferenceValue::Numeric(_) | GeneralReferenceValue::Temporal(_) => 0,
             }
         }
-        match &self.options {
-            GeneralReferenceOptions::Line {
-                axis_id,
-                value,
-                color,
-                ..
-            } => {
-                axis_id.capacity() + value_bytes(value) + color.as_ref().map_or(0, String::capacity)
+        self.composition_key.as_ref().map_or(0, String::capacity)
+            + match &self.options {
+                GeneralReferenceOptions::Line {
+                    axis_id,
+                    value,
+                    color,
+                    ..
+                } => {
+                    axis_id.capacity()
+                        + value_bytes(value)
+                        + color.as_ref().map_or(0, String::capacity)
+                }
+                GeneralReferenceOptions::Dot {
+                    x_axis_id,
+                    y_axis_id,
+                    x,
+                    y,
+                    color,
+                    ..
+                } => {
+                    x_axis_id.capacity()
+                        + y_axis_id.capacity()
+                        + value_bytes(x)
+                        + value_bytes(y)
+                        + color.as_ref().map_or(0, String::capacity)
+                }
+                GeneralReferenceOptions::Region {
+                    x_axis_id,
+                    y_axis_id,
+                    x_from,
+                    x_to,
+                    y_from,
+                    y_to,
+                    fill_color,
+                    ..
+                } => {
+                    x_axis_id.capacity()
+                        + y_axis_id.capacity()
+                        + value_bytes(x_from)
+                        + value_bytes(x_to)
+                        + value_bytes(y_from)
+                        + value_bytes(y_to)
+                        + fill_color.as_ref().map_or(0, String::capacity)
+                }
             }
-            GeneralReferenceOptions::Dot {
-                x_axis_id,
-                y_axis_id,
-                x,
-                y,
-                color,
-                ..
-            } => {
-                x_axis_id.capacity()
-                    + y_axis_id.capacity()
-                    + value_bytes(x)
-                    + value_bytes(y)
-                    + color.as_ref().map_or(0, String::capacity)
-            }
-            GeneralReferenceOptions::Region {
-                x_axis_id,
-                y_axis_id,
-                x_from,
-                x_to,
-                y_from,
-                y_to,
-                fill_color,
-                ..
-            } => {
-                x_axis_id.capacity()
-                    + y_axis_id.capacity()
-                    + value_bytes(x_from)
-                    + value_bytes(x_to)
-                    + value_bytes(y_from)
-                    + value_bytes(y_to)
-                    + fill_color.as_ref().map_or(0, String::capacity)
-            }
-        }
     }
 }
 
@@ -1369,9 +1427,11 @@ impl GeneralSeries {
             + self.box_median_color.as_ref().map_or(0, String::capacity)
             + self.group_id.as_ref().map_or(0, String::capacity)
             + self.stack_id.as_ref().map_or(0, String::capacity)
+            + self.composition_key.as_ref().map_or(0, String::capacity)
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct GeneralSeriesRegistry {
     series: Vec<GeneralSeries>,
     next_id: u32,
@@ -1467,6 +1527,35 @@ impl GeneralSeriesRegistry {
         true
     }
 
+    fn set_reference_order(&mut self, pane_id: PaneId, ids: &[GeneralReferenceId]) -> bool {
+        let positions = self
+            .references
+            .iter()
+            .enumerate()
+            .filter(|(_, reference)| reference.pane_id == pane_id)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if positions.len() != ids.len() {
+            return false;
+        }
+        let mut current = positions
+            .iter()
+            .map(|&index| {
+                let reference = self.references[index].clone();
+                (reference.id, reference)
+            })
+            .collect::<HashMap<_, _>>();
+        if current.len() != ids.len() || ids.iter().any(|id| !current.contains_key(id)) {
+            return false;
+        }
+        for (index, id) in positions.into_iter().zip(ids) {
+            self.references[index] = current
+                .remove(id)
+                .expect("a validated general reference order contains only live ids");
+        }
+        true
+    }
+
     pub(crate) fn reference_iter(&self) -> impl Iterator<Item = &GeneralReference> {
         self.references.iter()
     }
@@ -1505,6 +1594,7 @@ impl GeneralSeriesRegistry {
             id,
             pane_id,
             options,
+            composition_key: None,
         });
         Ok(id)
     }
@@ -1572,6 +1662,7 @@ impl GeneralSeriesRegistry {
             group_id: options.group_id,
             stack_id: options.stack_id,
             stack_mode: options.stack_mode,
+            composition_key: None,
         });
         self.next_id = next_id;
         Ok(id)
@@ -1709,6 +1800,108 @@ impl Default for GeneralSeriesRegistry {
     }
 }
 
+fn reference_axis_ids(options: &GeneralReferenceOptions) -> Vec<&str> {
+    match options {
+        GeneralReferenceOptions::Line { axis_id, .. } => vec![axis_id],
+        GeneralReferenceOptions::Dot {
+            x_axis_id,
+            y_axis_id,
+            ..
+        }
+        | GeneralReferenceOptions::Region {
+            x_axis_id,
+            y_axis_id,
+            ..
+        } => vec![x_axis_id, y_axis_id],
+    }
+}
+
+fn validate_composed_layout(series: &[GeneralPaneSeriesComposition]) -> Result<(), ChartError> {
+    for (index, proposed) in series.iter().enumerate() {
+        let options = &proposed.options;
+        for sibling in series.iter().skip(index + 1).map(|item| &item.options) {
+            if options.kind != sibling.kind {
+                continue;
+            }
+            if matches!(
+                options.kind,
+                GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar
+            ) && options.group_id.is_some()
+                && options.group_id == sibling.group_id
+            {
+                let same_category_axis = match options.kind {
+                    GeneralSeriesKind::Column => options.x_axis_id == sibling.x_axis_id,
+                    GeneralSeriesKind::HorizontalBar => options.y_axis_id == sibling.y_axis_id,
+                    _ => true,
+                };
+                if !same_category_axis {
+                    return Err(invalid(
+                        "grouped bar series must share the same category axis",
+                    ));
+                }
+            }
+            if options.stack_id.is_some()
+                && options.stack_id == sibling.stack_id
+                && options.group_id == sibling.group_id
+                && (options.x_axis_id != sibling.x_axis_id
+                    || options.y_axis_id != sibling.y_axis_id
+                    || options.stack_mode != sibling.stack_mode
+                    || (matches!(
+                        options.kind,
+                        GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar
+                    ) && (options.bar_gap != sibling.bar_gap
+                        || options.bar_max_width != sibling.bar_max_width))
+                    || (options.kind == GeneralSeriesKind::XyArea
+                        && (options.interpolation != sibling.interpolation
+                            || options.connect_missing != sibling.connect_missing)))
+            {
+                return Err(invalid(
+                    "stacked series must share X/Y axes, group ID, stack mode, bar thickness, and area path policy",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_composed_series_options(
+    series: &mut GeneralSeries,
+    pane_id: PaneId,
+    options: GeneralSeriesOptions,
+) {
+    series.kind = options.kind;
+    series.pane_id = pane_id;
+    series.dataset = options.dataset;
+    series.x_axis_id = options.x_axis_id;
+    series.y_axis_id = options.y_axis_id;
+    series.visible = options.visible;
+    series.title = options.title;
+    series.color = options.color;
+    series.point_radius = options.point_radius;
+    series.point_markers = options.point_markers;
+    series.point_symbol = options.point_symbol;
+    series.line_width = options.line_width;
+    series.line_style = options.line_style;
+    series.interpolation = options.interpolation;
+    series.connect_missing = options.connect_missing;
+    series.fill_opacity = options.fill_opacity;
+    series.fill_gradient = options.fill_gradient;
+    series.baseline_value = options.baseline_value;
+    series.baseline_policy = options.baseline_policy;
+    series.data_labels = options.data_labels;
+    series.bar_gap = options.bar_gap;
+    series.bar_max_width = options.bar_max_width;
+    series.bar_corner_radius = options.bar_corner_radius;
+    series.heatmap_value_domain = options.heatmap_value_domain;
+    series.heatmap_low_color = options.heatmap_low_color;
+    series.heatmap_high_color = options.heatmap_high_color;
+    series.box_fill_color = options.box_fill_color;
+    series.box_median_color = options.box_median_color;
+    series.group_id = options.group_id;
+    series.stack_id = options.stack_id;
+    series.stack_mode = options.stack_mode;
+}
+
 impl ChartEngine {
     /// Validate a complete proposed general pane without changing live state.
     pub fn validate_general_pane_proposal(
@@ -1779,6 +1972,475 @@ impl ChartEngine {
             validate_general_reference_options(pane_id, reference, axis_info)?;
         }
         Ok(())
+    }
+
+    /// Atomically replace the complete general graph owned by one pane.
+    pub fn compose_general_pane(
+        &mut self,
+        composition: GeneralPaneComposition,
+    ) -> Result<GeneralPaneCompositionResult, ChartError> {
+        self.validate_general_pane_composition(&composition)?;
+
+        // Only the three general-domain registries are staged. Financial data, panes, drawings,
+        // interaction, retained frames, and every other engine owner remain untouched.
+        let staged_axes = self.general_axes.clone();
+        let staged_data = self.general_data.clone();
+        let staged_series = self.general_series.clone();
+        let original_axes = std::mem::replace(&mut self.general_axes, staged_axes);
+        let original_data = std::mem::replace(&mut self.general_data, staged_data);
+        let original_series = std::mem::replace(&mut self.general_series, staged_series);
+        let original_invalidation = self.frame_invalidation.clone();
+
+        match self.apply_general_pane_composition(composition) {
+            Ok((result, structurally_removed_axes)) => {
+                self.general_dataset_handles_issued |= !result.series.is_empty();
+                for axis_id in structurally_removed_axes {
+                    self.disarm_general_brush_input_for_axis(&axis_id);
+                }
+                self.invalidate_frame_all();
+                Ok(result)
+            }
+            Err(error) => {
+                self.general_axes = original_axes;
+                self.general_data = original_data;
+                self.general_series = original_series;
+                self.frame_invalidation = original_invalidation;
+                Err(error)
+            }
+        }
+    }
+
+    fn validate_general_pane_composition(
+        &self,
+        composition: &GeneralPaneComposition,
+    ) -> Result<(), ChartError> {
+        let pane = composition.pane;
+        let pane_id = self
+            .pane_stable_id(pane)
+            .ok_or_else(|| invalid("general pane composition references a stale pane"))?;
+        let pane_domain = self
+            .pane_horizontal_domain(pane)
+            .ok_or_else(|| invalid("general pane composition has no horizontal domain"))?;
+        let mut axis_ids = HashSet::with_capacity(composition.axes.len());
+        for axis in &composition.axes {
+            if axis.pane != pane {
+                return Err(invalid("composed general axes must belong to their pane"));
+            }
+            if !axis_ids.insert(axis.id.as_str()) {
+                return Err(invalid("general axis IDs must be unique"));
+            }
+            if self
+                .general_axes
+                .iter()
+                .any(|live| live.id() == axis.id && live.pane_id() != pane_id)
+            {
+                return Err(invalid(format!(
+                    "general axis id {:?} already exists",
+                    axis.id
+                )));
+            }
+            self.validate_general_axis_definition(axis)?;
+        }
+        let axis = |id: &str| {
+            composition
+                .axes
+                .iter()
+                .find(|axis| axis.id == id)
+                .ok_or_else(|| invalid(format!("general series axis {id:?} does not exist")))
+        };
+
+        let mut series_keys = HashSet::with_capacity(composition.series.len());
+        let mut current_series = HashSet::with_capacity(composition.series.len());
+        let mut validated_data = crate::general_data::GeneralDataStore::new();
+        for proposed in &composition.series {
+            if proposed.key.is_empty()
+                || proposed.key.len() > MAX_GENERAL_SERIES_TITLE_BYTES
+                || !series_keys.insert(proposed.key.as_str())
+            {
+                return Err(invalid(
+                    "general series composition keys must be bounded, nonempty, and unique",
+                ));
+            }
+            if proposed.options.pane != pane {
+                return Err(invalid("composed general series must belong to their pane"));
+            }
+            if let Some(current) = proposed.current {
+                if !current_series.insert(current) {
+                    return Err(invalid(
+                        "a current general series may be composed only once",
+                    ));
+                }
+                let live = self.general_series(current).ok_or_else(|| {
+                    ChartError::new(ErrorCode::InvalidHandle, "current general series is stale")
+                })?;
+                if live.pane_id() != pane_id {
+                    return Err(invalid("current general series belongs to another pane"));
+                }
+            }
+            let x_axis = axis(&proposed.options.x_axis_id)?;
+            let y_axis = axis(&proposed.options.y_axis_id)?;
+            if x_axis.dimension != AxisDimension::X || y_axis.dimension != AxisDimension::Y {
+                return Err(invalid("general series axis dimensions are incompatible"));
+            }
+            validate_presentation(&proposed.options)?;
+            validate_general_series_axis_compatibility(
+                proposed.options.kind,
+                pane_domain,
+                proposed.data.x_kind(),
+                x_axis.scale,
+                y_axis.scale,
+                matches!(
+                    proposed.data,
+                    GeneralXyInput::HeatmapCategoryCategory { .. }
+                ),
+                matches!(
+                    proposed.data,
+                    GeneralXyInput::HeatmapNumericNumeric { .. }
+                        | GeneralXyInput::HeatmapTemporalNumeric { .. }
+                ),
+            )?;
+            let dataset = validated_data.insert_styled(
+                proposed.data.clone(),
+                proposed.labels.clone(),
+                proposed.colors.clone(),
+                proposed.symbols.clone(),
+            )?;
+            validate_dataset_for_series(
+                proposed.options.kind,
+                validated_data
+                    .get(dataset)
+                    .expect("newly validated composition data remains present"),
+                x_axis.scale,
+                y_axis.scale,
+            )?;
+        }
+        validate_composed_layout(&composition.series)?;
+
+        let mut reference_keys = HashSet::with_capacity(composition.references.len());
+        let mut current_references = HashSet::with_capacity(composition.references.len());
+        for proposed in &composition.references {
+            if proposed.key.is_empty()
+                || proposed.key.len() > MAX_GENERAL_SERIES_TITLE_BYTES
+                || !reference_keys.insert(proposed.key.as_str())
+            {
+                return Err(invalid(
+                    "general reference composition keys must be bounded, nonempty, and unique",
+                ));
+            }
+            if proposed.options.pane() != pane {
+                return Err(invalid(
+                    "composed general references must belong to their pane",
+                ));
+            }
+            if let Some(current) = proposed.current {
+                if !current_references.insert(current) {
+                    return Err(invalid(
+                        "a current general reference may be composed only once",
+                    ));
+                }
+                let live = self
+                    .general_series
+                    .as_ref()
+                    .and_then(|registry| registry.reference_get(current))
+                    .ok_or_else(|| {
+                        ChartError::new(
+                            ErrorCode::InvalidHandle,
+                            "current general reference is stale",
+                        )
+                    })?;
+                if live.pane_id() != pane_id {
+                    return Err(invalid("current general reference belongs to another pane"));
+                }
+            }
+            validate_general_reference_options(pane_id, &proposed.options, |id| {
+                let axis = axis(id)?;
+                Ok((pane_id, axis.dimension, axis.scale))
+            })?;
+        }
+        Ok(())
+    }
+
+    fn apply_general_pane_composition(
+        &mut self,
+        composition: GeneralPaneComposition,
+    ) -> Result<(GeneralPaneCompositionResult, Vec<String>), ChartError> {
+        let pane = composition.pane;
+        let pane_id = self
+            .pane_stable_id(pane)
+            .expect("a validated composition pane remains present");
+        let structural_axes = composition
+            .axes
+            .iter()
+            .filter_map(|options| {
+                self.general_axis(&options.id)
+                    .filter(|axis| {
+                        axis.pane_id() == pane_id
+                            && (axis.dimension() != options.dimension
+                                || axis.scale() != options.scale)
+                    })
+                    .map(|_| options.id.clone())
+            })
+            .collect::<HashSet<_>>();
+
+        let retain_series = composition
+            .series
+            .iter()
+            .filter_map(|proposed| {
+                let id = proposed.current?;
+                let live = self.general_series(id)?;
+                (live
+                    .composition_key
+                    .as_deref()
+                    .is_none_or(|key| key == proposed.key)
+                    && live.kind == proposed.options.kind
+                    && !structural_axes.contains(&live.x_axis_id)
+                    && !structural_axes.contains(&live.y_axis_id)
+                    && !structural_axes.contains(&proposed.options.x_axis_id)
+                    && !structural_axes.contains(&proposed.options.y_axis_id))
+                .then_some(id)
+            })
+            .collect::<HashSet<_>>();
+        let retain_references = composition
+            .references
+            .iter()
+            .filter_map(|proposed| {
+                let id = proposed.current?;
+                let live = self.general_series.as_ref()?.reference_get(id)?;
+                (live
+                    .composition_key
+                    .as_deref()
+                    .is_none_or(|key| key == proposed.key)
+                    && std::mem::discriminant(&live.options)
+                        == std::mem::discriminant(&proposed.options)
+                    && !reference_axis_ids(&live.options)
+                        .iter()
+                        .any(|axis| structural_axes.contains(*axis)))
+                .then_some(id)
+            })
+            .collect::<HashSet<_>>();
+
+        let (remove_series, remove_references) = self.general_series.as_ref().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |registry| {
+                (
+                    registry
+                        .series
+                        .iter()
+                        .filter(|series| {
+                            series.pane_id == pane_id && !retain_series.contains(&series.id)
+                        })
+                        .map(|series| (series.id, series.dataset))
+                        .collect(),
+                    registry
+                        .references
+                        .iter()
+                        .filter(|reference| {
+                            reference.pane_id == pane_id
+                                && !retain_references.contains(&reference.id)
+                        })
+                        .map(|reference| reference.id)
+                        .collect(),
+                )
+            },
+        );
+        if let Some(registry) = self.general_series.as_mut() {
+            for id in remove_references {
+                registry.reference_remove(id);
+            }
+            for &(id, _) in &remove_series {
+                registry.remove(id);
+            }
+        }
+        for (_, dataset) in remove_series {
+            if !self.general_series_uses_dataset(dataset)
+                && let Some(store) = self.general_data.as_mut()
+            {
+                store.remove(dataset);
+            }
+        }
+
+        let desired_axes = composition
+            .axes
+            .iter()
+            .map(|axis| axis.id.as_str())
+            .collect::<HashSet<_>>();
+        let axis_order = composition
+            .axes
+            .iter()
+            .map(|axis| axis.id.clone())
+            .collect::<Vec<_>>();
+        let removed_axes = self
+            .general_axes(Some(pane))
+            .into_iter()
+            .filter(|axis| !desired_axes.contains(axis.id()) || structural_axes.contains(axis.id()))
+            .map(|axis| axis.id().to_owned())
+            .collect::<Vec<_>>();
+        for id in &removed_axes {
+            self.general_axes.remove(id);
+        }
+        // A semantic range cannot survive a removed axis or a dimension/scale replacement.
+        let brush_cleared = self.general_series.as_mut().is_some_and(|registry| {
+            let cleared = registry
+                .brush
+                .as_ref()
+                .is_some_and(|brush| removed_axes.contains(&brush.axis_id));
+            if cleared {
+                registry.brush = None;
+            }
+            cleared
+        });
+        for options in composition.axes {
+            if self.general_axis(&options.id).is_some() {
+                self.update_general_axis_options(options)?;
+            } else {
+                self.add_general_axis(options)?;
+            }
+        }
+        if !self.general_axes.set_pane_order(pane_id, &axis_order) {
+            return Err(invalid("composed general axis order is invalid"));
+        }
+
+        let mut series_result = Vec::with_capacity(composition.series.len());
+        for mut proposed in composition.series {
+            let retained = proposed.current.filter(|id| retain_series.contains(id));
+            let (id, dataset) = if let Some(id) = retained {
+                let dataset = self
+                    .general_series(id)
+                    .expect("retained composition series remains present")
+                    .dataset;
+                self.general_data
+                    .as_mut()
+                    .expect("retained composition series has a data store")
+                    .replace_styled(
+                        dataset,
+                        proposed.data,
+                        proposed.labels,
+                        proposed.colors,
+                        proposed.symbols,
+                    )?;
+                proposed.options.dataset = dataset;
+                let registry = self
+                    .general_series
+                    .as_mut()
+                    .expect("retained composition series has a registry");
+                let series = registry
+                    .get_mut(id)
+                    .expect("retained composition series remains present");
+                apply_composed_series_options(series, pane_id, proposed.options);
+                series.composition_key = Some(proposed.key.clone());
+                registry.scatter_spatial.get_mut().remove(&id);
+                registry.axis_scans.get_mut().remove(&id);
+                (id, dataset)
+            } else {
+                let (data, labels, colors, symbols) = (
+                    proposed.data,
+                    proposed.labels,
+                    proposed.colors,
+                    proposed.symbols,
+                );
+                let dataset = if let Some(store) = self.general_data.as_mut() {
+                    store.insert_styled(data, labels, colors, symbols)?
+                } else {
+                    let mut store = crate::general_data::GeneralDataStore::new();
+                    let dataset = store.insert_styled(data, labels, colors, symbols)?;
+                    self.general_data = Some(store);
+                    dataset
+                };
+                proposed.options.dataset = dataset;
+                let id = if let Some(registry) = self.general_series.as_mut() {
+                    registry.insert(pane_id, proposed.options)?
+                } else {
+                    let mut registry = GeneralSeriesRegistry::new();
+                    let id = registry.insert(pane_id, proposed.options)?;
+                    self.general_series = Some(registry);
+                    id
+                };
+                self.general_series
+                    .as_mut()
+                    .and_then(|registry| registry.get_mut(id))
+                    .expect("new composition series remains present")
+                    .composition_key = Some(proposed.key.clone());
+                (id, dataset)
+            };
+            series_result.push(GeneralPaneComposedSeries {
+                key: proposed.key,
+                id,
+                dataset,
+            });
+        }
+        let order = series_result.iter().map(|item| item.id).collect::<Vec<_>>();
+        if let Some(registry) = self.general_series.as_mut()
+            && !registry.set_order(Some(pane_id), &order)
+        {
+            return Err(invalid("composed general series order is invalid"));
+        }
+
+        let mut reference_result = Vec::with_capacity(composition.references.len());
+        for proposed in composition.references {
+            let retained = proposed.current.filter(|id| retain_references.contains(id));
+            let id = if let Some(id) = retained {
+                let reference = self
+                    .general_series
+                    .as_mut()
+                    .and_then(|registry| registry.reference_get_mut(id))
+                    .expect("retained composition reference remains present");
+                reference.options = proposed.options;
+                reference.pane_id = pane_id;
+                reference.composition_key = Some(proposed.key.clone());
+                id
+            } else {
+                let id = if let Some(registry) = self.general_series.as_mut() {
+                    registry.reference_insert(pane_id, proposed.options)?
+                } else {
+                    let mut registry = GeneralSeriesRegistry::new();
+                    let id = registry.reference_insert(pane_id, proposed.options)?;
+                    self.general_series = Some(registry);
+                    id
+                };
+                self.general_series
+                    .as_mut()
+                    .and_then(|registry| registry.reference_get_mut(id))
+                    .expect("new composition reference remains present")
+                    .composition_key = Some(proposed.key.clone());
+                id
+            };
+            reference_result.push(GeneralPaneComposedReference {
+                key: proposed.key,
+                id,
+            });
+        }
+        let reference_order = reference_result
+            .iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        if let Some(registry) = self.general_series.as_mut()
+            && !registry.set_reference_order(pane_id, &reference_order)
+        {
+            return Err(invalid("composed general reference order is invalid"));
+        }
+
+        if self
+            .general_data
+            .as_ref()
+            .is_some_and(|store| store.is_empty())
+        {
+            self.general_data = None;
+        }
+        if self
+            .general_series
+            .as_ref()
+            .is_some_and(GeneralSeriesRegistry::is_empty)
+        {
+            self.general_series = None;
+        }
+        Ok((
+            GeneralPaneCompositionResult {
+                series: series_result,
+                references: reference_result,
+                brush_cleared,
+            },
+            removed_axes,
+        ))
     }
 
     #[doc(hidden)]
@@ -8470,6 +9132,340 @@ fn invalid_data(message: impl Into<String>) -> ChartError {
 
 fn resource(message: impl Into<String>) -> ChartError {
     ChartError::new(ErrorCode::ResourceLimit, message)
+}
+
+#[cfg(test)]
+mod composition_tests {
+    use super::*;
+    use crate::{ContinuousScaleType, GeneralAxisOptions, GeneralScaleType};
+
+    fn chart() -> ChartEngine {
+        ChartEngine::new_with_initial_domain(
+            640.0,
+            400.0,
+            1.0,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap()
+    }
+
+    fn axes(y_scale: GeneralScaleType) -> Vec<GeneralAxisOptions> {
+        vec![
+            GeneralAxisOptions::new("x", 0, AxisDimension::X, GeneralScaleType::Linear),
+            GeneralAxisOptions::new("y", 0, AxisDimension::Y, y_scale),
+        ]
+    }
+
+    fn data(value: f64) -> GeneralXyInput {
+        GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0, 2.0],
+            y: vec![value, value + 1.0],
+            y_valid: None,
+        }
+    }
+
+    fn series(
+        key: &str,
+        current: Option<GeneralSeriesId>,
+        value: f64,
+    ) -> GeneralPaneSeriesComposition {
+        GeneralPaneSeriesComposition {
+            key: key.into(),
+            current,
+            options: GeneralSeriesOptions::xy_line(
+                0,
+                GeneralDatasetId::from_raw(1).unwrap(),
+                "x",
+                "y",
+            ),
+            data: data(value),
+            labels: None,
+            colors: None,
+            symbols: None,
+        }
+    }
+
+    fn reference(
+        key: &str,
+        current: Option<GeneralReferenceId>,
+    ) -> GeneralPaneReferenceComposition {
+        GeneralPaneReferenceComposition {
+            key: key.into(),
+            current,
+            options: GeneralReferenceOptions::Line {
+                pane: 0,
+                axis_id: "y".into(),
+                value: GeneralReferenceValue::Numeric(2.0),
+                color: None,
+                line_width: 1.0,
+                extend_domain: false,
+            },
+        }
+    }
+
+    #[test]
+    fn composition_invalid_graph_is_atomic_including_identity_counters_and_invalidation() {
+        let mut chart = chart();
+        let before_clock = chart.frame_invalidation.clock();
+        let mut invalid = series("bad", None, -1.0);
+        invalid.data = GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0, 2.0],
+            y: vec![1.0],
+            y_valid: None,
+        };
+        assert!(
+            chart
+                .compose_general_pane(GeneralPaneComposition {
+                    pane: 0,
+                    axes: axes(GeneralScaleType::Logarithmic),
+                    series: vec![invalid],
+                    references: vec![],
+                })
+                .is_err()
+        );
+        assert_eq!(chart.frame_invalidation.clock(), before_clock);
+        assert_eq!(chart.general_series_count(), 0);
+        assert_eq!(chart.general_dataset_count(), 0);
+        assert!(chart.general_axes(Some(0)).is_empty());
+
+        let result = chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: axes(GeneralScaleType::Linear),
+                series: vec![series("ok", None, 1.0)],
+                references: vec![reference("mark", None)],
+            })
+            .unwrap();
+        assert_eq!(chart.general_axis("x").unwrap().handle_token(), 1);
+        assert_eq!(result.series[0].id.get(), 1);
+        assert_eq!(result.series[0].dataset.get(), 1);
+        assert_eq!(result.references[0].id.get(), 1);
+    }
+
+    #[test]
+    fn composition_removes_dependents_before_axes_and_releases_datasets() {
+        let mut chart = chart();
+        chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: axes(GeneralScaleType::Linear),
+                series: vec![series("line", None, 1.0)],
+                references: vec![reference("mark", None)],
+            })
+            .unwrap();
+        chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: vec![],
+                series: vec![],
+                references: vec![],
+            })
+            .unwrap();
+        assert_eq!(chart.general_series_count(), 0);
+        assert_eq!(chart.general_reference_count(), 0);
+        assert_eq!(chart.general_dataset_count(), 0);
+        assert!(chart.general_axes(Some(0)).is_empty());
+    }
+
+    #[test]
+    fn composition_retains_reordered_objects_and_replaces_key_or_structural_axis_changes() {
+        let mut chart = chart();
+        let first = chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: axes(GeneralScaleType::Linear),
+                series: vec![series("a", None, 1.0), series("b", None, 10.0)],
+                references: vec![reference("mark", None)],
+            })
+            .unwrap();
+        let a = first.series[0].clone();
+        let b = first.series[1].clone();
+        let mark = first.references[0].clone();
+        let mut updated_b = series("b", Some(b.id), 20.0);
+        updated_b.options.visible = false;
+        let second = chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: axes(GeneralScaleType::Linear),
+                series: vec![updated_b, series("a", Some(a.id), 2.0)],
+                references: vec![reference("mark", Some(mark.id))],
+            })
+            .unwrap();
+        assert_eq!(second.series[0].id, b.id);
+        assert_eq!(second.series[0].dataset, b.dataset);
+        assert_eq!(second.series[1].id, a.id);
+        assert_eq!(chart.general_series_order(Some(0)), vec![b.id, a.id]);
+        assert!(!chart.general_series(b.id).unwrap().visible());
+        assert_eq!(second.references[0].id, mark.id);
+
+        let x_handle = chart.general_axis("x").unwrap().handle_token();
+        let third = chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: axes(GeneralScaleType::SymmetricLog),
+                series: vec![
+                    series("renamed", Some(b.id), 30.0),
+                    series("a", Some(a.id), 3.0),
+                ],
+                references: vec![reference("mark", Some(mark.id))],
+            })
+            .unwrap();
+        assert_ne!(third.series[0].id, b.id);
+        assert_ne!(third.series[1].id, a.id);
+        assert_ne!(third.references[0].id, mark.id);
+        assert_eq!(chart.general_axis("x").unwrap().handle_token(), x_handle);
+        assert_eq!(chart.general_series_count(), 2);
+        assert_eq!(chart.general_dataset_count(), 2);
+    }
+
+    #[test]
+    fn composition_removing_a_used_axis_fails_naming_the_dependency() {
+        let mut chart = chart();
+        let first = chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: axes(GeneralScaleType::Linear),
+                series: vec![series("line", None, 1.0)],
+                references: vec![reference("mark", None)],
+            })
+            .unwrap();
+        let before_clock = chart.frame_invalidation.clock();
+        let error = chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: axes(GeneralScaleType::Linear)
+                    .into_iter()
+                    .filter(|axis| axis.id != "y")
+                    .collect(),
+                series: vec![series("line", Some(first.series[0].id), 2.0)],
+                references: vec![],
+            })
+            .unwrap_err();
+        assert!(
+            error.message().contains("\"y\" does not exist"),
+            "{error:?}"
+        );
+        assert_eq!(chart.frame_invalidation.clock(), before_clock);
+        assert!(chart.general_axis("y").is_some());
+        assert_eq!(chart.general_reference_count(), 1);
+        assert_eq!(
+            chart.general_series_order(Some(0)),
+            vec![first.series[0].id]
+        );
+
+        let error = chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: axes(GeneralScaleType::Linear)
+                    .into_iter()
+                    .filter(|axis| axis.id != "y")
+                    .collect(),
+                series: vec![],
+                references: vec![reference("mark", Some(first.references[0].id))],
+            })
+            .unwrap_err();
+        assert!(
+            error.message().contains("\"y\" does not exist"),
+            "{error:?}"
+        );
+        assert_eq!(chart.general_series_count(), 1);
+        assert_eq!(chart.general_reference_count(), 1);
+    }
+
+    #[test]
+    fn composition_installs_and_replaces_row_labels_with_the_data() {
+        let mut chart = chart();
+        let mut labeled = series("line", None, 1.0);
+        labeled.labels = Some(vec![Some("first".into()), None]);
+        let first = chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: axes(GeneralScaleType::Linear),
+                series: vec![labeled],
+                references: vec![],
+            })
+            .unwrap();
+        let id = first.series[0].id;
+        let label = |chart: &ChartEngine, row| {
+            chart
+                .general_tooltip_snapshot(id, row)
+                .and_then(|snapshot| snapshot.label)
+        };
+        assert_eq!(label(&chart, 0).as_deref(), Some("first"));
+        assert_eq!(label(&chart, 1), None);
+
+        let mut relabeled = series("line", Some(id), 2.0);
+        relabeled.labels = Some(vec![None, Some("second".into())]);
+        chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: axes(GeneralScaleType::Linear),
+                series: vec![relabeled],
+                references: vec![],
+            })
+            .unwrap();
+        assert_eq!(label(&chart, 0), None);
+        assert_eq!(label(&chart, 1).as_deref(), Some("second"));
+
+        let mut mismatched = series("line", Some(id), 3.0);
+        mismatched.labels = Some(vec![Some("only one".into())]);
+        assert!(
+            chart
+                .compose_general_pane(GeneralPaneComposition {
+                    pane: 0,
+                    axes: axes(GeneralScaleType::Linear),
+                    series: vec![mismatched],
+                    references: vec![],
+                })
+                .is_err()
+        );
+        assert_eq!(label(&chart, 1).as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn composition_clears_a_brush_only_when_its_axis_is_removed_or_structural() {
+        let mut chart = chart();
+        let first = chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: axes(GeneralScaleType::Linear),
+                series: vec![series("line", None, 1.0)],
+                references: vec![],
+            })
+            .unwrap();
+        chart.select_full_general_brush("y").unwrap();
+        let mut titled = axes(GeneralScaleType::Linear);
+        titled[1].title = Some("Retitled".into());
+        let retained = chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: titled,
+                series: vec![series("line", Some(first.series[0].id), 2.0)],
+                references: vec![],
+            })
+            .unwrap();
+        assert!(!retained.brush_cleared);
+        assert_eq!(chart.general_brush_snapshot().unwrap().axis_id, "y");
+
+        let mut structural = axes(GeneralScaleType::Linear);
+        structural[1].scale = GeneralScaleType::Logarithmic;
+        let replaced = chart
+            .compose_general_pane(GeneralPaneComposition {
+                pane: 0,
+                axes: structural,
+                series: vec![series("line", Some(first.series[0].id), 2.0)],
+                references: vec![],
+            })
+            .unwrap();
+        assert!(replaced.brush_cleared);
+        assert!(chart.general_brush_snapshot().is_none());
+        chart.select_full_general_brush("y").unwrap();
+        assert_eq!(chart.general_brush_snapshot().unwrap().axis_id, "y");
+    }
 }
 
 #[cfg(test)]

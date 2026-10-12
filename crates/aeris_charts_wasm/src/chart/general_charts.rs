@@ -4,11 +4,12 @@ use aeris_charts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
     DEFAULT_GENERAL_FILL_OPACITY, GeneralAreaBaseline, GeneralAxisDomain, GeneralAxisOptions,
     GeneralAxisTick, GeneralBrushEndpoint, GeneralBrushRange, GeneralBrushSnapshot,
-    GeneralDatasetId, GeneralHitMode, GeneralInterpolation, GeneralLineStyle, GeneralPaneProposal,
-    GeneralPointSymbol, GeneralReferenceId, GeneralReferenceOptions, GeneralRowId,
-    GeneralRowIdentity, GeneralScaleType, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralSeriesProposal, GeneralStackMode, GeneralTooltipSnapshot, GeneralXyInput,
-    HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    GeneralDatasetId, GeneralHitMode, GeneralInterpolation, GeneralLineStyle,
+    GeneralPaneComposition, GeneralPaneProposal, GeneralPaneReferenceComposition,
+    GeneralPaneSeriesComposition, GeneralPointSymbol, GeneralReferenceId, GeneralReferenceOptions,
+    GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId, GeneralSeriesKind,
+    GeneralSeriesOptions, GeneralSeriesProposal, GeneralStackMode, GeneralTooltipSnapshot,
+    GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use js_sys::{Float64Array, Uint8Array, Uint32Array};
 use serde::Deserialize;
@@ -191,6 +192,32 @@ struct PaneProposalInput {
 }
 
 #[derive(Deserialize)]
+struct PaneCompositionInput {
+    pane: usize,
+    axes: Vec<AxisInput>,
+    series: Vec<SeriesCompositionInput>,
+    references: Vec<ReferenceCompositionInput>,
+}
+
+#[derive(Deserialize)]
+struct SeriesCompositionInput {
+    key: String,
+    #[serde(default, alias = "current")]
+    current_series_id: Option<u32>,
+    kind: String,
+    options: SeriesInput,
+    columns: PackedColumnsInput,
+}
+
+#[derive(Deserialize)]
+struct ReferenceCompositionInput {
+    key: String,
+    #[serde(default, alias = "current")]
+    current_reference_id: Option<u32>,
+    options: GeneralReferenceOptions,
+}
+
+#[derive(Deserialize)]
 struct SeriesProposalInput {
     kind: String,
     x_axis_id: String,
@@ -240,6 +267,9 @@ struct PackedColumnsInput {
     y_coordinate: Option<Vec<f64>>,
     value: Option<Vec<f64>>,
     value_valid: Option<Vec<u8>>,
+    labels: Option<Vec<Option<String>>>,
+    colors: Option<Vec<Option<String>>>,
+    symbols: Option<Vec<Option<String>>>,
 }
 
 #[derive(Deserialize)]
@@ -1012,6 +1042,122 @@ impl ChartInner {
         };
         match self.engine.validate_general_pane_proposal(&proposal) {
             Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn compose_general_pane_result_json(&mut self, options_json: &str) -> String {
+        let input = match parse_json::<PaneCompositionInput>(options_json) {
+            Ok(input) => input,
+            Err(error) => return error,
+        };
+        let axis_ids = input
+            .axes
+            .iter()
+            .map(|axis| axis.id.clone())
+            .collect::<Vec<_>>();
+        let axes = match input
+            .axes
+            .into_iter()
+            .map(axis_options_from_input)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(axes) => axes,
+            Err(error) => return error,
+        };
+        let placeholder_dataset =
+            GeneralDatasetId::from_raw(1).expect("one is a valid general dataset identity");
+        let series = match input
+            .series
+            .into_iter()
+            .map(|mut input| {
+                let labels = input.columns.labels.take();
+                let colors = input.columns.colors.take();
+                let symbols = input.columns.symbols.take();
+                let proposal = proposal_series(SeriesProposalInput {
+                    kind: input.kind,
+                    x_axis_id: input.options.x_axis_id.clone(),
+                    y_axis_id: input.options.y_axis_id.clone(),
+                    columns: input.columns,
+                })?;
+                let current = input
+                    .current_series_id
+                    .map(|id| {
+                        GeneralSeriesId::from_raw(id)
+                            .ok_or_else(|| input_error("current general series handle is stale"))
+                    })
+                    .transpose()?;
+                let options =
+                    series_options_from_input(proposal.kind, placeholder_dataset, input.options)
+                        .map_err(|error| result_error(&error))?;
+                Ok(GeneralPaneSeriesComposition {
+                    key: input.key,
+                    current,
+                    options,
+                    data: proposal.data,
+                    labels,
+                    colors,
+                    symbols,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()
+        {
+            Ok(series) => series,
+            Err(error) => return error,
+        };
+        let references = match input
+            .references
+            .into_iter()
+            .map(|input| {
+                let current = input
+                    .current_reference_id
+                    .map(|id| {
+                        GeneralReferenceId::from_raw(id)
+                            .ok_or_else(|| input_error("current general reference handle is stale"))
+                    })
+                    .transpose()?;
+                Ok(GeneralPaneReferenceComposition {
+                    key: input.key,
+                    current,
+                    options: input.options,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()
+        {
+            Ok(references) => references,
+            Err(error) => return error,
+        };
+        match self.engine.compose_general_pane(GeneralPaneComposition {
+            pane: input.pane,
+            axes,
+            series,
+            references,
+        }) {
+            Ok(result) => {
+                let axis_handle_tokens = axis_ids
+                    .into_iter()
+                    .map(|id| {
+                        let handle_token = self
+                            .engine
+                            .general_axis(&id)
+                            .map_or(0, aeris_charts_engine::GeneralAxis::handle_token);
+                        (id, json!(handle_token))
+                    })
+                    .collect::<serde_json::Map<String, Value>>();
+                result_ok(json!({
+                    "series": result.series.into_iter().map(|item| json!({
+                        "key": item.key,
+                        "id": item.id.get(),
+                        "dataset": item.dataset.get(),
+                    })).collect::<Vec<_>>(),
+                    "references": result.references.into_iter().map(|item| json!({
+                        "key": item.key,
+                        "id": item.id.get(),
+                    })).collect::<Vec<_>>(),
+                    "axis_handle_tokens": axis_handle_tokens,
+                    "brush_cleared": result.brush_cleared,
+                }))
+            }
             Err(error) => result_error(&error),
         }
     }

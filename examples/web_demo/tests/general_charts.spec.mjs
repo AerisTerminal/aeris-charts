@@ -674,6 +674,283 @@ test("React general declarations map records once per changed input and retain e
   });
 });
 
+test("public pane composition is atomic, retains compatible identities, and replaces only a renamed key", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "width:640px;height:320px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false, accessibility: false });
+    const earlier = chart.addPane({
+      preserve_empty: true,
+      horizontal_domain: { type: "category", scale: "band" },
+    });
+    const pane = chart.addPane({
+      preserve_empty: true,
+      horizontal_domain: { type: "category", scale: "band" },
+    });
+    const before_remove = pane.paneIndex();
+    const axes = [
+      { id: "month", dimension: "x", position: "bottom", scale: "band" },
+      { id: "value", dimension: "y", position: "left", scale: "linear" },
+    ];
+    const first = chart.compose_general_pane({
+      pane,
+      axes,
+      series: [{
+        key: "actual",
+        kind: "xy_line",
+        options: { x_axis_id: "month", y_axis_id: "value", title: "Actual" },
+        data: [{ id: "jan", x: "Jan", y: 12 }],
+      }, {
+        key: "forecast",
+        kind: "xy_line",
+        options: { x_axis_id: "month", y_axis_id: "value", title: "Forecast" },
+        data: [{ id: "jan-f", x: "Jan", y: 15 }],
+      }],
+      references: [{
+        key: "target",
+        options: { kind: "line", axis_id: "value", value: 20 },
+      }],
+    });
+    const actual = first.series[0].handle;
+    const forecast = first.series[1].handle;
+    const target = first.references[0].handle;
+    const second = chart.compose_general_pane({
+      pane,
+      axes: [
+        axes[0],
+        { ...axes[1], title: "Updated value" },
+      ],
+      series: [{
+        key: "forecast",
+        current: forecast,
+        kind: "xy_line",
+        options: { x_axis_id: "month", y_axis_id: "value", title: "Updated forecast" },
+        data: [{ id: "jan-f", x: "Jan", y: 31 }],
+      }, {
+        key: "actual",
+        current: actual,
+        kind: "xy_line",
+        options: { x_axis_id: "month", y_axis_id: "value", title: "Updated actual", visible: false },
+        data: [{ id: "jan", x: "Jan", y: 27 }],
+      }],
+      references: [{
+        key: "target",
+        current: target,
+        options: { kind: "line", axis_id: "value", value: 25 },
+      }],
+    });
+    const updated_forecast = second.series[0].handle;
+    const updated_actual = second.series[1].handle;
+    const updated_target = second.references[0].handle;
+    const retained = {
+      same_actual: updated_actual === actual,
+      same_forecast: updated_forecast === forecast,
+      same_target: updated_target.id === target.id,
+      actual_value: actual.dataAt(0)?.value,
+      forecast_value: forecast.dataAt(0)?.value,
+      actual_visible: actual.options().visible,
+      order: chart.general_series_order(before_remove).map((series) => series.id),
+      expected_order: [forecast.id, actual.id],
+    };
+    let failure = "";
+    try {
+      chart.compose_general_pane({
+        pane,
+        axes: [
+          axes[0],
+          { id: "value", dimension: "y", position: "left", scale: "log" },
+          { id: "leaked", dimension: "y", position: "right", scale: "linear" },
+        ],
+        series: [{
+          key: "forecast",
+          current: updated_forecast,
+          kind: "xy_line",
+          options: { x_axis_id: "month", y_axis_id: "value", title: "Invalid" },
+          data: [{ id: "jan-f", x: "Jan", y: -31 }],
+        }, {
+          key: "forecast",
+          kind: "column",
+          options: { x_axis_id: "month", y_axis_id: "leaked" },
+          data: [{ id: "jan-leaked", x: "Jan", y: 1 }],
+        }],
+        references: [{
+          key: "leaked-reference",
+          options: { kind: "line", axis_id: "leaked", value: 1 },
+        }],
+      });
+    } catch (error) {
+      failure = error.message;
+    }
+    const after_failure = {
+      same_order: chart.general_series_order(before_remove)[0] === forecast
+        && chart.general_series_order(before_remove)[1] === actual,
+      axes: chart.axes(before_remove).map((axis) => axis.options().id),
+      series_count: chart.general_series_order(before_remove).length,
+      reference_count: chart.general_references(before_remove).length,
+      leaked_axis: chart.axis("leaked") !== null,
+      actual_title: actual.options().title,
+      target_value: target.options().value,
+    };
+    const third = chart.compose_general_pane({
+      pane,
+      axes: second.axes.map((axis) => axis.options()),
+      series: [{
+        key: "forecast-renamed",
+        current: updated_forecast,
+        kind: "xy_line",
+        options: { x_axis_id: "month", y_axis_id: "value", title: "Renamed forecast" },
+        data: [{ id: "jan-f", x: "Jan", y: 32 }],
+      }, {
+        key: "actual",
+        current: updated_actual,
+        kind: "xy_line",
+        options: { x_axis_id: "month", y_axis_id: "value", title: "Updated actual", visible: true },
+        data: [{ id: "jan", x: "Jan", y: 28 }],
+      }],
+      references: [{
+        key: "target",
+        current: updated_target,
+        options: { kind: "line", axis_id: "value", value: 26 },
+      }],
+    });
+    const renamed = third.series[0].handle;
+    let old_forecast_stale = false;
+    try {
+      forecast.options();
+    } catch (error) {
+      old_forecast_stale = error.code === "stale_handle";
+    }
+    const replacement = {
+      renamed_replaced: renamed !== forecast,
+      exact_next_id: renamed.id === Math.max(actual.id, forecast.id) + 1,
+      old_forecast_stale,
+      actual_retained: third.series[1].handle === actual,
+      actual_live_value: actual.dataAt(0)?.value,
+      series_count: chart.general_series_order(before_remove).length,
+      reference_retained: third.references[0].handle.id === target.id,
+    };
+    chart.remove_pane(earlier.paneIndex());
+    const after_remove = pane.paneIndex();
+    const rebound = chart.compose_general_pane({
+      pane,
+      axes: third.axes.map((axis) => axis.options()),
+      series: [{
+        key: "forecast-renamed",
+        current: renamed,
+        kind: "xy_line",
+        options: { x_axis_id: "month", y_axis_id: "value", title: "Renamed forecast" },
+        data: [{ id: "jan-f", x: "Jan", y: 33 }],
+      }, {
+        key: "actual",
+        current: actual,
+        kind: "xy_line",
+        options: { x_axis_id: "month", y_axis_id: "value", title: "Updated actual", visible: true },
+        data: [{ id: "jan", x: "Jan", y: 29 }],
+      }],
+      references: [{
+        key: "target",
+        current: third.references[0].handle,
+        options: { kind: "line", axis_id: "value", value: 27 },
+      }],
+    });
+    const pane_binding = {
+      before_remove,
+      after_remove,
+      axis_count: chart.axes(after_remove).length,
+      same_renamed: rebound.series[0].handle === renamed,
+      same_actual: rebound.series[1].handle === actual,
+      renamed_value: renamed.dataAt(0)?.value,
+      actual_value: actual.dataAt(0)?.value,
+    };
+    chart.remove();
+    host.remove();
+    return {
+      pane_binding,
+      failure,
+      after_failure,
+      retained,
+      replacement,
+    };
+  });
+  expect(result.failure).toContain("composition keys must be bounded, nonempty, and unique");
+  expect(result).toMatchObject({
+    pane_binding: {
+      before_remove: 2,
+      after_remove: 1,
+      axis_count: 2,
+      same_renamed: true,
+      same_actual: true,
+      renamed_value: 33,
+      actual_value: 29,
+    },
+    after_failure: {
+      same_order: true,
+      axes: ["month", "value"],
+      series_count: 2,
+      reference_count: 1,
+      leaked_axis: false,
+      actual_title: "Updated actual",
+      target_value: 25,
+    },
+    retained: {
+      same_actual: true,
+      same_forecast: true,
+      same_target: true,
+      actual_value: 27,
+      forecast_value: 31,
+      actual_visible: false,
+    },
+    replacement: {
+      renamed_replaced: true,
+      exact_next_id: true,
+      old_forecast_stale: true,
+      actual_retained: true,
+      actual_live_value: 28,
+      series_count: 2,
+      reference_retained: true,
+    },
+  });
+  expect(result.retained.order).toEqual(result.retained.expected_order);
+});
+
+test("React GeneralPane composes a multi-change commit once and skips ten equivalent idle rerenders", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactCompositionTransactions();
+  });
+  expect(result.multi_change).toMatchObject({
+    calls: { compose: 1, validate: 0, direct_add: 0, direct_remove: 0, direct_reorder: 0 },
+    map_calls: 2,
+    same_sales: true,
+    same_forecast: true,
+    same_mapped: true,
+    axis_title: "Updated sales",
+  });
+  expect(result.multi_change.order).toEqual(result.multi_change.expected_order);
+  expect(result.idle).toEqual({
+    calls: { compose: 0, validate: 0, direct_add: 0, direct_remove: 0, direct_reorder: 0 },
+    map_calls: 0,
+  });
+});
+
+test("React GeneralPane rejects unsupported child declarations without installing resources", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactUnsupportedChild();
+  });
+  expect(result).toEqual({
+    failure: "GeneralPane received an unsupported child declaration",
+    pane_count: 1,
+    axis_count: 0,
+    series_count: 0,
+  });
+});
+
 test("React references and default controls follow the retained general pane", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
@@ -754,6 +1031,7 @@ test("React rejects an invalid structural axis render before changing live handl
     return fixture.exerciseReactAxisPreflight();
   });
   expect(result.error).toContain("incompatible with the pane domain");
+  expect(result.validation_count).toBe(1);
   expect(result).toMatchObject({
     after_invalid: {
       same_axis: true,
@@ -773,6 +1051,7 @@ test("React rejects an invalid reference render before changing series or refere
     return fixture.exerciseReactReferencePreflight();
   });
   expect(result.error).toContain("numeric reference values must be finite numbers");
+  expect(result.validation_count).toBe(1);
   expect(result).toMatchObject({
     after_invalid: { series_title: "Sales", reference_value: 14, reference_count: 1 },
     same_series: true,
@@ -788,6 +1067,8 @@ test("React rejects invalid data on a kind change before removing the prior seri
   });
   expect(result.row_error).toContain("range_bar rows require low and high fields");
   expect(result.axis_error).toContain("scatter/bubble requires a continuous pane");
+  // One delivery for each of the two rejected commits.
+  expect(result.validation_count).toBe(2);
   expect(result).toMatchObject({
     retained: { same_series: true, kind: "column", value: 12 },
     after_axis_error: { same_series: true, kind: "column", value: 12 },
@@ -803,6 +1084,7 @@ test("React validates a reference against a proposed structural axis before repl
     return fixture.exerciseReactReferenceAxisPreflight();
   });
   expect(result.error).toContain("general reference values on logarithmic axes must be positive");
+  expect(result.validation_count).toBe(1);
   expect(result).toMatchObject({
     retained: { same_series: true, same_reference: true, axis_scale: "linear" },
     applied: { axis_scale: "log", reference_value: 20, series_replaced: true },
@@ -817,6 +1099,7 @@ test("React rejects scatter data incompatible with a proposed logarithmic axis",
   });
   expect(result.error).toContain("logarithmic general-series Y values must be positive");
   expect(result.imperative_error).toBe(result.error);
+  expect(result.validation_count).toBe(1);
   expect(result).toMatchObject({
     retained: { same_series: true, axis_scale: "linear", value: -5 },
     applied: { axis_scale: "log", value: 5 },
@@ -845,6 +1128,658 @@ test("React readiness callback failure cleans up and permits a valid retry", asy
     after_retry: { pane_count: 2, axis_count: 3, legend_count: 1 },
     disposed: true,
   });
+});
+
+test("React GeneralPane retains every handle across presentation, data, axis, reference, and label edits", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactRetainedIdentities();
+  });
+  expect(result.initial.series_ids).toHaveLength(2);
+  expect(result.initial.reference_ids).toHaveLength(1);
+  expect(result.initial.series_ready).toBeGreaterThanOrEqual(2);
+  expect(result.initial.reference_ready).toBeGreaterThanOrEqual(1);
+  const retained = {
+    series_ids: result.initial.series_ids,
+    reference_ids: result.initial.reference_ids,
+    same_handles: true,
+    axes_live: true,
+    series_ready: result.initial.series_ready,
+    reference_ready: result.initial.reference_ready,
+  };
+  const unchanged_axis = { title: "Sales axis", position: "left", tick_count: 5, grid_visible: true };
+  const changed_axis = { title: "Revenue axis", position: "right", tick_count: 3, grid_visible: false };
+  expect(result.steps.series_title_color).toEqual({
+    ...retained, title: "Revenue", color: "#dc2626", visible: true, values: [12, 19],
+    axis: unchanged_axis, reference: { value: 14, color: "#f59e0b" }, labels: false,
+  });
+  expect(result.steps.series_visibility).toEqual({
+    ...retained, title: "Revenue", color: "#dc2626", visible: false, values: [12, 19],
+    axis: unchanged_axis, reference: { value: 14, color: "#f59e0b" }, labels: false,
+  });
+  expect(result.steps.data_replacement).toEqual({
+    ...retained, title: "Revenue", color: "#dc2626", visible: false, values: [33, 44],
+    axis: unchanged_axis, reference: { value: 14, color: "#f59e0b" }, labels: false,
+  });
+  expect(result.steps.axis_presentation).toEqual({
+    ...retained, title: "Revenue", color: "#dc2626", visible: false, values: [33, 44],
+    axis: changed_axis, reference: { value: 14, color: "#f59e0b" }, labels: false,
+  });
+  expect(result.steps.reference_options).toEqual({
+    ...retained, title: "Revenue", color: "#dc2626", visible: false, values: [33, 44],
+    axis: changed_axis, reference: { value: 18, color: "#10b981" }, labels: false,
+  });
+  expect(result.steps.labels_on).toEqual({
+    ...retained, title: "Revenue", color: "#dc2626", visible: false, values: [33, 44],
+    axis: changed_axis, reference: { value: 18, color: "#10b981" }, labels: true,
+  });
+  expect(result.steps.labels_off).toEqual({
+    ...retained, title: "Revenue", color: "#dc2626", visible: false, values: [33, 44],
+    axis: changed_axis, reference: { value: 18, color: "#10b981" }, labels: false,
+  });
+});
+
+test("React rejects a reference bound to a removed or missing axis without changing the pane", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactReferenceAxisRemoval();
+  });
+  expect(result.before.axes.map((axis) => axis.id)).toEqual(["month", "sales", "alt"]);
+  expect(result.before.series.map((series) => series.options.title)).toEqual(["Sales", "Trend"]);
+  expect(result.before.references).toHaveLength(2);
+  expect(result.after_removed).toEqual({ state: result.before, errors: 1 });
+  expect(result.after_missing).toEqual({ state: result.before, errors: 2 });
+  expect(result.errors[0]).toContain('general reference axis "alt" does not exist');
+  expect(result.errors[1]).toContain('general reference axis "missing" does not exist');
+  expect(result.errors).toHaveLength(2);
+  expect(result).toMatchObject({
+    recovered_title: "Recovered",
+    recovered_ids: result.before.series.map((series) => series.id),
+    recovered_reference_ids: result.before.references.map((reference) => reference.id),
+    series_ready: 2,
+    reference_ready: 2,
+  });
+});
+
+test("React rejects invalid new or replacement series rows together with every valid change", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactInvalidSeriesBatch();
+  });
+  expect(result.before.series).toHaveLength(1);
+  expect(result.before.series[0].options.title).toBe("Sales");
+  expect(result.new_invalid_series).toEqual({ state: result.before, errors: 1, series_count: 1 });
+  expect(result.invalid_replacement).toEqual({ state: result.before, errors: 2 });
+  expect(result.errors).toHaveLength(2);
+  for (const error of result.errors) expect(error).toContain("category X values must be strings");
+  expect(result.recovered).toEqual({
+    same_id: true, title: "Recovered", rows: [30], series_ready: 1, errors: 2,
+  });
+});
+
+test("React mapper failure keeps the prior pane and ready-callback failures keep the complete new pane", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactCallbackFailures();
+  });
+  expect(result.mapper_failure).toEqual({
+    errors: ["expected mapper failure"],
+    keys: ["sales", "mapped"],
+    sales_title: "Sales",
+    mapped_values: [12, 19],
+    reference_values: [14],
+    axis_count: 2,
+    series_ready: ["sales", "mapped"],
+    reference_ready: ["target"],
+    state_unchanged: true,
+  });
+  expect(result.series_ready_failure).toEqual({
+    errors: ["expected mapper failure", "expected series ready failure"],
+    keys: ["sales", "extra", "mapped"],
+    sales_title: "Series ready title",
+    mapped_values: [12, 19],
+    reference_values: [14],
+    axis_count: 2,
+    series_ready: ["sales", "mapped", "extra"],
+    reference_ready: ["target"],
+  });
+  expect(result.reference_ready_failure).toEqual({
+    errors: ["expected mapper failure", "expected series ready failure", "expected reference ready failure"],
+    keys: ["sales", "extra", "mapped"],
+    sales_title: "Reference ready title",
+    mapped_values: [12, 19],
+    reference_values: [14, 2],
+    axis_count: 2,
+    series_ready: ["sales", "mapped", "extra"],
+    reference_ready: ["target", "floor"],
+  });
+  expect(result.recovered).toEqual({
+    errors: ["expected mapper failure", "expected series ready failure", "expected reference ready failure"],
+    keys: ["sales", "extra", "mapped"],
+    sales_title: "Recovered",
+    mapped_values: [22, 29],
+    reference_values: [14, 2],
+    axis_count: 2,
+    series_ready: ["sales", "mapped", "extra"],
+    reference_ready: ["target", "floor"],
+  });
+  // Both new handles receive their callback; the two failures are delivered once, together.
+  expect(result.multiple_ready_failures).toEqual({
+    errors: [
+      "expected mapper failure",
+      "expected series ready failure",
+      "expected reference ready failure",
+      "general pane ready callbacks failed",
+    ],
+    keys: ["sales", "extra", "burst_a", "burst_b", "mapped"],
+    sales_title: "Recovered",
+    mapped_values: [22, 29],
+    reference_values: [14, 2],
+    axis_count: 2,
+    series_ready: ["sales", "mapped", "extra", "burst_a", "burst_b"],
+    reference_ready: ["target", "floor"],
+  });
+});
+
+test("React delivers composition failures once to onValidationError or else to the nearest boundary", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactFailureDelivery();
+  });
+  const financial = { chart_live: true, financial_retained: true, financial_closes: [2, 4] };
+  expect(result.validation_messages).toHaveLength(2);
+  expect(result.validation_messages[0]).toContain("category X values must be strings");
+  expect(result.validation_messages[1]).toBe("expected mapper failure");
+  expect(result.handled_engine).toEqual({ validation: 1, boundary: 0, pane_count: 2, ...financial });
+  expect(result.handled_mapper).toEqual({ validation: 2, boundary: 0, pane_count: 2, ...financial });
+  expect(result.remounted_panes).toBe(2);
+  expect(result.unhandled_engine.validation).toBe(2);
+  expect(result.unhandled_engine.boundary).toHaveLength(1);
+  expect(result.unhandled_engine.boundary[0]).toContain("category X values must be strings");
+  expect(result.unhandled_engine).toMatchObject({ pane_count: 1, ...financial });
+  expect(result.unhandled_mapper.validation).toBe(2);
+  expect(result.unhandled_mapper.boundary).toHaveLength(2);
+  expect(result.unhandled_mapper.boundary[1]).toBe("expected mapper failure");
+  expect(result.unhandled_mapper).toMatchObject({ pane_count: 1, ...financial });
+});
+
+test("React legend and tooltip keep their DOM across new inline formatters and show the latest output", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const mounted = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.mountReactFormatterFixture();
+  });
+  expect(mounted.legend_text).toEqual(["T0:Sales", "T0:Margin"]);
+  const retained = {
+    same_legend: true, legend_connected: true, legend_count: 1,
+    same_tooltip: true, tooltip_connected: true, tooltip_count: 1, series_ready: 2,
+  };
+  for (let generation = 1; generation <= 5; generation += 1) {
+    const observed = await page.evaluate((value) => window.__reactFormatters.rerender(value), generation);
+    expect(observed).toEqual({
+      ...retained,
+      legend_text: [`T${generation}:Sales`, `T${generation}:Margin`],
+      legend_actions: [`A${generation} hide Sales`, `A${generation} hide Margin`],
+    });
+  }
+  const point = await page.evaluate(() => window.__reactFormatters.point());
+  await page.mouse.move(point.x, point.y);
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toContainText("Sales: V5:42");
+  await expect(tooltip).toContainText("Margin: D5:21");
+  const after_hover = await page.evaluate(() => window.__reactFormatters.rerender(5));
+  expect(after_hover).toMatchObject({ same_tooltip: true, tooltip_connected: true, tooltip_count: 1 });
+  await page.evaluate(() => window.__reactFormatters.dispose());
+});
+
+test("React removing the first general pane leaves the second pane's legend and tooltip scoped to it", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const before = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.mountReactTwoPaneFixture();
+  });
+  expect(before).toEqual({
+    pane_count: 3,
+    pane_b_index: 2,
+    legend_a_present: true,
+    legend_a_titles: ["Alpha"],
+    legend_b_titles: ["Beta", "Gamma"],
+    same_legend_b: true,
+    same_tooltip_b: true,
+    tooltip_langs: ["x-a", "x-b"],
+    general_series_count: 3,
+  });
+  const tooltip_b = page.locator('[role="tooltip"][lang="x-b"]');
+  const tooltip_a = page.locator('[role="tooltip"][lang="x-a"]');
+  const point_b = await page.evaluate(() => window.__reactTwoPanes.point_b());
+  await page.mouse.move(point_b.x, point_b.y);
+  await expect(tooltip_b).toBeVisible();
+  await expect(tooltip_b).toContainText("Beta: 40");
+  await expect(tooltip_b).toContainText("Gamma: 20");
+  await expect(tooltip_b).not.toContainText("Alpha");
+  await expect(tooltip_a).toBeHidden();
+  await page.mouse.move(1200, 700);
+
+  const after = await page.evaluate(() => window.__reactTwoPanes.remove_a());
+  expect(after).toEqual({
+    pane_count: 2,
+    pane_b_index: 1,
+    legend_a_present: false,
+    legend_a_titles: [],
+    legend_b_titles: ["Beta", "Gamma"],
+    same_legend_b: true,
+    same_tooltip_b: true,
+    tooltip_langs: ["x-b"],
+    general_series_count: 2,
+  });
+  const moved_b = await page.evaluate(() => window.__reactTwoPanes.point_b());
+  await page.mouse.move(moved_b.x, moved_b.y);
+  await expect(tooltip_b).toBeVisible();
+  await expect(tooltip_b).toContainText("Beta: 40");
+  await expect(tooltip_b).toContainText("Gamma: 20");
+  await expect(tooltip_b).not.toContainText("Alpha");
+  await expect(page.getByRole("tooltip")).toHaveCount(1);
+  await page.evaluate(() => window.__reactTwoPanes.dispose());
+});
+
+test("React brush controls on two axes share one engine brush and survive structural axis replacement", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactDualBrush();
+  });
+  const month_range = { axis_id: "month", dimension: "x", range: { type: "category", from: "Feb", to: "Mar" } };
+  expect(result.month_controlled).toEqual(month_range);
+  // A null controlled range on another axis must not clear the active brush.
+  expect(result.other_cleared).toEqual(month_range);
+  expect(result.own_cleared).toBeNull();
+  expect(result.sales_selected).toMatchObject({ axis_id: "sales", dimension: "y", range: { type: "numeric" } });
+  // The controlled month control reports losing the brush once and does not re-take it.
+  expect(result.not_stolen).toEqual({ axis_id: "sales", month_reports: [null] });
+  expect(result.month_reported_other_axis).toBe(false);
+  expect(result.replaced).toEqual({
+    snapshot: null,
+    axis_scale: "log",
+    prior_axis_stale: true,
+    reported: [null],
+    sales_controls_retained: true,
+    month_controls_retained: true,
+    status: "No range selected",
+  });
+  expect(result.reselected.axis_scale).toBe("log");
+  expect(result.reselected.snapshot).toMatchObject({ axis_id: "sales", dimension: "y", range: { type: "numeric" } });
+  expect(result.month_changes_seen).toBe(true);
+});
+
+test("React MarketDashboard declarations match the equivalent raw public composition", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactImperativeParity();
+  });
+  expect(result.react.axes.map((axis) => axis.id)).toEqual(["month", "revenue"]);
+  expect(result.react.series).toHaveLength(1);
+  expect(result.react.series[0]).toMatchObject({
+    kind: "column",
+    options: { x_axis_id: "month", y_axis_id: "revenue", title: "Revenue", data_labels: true },
+  });
+  expect(result.react.series[0].rows.map((row) => [row.x_label, row.value, row.label])).toEqual([
+    ["Jan", 42, "42"], ["Feb", 55, "55"], ["Mar", 48, "48"],
+  ]);
+  expect(result.react.references).toEqual([
+    expect.objectContaining({ kind: "line", axis_id: "revenue", value: 50, color: "#f59e0b" }),
+  ]);
+  expect(result.react.legend).toHaveLength(1);
+  expect(result.composed).toEqual(result.react);
+  expect(result.direct).toEqual(result.react);
+});
+
+test("public pane composition rejects every invalid proposal atomically and applies none of its valid edits", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "width:640px;height:320px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false, accessibility: false });
+    const pane = chart.addPane({ preserve_empty: true, horizontal_domain: { type: "category", scale: "band" } });
+    const index = pane.pane_index();
+    const month = { id: "month", dimension: "x", position: "bottom", scale: "band" };
+    const value = { id: "value", dimension: "y", position: "left", scale: "linear" };
+    const alt = { id: "alt", dimension: "y", position: "right", scale: "linear" };
+    const actual_options = { x_axis_id: "month", y_axis_id: "value", title: "Actual" };
+    const bars_options = { x_axis_id: "month", y_axis_id: "alt", title: "Bars" };
+    const actual_rows = [{ id: "jan", x: "Jan", y: 12 }, { id: "feb", x: "Feb", y: 18 }];
+    const bars_rows = [{ id: "jan-b", x: "Jan", y: 3 }];
+    const first = chart.compose_general_pane({
+      pane,
+      axes: [month, value, alt],
+      series: [
+        { key: "actual", kind: "xy_line", options: actual_options, data: actual_rows },
+        { key: "bars", kind: "column", options: bars_options, data: bars_rows },
+      ],
+      references: [
+        { key: "target", options: { kind: "line", axis_id: "value", value: 20 } },
+        { key: "alt-target", options: { kind: "line", axis_id: "alt", value: 2 } },
+      ],
+    });
+    const [actual, bars] = first.series.map((item) => item.handle);
+    const [target, alt_target] = first.references.map((item) => item.handle);
+    const actual_entry = (patch = {}) => ({
+      key: "actual", current: actual, kind: "xy_line", options: actual_options, data: actual_rows, ...patch,
+    });
+    const bars_entry = { key: "bars", current: bars, kind: "column", options: bars_options, data: bars_rows };
+    const target_entry = { key: "target", current: target, options: { kind: "line", axis_id: "value", value: 20 } };
+    const alt_target_entry = (axis_id = "alt") => ({
+      key: "alt-target", current: alt_target, options: { kind: "line", axis_id, value: 2 },
+    });
+    const valid_title = { options: { ...actual_options, title: "Should not apply" } };
+    // Lines treat non-positive logarithmic values as path gaps, so the log rejection case uses
+    // scatter marks, which require every Y value to be representable, on a continuous pane.
+    const measure = chart.addPane({ preserve_empty: true, horizontal_domain: { type: "continuous", scale: "linear" } });
+    const measure_x = { id: "measure-x", dimension: "x", position: "bottom", scale: "linear" };
+    const measure_y = { id: "measure-y", dimension: "y", position: "left", scale: "linear" };
+    const points_options = { x_axis_id: "measure-x", y_axis_id: "measure-y", title: "Points" };
+    const trend_options = { x_axis_id: "measure-x", y_axis_id: "measure-y", title: "Trend" };
+    const points_rows = [{ id: "p1", x: 1, y: 4 }, { id: "p2", x: 2, y: 9 }];
+    const measured = chart.compose_general_pane({
+      pane: measure,
+      axes: [measure_x, measure_y],
+      series: [
+        { key: "points", kind: "scatter", options: points_options, data: points_rows },
+        { key: "trend", kind: "xy_line", options: trend_options, data: points_rows },
+      ],
+    });
+    const [points, trend] = measured.series.map((item) => item.handle);
+    const rows_of = (series) => {
+      const total = series.accessibility_snapshot(0, 0).total_rows;
+      return Array.from({ length: total }, (_, row) => series.data_at(row));
+    };
+    const pane_snapshot = (pane_index) => ({
+      axes: chart.axes(pane_index).map((axis) => axis.options()),
+      series: chart.general_series_order(pane_index).map((series) => ({
+        id: series.id, kind: series.kind, options: series.options(), rows: rows_of(series),
+      })),
+      references: chart.general_references(pane_index).map((reference) => ({
+        id: reference.id, options: reference.options(),
+      })),
+    });
+    const snapshot = () => JSON.stringify({
+      category: pane_snapshot(index),
+      measure: pane_snapshot(measure.pane_index()),
+    });
+    const cases = {
+      log_axis_negative_data: {
+        pane: measure,
+        axes: [measure_x, { ...measure_y, scale: "log" }],
+        series: [
+          { key: "points", current: points, kind: "scatter", options: points_options,
+            data: [{ id: "p1", x: 1, y: -4 }, { id: "p2", x: 2, y: 9 }] },
+          { key: "trend", current: trend, kind: "xy_line", options: { ...trend_options, title: "Should not apply" },
+            data: points_rows },
+        ],
+      },
+      kind_incompatible_with_axes: {
+        axes: [month, value, alt],
+        series: [actual_entry(valid_title), bars_entry, {
+          key: "points", kind: "scatter", options: { x_axis_id: "month", y_axis_id: "value" },
+          data: [{ id: "p", x: 1, y: 2 }],
+        }],
+        references: [target_entry, alt_target_entry()],
+      },
+      reference_axis_missing: {
+        axes: [month, value, alt],
+        series: [actual_entry(valid_title), bars_entry],
+        references: [target_entry, alt_target_entry("missing")],
+      },
+      reference_axis_removed_by_batch: {
+        axes: [month, value],
+        series: [actual_entry(valid_title)],
+        references: [target_entry, alt_target_entry()],
+      },
+      axis_scale_invalid_for_domain: {
+        axes: [month, value, alt, { id: "linear-x", dimension: "x", position: "top", scale: "linear" }],
+        series: [actual_entry(valid_title), bars_entry],
+        references: [target_entry, alt_target_entry()],
+      },
+      new_invalid_series_with_valid_edit: {
+        axes: [month, value, alt],
+        series: [actual_entry(valid_title), bars_entry, {
+          key: "bad", kind: "column", options: { x_axis_id: "month", y_axis_id: "value", title: "Bad" },
+          data: [{ id: "bad", x: 7, y: 1 }],
+        }],
+        references: [target_entry, alt_target_entry()],
+      },
+      invalid_data_replacement: {
+        axes: [month, value, alt],
+        series: [actual_entry({ data: [{ id: "jan", x: 7, y: 12 }] }), bars_entry],
+        references: [target_entry, alt_target_entry()],
+      },
+    };
+    const title_of = (series) => {
+      try {
+        return series.options().title;
+      } catch (error) {
+        return error.code;
+      }
+    };
+    const before = snapshot();
+    const outcomes = {};
+    for (const [name, proposal] of Object.entries(cases)) {
+      let error = null;
+      try {
+        chart.compose_general_pane({ pane, ...proposal });
+      } catch (caught) {
+        error = caught.message;
+      }
+      outcomes[name] = {
+        error,
+        unchanged: snapshot() === before,
+        counts: [chart.axes(index).length, chart.general_series_order(index).length,
+          chart.general_references(index).length],
+        measure_counts: [chart.axes(measure.pane_index()).length,
+          chart.general_series_order(measure.pane_index()).length],
+        actual_title: title_of(actual),
+        bars_title: title_of(bars),
+        trend_title: title_of(trend),
+        points_title: title_of(points),
+        series_order: chart.general_series_order(index).map((series) => series.id),
+        leaked_axis: chart.axis("value")?.options().scale !== "linear"
+          || chart.axis("month")?.options().scale !== "band"
+          || chart.axis("measure-y")?.options().scale !== "linear",
+      };
+    }
+    let applied;
+    try {
+      const recovered = chart.compose_general_pane({
+        pane,
+        axes: [month, value, alt],
+        series: [actual_entry({ options: { ...actual_options, title: "Applied" } }), bars_entry],
+        references: [target_entry, alt_target_entry()],
+      });
+      applied = { same_actual: recovered.series[0].handle === actual, title: title_of(actual) };
+    } catch (error) {
+      applied = { error: error.message };
+    }
+    const expected_order = [actual.id, bars.id];
+    chart.remove();
+    host.remove();
+    return { outcomes, applied, expected_order, before: JSON.parse(before) };
+  });
+  const expected_errors = {
+    log_axis_negative_data: "logarithmic general-series Y values must be positive",
+    kind_incompatible_with_axes: "scatter/bubble requires a continuous pane",
+    reference_axis_missing: 'general reference axis "missing" does not exist',
+    reference_axis_removed_by_batch: 'general reference axis "alt" does not exist',
+    axis_scale_invalid_for_domain: "incompatible with the pane domain",
+    new_invalid_series_with_valid_edit: "category X values must be strings",
+    invalid_data_replacement: "category X values must be strings",
+  };
+  expect(result.before.category.series.map((series) => series.options.title)).toEqual(["Actual", "Bars"]);
+  expect(result.before.category.references).toHaveLength(2);
+  expect(result.before.measure.series.map((series) => series.options.title)).toEqual(["Points", "Trend"]);
+  for (const [name, message] of Object.entries(expected_errors)) {
+    const outcome = result.outcomes[name];
+    expect(outcome.error, name).toContain(message);
+    expect(outcome, name).toMatchObject({
+      unchanged: true,
+      counts: [3, 2, 2],
+      measure_counts: [2, 2],
+      actual_title: "Actual",
+      bars_title: "Bars",
+      trend_title: "Trend",
+      points_title: "Points",
+      series_order: result.expected_order,
+      leaked_axis: false,
+    });
+  }
+  expect(result.applied).toEqual({ same_actual: true, title: "Applied" });
+});
+
+test("public pane composition removes an axis with all its bindings and rejects removing a bound axis", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "width:640px;height:480px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false, accessibility: false });
+    const build = (prefix) => {
+      const pane = chart.addPane({ preserve_empty: true, horizontal_domain: { type: "category", scale: "band" } });
+      const axes = {
+        month: { id: `${prefix}month`, dimension: "x", position: "bottom", scale: "band" },
+        value: { id: `${prefix}value`, dimension: "y", position: "left", scale: "linear" },
+        alt: { id: `${prefix}alt`, dimension: "y", position: "right", scale: "linear" },
+      };
+      const series_options = {
+        actual: { x_axis_id: axes.month.id, y_axis_id: axes.value.id, title: "Actual" },
+        extra: { x_axis_id: axes.month.id, y_axis_id: axes.value.id, title: "Extra" },
+        bars: { x_axis_id: axes.month.id, y_axis_id: axes.alt.id, title: "Bars" },
+      };
+      const rows = { actual: [{ id: "a", x: "Jan", y: 12 }], extra: [{ id: "e", x: "Jan", y: 8 }],
+        bars: [{ id: "b", x: "Jan", y: 3 }] };
+      const reference_options = {
+        target: { kind: "line", axis_id: axes.value.id, value: 20 },
+        floor: { kind: "line", axis_id: axes.value.id, value: 1 },
+        alt_target: { kind: "line", axis_id: axes.alt.id, value: 2 },
+      };
+      const composed = chart.compose_general_pane({
+        pane,
+        axes: [axes.month, axes.value, axes.alt],
+        series: [
+          { key: "actual", kind: "xy_line", options: series_options.actual, data: rows.actual },
+          { key: "bars", kind: "column", options: series_options.bars, data: rows.bars },
+          { key: "extra", kind: "xy_line", options: series_options.extra, data: rows.extra },
+        ],
+        references: [
+          { key: "target", options: reference_options.target },
+          { key: "alt_target", options: reference_options.alt_target },
+          { key: "floor", options: reference_options.floor },
+        ],
+      });
+      const series = Object.fromEntries(composed.series.map(({ key, handle }) => [key, handle]));
+      const references = Object.fromEntries(composed.references.map(({ key, handle }) => [key, handle]));
+      const series_entry = (key, options = series_options[key]) => ({
+        key, current: series[key], kind: series[key].kind, options, data: rows[key],
+      });
+      const reference_entry = (key, options = reference_options[key]) => ({
+        key, current: references[key], options,
+      });
+      return { pane, axes, series, references, series_options, reference_options, series_entry, reference_entry };
+    };
+    const stale = (handle) => {
+      try {
+        handle.options();
+        return false;
+      } catch (error) {
+        return error.code === "stale_handle";
+      }
+    };
+    const state = (built) => {
+      const index = built.pane.pane_index();
+      return {
+        axes: chart.axes(index).map((axis) => axis.options().id).sort(),
+        series: chart.general_series_order(index).map((series) => series.id),
+        references: chart.general_references(index).map((reference) => reference.id),
+        options: JSON.stringify(chart.general_series_order(index).map((series) => series.options())),
+      };
+    };
+    const removal = (built, axis_order, series_keys, reference_keys) => {
+      const before_bars = built.series.bars;
+      const composed = chart.compose_general_pane({
+        pane: built.pane,
+        axes: axis_order.map((key) => built.axes[key]),
+        series: series_keys.map((key) => built.series_entry(key)),
+        references: reference_keys.map((key) => built.reference_entry(key)),
+      });
+      const index = built.pane.pane_index();
+      return {
+        axes: chart.axes(index).map((axis) => axis.options().id).sort(),
+        series_retained: composed.series.every(({ key, handle }) => handle === built.series[key]),
+        series_order: chart.general_series_order(index).map((series) => series.id),
+        expected_order: series_keys.map((key) => built.series[key].id),
+        reference_ids: chart.general_references(index).map((reference) => reference.id).sort(),
+        expected_references: reference_keys.map((key) => built.references[key].id).sort(),
+        removed_axis_gone: chart.axis(built.axes.alt.id) === null,
+        removed_series_stale: stale(before_bars),
+      };
+    };
+    const forward = removal(build("forward-"), ["month", "value"], ["actual", "extra"], ["target", "floor"]);
+    const reversed = removal(build("reversed-"), ["value", "month"], ["extra", "actual"], ["floor", "target"]);
+
+    const bound = build("");
+    const before = state(bound);
+    const failures = {};
+    const attempt = (name, proposal) => {
+      let error = null;
+      try {
+        chart.compose_general_pane({ pane: bound.pane, ...proposal });
+      } catch (caught) {
+        error = caught.message;
+      }
+      const after = state(bound);
+      failures[name] = { error, unchanged: JSON.stringify(after) === JSON.stringify(before),
+        value_axis_live: chart.axis("value") !== null };
+    };
+    attempt("series_still_bound", {
+      axes: [bound.axes.month, bound.axes.alt],
+      series: [bound.series_entry("actual"), bound.series_entry("bars")],
+      references: [bound.reference_entry("alt_target")],
+    });
+    attempt("reference_still_bound", {
+      axes: [bound.axes.month, bound.axes.alt],
+      series: [
+        bound.series_entry("actual", { ...bound.series_options.actual, y_axis_id: "alt" }),
+        bound.series_entry("bars"),
+      ],
+      references: [bound.reference_entry("target"), bound.reference_entry("alt_target")],
+    });
+    chart.remove();
+    host.remove();
+    return { forward, reversed, failures };
+  });
+  for (const [name, outcome] of Object.entries({ forward: result.forward, reversed: result.reversed })) {
+    expect(outcome.series_order, name).toEqual(outcome.expected_order);
+    expect(outcome.reference_ids, name).toEqual(outcome.expected_references);
+    expect(outcome, name).toMatchObject({
+      series_retained: true,
+      removed_axis_gone: true,
+      removed_series_stale: true,
+    });
+  }
+  expect(result.forward.axes).toEqual(["forward-month", "forward-value"]);
+  expect(result.reversed.axes).toEqual(["reversed-month", "reversed-value"]);
+  expect(result.failures.series_still_bound.error).toContain('general series axis "value" does not exist');
+  expect(result.failures.reference_still_bound.error).toContain('general reference axis "value" does not exist');
+  for (const outcome of Object.values(result.failures)) {
+    expect(outcome).toMatchObject({ unchanged: true, value_axis_live: true });
+  }
 });
 
 test("camel-case aliases share the original chart and series handles", async ({ page }) => {
