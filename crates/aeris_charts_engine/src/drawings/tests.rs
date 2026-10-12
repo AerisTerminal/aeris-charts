@@ -4381,6 +4381,63 @@ fn position_account_settings_are_atomic_and_survive_history_and_persistence() {
     assert_eq!(restored.drawing(id).unwrap().position_risk_percent, 2.0);
 }
 
+#[test]
+fn a_level_drawings_line_style_restyles_every_painted_level() {
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::FibonacciRetracement,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 6.0,
+                    price: 12.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let level_lines = |chart: &mut ChartEngine, style: LineStyle| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::HLine { style: painted, .. } if *painted == style))
+            .count()
+    };
+    let visible = chart
+        .drawing(id)
+        .unwrap()
+        .levels
+        .iter()
+        .filter(|level| level.visible)
+        .count();
+    assert!(visible > 0);
+    assert_eq!(level_lines(&mut chart, LineStyle::Dashed), 0);
+
+    assert!(chart.drawing_apply_options(id, r#"{"style":"dashed"}"#));
+    let drawing = chart.drawing(id).unwrap();
+    assert!(drawing.levels.iter().all(|level| level.style == "dashed"));
+    assert_eq!(level_lines(&mut chart, LineStyle::Dashed), visible);
+
+    // Levels sent alongside the style keep the styles they carry.
+    let mut levels = chart.drawing(id).unwrap().levels.clone();
+    levels[0].style = "solid".to_string();
+    let patch = serde_json::json!({ "style": "dotted", "levels": levels });
+    assert!(chart.drawing_apply_options(id, &patch.to_string()));
+    let drawing = chart.drawing(id).unwrap();
+    assert_eq!(drawing.style, LineStyle::Dotted);
+    assert_eq!(drawing.levels[0].style, "solid");
+    assert!(
+        drawing.levels[1..]
+            .iter()
+            .all(|level| level.style == "dashed")
+    );
+}
+
 // --- measuring tools (price range, date range, date and price range, Shift-click measure) ---
 
 fn pane_texts(chart: &mut ChartEngine) -> Vec<String> {

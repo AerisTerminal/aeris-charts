@@ -2334,6 +2334,7 @@ impl Drawing {
         if let Some(labels) = patch.labels {
             self.labels = labels;
         }
+        let levels_patched = patch.levels.is_some();
         if let Some(levels) = patch.levels {
             self.levels = levels;
         }
@@ -2431,6 +2432,13 @@ impl Drawing {
         }
         if let Some(style) = patch.style.as_ref().and_then(parse_drawing_style) {
             self.style = style;
+            // A level kind paints its levels rather than one stroke, so its line style is the
+            // style every level shares. Levels sent in the same patch keep their own styles.
+            if self.kind.has_levels() && !levels_patched {
+                for level in &mut self.levels {
+                    level.style = style_name(style).to_string();
+                }
+            }
         }
         if let Some(css) = patch.fill_color {
             update_css_slot(&mut self.fill_color, css);
