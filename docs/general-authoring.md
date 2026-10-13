@@ -26,8 +26,9 @@ const mapSale = (row: Sale) => ({
 });
 
 export function SalesChart({ sales }: { sales: readonly Sale[] }) {
-  return <AerisChart style={{ width: "100%", height: 400 }}>
-    <GeneralPane options={{ horizontal_domain: { type: "category", scale: "band" } }}>
+  return <AerisChart options={{ initialPane: { horizontal_domain: { type: "category", scale: "band" } } }}
+    style={{ width: "100%", height: 400 }}>
+    <GeneralPane options={{ horizontal_domain: { type: "category", scale: "band" } }} useInitialPane>
       <GeneralAxis id="month" dimension="x" scale="band" position="bottom" />
       <GeneralAxis id="amount" dimension="y" scale="linear" position="left" />
       <MappedGeneralSeries seriesKey="sales" kind="column"
@@ -61,6 +62,13 @@ committed pane; without it, the error reaches the nearest React error boundary.
 `onSeriesReady` and `onReferenceReady` run after the composition commits. If one throws, the pane
 keeps the complete new graph, every other new handle still receives its callback, and the failure
 is reported once (several failures arrive together as an `AggregateError`).
+
+For a general-only chart, supply the same domain in `AerisChart`'s `initialPane` and the first
+`GeneralPane`'s `options`, then set `useInitialPane`. That declaration owns the existing first pane,
+so no empty financial pane consumes half the chart. The domain must match and the first pane must
+be empty when React claims it. Removing the declaration clears its axes, series, and references but
+keeps the preserved pane available for a later declaration. Omit `useInitialPane` for additional
+panes or for mixed financial/general charts.
 
 Row `id` values make focus and selection survive replacement and reorder. A row's `label` is the
 portable text for `GeneralDataLabels`; a React formatter cannot run inside native or WebGPU

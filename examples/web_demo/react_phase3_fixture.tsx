@@ -131,7 +131,7 @@ function portable_pane_state(chart: chart_api, pane: number) {
 
 /**
  * Find a viewport point over a mark of `pane` by scanning public engine hits from the plot bottom
- * up. Hit-test X is plot-local and Y is chart-space; the chart host is fixed at the viewport origin.
+ * up. Hit-test X is plot-local and Y is chart-space; the chart host starts at viewport (0, 0).
  */
 function general_hit_point(chart: chart_api, pane: pane_api, row = 0): { x: number; y: number } {
   const geometry = pane.get_geometry();
@@ -580,7 +580,9 @@ export async function exerciseReactCompositionTransactions(): Promise<Record<str
   try {
     render(false, true);
     await wait_until(() => chart !== null && ready.size === 3
-      && safely(() => ready.get("mapped")?.dataAt(1)?.value === 19));
+      && safely(() => ready.get("mapped")?.dataAt(1)?.value === 19)).catch(() => {
+      throw new Error(`initial composition did not settle: chart=${chart !== null}, ready=${[...ready.keys()]}, mapped=${safely(() => ready.get("mapped")?.dataAt(1)?.value === 19)}`);
+    });
     const live = chart as chart_api;
     const first_sales = ready.get("sales") as general_series_api;
     const first_forecast = ready.get("forecast") as general_series_api;
@@ -615,7 +617,9 @@ export async function exerciseReactCompositionTransactions(): Promise<Record<str
     render(true, false);
     await wait_until(() => calls.compose === 1
       && safely(() => first_mapped.dataAt(1)?.value === 27)
-      && safely(() => first_sales.options().visible === false));
+      && safely(() => first_sales.options().visible === false)).catch(() => {
+      throw new Error(`updated composition did not settle: calls=${JSON.stringify(calls)}, mapped=${safely(() => first_mapped.dataAt(1)?.value === 27)}, hidden=${safely(() => first_sales.options().visible === false)}`);
+    });
     const multi_change = {
       calls: { ...calls },
       map_calls,
@@ -638,6 +642,55 @@ export async function exerciseReactCompositionTransactions(): Promise<Record<str
 
     root.unmount();
     return { multi_change, idle };
+  } finally {
+    root.unmount();
+    host.remove();
+  }
+}
+
+/** A declarative general-only chart owns the canonical first pane across Strict Mode remounts. */
+export async function exerciseReactGeneralFirstPane(): Promise<Record<string, unknown>> {
+  const host = create_host();
+  const root = createRoot(host);
+  let chart: chart_api | null = null;
+  let pane: pane_api | null = null;
+  let series: general_series_api | null = null;
+  const render = (visible: boolean) => root.render(
+    <StrictMode>
+      <AerisChart options={{ backend: "canvas2d", autoSize: false, accessibility: false,
+        initialPane: pane_options }} onChartReady={(created) => { chart = created; }}>
+        {visible && <GeneralPane options={pane_options} useInitialPane
+          onPaneReady={(created) => { pane = created; }}
+          onSeriesReady={(_key, created) => { series = created; }}>
+          <GeneralAxis id="month" dimension="x" position="bottom" scale="band" />
+          <GeneralAxis id="sales" dimension="y" position="left" scale="linear" />
+          <GeneralSeries seriesKey="sales" kind="column"
+            options={{ x_axis_id: "month", y_axis_id: "sales" }}
+            data={[{ id: "jan", x: "Jan", y: 12 }]} />
+        </GeneralPane>}
+      </AerisChart>
+    </StrictMode>,
+  );
+  try {
+    render(true);
+    await wait_until(() => chart !== null && pane !== null && series !== null
+      && safely(() => series?.dataAt(0)?.value === 12)).catch(() => {
+      throw new Error(`general-first initial: chart=${chart !== null}, pane=${pane !== null}, series=${series !== null}, axes=${chart === null ? "none" : (chart as chart_api).axes().map((axis) => axis.id)}`);
+    });
+    const live = chart as chart_api;
+    const first_pane = pane as pane_api;
+    const initial = { pane_count: live.panes().length, pane_index: first_pane.pane_index(),
+      series_count: live.general_series_order(0).length, all_series_count: first_pane.get_series().length };
+    render(false);
+    await wait_until(() => live.axes(0).length === 0 && live.general_series_order(0).length === 0)
+      .catch(() => { throw new Error(`general-first empty: axes=${live.axes(0).length}, series=${live.general_series_order(0).length}`); });
+    const empty = { pane_count: live.panes().length, same_pane: live.panes()[0]?.pane_index() === first_pane.pane_index() };
+    render(true);
+    await wait_until(() => live.general_series_order(0).length === 1)
+      .catch(() => { throw new Error(`general-first remount: axes=${live.axes(0).length}, series=${live.general_series_order(0).length}`); });
+    const remounted = { pane_count: live.panes().length, pane_index: pane?.pane_index(),
+      value: live.general_series_order(0)[0]?.dataAt(0)?.value };
+    return { initial, empty, remounted };
   } finally {
     root.unmount();
     host.remove();

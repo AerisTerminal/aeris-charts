@@ -1017,6 +1017,11 @@ The package preserves its complete `snake_case` surface and adds camel-case alia
 
 `GeneralPane` still accepts keyed axis/series arrays. Its React child declarations add axes,
 canonical or mapped series, data labels, and keyed references through the same reconciliation.
+For a general-only React chart, `AerisChart` supplies an explicit first-pane domain and one
+`GeneralPane` claims that already-created pane through `useInitialPane`. The adapter checks the
+domain and exclusive ownership before installing declarations. Its cleanup empties the pane but
+keeps the preserved domain for Strict Mode setup and later declarative remounts; the parent chart
+still owns final disposal. Other `GeneralPane` declarations append panes as before.
 Mapping application records happens once per changed source or mapper identity in the committed
 effect, outside frame and hit loops. Default legend, tooltip, and brush React controls mount the
 browser package's existing DOM components and detach their subscriptions with the pane. Those

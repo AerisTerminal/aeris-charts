@@ -87,16 +87,16 @@ fn text_box_cutout(
     };
     let (from, to) = (local(a), local(b));
     let (mut start, mut end) = (0.0_f64, 1.0_f64);
-    for (origin, delta, low, high) in [
+    for (coordinate, delta, low, high) in [
         (from.0, to.0 - from.0, run.0, run.1),
         (from.1, to.1 - from.1, -half_height, half_height),
     ] {
         if delta.abs() <= f64::EPSILON {
-            if origin < low || origin > high {
+            if coordinate < low || coordinate > high {
                 return None;
             }
         } else {
-            let (enter, exit) = ((low - origin) / delta, (high - origin) / delta);
+            let (enter, exit) = ((low - coordinate) / delta, (high - coordinate) / delta);
             start = start.max(enter.min(exit));
             end = end.min(enter.max(exit));
         }

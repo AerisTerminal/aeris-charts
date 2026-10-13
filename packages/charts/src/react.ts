@@ -48,6 +48,10 @@ import type {
 const chart_context = createContext<chart_api | null>(null);
 const chart_host_context = createContext<HTMLElement | null>(null);
 const general_pane_context = createContext<pane_api | null>(null);
+const initial_pane_context = createContext<{
+  domain_signature: string;
+  claimed: boolean;
+} | null>(null);
 
 /** Return the live Aeris chart owned by the nearest {@link AerisChart}. */
 export function useAerisChart(): chart_api {
@@ -73,6 +77,10 @@ export function AerisChart({ options, className, style, children, onChartReady }
   const host_ref = useRef<HTMLDivElement | null>(null);
   const on_ready_ref = useRef(onChartReady);
   const initial_options_ref = useRef(options);
+  const initial_pane_ref = useRef(initial_options_ref.current?.initialPane?.horizontal_domain === undefined ? null : {
+    domain_signature: stable_signature(initial_options_ref.current.initialPane.horizontal_domain),
+    claimed: false,
+  });
   const [chart, set_chart] = useState<chart_api | null>(null);
   const [failure, set_failure] = useState<unknown>(null);
   on_ready_ref.current = onChartReady;
@@ -116,7 +124,8 @@ export function AerisChart({ options, className, style, children, onChartReady }
   const contents = chart === null
     ? null
     : createElement(chart_context.Provider, { value: chart },
-      createElement(chart_host_context.Provider, { value: host_ref.current }, children));
+      createElement(chart_host_context.Provider, { value: host_ref.current },
+        createElement(initial_pane_context.Provider, { value: initial_pane_ref.current }, children)));
   return createElement("div", {
     ref: host_ref,
     className,
@@ -423,6 +432,8 @@ function declared_general_items(children: ReactNode): {
 export interface GeneralPaneProps {
   /** The horizontal-domain contract. The adapter retains this pane while mounted, even when empty. */
   options: Omit<general_pane_options, "preserve_empty">;
+  /** Own the chart's explicit general first pane instead of appending another pane. */
+  useInitialPane?: boolean;
   axes?: readonly GeneralAxisSpec[];
   series?: readonly GeneralSeriesSpec[];
   references?: readonly GeneralReferenceSpec[];
@@ -446,6 +457,7 @@ interface series_runtime {
 
 interface pane_runtime {
   pane: pane_api;
+  initial_owner?: { claimed: boolean };
   axes: Map<string, axis_runtime>;
   series: Map<string, series_runtime>;
   references: Map<string, { handle: general_reference_api }>;
@@ -472,6 +484,7 @@ function general_axis_structure(axis: GeneralAxisSpec): object {
 }
 
 function dispose_pane_runtime(chart: chart_api, runtime: pane_runtime): void {
+  if (runtime.initial_owner !== undefined) runtime.initial_owner.claimed = false;
   try {
     chart.backend();
   } catch {
@@ -487,6 +500,7 @@ function dispose_pane_runtime(chart: chart_api, runtime: pane_runtime): void {
   runtime.series.clear();
   runtime.references.clear();
   runtime.axes.clear();
+  if (runtime.initial_owner !== undefined) return;
   const removed = chart.remove_pane(runtime.pane.pane_index());
   if (!removed) throw new Error("general pane could not be removed during cleanup");
 }
@@ -497,8 +511,9 @@ function dispose_pane_runtime(chart: chart_api, runtime: pane_runtime): void {
  * `set_data` on that same handle. Compatible series binding changes retain handles; structural axis
  * or kind changes replace only the affected general series, never the chart.
  */
-export function GeneralPane({ options, axes: axis_specs = [], series: series_specs = [], references: reference_specs = [], children, onPaneReady, onSeriesReady, onReferenceReady, onValidationError }: GeneralPaneProps) {
+export function GeneralPane({ options, useInitialPane = false, axes: axis_specs = [], series: series_specs = [], references: reference_specs = [], children, onPaneReady, onSeriesReady, onReferenceReady, onValidationError }: GeneralPaneProps) {
   const chart = useAerisChart();
+  const initial_owner = useContext(initial_pane_context);
   const runtime_ref = useRef<pane_runtime | null>(null);
   const mapped_cache_ref = useRef(new Map<string, {
     input: readonly unknown[];
@@ -509,7 +524,7 @@ export function GeneralPane({ options, axes: axis_specs = [], series: series_spe
   const series_ready_ref = useRef(onSeriesReady);
   const reference_ready_ref = useRef(onReferenceReady);
   const validation_error_ref = useRef(onValidationError);
-  const [generation, set_generation] = useState(0);
+  const [, set_generation] = useState(0);
   const domain_signature = stable_signature(options.horizontal_domain);
   const declared = declared_general_items(children);
   const axes = [...axis_specs, ...declared.axes];
@@ -568,8 +583,23 @@ export function GeneralPane({ options, axes: axis_specs = [], series: series_spe
   });
 
   useEffect(() => {
-    const pane = chart.addPane({ preserve_empty: true, horizontal_domain: options.horizontal_domain });
-    const runtime: pane_runtime = { pane, axes: new Map(), series: new Map(), references: new Map() };
+    let pane: pane_api;
+    if (useInitialPane) {
+      if (initial_owner === null || initial_owner.domain_signature !== domain_signature) {
+        throw new Error("useInitialPane requires a matching AerisChart initialPane domain");
+      }
+      if (initial_owner.claimed) throw new Error("the initial general pane already has an owner");
+      pane = chart.panes()[0] as pane_api;
+      if (pane === undefined || pane.get_series().length > 0 || chart.axes(pane.pane_index()).length > 0
+        || chart.general_references(pane.pane_index()).length > 0) {
+        throw new Error("the initial general pane must be empty before React owns it");
+      }
+      initial_owner.claimed = true;
+    } else {
+      pane = chart.addPane({ preserve_empty: true, horizontal_domain: options.horizontal_domain });
+    }
+    const runtime: pane_runtime = { pane, initial_owner: useInitialPane ? initial_owner ?? undefined : undefined,
+      axes: new Map(), series: new Map(), references: new Map() };
     runtime_ref.current = runtime;
     try {
       ready_ref.current?.(pane);
@@ -584,7 +614,7 @@ export function GeneralPane({ options, axes: axis_specs = [], series: series_spe
       dispose_pane_runtime(chart, runtime);
     };
     // A horizontal-domain change is structural and intentionally replaces this one pane.
-  }, [chart, domain_signature]);
+  }, [chart, domain_signature, useInitialPane, initial_owner]);
 
   useEffect(() => {
     const runtime = runtime_ref.current;
@@ -679,7 +709,7 @@ export function GeneralPane({ options, axes: axis_specs = [], series: series_spe
       if (validation_error_ref.current === undefined) throw error;
       validation_error_ref.current(error);
     }
-  }, [chart, generation, composition_signature]);
+  }, [chart, domain_signature, useInitialPane, composition_signature]);
 
   const pane = runtime_ref.current?.pane;
   return pane === undefined ? null : createElement(

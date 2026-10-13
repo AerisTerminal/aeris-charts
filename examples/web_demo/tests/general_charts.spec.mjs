@@ -937,6 +937,19 @@ test("React GeneralPane composes a multi-change commit once and skips ten equiva
   });
 });
 
+test("React general-only composition owns the first pane through Strict Mode and remount", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactGeneralFirstPane();
+  });
+  expect(result).toEqual({
+    initial: { pane_count: 1, pane_index: 0, series_count: 1, all_series_count: 1 },
+    empty: { pane_count: 1, same_pane: true },
+    remounted: { pane_count: 1, pane_index: 0, value: 12 },
+  });
+});
+
 test("React GeneralPane rejects unsupported child declarations without installing resources", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {

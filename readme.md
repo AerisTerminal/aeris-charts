@@ -150,6 +150,8 @@ The adapter creates the ordinary imperative chart once, reconciles data/configur
 engine handles, and calls the same `chart.remove()` lifecycle on unmount. Its module is safe to import
 during SSR because chart creation and DOM access begin only after the component mounts. Complete
 framework-neutral and React combined examples live in `examples/all_in_one/`.
+The [general chart authoring guide](docs/general-authoring.md) covers composable declarations,
+general-only first-pane setup, controlled brushing, and Recharts migration mappings.
 
 The optimized WASM binary is shipped beside the ESM entry and resolves there automatically. Bundlers
 that require an explicit asset URL may import `@aeristerminal/aeris-charts/wasm` (or their normal URL-loader

@@ -24,7 +24,7 @@ with its commit, and update the status table in the same commit. A phase or matr
 
 ## Status at a glance
 
-Updated 2026-10-11. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
+Updated 2026-10-13. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
 expansion completed on 2026-10-06; general-chart batches have resumed in dependency order.
 
 | Batch | Phase | Scope | Status | Done so far | Next |
@@ -33,7 +33,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G2 | R2 | Scales, axes and responsive layout | **Complete** | Numeric/log/symlog, UTC temporal and category views; typed ticks; grids/zero rules; multi-axis titles; padding; bounded responsive layout | G3 |
 | G3 | R3 | Cartesian visual and data semantics (remainder) | **Complete** | Cartesian families, stack offsets, gradients, composition, per-item styles and required portable gates delivered | G4; calibrated GPUI images and official browser benchmark remain separately pending |
 | G4 | R4 | Components and interaction | **Complete** | Default legend, tooltip and brush controls; engine selection and semantic linked sync; shared-frame export coverage | G5; manual assistive-technology and calibrated GPUI image evidence remain pending |
-| G5 | R5 | React and framework-neutral authoring | **Open** | — | Composable components over complete mutations |
+| G5 | R5 | React and framework-neutral authoring | **Complete** | Keyed declarations and mapped rows; atomic shared composition; controlled brush; first-pane ownership; lifecycle, SSR, packed-consumer and browser evidence | G6; manual assistive-technology review remains pending |
 | G6 | R6 | Polar families and transitions | **Open** | — | Polar transforms, pie/donut, radar, radial bar, polar area, animation |
 | G7 | R7 | Hierarchy and flow families | **Open** | — | Funnel, treemap, Sankey, sunburst |
 | G8 | R8 | Parity closure and release readiness | **Open** | — | Full matrix verification against the pinned competitor |
@@ -253,19 +253,32 @@ package-size thresholds passed on 2026-10-11. Structural GPUI parity/replay and 
 release performance passed. Calibrated GPUI window pixels and an assistive-technology session
 remain separate manual evidence.
 
+G5 completes declarative and framework-neutral authoring over the same atomic pane transaction
+introduced in `e3dd895` and `0dda695`. Keyed axes, canonical and mapped series, references,
+labels, legends, tooltips, and controlled or uncontrolled brush controls retain engine identity
+across ordinary updates. A general-only React chart can claim its explicit first pane without
+allocating an empty financial pane; cleanup leaves that pane available through Strict Mode and
+conditional remounts. The React reconciliation effect no longer repeats an unchanged composition
+after its mount-state rerender. Browser fixtures cover invalid proposals, rollback, callbacks,
+concurrent hydration, pane cleanup, first-pane ownership, and imperative parity. The installed
+npm tarball bundles standalone, composed, linked, and mixed React consumer examples; the React
+entry imports during SSR without creating a chart. The 2026-10-13 batch gate passed formatting,
+locked workspace tests, warning-denying workspace/wasm32 Clippy, package install/lint/build/
+typecheck/pack/SSR/API/namespace/release guards, all six policy-v7 size limits, strict native
+release performance, and 684 portable Chromium/Firefox/WebKit tests with 22 intended skips on
+fresh assets. An earlier combined browser run hit Firefox context-teardown errors; the complete
+Firefox project and then the complete combined suite passed unchanged. Earlier native Target P
+and Q timing outliers also passed on the final strict run without threshold changes. This batch
+does not claim a manual assistive-technology session or calibrated GPUI window pixels.
+
 ## Known gaps
 
-Source-confirmed gaps and review risks from the 2026-09-23 review. Each is owned by a phase. The
-earlier Phase 1–3 completion statements described narrower slices and are superseded: Cartesian
-completeness and the all-in-one authoring experience are **open**. Earlier test counts and timings
-are historical observations in Git history, not proof of current completion. Existing code and tests
-remain valuable and must be preserved.
+Remaining source-confirmed gaps from the 2026-09-23 review. R3–R5 closed the earlier Cartesian,
+component, and authoring gaps; polar and hierarchy/flow breadth remains open. Earlier test counts
+and timings are historical observations in Git history, not proof of current completion.
 
 | Gap | Evidence | Required correction | Phase |
 | --- | --- | --- | --- |
-| Visual configuration | `GeneralSeriesOptions`, `frame/general_series_geometry.rs` | Surface is narrow. Audit and implement documented styles and geometry choices end to end (the delivered slices above began this) | R3 |
-| Shared components | Legend, shared-tooltip, brush and reference snapshots in `general_series.rs` | Snapshots alone do not establish a complete interactive legend, tooltip, brush or export experience | R4 |
-| React reconciliation | `packages/charts/src/react.ts::GeneralPane` | Current array reconciliation retains ordinary mutations, but configuration arrays remain instead of component composition. Complete declarative authoring and concurrent lifecycle | R5 |
 | Chart breadth | `GeneralSeriesKind` has Cartesian variants only | Polar and hierarchy/flow families are open. Funnel, treemap, Sankey and sunburst are in the competitive target, not an indefinite backlog | R6, R7 |
 
 These are not an exhaustive defect audit. Coverage-matrix rows are required coverage to audit, not
@@ -460,13 +473,13 @@ snapshots.
 
 ### R5 — React and framework-neutral authoring
 
-**Batch:** G5. **Depends on:** R1–R4. **Status:** open.
+**Batch:** G5. **Depends on:** R1–R4. **Status:** complete.
 
-- [ ] Composable components and typed data mapping over canonical handles.
-- [ ] Controlled and uncontrolled behavior where applicable, events and documented defaults.
-- [ ] Migration recipes from Recharts.
-- [ ] Equivalent imperative composition for hosts that do not use React.
-- [ ] G5 full gate green; batch committed and pushed.
+- [x] Composable components and typed data mapping over canonical handles.
+- [x] Controlled and uncontrolled behavior where applicable, events and documented defaults.
+- [x] Migration recipes from Recharts.
+- [x] Equivalent imperative composition for hosts that do not use React.
+- [x] G5 full gate green; batch committed and pushed.
 
 **Exit:** packed-consumer examples cover standalone, composed, synchronized and financial/general
 charts. Prop changes retain engine identities; failure, Strict Mode and concurrent lifecycle tests

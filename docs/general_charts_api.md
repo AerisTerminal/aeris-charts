@@ -16,8 +16,10 @@ axes with optional independent bounds on either axis, plus category band/point X
 for a visible mark. `heatmap_grid` supports band X/Y string categories, continuous numeric X with numeric Y
 coordinates, and temporal epoch-millisecond X with numeric Y coordinates. Later polar and
 hierarchy/flow series names remain proposals until their implementations and release evidence land.
-The current array-based React `GeneralPane` is supported; composable child authoring, controlled
-state, and full concurrent lifecycle remain proposed for R5.
+React `GeneralPane` supports keyed arrays and direct axis, series, reference, label, legend,
+tooltip, and brush declarations. `MappedGeneralSeries` maps typed application rows before the
+engine transaction; brush controls support controlled and uncontrolled ranges. See
+[general chart authoring](general-authoring.md) for composition, lifecycle, and migration examples.
 
 General-series legend metadata is engine-owned. `chart.general_legend_snapshot(pane?)` returns bounded
 series metadata in stable engine order, including pane, kind, title, color, and visibility. Hidden series remain
