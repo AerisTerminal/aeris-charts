@@ -87,12 +87,27 @@ pub struct FinancialAppearance {
     pub border_visible: bool,
     pub open_visible: bool,
     pub thin_bars: bool,
-    pub line_color: String,
+    /// `Theme` follows the series kind's default stroke.
+    pub line_color: AppearanceColor,
     pub line_width: u8,
     pub line_style: u8,
-    pub area_top_color: String,
-    pub baseline_top_color: String,
-    pub baseline_bottom_color: String,
+    /// `Theme` follows the canonical fill gradient of the series' own stroke.
+    pub area_top_color: AppearanceColor,
+    pub area_bottom_color: AppearanceColor,
+    /// `Theme` follows the market up/down default.
+    pub baseline_top_color: AppearanceColor,
+    pub baseline_bottom_color: AppearanceColor,
+}
+
+/// The CSS colors the series paints for its line, area and baseline controls, whether each is
+/// pinned or follows its default. Hosts show these in swatches instead of re-deriving defaults.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FinancialSeriesColors {
+    pub line: String,
+    pub area_top: String,
+    pub area_bottom: String,
+    pub baseline_top: String,
+    pub baseline_bottom: String,
 }
 
 impl Default for FinancialAppearance {
@@ -116,12 +131,13 @@ impl Default for FinancialAppearance {
             border_visible: true,
             open_visible: true,
             thin_bars: true,
-            line_color: "#2196f3".to_string(),
+            line_color: AppearanceColor::Theme,
             line_width: 2,
             line_style: 0,
-            area_top_color: "#089981".to_string(),
-            baseline_top_color: "#089981".to_string(),
-            baseline_bottom_color: "#f7525f".to_string(),
+            area_top_color: AppearanceColor::Theme,
+            area_bottom_color: AppearanceColor::Theme,
+            baseline_top_color: AppearanceColor::Theme,
+            baseline_bottom_color: AppearanceColor::Theme,
         }
     }
 }
@@ -174,62 +190,67 @@ impl ChartEngine {
             .iter()
             .find(|series| series.id == series_id && !series.removed)?;
         let options = self.options.get();
-        let mut appearance = FinancialAppearance::default();
-        appearance.background_color = if self.background_color_follows_theme {
-            AppearanceColor::Theme
-        } else {
-            AppearanceColor::Custom(options.layout.background.color.clone())
+        let canvas_color = |follows_theme: bool, color: &str| {
+            if follows_theme {
+                AppearanceColor::Theme
+            } else {
+                AppearanceColor::Custom(color.to_string())
+            }
         };
-        appearance.text_color = if self.text_color_follows_theme {
-            AppearanceColor::Theme
-        } else {
-            AppearanceColor::Custom(options.layout.text_color.clone())
-        };
-        appearance.grid_visible =
-            options.grid.vert_lines.visible && options.grid.horz_lines.visible;
-        appearance.grid_color = if self.grid_color_follows_theme {
-            AppearanceColor::Theme
-        } else {
-            AppearanceColor::Custom(options.grid.vert_lines.color.clone())
-        };
-        appearance.grid_style = options.grid.vert_lines.style.min(4);
-        appearance.crosshair_color = if self.crosshair_color_follows_theme {
-            AppearanceColor::Theme
-        } else {
-            AppearanceColor::Custom(options.crosshair.vert_line.color.clone())
-        };
-        appearance.crosshair_width = bounded_width(options.crosshair.vert_line.width);
-        appearance.crosshair_style = options.crosshair.vert_line.style.min(4);
-        appearance.up_color = color_provenance(&series.up_color);
-        appearance.down_color = color_provenance(&series.down_color);
-        appearance.wick_up_color = color_provenance(&series.wick_up_color);
-        appearance.wick_down_color = color_provenance(&series.wick_down_color);
-        appearance.border_up_color = color_provenance(&series.border_up_color);
-        appearance.border_down_color = color_provenance(&series.border_down_color);
-        appearance.wick_visible = series.wick_visible.unwrap_or(true);
-        appearance.border_visible = series.border_visible.unwrap_or(true);
-        appearance.open_visible = series.open_visible;
-        appearance.thin_bars = series.thin_bars;
-        appearance.line_color = series
-            .line_color
-            .clone()
-            .unwrap_or_else(|| crate::frame::series_stroke_color(series).to_css());
-        appearance.line_width =
-            bounded_width(series.line_width.unwrap_or(crate::frame::LINE_WIDTH));
-        appearance.line_style = series.line_style.min(4);
-        appearance.area_top_color = series
-            .area_top_color
-            .clone()
-            .unwrap_or_else(|| appearance.area_top_color.clone());
-        appearance.baseline_top_color = series
-            .top_line_color
-            .clone()
-            .unwrap_or_else(|| appearance.baseline_top_color.clone());
-        appearance.baseline_bottom_color = series
-            .bottom_line_color
-            .clone()
-            .unwrap_or_else(|| appearance.baseline_bottom_color.clone());
-        Some(appearance)
+        Some(FinancialAppearance {
+            background_color: canvas_color(
+                self.background_color_follows_theme,
+                &options.layout.background.color,
+            ),
+            text_color: canvas_color(self.text_color_follows_theme, &options.layout.text_color),
+            grid_visible: options.grid.vert_lines.visible && options.grid.horz_lines.visible,
+            grid_color: canvas_color(
+                self.grid_color_follows_theme,
+                &options.grid.vert_lines.color,
+            ),
+            grid_style: options.grid.vert_lines.style.min(4),
+            crosshair_color: canvas_color(
+                self.crosshair_color_follows_theme,
+                &options.crosshair.vert_line.color,
+            ),
+            crosshair_width: bounded_width(options.crosshair.vert_line.width),
+            crosshair_style: options.crosshair.vert_line.style.min(4),
+            up_color: color_provenance(&series.up_color),
+            down_color: color_provenance(&series.down_color),
+            wick_up_color: color_provenance(&series.wick_up_color),
+            wick_down_color: color_provenance(&series.wick_down_color),
+            border_up_color: color_provenance(&series.border_up_color),
+            border_down_color: color_provenance(&series.border_down_color),
+            wick_visible: series.wick_visible.unwrap_or(true),
+            border_visible: series.border_visible.unwrap_or(true),
+            open_visible: series.open_visible,
+            thin_bars: series.thin_bars,
+            line_color: color_provenance(&series.line_color),
+            line_width: bounded_width(series.line_width.unwrap_or(crate::frame::LINE_WIDTH)),
+            line_style: series.line_style.min(4),
+            area_top_color: color_provenance(&series.area_top_color),
+            area_bottom_color: color_provenance(&series.area_bottom_color),
+            baseline_top_color: color_provenance(&series.top_line_color),
+            baseline_bottom_color: color_provenance(&series.bottom_line_color),
+        })
+    }
+
+    /// The colors the series currently paints for its line, area and baseline controls.
+    #[must_use]
+    pub fn financial_series_colors(&self, series_id: SeriesId) -> Option<FinancialSeriesColors> {
+        let series = self
+            .series
+            .iter()
+            .find(|series| series.id == series_id && !series.removed)?;
+        let (area_top, area_bottom) = crate::frame::area_fill_colors(series);
+        let (baseline_top, baseline_bottom) = crate::frame::baseline_line_colors(series);
+        Some(FinancialSeriesColors {
+            line: crate::frame::series_stroke_color(series).to_css(),
+            area_top: area_top.to_css(),
+            area_bottom: area_bottom.to_css(),
+            baseline_top: baseline_top.to_css(),
+            baseline_bottom: baseline_bottom.to_css(),
+        })
     }
 
     /// Apply only canvas appearance, retaining typed follow-theme provenance.
@@ -311,12 +332,13 @@ impl ChartEngine {
         series.border_visible = Some(appearance.border_visible);
         series.open_visible = appearance.open_visible;
         series.thin_bars = appearance.thin_bars;
-        series.line_color = Some(appearance.line_color.clone());
+        series.line_color = appearance.line_color.override_value();
         series.line_width = Some(f64::from(appearance.line_width.clamp(1, 4)));
         series.line_style = appearance.line_style.min(4);
-        series.area_top_color = Some(appearance.area_top_color.clone());
-        series.top_line_color = Some(appearance.baseline_top_color.clone());
-        series.bottom_line_color = Some(appearance.baseline_bottom_color.clone());
+        series.area_top_color = appearance.area_top_color.override_value();
+        series.area_bottom_color = appearance.area_bottom_color.override_value();
+        series.top_line_color = appearance.baseline_top_color.override_value();
+        series.bottom_line_color = appearance.baseline_bottom_color.override_value();
         self.invalidate_frame_all();
         before != self.financial_appearance(series_id)
     }
@@ -448,6 +470,53 @@ mod tests {
                 .up_color
                 .is_none()
         );
+    }
+
+    #[test]
+    fn default_line_area_and_baseline_colors_round_trip_without_pinning() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart.convert_series_kind(0, crate::SeriesKind::Area);
+        let appearance = chart.financial_appearance(0).unwrap();
+        for color in [
+            &appearance.line_color,
+            &appearance.area_top_color,
+            &appearance.area_bottom_color,
+            &appearance.baseline_top_color,
+            &appearance.baseline_bottom_color,
+        ] {
+            assert_eq!(*color, AppearanceColor::Theme);
+        }
+        let painted = chart.financial_series_colors(0).unwrap();
+        // Re-applying the reported appearance, as a saved layout does, keeps the translucent
+        // default gradient instead of pinning an opaque fill.
+        chart.apply_financial_series_appearance(0, &appearance);
+        assert_eq!(chart.financial_series_colors(0).unwrap(), painted);
+        let series = chart.series.iter().find(|series| series.id == 0).unwrap();
+        assert!(series.line_color.is_none() && series.area_top_color.is_none());
+        let stroke = crate::frame::series_stroke_color(series);
+        let (strong, faint) = crate::frame::area_fill_gradient(stroke);
+        assert_eq!(painted.line, stroke.to_css());
+        assert_eq!(painted.area_top, strong.to_css());
+        assert_eq!(painted.area_bottom, faint.to_css());
+        assert!(strong.a() < 0xFF && faint.a() < strong.a());
+
+        let mut custom = appearance;
+        custom.line_color = AppearanceColor::Custom("#2962ff".into());
+        custom.area_bottom_color = AppearanceColor::Custom("#2962ff00".into());
+        assert!(chart.apply_financial_series_appearance(0, &custom));
+        let typed = chart.financial_appearance(0).unwrap();
+        assert_eq!(typed.area_top_color, AppearanceColor::Theme);
+        assert_eq!(
+            typed.area_bottom_color,
+            AppearanceColor::Custom("#2962ff00".into())
+        );
+        let painted = chart.financial_series_colors(0).unwrap();
+        let (strong, _) = crate::frame::area_fill_gradient(aeris_charts_render::color::Color::rgb(
+            0x29, 0x62, 0xff,
+        ));
+        assert_eq!(painted.line, "#2962ff");
+        assert_eq!(painted.area_top, strong.to_css());
+        assert_eq!(painted.area_bottom, "rgba(41,98,255,0)");
     }
 
     #[test]

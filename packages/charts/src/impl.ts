@@ -6263,6 +6263,13 @@ export class chart_impl implements chart_api {
     return JSON.parse(value) as drawing_property_schema;
   }
 
+  drawing_painted_colors(drawing: drawing_api | number): Record<string, string> {
+    const id = typeof drawing === "number" ? drawing : drawing.id;
+    const value = this.wasm.drawing_painted_colors_json(id);
+    if (value === "") throw new AerisChartsError("stale_handle", "drawing has been removed");
+    return JSON.parse(value) as Record<string, string>;
+  }
+
   drawing_kind_options(drawing: drawing_api | number): drawing_kind_options {
     const id = typeof drawing === "number" ? drawing : drawing.id;
     const value = this.wasm.drawing_kind_options_json(id);
@@ -6790,7 +6797,7 @@ export class chart_impl implements chart_api {
     type edit_layout = {
       anchor_x: number; anchor_y: number; angle: number; font_size: number;
       font_family: string; font_weight: number; font_italic: boolean;
-      left_edge: number; advance: number; caret_x: number;
+      left_edge: number; advance: number; caret_x: number; ink: string;
     };
     const read_layout = (): edit_layout | null =>
       JSON.parse(this.wasm.drawing_text_edit_layout_json()) as edit_layout | null;
@@ -6800,23 +6807,10 @@ export class chart_impl implements chart_api {
       return;
     }
     const options = drawing.options();
-    const layout = (this.options() as {
-      layout?: {
-        textColor?: string;
-      };
-    }).layout ?? {};
     const font_size = initial_layout.font_size;
     const font = `${initial_layout.font_italic ? "italic " : ""}${initial_layout.font_weight} ${font_size}px ${initial_layout.font_family}`;
-    // Same color the engine paints with: explicit drawing override, then a trend label's line,
-    // otherwise the chart foreground used by standalone text. Never infer a different trend-label
-    // default in the host.
-    const ink =
-      (options.text_color && options.text_color.trim() !== ""
-        ? options.text_color
-        : null) ??
-      (drawing.kind() === "trend_line" ? options.color : null) ??
-      layout.textColor ??
-      theme_palette(default_theme_name).foreground;
+    // The caret uses the ink the engine paints the label with.
+    const ink = initial_layout.ink;
 
     const wrap = document.createElement("div");
     wrap.id = "aeris_charts-text-editor";

@@ -509,7 +509,7 @@ pub(crate) struct RetainedFrame {
     last_selected_drawing: Option<crate::DrawingId>,
     /// Trend line whose `+ Add text` prompt the retained drawings layer paints. The prompt follows
     /// selection and editing, which do not otherwise rebuild that layer.
-    last_trend_text_prompt: Option<crate::DrawingId>,
+    last_line_text_prompt: Option<crate::DrawingId>,
     /// Invalidation clock observed by the last prepared host frame.
     prepared_clock: u64,
 }
@@ -815,6 +815,25 @@ pub(crate) fn series_stroke_color(series: &crate::SeriesEntry) -> Color {
     }
 }
 
+/// The top and bottom area fill colors a series renders: each explicit color, else the
+/// canonical gradient of its own stroke.
+pub(crate) fn area_fill_colors(series: &crate::SeriesEntry) -> (Color, Color) {
+    let (strong, faint) = area_fill_gradient(series_stroke_color(series));
+    (
+        verbatim_color(&series.area_top_color, strong),
+        verbatim_color(&series.area_bottom_color, faint),
+    )
+}
+
+/// The above- and below-baseline line colors a baseline series renders: each explicit color,
+/// else the market up/down default.
+pub(crate) fn baseline_line_colors(series: &crate::SeriesEntry) -> (Color, Color) {
+    (
+        verbatim_color(&series.top_line_color, BASELINE_TOP_LINE),
+        verbatim_color(&series.bottom_line_color, BASELINE_BOTTOM_LINE),
+    )
+}
+
 /// Default brushable-area styles for one series, all on the canonical fill strength: selected
 /// ranges in the market up/down hues, and everything outside the selection as the series' own
 /// stroke faded to 20% with its fill derived by the same rule.
@@ -920,17 +939,10 @@ impl ChartEngine {
             // reference baseline colorer: top line color at/above the baseline, bottom below it.
             SeriesKind::Baseline => {
                 let close = plot.value_at(row, PlotValueIndex::Close);
+                let (top, bottom) = baseline_line_colors(series);
                 match baseline_price {
-                    Some(base) if close < base => series
-                        .bottom_line_color
-                        .as_deref()
-                        .and_then(Color::parse_css)
-                        .unwrap_or(BASELINE_BOTTOM_LINE),
-                    _ => series
-                        .top_line_color
-                        .as_deref()
-                        .and_then(Color::parse_css)
-                        .unwrap_or(BASELINE_TOP_LINE),
+                    Some(base) if close < base => bottom,
+                    _ => top,
                 }
             }
             // reference bar/candlestick colorer: up when open <= close.
@@ -1440,9 +1452,9 @@ impl ChartEngine {
                 self.frame_invalidation.chrome();
             }
         }
-        let trend_text_prompt = self.trend_text_prompt();
-        if self.retained_frame.last_trend_text_prompt != trend_text_prompt {
-            self.retained_frame.last_trend_text_prompt = trend_text_prompt;
+        let line_text_prompt = self.line_text_prompt();
+        if self.retained_frame.last_line_text_prompt != line_text_prompt {
+            self.retained_frame.last_line_text_prompt = line_text_prompt;
             self.frame_invalidation.drawings();
         }
         self.retained_frame.last_layout_key = Some(layout_key);
@@ -1524,11 +1536,9 @@ impl ChartEngine {
             let up = verbatim_color(&s.up_color, fallback_up);
             let down = verbatim_color(&s.down_color, fallback_down);
             let color = series_stroke_color(s);
-            // Area-like fills default to the canonical gradient of their own stroke color.
-            let (area_strong, area_faint) = area_fill_gradient(color);
+            let (area_top, area_bottom) = area_fill_colors(s);
             let css = |value: &Option<String>| value.as_deref().and_then(Color::parse_css);
-            let top_line = css(&s.top_line_color).unwrap_or(BASELINE_TOP_LINE);
-            let bottom_line = css(&s.bottom_line_color).unwrap_or(BASELINE_BOTTOM_LINE);
+            let (top_line, bottom_line) = baseline_line_colors(s);
             let (top_strong, top_faint) = area_fill_gradient(top_line);
             let (bottom_strong, bottom_faint) = area_fill_gradient(bottom_line);
             resolved.push(ResolvedSeries {
@@ -1547,8 +1557,8 @@ impl ChartEngine {
                 line_width: s.line_width.unwrap_or(LINE_WIDTH),
                 line_style: crate::line_style_from_u8(s.line_style),
                 line_visible: s.line_visible,
-                area_top: verbatim_color(&s.area_top_color, area_strong),
-                area_bottom: verbatim_color(&s.area_bottom_color, area_faint),
+                area_top,
+                area_bottom,
                 threshold_region: s.threshold_region,
                 invert_filled_area: s.invert_filled_area,
                 point_markers: s.point_markers,

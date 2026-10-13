@@ -801,6 +801,20 @@ impl DrawingKind {
         )
     }
 
+    /// Alpha of the area fill painted while `fill_color` is unset: the stroke washed out, lighter
+    /// for kinds whose fills repeat (cycles, Gann grids) or band a center line (regression).
+    pub(crate) const fn default_fill_alpha(self) -> u8 {
+        match self {
+            Self::RegressionTrend => 35,
+            Self::CyclicLines
+            | Self::TimeCycles
+            | Self::GannBox
+            | Self::GannSquare
+            | Self::GannSquareFixed => 24,
+            _ => 51,
+        }
+    }
+
     pub(crate) const fn spec(self) -> &'static DrawingToolSpec {
         match self {
             Self::TrendLine => &TREND_LINE,
@@ -992,6 +1006,22 @@ impl DrawingKind {
                 | Self::TrendAngle
                 | Self::ArrowLine
         )
+    }
+
+    /// Lines whose text is a line label: it runs along the line's readable axis, defaults to the
+    /// line's ink, is typed in place from the selected line's `+ Add text` prompt, and opens a
+    /// gap in the stroke when centered on it.
+    pub(crate) const fn has_line_text(self) -> bool {
+        self.is_straight_line()
+            || matches!(
+                self,
+                Self::HorizontalLine | Self::HorizontalRay | Self::VerticalLine
+            )
+    }
+
+    /// Kinds whose text is typed in place on the chart.
+    pub(crate) fn edits_text_inline(self) -> bool {
+        self == Self::Text || self.is_text_annotation() || self.has_line_text()
     }
 
     /// Lines that paint the statistics card selected by `labels`.

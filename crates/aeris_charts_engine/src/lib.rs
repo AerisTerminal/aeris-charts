@@ -131,7 +131,9 @@ pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
     StackedAreaColor,
 };
-pub use financial_appearance::{AppearanceColor, FinancialAppearance, FinancialThemeColors};
+pub use financial_appearance::{
+    AppearanceColor, FinancialAppearance, FinancialSeriesColors, FinancialThemeColors,
+};
 pub use financial_legend::{
     FinancialLegendIdentity, FinancialLegendRequest, FinancialLegendRow, FinancialLegendTone,
     FinancialLegendValue, HostLegendSeries,
