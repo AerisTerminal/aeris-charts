@@ -1,9 +1,9 @@
 use aeris_charts_core::scale::general_scale::{BandScale, LinearScale, PointScale};
 use aeris_charts_render::color::Color;
-use aeris_charts_render::draw_list::{Gradient, IRect, LineStyle, Prim, TextAlign};
+use aeris_charts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim, TextAlign};
 
 use crate::general_axes::NumericAxisScale;
-use crate::general_series::general_bar_radii;
+use crate::general_series::{general_bar_radii, general_polar_fill_color};
 use crate::{
     AxisDimension, ChartEngine, DEFAULT_LINE_COLOR, GeneralAxisDomain, GeneralPointSymbol,
     GeneralReferenceOptions, GeneralReferenceValue, GeneralScaleType, GeneralSeries,
@@ -19,7 +19,6 @@ const GENERAL_REFERENCE_REGION: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x20);
 const GENERAL_REFERENCE_MARK: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0xCC);
 const MAX_GENERAL_DATA_LABELS_PER_PANE: usize = 512;
 const MAX_GENERAL_DATA_LABEL_ATTEMPTS_PER_PANE: usize = 4_096;
-
 fn opacity_alpha(opacity: f64) -> u8 {
     (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
 }
@@ -175,6 +174,7 @@ impl ChartEngine {
         let label_size = layout.font_size.max(1.0);
         let label_color = self.primary_text_color();
         let mut occupied_labels: Vec<[f64; 4]> = Vec::new();
+        let mut leader_primitives = Vec::new();
         let mut label_primitives = Vec::new();
         let mut label_attempts = 0;
         self.push_general_reference_regions(pane_id, plot, hpr, vpr, out);
@@ -238,30 +238,50 @@ impl ChartEngine {
             .general_series_iter()
             .filter(|series| series.visible() && series.pane_id() == pane_id)
         {
-            let Some(dataset) = self.general_dataset(series.dataset()) else {
+            let Some(dataset) = self.general_geometry_dataset(series.dataset()) else {
                 continue;
             };
-            let mut push_label = |row: usize, x: f64, above: f64, below: f64, width_limit: f64| {
+            let mut push_label = |row: usize,
+                                  x: f64,
+                                  above: f64,
+                                  below: f64,
+                                  width_limit: f64,
+                                  outside_side: Option<f64>| {
                 if !series.data_labels()
                     || occupied_labels.len() >= MAX_GENERAL_DATA_LABELS_PER_PANE
                     || label_attempts >= MAX_GENERAL_DATA_LABEL_ATTEMPTS_PER_PANE
                 {
-                    return;
+                    return None;
                 }
                 label_attempts += 1;
                 let text = dataset
                     .row_label(row)
                     .map(str::to_owned)
+                    .or_else(|| {
+                        if !matches!(
+                            series.kind(),
+                            GeneralSeriesKind::Pie
+                                | GeneralSeriesKind::Radar
+                                | GeneralSeriesKind::PolarArea
+                                | GeneralSeriesKind::RadialBar
+                        ) {
+                            return None;
+                        }
+                        let category =
+                            usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
+                        dataset.categories()?.get(category).cloned()
+                    })
                     .unwrap_or_else(|| dataset.y()[row].to_string());
                 let width =
                     self.measure_text_run(&text, label_size, &layout.font_family, 400, false);
                 if !width.is_finite() || width <= 0.0 || width > width_limit {
-                    return;
+                    return None;
                 }
+                let x = x + outside_side.unwrap_or(0.0) * (width * 0.5 + 6.0);
                 let left = x - width * 0.5;
                 let right = x + width * 0.5;
                 if left < 2.0 || right > plot.width - 2.0 {
-                    return;
+                    return None;
                 }
                 for y in [above, below] {
                     let top = y - label_size * 0.55;
@@ -290,11 +310,186 @@ impl ChartEngine {
                         weight: 400,
                         italic: false,
                     });
-                    break;
+                    return Some((x, width, y));
                 }
+                None
             };
             let fill_gradient = general_fill_gradient(series);
             match series.kind() {
+                GeneralSeriesKind::Pie
+                | GeneralSeriesKind::PolarArea
+                | GeneralSeriesKind::RadialBar => {
+                    let mut paint =
+                        |geometry: crate::general_series::GeneralPolarSectorGeometry| {
+                            let color = general_polar_fill_color(series, dataset, geometry.row);
+                            let first_point = points.len() as u32;
+                            geometry.sector.visit_triangles(|triangle| {
+                                points.extend(
+                                    triangle.map(|(x, y)| [(x * hpr) as f32, (y * vpr) as f32]),
+                                );
+                            });
+                            let point_count = points.len() as u32 - first_point;
+                            if point_count > 0 {
+                                out.push(Prim::MeshFill {
+                                    first_point,
+                                    point_count,
+                                    color,
+                                });
+                            }
+                            if let Some((x, y)) = geometry
+                                .sector
+                                .plot()
+                                .point(geometry.sector.mid_angle(), geometry.sector.mid_radius())
+                            {
+                                if series.data_labels() {
+                                    let polar_plot = geometry.sector.plot();
+                                    let (_, outer) = geometry.sector.radial_bounds();
+                                    let angle = geometry.sector.mid_angle();
+                                    let extra = 9.0 / polar_plot.outer_radius();
+                                    if let (Some(anchor), Some(elbow)) = (
+                                        polar_plot.point(angle, outer),
+                                        polar_plot.point(angle, outer + extra),
+                                    ) {
+                                        let side = if elbow.0 >= polar_plot.center().0 {
+                                            1.0
+                                        } else {
+                                            -1.0
+                                        };
+                                        if let Some((label_x, width, _)) = push_label(
+                                            geometry.row,
+                                            elbow.0,
+                                            elbow.1,
+                                            elbow.1,
+                                            plot.width - 4.0,
+                                            Some(side),
+                                        ) {
+                                            let tail_x = label_x - side * (width * 0.5 + 2.0);
+                                            let first_point = points.len() as u32;
+                                            points.extend([
+                                                [(anchor.0 * hpr) as f32, (anchor.1 * vpr) as f32],
+                                                [(elbow.0 * hpr) as f32, (elbow.1 * vpr) as f32],
+                                                [(tail_x * hpr) as f32, (elbow.1 * vpr) as f32],
+                                            ]);
+                                            leader_primitives.push(Prim::Polyline {
+                                                first_point,
+                                                point_count: 3,
+                                                width: hpr.min(vpr).max(1.0) as f32,
+                                                style: LineStyle::Solid,
+                                                line_type: LineType::Simple,
+                                                color: Color::rgba(
+                                                    label_color.r(),
+                                                    label_color.g(),
+                                                    label_color.b(),
+                                                    (f64::from(label_color.a()) * 0.7).round()
+                                                        as u8,
+                                                ),
+                                            });
+                                        }
+                                    }
+                                }
+                                let (hovered, selected) =
+                                    self.general_row_interaction(series.id(), geometry.row);
+                                if hovered || selected {
+                                    interaction[usize::from(selected)] = Some(Prim::Circle {
+                                        cx: (x * hpr) as f32,
+                                        cy: (y * vpr) as f32,
+                                        radius: (if selected { 5.0 } else { 4.0 }) * vpr as f32,
+                                        fill: Color::rgba(0, 0, 0, 0),
+                                        stroke_width: (if selected { 2.0 } else { 1.0 })
+                                            * vpr as f32,
+                                        stroke: if selected { PRIMARY } else { GENERAL_HOVER },
+                                    });
+                                }
+                            }
+                        };
+                    if series.kind() == GeneralSeriesKind::Pie {
+                        self.visit_general_pie_slices(series, &mut paint);
+                    } else {
+                        self.visit_general_polar_value_sectors(series, &mut paint);
+                    }
+                }
+                GeneralSeriesKind::Radar => {
+                    let base = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    let fill = Color::rgba(
+                        base.r(),
+                        base.g(),
+                        base.b(),
+                        opacity_alpha(f64::from(base.a()) / 255.0 * series.fill_opacity()),
+                    );
+                    self.with_general_radar_polygon(series, |polygon, _, marker_rows| {
+                        let fill_first = points.len() as u32;
+                        polygon.visit_triangles(|triangle| {
+                            points.extend(
+                                triangle.map(|(x, y)| [(x * hpr) as f32, (y * vpr) as f32]),
+                            );
+                        });
+                        let fill_count = points.len() as u32 - fill_first;
+                        if fill_count > 0 {
+                            out.push(Prim::MeshFill {
+                                first_point: fill_first,
+                                point_count: fill_count,
+                                color: fill,
+                            });
+                        }
+                        let first_point = points.len() as u32;
+                        let mut markers = Vec::new();
+                        for (index, row) in marker_rows.iter().enumerate() {
+                            let Some((x, y)) = polygon.vertex(index) else {
+                                continue;
+                            };
+                            let Some(row) = row else {
+                                continue;
+                            };
+                            if !dataset.y_is_valid(*row) {
+                                continue;
+                            }
+                            push_label(*row, x, y, y, plot.width - 4.0, None);
+                            if series.point_markers() {
+                                push_general_point_symbol(
+                                    &mut markers,
+                                    dataset.row_symbol(*row).unwrap_or(series.point_symbol()),
+                                    x * hpr,
+                                    y * vpr,
+                                    series.point_radius() * vpr,
+                                    dataset.row_color(*row).unwrap_or(base),
+                                );
+                            }
+                        }
+                        for index in 0..polygon.vertex_count() {
+                            let Some((x, y)) = polygon.vertex(index) else {
+                                continue;
+                            };
+                            let previous = polygon.vertex(
+                                (index + polygon.vertex_count() - 1) % polygon.vertex_count(),
+                            );
+                            let next = polygon.vertex((index + 1) % polygon.vertex_count());
+                            if let (Some((px, py)), Some((nx, ny))) = (previous, next) {
+                                let cross = (x - px) * (ny - y) - (y - py) * (nx - x);
+                                let span = (nx - px).hypot(ny - py);
+                                if span > 0.0 && cross.abs() <= span * 1e-9 {
+                                    continue;
+                                }
+                            }
+                            points.push([(x * hpr) as f32, (y * vpr) as f32]);
+                        }
+                        if points.len() > first_point as usize {
+                            let point_count = points.len() as u32 - first_point;
+                            points.push(points[first_point as usize]);
+                            out.push(Prim::Polyline {
+                                first_point,
+                                point_count: point_count + 1,
+                                width: (series.line_width() * vpr) as f32,
+                                style: series.line_style().render_style(),
+                                line_type: LineType::Simple,
+                                color: base,
+                            });
+                        }
+                        out.append(&mut markers);
+                    });
+                }
                 GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
                     let color = series
                         .color()
@@ -373,6 +568,7 @@ impl ChartEngine {
                                 geometry.low_y.min(geometry.high_y) - label_size * 0.65 - 4.0,
                                 geometry.low_y.max(geometry.high_y) + label_size * 0.65 + 4.0,
                                 plot.width - 4.0,
+                                None,
                             );
                             let (hovered, selected) =
                                 self.general_row_interaction(series.id(), geometry.row);
@@ -459,6 +655,7 @@ impl ChartEngine {
                             geometry.y - label_size * 0.65 - 4.0,
                             geometry.y + label_size * 0.65 + 4.0,
                             plot.width - 4.0,
+                            None,
                         );
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
@@ -607,6 +804,7 @@ impl ChartEngine {
                             geometry.high_y - label_size * 0.65 - 4.0,
                             geometry.low_y + label_size * 0.65 + 4.0,
                             plot.width - 4.0,
+                            None,
                         );
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
@@ -707,6 +905,7 @@ impl ChartEngine {
                             top - label_size * 0.65 - 4.0,
                             bottom + label_size * 0.65 + 4.0,
                             plot.width - 4.0,
+                            None,
                         );
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
@@ -774,6 +973,7 @@ impl ChartEngine {
                             above,
                             below,
                             geometry.right - geometry.left - 4.0,
+                            None,
                         );
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
@@ -828,6 +1028,7 @@ impl ChartEngine {
                             geometry.top - label_size * 0.65 - 2.0,
                             geometry.bottom + label_size * 0.65 + 2.0,
                             geometry.right - geometry.left - 4.0,
+                            None,
                         );
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
@@ -936,6 +1137,7 @@ impl ChartEngine {
                             geometry.min_y.min(geometry.max_y) - label_size * 0.65 - 4.0,
                             geometry.min_y.max(geometry.max_y) + label_size * 0.65 + 4.0,
                             geometry.right - geometry.left - 4.0,
+                            None,
                         );
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
@@ -1025,6 +1227,7 @@ impl ChartEngine {
                             geometry.top - label_size * 0.65,
                             geometry.bottom + label_size * 0.65,
                             geometry.right - geometry.left - 4.0,
+                            None,
                         );
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
@@ -1070,6 +1273,7 @@ impl ChartEngine {
                             geometry.y - geometry.radius - label_size * 0.65 - 2.0,
                             geometry.y + geometry.radius + label_size * 0.65 + 2.0,
                             plot.width - 4.0,
+                            None,
                         );
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
@@ -1090,6 +1294,7 @@ impl ChartEngine {
             }
         }
         self.push_general_reference_marks(pane_id, plot, hpr, vpr, out);
+        out.extend(leader_primitives);
         out.extend(label_primitives);
         interaction
     }
@@ -1276,26 +1481,32 @@ impl ChartEngine {
             }
             (GeneralReferenceValue::Category(value), GeneralAxisDomain::Category(categories)) => {
                 let index = categories.iter().position(|category| category == value)?;
-                match axis.scale() {
-                    GeneralScaleType::Band => {
-                        let scale = BandScale::new(
+                self.category_motion_bounds(axis, value, from, to)
+                    .map(|(first, second)| (first + second) / 2.0)
+                    .or_else(|| match axis.scale() {
+                        GeneralScaleType::Band => {
+                            let scale = BandScale::new(
+                                categories.len(),
+                                from,
+                                to,
+                                axis.band_padding_inner(),
+                                axis.band_padding_outer(),
+                                0.5,
+                            )
+                            .ok()?;
+                            scale.bounds(index).map(|(from, to)| (from + to) * 0.5)
+                        }
+                        GeneralScaleType::Point => PointScale::new(
                             categories.len(),
                             from,
                             to,
-                            axis.band_padding_inner(),
                             axis.band_padding_outer(),
                             0.5,
                         )
-                        .ok()?;
-                        scale.bounds(index).map(|(from, to)| (from + to) * 0.5)
-                    }
-                    GeneralScaleType::Point => {
-                        PointScale::new(categories.len(), from, to, axis.band_padding_outer(), 0.5)
-                            .ok()?
-                            .coordinate(index)
-                    }
-                    _ => None,
-                }
+                        .ok()?
+                        .coordinate(index),
+                        _ => None,
+                    })
             }
             _ => None,
         }?;

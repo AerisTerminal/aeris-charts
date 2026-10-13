@@ -3,7 +3,8 @@ use std::num::NonZeroU32;
 
 use aeris_charts_core::format::time_formatter::MonthNames;
 use aeris_charts_core::scale::general_scale::{
-    BandScale, DEFAULT_SYMLOG_CONSTANT, LinearScale, LogScale, PointScale, SymLogScale,
+    AngularCategoryScale, BandScale, DEFAULT_SYMLOG_CONSTANT, LinearScale, LogScale, PointScale,
+    PolarPlot, SymLogScale,
 };
 use aeris_charts_core::scale::time_tick_marks::{civil_from_timestamp, days_from_civil};
 use aeris_charts_core::style::DEFAULT_BORDER_RGB;
@@ -15,8 +16,10 @@ use crate::{
     AxisBand, AxisFrame, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,
     AxisTextMidpoint, CategoryScaleType, ChartEngine, ChartError, ChartSyncEventKind,
     ContinuousScaleType, ErrorCode, GeneralAxisSyncDomain, GeneralAxisSyncValue,
-    GeneralCrosshairSyncPosition, GeneralSeriesKind, HorizontalDomain, PaneId, PriceScaleSide,
+    GeneralCrosshairSyncPosition, GeneralDataset, GeneralDatasetId, GeneralSeriesKind,
+    HorizontalDomain, PaneId, PriceScaleSide,
     axis_metrics::{AXIS_FONT_SCALE, AxisMetrics},
+    general_data::GeneralTransitionRow,
 };
 
 pub const MAX_GENERAL_AXES: usize = 128;
@@ -27,6 +30,42 @@ pub const MAX_GENERAL_AXIS_TICK_BYTES: usize = 1_048_576;
 pub const MAX_GENERAL_AXIS_CATEGORIES: usize = 65_536;
 pub const MAX_GENERAL_AXIS_CATEGORY_BYTES: usize = 1_048_576;
 pub const MAX_GENERAL_TEMPORAL_MILLISECONDS: i64 = 9_007_199_254_740_991;
+
+pub(crate) struct CategoryAxisMotion {
+    pub(crate) axis_id: String,
+    source: HashMap<String, [f64; 2]>,
+    target: HashMap<String, [f64; 2]>,
+    row_starts: HashMap<usize, [f64; 2]>,
+}
+
+impl CategoryAxisMotion {
+    fn bounds(&self, category: &str, progress: f64) -> Option<[f64; 2]> {
+        let source = self
+            .source
+            .get(category)
+            .or_else(|| self.target.get(category))?;
+        let target = self.target.get(category).unwrap_or(source);
+        Some([
+            source[0] * (1.0 - progress) + target[0] * progress,
+            source[1] * (1.0 - progress) + target[1] * progress,
+        ])
+    }
+
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.axis_id.capacity()
+            + [&self.source, &self.target]
+                .into_iter()
+                .map(|values| {
+                    values.capacity()
+                        * (std::mem::size_of::<String>() + 2 * std::mem::size_of::<f64>())
+                        + values.keys().map(String::capacity).sum::<usize>()
+                })
+                .sum::<usize>()
+            + self.row_starts.capacity()
+                * (std::mem::size_of::<usize>() + 2 * std::mem::size_of::<f64>() + 1)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AxisDimension {
@@ -203,7 +242,7 @@ impl NumericAxisScale {
         range_to: f64,
     ) -> Option<Self> {
         Some(match scale {
-            GeneralScaleType::Linear => {
+            GeneralScaleType::Linear | GeneralScaleType::RadialLinear => {
                 Self::Linear(LinearScale::new(domain[0], domain[1], range_from, range_to).ok()?)
             }
             GeneralScaleType::Logarithmic => {
@@ -510,6 +549,38 @@ struct AxisTickLayout {
     align: AxisTextAlign,
 }
 
+fn append_polar_ring(
+    polar: PolarPlot,
+    fraction: f64,
+    ratios: [f64; 2],
+    style: LineStyle,
+    color: Color,
+    out: &mut Vec<Prim>,
+    points: &mut Vec<[f32; 2]>,
+) {
+    let [hpr, vpr] = ratios;
+    let radius = polar.outer_radius() * fraction;
+    let segments =
+        ((std::f64::consts::TAU * radius * hpr.max(vpr) / 4.0).ceil() as usize).clamp(16, 512);
+    let first_point = points.len() as u32;
+    for index in 0..=segments {
+        let angle = std::f64::consts::TAU * index as f64 / segments as f64;
+        let Some((x, y)) = polar.point(angle, fraction) else {
+            points.truncate(first_point as usize);
+            return;
+        };
+        points.push([(x * hpr) as f32, (y * vpr) as f32]);
+    }
+    out.push(Prim::Polyline {
+        first_point,
+        point_count: (segments + 1) as u32,
+        width: hpr.min(vpr).max(1.0) as f32,
+        style,
+        line_type: aeris_charts_render::draw_list::LineType::Simple,
+        color,
+    });
+}
+
 impl ChartEngine {
     pub(crate) fn measure_general_axis_widths<F>(&mut self, measure: &F, allow_shrink: bool)
     where
@@ -607,6 +678,7 @@ impl ChartEngine {
         hpr: f64,
         vpr: f64,
         out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
     ) {
         let Some(pane_id) = self.pane_stable_id(pane_index) else {
             return;
@@ -620,7 +692,8 @@ impl ChartEngine {
                         && match axis.dimension {
                             AxisDimension::X => grid.vert_lines.visible,
                             AxisDimension::Y => grid.horz_lines.visible,
-                            AxisDimension::Angle | AxisDimension::Radius => false,
+                            AxisDimension::Angle => grid.vert_lines.visible,
+                            AxisDimension::Radius => grid.horz_lines.visible,
                         })
         });
         if !has_rules {
@@ -649,6 +722,121 @@ impl ChartEngine {
         let mut seen_horizontal_grid = HashSet::new();
         let mut seen_vertical_zero = HashSet::new();
         let mut seen_horizontal_zero = HashSet::new();
+        let mut polar_grid_count = 0;
+
+        if let Ok(polar) = PolarPlot::from_rect(0.0, plot.y, plot.width, plot.height) {
+            let (cx, cy) = polar.center();
+            let mut seen_polar_rings = HashSet::new();
+            let mut seen_polar_spokes = HashSet::new();
+            for axis in self.general_axes.iter().filter(|axis| {
+                axis.pane_id == pane_id
+                    && axis.visible
+                    && axis.zero_line
+                    && axis.dimension == AxisDimension::Radius
+            }) {
+                if polar_grid_count >= MAX_GENERAL_AXIS_TICKS as usize {
+                    break;
+                }
+                let Some(GeneralAxisDomain::Numeric(domain)) =
+                    self.effective_general_axis_domain(axis)
+                else {
+                    continue;
+                };
+                if domain[0] > 0.0 || domain[1] < 0.0 {
+                    continue;
+                }
+                let range = if axis.reverse { (1.0, 0.0) } else { (0.0, 1.0) };
+                let Some(fraction) = NumericAxisScale::new(axis.scale, domain, range.0, range.1)
+                    .and_then(|scale| scale.coordinate(0.0))
+                else {
+                    continue;
+                };
+                if fraction <= 0.0 || fraction > 1.0 {
+                    continue;
+                }
+                let key = (polar.outer_radius() * fraction * hpr.max(vpr)).round() as i32;
+                if seen_polar_rings.insert(key) {
+                    append_polar_ring(
+                        polar,
+                        fraction,
+                        [hpr, vpr],
+                        LineStyle::Solid,
+                        zero_color,
+                        out,
+                        points,
+                    );
+                    polar_grid_count += 1;
+                }
+            }
+            for axis in self
+                .general_axes
+                .iter()
+                .filter(|axis| axis.pane_id == pane_id && axis.visible && axis.grid_visible)
+            {
+                if polar_grid_count >= MAX_GENERAL_AXIS_TICKS as usize {
+                    break;
+                }
+                let enabled = match axis.dimension {
+                    AxisDimension::Angle => grid.vert_lines.visible,
+                    AxisDimension::Radius => grid.horz_lines.visible,
+                    AxisDimension::X | AxisDimension::Y => false,
+                };
+                if !enabled {
+                    continue;
+                }
+                let Some(domain) = self.effective_general_axis_domain(axis) else {
+                    continue;
+                };
+                let (from, to) = match axis.dimension {
+                    AxisDimension::Angle => (0.0, std::f64::consts::TAU),
+                    AxisDimension::Radius if axis.reverse => (1.0, 0.0),
+                    AxisDimension::Radius => (0.0, 1.0),
+                    AxisDimension::X | AxisDimension::Y => continue,
+                };
+                for tick in axis_ticks(self, axis, &domain, from, to, metrics) {
+                    if polar_grid_count >= MAX_GENERAL_AXIS_TICKS as usize {
+                        break;
+                    }
+                    if axis.dimension == AxisDimension::Angle {
+                        let Some((x, y)) = polar.point(tick.coordinate, 1.0) else {
+                            continue;
+                        };
+                        let key = ((x * hpr).round() as i32, (y * vpr).round() as i32);
+                        if !seen_polar_spokes.insert(key) {
+                            continue;
+                        }
+                        let first_point = points.len() as u32;
+                        points.push([(cx * hpr) as f32, (cy * vpr) as f32]);
+                        points.push([(x * hpr) as f32, (y * vpr) as f32]);
+                        out.push(Prim::Polyline {
+                            first_point,
+                            point_count: 2,
+                            width: hpr.min(vpr).max(1.0) as f32,
+                            style: vertical_style,
+                            line_type: aeris_charts_render::draw_list::LineType::Simple,
+                            color: vertical_color,
+                        });
+                        polar_grid_count += 1;
+                    } else if tick.coordinate > 0.0 && tick.coordinate <= 1.0 {
+                        let key =
+                            (polar.outer_radius() * tick.coordinate * hpr.max(vpr)).round() as i32;
+                        if !seen_polar_rings.insert(key) {
+                            continue;
+                        }
+                        append_polar_ring(
+                            polar,
+                            tick.coordinate,
+                            [hpr, vpr],
+                            horizontal_style,
+                            horizontal_color,
+                            out,
+                            points,
+                        );
+                        polar_grid_count += 1;
+                    }
+                }
+            }
+        }
 
         for axis in self
             .general_axes
@@ -684,15 +872,7 @@ impl ChartEngine {
                     AxisDimension::Angle | AxisDimension::Radius => false,
                 }
             {
-                for tick in axis_ticks(
-                    axis,
-                    &domain,
-                    range.0,
-                    range.1,
-                    metrics,
-                    &self.month_names,
-                    self.time_zone,
-                ) {
+                for tick in axis_ticks(self, axis, &domain, range.0, range.1, metrics) {
                     match axis.dimension {
                         AxisDimension::X => {
                             let coordinate = (tick.coordinate * hpr).round() as i32;
@@ -819,12 +999,82 @@ impl ChartEngine {
             let mut bottom_offset = 0.0;
             let mut left_offset = 0.0;
             let mut right_offset = 0.0;
+            let mut polar_occupied: Vec<[f64; 4]> = Vec::new();
 
             for axis in self
                 .general_axes
                 .iter()
                 .filter(|axis| axis.pane_id == pane_id && axis.visible)
             {
+                if matches!(axis.dimension, AxisDimension::Angle | AxisDimension::Radius) {
+                    let Ok(polar) = PolarPlot::from_rect(plot.x, plot.y, plot.width, plot.height)
+                    else {
+                        continue;
+                    };
+                    let Some(domain) = self.effective_general_axis_domain(axis) else {
+                        continue;
+                    };
+                    let (from, to) = match axis.dimension {
+                        AxisDimension::Angle => (0.0, std::f64::consts::TAU),
+                        AxisDimension::Radius if axis.reverse => (1.0, 0.0),
+                        AxisDimension::Radius => (0.0, 1.0),
+                        AxisDimension::X | AxisDimension::Y => continue,
+                    };
+                    for tick in axis_ticks(self, axis, &domain, from, to, metrics) {
+                        if polar_occupied.len() >= MAX_GENERAL_AXIS_TICKS as usize {
+                            break;
+                        }
+                        let width = measure(&tick.label, false);
+                        if !width.is_finite() || width <= 0.0 || width > plot.width - 4.0 {
+                            continue;
+                        }
+                        let (x, y) = if axis.dimension == AxisDimension::Angle {
+                            let inset = width / 2.0 + metrics.axis / 2.0 + 4.0;
+                            let fraction =
+                                ((polar.outer_radius() - inset) / polar.outer_radius()).max(0.0);
+                            let Some(point) = polar.point(tick.coordinate, fraction) else {
+                                continue;
+                            };
+                            point
+                        } else {
+                            let Some((_, y)) = polar.point(0.0, tick.coordinate) else {
+                                continue;
+                            };
+                            (
+                                polar.center().0 + width / 2.0 + 4.0,
+                                y.max(plot.y + metrics.axis / 2.0 + 2.0),
+                            )
+                        };
+                        let rect = [
+                            x - width / 2.0,
+                            y - metrics.axis / 2.0,
+                            x + width / 2.0,
+                            y + metrics.axis / 2.0,
+                        ];
+                        if rect[0] < plot.x + 2.0
+                            || rect[2] > plot.x + plot.width - 2.0
+                            || rect[1] < plot.y + 2.0
+                            || rect[3] > plot.y + plot.height - 2.0
+                            || polar_occupied.iter().any(|other| {
+                                rect[0] < other[2] + axis.min_tick_gap
+                                    && rect[2] > other[0] - axis.min_tick_gap
+                                    && rect[1] < other[3] + axis.min_tick_gap
+                                    && rect[3] > other[1] - axis.min_tick_gap
+                            })
+                        {
+                            continue;
+                        }
+                        polar_occupied.push(rect);
+                        out.labels.push(plain_axis_label(
+                            tick.label,
+                            x,
+                            y,
+                            text_color,
+                            AxisTextAlign::Center,
+                        ));
+                    }
+                    continue;
+                }
                 let Some(position) = axis.position else {
                     continue;
                 };
@@ -929,15 +1179,7 @@ impl ChartEngine {
                 let Some(domain) = self.effective_general_axis_domain(axis) else {
                     continue;
                 };
-                let ticks = axis_ticks(
-                    axis,
-                    &domain,
-                    range.0,
-                    range.1,
-                    metrics,
-                    &self.month_names,
-                    self.time_zone,
-                );
+                let ticks = axis_ticks(self, axis, &domain, range.0, range.1, metrics);
                 let ticks =
                     collision_filtered_ticks(axis, ticks, measure, metrics, range.0, range.1);
                 for tick in ticks {
@@ -1044,94 +1286,304 @@ impl ChartEngine {
         self.base_general_axis_domain(axis)
     }
 
+    pub(crate) fn category_axis_values(
+        &self,
+        axis: &GeneralAxis,
+        override_dataset: Option<(GeneralDatasetId, &GeneralDataset)>,
+        canonical: bool,
+        apply_view: bool,
+    ) -> Option<Vec<String>> {
+        let mut categories = match &axis.domain {
+            GeneralAxisDomain::Category(values) => values.clone(),
+            GeneralAxisDomain::Auto => {
+                let mut values = Vec::new();
+                let mut seen = HashSet::new();
+                for series in self.general_series_iter().filter(|series| {
+                    series.visible()
+                        && series.pane_id() == axis.pane_id
+                        && match axis.dimension {
+                            AxisDimension::X => series.x_axis_id() == axis.id,
+                            AxisDimension::Angle => {
+                                series.x_axis_id() == axis.id
+                                    && matches!(
+                                        series.kind(),
+                                        GeneralSeriesKind::Radar
+                                            | GeneralSeriesKind::PolarArea
+                                            | GeneralSeriesKind::RadialBar
+                                    )
+                            }
+                            AxisDimension::Y => {
+                                series.y_axis_id() == axis.id
+                                    && matches!(
+                                        series.kind(),
+                                        GeneralSeriesKind::HorizontalBar
+                                            | GeneralSeriesKind::HeatmapGrid
+                                    )
+                            }
+                            AxisDimension::Radius => false,
+                        }
+                }) {
+                    let dataset = override_dataset
+                        .filter(|(id, _)| *id == series.dataset())
+                        .map(|(_, dataset)| dataset)
+                        .or_else(|| {
+                            if canonical {
+                                self.general_dataset(series.dataset())
+                            } else {
+                                self.general_geometry_dataset(series.dataset())
+                            }
+                        });
+                    let Some(dataset) = dataset else { continue };
+                    let source = if axis.dimension == AxisDimension::Y
+                        && series.kind() == GeneralSeriesKind::HeatmapGrid
+                    {
+                        dataset.heatmap_y_categories()
+                    } else {
+                        dataset.categories()
+                    };
+                    for value in source.into_iter().flatten() {
+                        if seen.insert(value.clone()) {
+                            values.push(value.clone());
+                        }
+                    }
+                }
+                for reference in self.general_reference_iter().filter(|reference| {
+                    reference.pane_id() == axis.pane_id && reference.options().extend_domain()
+                }) {
+                    for value in general_reference_values_for_axis(reference.options(), &axis.id)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let crate::GeneralReferenceValue::Category(value) = value
+                            && seen.insert(value.clone())
+                        {
+                            values.push(value.clone());
+                        }
+                    }
+                }
+                values
+            }
+            _ => return None,
+        };
+        if categories.is_empty() {
+            return None;
+        }
+        if apply_view
+            && let Some(GeneralAxisView::Category { start, len }) = axis.view_domain.as_ref()
+        {
+            let len = (*len).clamp(1, categories.len());
+            let start = (*start).min(categories.len() - len);
+            categories = categories[start..start + len].to_vec();
+        }
+        Some(categories)
+    }
+
+    pub(crate) fn category_axis_motions_for_dataset(
+        &self,
+        id: GeneralDatasetId,
+        previous: &GeneralDataset,
+        rows: &[GeneralTransitionRow],
+    ) -> Vec<CategoryAxisMotion> {
+        let mut motions = Vec::new();
+        let Some(dataset) = self.general_dataset(id) else {
+            return motions;
+        };
+        for axis in self.general_axes.iter().filter(|axis| {
+            matches!(
+                &axis.domain,
+                GeneralAxisDomain::Auto | GeneralAxisDomain::Category(_)
+            ) && matches!(
+                axis.scale,
+                GeneralScaleType::Band
+                    | GeneralScaleType::Point
+                    | GeneralScaleType::AngularCategory
+            ) && self.general_series_iter().any(|series| {
+                series.visible()
+                    && series.dataset() == id
+                    && series.pane_id() == axis.pane_id
+                    && match axis.dimension {
+                        AxisDimension::X | AxisDimension::Angle => series.x_axis_id() == axis.id,
+                        AxisDimension::Y => series.y_axis_id() == axis.id,
+                        AxisDimension::Radius => false,
+                    }
+            })
+        }) {
+            let Some(source_categories) =
+                self.category_axis_values(axis, Some((id, previous)), false, true)
+            else {
+                continue;
+            };
+            let Some(target_categories) = self.category_axis_values(axis, None, true, true) else {
+                continue;
+            };
+            let Some(mut source) = normalized_category_bounds(axis, &source_categories) else {
+                continue;
+            };
+            let Some(target) = normalized_category_bounds(axis, &target_categories) else {
+                continue;
+            };
+            for (category, bounds) in source.iter_mut() {
+                if let Some(current) = self.category_motion_bounds_normalized(&axis.id, category) {
+                    *bounds = current;
+                }
+            }
+            let mut row_starts = HashMap::new();
+            for (presentation_row, mapping) in rows.iter().enumerate() {
+                let (Some(source_row), Some(target_row)) = (mapping.source, mapping.target) else {
+                    continue;
+                };
+                let (Some(source_category), Some(target_category)) = (
+                    axis_category_for_row(axis, previous, source_row),
+                    axis_category_for_row(axis, dataset, target_row),
+                ) else {
+                    continue;
+                };
+                let Some(start) = self
+                    .category_row_motion_bounds_normalized(
+                        id,
+                        &axis.id,
+                        source_row,
+                        source_category,
+                    )
+                    .or_else(|| source.get(source_category).copied())
+                else {
+                    continue;
+                };
+                let Some(target_at_start) = source
+                    .get(target_category)
+                    .or_else(|| target.get(target_category))
+                else {
+                    continue;
+                };
+                if start != *target_at_start {
+                    row_starts.insert(presentation_row, start);
+                }
+            }
+            let moved = !row_starts.is_empty()
+                || (rows
+                    .iter()
+                    .any(|row| row.source.is_none() || row.target.is_none())
+                    && source_categories != target_categories)
+                || source.iter().any(|(category, bounds)| {
+                    target.get(category).is_some_and(|target| target != bounds)
+                });
+            if moved {
+                motions.push(CategoryAxisMotion {
+                    axis_id: axis.id.clone(),
+                    source,
+                    target,
+                    row_starts,
+                });
+            }
+        }
+        motions
+    }
+
+    pub(crate) fn category_motion_bounds_normalized(
+        &self,
+        axis_id: &str,
+        category: &str,
+    ) -> Option<[f64; 2]> {
+        let transition = self.general_transitions.iter().rev().find(|transition| {
+            transition
+                .category_axes
+                .iter()
+                .any(|motion| motion.axis_id == axis_id)
+        })?;
+        let motion = transition
+            .category_axes
+            .iter()
+            .find(|motion| motion.axis_id == axis_id)?;
+        let progress = ((self.general_transition_time_ms - transition.started_ms)
+            / self.general_transition_duration_ms)
+            .clamp(0.0, 1.0);
+        motion.bounds(category, progress)
+    }
+
+    fn category_row_motion_bounds_normalized(
+        &self,
+        id: GeneralDatasetId,
+        axis_id: &str,
+        row: usize,
+        current_category: &str,
+    ) -> Option<[f64; 2]> {
+        let transition = self
+            .general_transitions
+            .iter()
+            .find(|transition| transition.dataset == id)?;
+        let motion = transition
+            .category_axes
+            .iter()
+            .find(|motion| motion.axis_id == axis_id)?;
+        let start = motion.row_starts.get(&row)?;
+        let target = self.category_motion_bounds_normalized(axis_id, current_category)?;
+        let progress = ((self.general_transition_time_ms - transition.started_ms)
+            / self.general_transition_duration_ms)
+            .clamp(0.0, 1.0);
+        Some([
+            start[0] * (1.0 - progress) + target[0] * progress,
+            start[1] * (1.0 - progress) + target[1] * progress,
+        ])
+    }
+
+    pub(crate) fn category_row_motion_bounds(
+        &self,
+        axis: &GeneralAxis,
+        dataset: GeneralDatasetId,
+        row: usize,
+        target: (f64, f64),
+        range: (f64, f64),
+    ) -> Option<(f64, f64)> {
+        let transition = self
+            .general_transitions
+            .iter()
+            .find(|transition| transition.dataset == dataset)?;
+        let motion = transition
+            .category_axes
+            .iter()
+            .find(|motion| motion.axis_id == axis.id)?;
+        let start = motion.row_starts.get(&row)?;
+        let progress = ((self.general_transition_time_ms - transition.started_ms)
+            / self.general_transition_duration_ms)
+            .clamp(0.0, 1.0);
+        let span = range.1 - range.0;
+        let start_first = range.0 + start[0] * span;
+        let start_second = range.0 + start[1] * span;
+        Some((
+            start_first * (1.0 - progress) + target.0 * progress,
+            start_second * (1.0 - progress) + target.1 * progress,
+        ))
+    }
+
+    pub(crate) fn category_motion_bounds(
+        &self,
+        axis: &GeneralAxis,
+        category: &str,
+        range_from: f64,
+        range_to: f64,
+    ) -> Option<(f64, f64)> {
+        let [first, second] = self.category_motion_bounds_normalized(&axis.id, category)?;
+        let span = range_to - range_from;
+        Some((range_from + first * span, range_from + second * span))
+    }
+
     pub(crate) fn base_general_axis_domain(&self, axis: &GeneralAxis) -> Option<GeneralAxisDomain> {
         if axis.domain != GeneralAxisDomain::Auto {
             return padded_axis_domain(axis, axis.domain.clone());
         }
 
         match (axis.dimension, axis.scale) {
-            (AxisDimension::X, GeneralScaleType::Band | GeneralScaleType::Point) => {
-                let mut categories = Vec::new();
-                let mut seen = HashSet::new();
-                for series in self.general_series_iter().filter(|series| {
-                    series.visible()
-                        && series.pane_id() == axis.pane_id
-                        && series.x_axis_id() == axis.id
-                }) {
-                    let Some(dataset) = self.general_dataset(series.dataset()) else {
-                        continue;
-                    };
-                    let Some(values) = dataset.categories() else {
-                        continue;
-                    };
-                    for value in values {
-                        if seen.insert(value.clone()) {
-                            categories.push(value.clone());
-                        }
-                    }
-                }
-                for reference in self.general_reference_iter().filter(|reference| {
-                    reference.pane_id() == axis.pane_id && reference.options().extend_domain()
-                }) {
-                    for value in general_reference_values_for_axis(reference.options(), &axis.id)
-                        .into_iter()
-                        .flatten()
-                    {
-                        if let crate::GeneralReferenceValue::Category(value) = value
-                            && seen.insert(value.clone())
-                        {
-                            categories.push(value.clone());
-                        }
-                    }
-                }
-                (!categories.is_empty()).then_some(GeneralAxisDomain::Category(categories))
-            }
-            (AxisDimension::Y, GeneralScaleType::Band | GeneralScaleType::Point) => {
-                let mut categories = Vec::new();
-                let mut seen = HashSet::new();
-                for series in self.general_series_iter().filter(|series| {
-                    series.visible()
-                        && series.pane_id() == axis.pane_id
-                        && series.y_axis_id() == axis.id
-                        && matches!(
-                            series.kind(),
-                            crate::GeneralSeriesKind::HorizontalBar
-                                | crate::GeneralSeriesKind::HeatmapGrid
-                        )
-                }) {
-                    let Some(dataset) = self.general_dataset(series.dataset()) else {
-                        continue;
-                    };
-                    let values = if series.kind() == crate::GeneralSeriesKind::HeatmapGrid {
-                        dataset.heatmap_y_categories()
-                    } else {
-                        dataset.categories()
-                    };
-                    let Some(values) = values else {
-                        continue;
-                    };
-                    for value in values {
-                        if seen.insert(value.clone()) {
-                            categories.push(value.clone());
-                        }
-                    }
-                }
-                for reference in self.general_reference_iter().filter(|reference| {
-                    reference.pane_id() == axis.pane_id && reference.options().extend_domain()
-                }) {
-                    for value in general_reference_values_for_axis(reference.options(), &axis.id)
-                        .into_iter()
-                        .flatten()
-                    {
-                        if let crate::GeneralReferenceValue::Category(value) = value
-                            && seen.insert(value.clone())
-                        {
-                            categories.push(value.clone());
-                        }
-                    }
-                }
-                (!categories.is_empty()).then_some(GeneralAxisDomain::Category(categories))
-            }
+            (
+                AxisDimension::X | AxisDimension::Angle,
+                GeneralScaleType::Band
+                | GeneralScaleType::Point
+                | GeneralScaleType::AngularCategory,
+            ) => self
+                .category_axis_values(axis, None, false, false)
+                .map(GeneralAxisDomain::Category),
+            (AxisDimension::Y, GeneralScaleType::Band | GeneralScaleType::Point) => self
+                .category_axis_values(axis, None, false, false)
+                .map(GeneralAxisDomain::Category),
             (AxisDimension::X, GeneralScaleType::Temporal) => {
                 let mut bounds: Option<(i64, i64)> = None;
                 for series in self.general_series_iter().filter(|series| {
@@ -1139,7 +1591,7 @@ impl ChartEngine {
                         && series.pane_id() == axis.pane_id
                         && series.x_axis_id() == axis.id
                 }) {
-                    let Some(dataset) = self.general_dataset(series.dataset()) else {
+                    let Some(dataset) = self.general_geometry_dataset(series.dataset()) else {
                         continue;
                     };
                     let Some(values) = dataset.temporal_x_epoch_ms() else {
@@ -1192,10 +1644,11 @@ impl ChartEngine {
                 bounds.and_then(|(low, high)| expanded_temporal_domain(low, high))
             }
             (
-                AxisDimension::X | AxisDimension::Y,
+                AxisDimension::X | AxisDimension::Y | AxisDimension::Radius,
                 GeneralScaleType::Linear
                 | GeneralScaleType::Logarithmic
-                | GeneralScaleType::SymmetricLog,
+                | GeneralScaleType::SymmetricLog
+                | GeneralScaleType::RadialLinear,
             ) => {
                 let mut bounds: Option<(f64, f64)> = None;
                 let mut include_zero = false;
@@ -1208,7 +1661,7 @@ impl ChartEngine {
                             series.y_axis_id() == axis.id
                         }
                 }) {
-                    let Some(dataset) = self.general_dataset(series.dataset()) else {
+                    let Some(dataset) = self.general_geometry_dataset(series.dataset()) else {
                         continue;
                     };
                     let (series_bounds, series_zero) = self.cached_general_series_axis_scan(
@@ -1761,7 +2214,11 @@ impl ChartEngine {
             }
             (GeneralAxisDomain::Category(values), GeneralAxisSyncValue::Category { value }) => {
                 let index = values.iter().position(|candidate| candidate == value)?;
-                general_sync_category_coordinate(axis, values.len(), from, to, index)?
+                self.category_motion_bounds(axis, value, from, to)
+                    .map(|(first, second)| (first + second) / 2.0)
+                    .or_else(|| {
+                        general_sync_category_coordinate(axis, values.len(), from, to, index)
+                    })?
             }
             _ => return None,
         };
@@ -1811,6 +2268,75 @@ fn general_sync_category_coordinate(
             .coordinate(index),
         _ => None,
     }
+}
+
+fn normalized_category_bounds(
+    axis: &GeneralAxis,
+    categories: &[String],
+) -> Option<HashMap<String, [f64; 2]>> {
+    let band = (axis.scale == GeneralScaleType::Band)
+        .then(|| {
+            BandScale::new(
+                categories.len(),
+                0.0,
+                1.0,
+                axis.band_padding_inner,
+                axis.band_padding_outer,
+                0.5,
+            )
+            .ok()
+        })
+        .flatten();
+    let point = (axis.scale == GeneralScaleType::Point)
+        .then(|| PointScale::new(categories.len(), 0.0, 1.0, axis.band_padding_outer, 0.5).ok())
+        .flatten();
+    let angular = (axis.scale == GeneralScaleType::AngularCategory)
+        .then(|| {
+            let step = std::f64::consts::TAU / categories.len() as f64;
+            let start = if axis.reverse {
+                step / 2.0
+            } else {
+                -step / 2.0
+            };
+            AngularCategoryScale::new(categories.len(), start, !axis.reverse).ok()
+        })
+        .flatten();
+    let mut result = HashMap::with_capacity(categories.len());
+    for (index, category) in categories.iter().enumerate() {
+        let bounds = if let Some(scale) = band {
+            let (first, second) = scale.bounds(index)?;
+            [first, second]
+        } else if let Some(scale) = angular {
+            let (first, second) = scale.sector(index)?;
+            [
+                first / std::f64::consts::TAU,
+                second / std::f64::consts::TAU,
+            ]
+        } else {
+            let coordinate = point?.coordinate(index)?;
+            [coordinate, coordinate]
+        };
+        result.insert(category.clone(), bounds);
+    }
+    Some(result)
+}
+
+fn axis_category_for_row<'a>(
+    axis: &GeneralAxis,
+    dataset: &'a GeneralDataset,
+    row: usize,
+) -> Option<&'a str> {
+    let (categories, indices) =
+        if axis.dimension == AxisDimension::Y && dataset.heatmap_y_categories().is_some() {
+            (
+                dataset.heatmap_y_categories()?,
+                dataset.heatmap_y_category_indices()?,
+            )
+        } else {
+            (dataset.categories()?, dataset.category_indices()?)
+        };
+    let index = usize::try_from(*indices.get(row)?).ok()?;
+    categories.get(index).map(String::as_str)
 }
 
 fn category_view_start(axis: &GeneralAxis, base_len: usize, view_len: usize) -> usize {
@@ -1910,7 +2436,8 @@ fn tick_labels_for_domain(
         (
             GeneralScaleType::Linear
             | GeneralScaleType::Logarithmic
-            | GeneralScaleType::SymmetricLog,
+            | GeneralScaleType::SymmetricLog
+            | GeneralScaleType::RadialLinear,
             GeneralAxisDomain::Numeric(domain),
         ) => {
             let Some(scale) = NumericAxisScale::new(axis.scale, *domain, 0.0, 1.0) else {
@@ -1926,12 +2453,13 @@ fn tick_labels_for_domain(
                 })
                 .collect()
         }
-        (GeneralScaleType::Band | GeneralScaleType::Point, GeneralAxisDomain::Category(values)) => {
-            category_tick_entries(axis, values)
-                .into_iter()
-                .map(|(_, label)| label)
-                .collect()
-        }
+        (
+            GeneralScaleType::Band | GeneralScaleType::Point | GeneralScaleType::AngularCategory,
+            GeneralAxisDomain::Category(values),
+        ) => category_tick_entries(axis, values)
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect(),
         (GeneralScaleType::Temporal, GeneralAxisDomain::Temporal(domain)) => temporal_tick_entries(
             axis,
             *domain,
@@ -1947,19 +2475,21 @@ fn tick_labels_for_domain(
 }
 
 fn axis_ticks(
+    chart: &ChartEngine,
     axis: &GeneralAxis,
     domain: &GeneralAxisDomain,
     range_from: f64,
     range_to: f64,
     metrics: AxisMetrics,
-    month_names: &MonthNames,
-    time_zone: ChartTimeZone,
 ) -> Vec<AxisTickLayout> {
+    let month_names = &chart.month_names;
+    let time_zone = chart.time_zone;
     match (&axis.scale, domain) {
         (
             GeneralScaleType::Linear
             | GeneralScaleType::Logarithmic
-            | GeneralScaleType::SymmetricLog,
+            | GeneralScaleType::SymmetricLog
+            | GeneralScaleType::RadialLinear,
             GeneralAxisDomain::Numeric(domain),
         ) => {
             let Some(scale) = NumericAxisScale::new(axis.scale, *domain, range_from, range_to)
@@ -2035,7 +2565,12 @@ fn axis_ticks(
             ) else {
                 return Vec::new();
             };
-            sampled_category_ticks(axis, values, |index| scale.center(index))
+            sampled_category_ticks(axis, values, |index| {
+                chart
+                    .category_motion_bounds(axis, &values[index], range_from, range_to)
+                    .map(|(first, second)| (first + second) / 2.0)
+                    .or_else(|| scale.center(index))
+            })
         }
         (GeneralScaleType::Point, GeneralAxisDomain::Category(values)) => {
             let Ok(scale) = PointScale::new(
@@ -2047,7 +2582,36 @@ fn axis_ticks(
             ) else {
                 return Vec::new();
             };
-            sampled_category_ticks(axis, values, |index| scale.coordinate(index))
+            sampled_category_ticks(axis, values, |index| {
+                chart
+                    .category_motion_bounds(axis, &values[index], range_from, range_to)
+                    .map(|(first, second)| (first + second) / 2.0)
+                    .or_else(|| scale.coordinate(index))
+            })
+        }
+        (GeneralScaleType::AngularCategory, GeneralAxisDomain::Category(values)) => {
+            let step = std::f64::consts::TAU / values.len() as f64;
+            let start = if axis.reverse {
+                step / 2.0
+            } else {
+                -step / 2.0
+            };
+            let Ok(scale) =
+                AngularCategoryScale::new(values.len(), range_from + start, !axis.reverse)
+            else {
+                return Vec::new();
+            };
+            sampled_category_ticks(axis, values, |index| {
+                chart
+                    .category_motion_bounds(
+                        axis,
+                        &values[index],
+                        range_from,
+                        range_from + std::f64::consts::TAU,
+                    )
+                    .map(|(first, second)| (first + second) / 2.0)
+                    .or_else(|| scale.center(index))
+            })
         }
         _ => Vec::new(),
     }
@@ -2416,7 +2980,18 @@ fn scan_general_series_numeric_bounds(
 ) -> (Option<(f64, f64)>, bool) {
     let mut bounds: Option<(f64, f64)> = None;
     let mut include_zero = false;
-    if axis.dimension == AxisDimension::Y {
+    if axis.dimension == AxisDimension::Y
+        || (axis.dimension == AxisDimension::Radius
+            && matches!(
+                series.kind(),
+                crate::GeneralSeriesKind::Radar
+                    | crate::GeneralSeriesKind::PolarArea
+                    | crate::GeneralSeriesKind::RadialBar
+            ))
+    {
+        if axis.dimension == AxisDimension::Radius {
+            include_zero = true;
+        }
         if series.kind() == crate::GeneralSeriesKind::HeatmapGrid
             && let Some(values) = dataset.heatmap_y_numeric()
         {
@@ -2605,9 +3180,9 @@ fn expanded_numeric_domain_for_scale(
                     ascending_numeric_domain(low, next)
                 })
         }
-        GeneralScaleType::Linear | GeneralScaleType::SymmetricLog => {
-            expanded_numeric_domain(low, high)
-        }
+        GeneralScaleType::Linear
+        | GeneralScaleType::SymmetricLog
+        | GeneralScaleType::RadialLinear => expanded_numeric_domain(low, high),
         _ => None,
     }
 }
@@ -3049,14 +3624,6 @@ fn validate_ticks(options: &GeneralAxisOptions) -> Result<(), ChartError> {
             "general axis tick_count and explicit ticks are mutually exclusive",
         ));
     }
-    if matches!(
-        options.scale,
-        GeneralScaleType::RadialLinear | GeneralScaleType::AngularCategory
-    ) {
-        return Err(invalid(
-            "explicit ticks require an executable Cartesian axis",
-        ));
-    }
     if ticks.len() > usize::from(MAX_GENERAL_AXIS_TICKS) {
         return Err(resource(format!(
             "general axis explicit ticks exceed {MAX_GENERAL_AXIS_TICKS} entries"
@@ -3080,7 +3647,8 @@ fn validate_ticks(options: &GeneralAxisOptions) -> Result<(), ChartError> {
     match options.scale {
         GeneralScaleType::Linear
         | GeneralScaleType::Logarithmic
-        | GeneralScaleType::SymmetricLog => {
+        | GeneralScaleType::SymmetricLog
+        | GeneralScaleType::RadialLinear => {
             let mut seen = HashSet::with_capacity(ticks.len());
             for tick in ticks {
                 let GeneralAxisTick::Numeric { value, .. } = tick else {
@@ -3114,7 +3682,7 @@ fn validate_ticks(options: &GeneralAxisOptions) -> Result<(), ChartError> {
                 }
             }
         }
-        GeneralScaleType::Band | GeneralScaleType::Point => {
+        GeneralScaleType::Band | GeneralScaleType::Point | GeneralScaleType::AngularCategory => {
             let mut seen = HashSet::with_capacity(ticks.len());
             for tick in ticks {
                 let GeneralAxisTick::Category { value, .. } = tick else {
@@ -3124,9 +3692,6 @@ fn validate_ticks(options: &GeneralAxisOptions) -> Result<(), ChartError> {
                     return Err(invalid("general axis explicit tick values must be unique"));
                 }
             }
-        }
-        GeneralScaleType::RadialLinear | GeneralScaleType::AngularCategory => {
-            unreachable!("polar explicit ticks are rejected before scale-specific validation")
         }
     }
     Ok(())
@@ -3550,6 +4115,11 @@ mod tests {
         axis.scale = GeneralScaleType::RadialLinear;
         axis.ticks = Some(vec![GeneralAxisTick::Numeric {
             value: 1.0,
+            label: None,
+        }]);
+        assert!(validate_options(&axis).is_ok());
+        axis.ticks = Some(vec![GeneralAxisTick::Temporal {
+            value: 1,
             label: None,
         }]);
         assert!(validate_options(&axis).is_err());

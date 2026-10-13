@@ -74,6 +74,96 @@ function crop_png(source, x, y, width, height) {
   return output;
 }
 
+function flat_interior_mismatches(a, b, tolerance) {
+  let mismatches = 0;
+  let ink_compared = 0;
+  for (let y = 1; y < a.height - 1; y += 1) {
+    for (let x = 1; x < a.width - 1; x += 1) {
+      const offset = (y * a.width + x) * 4;
+      let flat = true;
+      for (let dy = -1; dy <= 1 && flat; dy += 1) {
+        for (let dx = -1; dx <= 1 && flat; dx += 1) {
+          const neighbor = ((y + dy) * a.width + x + dx) * 4;
+          for (let channel = 0; channel < 4; channel += 1) {
+            if (a.data[offset + channel] !== a.data[neighbor + channel]
+                || b.data[offset + channel] !== b.data[neighbor + channel]) flat = false;
+          }
+        }
+      }
+      if (flat) {
+        if (a.data[offset] !== 255 || a.data[offset + 1] !== 255 || a.data[offset + 2] !== 255) ink_compared += 1;
+        for (let channel = 0; channel < 4; channel += 1) {
+          if (Math.abs(a.data[offset + channel] - b.data[offset + channel]) > tolerance) {
+            mismatches += 1;
+            break;
+          }
+        }
+      }
+    }
+  }
+  return { mismatches, ink_compared };
+}
+
+test("polar families retain flat fills and bounded Canvas2D/WebGPU edge residuals", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  for (const family of ["pie", "radar", "polar_area", "radial_bar"]) {
+    const capture = async backend => {
+      const actual_backend = await page.evaluate(async ({ backend, family }) => {
+        window.__polar_parity_chart?.remove();
+        document.getElementById("polar-parity-host")?.remove();
+        const { create_chart } = await import("/dist/aeris_charts_financial.js");
+        const host = document.createElement("div");
+        host.id = "polar-parity-host";
+        host.style.cssText = "position:fixed;left:0;top:0;width:400px;height:400px;background:#fff;z-index:9999";
+        document.body.appendChild(host);
+        const chart = await create_chart(host, {
+          backend, autoSize: false,
+          initialPane: { horizontal_domain: { type: "polar" } },
+          __force_webgpu_fallback_adapter: true,
+          layout: { background: { type: "solid", color: "#ffffff" } },
+        });
+        chart.resize(400, 400, 1);
+        chart.add_axis({ id: "angle", pane: 0, dimension: "angle", scale: "angular_category", visible: false });
+        chart.add_axis({ id: "radius", pane: 0, dimension: "radius", scale: "radial_linear", domain: [0, 5], visible: false });
+        const series = chart.add_series(family, {
+          pane: 0, x_axis_id: "angle", y_axis_id: "radius",
+          color: "#2979b8", fill_opacity: 0.55,
+          point_markers: false, data_labels: false,
+          ...(family === "radar" ? {} : { polar: { inner_radius: 0.15, outer_radius: 0.88, pad_angle: 0.03 } }),
+        });
+        series.set_data([
+          { id: "a", x: "A", y: 4 }, { id: "b", x: "B", y: 2 },
+          { id: "c", x: "C", y: 3 }, { id: "zero", x: "Zero", y: 0 },
+          { id: "missing", x: "Missing", y: null },
+        ]);
+        window.__polar_parity_chart = chart;
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return chart.backend();
+      }, { backend, family });
+      return { backend: actual_backend, image: PNG.sync.read(await page.locator("#polar-parity-host").screenshot()) };
+    };
+    const canvas = await capture("canvas2d");
+    const gpu = await capture("auto");
+    expect(canvas.backend).toBe("canvas2d");
+    expect(gpu.backend).toBe("webgpu");
+    const residual1 = rgba_diff(canvas.image.data, gpu.image.data, 1);
+    const flat = flat_interior_mismatches(canvas.image, gpu.image, 1);
+    expect(flat.ink_compared, `${family} contains filled interior pixels`).toBeGreaterThan(1_000);
+    expect(flat.mismatches, `${family} flat fill colors differ`).toBe(0);
+    expect(residual1.different_pixels, `${family} edge residual exceeds its measured margin`)
+      .toBeLessThanOrEqual({ pie: 12_000, radar: 8_000, polar_area: 7_000, radial_bar: 6_000 }[family]);
+    expect(residual1.maximum_channel_delta, `${family} edge color residual exceeds its measured margin`)
+      .toBeLessThanOrEqual(family === "radar" ? 96 : 64);
+    expect(residual1.mean_absolute_channel_delta, `${family} average channel residual is too high`)
+      .toBeLessThan(0.5);
+  }
+  await page.evaluate(() => {
+    window.__polar_parity_chart?.remove();
+    document.getElementById("polar-parity-host")?.remove();
+    delete window.__polar_parity_chart;
+  });
+});
+
 test("scaled four-color image matches WebGPU, Canvas2D, and native", async ({ browser }, test_info) => {
   const context = await browser.newContext({ viewport: { width: 120, height: 120 }, deviceScaleFactor: 1 });
   const page = await context.newPage();

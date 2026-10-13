@@ -1705,14 +1705,15 @@ impl ChartInner {
             .set_series_last_price_animation(id as SeriesId, enabled);
     }
 
-    /// Whether the frame draws the last-price pulse (so the host can start/stop its rAF loop).
+    /// Whether the frame needs another animation sample (last-price pulse or general transition).
     pub fn wants_animation(&self) -> bool {
-        self.engine.last_price_pulse_active()
+        self.engine.last_price_pulse_active() || self.engine.general_transition_active()
     }
 
     /// Set the host animation clock (ms). The shell's rAF loop calls this then `render()`.
     pub fn set_animation_time(&mut self, t_ms: f64) {
         self.animation_time = t_ms;
+        self.engine.set_general_animation_time_ms(t_ms);
     }
 
     /// Move a series onto its pane's bottom-band overlay scale (volume-style) and set that band's

@@ -21,6 +21,9 @@
 //!   Target Q — live indicator updates for every `IndicatorKind`: tip append and tip replacement
 //!              p99 at 10k and 1M rows per binding and with all attached, history-length scaling,
 //!              and fresh-engine equality (`perf_gate/indicator_live.rs`)
+//!   Target R — dense polar exact-hit input latency across pie, radar and polar area
+//!   Target S — pie entry/exit transition update and ordered-frame construction at 2,048 rows
+//!   Target T — shared Cartesian category reorder update and frame at 4,096 rows
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `AERIS_CHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -45,8 +48,12 @@ use aeris_charts_engine::{
 use aeris_charts_render::draw_list::Prim;
 use aeris_charts_render_wgpu::{DrawGroup, TexQuadInstance, prims_to_group};
 
+#[path = "perf_gate/category_motion.rs"]
+mod category_motion;
 #[path = "perf_gate/indicator_live.rs"]
 mod indicator_live;
+#[path = "perf_gate/polar_hit.rs"]
+mod polar_hit;
 
 /// Parallel `(times, open, high, low, close)` columns.
 type OhlcColumns = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
@@ -1627,6 +1634,21 @@ fn main() {
     // ---- Target Q: live indicator updates for every IndicatorKind ---------------------------
     let q_pass = indicator_live::run();
 
+    // ---- Target R: bounded exact-hit work with 4,096 polar categories ------------------------
+    let r_pass = polar_hit::run();
+
+    // ---- Target S: bounded pie entry/exit transition work -----------------------------------
+    let s_p95_ms = polar_hit::transition_p95_ms();
+    let s_pass = report("polar pie entry/exit update + frame p95", s_p95_ms, 4.0);
+
+    // ---- Target T: shared category-axis reordering ------------------------------------------
+    let t_p95_ms = category_motion::reorder_p95_ms();
+    let t_pass = report(
+        "Cartesian category reorder update + frame p95",
+        t_p95_ms,
+        12.0,
+    );
+
     let all_pass = a_pass
         && b_pass
         && c_pass
@@ -1666,7 +1688,10 @@ fn main() {
         && p_max
         && p_memory
         && p_retention
-        && q_pass;
+        && q_pass
+        && r_pass
+        && s_pass
+        && t_pass;
     println!(
         "\n{}",
         if all_pass {

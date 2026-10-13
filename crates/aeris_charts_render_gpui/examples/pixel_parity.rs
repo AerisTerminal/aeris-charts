@@ -83,7 +83,8 @@ impl Harness {
         let fixtures = fixtures::all(dpr)
             .into_iter()
             .filter(|fixture| {
-                !cfg!(target_os = "linux") || matches!(fixture.name, "crisp_rects" | "tessellated")
+                !cfg!(target_os = "linux")
+                    || matches!(fixture.name, "crisp_rects" | "tessellated" | "polar_meshes")
             })
             .collect();
         Self {
@@ -304,6 +305,58 @@ impl Harness {
             "crisp rects differ from native rendering"
         );
         println!("\ncrisp-rect gate: PASS (exact pixel match)");
+        let polar = self
+            .results
+            .iter()
+            .find(|row| row.name == "polar_meshes")
+            .expect("polar mesh parity fixture");
+        assert!(
+            polar.note.is_empty(),
+            "polar capture failed: {}",
+            polar.note
+        );
+        let gpui = tiny_skia::Pixmap::load_png(self.out_dir.join("polar_meshes_gpui.png"))
+            .expect("captured GPUI polar meshes");
+        let native = tiny_skia::Pixmap::load_png(self.out_dir.join("polar_meshes_native.png"))
+            .expect("native polar meshes");
+        let dpr = polar.width as f32 / fixtures::LOGICAL_W;
+        for (x, y, expected) in [
+            (148.0_f32, 46.0_f32, [0x26, 0xa6, 0x9a]),
+            (379.0, 47.0, [0x21, 0x96, 0xf3]),
+            (143.0, 201.0, [0x26, 0xa6, 0x9a]),
+            (388.0, 196.0, [0x26, 0xa6, 0x9a]),
+        ] {
+            let (px, py) = ((x * dpr).round() as usize, (y * dpr).round() as usize);
+            let offset = (py * polar.width as usize + px) * 4;
+            for channel in 0..3 {
+                assert_eq!(
+                    native.data()[offset + channel],
+                    expected[channel],
+                    "native polar interior at {x},{y}"
+                );
+                assert!(
+                    gpui.data()[offset + channel].abs_diff(native.data()[offset + channel]) <= 1,
+                    "GPUI polar interior at {x},{y}, channel {channel}",
+                );
+            }
+        }
+        if cfg!(target_os = "windows") {
+            assert!(
+                polar.differing * 100 <= polar.total * 2,
+                "polar mesh edge residual exceeds 2%: {} of {} pixels",
+                polar.differing,
+                polar.total,
+            );
+            assert!(
+                polar.max_delta <= 128,
+                "polar mesh edge delta: {}",
+                polar.max_delta,
+            );
+        }
+        println!(
+            "polar-mesh gate: PASS (four flat interiors within one channel; {} edge pixels, max delta {})",
+            polar.differing, polar.max_delta
+        );
         if cfg!(target_os = "linux") {
             let fills = self
                 .results

@@ -3662,13 +3662,26 @@ impl AerisChart {
             .borrow_mut()
             .set_series_markers_z_order(series_id, z_order)
     }
-    /// Whether any series wants the last-price pulse (host uses this to run/stop its rAF loop).
+    /// Whether a last-price pulse or general transition needs the host's rAF loop.
     pub fn wants_animation(&self) -> bool {
         self.inner.borrow().wants_animation()
     }
     /// Set the host animation clock (ms). Call before `render()` in the rAF loop (Phase B3).
     pub fn set_animation_time(&mut self, t_ms: f64) {
         self.inner.borrow_mut().set_animation_time(t_ms);
+    }
+
+    /// Configure opt-in engine-owned transitions for compatible general dataset updates.
+    pub fn set_general_transition_duration_result_json(&mut self, duration_ms: f64) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_transition_duration_result_json(duration_ms)
+    }
+
+    pub fn set_general_transition_reduced_motion(&mut self, reduced_motion: bool) {
+        self.inner
+            .borrow_mut()
+            .set_general_transition_reduced_motion(reduced_motion);
     }
 
     /// Pin the countdown clock (UTC seconds). Until the first pin the render path feeds the

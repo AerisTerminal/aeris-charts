@@ -20,10 +20,10 @@
 
 use aeris_charts_engine::{
     AxisDimension, CategoryScaleType, ChartEngine, ContinuousScaleType, GeneralAxisDomain,
-    GeneralAxisOptions, GeneralReferenceOptions, GeneralReferenceValue, GeneralScaleType,
-    GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, IndicatorInputSource, IndicatorKind,
-    IndicatorOutputStyle, OrderId, OrderKind, OrderRole, OrderSide, OrderStatus, PositionId,
-    PositionSide, SeriesKind, TradingPosition, TradingPriceScale, WorkingOrder,
+    GeneralAxisOptions, GeneralReferenceOptions, GeneralReferenceValue, GeneralRowId,
+    GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, IndicatorInputSource,
+    IndicatorKind, IndicatorOutputStyle, OrderId, OrderKind, OrderRole, OrderSide, OrderStatus,
+    PositionId, PositionSide, SeriesKind, TradingPosition, TradingPriceScale, WorkingOrder,
 };
 use aeris_charts_render::canvas2d::{Canvas2d, Viewport, execute as canvas_execute};
 use aeris_charts_render::color::Color;
@@ -136,6 +136,235 @@ fn gpui_plan(prims: &[Prim], points: &[[f32; 2]]) -> (ScenePlan, GpuiFrameMetric
         &mut metrics,
     );
     (plan, metrics)
+}
+
+#[test]
+fn translucent_polar_mesh_is_one_fill_on_canvas_and_one_gpui_mesh() {
+    let points = [
+        [0.0, 0.0],
+        [10.0, 0.0],
+        [0.0, 10.0],
+        [10.0, 0.0],
+        [10.0, 10.0],
+        [0.0, 10.0],
+    ];
+    let color = Color::rgba(40, 80, 120, 128);
+    let prims = [Prim::MeshFill {
+        first_point: 0,
+        point_count: 6,
+        color,
+    }];
+    let canvas = canvas_rects(&prims, &points);
+    let (plan, metrics) = gpui_plan(&prims, &points);
+    assert_eq!(canvas.path_fills, 1);
+    assert_eq!(metrics.dropped_prims, 0);
+    assert!(matches!(
+        plan.ops.as_slice(),
+        [SceneOp::Mesh { vertex_count: 30, fill: Paint::Solid(actual), .. }] if *actual == color
+    ));
+}
+
+#[test]
+fn polar_window_fixture_retains_all_ordered_fills_at_fractional_dpr() {
+    for dpr in [1.0, 1.25, 1.5, 2.0] {
+        let fixture = fixtures::polar_meshes(dpr);
+        let canvas = canvas_rects(&fixture.prims, &fixture.points);
+        let (gpui, metrics) = gpui_plan(&fixture.prims, &fixture.points);
+        assert_eq!(canvas.path_fills, 13, "DPR {dpr}");
+        assert_eq!(metrics.dropped_prims, 0, "DPR {dpr}");
+        assert_eq!(
+            gpui.ops
+                .iter()
+                .filter(|op| matches!(op, SceneOp::Mesh { .. }))
+                .count(),
+            canvas.path_fills,
+            "DPR {dpr}",
+        );
+    }
+}
+
+#[test]
+fn polar_families_keep_the_same_ordered_fills_in_canvas_and_gpui() {
+    for family in ["pie", "radar", "polar_area", "radial_bar"] {
+        let mut engine =
+            ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar)
+                .unwrap();
+        let mut angle = GeneralAxisOptions::new(
+            "angle",
+            0,
+            AxisDimension::Angle,
+            GeneralScaleType::AngularCategory,
+        );
+        angle.visible = false;
+        engine.add_general_axis(angle).unwrap();
+        let mut radius = GeneralAxisOptions::new(
+            "radius",
+            0,
+            AxisDimension::Radius,
+            GeneralScaleType::RadialLinear,
+        );
+        radius.visible = false;
+        radius.domain = GeneralAxisDomain::Numeric([0.0, 5.0]);
+        engine.add_general_axis(radius).unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: Some(
+                    ["a", "b", "zero", "missing"]
+                        .into_iter()
+                        .map(|id| GeneralRowId::Text(id.into()))
+                        .collect(),
+                ),
+                categories: ["A", "B", "Zero", "Missing"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                category_indices: vec![0, 1, 2, 3],
+                y: vec![4.0, 2.0, 0.0, 100.0],
+                y_valid: Some(vec![1, 1, 1, 0]),
+            })
+            .unwrap();
+        let options = match family {
+            "pie" => GeneralSeriesOptions::pie(0, dataset, "angle", "radius"),
+            "radar" => GeneralSeriesOptions::radar(0, dataset, "angle", "radius"),
+            "polar_area" => GeneralSeriesOptions::polar_area(0, dataset, "angle", "radius"),
+            "radial_bar" => GeneralSeriesOptions::radial_bar(0, dataset, "angle", "radius"),
+            _ => unreachable!(),
+        };
+        engine.add_general_series(options).unwrap();
+        engine.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+        let frame = engine.build_frame();
+        let pane = &frame.panes[0];
+        let fills = pane
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::MeshFill { .. }))
+            .count();
+        assert_eq!(fills, if family == "radar" { 1 } else { 2 }, "{family}");
+        let canvas = canvas_rects(&pane.main, &pane.points);
+        let (gpui, metrics) = gpui_plan(&pane.main, &pane.points);
+        assert_eq!(canvas.path_fills, fills, "{family}");
+        assert_eq!(metrics.dropped_prims, 0, "{family}");
+        assert_eq!(
+            gpui.ops
+                .iter()
+                .filter(|op| matches!(op, SceneOp::Mesh { .. }))
+                .count(),
+            canvas.path_fills + canvas.path_strokes,
+            "{family}",
+        );
+    }
+}
+
+#[test]
+fn animated_radar_frame_keeps_the_same_mesh_in_canvas_and_gpui() {
+    let mut engine =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "angle",
+        0,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    engine.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radius",
+        0,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    radius.domain = GeneralAxisDomain::Numeric([0.0, 5.0]);
+    engine.add_general_axis(radius).unwrap();
+    let input = |include_d| GeneralXyInput::Category {
+        ids: Some(
+            ["a", "b", "c", "d"]
+                .into_iter()
+                .take(if include_d { 4 } else { 3 })
+                .map(|id| GeneralRowId::Text(id.into()))
+                .collect(),
+        ),
+        categories: if include_d {
+            vec!["C".into(), "B".into(), "A".into(), "D".into()]
+        } else {
+            vec!["A".into(), "B".into(), "C".into()]
+        },
+        category_indices: if include_d {
+            vec![2, 1, 0, 3]
+        } else {
+            vec![0, 1, 2]
+        },
+        y: if include_d {
+            vec![1.0, 2.0, 4.0, 3.0]
+        } else {
+            vec![1.0, 2.0, 4.0]
+        },
+        y_valid: None,
+    };
+    let dataset = engine.create_general_xy_dataset(input(false)).unwrap();
+    engine
+        .add_general_series(GeneralSeriesOptions::radar(0, dataset, "angle", "radius"))
+        .unwrap();
+    engine.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    engine.set_general_transition_duration_ms(200.0).unwrap();
+    engine.set_general_animation_time_ms(1_000.0);
+    engine
+        .replace_general_xy_dataset(dataset, input(true))
+        .unwrap();
+    engine.set_general_animation_time_ms(1_100.0);
+    let frame = engine.build_frame();
+    let pane = &frame.panes[0];
+    let (first_point, point_count) = pane
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::MeshFill {
+                first_point,
+                point_count,
+                ..
+            } => Some((*first_point, *point_count)),
+            _ => None,
+        })
+        .expect("animated radar fill");
+    let mesh = &pane.points[first_point as usize..(first_point + point_count) as usize];
+    let canvas = canvas_rects(&pane.main, &pane.points);
+    let (gpui, metrics) = gpui_plan(&pane.main, &pane.points);
+    assert_eq!(canvas.path_fills, 1);
+    assert_eq!(metrics.dropped_prims, 0);
+    let (first_vertex, vertex_count) = gpui
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            SceneOp::Mesh {
+                first_vertex,
+                vertex_count,
+                ..
+            } => Some((*first_vertex, *vertex_count)),
+            _ => None,
+        })
+        .expect("GPUI radar mesh");
+    let encoded = gpui.mesh_vertices(first_vertex, vertex_count);
+    assert!(encoded.len() >= mesh.len());
+    for (actual, expected) in encoded.iter().zip(mesh.iter()) {
+        assert_eq!((actual.x, actual.y), (expected[0], expected[1]));
+    }
+    let area: f32 = mesh
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|triangle| {
+            let a = [
+                triangle[1][0] - triangle[0][0],
+                triangle[1][1] - triangle[0][1],
+            ];
+            let b = [
+                triangle[2][0] - triangle[0][0],
+                triangle[2][1] - triangle[0][1],
+            ];
+            (a[0] * b[1] - a[1] * b[0]).abs() / 2.0
+        })
+        .sum();
+    assert!(area > 100.0);
 }
 
 /// The GPUI plan's quads as `(x, y, w, h, fill)`, in emission order.

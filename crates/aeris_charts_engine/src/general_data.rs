@@ -71,7 +71,7 @@ fn normalized_number_bits(value: f64) -> u64 {
     if value == 0.0 { 0 } else { value.to_bits() }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GeneralRowIdentity {
     Generated(u64),
     Explicit(GeneralRowId),
@@ -264,6 +264,156 @@ pub struct GeneralDataset {
     symbols: HashMap<usize, GeneralPointSymbol>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GeneralTransitionRow {
+    pub(crate) source: Option<usize>,
+    pub(crate) target: Option<usize>,
+}
+
+fn transition_channel(
+    source: Option<&[f64]>,
+    target: Option<&[f64]>,
+    rows: &[GeneralTransitionRow],
+    source_fallback: impl Fn(usize) -> f64,
+) -> Option<Vec<f64>> {
+    let target = target?;
+    Some(
+        rows.iter()
+            .map(|row| match (row.source, row.target) {
+                (_, Some(index)) => target[index],
+                (Some(index), None) => {
+                    source.map_or_else(|| source_fallback(index), |values| values[index])
+                }
+                (None, None) => unreachable!("transition rows have a source or target"),
+            })
+            .collect(),
+    )
+}
+
+fn transition_validity(
+    source: Option<&[u8]>,
+    target: Option<&[u8]>,
+    rows: &[GeneralTransitionRow],
+) -> Option<Vec<u8>> {
+    if source.is_none() && target.is_none() {
+        return None;
+    }
+    Some(
+        rows.iter()
+            .map(|row| match (row.source, row.target) {
+                (_, Some(index)) => target.map_or(1, |values| values[index]),
+                (Some(index), None) => source.map_or(1, |values| values[index]),
+                (None, None) => unreachable!("transition rows have a source or target"),
+            })
+            .collect(),
+    )
+}
+
+fn blend_transition_validity(
+    current: Option<&mut [u8]>,
+    source: Option<&[u8]>,
+    target: Option<&[u8]>,
+    rows: &[GeneralTransitionRow],
+    progress: f64,
+) {
+    let Some(current) = current else { return };
+    for (index, value) in current.iter_mut().enumerate() {
+        let row = rows[index];
+        let source_valid = row
+            .source
+            .is_some_and(|source_row| source.is_none_or(|mask| mask[source_row] != 0));
+        let target_valid = row
+            .target
+            .is_some_and(|target_row| target.is_none_or(|mask| mask[target_row] != 0));
+        *value = match (row.source, row.target) {
+            (Some(_), Some(_)) if progress == 0.0 => u8::from(source_valid),
+            (Some(_), Some(_)) if progress >= 1.0 => u8::from(target_valid),
+            (Some(_), Some(_)) => u8::from(source_valid || target_valid),
+            (None, Some(_)) => u8::from(target_valid),
+            (Some(_), None) => u8::from(source_valid),
+            (None, None) => unreachable!("transition rows have a source or target"),
+        };
+    }
+}
+
+fn masked_transition_values_match(
+    current: Option<&[f64]>,
+    current_valid: Option<&[u8]>,
+    target: Option<&[f64]>,
+    target_valid: Option<&[u8]>,
+) -> bool {
+    match (current, target) {
+        (None, None) => true,
+        (Some(current), Some(target)) if current.len() == target.len() => current
+            .iter()
+            .zip(target)
+            .enumerate()
+            .all(|(row, (from, to))| {
+                let from_valid = current_valid.is_none_or(|mask| mask[row] != 0);
+                let to_valid = target_valid.is_none_or(|mask| mask[row] != 0);
+                from_valid == to_valid && (!from_valid || from == to)
+            }),
+        _ => false,
+    }
+}
+
+fn transition_categories(
+    source: &[String],
+    source_indices: &[u32],
+    target: &[String],
+    target_indices: &[u32],
+    rows: &[GeneralTransitionRow],
+) -> Option<(Vec<String>, Vec<u32>)> {
+    let mut categories = source.to_vec();
+    let mut indices: HashMap<&str, u32> = source
+        .iter()
+        .enumerate()
+        .map(|(index, value)| (value.as_str(), index as u32))
+        .collect();
+    for value in target {
+        if !indices.contains_key(value.as_str()) {
+            let index = u32::try_from(categories.len()).ok()?;
+            indices.insert(value.as_str(), index);
+            categories.push(value.clone());
+        }
+    }
+    if categories.len() > MAX_GENERAL_DATASET_CATEGORIES
+        || categories.iter().map(String::len).sum::<usize>() > MAX_GENERAL_DATASET_CATEGORY_BYTES
+    {
+        return None;
+    }
+    let row_indices = rows
+        .iter()
+        .map(|row| {
+            let value = if let Some(index) = row.target {
+                target.get(target_indices[index] as usize)?
+            } else {
+                source.get(source_indices[row.source?] as usize)?
+            };
+            indices.get(value.as_str()).copied()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((categories, row_indices))
+}
+
+fn transition_sparse<T: Clone>(
+    source: &HashMap<usize, T>,
+    target: &HashMap<usize, T>,
+    rows: &[GeneralTransitionRow],
+) -> HashMap<usize, T> {
+    rows.iter()
+        .enumerate()
+        .filter_map(|(row, mapping)| {
+            let value = if let Some(index) = mapping.target {
+                target.get(&index)
+            } else {
+                mapping.source.and_then(|index| source.get(&index))
+            }?;
+            Some((row, value.clone()))
+        })
+        .collect()
+}
+
 impl GeneralDataset {
     pub fn id(&self) -> GeneralDatasetId {
         self.id
@@ -425,7 +575,7 @@ impl GeneralDataset {
         self.heatmap_y_category_indices.as_deref()
     }
 
-    fn estimated_bytes(&self) -> usize {
+    pub(crate) fn estimated_bytes(&self) -> usize {
         let identity_text = self
             .identities
             .iter()
@@ -501,6 +651,557 @@ impl GeneralDataset {
                 * (std::mem::size_of::<usize>()
                     + std::mem::size_of::<GeneralPointSymbol>()
                     + std::mem::size_of::<usize>())
+    }
+
+    pub(crate) fn transition_rows(&self, target: &Self) -> Option<Vec<GeneralTransitionRow>> {
+        if !matches!(
+            (&self.x, &target.x),
+            (GeneralXColumn::Numeric(_), GeneralXColumn::Numeric(_))
+                | (GeneralXColumn::Temporal(_), GeneralXColumn::Temporal(_))
+                | (
+                    GeneralXColumn::Category { .. },
+                    GeneralXColumn::Category { .. }
+                )
+        ) {
+            return None;
+        }
+        let old_rows: HashMap<&GeneralRowIdentity, usize> = self
+            .identities
+            .iter()
+            .enumerate()
+            .map(|(row, identity)| (identity, row))
+            .collect();
+        let source_rows = target
+            .identities
+            .iter()
+            .map(|identity| old_rows.get(identity).copied())
+            .collect::<Vec<_>>();
+        let ordered = source_rows
+            .iter()
+            .flatten()
+            .try_fold(None, |previous: Option<usize>, &source| {
+                (previous.is_none_or(|previous| source > previous)).then_some(Some(source))
+            })
+            .is_some();
+        let mut rows = Vec::with_capacity(target.len() + self.len());
+        if ordered {
+            let mut cursor = 0;
+            for (target, source) in source_rows.into_iter().enumerate() {
+                if let Some(source) = source {
+                    for old in cursor..source {
+                        rows.push(GeneralTransitionRow {
+                            source: Some(old),
+                            target: None,
+                        });
+                    }
+                    cursor = source + 1;
+                }
+                rows.push(GeneralTransitionRow {
+                    source,
+                    target: Some(target),
+                });
+            }
+            for old in cursor..self.len() {
+                rows.push(GeneralTransitionRow {
+                    source: Some(old),
+                    target: None,
+                });
+            }
+        } else {
+            let retained: HashSet<&GeneralRowIdentity> = target.identities.iter().collect();
+            for (target, source) in source_rows.into_iter().enumerate() {
+                rows.push(GeneralTransitionRow {
+                    source,
+                    target: Some(target),
+                });
+            }
+            for (source, identity) in self.identities.iter().enumerate() {
+                if !retained.contains(identity) {
+                    rows.push(GeneralTransitionRow {
+                        source: Some(source),
+                        target: None,
+                    });
+                }
+            }
+        }
+        Some(rows)
+    }
+
+    pub(crate) fn transition_presentation(
+        &self,
+        target: &Self,
+        rows: &[GeneralTransitionRow],
+    ) -> Option<Self> {
+        let x = match (&self.x, &target.x) {
+            (GeneralXColumn::Numeric(source), GeneralXColumn::Numeric(to)) => {
+                GeneralXColumn::Numeric(
+                    rows.iter()
+                        .map(|row| {
+                            row.target
+                                .map_or_else(|| source[row.source.unwrap()], |index| to[index])
+                        })
+                        .collect(),
+                )
+            }
+            (GeneralXColumn::Temporal(source), GeneralXColumn::Temporal(to)) => {
+                GeneralXColumn::Temporal(
+                    rows.iter()
+                        .map(|row| {
+                            row.target
+                                .map_or_else(|| source[row.source.unwrap()], |index| to[index])
+                        })
+                        .collect(),
+                )
+            }
+            (
+                GeneralXColumn::Category {
+                    categories: source,
+                    indices: source_indices,
+                },
+                GeneralXColumn::Category {
+                    categories: to,
+                    indices: target_indices,
+                },
+            ) => {
+                let (categories, indices) =
+                    transition_categories(source, source_indices, to, target_indices, rows)?;
+                GeneralXColumn::Category {
+                    categories,
+                    indices,
+                }
+            }
+            _ => return None,
+        };
+        let (heatmap_y_categories, heatmap_y_category_indices) =
+            if let (Some(to), Some(target_indices)) = (
+                target.heatmap_y_categories.as_ref(),
+                target.heatmap_y_category_indices.as_ref(),
+            ) {
+                let source = self.heatmap_y_categories.as_deref().unwrap_or(&[]);
+                let source_indices = self.heatmap_y_category_indices.as_deref().unwrap_or(&[]);
+                let (categories, indices) =
+                    transition_categories(source, source_indices, to, target_indices, rows)?;
+                (Some(categories), Some(indices))
+            } else {
+                (None, None)
+            };
+        let source_x = |row: usize| match &self.x {
+            GeneralXColumn::Numeric(values) => values[row],
+            GeneralXColumn::Temporal(values) => values[row] as f64,
+            GeneralXColumn::Category { .. } => self.y[row],
+        };
+        Some(Self {
+            id: target.id,
+            generation: target.generation,
+            identities: rows
+                .iter()
+                .map(|row| {
+                    row.target.map_or_else(
+                        || self.identities[row.source.unwrap()].clone(),
+                        |index| target.identities[index].clone(),
+                    )
+                })
+                .collect(),
+            x,
+            y: rows
+                .iter()
+                .map(|row| {
+                    row.target
+                        .map_or_else(|| self.y[row.source.unwrap()], |index| target.y[index])
+                })
+                .collect(),
+            y_valid: transition_validity(self.y_valid.as_deref(), target.y_valid.as_deref(), rows),
+            low: transition_channel(self.low.as_deref(), target.low.as_deref(), rows, |row| {
+                self.y[row]
+            }),
+            low_valid: target.low.as_ref().and_then(|_| {
+                transition_validity(self.low_valid.as_deref(), target.low_valid.as_deref(), rows)
+            }),
+            high: transition_channel(self.high.as_deref(), target.high.as_deref(), rows, |row| {
+                self.y[row]
+            }),
+            high_valid: target.high.as_ref().and_then(|_| {
+                transition_validity(
+                    self.high_valid.as_deref(),
+                    target.high_valid.as_deref(),
+                    rows,
+                )
+            }),
+            x_low: transition_channel(
+                self.x_low.as_deref(),
+                target.x_low.as_deref(),
+                rows,
+                source_x,
+            ),
+            x_low_valid: target.x_low.as_ref().and_then(|_| {
+                transition_validity(
+                    self.x_low_valid.as_deref(),
+                    target.x_low_valid.as_deref(),
+                    rows,
+                )
+            }),
+            x_high: transition_channel(
+                self.x_high.as_deref(),
+                target.x_high.as_deref(),
+                rows,
+                source_x,
+            ),
+            x_high_valid: target.x_high.as_ref().and_then(|_| {
+                transition_validity(
+                    self.x_high_valid.as_deref(),
+                    target.x_high_valid.as_deref(),
+                    rows,
+                )
+            }),
+            size: transition_channel(self.size.as_deref(), target.size.as_deref(), rows, |_| 0.0),
+            size_valid: target.size.as_ref().and_then(|_| {
+                transition_validity(
+                    self.size_valid.as_deref(),
+                    target.size_valid.as_deref(),
+                    rows,
+                )
+            }),
+            heatmap_y_numeric: transition_channel(
+                self.heatmap_y_numeric.as_deref(),
+                target.heatmap_y_numeric.as_deref(),
+                rows,
+                |_| 0.0,
+            ),
+            heatmap_y_categories,
+            heatmap_y_category_indices,
+            labels: transition_sparse(&self.labels, &target.labels, rows),
+            colors: transition_sparse(&self.colors, &target.colors, rows),
+            symbols: transition_sparse(&self.symbols, &target.symbols, rows),
+        })
+    }
+
+    pub(crate) fn blend_transition(
+        &mut self,
+        from: &Self,
+        target: &Self,
+        rows: &[GeneralTransitionRow],
+        progress: f64,
+    ) {
+        debug_assert_eq!(rows.len(), self.len());
+        let blend = |from: f64, to: f64| from * (1.0 - progress) + to * progress;
+        for (row, current) in self.y.iter_mut().enumerate() {
+            let source_valid = rows[row]
+                .source
+                .is_some_and(|source| from.y_is_valid(source));
+            let target_valid = rows[row]
+                .target
+                .is_some_and(|index| target.y_is_valid(index));
+            *current = blend(
+                rows[row]
+                    .source
+                    .filter(|_| source_valid)
+                    .map_or(0.0, |source| from.y[source]),
+                rows[row]
+                    .target
+                    .filter(|_| target_valid)
+                    .map_or(0.0, |index| target.y[index]),
+            );
+        }
+        blend_transition_validity(
+            self.y_valid.as_deref_mut(),
+            from.y_valid.as_deref(),
+            target.y_valid.as_deref(),
+            rows,
+            progress,
+        );
+        if let (
+            GeneralXColumn::Numeric(current),
+            GeneralXColumn::Numeric(from),
+            GeneralXColumn::Numeric(to),
+        ) = (&mut self.x, &from.x, &target.x)
+        {
+            for (row, current) in current.iter_mut().enumerate() {
+                let mapping = rows[row];
+                *current = mapping.target.map_or_else(
+                    || from[mapping.source.unwrap()],
+                    |index| {
+                        mapping
+                            .source
+                            .map_or(to[index], |source| blend(from[source], to[index]))
+                    },
+                );
+            }
+        }
+        if let (
+            GeneralXColumn::Temporal(current),
+            GeneralXColumn::Temporal(from),
+            GeneralXColumn::Temporal(to),
+        ) = (&mut self.x, &from.x, &target.x)
+        {
+            for (row, current) in current.iter_mut().enumerate() {
+                let mapping = rows[row];
+                *current = mapping.target.map_or_else(
+                    || from[mapping.source.unwrap()],
+                    |index| {
+                        mapping.source.map_or(to[index], |source| {
+                            blend(from[source] as f64, to[index] as f64).round() as i64
+                        })
+                    },
+                );
+            }
+        }
+        if let (Some(current), Some(to)) = (self.low.as_mut(), target.low.as_ref()) {
+            for (row, current) in current.iter_mut().enumerate() {
+                let initial = rows[row].source.map_or(0.0, |source| {
+                    let baseline = if from.y_is_valid(source) {
+                        from.y[source]
+                    } else {
+                        0.0
+                    };
+                    from.low
+                        .as_ref()
+                        .filter(|_| from.low_is_valid(source))
+                        .map_or(baseline, |values| values[source])
+                });
+                let final_value = rows[row].target.map_or(0.0, |index| {
+                    if target.low_is_valid(index) {
+                        to[index]
+                    } else if target.y_is_valid(index) {
+                        target.y[index]
+                    } else {
+                        0.0
+                    }
+                });
+                *current = blend(initial, final_value);
+            }
+        }
+        if from.low.is_some() && target.low.is_some() {
+            blend_transition_validity(
+                self.low_valid.as_deref_mut(),
+                from.low_valid.as_deref(),
+                target.low_valid.as_deref(),
+                rows,
+                progress,
+            );
+        }
+        if let (Some(current), Some(to)) = (self.high.as_mut(), target.high.as_ref()) {
+            for (row, current) in current.iter_mut().enumerate() {
+                let initial = rows[row].source.map_or(0.0, |source| {
+                    let baseline = if from.y_is_valid(source) {
+                        from.y[source]
+                    } else {
+                        0.0
+                    };
+                    from.high
+                        .as_ref()
+                        .filter(|_| from.high_is_valid(source))
+                        .map_or(baseline, |values| values[source])
+                });
+                let final_value = rows[row].target.map_or(0.0, |index| {
+                    if target.high_is_valid(index) {
+                        to[index]
+                    } else if target.y_is_valid(index) {
+                        target.y[index]
+                    } else {
+                        0.0
+                    }
+                });
+                *current = blend(initial, final_value);
+            }
+        }
+        if from.high.is_some() && target.high.is_some() {
+            blend_transition_validity(
+                self.high_valid.as_deref_mut(),
+                from.high_valid.as_deref(),
+                target.high_valid.as_deref(),
+                rows,
+                progress,
+            );
+        }
+        let entering_x = |target_row: Option<usize>, source: Option<usize>| match &target.x {
+            GeneralXColumn::Numeric(values) => target_row.map_or_else(
+                || from.numeric_x().unwrap()[source.unwrap()],
+                |row| values[row],
+            ),
+            GeneralXColumn::Temporal(values) => target_row.map_or_else(
+                || from.temporal_x_epoch_ms().unwrap()[source.unwrap()] as f64,
+                |row| values[row] as f64,
+            ),
+            GeneralXColumn::Category { .. } => source.map_or(0.0, |source| from.y[source]),
+        };
+        let source_x = |row: usize| match &from.x {
+            GeneralXColumn::Numeric(values) => values[row],
+            GeneralXColumn::Temporal(values) => values[row] as f64,
+            GeneralXColumn::Category { .. } => from.y[row],
+        };
+        let target_x = |row: usize| match &target.x {
+            GeneralXColumn::Numeric(values) => values[row],
+            GeneralXColumn::Temporal(values) => values[row] as f64,
+            GeneralXColumn::Category { .. } => target.y[row],
+        };
+        if let (Some(current), Some(to)) = (self.x_low.as_mut(), target.x_low.as_ref()) {
+            for (row, current) in current.iter_mut().enumerate() {
+                let mapping = rows[row];
+                let initial = mapping.source.map_or_else(
+                    || target_x(mapping.target.unwrap()),
+                    |source| {
+                        from.x_low
+                            .as_ref()
+                            .filter(|_| from.x_low_is_valid(source))
+                            .map_or(source_x(source), |values| values[source])
+                    },
+                );
+                let final_value = mapping.target.map_or_else(
+                    || match &target.x {
+                        GeneralXColumn::Category { .. } => 0.0,
+                        _ => entering_x(None, mapping.source),
+                    },
+                    |index| {
+                        if target.x_low_is_valid(index) {
+                            to[index]
+                        } else {
+                            target_x(index)
+                        }
+                    },
+                );
+                *current = blend(initial, final_value);
+            }
+        }
+        if from.x_low.is_some() && target.x_low.is_some() {
+            blend_transition_validity(
+                self.x_low_valid.as_deref_mut(),
+                from.x_low_valid.as_deref(),
+                target.x_low_valid.as_deref(),
+                rows,
+                progress,
+            );
+        }
+        if let (Some(current), Some(to)) = (self.x_high.as_mut(), target.x_high.as_ref()) {
+            for (row, current) in current.iter_mut().enumerate() {
+                let mapping = rows[row];
+                let initial = mapping.source.map_or_else(
+                    || target_x(mapping.target.unwrap()),
+                    |source| {
+                        from.x_high
+                            .as_ref()
+                            .filter(|_| from.x_high_is_valid(source))
+                            .map_or(source_x(source), |values| values[source])
+                    },
+                );
+                let final_value = mapping.target.map_or_else(
+                    || match &target.x {
+                        GeneralXColumn::Category { .. } => 0.0,
+                        _ => entering_x(None, mapping.source),
+                    },
+                    |index| {
+                        if target.x_high_is_valid(index) {
+                            to[index]
+                        } else {
+                            target_x(index)
+                        }
+                    },
+                );
+                *current = blend(initial, final_value);
+            }
+        }
+        if from.x_high.is_some() && target.x_high.is_some() {
+            blend_transition_validity(
+                self.x_high_valid.as_deref_mut(),
+                from.x_high_valid.as_deref(),
+                target.x_high_valid.as_deref(),
+                rows,
+                progress,
+            );
+        }
+        if let (Some(current), Some(to)) = (self.size.as_mut(), target.size.as_ref()) {
+            for (row, current) in current.iter_mut().enumerate() {
+                let initial = rows[row]
+                    .source
+                    .and_then(|source| {
+                        from.size
+                            .as_ref()
+                            .filter(|_| from.size_is_valid(source))
+                            .map(|values| values[source])
+                    })
+                    .unwrap_or(0.0);
+                *current = blend(
+                    initial,
+                    rows[row]
+                        .target
+                        .filter(|index| target.size_is_valid(*index))
+                        .map_or(0.0, |index| to[index]),
+                );
+            }
+        }
+        if from.size.is_some() && target.size.is_some() {
+            blend_transition_validity(
+                self.size_valid.as_deref_mut(),
+                from.size_valid.as_deref(),
+                target.size_valid.as_deref(),
+                rows,
+                progress,
+            );
+        }
+        if let (Some(current), Some(from), Some(to)) = (
+            self.heatmap_y_numeric.as_mut(),
+            from.heatmap_y_numeric.as_ref(),
+            target.heatmap_y_numeric.as_ref(),
+        ) {
+            for (row, current) in current.iter_mut().enumerate() {
+                let mapping = rows[row];
+                *current = mapping.target.map_or_else(
+                    || from[mapping.source.unwrap()],
+                    |index| {
+                        mapping
+                            .source
+                            .map_or(to[index], |source| blend(from[source], to[index]))
+                    },
+                );
+            }
+        }
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    pub(crate) fn transition_values_match(&self, from: &Self, target: &Self) -> bool {
+        self.x == target.x
+            && masked_transition_values_match(
+                Some(&self.y),
+                self.y_valid.as_deref(),
+                Some(&target.y),
+                target.y_valid.as_deref(),
+            )
+            && (from.low.is_none()
+                || masked_transition_values_match(
+                    self.low.as_deref(),
+                    self.low_valid.as_deref(),
+                    target.low.as_deref(),
+                    target.low_valid.as_deref(),
+                ))
+            && (from.high.is_none()
+                || masked_transition_values_match(
+                    self.high.as_deref(),
+                    self.high_valid.as_deref(),
+                    target.high.as_deref(),
+                    target.high_valid.as_deref(),
+                ))
+            && (from.x_low.is_none()
+                || masked_transition_values_match(
+                    self.x_low.as_deref(),
+                    self.x_low_valid.as_deref(),
+                    target.x_low.as_deref(),
+                    target.x_low_valid.as_deref(),
+                ))
+            && (from.x_high.is_none()
+                || masked_transition_values_match(
+                    self.x_high.as_deref(),
+                    self.x_high_valid.as_deref(),
+                    target.x_high.as_deref(),
+                    target.x_high_valid.as_deref(),
+                ))
+            && (from.size.is_none()
+                || masked_transition_values_match(
+                    self.size.as_deref(),
+                    self.size_valid.as_deref(),
+                    target.size.as_deref(),
+                    target.size_valid.as_deref(),
+                ))
+            && (from.heatmap_y_numeric.is_none()
+                || self.heatmap_y_numeric == target.heatmap_y_numeric)
     }
 }
 

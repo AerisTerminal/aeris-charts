@@ -13,6 +13,9 @@
 //! residual: geometry that both backends fill as axis-aligned rectangles is separable from
 //! antialiased triangle edges, which is separable from gradients, which is separable from glyphs.
 
+use aeris_charts_core::scale::general_scale::{
+    AngularCategoryScale, PolarPlot, PolarPolygon, PolarSector,
+};
 use aeris_charts_engine::{ChartEngine, PriceScaleTarget, SeriesKind};
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{
@@ -256,6 +259,73 @@ pub fn tessellated(dpr: f32) -> Fixture {
         height: h,
         background: BG,
     }
+}
+
+/// Ordered sector and radar fills exercise the polar triangle mesh in a real GPUI window.
+pub fn polar_meshes(dpr: f32) -> Fixture {
+    let (width, height) = dims(dpr);
+    let mut points = Vec::new();
+    let mut prims = vec![Prim::Rect {
+        rect: IRect {
+            x: 0,
+            y: 0,
+            w: width as i32,
+            h: height as i32,
+        },
+        color: BG,
+    }];
+    let pie = PolarPlot::from_rect(12.0, 8.0, 216.0, 132.0).unwrap();
+    let radar = PolarPlot::from_rect(252.0, 8.0, 216.0, 132.0).unwrap();
+    let area = PolarPlot::from_rect(12.0, 158.0, 216.0, 132.0).unwrap();
+    let bar = PolarPlot::from_rect(252.0, 158.0, 216.0, 132.0).unwrap();
+    for (plot, inner, radii, colors) in [
+        (pie, 0.3, [0.9, 0.9, 0.9, 0.9], [UP, DOWN, LINE, INK]),
+        (area, 0.0, [0.9, 0.5, 0.75, 0.35], [UP, DOWN, LINE, INK]),
+        (bar, 0.35, [0.9, 0.5, 0.75, 0.65], [UP, DOWN, LINE, INK]),
+    ] {
+        let angles = AngularCategoryScale::new(4, 0.0, true).unwrap();
+        for index in 0..4 {
+            let (start, end) = angles.sector(index).unwrap();
+            let sector =
+                PolarSector::new(plot, start + 0.04, end - start - 0.08, inner, radii[index])
+                    .unwrap();
+            append_polar_mesh(&mut prims, &mut points, dpr, colors[index], |visit| {
+                sector.visit_triangles(visit)
+            });
+        }
+    }
+    let angles = AngularCategoryScale::new(5, 0.0, true).unwrap();
+    let polygon = PolarPolygon::new(radar, angles, &[0.95, 0.55, 0.8, 0.4, 0.7]).unwrap();
+    append_polar_mesh(&mut prims, &mut points, dpr, LINE, |visit| {
+        polygon.visit_triangles(visit)
+    });
+    Fixture {
+        name: "polar_meshes",
+        attribution: "polar sector and polygon mesh coverage",
+        prims,
+        points,
+        width,
+        height,
+        background: BG,
+    }
+}
+
+fn append_polar_mesh(
+    prims: &mut Vec<Prim>,
+    points: &mut Vec<[f32; 2]>,
+    dpr: f32,
+    color: Color,
+    generate: impl FnOnce(&mut dyn FnMut([(f64, f64); 3])),
+) {
+    let first_point = points.len() as u32;
+    generate(&mut |triangle| {
+        points.extend(triangle.map(|(x, y)| [(x as f32) * dpr, (y as f32) * dpr]));
+    });
+    prims.push(Prim::MeshFill {
+        first_point,
+        point_count: points.len() as u32 - first_point,
+        color,
+    });
 }
 
 /// **Curved brush strokes.** Sparse and dense point streams at thin through heavy brush widths.
@@ -731,6 +801,7 @@ pub fn all(dpr: f32) -> Vec<Fixture> {
         translucent_joins(dpr),
         opaque_aa(dpr),
         tessellated(dpr),
+        polar_meshes(dpr),
         curved_brushes(dpr),
         gradients(dpr),
         text(dpr),

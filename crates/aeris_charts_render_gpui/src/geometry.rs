@@ -10,6 +10,8 @@
 //!
 //! Uses Aeris's coordinate, bar-width, and snapping calculations.
 
+use std::collections::BTreeMap;
+
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, LineType};
 pub(crate) use aeris_charts_render::line::round_rect_polygon;
@@ -179,7 +181,14 @@ fn push_polygon_fringe(pool: &mut Vec<MeshVertex>, polygon: &[[f32; 2]]) {
     if signed_area.abs() < 1e-6 {
         return;
     }
-    let side = signed_area.signum();
+    push_polygon_fringe_with_side(pool, polygon, signed_area.signum());
+}
+
+fn push_polygon_fringe_with_side(pool: &mut Vec<MeshVertex>, polygon: &[[f32; 2]], side: f32) {
+    let count = polygon.len();
+    if count < 3 || side == 0.0 {
+        return;
+    }
     let normal = |a: [f32; 2], b: [f32; 2]| {
         let dx = b[0] - a[0];
         let dy = b[1] - a[1];
@@ -220,6 +229,72 @@ fn push_polygon_fringe(pool: &mut Vec<MeshVertex>, polygon: &[[f32; 2]]) {
         push_tri_st(pool, p0, inner_st, q0, outer_st, q1, outer_st);
         push_tri_st(pool, p0, inner_st, q1, outer_st, p1, inner_st);
     }
+}
+
+/// One solid mesh plus coverage only on its exposed edges. Shared triangle edges cancel
+/// exactly in the frame's `f32` point pool, so translucent fills never gain an internal fringe.
+pub(crate) fn mesh_fill_mesh(pool: &mut Vec<MeshVertex>, mesh: &[[f32; 2]]) -> (u32, u32) {
+    let core = push_vertices(pool, mesh.iter().copied());
+    if core.1 == 0 {
+        return core;
+    }
+    type Key = (u32, u32);
+    let key = |point: [f32; 2]| -> Key {
+        let bits = |value: f32| if value == 0.0 { 0 } else { value.to_bits() };
+        (bits(point[0]), bits(point[1]))
+    };
+    let point = |(x, y): Key| [f32::from_bits(x), f32::from_bits(y)];
+    let mut edges = BTreeMap::<(Key, Key), (Key, Key)>::new();
+    let mut side = 0.0_f32;
+    for triangle in mesh.as_chunks::<3>().0 {
+        let [a, b, c] = *triangle;
+        let orientation = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        if orientation == 0.0 {
+            continue;
+        }
+        if side == 0.0 {
+            side = orientation.signum();
+        } else if orientation.signum() != side {
+            return core;
+        }
+        for (from, to) in [(a, b), (b, c), (c, a)] {
+            let from = key(from);
+            let to = key(to);
+            let undirected = if from < to { (from, to) } else { (to, from) };
+            if edges.remove(&undirected).is_none() {
+                edges.insert(undirected, (from, to));
+            }
+        }
+    }
+    let mut successors = BTreeMap::<Key, Key>::new();
+    for (_, (from, to)) in edges {
+        if successors.insert(from, to).is_some() {
+            return core;
+        }
+    }
+    let mut loops = Vec::new();
+    while let Some((&start, _)) = successors.first_key_value() {
+        let mut polygon = Vec::new();
+        let mut current = start;
+        loop {
+            polygon.push(point(current));
+            let Some(next) = successors.remove(&current) else {
+                return core;
+            };
+            current = next;
+            if current == start {
+                break;
+            }
+            if polygon.len() > mesh.len() {
+                return core;
+            }
+        }
+        loops.push(polygon);
+    }
+    for polygon in loops {
+        push_polygon_fringe_with_side(pool, &polygon, side);
+    }
+    (core.0, pool.len() as u32 - core.0)
 }
 
 /// Keep the shared inside-ring triangles intact and fade both exposed boundaries. The fringes
@@ -1194,6 +1269,39 @@ mod tests {
             push_vertices(&mut pool, [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [2.0, 2.0]]);
         assert_eq!((first, count), (0, 3));
         assert_eq!(pool.len(), 3);
+    }
+
+    #[test]
+    fn annular_mesh_fringe_tracks_only_exposed_edges_in_both_directions() {
+        use aeris_charts_core::scale::general_scale::{PolarPlot, PolarSector};
+
+        let plot = PolarPlot::from_rect(0.0, 0.0, 100.0, 100.0).unwrap();
+        for sweep in [std::f64::consts::TAU, -std::f64::consts::TAU] {
+            let sector = PolarSector::new(plot, 0.0, sweep, 0.25, 0.9).unwrap();
+            let mut points = Vec::new();
+            sector.visit_triangles(|triangle| {
+                points.extend(triangle.map(|(x, y)| [x as f32, y as f32]));
+            });
+            let mut vertices = Vec::new();
+            let (first, count) = mesh_fill_mesh(&mut vertices, &points);
+            assert_eq!(first, 0);
+            assert!(
+                count as usize > points.len(),
+                "missing outer or inner fringe"
+            );
+            assert!(
+                (count as usize) < points.len() * 4,
+                "interior triangle edges gained an antialiasing fringe"
+            );
+        }
+    }
+
+    #[test]
+    fn tiny_valid_mesh_triangle_keeps_its_exposed_edge_fringe() {
+        let points = [[0.0, 0.0], [0.001, 0.0], [0.0, 0.001]];
+        let mut vertices = Vec::new();
+        let (_, count) = mesh_fill_mesh(&mut vertices, &points);
+        assert!(count > 3);
     }
 
     #[test]

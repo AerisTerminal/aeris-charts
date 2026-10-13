@@ -1,6 +1,51 @@
 import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
 
+test("translucent polar fill has matching interior pixels on Canvas2D and WebGPU", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "This backend comparison requires WebGPU");
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const captures = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const frames = [];
+    for (const backend of ["canvas2d", "webgpu"]) {
+      const host = document.createElement("div");
+      Object.assign(host.style, { width: "400px", height: "400px" });
+      document.body.appendChild(host);
+      const chart = await create_chart(host, {
+        backend, autoSize: false, __force_webgpu_fallback_adapter: true,
+        initialPane: { horizontal_domain: { type: "polar" } },
+      });
+      try {
+        chart.add_axis({ id: "angle", pane: 0, dimension: "angle", scale: "angular_category", visible: false });
+        chart.add_axis({ id: "radius", pane: 0, dimension: "radius", scale: "radial_linear", visible: false });
+        const pie = chart.add_series("pie", {
+          pane: 0, x_axis_id: "angle", y_axis_id: "radius", fill_opacity: 0.5,
+        });
+        pie.set_data([{ id: "a", x: "A", y: 1 }]);
+        frames.push({ backend: chart.backend(), png: chart.take_screenshot().toDataURL() });
+      } finally {
+        chart.remove();
+        host.remove();
+      }
+    }
+    return frames;
+  });
+  expect(captures.map((frame) => frame.backend)).toEqual(["canvas2d", "webgpu"]);
+  const images = captures.map(({ png }) => PNG.sync.read(Buffer.from(png.split(",")[1], "base64")));
+  expect(images[0].width).toBe(images[1].width);
+  expect(images[0].height).toBe(images[1].height);
+  const background = Array.from(images[0].data.subarray(0, 3));
+  for (const [x, y] of [[200, 200], [200, 130], [240, 175], [160, 175]]) {
+    const offset = (y * images[0].width + x) * 4;
+    const canvas = Array.from(images[0].data.subarray(offset, offset + 4));
+    const gpu = Array.from(images[1].data.subarray(offset, offset + 4));
+    expect(canvas.slice(0, 3), `${x},${y} should be inside the polar fill`).not.toEqual(background);
+    for (let channel = 0; channel < 4; channel += 1) {
+      expect(Math.abs(canvas[channel] - gpu[channel]), `${x},${y} channel ${channel}: ${canvas} vs ${gpu}`).toBeLessThanOrEqual(3);
+    }
+  }
+});
+
 test("general charts can own the first pane and failed creation leaves no host resources", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
@@ -215,6 +260,231 @@ test("general charts can own the first pane and failed creation leaves no host r
       custom: { added: 0, ids: [0] },
     },
   });
+});
+
+test("pie and donut use the public category path with nested option updates and exact hits", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "400px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    try {
+      const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "polar" } });
+      const index = pane.pane_index();
+      chart.add_axis({ id: "angle", pane: index, dimension: "angle", scale: "angular_category", visible: false });
+      chart.add_axis({ id: "radius", pane: index, dimension: "radius", scale: "radial_linear", visible: false });
+      const pie = chart.add_series("pie", {
+        pane: index, x_axis_id: "angle", y_axis_id: "radius",
+        polar: { inner_radius: 0.35, outer_radius: 0.9 },
+      });
+      pie.set_data([{ id: "a", x: "A", y: 3 }, { id: "b", x: "B", y: 1 }]);
+      pie.apply_options({ polar: { pad_angle: 0.05 } });
+      const polar = pie.options().polar;
+      const hits = [];
+      for (let y = 30; y < 390; y += 12) {
+        for (let x = 30; x < 390; x += 12) {
+          const hit = chart.general_hit_test(index, x, y);
+          if (hit?.series === pie.id) hits.push(hit.row);
+        }
+      }
+      const snapshot = chart.export_state();
+      return {
+        polar,
+        rows: [...new Set(hits)].sort(),
+        exported: snapshot.series.at(-1).polar,
+        screenshot: chart.take_screenshot().toDataURL().length > 100,
+      };
+    } finally {
+      chart.remove();
+      host.remove();
+    }
+  });
+  expect(result.polar).toMatchObject({ inner_radius: 0.35, outer_radius: 0.9, pad_angle: 0.05 });
+  expect(result.exported).toMatchObject(result.polar);
+  expect(result.rows).toEqual([0, 1]);
+  expect(result.screenshot).toBe(true);
+});
+
+test("polar slices expose category values and keyboard selection through the accessibility layer", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.evaluate(async () => {
+    const { create_chart, enable_accessibility } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.id = "polar-keyboard-host";
+    Object.assign(host.style, { position: "fixed", width: "420px", height: "420px", left: "0", top: "0" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(420, 420, 1);
+    const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "polar" } });
+    const index = pane.pane_index();
+    chart.add_axis({ id: "polar-key-angle", pane: index, dimension: "angle", scale: "angular_category", visible: false });
+    chart.add_axis({ id: "polar-key-radius", pane: index, dimension: "radius", scale: "radial_linear", visible: false });
+    const pie = chart.add_series("pie", {
+      pane: index, x_axis_id: "polar-key-angle", y_axis_id: "polar-key-radius", title: "Regional share",
+    });
+    pie.set_data([
+      { id: "north", x: "North", y: 2 },
+      { id: "south", x: "South", y: 3 },
+      { id: "west", x: "West", y: 5 },
+    ]);
+    const accessibility = enable_accessibility(chart, { chart_title: "Polar keyboard chart", data_scope: "all" });
+    window.__polar_keyboard = { chart, host, pie, accessibility };
+  });
+
+  const layer = page.locator("#polar-keyboard-host .aeris_charts-a11y-layer").last();
+  await layer.focus();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowRight");
+  const region = layer.locator(".aeris_charts-a11y-live-region");
+  await expect(region).toContainText("South");
+  await expect(region).toContainText("Point 2 of 3");
+  await page.keyboard.press("Enter");
+  await expect(region).toContainText("Selected Regional share");
+  expect(await page.evaluate(() => window.__polar_keyboard.chart.general_selected_hit()?.row_id)).toBe("south");
+  await page.keyboard.press("Escape");
+  expect(await page.evaluate(() => window.__polar_keyboard.chart.general_selected_hit())).toBeNull();
+  expect(await page.evaluate(() => window.__polar_keyboard.pie.accessibility_snapshot(0, 3).items.map((item) => item.x_label)))
+    .toEqual(["North", "South", "West"]);
+  await page.evaluate(() => {
+    window.__polar_keyboard.accessibility.detach();
+    window.__polar_keyboard.chart.remove();
+    window.__polar_keyboard.host.remove();
+    delete window.__polar_keyboard;
+  });
+});
+
+test("radar resolves automatic polar domains and renders from public category rows", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "400px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    try {
+      const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "polar" } });
+      const index = pane.pane_index();
+      chart.add_axis({ id: "angle", pane: index, dimension: "angle", scale: "angular_category", visible: false });
+      chart.add_axis({ id: "radius", pane: index, dimension: "radius", scale: "radial_linear", visible: false });
+      const radar = chart.add_series("radar", {
+        pane: index, x_axis_id: "angle", y_axis_id: "radius",
+        title: "Strength", point_markers: true,
+      });
+      radar.set_data([
+        { id: "n", x: "North", y: 4 },
+        { id: "e", x: "East", y: 2 },
+        { id: "s", x: "South", y: 3 },
+        { id: "w", x: "West", y: 1 },
+      ]);
+      const rows = new Set();
+      for (let y = 30; y < 390; y += 12) {
+        for (let x = 30; x < 390; x += 12) {
+          const hit = chart.general_hit_test(index, x, y);
+          if (hit?.series === radar.id) rows.add(hit.row);
+        }
+      }
+      return {
+        rows: [...rows].sort(),
+        legend: chart.general_legend_snapshot(index).items[0].kind,
+        screenshot: chart.take_screenshot().toDataURL().length > 100,
+      };
+    } finally {
+      chart.remove();
+      host.remove();
+    }
+  });
+  expect(result.rows).toEqual([0, 1, 2, 3]);
+  expect(result.legend).toBe("radar");
+  expect(result.screenshot).toBe(true);
+});
+
+test("polar area uses value-scaled sectors through the public chart API", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "400px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    try {
+      const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "polar" } });
+      const index = pane.pane_index();
+      chart.add_axis({ id: "angle", pane: index, dimension: "angle", scale: "angular_category", visible: false });
+      chart.add_axis({ id: "radius", pane: index, dimension: "radius", scale: "radial_linear", visible: false });
+      const area = chart.add_series("polar_area", {
+        pane: index, x_axis_id: "angle", y_axis_id: "radius",
+        polar: { inner_radius: 0.2, outer_radius: 0.9, pad_angle: 0.05 },
+      });
+      area.set_data([
+        { id: "a", x: "A", y: 4 },
+        { id: "b", x: "B", y: 2 },
+        { id: "c", x: "C", y: 0 },
+        { id: "d", x: "D", y: null },
+      ]);
+      const rows = new Set();
+      for (let y = 30; y < 390; y += 12) {
+        for (let x = 30; x < 390; x += 12) {
+          const hit = chart.general_hit_test(index, x, y);
+          if (hit?.series === area.id) rows.add(hit.row);
+        }
+      }
+      return {
+        rows: [...rows].sort(),
+        polar: area.options().polar,
+        legend: chart.general_legend_snapshot(index).items[0].kind,
+        screenshot: chart.take_screenshot().toDataURL().length > 100,
+      };
+    } finally {
+      chart.remove();
+      host.remove();
+    }
+  });
+  expect(result.rows).toEqual([0, 1]);
+  expect(result.polar).toMatchObject({ inner_radius: 0.2, outer_radius: 0.9, pad_angle: 0.05 });
+  expect(result.legend).toBe("polar_area");
+  expect(result.screenshot).toBe(true);
+});
+
+test("radial bars use the public polar category path and exact hits", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "400px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    try {
+      const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "polar" } });
+      const index = pane.pane_index();
+      chart.add_axis({ id: "angle", pane: index, dimension: "angle", scale: "angular_category", visible: false });
+      chart.add_axis({ id: "radius", pane: index, dimension: "radius", scale: "radial_linear", visible: false });
+      const bars = chart.add_series("radial_bar", {
+        pane: index, x_axis_id: "angle", y_axis_id: "radius",
+        polar: { inner_radius: 0.2, outer_radius: 0.9, pad_angle: 0.05 },
+      });
+      bars.set_data([{ id: "a", x: "A", y: 4 }, { id: "b", x: "B", y: 2 }, { id: "c", x: "C", y: 0 }]);
+      const rows = new Set();
+      for (let y = 30; y < 390; y += 12) {
+        for (let x = 30; x < 390; x += 12) {
+          const hit = chart.general_hit_test(index, x, y);
+          if (hit?.series === bars.id) rows.add(hit.row);
+        }
+      }
+      return {
+        rows: [...rows].sort(),
+        legend: chart.general_legend_snapshot(index).items[0].kind,
+        screenshot: chart.take_screenshot().toDataURL().length > 100,
+      };
+    } finally {
+      chart.remove();
+      host.remove();
+    }
+  });
+  expect(result.rows).toEqual([0, 1]);
+  expect(result.legend).toBe("radial_bar");
+  expect(result.screenshot).toBe(true);
 });
 
 test("general row styles survive object updates, typed replacement, and V2 restore", async ({ page }) => {
@@ -484,6 +754,664 @@ test("default general legend toggles visibility with keyboard focus intact", asy
   await expect(show).toBeFocused();
   await page.keyboard.press("Space");
   await expect(first.getByRole("button", { name: "Hide Revenue" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("polar legend shows bounded slice labels and paint colors after data changes", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart, create_general_legend } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "400px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "polar" } },
+    });
+    let legend;
+    try {
+      chart.add_axis({ id: "angle", pane: 0, dimension: "angle", scale: "angular_category", visible: false });
+      chart.add_axis({ id: "radius", pane: 0, dimension: "radius", scale: "radial_linear", visible: false });
+      const pie = chart.add_series("pie", {
+        pane: 0, x_axis_id: "angle", y_axis_id: "radius", title: "Allocation",
+      });
+      legend = create_general_legend(chart, host);
+      pie.set_data([
+        { id: "a", x: "A", y: 3, label: "Named A", color: "#f00" },
+        { id: "b", x: "B", y: 1 },
+        { id: "c", x: "C", y: 0 },
+      ]);
+      const first = {
+        snapshot: chart.general_legend_snapshot(0).items[0].slices,
+        labels: [...host.querySelectorAll('[role="listitem"]')].map((node) => node.textContent),
+        red: host.querySelector('[role="listitem"] [aria-hidden="true"]')?.style.backgroundColor,
+      };
+      pie.set_data([{ id: "a", x: "A", y: 0 }, { id: "b", x: "B", y: 2 }]);
+      const second = {
+        snapshot: chart.general_legend_snapshot(0).items[0].slices,
+        labels: [...host.querySelectorAll('[role="listitem"]')].map((node) => node.textContent),
+      };
+      return { first, second };
+    } finally {
+      legend?.detach();
+      chart.remove();
+      host.remove();
+    }
+  });
+  expect(result.first.snapshot.map((slice) => slice.label)).toEqual(["Named A", "B"]);
+  expect(result.first.snapshot.map((slice) => slice.color)).toEqual(["#ff0000", "#48ae91"]);
+  expect(result.first.labels).toEqual(["Named A: 3", "B: 1"]);
+  expect(result.first.red).toBe("rgb(255, 0, 0)");
+  expect(result.second.snapshot.map((slice) => slice.label)).toEqual(["B"]);
+  expect(result.second.labels).toEqual(["B: 2"]);
+});
+
+test("polar callout labels paint through Canvas2D and WebGPU", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "This backend comparison requires WebGPU");
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const captures = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const frames = [];
+    for (const backend of ["canvas2d", "webgpu"]) {
+      const host = document.createElement("div");
+      Object.assign(host.style, { width: "400px", height: "400px" });
+      document.body.appendChild(host);
+      const chart = await create_chart(host, {
+        backend, autoSize: false, __force_webgpu_fallback_adapter: true,
+        initialPane: { horizontal_domain: { type: "polar" } },
+      });
+      try {
+        chart.add_axis({ id: "angle", pane: 0, dimension: "angle", scale: "angular_category", visible: false });
+        chart.add_axis({ id: "radius", pane: 0, dimension: "radius", scale: "radial_linear", visible: false });
+        const pie = chart.add_series("pie", {
+          pane: 0, x_axis_id: "angle", y_axis_id: "radius",
+          polar: { inner_radius: 0.25, outer_radius: 0.65 },
+        });
+        pie.set_data(Array.from({ length: 8 }, (_, row) => ({
+          id: `sector-${row}`, x: `Sector ${row}`, y: 1, label: `Sector ${row}`,
+        })));
+        const before = chart.take_screenshot().toDataURL();
+        pie.apply_options({ data_labels: true });
+        const after = chart.take_screenshot().toDataURL();
+        frames.push({ backend: chart.backend(), before, after });
+      } finally {
+        chart.remove();
+        host.remove();
+      }
+    }
+    return frames;
+  });
+  expect(captures.map((frame) => frame.backend)).toEqual(["canvas2d", "webgpu"]);
+  for (const frame of captures) {
+    const before = PNG.sync.read(Buffer.from(frame.before.split(",")[1], "base64"));
+    const after = PNG.sync.read(Buffer.from(frame.after.split(",")[1], "base64"));
+    let changed = 0;
+    for (let offset = 0; offset < before.data.length; offset += 4) {
+      if (before.data[offset] !== after.data[offset]
+        || before.data[offset + 1] !== after.data[offset + 1]
+        || before.data[offset + 2] !== after.data[offset + 2]) changed += 1;
+    }
+    expect(changed, `${frame.backend} should paint labels and leaders`).toBeGreaterThan(100);
+  }
+});
+
+test("opt-in general transitions repaint to rest and honor reduced motion", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "400px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "polar" } },
+    });
+      chart.resize(400, 400, 1);
+      chart.add_axis({ id: "angle", pane: 0, dimension: "angle", scale: "angular_category", visible: false });
+      chart.add_axis({ id: "radius", pane: 0, dimension: "radius", scale: "radial_linear", visible: false });
+      const pie = chart.add_series("pie", { pane: 0, x_axis_id: "angle", y_axis_id: "radius" });
+      const rows = (a, b) => [{ id: "a", x: "A", y: a }, { id: "b", x: "B", y: b }];
+      pie.set_data(rows(1, 3));
+      const before = chart.take_screenshot().toDataURL();
+      chart.set_general_transition_duration(120);
+      pie.set_data(rows(3, 1));
+      const active = chart.wasm.wants_animation();
+      const saved = chart.export_state();
+      const restored_host = document.createElement("div");
+      Object.assign(restored_host.style, { width: "400px", height: "400px" });
+      document.body.appendChild(restored_host);
+      const restored_chart = await create_chart(restored_host, {
+        backend: "canvas2d", autoSize: false,
+        initialPane: { horizontal_domain: { type: "polar" } },
+      });
+      restored_chart.resize(400, 400, 1);
+      restored_chart.import_state(saved);
+      const persisted_duration = restored_chart.export_state().general_transition_duration_ms;
+      const restored_idle = !restored_chart.wasm.wants_animation();
+      restored_chart.remove(); restored_host.remove();
+      await new Promise((resolve) => setTimeout(resolve, 220));
+      const idle = chart.wasm.wants_animation();
+      const after = chart.take_screenshot().toDataURL();
+      pie.set_data(rows(3, 1));
+      const unchanged_idle = !chart.wasm.wants_animation();
+      let invalid = null;
+      try { chart.set_general_transition_duration(-1); } catch (error) { invalid = error.code; }
+      pie.set_data([...rows(3, 1), { id: "c", x: "C", y: 2 }]);
+      const entry_active = chart.wasm.wants_animation();
+      await new Promise((resolve) => setTimeout(resolve, 220));
+      const entry_idle = chart.wasm.wants_animation();
+      const entry_categories = pie.accessibility_snapshot(0, 3).items.map((item) => item.x_label);
+      pie.set_data(rows(3, 1));
+      const exit_active = chart.wasm.wants_animation();
+      const exit_categories = pie.accessibility_snapshot(0, 3).items.map((item) => item.x_label);
+      await new Promise((resolve) => setTimeout(resolve, 220));
+      const exit_idle = chart.wasm.wants_animation();
+      window.__transitionFixture = { chart, host, pie, rows };
+      return { active, idle, changed: before !== after, unchanged_idle, invalid, entry_active, entry_idle, entry_categories, exit_active, exit_idle, exit_categories, persisted_duration, restored_idle };
+  });
+  expect(result).toEqual({
+    active: true, idle: false, changed: true, unchanged_idle: true, invalid: "invalid_options",
+    entry_active: true, entry_idle: false, entry_categories: ["A", "B", "C"],
+    exit_active: true, exit_idle: false, exit_categories: ["A", "B"],
+    persisted_duration: 120, restored_idle: true,
+  });
+  const interrupted_active = await page.evaluate(() => {
+    const { chart, pie, rows } = window.__transitionFixture;
+    chart.set_general_transition_duration(1000);
+    pie.set_data(rows(1, 3));
+    return chart.wasm.wants_animation();
+  });
+  expect(interrupted_active).toBe(true);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect.poll(() => page.evaluate(() => window.__transitionFixture.chart.wasm.wants_animation())).toBe(false);
+  const reduced_idle = await page.evaluate(() => {
+    const { chart, host, pie, rows } = window.__transitionFixture;
+    pie.set_data(rows(3, 1));
+    const idle = !chart.wasm.wants_animation();
+    chart.remove(); host.remove();
+    delete window.__transitionFixture;
+    return idle;
+  });
+  expect(reduced_idle).toBe(true);
+});
+
+test("pie row reorder moves slice hits and Canvas2D pixels", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:400px;height:400px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "polar" } },
+    });
+    chart.resize(400, 400, 1);
+    chart.add_axis({ id: "angle-order", pane: 0, dimension: "angle", scale: "angular_category", visible: false });
+    chart.add_axis({ id: "radius-order", pane: 0, dimension: "radius", scale: "radial_linear", visible: false });
+    const pie = chart.add_series("pie", { pane: 0, x_axis_id: "angle-order", y_axis_id: "radius-order" });
+    const rows = { a: { id: "a", x: "A", y: 1 }, b: { id: "b", x: "B", y: 1 }, c: { id: "c", x: "C", y: 1 } };
+    pie.set_data([rows.a, rows.b, rows.c]);
+    const geometry = chart.panes()[0].get_geometry();
+    const radius = Math.min(geometry.width, geometry.height) * 0.24;
+    const hit = (degrees) => {
+      const angle = degrees * Math.PI / 180;
+      return chart.general_hit_test(
+        0,
+        geometry.width / 2 + Math.sin(angle) * radius,
+        geometry.top + geometry.height / 2 - Math.cos(angle) * radius,
+      )?.row_id ?? null;
+    };
+    const start = hit(60);
+    const before = chart.take_screenshot().toDataURL();
+    chart.set_general_transition_duration(200);
+    pie.set_data([rows.c, rows.b, rows.a]);
+    const started = performance.now();
+    const active = chart.wasm.wants_animation();
+    const initial = hit(60);
+    chart.wasm.set_animation_time(started + 100);
+    const middle = hit(180);
+    const during = chart.take_screenshot().toDataURL();
+    chart.wasm.set_animation_time(started + 200);
+    const end = hit(300);
+    const after = chart.take_screenshot().toDataURL();
+    const idle = !chart.wasm.wants_animation();
+    chart.remove();
+    host.remove();
+    return { start, initial, middle, end, active, idle, changed_mid: before !== during, changed_end: during !== after };
+  });
+  expect(result).toEqual({
+    start: "a", initial: "a", middle: "a", end: "a",
+    active: true, idle: true, changed_mid: true, changed_end: true,
+  });
+});
+
+test("polar category row motion moves radial-bar hits and Canvas2D pixels", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:400px;height:400px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "polar" } },
+    });
+    chart.resize(400, 400, 1);
+    chart.add_axis({ id: "angle-motion", pane: 0, dimension: "angle", scale: "angular_category", domain: ["A", "B", "C"], visible: false });
+    chart.add_axis({ id: "radius-motion", pane: 0, dimension: "radius", scale: "radial_linear", domain: [0, 4], visible: false });
+    const bars = chart.add_series("radial_bar", {
+      pane: 0, x_axis_id: "angle-motion", y_axis_id: "radius-motion",
+      polar: { inner_radius: 0.2, outer_radius: 0.9 },
+    });
+    const row = (x) => [{ id: "moving", x, y: 3 }];
+    bars.set_data(row("A"));
+    const geometry = chart.panes()[0].get_geometry();
+    const radius = Math.min(geometry.width, geometry.height) * 0.24;
+    const hit = (degrees) => {
+      const angle = degrees * Math.PI / 180;
+      const x = geometry.width / 2 + Math.sin(angle) * radius;
+      const y = geometry.top + geometry.height / 2 - Math.cos(angle) * radius;
+      return chart.general_hit_test(0, x, y)?.row_id ?? null;
+    };
+    const start = hit(0);
+    const before = chart.take_screenshot().toDataURL();
+    chart.set_general_transition_duration(200);
+    bars.set_data(row("C"));
+    const started = performance.now();
+    const active = chart.wasm.wants_animation();
+    const initial = hit(0);
+    chart.wasm.set_animation_time(started + 100);
+    const middle = hit(120);
+    const during = chart.take_screenshot().toDataURL();
+    chart.wasm.set_animation_time(started + 200);
+    const end = hit(240);
+    const after = chart.take_screenshot().toDataURL();
+    const idle = !chart.wasm.wants_animation();
+    chart.remove();
+    host.remove();
+    return { start, initial, middle, end, active, idle, changed_mid: before !== during, changed_end: during !== after };
+  });
+  expect(result).toEqual({
+    start: "moving", initial: "moving", middle: "moving", end: "moving",
+    active: true, idle: true, changed_mid: true, changed_end: true,
+  });
+});
+
+test("radar category reorder keeps a filled hit region while values morph", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:400px;height:400px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "polar" } },
+    });
+    chart.resize(400, 400, 1);
+    chart.add_axis({ id: "radar-angle-motion", pane: 0, dimension: "angle", scale: "angular_category", visible: false });
+    chart.add_axis({ id: "radar-radius-motion", pane: 0, dimension: "radius", scale: "radial_linear", domain: [0, 5], visible: false });
+    const radar = chart.add_series("radar", {
+      pane: 0, x_axis_id: "radar-angle-motion", y_axis_id: "radar-radius-motion",
+    });
+    const rows = {
+      a: { id: "a", x: "A", y: 1 }, b: { id: "b", x: "B", y: 2 }, c: { id: "c", x: "C", y: 4 },
+    };
+    radar.set_data([rows.a, rows.b, rows.c]);
+    const geometry = chart.panes()[0].get_geometry();
+    const center = [geometry.width / 2, geometry.top + geometry.height / 2];
+    const start_hit = chart.general_hit_test(0, center[0], center[1])?.series === radar.id;
+    const before = chart.take_screenshot().toDataURL();
+    chart.set_general_transition_duration(200);
+    radar.set_data([rows.c, rows.b, rows.a]);
+    const started = performance.now();
+    const active = chart.wasm.wants_animation();
+    chart.wasm.set_animation_time(started + 100);
+    const middle_hit = chart.general_hit_test(0, center[0], center[1])?.series === radar.id;
+    const during = chart.take_screenshot().toDataURL();
+    chart.wasm.set_animation_time(started + 200);
+    const end_hit = chart.general_hit_test(0, center[0], center[1])?.series === radar.id;
+    const after = chart.take_screenshot().toDataURL();
+    const idle = !chart.wasm.wants_animation();
+    chart.remove();
+    host.remove();
+    return { start_hit, middle_hit, end_hit, active, idle, changed_mid: before !== during, changed_end: during !== after };
+  });
+  expect(result).toEqual({
+    start_hit: true, middle_hit: true, end_hit: true,
+    active: true, idle: true, changed_mid: true, changed_end: true,
+  });
+});
+
+test("radar category entry keeps its first Canvas2D frame and center hit", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:400px;height:400px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "polar" } },
+    });
+    chart.resize(400, 400, 1);
+    chart.add_axis({ id: "entry-angle", pane: 0, dimension: "angle", scale: "angular_category", visible: false });
+    chart.add_axis({ id: "entry-radius", pane: 0, dimension: "radius", scale: "radial_linear", visible: false });
+    const radar = chart.add_series("radar", { pane: 0, x_axis_id: "entry-angle", y_axis_id: "entry-radius" });
+    const rows = [
+      { id: "a", x: "A", y: 1 }, { id: "b", x: "B", y: 2 },
+      { id: "c", x: "C", y: 4 }, { id: "d", x: "D", y: 12 },
+    ];
+    radar.set_data(rows.slice(0, 3));
+    const geometry = chart.panes()[0].get_geometry();
+    const center = [geometry.width / 2, geometry.top + geometry.height / 2];
+    const before = chart.take_screenshot().toDataURL();
+    chart.set_general_transition_duration(200);
+    radar.set_data(rows);
+    const started = performance.now();
+    const active = chart.wasm.wants_animation();
+    const initial = chart.take_screenshot().toDataURL();
+    chart.wasm.set_animation_time(started + 100);
+    const middle_hit = chart.general_hit_test(0, center[0], center[1])?.series === radar.id;
+    const middle = chart.take_screenshot().toDataURL();
+    chart.wasm.set_animation_time(started + 200);
+    const final_hit = chart.general_hit_test(0, center[0], center[1])?.series === radar.id;
+    const after = chart.take_screenshot().toDataURL();
+    const idle = !chart.wasm.wants_animation();
+    chart.remove();
+    host.remove();
+    return { active, idle, same_start: before === initial, middle_hit, final_hit, changed_middle: before !== middle, changed_final: middle !== after };
+  });
+  expect(result).toEqual({
+    active: true, idle: true, same_start: true,
+    middle_hit: true, final_hit: true, changed_middle: true, changed_final: true,
+  });
+});
+
+test("missing scatter Y enters and exits on the public browser clock", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:400px;height:300px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "continuous", scale: "linear" } },
+    });
+    chart.resize(400, 300, 1);
+    chart.add_axis({ id: "missing-x", pane: 0, dimension: "x", scale: "linear", domain: [0, 10], visible: false });
+    chart.add_axis({ id: "missing-y", pane: 0, dimension: "y", scale: "linear", domain: [0, 20], visible: false });
+    const scatter = chart.add_series("scatter", { pane: 0, x_axis_id: "missing-x", y_axis_id: "missing-y" });
+    const row = y => [{ id: "one", x: 5, y }];
+    const geometry = chart.panes()[0].get_geometry();
+    const hit_y = () => {
+      const hits = [];
+      for (let y = geometry.top; y < geometry.top + geometry.height; y += 2) {
+        if (chart.general_hit_test(0, geometry.width / 2, y)?.series === scatter.id) hits.push(y);
+      }
+      return hits.length ? hits[Math.floor(hits.length / 2)] : null;
+    };
+    scatter.set_data(row(null));
+    const before = hit_y();
+    chart.set_general_transition_duration(200);
+    scatter.set_data(row(12));
+    const started = performance.now();
+    const active = chart.wasm.wants_animation();
+    const entry_start = hit_y();
+    chart.wasm.set_animation_time(started + 100);
+    const entry_middle = hit_y();
+    chart.wasm.set_animation_time(started + 200);
+    const entry_end = hit_y();
+    scatter.set_data(row(null));
+    const exit_start = hit_y();
+    chart.wasm.set_animation_time(started + 300);
+    const exit_middle = hit_y();
+    chart.wasm.set_animation_time(started + 420);
+    const exit_end = hit_y();
+    const idle = !chart.wasm.wants_animation();
+    chart.remove();
+    host.remove();
+    return { before, active, entry_start, entry_middle, entry_end, exit_start, exit_middle, exit_end, idle };
+  });
+  expect(result.before).toBeNull();
+  expect(result.active).toBe(true);
+  expect(result.entry_start).toBeNull();
+  expect(result.entry_middle).toBeGreaterThan(result.entry_end + 30);
+  expect(result.exit_start).toBe(result.entry_end);
+  expect(result.exit_middle).toBeGreaterThan(result.exit_start + 30);
+  expect(result.exit_end).toBeNull();
+  expect(result.idle).toBe(true);
+});
+
+test("missing error bounds expand from their center in Canvas2D", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:400px;height:300px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "continuous", scale: "linear" } },
+    });
+    chart.resize(400, 300, 1);
+    chart.add_axis({ id: "bounds-x", pane: 0, dimension: "x", scale: "linear", domain: [0, 20], visible: false });
+    chart.add_axis({ id: "bounds-y", pane: 0, dimension: "y", scale: "linear", domain: [0, 20], visible: false });
+    const bars = chart.add_series("error_bar", { pane: 0, x_axis_id: "bounds-x", y_axis_id: "bounds-y" });
+    const row = valid => [{
+      id: "one", x: 5, y: 10,
+      x_low: valid ? 4 : null, x_high: valid ? 6 : null,
+      y_low: valid ? 8 : null, y_high: valid ? 12 : null,
+    }];
+    bars.set_data(row(false));
+    const before = chart.take_screenshot().toDataURL();
+    chart.set_general_transition_duration(200);
+    bars.set_data(row(true));
+    const started = performance.now();
+    const active = chart.wasm.wants_animation();
+    const initial = chart.take_screenshot().toDataURL();
+    chart.wasm.set_animation_time(started + 100);
+    const middle = chart.take_screenshot().toDataURL();
+    chart.wasm.set_animation_time(started + 200);
+    const after = chart.take_screenshot().toDataURL();
+    const idle = !chart.wasm.wants_animation();
+    chart.remove();
+    host.remove();
+    return { active, idle, same_start: before === initial, changed_middle: before !== middle, changed_end: middle !== after };
+  });
+  expect(result).toEqual({ active: true, idle: true, same_start: true, changed_middle: true, changed_end: true });
+});
+
+test("temporal X transition moves the public hit target through the browser clock", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:400px;height:300px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(400, 300, 1);
+    const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "temporal" } });
+    const epoch = 1_700_000_000_000;
+    chart.add_axis({ id: "motion-x", pane: pane.pane_index(), dimension: "x", scale: "temporal", domain: [epoch, epoch + 4_000], visible: false });
+    chart.add_axis({ id: "motion-y", pane: pane.pane_index(), dimension: "y", scale: "linear", domain: [0, 10], visible: false });
+    const line = chart.add_series("xy_line", {
+      pane: pane.pane_index(), x_axis_id: "motion-x", y_axis_id: "motion-y", point_markers: true,
+    });
+    line.set_data([{ id: "moving", x: epoch + 1_000, y: 5 }]);
+    const geometry = pane.get_geometry();
+    const y = geometry.top + geometry.height / 2;
+    const hit_x = () => {
+      const hits = [];
+      for (let x = 0; x < geometry.width; x += 2) {
+        if (chart.general_hit_test(pane.pane_index(), x, y)?.series === line.id) hits.push(x);
+      }
+      return hits.length ? hits[Math.floor(hits.length / 2)] : null;
+    };
+    const start = hit_x();
+    const start_image = chart.take_screenshot().toDataURL();
+    chart.set_general_transition_duration(200);
+    line.set_data([{ id: "moving", x: epoch + 3_000, y: 5 }]);
+    const started = performance.now();
+    const active = chart.wasm.wants_animation();
+    const initial = hit_x();
+    chart.wasm.set_animation_time(started + 100);
+    const middle = hit_x();
+    const middle_image = chart.take_screenshot().toDataURL();
+    chart.wasm.set_animation_time(started + 200);
+    const end = hit_x();
+    const end_image = chart.take_screenshot().toDataURL();
+    const idle = !chart.wasm.wants_animation();
+    chart.remove();
+    host.remove();
+    return {
+      start, initial, middle, end, active, idle, width: geometry.width,
+      start_to_middle_pixels_changed: start_image !== middle_image,
+      middle_to_end_pixels_changed: middle_image !== end_image,
+    };
+  });
+  expect(result.active).toBe(true);
+  expect(result.idle).toBe(true);
+  expect(result.start).not.toBeNull();
+  expect(Math.abs(result.initial - result.start)).toBeLessThanOrEqual(2);
+  expect(result.middle).toBeGreaterThan(result.start + result.width * 0.15);
+  expect(result.middle).toBeLessThan(result.end - result.width * 0.15);
+  expect(result.start_to_middle_pixels_changed).toBe(true);
+  expect(result.middle_to_end_pixels_changed).toBe(true);
+});
+
+test("category reorder moves column hits and Canvas2D pixels with the axis clock", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:400px;height:300px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(400, 300, 1);
+    const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "category", scale: "band" } });
+    chart.add_axis({ id: "motion-x", pane: pane.pane_index(), dimension: "x", scale: "band" });
+    chart.add_axis({ id: "motion-y", pane: pane.pane_index(), dimension: "y", scale: "linear", domain: [0, 10], visible: false });
+    const bars = chart.add_series("column", { pane: pane.pane_index(), x_axis_id: "motion-x", y_axis_id: "motion-y" });
+    const rows = {
+      a: { id: "a", x: "A", y: 2 }, b: { id: "b", x: "B", y: 4 }, c: { id: "c", x: "C", y: 6 },
+    };
+    bars.set_data([rows.a, rows.b, rows.c]);
+    const geometry = pane.get_geometry();
+    let hit_y = null;
+    for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2 && hit_y === null; y += 2) {
+      for (let x = 0; x < geometry.width; x += 4) {
+        if (chart.general_hit_test(pane.pane_index(), x, y)?.row_id === "a") {
+          hit_y = y;
+          break;
+        }
+      }
+    }
+    const hit_x = () => {
+      const hits = [];
+      for (let x = 0; x < geometry.width; x += 2) {
+        if (chart.general_hit_test(pane.pane_index(), x, hit_y)?.row_id === "a") hits.push(x);
+      }
+      return hits.length ? hits[Math.floor(hits.length / 2)] : null;
+    };
+    const start = hit_x();
+    const start_image = chart.take_screenshot().toDataURL();
+    chart.set_general_transition_duration(200);
+    bars.set_data([rows.c, rows.a, rows.b]);
+    const started = performance.now();
+    const active = chart.wasm.wants_animation();
+    const initial = hit_x();
+    chart.wasm.set_animation_time(started + 100);
+    const middle = hit_x();
+    const middle_image = chart.take_screenshot().toDataURL();
+    chart.wasm.set_animation_time(started + 200);
+    const end = hit_x();
+    const end_image = chart.take_screenshot().toDataURL();
+    const idle = !chart.wasm.wants_animation();
+    chart.remove();
+    host.remove();
+    return {
+      hit_y, start, initial, middle, end, active, idle,
+      start_to_middle_pixels_changed: start_image !== middle_image,
+      middle_to_end_pixels_changed: middle_image !== end_image,
+    };
+  });
+  expect(result.active).toBe(true);
+  expect(result.idle).toBe(true);
+  expect(result.hit_y).not.toBeNull();
+  expect(result.start).not.toBeNull();
+  expect(Math.abs(result.initial - result.start)).toBeLessThanOrEqual(2);
+  expect(result.middle).toBeGreaterThan(result.start + 10);
+  expect(result.middle).toBeLessThan(result.end - 10);
+  expect(result.start_to_middle_pixels_changed).toBe(true);
+  expect(result.middle_to_end_pixels_changed).toBe(true);
+});
+
+test("matched category row moves across fixed slots in hits and Canvas2D pixels", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:400px;height:300px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(400, 300, 1);
+    const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "category", scale: "band" } });
+    chart.add_axis({ id: "motion-x", pane: pane.pane_index(), dimension: "x", scale: "band", domain: ["A", "B", "C"] });
+    chart.add_axis({ id: "motion-y", pane: pane.pane_index(), dimension: "y", scale: "linear", domain: [0, 10], visible: false });
+    const bars = chart.add_series("column", { pane: pane.pane_index(), x_axis_id: "motion-x", y_axis_id: "motion-y" });
+    const row = (x) => [{ id: "moving", x, y: 5 }];
+    bars.set_data(row("A"));
+    const geometry = pane.get_geometry();
+    let hit_y = null;
+    for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2 && hit_y === null; y += 2) {
+      for (let x = 0; x < geometry.width; x += 4) {
+        if (chart.general_hit_test(pane.pane_index(), x, y)?.row_id === "moving") {
+          hit_y = y;
+          break;
+        }
+      }
+    }
+    const hit_x = () => {
+      const hits = [];
+      for (let x = 0; x < geometry.width; x += 2) {
+        if (chart.general_hit_test(pane.pane_index(), x, hit_y)?.row_id === "moving") hits.push(x);
+      }
+      return hits.length ? hits[Math.floor(hits.length / 2)] : null;
+    };
+    const start = hit_x();
+    const start_image = chart.take_screenshot().toDataURL();
+    chart.set_general_transition_duration(200);
+    bars.set_data(row("C"));
+    const started = performance.now();
+    const active = chart.wasm.wants_animation();
+    const initial = hit_x();
+    chart.wasm.set_animation_time(started + 100);
+    const middle = hit_x();
+    const middle_image = chart.take_screenshot().toDataURL();
+    chart.wasm.set_animation_time(started + 200);
+    const end = hit_x();
+    const end_image = chart.take_screenshot().toDataURL();
+    const idle = !chart.wasm.wants_animation();
+    chart.remove();
+    host.remove();
+    return {
+      hit_y, start, initial, middle, end, active, idle,
+      start_to_middle_pixels_changed: start_image !== middle_image,
+      middle_to_end_pixels_changed: middle_image !== end_image,
+    };
+  });
+  expect(result.active).toBe(true);
+  expect(result.idle).toBe(true);
+  expect(result.hit_y).not.toBeNull();
+  expect(result.start).not.toBeNull();
+  expect(Math.abs(result.initial - result.start)).toBeLessThanOrEqual(2);
+  expect(result.middle).toBeGreaterThan(result.start + 20);
+  expect(result.middle).toBeLessThan(result.end - 20);
+  expect(Math.abs(result.middle - (result.start + result.end) / 2)).toBeLessThan(8);
+  expect(result.start_to_middle_pixels_changed).toBe(true);
+  expect(result.middle_to_end_pixels_changed).toBe(true);
 });
 
 test("default legend follows programmatic series changes and localized action labels", async ({ page }) => {

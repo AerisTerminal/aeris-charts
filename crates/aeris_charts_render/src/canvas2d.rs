@@ -397,6 +397,34 @@ pub fn execute(
                 target.close_path();
                 target.fill();
             }
+            Prim::MeshFill {
+                first_point,
+                point_count,
+                color,
+            } => {
+                let first = *first_point as usize;
+                let Some(end) = first.checked_add(*point_count as usize) else {
+                    continue;
+                };
+                let Some(mesh) = points.get(first..end) else {
+                    continue;
+                };
+                if mesh.is_empty()
+                    || mesh.len() % 3 != 0
+                    || mesh.iter().flatten().any(|value| !value.is_finite())
+                {
+                    continue;
+                }
+                target.set_fill_solid(*color);
+                target.begin_path();
+                for triangle in mesh.as_chunks::<3>().0 {
+                    target.move_to(triangle[0][0], triangle[0][1]);
+                    target.line_to(triangle[1][0], triangle[1][1]);
+                    target.line_to(triangle[2][0], triangle[2][1]);
+                    target.close_path();
+                }
+                target.fill();
+            }
             Prim::RoundRect {
                 x,
                 y,
@@ -696,6 +724,29 @@ mod tests {
             },
         );
         r.ops
+    }
+
+    #[test]
+    fn shared_mesh_fill_paints_adjacent_triangles_in_one_alpha_operation() {
+        let points = [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+        ];
+        let ops = run(
+            &[Prim::MeshFill {
+                first_point: 0,
+                point_count: 6,
+                color: Color::rgba(10, 20, 30, 128),
+            }],
+            &points,
+        );
+        assert_eq!(ops.iter().filter(|op| op.as_str() == "begin").count(), 1);
+        assert_eq!(ops.iter().filter(|op| op.as_str() == "fill").count(), 1);
+        assert_eq!(ops.iter().filter(|op| op.as_str() == "close").count(), 2);
     }
 
     #[test]

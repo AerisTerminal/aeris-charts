@@ -145,6 +145,8 @@ export function create_general_legend(
     for (const item of snapshot.items) {
       const handle = series.get(item.series);
       if (handle === undefined) continue;
+      const group = document.createElement("div");
+      group.style.cssText = "display:inline-flex;flex-direction:column;align-items:flex-start;gap:4px";
       const button = document.createElement("button");
       button.type = "button";
       button.dataset.series = String(item.series);
@@ -164,7 +166,32 @@ export function create_general_legend(
         handle.set_visible(!handle.options().visible);
         refresh();
       });
-      root.appendChild(button);
+      group.appendChild(button);
+      if (item.slices.length > 0 || item.slices_truncated) {
+        const slices = document.createElement("div");
+        slices.setAttribute("role", "list");
+        slices.setAttribute("aria-label", `${item.title || item.kind} slices`);
+        slices.style.cssText = "display:flex;flex-wrap:wrap;gap:4px 8px;padding:0 4px;max-height:120px;max-width:100%;overflow:auto;opacity:" + (item.visible ? "1" : "0.55");
+        for (const slice of item.slices) {
+          const entry = document.createElement("span");
+          entry.setAttribute("role", "listitem");
+          entry.style.cssText = "display:inline-flex;align-items:center;gap:4px;white-space:nowrap";
+          const marker = document.createElement("span");
+          marker.setAttribute("aria-hidden", "true");
+          marker.style.cssText = `display:inline-block;width:10px;height:10px;border-radius:50%;background:${slice.color}`;
+          const name = document.createElement("span");
+          name.textContent = `${slice.label}: ${slice.value}`;
+          entry.append(marker, name);
+          slices.appendChild(entry);
+        }
+        if (item.slices_truncated) {
+          const more = document.createElement("span");
+          more.textContent = "More slices in chart data";
+          slices.appendChild(more);
+        }
+        group.appendChild(slices);
+      }
+      root.appendChild(group);
     }
     if (focused_series !== undefined) {
       for (const button of root.querySelectorAll<HTMLButtonElement>("button")) {

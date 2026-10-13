@@ -19,8 +19,8 @@ use aeris_charts_render::line::{normalized_round_rect_radii, round_rect_border};
 use crate::geometry::{
     Scratch, area_fill_mesh, area_fringe_gradient, area_gradient, band_fill_mesh,
     band_fill_mesh_parts, dash_spans, dashed_polyline_meshes, disc_mesh, fill_polygon, irect,
-    line_span_start, polyline_mesh, rect_frame_edges, ring_mesh, round_rect_polygon,
-    round_rect_ring_mesh,
+    line_span_start, mesh_fill_mesh, polyline_mesh, rect_frame_edges, ring_mesh,
+    round_rect_polygon, round_rect_ring_mesh,
 };
 use crate::metrics::GpuiFrameMetrics;
 use crate::scene::{DeviceRect, Paint, SceneOp, ScenePlan, TextRun};
@@ -288,6 +288,28 @@ fn lower_prim(
 
         Prim::Triangle { a, b, c, color } => {
             let range = fill_polygon(&mut plan.vertices, &[*a, *b, *c]);
+            push_mesh(plan, metrics, range, Paint::Solid(*color));
+        }
+
+        Prim::MeshFill {
+            first_point,
+            point_count,
+            color,
+        } => {
+            let first = *first_point as usize;
+            let Some(end) = first.checked_add(*point_count as usize) else {
+                return;
+            };
+            let Some(mesh) = points.get(first..end) else {
+                return;
+            };
+            if mesh.is_empty()
+                || mesh.len() % 3 != 0
+                || mesh.iter().flatten().any(|value| !value.is_finite())
+            {
+                return;
+            }
+            let range = mesh_fill_mesh(&mut plan.vertices, mesh);
             push_mesh(plan, metrics, range, Paint::Solid(*color));
         }
 
@@ -1005,6 +1027,33 @@ mod tests {
                 "border triangle covers the transparent inner rect at ({x}, {y})"
             );
         }
+    }
+
+    #[test]
+    fn mesh_fill_uses_one_scene_op_for_translucent_adjacent_triangles() {
+        let points = [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+        ];
+        let color = Color::rgba(10, 20, 30, 128);
+        let (plan, _) = run(
+            &[Prim::MeshFill {
+                first_point: 0,
+                point_count: 6,
+                color,
+            }],
+            &points,
+        );
+        assert_eq!(plan.ops.len(), 1);
+        assert!(matches!(
+            plan.ops[0],
+            SceneOp::Mesh { vertex_count: 30, fill: Paint::Solid(actual), .. } if actual == color
+        ));
+        assert_eq!(plan.vertices.len(), 30);
     }
 
     #[test]

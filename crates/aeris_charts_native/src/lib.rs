@@ -1325,6 +1325,56 @@ mod tests {
     }
 
     #[test]
+    fn translucent_mesh_has_no_shared_triangle_edge_seam() {
+        let background = Color::rgb(255, 255, 255);
+        let fill = Color::rgba(40, 80, 120, 128);
+        let points = [
+            [2.0, 2.0],
+            [18.0, 2.0],
+            [2.0, 18.0],
+            [18.0, 2.0],
+            [18.0, 18.0],
+            [2.0, 18.0],
+        ];
+        let mesh = render_prims(
+            20,
+            20,
+            background,
+            &[Prim::MeshFill {
+                first_point: 0,
+                point_count: 6,
+                color: fill,
+            }],
+            &points,
+        );
+        let rect = render_prims(
+            20,
+            20,
+            background,
+            &[Prim::Rect {
+                rect: aeris_charts_render::draw_list::IRect {
+                    x: 2,
+                    y: 2,
+                    w: 16,
+                    h: 16,
+                },
+                color: fill,
+            }],
+            &[],
+        );
+        for (x, y) in [(10, 9), (9, 10), (10, 10)] {
+            let actual = mesh.pixel_rgba(x, y);
+            let expected = rect.pixel_rgba(x, y);
+            for (a, e) in actual.into_iter().zip(expected) {
+                assert!(
+                    a.abs_diff(e) <= 1,
+                    "shared edge pixel ({x}, {y}): {actual:?} != {expected:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn fills_a_rect_at_expected_pixels() {
         let bg = Color::rgb(0xff, 0xff, 0xff);
         let red = Color::rgb(0xff, 0x00, 0x00);

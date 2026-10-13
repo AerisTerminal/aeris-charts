@@ -34,7 +34,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G3 | R3 | Cartesian visual and data semantics (remainder) | **Complete** | Cartesian families, stack offsets, gradients, composition, per-item styles and required portable gates delivered | G4; calibrated GPUI images and official browser benchmark remain separately pending |
 | G4 | R4 | Components and interaction | **Complete** | Default legend, tooltip and brush controls; engine selection and semantic linked sync; shared-frame export coverage | G5; manual assistive-technology and calibrated GPUI image evidence remain pending |
 | G5 | R5 | React and framework-neutral authoring | **Complete** | Keyed declarations and mapped rows; atomic shared composition; controlled brush; first-pane ownership; lifecycle, SSR, packed-consumer and browser evidence | G6; manual assistive-technology review remains pending |
-| G6 | R6 | Polar families and transitions | **Open** | — | Polar transforms, pie/donut, radar, radial bar, polar area, animation |
+| G6 | R6 | Polar families and transitions | **Complete** | `f64` polar geometry and axes; pie/donut, radar, polar-area and radial-bar paths; single-fill ordered polar mesh; bounded cached hits, slice legends, shared-frame leader labels, pointer and keyboard selection; WASM/TS bindings; opt-in fixed-clock value and numeric/temporal X updates, Cartesian and angular category-axis and matched-row category movement, identity-matched entry and exit rows, missing/valid Y, error-bound and bubble-size motion, pie row-order motion, fixed-spoke and changing-count radar morphs, compatible optional-channel changes, collapsed error-bound entry, persisted duration and browser scheduling; polar and Cartesian family fixed-clock frame/hit fixtures, GPUI/Canvas2D structural fill, bounded Canvas2D/WebGPU pixels, and measured 1.25× GPUI/native polar window parity; strict release performance, six package-size limits, and 735 portable browser tests passed | G7; manual assistive-technology and broader device-scale image evidence remain pending |
 | G7 | R7 | Hierarchy and flow families | **Open** | — | Funnel, treemap, Sankey, sunburst |
 | G8 | R8 | Parity closure and release readiness | **Open** | — | Full matrix verification against the pinned competitor |
 
@@ -271,15 +271,29 @@ Firefox project and then the complete combined suite passed unchanged. Earlier n
 and Q timing outliers also passed on the final strict run without threshold changes. This batch
 does not claim a manual assistive-technology session or calibrated GPUI window pixels.
 
+G6 delivered all four polar series families through the shared frame and public browser package,
+with deterministic sector/polygon geometry, exact hits, legends, labels, selection, keyboard input,
+and persistence. One bounded engine clock now animates polar and Cartesian value, position, and
+identity changes, including interruption and reduced motion. Shared frame fixtures, browser tests,
+GPUI structural and 1.25× window pixels, and SwiftShader/Canvas2D pixel tests cover the affected
+executors. On 2026-10-13, locked Rust and WASM checks, package checks, public API/namespace/release
+guards, SSR/pack checks, strict native performance, all six policy-v7 size limits, and the portable
+Chromium/Firefox/WebKit suite passed (735 tests, 26 intended skips). The strict native run measured
+pie entry/exit plus frame p95 at 1.34 ms against 4 ms and 4,096-category reorder plus frame p95 at
+9.02 ms against 12 ms. The real GPUI window capture at 1.25× matched four polar interiors within
+one channel; 2,672 of 225,000 edge pixels differed, with maximum channel delta 101 under the
+configured 2%/128 limits. Manual assistive-technology review, competitor screenshot comparison,
+and further device-scale/platform window captures remain evidence work for parity closure.
+
 ## Known gaps
 
-Remaining source-confirmed gaps from the 2026-09-23 review. R3–R5 closed the earlier Cartesian,
-component, and authoring gaps; polar and hierarchy/flow breadth remains open. Earlier test counts
+Remaining source-confirmed gaps from the 2026-09-23 review. R3–R6 closed the earlier Cartesian,
+component, authoring, and polar gaps; hierarchy/flow breadth remains open. Earlier test counts
 and timings are historical observations in Git history, not proof of current completion.
 
 | Gap | Evidence | Required correction | Phase |
 | --- | --- | --- | --- |
-| Chart breadth | `GeneralSeriesKind` has Cartesian variants only | Polar and hierarchy/flow families are open. Funnel, treemap, Sankey and sunburst are in the competitive target, not an indefinite backlog | R6, R7 |
+| Chart breadth | Polar families are delivered; hierarchy/flow families are absent | Add funnel, treemap, Sankey and sunburst as required engine families | R7 |
 
 These are not an exhaustive defect audit. Coverage-matrix rows are required coverage to audit, not
 assertions that every listed feature is absent.
@@ -488,16 +502,16 @@ repository paths.
 
 ### R6 — Polar families and shared transitions
 
-**Batch:** G6. **Depends on:** R2–R5. **Status:** open.
+**Batch:** G6. **Depends on:** R2–R5. **Status:** complete.
 
-- [ ] Angular and radial transforms with shared sector and polygon geometry.
-- [ ] Pie and donut.
-- [ ] Radar.
-- [ ] Radial bar.
-- [ ] Polar area.
-- [ ] Shared general transitions for every family, including existing Cartesian families, with
+- [x] Angular and radial transforms with shared sector and polygon geometry.
+- [x] Pie and donut.
+- [x] Radar.
+- [x] Radial bar.
+- [x] Polar area.
+- [x] Shared general transitions for every family, including existing Cartesian families, with
       interruption and reduced-motion behavior.
-- [ ] G6 full gate green; batch committed and pushed.
+- [x] G6 full gate green; batch committed and pushed.
 
 **Exit:** all polar variants cover degenerate, zero and missing data, angles and radii, label
 collision, legends, selection, keyboard navigation, persistence and every executor. Fixed-clock
@@ -554,7 +568,7 @@ platform capabilities beyond the competitor's browser rendering model.
 | Bars and stacks | Partial (range bars delivered) | Both orientations, groups, sizing/gaps, corners, per-item styling, mixed signs, range bars, stack order and required offset modes | R3 |
 | Box plots and heatmaps | Partial | Preserve existing extra families; complete color domains, legends, missing values and interaction | R3 |
 | Scales and axes | Verified (G2, 2026-10-10) | Numeric/log/symlog, temporal, category/point, reversed/multiple axes, explicit/auto domains, ticks, formatting, overflow and grid policy | R2 |
-| Pie/donut, radar, radial bar, polar area | Open | Polar layout, start/end angles, inner/outer radii, padding, labels/leaders, angular/radial axes and interactions | R6 |
+| Pie/donut, radar, radial bar, polar area | Partial | Polar layout, start/end angles, inner/outer radii, padding, labels/leaders, angular/radial axes and interactions | R6 |
 | Funnel, treemap, Sankey, sunburst | Open | Purpose-built deterministic bounded layouts, data contracts, styling, labels, hits, accessibility and updates | R7 |
 | Legend and tooltip | Partial | Default usable components, visibility controls, item/shared modes, placement, formatting, ordering, custom content and touch/keyboard behavior | R4 |
 | References, labels, titles and grids | Partial | Engine layout and domain contribution, overlap/overflow policy, background/foreground order, style and export consistency | R2, R4 |
@@ -562,7 +576,7 @@ platform capabilities beyond the competitor's browser rendering model.
 | Responsive layout | Verified (G2, 2026-10-10) | Zero-size/hidden/revealed containers, constrained/aspect sizing, DPR/font changes, small plots and bounded layout convergence | R1, R2 |
 | React authoring | Partial | Composable axes/series/components, typed data mapping, controlled updates, stable identities, Strict Mode, failure cleanup and SSR-safe import | R5 |
 | Customization | Partial | Per-item styles, symbols, gradients, dash patterns, label/tooltip formatting, bounded custom marks and explicit host-only content boundaries | R3–R5 |
-| Animation | Open for general transitions | Enter/update/exit and interruption with stable identities, bounded retained state, shared timing semantics and reduced motion | R6 |
+| Animation | Partial for general transitions | Enter/update/exit and interruption with stable identities, bounded retained state, shared timing semantics and reduced motion | R6 |
 | Accessibility/localization | Partial | Keyboard operation of every family/control, meaningful bounded snapshots, focus retention, announcements, contrast, locale and text measurement | Every phase |
 | Persistence, export and recovery | Partial | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
 | Packaging and migration | Partial | Packed-consumer examples, framework-neutral and React guides, discoverable API, reproducible competitor comparisons | R0, R5, R8 |

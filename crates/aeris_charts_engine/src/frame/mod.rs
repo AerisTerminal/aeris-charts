@@ -320,6 +320,10 @@ impl FrameInvalidation {
         self.clock
     }
 
+    pub(crate) const fn scene_generation(&self) -> u64 {
+        self.scene
+    }
+
     fn tick(&mut self) -> u64 {
         self.clock = self.clock.wrapping_add(1).max(1);
         self.clock
@@ -1077,6 +1081,7 @@ fn translate_prims_x(prims: &mut [Prim], dx: i32) {
             Prim::Text { x, .. } | Prim::RotatedText { x, .. } => *x += dxf,
             Prim::Image { rect, .. } => rect[0] += dxf,
             Prim::Polyline { .. }
+            | Prim::MeshFill { .. }
             | Prim::AreaFill { .. }
             | Prim::BandFill { .. }
             | Prim::BandGradientFill { .. }
@@ -1115,7 +1120,9 @@ fn append_drawing_part(
     for prim in &retained_prims[prim_start..prim_end] {
         let mut prim = prim.clone();
         match &mut prim {
-            Prim::Polyline { first_point, .. } | Prim::AreaFill { first_point, .. } => {
+            Prim::Polyline { first_point, .. }
+            | Prim::MeshFill { first_point, .. }
+            | Prim::AreaFill { first_point, .. } => {
                 *first_point = first_point.wrapping_add(adjust);
             }
             Prim::BandFill {
@@ -1144,7 +1151,9 @@ fn append_retained_layer(layer: &RetainedLayer, prims: &mut Vec<Prim>, points: &
     for prim in &layer.prims {
         let mut prim = prim.clone();
         match &mut prim {
-            Prim::Polyline { first_point, .. } | Prim::AreaFill { first_point, .. } => {
+            Prim::Polyline { first_point, .. }
+            | Prim::MeshFill { first_point, .. }
+            | Prim::AreaFill { first_point, .. } => {
                 *first_point += point_base;
             }
             Prim::BandFill {
@@ -1674,7 +1683,13 @@ impl ChartEngine {
                     );
                     self.build_depth_heatmap_frame(pi, hpr, vpr, &mut cache.under.prims);
                 }
-                self.append_general_grid_frame(pi, hpr, vpr, &mut cache.under.prims);
+                self.append_general_grid_frame(
+                    pi,
+                    hpr,
+                    vpr,
+                    &mut cache.under.prims,
+                    &mut cache.under.points,
+                );
                 self.build_native_image_watermark_frame(pi, hpr, vpr, &mut cache.under.prims);
                 cache.under.revision = self.frame_invalidation.scene;
                 cache.under.coordinate_revision = self.frame_invalidation.coordinate;

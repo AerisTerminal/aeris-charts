@@ -2816,6 +2816,98 @@ mod tests {
         assert!(chart.general_selected_hit().is_none());
     }
 
+    #[test]
+    fn focused_polar_rows_select_by_identity_and_escape_clears_them() {
+        for kind in [
+            GeneralSeriesKind::Pie,
+            GeneralSeriesKind::Radar,
+            GeneralSeriesKind::PolarArea,
+            GeneralSeriesKind::RadialBar,
+        ] {
+            let mut chart =
+                ChartEngine::new_with_initial_domain(640.0, 400.0, 1.0, HorizontalDomain::Polar)
+                    .unwrap();
+            chart
+                .add_general_axis(GeneralAxisOptions::new(
+                    "angle",
+                    0,
+                    AxisDimension::Angle,
+                    GeneralScaleType::AngularCategory,
+                ))
+                .unwrap();
+            chart
+                .add_general_axis(GeneralAxisOptions::new(
+                    "radius",
+                    0,
+                    AxisDimension::Radius,
+                    GeneralScaleType::RadialLinear,
+                ))
+                .unwrap();
+            let dataset = chart
+                .create_general_xy_dataset(GeneralXyInput::Category {
+                    ids: Some(vec![
+                        crate::GeneralRowId::Text("north".into()),
+                        crate::GeneralRowId::Text("south".into()),
+                        crate::GeneralRowId::Text("west".into()),
+                    ]),
+                    categories: vec!["North".into(), "South".into(), "West".into()],
+                    category_indices: vec![0, 1, 2],
+                    y: vec![2.0, 3.0, 5.0],
+                    y_valid: None,
+                })
+                .unwrap();
+            let options = match kind {
+                GeneralSeriesKind::Pie => GeneralSeriesOptions::pie(0, dataset, "angle", "radius"),
+                GeneralSeriesKind::Radar => {
+                    GeneralSeriesOptions::radar(0, dataset, "angle", "radius")
+                }
+                GeneralSeriesKind::PolarArea => {
+                    GeneralSeriesOptions::polar_area(0, dataset, "angle", "radius")
+                }
+                GeneralSeriesKind::RadialBar => {
+                    GeneralSeriesOptions::radial_bar(0, dataset, "angle", "radius")
+                }
+                _ => unreachable!(),
+            };
+            let series = chart.add_general_series(options).unwrap();
+            relayout(&mut chart);
+            let snapshot = chart.general_accessibility_snapshot(series, 0, 3).unwrap();
+            assert_eq!(snapshot.items[1].x_label, "South");
+            assert_eq!(snapshot.items[1].value, Some(3.0));
+            let target = ChartFocusTarget::GeneralDatum { series, row: 1 };
+            assert!(chart.input_target_key_down(
+                target,
+                ChartKey::Enter,
+                InputModifiers::default()
+            ));
+            let selected = chart.general_selected_hit().unwrap();
+            assert_eq!(selected.row, 1);
+            assert_eq!(
+                selected.row_id,
+                crate::GeneralRowIdentity::Explicit(crate::GeneralRowId::Text("south".into()))
+            );
+            assert!(chart.input_key_down(ChartKey::Escape, InputModifiers::default(), false, 0.0));
+            assert!(chart.general_selected_hit().is_none());
+            let plot = chart.general_plot_rect(0).unwrap();
+            let pointer = (1..100)
+                .flat_map(|y| (1..100).map(move |x| (x, y)))
+                .map(|(x, y)| {
+                    (
+                        plot.width * x as f64 / 100.0,
+                        plot.y + plot.height * y as f64 / 100.0,
+                    )
+                })
+                .find(|&(x, y)| {
+                    chart
+                        .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+                        .is_some_and(|hit| hit.series == series && hit.row == 1)
+                })
+                .expect("every positive polar row has a hittable region");
+            click(&mut chart, pointer.0, pointer.1);
+            assert_eq!(chart.general_selected_hit().unwrap().row, 1, "{kind:?}");
+        }
+    }
+
     fn shifted(x: f64, y: f64) -> PointerInput {
         PointerInput {
             modifiers: InputModifiers {

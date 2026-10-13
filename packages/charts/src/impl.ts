@@ -705,11 +705,11 @@ function pack_general_rows(
   const x_mode = kind === "scatter"
     || kind === "bubble"
     ? "numeric"
-    : kind === "column" || kind === "horizontal_bar"
+      : kind === "column" || kind === "horizontal_bar" || kind === "pie" || kind === "radar" || kind === "polar_area" || kind === "radial_bar"
       ? "category"
       : x_scale === "temporal"
         ? "temporal"
-        : x_scale === "band" || x_scale === "point"
+        : x_scale === "band" || x_scale === "point" || x_scale === "angular_category"
           ? "category"
           : "numeric";
   if (x_mode === "numeric") {
@@ -1190,7 +1190,12 @@ class general_series_impl implements general_series_api {
   }
 
   apply_options(patch: Partial<general_series_options>): void {
-    const options = { ...this.options(), ...patch };
+    const current = this.options();
+    const options = {
+      ...current,
+      ...patch,
+      polar: patch.polar === undefined ? current.polar : { ...current.polar, ...patch.polar },
+    };
     parse_general_result<null>(
       this.chart.wasm.update_general_series_options_result_json(this.id, JSON.stringify(options)),
     );
@@ -1261,6 +1266,7 @@ class general_series_impl implements general_series_api {
     if (this.kind === "heatmap_grid" && !("value" in columns)) {
       throw new AerisChartsError("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
     }
+    this.chart.prepare_general_transition_update();
     let result: string;
     if ("value" in columns) {
       if ("x_category_indices" in columns) {
@@ -1398,6 +1404,10 @@ class general_series_impl implements general_series_api {
       );
     }
     parse_general_result<null>(result);
+    this.chart.sync_animation();
+    if (this.kind === "pie" || this.kind === "polar_area" || this.kind === "radial_bar") {
+      this.chart.notify_general_legend_change();
+    }
     this.chart.repaint();
     for (const handler of this.data_changed_subs) handler("update");
   }
@@ -1425,6 +1435,7 @@ class general_series_impl implements general_series_api {
     if (this.kind === "heatmap_grid" && !("value" in columns)) {
       throw new AerisChartsError("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
     }
+    this.chart.prepare_general_transition_update();
     let result: string;
     if ("value" in columns) {
       if ("x_category_indices" in columns) {
@@ -1554,6 +1565,10 @@ class general_series_impl implements general_series_api {
       );
     }
     parse_general_result<null>(result);
+    this.chart.sync_animation();
+    if (this.kind === "pie" || this.kind === "polar_area" || this.kind === "radial_bar") {
+      this.chart.notify_general_legend_change();
+    }
     this.chart.repaint();
     for (const handler of this.data_changed_subs) handler("full");
   }
@@ -3882,6 +3897,13 @@ export class chart_impl implements chart_api {
   private auto_size: boolean;
   private dpr_query: MediaQueryList | null = null;
   private reduced_motion_query: MediaQueryList | null = null;
+  private readonly general_motion_change_handler = (event: MediaQueryListEvent): void => {
+    if (this.removed) return;
+    this.wasm.set_general_transition_reduced_motion(event.matches);
+    this.sync_animation();
+    this.repaint();
+  };
+  private general_motion_listener_bound = false;
   private readonly dpr_change_handler = (): void => {
     if (this.removed || !this.auto_size) return;
     const bounds = this.container.getBoundingClientRect();
@@ -4436,7 +4458,35 @@ export class chart_impl implements chart_api {
     }
   }
 
-  /** Start or stop the animation rAF loop to match whether any series wants the last-price pulse. */
+  /** Enable fixed-clock value transitions for compatible general dataset updates. */
+  set_general_transition_duration(duration_ms: number): void {
+    parse_general_result<null>(
+      this.wasm.set_general_transition_duration_result_json(duration_ms),
+    );
+    this.sync_general_motion_listener(duration_ms);
+    this.sync_animation();
+    this.repaint();
+  }
+
+  private sync_general_motion_listener(duration_ms: number): void {
+    const reduced_motion = this.prefers_reduced_motion();
+    this.wasm.set_general_transition_reduced_motion(reduced_motion);
+    if (this.reduced_motion_query !== null && duration_ms > 0 && !this.general_motion_listener_bound) {
+      this.reduced_motion_query.addEventListener("change", this.general_motion_change_handler);
+      this.general_motion_listener_bound = true;
+    } else if (duration_ms === 0 && this.general_motion_listener_bound) {
+      this.reduced_motion_query?.removeEventListener("change", this.general_motion_change_handler);
+      this.general_motion_listener_bound = false;
+    }
+  }
+
+  /** Pin the shared engine clock before a general data mutation so its first frame starts at zero progress. */
+  prepare_general_transition_update(): void {
+    this.wasm.set_general_transition_reduced_motion(this.prefers_reduced_motion());
+    this.wasm.set_animation_time(performance.now());
+  }
+
+  /** Start or stop the animation rAF loop while the engine has active animated content. */
   sync_animation(): void {
     if (this.removed) return;
     if (this.wasm.wants_animation()) {
@@ -4509,7 +4559,7 @@ export class chart_impl implements chart_api {
       this.wasm.set_animation_time(performance.now());
       this.wasm.render();
       this.run_canvas_primitives();
-      this.anim_frame = requestAnimationFrame(tick);
+      this.anim_frame = this.wasm.wants_animation() ? requestAnimationFrame(tick) : null;
     };
     this.anim_frame = requestAnimationFrame(tick);
   }
@@ -4981,6 +5031,10 @@ export class chart_impl implements chart_api {
       || kind === "heatmap_grid"
       || kind === "scatter"
       || kind === "bubble"
+      || kind === "pie"
+      || kind === "radar"
+      || kind === "polar_area"
+      || kind === "radial_bar"
     ) {
       if (options === undefined || !("x_axis_id" in options) || !("y_axis_id" in options)) {
         throw new AerisChartsError(
@@ -6551,6 +6605,8 @@ export class chart_impl implements chart_api {
       | { ok: true; result: persistence_restore_result }
       | persistence_error_result;
     if (!response.ok) throw_persistence_error(response);
+    const persisted = JSON.parse(document) as { general_transition_duration_ms?: number };
+    this.sync_general_motion_listener(persisted.general_transition_duration_ms ?? 0);
     if (response.result.schema_version === 2) {
       const catalog = JSON.parse(this.wasm.general_series_catalog_json()) as
         { id: number; dataset: number; kind: general_series_kind; x_axis_id: string; y_axis_id: string }[];
@@ -7865,6 +7921,10 @@ export class chart_impl implements chart_api {
     this.close_text_editor(false);
     this.stop_animation();
     this.stop_countdown_timer();
+    if (this.general_motion_listener_bound) {
+      this.reduced_motion_query?.removeEventListener("change", this.general_motion_change_handler);
+      this.general_motion_listener_bound = false;
+    }
     window.removeEventListener("aeris_charts-chart-backend-lost", this.backend_loss_handler);
     this.unbind_dpr_watcher();
     this.detach_gestures?.();

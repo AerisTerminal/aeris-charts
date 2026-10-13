@@ -733,6 +733,3994 @@ fn explicit_general_axes_reserve_layout_and_emit_shared_axis_frame() {
 }
 
 #[test]
+fn polar_axes_emit_shared_labels_spokes_and_rings() {
+    let mut chart = ChartEngine::new(400.0, 400.0, 1.0);
+    chart
+        .apply_options(r#"{"grid":{"vertLines":{"visible":true},"horzLines":{"visible":true}}}"#)
+        .unwrap();
+    let pane = chart
+        .add_pane_with_domain(true, HorizontalDomain::Polar)
+        .unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "angle",
+        pane,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.domain = GeneralAxisDomain::Category(vec![
+        "North".into(),
+        "East".into(),
+        "South".into(),
+        "West".into(),
+    ]);
+    chart.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radius",
+        pane,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.domain = GeneralAxisDomain::Numeric([0.0, 100.0]);
+    radius.tick_count = Some(3);
+    chart.add_general_axis(radius).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    for expected in ["North", "East", "South", "West", "50", "100"] {
+        assert!(
+            axis.labels.iter().any(|label| label.text == expected),
+            "missing {expected}; labels: {:?}",
+            axis.labels
+                .iter()
+                .map(|label| label.text.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+    let mut grid = Vec::new();
+    let mut points = Vec::new();
+    chart.append_general_grid_frame(pane, 1.0, 1.0, &mut grid, &mut points);
+    assert!(
+        grid.iter()
+            .any(|prim| matches!(prim, Prim::Polyline { point_count: 2, .. }))
+    );
+    assert!(
+        grid.iter()
+            .any(|prim| matches!(prim, Prim::Polyline { point_count, .. } if *point_count > 16))
+    );
+    assert!((points[0][0] - points[1][0]).abs() < 1.0e-4);
+    assert!(points[1][1] < points[0][1]);
+    let frame = chart.build_frame();
+    let pane_frame = &frame.panes[pane];
+    let polar_paths: Vec<_> = pane_frame
+        .under
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Polyline {
+                first_point,
+                point_count,
+                ..
+            } => Some((*first_point as usize, *point_count as usize)),
+            _ => None,
+        })
+        .collect();
+    assert!(polar_paths.iter().any(|(_, count)| *count == 2));
+    assert!(polar_paths.iter().any(|(_, count)| *count > 16));
+    assert!(
+        polar_paths
+            .iter()
+            .all(|(first, count)| first + count <= pane_frame.points.len())
+    );
+
+    let mut angle = GeneralAxisOptions::new(
+        "angle",
+        pane,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.domain = GeneralAxisDomain::Category(vec![
+        "North".into(),
+        "East".into(),
+        "South".into(),
+        "West".into(),
+    ]);
+    angle.ticks = Some(vec![crate::GeneralAxisTick::Category {
+        value: "North".into(),
+        label: Some("Top".into()),
+    }]);
+    chart.update_general_axis_options(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radius",
+        pane,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.domain = GeneralAxisDomain::Numeric([0.0, 100.0]);
+    radius.reverse = true;
+    radius.ticks = Some(vec![crate::GeneralAxisTick::Numeric {
+        value: 50.0,
+        label: Some("Half".into()),
+    }]);
+    chart.update_general_axis_options(radius).unwrap();
+    let explicit = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(explicit.labels.iter().any(|label| label.text == "Top"));
+    assert!(explicit.labels.iter().any(|label| label.text == "Half"));
+    assert!(!explicit.labels.iter().any(|label| label.text == "East"));
+}
+
+#[test]
+fn radial_zero_ring_is_visible_without_grid_and_deduplicated_across_axes() {
+    let mut chart = ChartEngine::new(400.0, 400.0, 1.0);
+    chart
+        .apply_options(r##"{"grid":{"horzLines":{"visible":false}},"rightPriceScale":{"borderColor":"#ff0000"}}"##)
+        .unwrap();
+    let pane = chart
+        .add_pane_with_domain(true, HorizontalDomain::Polar)
+        .unwrap();
+    for id in ["radius-a", "radius-b"] {
+        let mut radius = GeneralAxisOptions::new(
+            id,
+            pane,
+            AxisDimension::Radius,
+            GeneralScaleType::RadialLinear,
+        );
+        radius.domain = GeneralAxisDomain::Numeric([-1.0, 1.0]);
+        radius.zero_line = true;
+        chart.add_general_axis(radius).unwrap();
+    }
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut prims = Vec::new();
+    let mut points = Vec::new();
+    chart.append_general_grid_frame(pane, 1.0, 1.0, &mut prims, &mut points);
+    let rings: Vec<_> = prims
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Polyline {
+                point_count, color, ..
+            } if *point_count > 16 => Some(*color),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rings, [Color::rgb(255, 0, 0)]);
+
+    chart
+        .apply_options(r#"{"grid":{"horzLines":{"visible":true}}}"#)
+        .unwrap();
+    prims.clear();
+    points.clear();
+    chart.append_general_grid_frame(pane, 1.0, 1.0, &mut prims, &mut points);
+    let plot = chart.general_plot_rect(pane).unwrap();
+    let center_y = plot.y + plot.height / 2.0;
+    let zero_radius = plot.width.min(plot.height) / 4.0;
+    let coincident: Vec<_> = prims
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Polyline {
+                first_point,
+                point_count,
+                color,
+                ..
+            } if *point_count > 16 => {
+                let radius = center_y - f64::from(points[*first_point as usize][1]);
+                ((radius - zero_radius).abs() < 0.5).then_some(*color)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(coincident, [Color::rgb(255, 0, 0)]);
+}
+
+#[test]
+fn pie_and_donut_share_sector_frame_and_exact_hit_geometry() {
+    let mut chart = ChartEngine::new(400.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(true, HorizontalDomain::Polar)
+        .unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "pie-angle",
+        pane,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    chart.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "pie-radius",
+        pane,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    chart.add_general_axis(radius).unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["A".into(), "B".into(), "C".into(), "D".into()],
+            category_indices: vec![0, 1, 2, 3],
+            y: vec![3.0, 1.0, 0.0, 9.0],
+            y_valid: Some(vec![1, 1, 1, 0]),
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::pie(pane, dataset, "pie-angle", "pie-radius");
+    options.polar.inner_radius = 0.4;
+    let series = chart.add_general_series(options.clone()).unwrap();
+    let mut invalid_options = options.clone();
+    invalid_options.polar.outer_radius = 0.3;
+    assert!(
+        chart
+            .update_general_series_options(series, invalid_options)
+            .is_err()
+    );
+    assert_eq!(
+        chart.general_series(series).unwrap().polar().inner_radius,
+        0.4
+    );
+    let negative_dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["Bad".into()],
+            category_indices: vec![0],
+            y: vec![-1.0],
+            y_valid: None,
+        })
+        .unwrap();
+    assert!(
+        chart
+            .add_general_series(GeneralSeriesOptions::pie(
+                pane,
+                negative_dataset,
+                "pie-angle",
+                "pie-radius"
+            ))
+            .is_err()
+    );
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut slices = Vec::new();
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+        slices.push(slice);
+    });
+    assert_eq!(
+        slices.iter().map(|slice| slice.row).collect::<Vec<_>>(),
+        [0, 1]
+    );
+    let frame = chart.build_frame();
+    assert!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::MeshFill { .. }))
+    );
+    assert_eq!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::MeshFill { .. }))
+            .count(),
+        2
+    );
+    for slice in &slices {
+        let point = slice
+            .sector
+            .plot()
+            .point(slice.sector.mid_angle(), slice.sector.mid_radius())
+            .unwrap();
+        let hit = chart
+            .general_hit_test(pane, point.0, point.1, crate::GeneralHitMode::Exact)
+            .unwrap();
+        assert_eq!(hit.row, slice.row);
+    }
+    let (cx, cy) = slices[0].sector.plot().center();
+    assert!(
+        chart
+            .general_hit_test(pane, cx, cy, crate::GeneralHitMode::Exact)
+            .is_none()
+    );
+    let mut solid = options;
+    solid.polar.inner_radius = 0.0;
+    chart
+        .update_general_series_options(series, solid.clone())
+        .unwrap();
+    let mut solid_slices = Vec::new();
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+        solid_slices.push(slice);
+    });
+    assert_eq!(solid_slices.len(), 2);
+    assert!(solid_slices[0].sector.contains(cx, cy));
+
+    for (start, end, inner, pad) in [
+        (0.0, std::f64::consts::TAU, 0.0, 0.0),
+        (0.35, 4.3, 0.35, 0.06),
+        (5.3, 8.0, 0.2, 0.02),
+    ] {
+        solid.polar.start_angle = start;
+        solid.polar.end_angle = end;
+        solid.polar.inner_radius = inner;
+        solid.polar.pad_angle = pad;
+        chart
+            .update_general_series_options(series, solid.clone())
+            .unwrap();
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let mut slices = Vec::new();
+        chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+            slices.push(slice)
+        });
+        let plot = slices[0].sector.plot();
+        for angle_index in 0..180 {
+            for radius_index in 1..20 {
+                let (x, y) = plot
+                    .point(
+                        std::f64::consts::TAU * angle_index as f64 / 180.0,
+                        radius_index as f64 / 20.0,
+                    )
+                    .unwrap();
+                let expected = slices
+                    .iter()
+                    .find(|slice| slice.sector.contains(x, y))
+                    .map(|slice| slice.row);
+                let actual = chart
+                    .general_hit_test(pane, x, y, crate::GeneralHitMode::Exact)
+                    .map(|hit| hit.row);
+                assert_eq!(
+                    actual, expected,
+                    "angle={angle_index} radius={radius_index} start={start}"
+                );
+            }
+        }
+    }
+
+    let mut old_first = None;
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+        if slice.row == 0 {
+            old_first = slice
+                .sector
+                .plot()
+                .point(slice.sector.mid_angle(), slice.sector.mid_radius());
+        }
+    });
+    let (x, y) = old_first.unwrap();
+    assert_eq!(
+        chart
+            .general_hit_test(pane, x, y, crate::GeneralHitMode::Exact)
+            .unwrap()
+            .row,
+        0
+    );
+    chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["A".into(), "B".into(), "C".into(), "D".into()],
+                category_indices: vec![0, 1, 2, 3],
+                y: vec![0.0, 1.0, 0.0, 9.0],
+                y_valid: Some(vec![1, 1, 1, 0]),
+            },
+        )
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert_eq!(
+        chart
+            .general_hit_test(pane, x, y, crate::GeneralHitMode::Exact)
+            .unwrap()
+            .row,
+        1
+    );
+    let bytes = chart.memory_usage().general_series_capacity_bytes;
+    for _ in 0..1_000 {
+        let _ = chart.general_hit_test(pane, x, y, crate::GeneralHitMode::Exact);
+    }
+    assert_eq!(chart.memory_usage().general_series_capacity_bytes, bytes);
+
+    let extremes = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["Max A".into(), "Max B".into()],
+            category_indices: vec![0, 1],
+            y: vec![f64::MAX, f64::MAX],
+            y_valid: None,
+        })
+        .unwrap();
+    let extreme_series = chart
+        .add_general_series(GeneralSeriesOptions::pie(
+            pane,
+            extremes,
+            "pie-angle",
+            "pie-radius",
+        ))
+        .unwrap();
+    let mut extreme_slices = Vec::new();
+    chart.visit_general_pie_slices(chart.general_series(extreme_series).unwrap(), |slice| {
+        extreme_slices.push(slice);
+    });
+    assert_eq!(extreme_slices.len(), 2);
+    assert!((extreme_slices[0].sector.mid_angle() - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+
+    let zeros = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["Zero".into(), "Missing".into()],
+            category_indices: vec![0, 1],
+            y: vec![0.0, 1.0],
+            y_valid: Some(vec![1, 0]),
+        })
+        .unwrap();
+    let zero_series = chart
+        .add_general_series(GeneralSeriesOptions::pie(
+            pane,
+            zeros,
+            "pie-angle",
+            "pie-radius",
+        ))
+        .unwrap();
+    chart.visit_general_pie_slices(chart.general_series(zero_series).unwrap(), |_| {
+        panic!("zero and missing rows have no visible sector")
+    });
+}
+
+#[test]
+fn polar_legend_slices_share_frame_colors_and_bounded_row_labels() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "angle",
+        0,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    chart.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radius",
+        0,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    chart.add_general_axis(radius).unwrap();
+    let input = GeneralXyInput::Category {
+        ids: None,
+        categories: (0..35).map(|row| format!("Category {row}")).collect(),
+        category_indices: (0..35).collect(),
+        y: vec![1.0; 35],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input.clone()).unwrap();
+    let mut labels = vec![None; 35];
+    labels[0] = Some("Named first".into());
+    let mut colors = vec![None; 35];
+    colors[1] = Some("#f00".into());
+    chart
+        .replace_general_xy_dataset_styled(dataset, input, Some(labels), Some(colors), None)
+        .unwrap();
+    let mut options = GeneralSeriesOptions::pie(0, dataset, "angle", "radius");
+    options.title = "Allocation".into();
+    let series = chart.add_general_series(options.clone()).unwrap();
+    let snapshot = chart.general_legend_snapshot(Some(0));
+    let item = &snapshot.items[0];
+    assert_eq!(item.slices.len(), 32);
+    assert!(item.slices_truncated);
+    assert_eq!(item.slices[0].label, "Named first");
+    assert_eq!(item.slices[0].color, "#4d8dd2");
+    assert_eq!(item.slices[1].label, "Category 1");
+    assert_eq!(item.slices[1].color, "#ff0000");
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let frame = chart.build_frame();
+    let first_fill = frame.panes[0]
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::MeshFill { color, .. } => Some(*color),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(Color::parse_css(&item.slices[0].color), Some(first_fill));
+    chart.set_general_series_visible(series, false);
+    assert_eq!(
+        chart.general_legend_snapshot(Some(0)).items[0].slices.len(),
+        32
+    );
+    for _ in 0..16 {
+        chart.add_general_series(options.clone()).unwrap();
+    }
+    let all = chart.general_legend_snapshot(Some(0));
+    assert_eq!(
+        all.items
+            .iter()
+            .map(|item| item.slices.len())
+            .sum::<usize>(),
+        512
+    );
+    assert!(all.items[16].slices.is_empty());
+    assert!(all.items[16].slices_truncated);
+}
+
+#[test]
+fn polar_data_labels_emit_collision_free_shared_frame_leaders() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "angle",
+        0,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    chart.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radius",
+        0,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    chart.add_general_axis(radius).unwrap();
+    let input = GeneralXyInput::Category {
+        ids: None,
+        categories: (0..32).map(|row| format!("Sector {row}")).collect(),
+        category_indices: (0..32).collect(),
+        y: vec![1.0; 32],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input).unwrap();
+    let mut options = GeneralSeriesOptions::pie(0, dataset, "angle", "radius");
+    options.polar.outer_radius = 0.65;
+    options.data_labels = true;
+    chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let frame = chart.build_frame();
+    let pane = &frame.panes[0];
+    let labels = pane
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Text {
+                x, y, text, size, ..
+            } => Some((f64::from(*x), f64::from(*y), text, f64::from(*size))),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let leaders = pane
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Polyline {
+                first_point,
+                point_count: 3,
+                ..
+            } => Some(*first_point as usize),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(!labels.is_empty());
+    assert!(
+        labels
+            .iter()
+            .all(|(_, _, text, _)| text.starts_with("Sector "))
+    );
+    assert!(
+        labels.len() < 32,
+        "dense sectors should suppress colliding labels"
+    );
+    assert_eq!(leaders.len(), labels.len());
+    let plot = chart.general_plot_rect(0).unwrap();
+    let bounds = labels
+        .iter()
+        .map(|(x, y, text, size)| {
+            let width = text.len() as f64 * 7.0;
+            [
+                x - width / 2.0,
+                y - size * 0.55,
+                x + width / 2.0,
+                y + size * 0.55,
+            ]
+        })
+        .collect::<Vec<_>>();
+    for (index, rect) in bounds.iter().enumerate() {
+        assert!(rect[0] >= 2.0 && rect[2] <= plot.width - 2.0);
+        assert!(rect[1] >= plot.y + 2.0 && rect[3] <= plot.y + plot.height - 2.0);
+        for other in &bounds[..index] {
+            assert!(
+                rect[0] >= other[2] + 2.0
+                    || rect[2] <= other[0] - 2.0
+                    || rect[1] >= other[3] + 2.0
+                    || rect[3] <= other[1] - 2.0
+            );
+        }
+    }
+    for first in leaders {
+        let segment = &pane.points[first..first + 3];
+        assert!(
+            segment
+                .iter()
+                .all(|point| point.iter().all(|value| value.is_finite()))
+        );
+        assert_ne!(segment[0], segment[2]);
+    }
+}
+
+#[test]
+fn pie_value_transition_uses_fixed_clock_for_frame_hits_and_interruption() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    for (id, dimension, scale) in [
+        (
+            "angle",
+            AxisDimension::Angle,
+            GeneralScaleType::AngularCategory,
+        ),
+        (
+            "radius",
+            AxisDimension::Radius,
+            GeneralScaleType::RadialLinear,
+        ),
+    ] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, scale);
+        axis.visible = false;
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |a, b| GeneralXyInput::Category {
+        ids: Some(vec![
+            crate::GeneralRowId::Text("a".into()),
+            crate::GeneralRowId::Text("b".into()),
+        ]),
+        categories: vec!["A".into(), "B".into()],
+        category_indices: vec![0, 1],
+        y: vec![a, b],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(1.0, 3.0)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::pie(0, dataset, "angle", "radius"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    assert!(chart.set_general_animation_time_ms(1_000.0));
+    chart
+        .replace_general_xy_dataset(dataset, input(3.0, 1.0))
+        .unwrap();
+    assert_eq!(chart.general_dataset(dataset).unwrap().y(), &[3.0, 1.0]);
+    assert!(chart.general_transition_active());
+    let first_sweep = |chart: &ChartEngine| {
+        let mut sweep = None;
+        chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |item| {
+            if item.row == 0 {
+                sweep = Some(item.sector.mid_angle() * 2.0);
+            }
+        });
+        sweep.unwrap()
+    };
+    assert!((first_sweep(&chart) - std::f64::consts::FRAC_PI_2).abs() < 1e-10);
+    assert!(chart.set_general_animation_time_ms(1_100.0));
+    assert!((first_sweep(&chart) - std::f64::consts::PI).abs() < 1e-10);
+    let mut first = None;
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |item| {
+        if item.row == 0 {
+            first = Some(item);
+        }
+    });
+    let first = first.unwrap();
+    let (x, y) = first
+        .sector
+        .plot()
+        .point(first.sector.mid_angle(), first.sector.mid_radius())
+        .unwrap();
+    assert_eq!(
+        chart
+            .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+            .unwrap()
+            .row,
+        0
+    );
+    let frame = chart.build_frame();
+    assert_eq!(
+        frame.panes[0]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::MeshFill { .. }))
+            .count(),
+        2
+    );
+    chart
+        .replace_general_xy_dataset(dataset, input(1.0, 3.0))
+        .unwrap();
+    assert!((first_sweep(&chart) - std::f64::consts::PI).abs() < 1e-10);
+    assert!(!chart.set_general_animation_time_ms(1_050.0));
+    assert!(chart.set_general_animation_time_ms(1_200.0));
+    assert!((first_sweep(&chart) - 0.75 * std::f64::consts::PI).abs() < 1e-10);
+    chart.set_general_transition_reduced_motion(true);
+    assert!(!chart.general_transition_active());
+    assert!((first_sweep(&chart) - std::f64::consts::FRAC_PI_2).abs() < 1e-10);
+    chart.set_general_transition_reduced_motion(false);
+    chart
+        .replace_general_xy_dataset(dataset, input(3.0, 1.0))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    assert!(chart.remove_general_series(series));
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn removed_pie_row_shrinks_in_source_order_without_a_ghost_hit() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    for (id, dimension, scale) in [
+        (
+            "angle",
+            AxisDimension::Angle,
+            GeneralScaleType::AngularCategory,
+        ),
+        (
+            "radius",
+            AxisDimension::Radius,
+            GeneralScaleType::RadialLinear,
+        ),
+    ] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, scale);
+        axis.visible = false;
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |keep_b: bool| GeneralXyInput::Category {
+        ids: Some(
+            (if keep_b {
+                vec!["a", "b", "c"]
+            } else {
+                vec!["a", "c"]
+            })
+            .into_iter()
+            .map(|id| GeneralRowId::Text(id.into()))
+            .collect(),
+        ),
+        categories: (if keep_b {
+            vec!["A", "B", "C"]
+        } else {
+            vec!["A", "C"]
+        })
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        category_indices: if keep_b { vec![0, 1, 2] } else { vec![0, 1] },
+        y: if keep_b { vec![2.0; 3] } else { vec![2.0; 2] },
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(true)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::pie(0, dataset, "angle", "radius"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(false))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    assert_eq!(chart.general_dataset(dataset).unwrap().len(), 2);
+    let mut slices = Vec::new();
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+        slices.push(slice)
+    });
+    assert_eq!(slices.len(), 3);
+    assert_eq!(
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::MeshFill { .. }))
+            .count(),
+        3
+    );
+    let presentation = chart.general_geometry_dataset(dataset).unwrap();
+    assert_eq!(
+        slices
+            .iter()
+            .map(|slice| presentation.row_identity(slice.row).unwrap().clone())
+            .collect::<Vec<_>>(),
+        ["a", "b", "c"]
+            .map(|id| GeneralRowIdentity::Explicit(GeneralRowId::Text(id.into())))
+            .to_vec()
+    );
+    chart.set_general_animation_time_ms(1_100.0);
+    slices.clear();
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+        slices.push(slice)
+    });
+    let ghost = slices.iter().find(|slice| slice.row == 1).unwrap();
+    let (x, y) = ghost
+        .sector
+        .plot()
+        .point(ghost.sector.mid_angle(), ghost.sector.mid_radius())
+        .unwrap();
+    assert!(
+        chart
+            .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+            .is_none()
+    );
+    chart
+        .replace_general_xy_dataset(dataset, input(true))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    assert!((chart.general_geometry_dataset(dataset).unwrap().y()[1] - 1.0).abs() < 1e-10);
+    slices.clear();
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+        slices.push(slice)
+    });
+    let restored = slices.iter().find(|slice| slice.row == 1).unwrap();
+    let (x, y) = restored
+        .sector
+        .plot()
+        .point(restored.sector.mid_angle(), restored.sector.mid_radius())
+        .unwrap();
+    assert_eq!(
+        chart
+            .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+            .unwrap()
+            .row,
+        1
+    );
+    chart.set_general_animation_time_ms(1_300.0);
+    assert!(!chart.general_transition_active());
+    chart
+        .replace_general_xy_dataset(dataset, input(false))
+        .unwrap();
+    chart.set_general_animation_time_ms(1_500.0);
+    assert!(!chart.general_transition_active());
+    slices.clear();
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+        slices.push(slice)
+    });
+    assert_eq!(slices.len(), 2);
+    chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::Category {
+                ids: Some(Vec::new()),
+                categories: Vec::new(),
+                category_indices: Vec::new(),
+                y: Vec::new(),
+                y_valid: None,
+            },
+        )
+        .unwrap();
+    assert!(chart.general_transition_active());
+    slices.clear();
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+        slices.push(slice)
+    });
+    assert_eq!(slices.len(), 2);
+    chart.set_general_animation_time_ms(1_700.0);
+    assert!(!chart.general_transition_active());
+    slices.clear();
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+        slices.push(slice)
+    });
+    assert!(slices.is_empty());
+    assert!(
+        !chart.build_frame().panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::MeshFill { .. }))
+    );
+}
+
+#[test]
+fn removed_column_keeps_its_category_slot_until_exit_completes() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Category {
+            scale: CategoryScaleType::Band,
+        },
+    )
+    .unwrap();
+    let mut x_axis = GeneralAxisOptions::new("x", 0, AxisDimension::X, GeneralScaleType::Band);
+    x_axis.visible = false;
+    chart.add_general_axis(x_axis).unwrap();
+    let mut y_axis = GeneralAxisOptions::new("y", 0, AxisDimension::Y, GeneralScaleType::Linear);
+    y_axis.visible = false;
+    y_axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+    chart.add_general_axis(y_axis).unwrap();
+    let input = |keep_b: bool| GeneralXyInput::Category {
+        ids: Some(
+            (if keep_b {
+                vec!["a", "b", "c"]
+            } else {
+                vec!["a", "c"]
+            })
+            .into_iter()
+            .map(|id| GeneralRowId::Text(id.into()))
+            .collect(),
+        ),
+        categories: (if keep_b {
+            vec!["A", "B", "C"]
+        } else {
+            vec!["A", "C"]
+        })
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        category_indices: if keep_b { vec![0, 1, 2] } else { vec![0, 1] },
+        y: if keep_b {
+            vec![2.0, 4.0, 6.0]
+        } else {
+            vec![2.0, 6.0]
+        },
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(true)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::column(0, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(false))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    chart.set_general_animation_time_ms(1_100.0);
+    assert_eq!(
+        chart.general_axis_effective_domain("x"),
+        Some(GeneralAxisDomain::Category(vec![
+            "A".into(),
+            "B".into(),
+            "C".into()
+        ]))
+    );
+    let mut columns = Vec::new();
+    chart.visit_general_columns(chart.general_series(series).unwrap(), |column| {
+        columns.push(column)
+    });
+    assert_eq!(columns.len(), 3);
+    let ghost = columns[1];
+    let x = (ghost.left + ghost.right) / 2.0;
+    let y = (ghost.top + ghost.bottom) / 2.0;
+    assert!(
+        chart
+            .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+            .is_none()
+    );
+    chart.set_general_animation_time_ms(1_200.0);
+    assert!(!chart.general_transition_active());
+    columns.clear();
+    chart.visit_general_columns(chart.general_series(series).unwrap(), |column| {
+        columns.push(column)
+    });
+    assert_eq!(columns.len(), 2);
+    assert_eq!(
+        chart.general_axis_effective_domain("x"),
+        Some(GeneralAxisDomain::Category(vec!["A".into(), "C".into()]))
+    );
+}
+
+#[test]
+fn category_reorder_moves_shared_band_geometry_ticks_and_hits() {
+    let mut chart = ChartEngine::new(400.0, 300.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    let mut y_axis = GeneralAxisOptions::new("y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y_axis.visible = false;
+    y_axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+    chart.add_general_axis(y_axis).unwrap();
+    let input = |categories: [&str; 3], indices: Vec<u32>| GeneralXyInput::Category {
+        ids: Some(
+            ["a", "b", "c"]
+                .into_iter()
+                .map(|id| GeneralRowId::Text(id.into()))
+                .collect(),
+        ),
+        categories: categories.into_iter().map(str::to_owned).collect(),
+        category_indices: indices,
+        y: vec![2.0, 4.0, 6.0],
+        y_valid: None,
+    };
+    let dataset = chart
+        .create_general_xy_dataset(input(["A", "B", "C"], vec![0, 1, 2]))
+        .unwrap();
+    let mut line_options = GeneralSeriesOptions::xy_line(pane, dataset, "x", "y");
+    line_options.point_markers = true;
+    let line = chart.add_general_series(line_options).unwrap();
+    let column = chart
+        .add_general_series(GeneralSeriesOptions::column(pane, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let positions = |chart: &ChartEngine| {
+        let mut line_x = None;
+        chart.visit_general_path_points(chart.general_series(line).unwrap(), |point| {
+            if point.row == 0 {
+                line_x = Some(point.x);
+            }
+        });
+        let mut column_x = None;
+        chart.visit_general_columns(chart.general_series(column).unwrap(), |bar| {
+            if bar.row == 0 {
+                column_x = Some((bar.left + bar.right) / 2.0);
+            }
+        });
+        let mut axis = AxisFrame::default();
+        chart.append_general_axis_frame(&mut axis, &|_, _| 14.0);
+        let tick_x = axis
+            .labels
+            .iter()
+            .find(|label| label.text == "A")
+            .map(|label| label.x);
+        (line_x.unwrap(), column_x.unwrap(), tick_x.unwrap())
+    };
+    let source = positions(&chart);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(["C", "A", "B"], vec![1, 2, 0]))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    let start = positions(&chart);
+    for (before, initial) in [
+        (source.0, start.0),
+        (source.1, start.1),
+        (source.2, start.2),
+    ] {
+        assert!((before - initial).abs() < 1e-8);
+    }
+    chart.set_general_animation_time_ms(1_100.0);
+    let middle = positions(&chart);
+    let mut bar_y = None;
+    chart.visit_general_columns(chart.general_series(column).unwrap(), |bar| {
+        if bar.row == 0 {
+            bar_y = Some((bar.top + bar.bottom) / 2.0);
+        }
+    });
+    assert_eq!(
+        chart
+            .general_hit_test(pane, middle.1, bar_y.unwrap(), crate::GeneralHitMode::Exact)
+            .unwrap()
+            .row,
+        0
+    );
+    chart.set_general_animation_time_ms(1_200.0);
+    let end = positions(&chart);
+    for (before, half, after) in [
+        (source.0, middle.0, end.0),
+        (source.1, middle.1, end.1),
+        (source.2, middle.2, end.2),
+    ] {
+        assert!((half - (before + after) / 2.0).abs() < 1e-8);
+    }
+    assert!(end.0 > source.0);
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn category_point_reorder_interrupts_from_its_sampled_position() {
+    let mut chart = ChartEngine::new(400.0, 300.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Point,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Point,
+        ))
+        .unwrap();
+    let mut y_axis = GeneralAxisOptions::new("y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y_axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+    y_axis.visible = false;
+    chart.add_general_axis(y_axis).unwrap();
+    let input = |categories: [&str; 3], indices: [u32; 3]| GeneralXyInput::Category {
+        ids: Some(
+            ["a", "b", "c"]
+                .into_iter()
+                .map(|id| GeneralRowId::Text(id.into()))
+                .collect(),
+        ),
+        categories: categories.into_iter().map(str::to_owned).collect(),
+        category_indices: indices.to_vec(),
+        y: vec![2.0, 4.0, 6.0],
+        y_valid: None,
+    };
+    let dataset = chart
+        .create_general_xy_dataset(input(["A", "B", "C"], [0, 1, 2]))
+        .unwrap();
+    let line = chart
+        .add_general_series(GeneralSeriesOptions::xy_line(pane, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let first_x = |chart: &ChartEngine| {
+        let mut x = None;
+        chart.visit_general_path_points(chart.general_series(line).unwrap(), |point| {
+            if point.row == 0 {
+                x = Some(point.x);
+            }
+        });
+        x.unwrap()
+    };
+    let original = first_x(&chart);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(["C", "A", "B"], [1, 2, 0]))
+        .unwrap();
+    chart.set_general_animation_time_ms(1_100.0);
+    let sampled = first_x(&chart);
+    assert!(sampled > original);
+    chart
+        .replace_general_xy_dataset(dataset, input(["B", "C", "A"], [2, 0, 1]))
+        .unwrap();
+    assert!((first_x(&chart) - sampled).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_200.0);
+    let midway = first_x(&chart);
+    chart.set_general_animation_time_ms(1_300.0);
+    let target = first_x(&chart);
+    assert!((midway - (sampled + target) / 2.0).abs() < 1e-8);
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn single_category_rename_with_fixed_geometry_schedules_no_animation() {
+    let mut chart = ChartEngine::new(400.0, 300.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Point,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Point,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let input = |category: &str| GeneralXyInput::Category {
+        ids: Some(vec![GeneralRowId::Text("same".into())]),
+        categories: vec![category.into()],
+        category_indices: vec![0],
+        y: vec![5.0],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input("A")).unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::xy_line(pane, dataset, "x", "y"))
+        .unwrap();
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input("B"))
+        .unwrap();
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn matched_row_moves_between_categories_on_a_fixed_axis() {
+    let mut chart = ChartEngine::new(400.0, 300.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    let mut x_axis = GeneralAxisOptions::new("x", pane, AxisDimension::X, GeneralScaleType::Band);
+    x_axis.domain = GeneralAxisDomain::Category(vec!["A".into(), "B".into(), "C".into()]);
+    chart.add_general_axis(x_axis).unwrap();
+    let mut y_axis = GeneralAxisOptions::new("y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y_axis.visible = false;
+    y_axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+    chart.add_general_axis(y_axis).unwrap();
+    let input = |category_index| GeneralXyInput::Category {
+        ids: Some(vec![GeneralRowId::Text("moving".into())]),
+        categories: vec!["A".into(), "B".into(), "C".into()],
+        category_indices: vec![category_index],
+        y: vec![5.0],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(0)).unwrap();
+    let line = chart
+        .add_general_series(GeneralSeriesOptions::xy_line(pane, dataset, "x", "y"))
+        .unwrap();
+    let column = chart
+        .add_general_series(GeneralSeriesOptions::column(pane, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let positions = |chart: &ChartEngine| {
+        let mut line_x = None;
+        chart.visit_general_path_points(chart.general_series(line).unwrap(), |point| {
+            line_x = Some(point.x)
+        });
+        let mut column_x = None;
+        chart.visit_general_columns(chart.general_series(column).unwrap(), |bar| {
+            column_x = Some((bar.left + bar.right) / 2.0)
+        });
+        (line_x.unwrap(), column_x.unwrap())
+    };
+    let source = positions(&chart);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart.replace_general_xy_dataset(dataset, input(2)).unwrap();
+    assert!(chart.general_transition_active());
+    let initial = positions(&chart);
+    assert!((initial.0 - source.0).abs() < 1e-8);
+    assert!((initial.1 - source.1).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_100.0);
+    let middle = positions(&chart);
+    chart.set_general_animation_time_ms(1_200.0);
+    let target = positions(&chart);
+    for (from, half, to) in [
+        (source.0, middle.0, target.0),
+        (source.1, middle.1, target.1),
+    ] {
+        assert!((half - (from + to) / 2.0).abs() < 1e-8);
+    }
+    assert!(!chart.general_transition_active());
+    chart.set_general_animation_time_ms(2_000.0);
+    chart.replace_general_xy_dataset(dataset, input(0)).unwrap();
+    chart.set_general_animation_time_ms(2_100.0);
+    let sampled = positions(&chart);
+    chart.replace_general_xy_dataset(dataset, input(1)).unwrap();
+    let restarted = positions(&chart);
+    assert!((restarted.0 - sampled.0).abs() < 1e-8);
+    assert!((restarted.1 - sampled.1).abs() < 1e-8);
+    chart.set_general_animation_time_ms(2_200.0);
+    let interrupted_middle = positions(&chart);
+    let mut bar_y = None;
+    chart.visit_general_columns(chart.general_series(column).unwrap(), |bar| {
+        bar_y = Some((bar.top + bar.bottom) / 2.0)
+    });
+    assert_eq!(
+        chart
+            .general_hit_test(
+                pane,
+                interrupted_middle.1,
+                bar_y.unwrap(),
+                crate::GeneralHitMode::Exact,
+            )
+            .unwrap()
+            .row,
+        0
+    );
+    chart.set_general_animation_time_ms(2_300.0);
+    let interrupted_target = positions(&chart);
+    for (from, half, to) in [
+        (sampled.0, interrupted_middle.0, interrupted_target.0),
+        (sampled.1, interrupted_middle.1, interrupted_target.1),
+    ] {
+        assert!((half - (from + to) / 2.0).abs() < 1e-8);
+    }
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn matched_horizontal_bar_moves_between_y_categories() {
+    let mut chart = ChartEngine::new(480.0, 360.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    let mut x_axis = GeneralAxisOptions::new("x", pane, AxisDimension::X, GeneralScaleType::Linear);
+    x_axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+    chart.add_general_axis(x_axis).unwrap();
+    let mut y_axis = GeneralAxisOptions::new("y", pane, AxisDimension::Y, GeneralScaleType::Band);
+    y_axis.domain = GeneralAxisDomain::Category(vec!["A".into(), "B".into(), "C".into()]);
+    chart.add_general_axis(y_axis).unwrap();
+    let input = |index| GeneralXyInput::Category {
+        ids: Some(vec![GeneralRowId::Text("bar".into())]),
+        categories: vec!["A".into(), "B".into(), "C".into()],
+        category_indices: vec![index],
+        y: vec![5.0],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(0)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::horizontal_bar(
+            pane, dataset, "x", "y",
+        ))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let center = |chart: &ChartEngine| {
+        let mut point = None;
+        chart.visit_general_horizontal_bars(chart.general_series(series).unwrap(), |bar| {
+            point = Some(((bar.left + bar.right) / 2.0, (bar.top + bar.bottom) / 2.0));
+        });
+        point.unwrap()
+    };
+    let source = center(&chart);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart.replace_general_xy_dataset(dataset, input(2)).unwrap();
+    let initial = center(&chart);
+    assert!((initial.1 - source.1).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_100.0);
+    let middle = center(&chart);
+    assert_eq!(
+        chart
+            .general_hit_test(pane, middle.0, middle.1, crate::GeneralHitMode::Exact)
+            .map(|hit| (hit.series, hit.row)),
+        Some((series, 0))
+    );
+    chart.set_general_animation_time_ms(1_200.0);
+    let target = center(&chart);
+    assert!((middle.1 - (source.1 + target.1) / 2.0).abs() < 1e-8);
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn matched_heatmap_cell_moves_on_both_fixed_category_axes() {
+    let mut chart = ChartEngine::new(480.0, 360.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        let mut axis = GeneralAxisOptions::new(id, pane, dimension, GeneralScaleType::Band);
+        axis.domain = GeneralAxisDomain::Category(vec!["A".into(), "B".into(), "C".into()]);
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |index| GeneralXyInput::HeatmapCategoryCategory {
+        ids: Some(vec![GeneralRowId::Text("cell".into())]),
+        x_categories: vec!["A".into(), "B".into(), "C".into()],
+        x_category_indices: vec![index],
+        y_categories: vec!["A".into(), "B".into(), "C".into()],
+        y_category_indices: vec![index],
+        value: vec![5.0],
+        value_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(0)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::heatmap_grid(pane, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let cell_center = |chart: &ChartEngine| {
+        let mut center = None;
+        chart.visit_general_heatmap_cells(chart.general_series(series).unwrap(), |cell| {
+            center = Some((
+                (cell.left + cell.right) / 2.0,
+                (cell.top + cell.bottom) / 2.0,
+            ));
+        });
+        center.unwrap()
+    };
+    let start = cell_center(&chart);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart.replace_general_xy_dataset(dataset, input(2)).unwrap();
+    assert!(chart.general_transition_active());
+    let initial = cell_center(&chart);
+    assert!((initial.0 - start.0).abs() < 1e-8);
+    assert!((initial.1 - start.1).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_100.0);
+    let middle = cell_center(&chart);
+    chart.set_general_animation_time_ms(1_200.0);
+    let end = cell_center(&chart);
+    for (from, half, to) in [(start.0, middle.0, end.0), (start.1, middle.1, end.1)] {
+        assert!((half - (from + to) / 2.0).abs() < 1e-8);
+    }
+    chart.set_general_animation_time_ms(2_000.0);
+    chart.replace_general_xy_dataset(dataset, input(0)).unwrap();
+    chart.set_general_animation_time_ms(2_100.0);
+    let sampled = cell_center(&chart);
+    chart.replace_general_xy_dataset(dataset, input(1)).unwrap();
+    let restarted = cell_center(&chart);
+    assert!((restarted.0 - sampled.0).abs() < 1e-8);
+    assert!((restarted.1 - sampled.1).abs() < 1e-8);
+    chart.set_general_animation_time_ms(2_200.0);
+    let interrupted_middle = cell_center(&chart);
+    assert_eq!(
+        chart
+            .general_hit_test(
+                pane,
+                interrupted_middle.0,
+                interrupted_middle.1,
+                crate::GeneralHitMode::Exact,
+            )
+            .map(|hit| (hit.series, hit.row)),
+        Some((series, 0))
+    );
+}
+
+#[test]
+fn automatic_category_axis_retains_the_departing_slot_during_row_motion() {
+    let mut chart = ChartEngine::new(400.0, 300.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    let mut y_axis = GeneralAxisOptions::new("y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y_axis.visible = false;
+    y_axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+    chart.add_general_axis(y_axis).unwrap();
+    let input = |categories: [&str; 2], indices: [u32; 2]| GeneralXyInput::Category {
+        ids: Some(
+            ["a", "b"]
+                .into_iter()
+                .map(|id| GeneralRowId::Text(id.into()))
+                .collect(),
+        ),
+        categories: categories.into_iter().map(str::to_owned).collect(),
+        category_indices: indices.to_vec(),
+        y: vec![2.0, 4.0],
+        y_valid: None,
+    };
+    let dataset = chart
+        .create_general_xy_dataset(input(["A", "B"], [0, 1]))
+        .unwrap();
+    let column = chart
+        .add_general_series(GeneralSeriesOptions::column(pane, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let first_x = |chart: &ChartEngine| {
+        let mut x = None;
+        chart.visit_general_columns(chart.general_series(column).unwrap(), |bar| {
+            if bar.row == 0 {
+                x = Some((bar.left + bar.right) / 2.0);
+            }
+        });
+        x.unwrap()
+    };
+    let start = first_x(&chart);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(["B", "C"], [1, 0]))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    assert_eq!(
+        chart.general_axis_effective_domain("x"),
+        Some(GeneralAxisDomain::Category(vec![
+            "A".into(),
+            "B".into(),
+            "C".into()
+        ]))
+    );
+    assert!((first_x(&chart) - start).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_200.0);
+    assert_eq!(
+        chart.general_axis_effective_domain("x"),
+        Some(GeneralAxisDomain::Category(vec!["B".into(), "C".into()]))
+    );
+    assert!(first_x(&chart) > start);
+}
+
+#[test]
+fn cartesian_value_transition_moves_shared_geometry_without_changing_public_data() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, GeneralScaleType::Linear);
+        axis.visible = false;
+        axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |x, y| GeneralXyInput::Numeric {
+        ids: Some(vec![crate::GeneralRowId::Text("one".into())]),
+        x: vec![x],
+        y: vec![y],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(2.0, 2.0)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::xy_line(0, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(500.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(6.0, 6.0))
+        .unwrap();
+    assert_eq!(chart.general_dataset(dataset).unwrap().y(), &[6.0]);
+    chart.set_general_animation_time_ms(600.0);
+    let mut midpoint = None;
+    chart.visit_general_path_points(chart.general_series(series).unwrap(), |point| {
+        midpoint = Some(point);
+    });
+    let point = midpoint.unwrap();
+    let plot = chart.general_plot_rect(0).unwrap();
+    let x = plot.width * 0.4;
+    let y = plot.y + plot.height * 0.6;
+    assert!((point.x - x).abs() < 1e-8);
+    assert!((point.y - y).abs() < 1e-8);
+    chart.set_general_animation_time_ms(700.0);
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn cartesian_area_families_replay_their_shared_fill_on_the_fixed_clock() {
+    for range in [false, true] {
+        let mut chart = ChartEngine::new_with_initial_domain(
+            400.0,
+            300.0,
+            1.0,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+        for (id, dimension, domain) in [
+            ("x", AxisDimension::X, [0.0, 4.0]),
+            ("y", AxisDimension::Y, [0.0, 10.0]),
+        ] {
+            let mut axis = GeneralAxisOptions::new(id, 0, dimension, GeneralScaleType::Linear);
+            axis.visible = false;
+            axis.domain = GeneralAxisDomain::Numeric(domain);
+            chart.add_general_axis(axis).unwrap();
+        }
+        let input = |target| {
+            let ids = Some(
+                ["a", "b", "c"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect(),
+            );
+            if range {
+                GeneralXyInput::RangeNumeric {
+                    ids,
+                    x: vec![1.0, 2.0, 3.0],
+                    low: if target {
+                        vec![3.0, 4.0, 3.0]
+                    } else {
+                        vec![1.0, 2.0, 1.0]
+                    },
+                    low_valid: None,
+                    high: if target {
+                        vec![5.0, 6.0, 5.0]
+                    } else {
+                        vec![2.0, 3.0, 2.0]
+                    },
+                    high_valid: None,
+                }
+            } else {
+                GeneralXyInput::Numeric {
+                    ids,
+                    x: vec![1.0, 2.0, 3.0],
+                    y: if target {
+                        vec![5.0, 6.0, 5.0]
+                    } else {
+                        vec![2.0, 3.0, 2.0]
+                    },
+                    y_valid: None,
+                }
+            }
+        };
+        let dataset = chart.create_general_xy_dataset(input(false)).unwrap();
+        let options = if range {
+            GeneralSeriesOptions::range_area(0, dataset, "x", "y")
+        } else {
+            GeneralSeriesOptions::xy_area(0, dataset, "x", "y")
+        };
+        let series = chart.add_general_series(options).unwrap();
+        chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+        let frame_signature = |chart: &mut ChartEngine| {
+            let frame = chart.build_frame();
+            (frame.panes[0].main.clone(), frame.panes[0].points.clone())
+        };
+        let source = frame_signature(&mut chart);
+        assert!(!source.0.is_empty(), "range={range}");
+        chart.set_general_transition_duration_ms(200.0).unwrap();
+        chart.set_general_animation_time_ms(1_000.0);
+        chart
+            .replace_general_xy_dataset(dataset, input(true))
+            .unwrap();
+        assert!(chart.general_transition_active(), "range={range}");
+        assert_eq!(frame_signature(&mut chart), source, "range={range}");
+        chart.set_general_animation_time_ms(1_100.0);
+        let middle = frame_signature(&mut chart);
+        assert_ne!(middle, source, "range={range}");
+        let plot = chart.general_plot_rect(0).unwrap();
+        let value = if range { 3.75 } else { 2.0 };
+        let y = plot.y + plot.height * (1.0 - value / 10.0);
+        assert_eq!(
+            chart
+                .general_hit_test(0, plot.width / 2.0, y, crate::GeneralHitMode::Exact)
+                .unwrap()
+                .series,
+            series,
+            "range={range}",
+        );
+        chart.set_general_animation_time_ms(1_200.0);
+        let final_frame = frame_signature(&mut chart);
+        assert_ne!(middle, final_frame, "range={range}");
+        assert!(!chart.general_transition_active(), "range={range}");
+    }
+}
+
+#[test]
+fn range_bars_and_box_plots_replay_their_shared_shapes_on_the_fixed_clock() {
+    for box_plot in [false, true] {
+        let mut chart = ChartEngine::new_with_initial_domain(
+            400.0,
+            300.0,
+            1.0,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+        let mut x_axis = GeneralAxisOptions::new("x", 0, AxisDimension::X, GeneralScaleType::Band);
+        x_axis.visible = false;
+        chart.add_general_axis(x_axis).unwrap();
+        let mut y_axis =
+            GeneralAxisOptions::new("y", 0, AxisDimension::Y, GeneralScaleType::Linear);
+        y_axis.visible = false;
+        y_axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(y_axis).unwrap();
+        let input = |target| {
+            let ids = Some(
+                ["a", "b"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect(),
+            );
+            let categories = vec!["A".into(), "B".into()];
+            let category_indices = vec![0, 1];
+            if box_plot {
+                GeneralXyInput::BoxCategory {
+                    ids,
+                    categories,
+                    category_indices,
+                    min: if target {
+                        vec![3.0, 4.0]
+                    } else {
+                        vec![1.0, 2.0]
+                    },
+                    min_valid: None,
+                    q1: if target {
+                        vec![4.0, 5.0]
+                    } else {
+                        vec![2.0, 3.0]
+                    },
+                    q1_valid: None,
+                    median: if target {
+                        vec![5.0, 6.0]
+                    } else {
+                        vec![3.0, 4.0]
+                    },
+                    median_valid: None,
+                    q3: if target {
+                        vec![6.0, 7.0]
+                    } else {
+                        vec![4.0, 5.0]
+                    },
+                    q3_valid: None,
+                    max: if target {
+                        vec![7.0, 8.0]
+                    } else {
+                        vec![5.0, 6.0]
+                    },
+                    max_valid: None,
+                }
+            } else {
+                GeneralXyInput::RangeCategory {
+                    ids,
+                    categories,
+                    category_indices,
+                    low: if target {
+                        vec![3.0, 4.0]
+                    } else {
+                        vec![1.0, 2.0]
+                    },
+                    low_valid: None,
+                    high: if target {
+                        vec![6.0, 8.0]
+                    } else {
+                        vec![3.0, 5.0]
+                    },
+                    high_valid: None,
+                }
+            }
+        };
+        let dataset = chart.create_general_xy_dataset(input(false)).unwrap();
+        let options = if box_plot {
+            GeneralSeriesOptions::box_plot(0, dataset, "x", "y")
+        } else {
+            GeneralSeriesOptions::range_bar(0, dataset, "x", "y")
+        };
+        chart.add_general_series(options).unwrap();
+        chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+        let frame_signature = |chart: &mut ChartEngine| {
+            let frame = chart.build_frame();
+            (frame.panes[0].main.clone(), frame.panes[0].points.clone())
+        };
+        let source = frame_signature(&mut chart);
+        assert!(!source.0.is_empty(), "box_plot={box_plot}");
+        chart.set_general_transition_duration_ms(200.0).unwrap();
+        chart.set_general_animation_time_ms(1_000.0);
+        chart
+            .replace_general_xy_dataset(dataset, input(true))
+            .unwrap();
+        assert!(chart.general_transition_active(), "box_plot={box_plot}");
+        assert_eq!(frame_signature(&mut chart), source, "box_plot={box_plot}");
+        chart.set_general_animation_time_ms(1_100.0);
+        let middle = frame_signature(&mut chart);
+        assert_ne!(middle, source, "box_plot={box_plot}");
+        chart.set_general_animation_time_ms(1_200.0);
+        assert_ne!(frame_signature(&mut chart), middle, "box_plot={box_plot}");
+        assert!(!chart.general_transition_active(), "box_plot={box_plot}");
+    }
+}
+
+#[test]
+fn heatmap_intensity_replays_the_shared_cells_and_exact_hits() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Category {
+            scale: CategoryScaleType::Band,
+        },
+    )
+    .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, GeneralScaleType::Band);
+        axis.visible = false;
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |target| GeneralXyInput::HeatmapCategoryCategory {
+        ids: Some(
+            ["a", "b"]
+                .into_iter()
+                .map(|id| GeneralRowId::Text(id.into()))
+                .collect(),
+        ),
+        x_categories: vec!["A".into(), "B".into()],
+        x_category_indices: vec![0, 1],
+        y_categories: vec!["A".into(), "B".into()],
+        y_category_indices: vec![0, 1],
+        value: if target {
+            vec![50.0, 70.0]
+        } else {
+            vec![20.0, 40.0]
+        },
+        value_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(false)).unwrap();
+    let mut options = GeneralSeriesOptions::heatmap_grid(0, dataset, "x", "y");
+    options.heatmap_value_domain = Some([0.0, 100.0]);
+    let series = chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let frame_signature = |chart: &mut ChartEngine| chart.build_frame().panes[0].main.clone();
+    let source = frame_signature(&mut chart);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(true))
+        .unwrap();
+    assert_eq!(frame_signature(&mut chart), source);
+    chart.set_general_animation_time_ms(1_100.0);
+    let middle = frame_signature(&mut chart);
+    assert_ne!(middle, source);
+    assert_eq!(
+        chart.general_geometry_dataset(dataset).unwrap().y(),
+        &[35.0, 55.0]
+    );
+    let mut center = None;
+    chart.visit_general_heatmap_cells(chart.general_series(series).unwrap(), |cell| {
+        if cell.row == 0 {
+            center = Some((
+                (cell.left + cell.right) / 2.0,
+                (cell.top + cell.bottom) / 2.0,
+            ));
+        }
+    });
+    let (x, y) = center.unwrap();
+    assert_eq!(
+        chart
+            .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+            .unwrap()
+            .row_id,
+        GeneralRowIdentity::Explicit(GeneralRowId::Text("a".into())),
+    );
+    chart.set_general_animation_time_ms(1_200.0);
+    assert_ne!(frame_signature(&mut chart), middle);
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn column_and_horizontal_bar_values_replay_their_shared_rectangles() {
+    for horizontal in [false, true] {
+        let mut chart = ChartEngine::new_with_initial_domain(
+            400.0,
+            300.0,
+            1.0,
+            if horizontal {
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                }
+            } else {
+                HorizontalDomain::Category {
+                    scale: CategoryScaleType::Band,
+                }
+            },
+        )
+        .unwrap();
+        let mut x_axis = GeneralAxisOptions::new(
+            "x",
+            0,
+            AxisDimension::X,
+            if horizontal {
+                GeneralScaleType::Linear
+            } else {
+                GeneralScaleType::Band
+            },
+        );
+        x_axis.visible = false;
+        if horizontal {
+            x_axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        }
+        chart.add_general_axis(x_axis).unwrap();
+        let mut y_axis = GeneralAxisOptions::new(
+            "y",
+            0,
+            AxisDimension::Y,
+            if horizontal {
+                GeneralScaleType::Band
+            } else {
+                GeneralScaleType::Linear
+            },
+        );
+        y_axis.visible = false;
+        if horizontal {
+            y_axis.domain = GeneralAxisDomain::Category(vec!["A".into(), "B".into()]);
+        } else {
+            y_axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        }
+        chart.add_general_axis(y_axis).unwrap();
+        let input = |target| GeneralXyInput::Category {
+            ids: Some(
+                ["a", "b"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect(),
+            ),
+            categories: vec!["A".into(), "B".into()],
+            category_indices: vec![0, 1],
+            y: if target {
+                vec![5.0, 8.0]
+            } else {
+                vec![2.0, 4.0]
+            },
+            y_valid: None,
+        };
+        let dataset = chart.create_general_xy_dataset(input(false)).unwrap();
+        let options = if horizontal {
+            GeneralSeriesOptions::horizontal_bar(0, dataset, "x", "y")
+        } else {
+            GeneralSeriesOptions::column(0, dataset, "x", "y")
+        };
+        let series = chart.add_general_series(options).unwrap();
+        chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+        let frame_signature = |chart: &mut ChartEngine| chart.build_frame().panes[0].main.clone();
+        let source = frame_signature(&mut chart);
+        chart.set_general_transition_duration_ms(200.0).unwrap();
+        chart.set_general_animation_time_ms(1_000.0);
+        chart
+            .replace_general_xy_dataset(dataset, input(true))
+            .unwrap();
+        assert_eq!(
+            frame_signature(&mut chart),
+            source,
+            "horizontal={horizontal}"
+        );
+        chart.set_general_animation_time_ms(1_100.0);
+        let middle = frame_signature(&mut chart);
+        assert_ne!(middle, source, "horizontal={horizontal}");
+        let mut center = None;
+        if horizontal {
+            chart.visit_general_horizontal_bars(chart.general_series(series).unwrap(), |bar| {
+                if bar.row == 0 {
+                    center = Some(((bar.left + bar.right) / 2.0, (bar.top + bar.bottom) / 2.0));
+                }
+            });
+        } else {
+            chart.visit_general_columns(chart.general_series(series).unwrap(), |bar| {
+                if bar.row == 0 {
+                    center = Some(((bar.left + bar.right) / 2.0, (bar.top + bar.bottom) / 2.0));
+                }
+            });
+        }
+        let (x, y) = center.unwrap();
+        assert_eq!(
+            chart
+                .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+                .unwrap()
+                .row_id,
+            GeneralRowIdentity::Explicit(GeneralRowId::Text("a".into())),
+            "horizontal={horizontal}",
+        );
+        chart.set_general_animation_time_ms(1_200.0);
+        assert_ne!(
+            frame_signature(&mut chart),
+            middle,
+            "horizontal={horizontal}"
+        );
+        assert!(
+            !chart.general_transition_active(),
+            "horizontal={horizontal}"
+        );
+    }
+}
+
+#[test]
+fn missing_y_row_enters_and_exits_through_the_shared_scatter_geometry() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    for (id, dimension, domain) in [
+        ("x", AxisDimension::X, [0.0, 10.0]),
+        ("y", AxisDimension::Y, [0.0, 20.0]),
+    ] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, GeneralScaleType::Linear);
+        axis.visible = false;
+        axis.domain = GeneralAxisDomain::Numeric(domain);
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |value, valid| GeneralXyInput::Numeric {
+        ids: Some(vec![GeneralRowId::Text("one".into())]),
+        x: vec![5.0],
+        y: vec![value],
+        y_valid: Some(vec![u8::from(valid)]),
+    };
+    let dataset = chart
+        .create_general_xy_dataset(input(100.0, false))
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::scatter(0, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let visible_y = |chart: &ChartEngine| {
+        let mut y = None;
+        chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+            y = Some(point.y);
+        });
+        y
+    };
+    assert_eq!(visible_y(&chart), None);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(12.0, true))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    assert!(
+        !chart
+            .general_geometry_dataset(dataset)
+            .unwrap()
+            .y_is_valid(0)
+    );
+    assert_eq!(visible_y(&chart), None);
+    chart.set_general_animation_time_ms(1_100.0);
+    assert!(visible_y(&chart).is_some());
+    assert_eq!(chart.general_geometry_dataset(dataset).unwrap().y(), &[6.0]);
+    chart.set_general_animation_time_ms(1_200.0);
+    assert!(visible_y(&chart).is_some());
+    chart
+        .replace_general_xy_dataset(dataset, input(200.0, false))
+        .unwrap();
+    assert!(visible_y(&chart).is_some());
+    chart.set_general_animation_time_ms(1_300.0);
+    assert!(visible_y(&chart).is_some());
+    assert_eq!(chart.general_geometry_dataset(dataset).unwrap().y(), &[6.0]);
+    chart
+        .replace_general_xy_dataset(dataset, input(12.0, true))
+        .unwrap();
+    assert_eq!(chart.general_geometry_dataset(dataset).unwrap().y(), &[6.0]);
+    chart.set_general_animation_time_ms(1_400.0);
+    assert_eq!(chart.general_geometry_dataset(dataset).unwrap().y(), &[9.0]);
+    chart.set_general_animation_time_ms(1_500.0);
+    assert_eq!(
+        chart.general_geometry_dataset(dataset).unwrap().y(),
+        &[12.0]
+    );
+    chart
+        .replace_general_xy_dataset(dataset, input(200.0, false))
+        .unwrap();
+    chart.set_general_animation_time_ms(1_700.0);
+    assert_eq!(visible_y(&chart), None);
+    assert!(!chart.general_transition_active());
+    chart
+        .replace_general_xy_dataset(dataset, input(12.0, true))
+        .unwrap();
+    chart.set_general_animation_time_ms(1_800.0);
+    assert!(visible_y(&chart).is_some());
+    chart.set_general_transition_reduced_motion(true);
+    assert!(!chart.general_transition_active());
+    assert_eq!(
+        chart.general_geometry_dataset(dataset).unwrap().y(),
+        &[12.0]
+    );
+    assert!(visible_y(&chart).is_some());
+    chart.set_general_transition_reduced_motion(false);
+    chart
+        .replace_general_xy_dataset(dataset, input(200.0, false))
+        .unwrap();
+    chart.set_general_animation_time_ms(1_900.0);
+    assert!(visible_y(&chart).is_some());
+    chart.set_general_transition_duration_ms(0.0).unwrap();
+    assert!(!chart.general_transition_active());
+    assert_eq!(visible_y(&chart), None);
+}
+
+#[test]
+fn missing_bubble_size_enters_from_zero_without_snapping_the_dataset() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, GeneralScaleType::Linear);
+        axis.visible = false;
+        axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |valid| GeneralXyInput::Bubble {
+        ids: Some(vec![GeneralRowId::Text("bubble".into())]),
+        x: vec![5.0],
+        y: vec![5.0],
+        y_valid: None,
+        size: vec![100.0],
+        size_valid: Some(vec![u8::from(valid)]),
+    };
+    let dataset = chart.create_general_xy_dataset(input(false)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::bubble(0, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(true))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    let radius = |chart: &ChartEngine| {
+        let mut radius = None;
+        chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+            radius = Some(point.radius)
+        });
+        radius
+    };
+    assert_eq!(radius(&chart), None);
+    chart.set_general_animation_time_ms(1_100.0);
+    let middle = chart.general_geometry_dataset(dataset).unwrap();
+    assert_eq!(middle.size().unwrap(), &[50.0]);
+    assert!(middle.size_is_valid(0));
+    assert!(radius(&chart).is_some());
+    chart.set_general_animation_time_ms(1_200.0);
+    assert_eq!(radius(&chart), Some(10.0));
+}
+
+#[test]
+fn identical_general_values_do_not_schedule_a_transition() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                id,
+                0,
+                dimension,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+    }
+    let input = || GeneralXyInput::Numeric {
+        ids: Some(vec![crate::GeneralRowId::Text("one".into())]),
+        x: vec![2.0],
+        y: vec![3.0],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input()).unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::xy_line(0, dataset, "x", "y"))
+        .unwrap();
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(500.0);
+    chart.replace_general_xy_dataset(dataset, input()).unwrap();
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn invalid_payload_changes_do_not_schedule_invisible_error_bar_motion() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, GeneralScaleType::Linear);
+        axis.visible = false;
+        axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |ignored| GeneralXyInput::ErrorNumeric {
+        ids: Some(
+            ["visible", "missing"]
+                .into_iter()
+                .map(|id| GeneralRowId::Text(id.into()))
+                .collect(),
+        ),
+        x: vec![2.0, 4.0],
+        y: vec![3.0, ignored],
+        y_valid: Some(vec![1, 0]),
+        x_low: vec![1.0, ignored],
+        x_low_valid: Some(vec![1, 0]),
+        x_high: vec![3.0, ignored],
+        x_high_valid: Some(vec![1, 0]),
+        y_low: vec![2.0, ignored],
+        y_low_valid: Some(vec![1, 0]),
+        y_high: vec![4.0, ignored],
+        y_high_valid: Some(vec![1, 0]),
+    };
+    let dataset = chart.create_general_xy_dataset(input(0.0)).unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::error_bar(0, dataset, "x", "y"))
+        .unwrap();
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(9.0))
+        .unwrap();
+    assert_eq!(chart.general_dataset(dataset).unwrap().y(), &[3.0, 9.0]);
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn entering_numeric_error_bar_starts_with_collapsed_horizontal_bounds() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, GeneralScaleType::Linear);
+        axis.visible = false;
+        axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |new_row: bool| GeneralXyInput::ErrorNumeric {
+        ids: Some(
+            if new_row { vec!["a", "b"] } else { vec!["a"] }
+                .into_iter()
+                .map(|id| GeneralRowId::Text(id.into()))
+                .collect(),
+        ),
+        x: if new_row { vec![4.0, 6.0] } else { vec![4.0] },
+        y: if new_row { vec![8.0, 5.0] } else { vec![8.0] },
+        y_valid: None,
+        x_low: if new_row { vec![3.0, 5.0] } else { vec![3.0] },
+        x_low_valid: None,
+        x_high: if new_row { vec![5.0, 7.0] } else { vec![5.0] },
+        x_high_valid: None,
+        y_low: if new_row { vec![7.0, 4.0] } else { vec![7.0] },
+        y_low_valid: None,
+        y_high: if new_row { vec![9.0, 6.0] } else { vec![9.0] },
+        y_high_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(false)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::error_bar(0, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(true))
+        .unwrap();
+    let mut entering = None;
+    chart.visit_general_error_bars(chart.general_series(series).unwrap(), |bar| {
+        if bar.row == 1 {
+            entering = Some(bar);
+        }
+    });
+    let start = entering.unwrap();
+    assert!((start.x_low.unwrap() - start.x).abs() < 1e-10);
+    assert!((start.x_high.unwrap() - start.x).abs() < 1e-10);
+    chart.set_general_animation_time_ms(1_100.0);
+    entering = None;
+    chart.visit_general_error_bars(chart.general_series(series).unwrap(), |bar| {
+        if bar.row == 1 {
+            entering = Some(bar);
+        }
+    });
+    let entering = entering.unwrap();
+    assert!(entering.x_low.unwrap() < entering.x);
+    assert!(entering.x < entering.x_high.unwrap());
+}
+
+#[test]
+fn missing_error_bounds_morph_from_their_center_on_the_shared_clock() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, GeneralScaleType::Linear);
+        axis.visible = false;
+        axis.domain = GeneralAxisDomain::Numeric([0.0, 20.0]);
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |valid| GeneralXyInput::ErrorNumeric {
+        ids: Some(vec![GeneralRowId::Text("one".into())]),
+        x: vec![5.0],
+        y: vec![10.0],
+        y_valid: None,
+        x_low: vec![4.0],
+        x_low_valid: Some(vec![u8::from(valid)]),
+        x_high: vec![6.0],
+        x_high_valid: Some(vec![u8::from(valid)]),
+        y_low: vec![8.0],
+        y_low_valid: Some(vec![u8::from(valid)]),
+        y_high: vec![12.0],
+        y_high_valid: Some(vec![u8::from(valid)]),
+    };
+    let dataset = chart.create_general_xy_dataset(input(false)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::error_bar(0, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(true))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    let mut bounds = None;
+    chart.visit_general_error_bars(chart.general_series(series).unwrap(), |bar| {
+        bounds = Some((bar.x_low, bar.x_high, bar.y_low, bar.y_high));
+    });
+    assert_eq!(bounds, Some((None, None, None, None)));
+    chart.set_general_animation_time_ms(1_100.0);
+    let middle = chart.general_geometry_dataset(dataset).unwrap();
+    assert_eq!(middle.x_low().unwrap(), &[4.5]);
+    assert_eq!(middle.x_high().unwrap(), &[5.5]);
+    assert_eq!(middle.low().unwrap(), &[9.0]);
+    assert_eq!(middle.high().unwrap(), &[11.0]);
+    assert!(middle.x_low_is_valid(0) && middle.x_high_is_valid(0));
+    assert!(middle.low_is_valid(0) && middle.high_is_valid(0));
+    chart.set_general_animation_time_ms(1_200.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(false))
+        .unwrap();
+    chart.set_general_animation_time_ms(1_300.0);
+    let middle = chart.general_geometry_dataset(dataset).unwrap();
+    assert_eq!(middle.x_low().unwrap(), &[4.5]);
+    assert_eq!(middle.x_high().unwrap(), &[5.5]);
+    assert_eq!(middle.low().unwrap(), &[9.0]);
+    assert_eq!(middle.high().unwrap(), &[11.0]);
+    chart.set_general_animation_time_ms(1_400.0);
+    assert!(!chart.general_transition_active());
+    assert!(
+        !chart
+            .general_geometry_dataset(dataset)
+            .unwrap()
+            .low_is_valid(0)
+    );
+}
+
+#[test]
+fn entering_temporal_error_bar_collapses_epoch_bounds_at_its_center() {
+    let mut chart = ChartEngine::new(400.0, 300.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(true, HorizontalDomain::Temporal)
+        .unwrap();
+    let mut x_axis =
+        GeneralAxisOptions::new("x", pane, AxisDimension::X, GeneralScaleType::Temporal);
+    x_axis.visible = false;
+    x_axis.domain = GeneralAxisDomain::Temporal([1_700_000_000_000, 1_700_000_100_000]);
+    chart.add_general_axis(x_axis).unwrap();
+    let mut y_axis = GeneralAxisOptions::new("y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y_axis.visible = false;
+    y_axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+    chart.add_general_axis(y_axis).unwrap();
+    let input = |new_row: bool| GeneralXyInput::ErrorTemporal {
+        ids: Some(
+            if new_row { vec!["a", "b"] } else { vec!["a"] }
+                .into_iter()
+                .map(|id| GeneralRowId::Text(id.into()))
+                .collect(),
+        ),
+        x_epoch_ms: if new_row {
+            vec![1_700_000_020_000, 1_700_000_060_000]
+        } else {
+            vec![1_700_000_020_000]
+        },
+        y: if new_row { vec![8.0, 5.0] } else { vec![8.0] },
+        y_valid: None,
+        x_low_epoch_ms: if new_row {
+            vec![1_700_000_010_000.0, 1_700_000_050_000.0]
+        } else {
+            vec![1_700_000_010_000.0]
+        },
+        x_low_valid: None,
+        x_high_epoch_ms: if new_row {
+            vec![1_700_000_030_000.0, 1_700_000_070_000.0]
+        } else {
+            vec![1_700_000_030_000.0]
+        },
+        x_high_valid: None,
+        y_low: if new_row { vec![7.0, 4.0] } else { vec![7.0] },
+        y_low_valid: None,
+        y_high: if new_row { vec![9.0, 6.0] } else { vec![9.0] },
+        y_high_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(false)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::error_bar(pane, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(true))
+        .unwrap();
+    let mut entering = None;
+    chart.visit_general_error_bars(chart.general_series(series).unwrap(), |bar| {
+        if bar.row == 1 {
+            entering = Some(bar);
+        }
+    });
+    let start = entering.unwrap();
+    assert!((start.x_low.unwrap() - start.x).abs() < 1e-8);
+    assert!((start.x_high.unwrap() - start.x).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_100.0);
+    entering = None;
+    chart.visit_general_error_bars(chart.general_series(series).unwrap(), |bar| {
+        if bar.row == 1 {
+            entering = Some(bar);
+        }
+    });
+    let midpoint = entering.unwrap();
+    assert!(midpoint.x_low.unwrap() < midpoint.x);
+    assert!(midpoint.x < midpoint.x_high.unwrap());
+}
+
+#[test]
+fn temporal_x_transition_moves_geometry_and_hit_with_fixed_clock() {
+    let mut chart = ChartEngine::new(400.0, 300.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(true, HorizontalDomain::Temporal)
+        .unwrap();
+    let epoch = 1_700_000_000_000_i64;
+    let mut x_axis =
+        GeneralAxisOptions::new("x", pane, AxisDimension::X, GeneralScaleType::Temporal);
+    x_axis.visible = false;
+    x_axis.domain = GeneralAxisDomain::Temporal([epoch, epoch + 4_000]);
+    chart.add_general_axis(x_axis).unwrap();
+    let mut y_axis = GeneralAxisOptions::new("y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y_axis.visible = false;
+    y_axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+    chart.add_general_axis(y_axis).unwrap();
+    let input = |x| GeneralXyInput::Temporal {
+        ids: Some(vec![GeneralRowId::Text("moving".into())]),
+        x_epoch_ms: vec![x],
+        y: vec![5.0],
+        y_valid: None,
+    };
+    let dataset = chart
+        .create_general_xy_dataset(input(epoch + 1_000))
+        .unwrap();
+    let mut options = GeneralSeriesOptions::xy_line(pane, dataset, "x", "y");
+    options.point_markers = true;
+    let series = chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(epoch + 3_000))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    let point_x = |chart: &ChartEngine| {
+        let mut x = None;
+        chart.visit_general_path_points(chart.general_series(series).unwrap(), |point| {
+            x = Some(point.x);
+        });
+        x.unwrap()
+    };
+    let plot = chart.general_plot_rect(pane).unwrap();
+    assert!((point_x(&chart) - plot.width * 0.25).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_100.0);
+    let midpoint = point_x(&chart);
+    assert!((midpoint - plot.width * 0.5).abs() < 1e-8);
+    let y = plot.y + plot.height * 0.5;
+    assert_eq!(
+        chart
+            .general_hit_test(
+                pane,
+                midpoint,
+                y,
+                crate::GeneralHitMode::Nearest { max_distance: 6.0 },
+            )
+            .unwrap()
+            .row,
+        0
+    );
+    chart.set_general_animation_time_ms(1_200.0);
+    assert!((point_x(&chart) - plot.width * 0.75).abs() < 1e-8);
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn line_value_transition_survives_unused_optional_channel_changes() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, GeneralScaleType::Linear);
+        axis.visible = false;
+        axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(axis).unwrap();
+    }
+    let numeric = |value| GeneralXyInput::Numeric {
+        ids: Some(vec![GeneralRowId::Text("one".into())]),
+        x: vec![2.0],
+        y: vec![value],
+        y_valid: None,
+    };
+    let range = |high| GeneralXyInput::RangeNumeric {
+        ids: Some(vec![GeneralRowId::Text("one".into())]),
+        x: vec![2.0],
+        low: vec![4.0],
+        low_valid: None,
+        high: vec![high],
+        high_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(numeric(2.0)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::xy_line(0, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, range(6.0))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    assert_eq!(
+        chart.general_geometry_dataset(dataset).unwrap().low(),
+        Some(&[2.0][..])
+    );
+    chart.set_general_animation_time_ms(1_100.0);
+    assert_eq!(
+        chart.general_geometry_dataset(dataset).unwrap().low(),
+        Some(&[3.0][..])
+    );
+    let mut point = None;
+    chart.visit_general_path_points(chart.general_series(series).unwrap(), |value| {
+        point = Some(value)
+    });
+    let plot = chart.general_plot_rect(0).unwrap();
+    assert!((point.unwrap().y - (plot.y + plot.height * 0.6)).abs() < 1e-8);
+
+    chart.set_general_animation_time_ms(1_200.0);
+    chart
+        .replace_general_xy_dataset(dataset, numeric(8.0))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    chart.set_general_animation_time_ms(1_300.0);
+    point = None;
+    chart.visit_general_path_points(chart.general_series(series).unwrap(), |value| {
+        point = Some(value)
+    });
+    assert!((point.unwrap().y - (plot.y + plot.height * 0.3)).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_400.0);
+    chart
+        .replace_general_xy_dataset(dataset, range(8.0))
+        .unwrap();
+    assert!(!chart.general_transition_active());
+}
+
+#[test]
+fn automatic_general_domain_tracks_transition_presentation() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            0,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            0,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let input = |a, b| GeneralXyInput::Numeric {
+        ids: Some(vec![
+            crate::GeneralRowId::Text("a".into()),
+            crate::GeneralRowId::Text("b".into()),
+        ]),
+        x: vec![1.0, 2.0],
+        y: vec![a, b],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(2.0, 4.0)).unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::xy_line(0, dataset, "x", "y"))
+        .unwrap();
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(6.0, 8.0))
+        .unwrap();
+    let domain = |chart: &ChartEngine| {
+        chart
+            .effective_general_axis_domain(chart.general_axis("y").unwrap())
+            .unwrap()
+    };
+    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([2.0, 4.0]));
+    chart.set_general_animation_time_ms(1_100.0);
+    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([4.0, 6.0]));
+    chart.set_general_animation_time_ms(1_200.0);
+    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([6.0, 8.0]));
+}
+
+#[test]
+fn radar_transition_budget_applies_target_atomically_for_many_bound_series() {
+    const ROWS: usize = 4_096;
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "angle",
+        0,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    chart.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radius",
+        0,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    radius.domain = GeneralAxisDomain::Numeric([0.0, 2.0]);
+    chart.add_general_axis(radius).unwrap();
+    let labels = (0..ROWS).map(|row| format!("C{row}")).collect::<Vec<_>>();
+    let input = |reversed| GeneralXyInput::Category {
+        ids: Some(
+            (0..ROWS)
+                .map(|row| GeneralRowId::Number(row as f64))
+                .collect(),
+        ),
+        categories: if reversed {
+            labels.iter().rev().cloned().collect()
+        } else {
+            labels.clone()
+        },
+        category_indices: (0..ROWS)
+            .map(|row| if reversed { ROWS - 1 - row } else { row } as u32)
+            .collect(),
+        y: vec![1.0; ROWS],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(false)).unwrap();
+    for _ in 0..32 {
+        chart
+            .add_general_series(GeneralSeriesOptions::radar(0, dataset, "angle", "radius"))
+            .unwrap();
+    }
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(true))
+        .unwrap();
+    assert!(!chart.general_transition_active());
+    assert_eq!(
+        chart
+            .general_dataset(dataset)
+            .unwrap()
+            .categories()
+            .unwrap()[0],
+        "C4095"
+    );
+    assert!(chart.memory_usage().general_data_capacity_bytes < 8 * 1024 * 1024);
+}
+
+#[test]
+fn radar_category_entry_preserves_the_source_fill_at_transition_start() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "angle",
+        0,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    chart.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radius",
+        0,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    chart.add_general_axis(radius).unwrap();
+    let input = |include_d: bool| GeneralXyInput::Category {
+        ids: Some(
+            ["a", "b", "c", "d"]
+                .into_iter()
+                .take(if include_d { 4 } else { 3 })
+                .map(|id| GeneralRowId::Text(id.into()))
+                .collect(),
+        ),
+        categories: ["A", "B", "C", "D"]
+            .into_iter()
+            .take(if include_d { 4 } else { 3 })
+            .map(str::to_owned)
+            .collect(),
+        category_indices: (0..if include_d { 4 } else { 3 }).collect(),
+        y: [1.0, 2.0, 4.0, 12.0]
+            .into_iter()
+            .take(if include_d { 4 } else { 3 })
+            .collect(),
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(false)).unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::radar(0, dataset, "angle", "radius"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let fill_area = |chart: &ChartEngine| {
+        let mut area = 0.0;
+        chart.with_general_radar_polygon(chart.general_series(series).unwrap(), |polygon, _, _| {
+            polygon.visit_triangles(|triangle| {
+                let a = (triangle[1].0 - triangle[0].0, triangle[1].1 - triangle[0].1);
+                let b = (triangle[2].0 - triangle[0].0, triangle[2].1 - triangle[0].1);
+                area += (a.0 * b.1 - a.1 * b.0).abs() / 2.0;
+            });
+        });
+        area
+    };
+    let source = fill_area(&chart);
+    assert!(source > 100.0);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(true))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    assert!((fill_area(&chart) - source).abs() < 1e-8);
+    let mut source_markers = 0;
+    chart.with_general_radar_polygon(chart.general_series(series).unwrap(), |_, _, markers| {
+        source_markers = markers.iter().flatten().count();
+    });
+    assert_eq!(source_markers, 3);
+    chart.set_general_animation_time_ms(1_100.0);
+    let middle = fill_area(&chart);
+    assert!(middle > 100.0);
+    let mut target_markers = 0;
+    chart.with_general_radar_polygon(chart.general_series(series).unwrap(), |_, _, markers| {
+        target_markers = markers.iter().flatten().count();
+    });
+    assert_eq!(target_markers, 4);
+    chart
+        .replace_general_xy_dataset(dataset, input(false))
+        .unwrap();
+    assert!((fill_area(&chart) - middle).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_300.0);
+    assert!(!chart.general_transition_active());
+    assert!((fill_area(&chart) - source).abs() < 1e-8);
+    chart.set_general_animation_time_ms(2_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(true))
+        .unwrap();
+    chart.set_general_animation_time_ms(2_199.999);
+    let near_target = fill_area(&chart);
+    chart.set_general_animation_time_ms(2_200.0);
+    assert!((fill_area(&chart) - near_target).abs() < 0.1);
+}
+
+#[test]
+fn radar_reorder_morphs_slot_radii_and_interrupts_from_the_sample() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "angle",
+        0,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    chart.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radius",
+        0,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    radius.domain = GeneralAxisDomain::Numeric([0.0, 5.0]);
+    chart.add_general_axis(radius).unwrap();
+    let input = |categories: [&str; 3], indices: [u32; 3]| GeneralXyInput::Category {
+        ids: Some(
+            ["a", "b", "c"]
+                .map(|id| GeneralRowId::Text(id.into()))
+                .to_vec(),
+        ),
+        categories: categories.map(str::to_owned).to_vec(),
+        category_indices: indices.to_vec(),
+        y: vec![1.0, 2.0, 4.0],
+        y_valid: None,
+    };
+    let dataset = chart
+        .create_general_xy_dataset(input(["A", "B", "C"], [0, 1, 2]))
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::radar(0, dataset, "angle", "radius"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let slot_zero_radius = |chart: &ChartEngine| {
+        let mut radius = None;
+        chart.with_general_radar_polygon(chart.general_series(series).unwrap(), |polygon, _, _| {
+            let point = polygon.vertex(0).unwrap();
+            radius = Some(polygon.plot().invert(point.0, point.1).unwrap().1);
+        });
+        radius.unwrap()
+    };
+    let source = slot_zero_radius(&chart);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(["C", "B", "A"], [2, 1, 0]))
+        .unwrap();
+    assert!((slot_zero_radius(&chart) - source).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_100.0);
+    let middle = slot_zero_radius(&chart);
+    chart.set_general_animation_time_ms(1_200.0);
+    let target = slot_zero_radius(&chart);
+    assert!((middle - (source + target) / 2.0).abs() < 1e-8);
+    chart.set_general_animation_time_ms(2_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(["A", "B", "C"], [0, 1, 2]))
+        .unwrap();
+    chart.set_general_animation_time_ms(2_100.0);
+    let sampled = slot_zero_radius(&chart);
+    chart
+        .replace_general_xy_dataset(dataset, input(["B", "C", "A"], [2, 0, 1]))
+        .unwrap();
+    assert!((slot_zero_radius(&chart) - sampled).abs() < 1e-8);
+    chart.set_general_animation_time_ms(2_200.0);
+    let interrupted_middle = slot_zero_radius(&chart);
+    chart.set_general_animation_time_ms(2_300.0);
+    let interrupted_target = slot_zero_radius(&chart);
+    assert!((interrupted_middle - (sampled + interrupted_target) / 2.0).abs() < 1e-8);
+}
+
+#[test]
+fn radial_bar_category_reorder_moves_sectors_with_the_fixed_clock() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "angle",
+        0,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    chart.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radius",
+        0,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    radius.domain = GeneralAxisDomain::Numeric([0.0, 4.0]);
+    chart.add_general_axis(radius).unwrap();
+    let input = |categories: [&str; 3], indices: [u32; 3]| GeneralXyInput::Category {
+        ids: Some(
+            ["a", "b", "c"]
+                .map(|id| GeneralRowId::Text(id.into()))
+                .to_vec(),
+        ),
+        categories: categories.map(str::to_owned).to_vec(),
+        category_indices: indices.to_vec(),
+        y: vec![2.0; 3],
+        y_valid: None,
+    };
+    let dataset = chart
+        .create_general_xy_dataset(input(["A", "B", "C"], [0, 1, 2]))
+        .unwrap();
+    let radar = chart
+        .add_general_series(GeneralSeriesOptions::radar(0, dataset, "angle", "radius"))
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::radial_bar(
+            0, dataset, "angle", "radius",
+        ))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let center_for_a = |chart: &ChartEngine| {
+        let mut center = None;
+        chart.visit_general_polar_value_sectors(chart.general_series(series).unwrap(), |item| {
+            if item.row == 0 {
+                center = item
+                    .sector
+                    .plot()
+                    .point(item.sector.mid_angle(), item.sector.mid_radius());
+            }
+        });
+        center.unwrap()
+    };
+    let radar_a = |chart: &ChartEngine| {
+        let mut point = None;
+        chart.with_general_radar_polygon(
+            chart.general_series(radar).unwrap(),
+            |polygon, rows, _| {
+                point = rows
+                    .iter()
+                    .position(|row| *row == Some(0))
+                    .and_then(|index| polygon.vertex(index));
+            },
+        );
+        point.unwrap()
+    };
+    let source = center_for_a(&chart);
+    let radar_source = radar_a(&chart);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(["C", "B", "A"], [2, 1, 0]))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    let initial = center_for_a(&chart);
+    let radar_initial = radar_a(&chart);
+    assert!((initial.0 - source.0).abs() < 1e-8);
+    assert!((initial.1 - source.1).abs() < 1e-8);
+    assert!((radar_initial.0 - radar_source.0).abs() < 1e-8);
+    assert!((radar_initial.1 - radar_source.1).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_100.0);
+    let middle = center_for_a(&chart);
+    let mut radar_area = 0.0;
+    chart.with_general_radar_polygon(chart.general_series(radar).unwrap(), |polygon, _, _| {
+        polygon.visit_triangles(|triangle| {
+            let a = (triangle[1].0 - triangle[0].0, triangle[1].1 - triangle[0].1);
+            let b = (triangle[2].0 - triangle[0].0, triangle[2].1 - triangle[0].1);
+            radar_area += (a.0 * b.1 - a.1 * b.0).abs() / 2.0;
+        });
+    });
+    assert!(
+        radar_area > 100.0,
+        "positive radar values must stay visible during reorder"
+    );
+    let mut moving_sectors = Vec::new();
+    chart.visit_general_polar_value_sectors(chart.general_series(series).unwrap(), |item| {
+        moving_sectors.push(item)
+    });
+    for item in &moving_sectors {
+        let point = item
+            .sector
+            .plot()
+            .point(item.sector.mid_angle(), item.sector.mid_radius())
+            .unwrap();
+        let expected = moving_sectors
+            .iter()
+            .rev()
+            .find(|candidate| candidate.sector.contains(point.0, point.1))
+            .map(|candidate| (series, candidate.row));
+        assert_eq!(
+            chart
+                .general_hit_test(0, point.0, point.1, crate::GeneralHitMode::Exact)
+                .map(|hit| (hit.series, hit.row)),
+            expected
+        );
+    }
+    chart.set_general_animation_time_ms(1_200.0);
+    let target = center_for_a(&chart);
+    assert!((middle.0 - source.0).abs() > 1.0 || (middle.1 - source.1).abs() > 1.0);
+    assert!((middle.0 - target.0).abs() > 1.0 || (middle.1 - target.1).abs() > 1.0);
+    chart.set_general_animation_time_ms(2_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(["A", "B", "C"], [0, 1, 2]))
+        .unwrap();
+    chart.set_general_animation_time_ms(2_100.0);
+    let sampled = center_for_a(&chart);
+    chart
+        .replace_general_xy_dataset(dataset, input(["B", "A", "C"], [1, 0, 2]))
+        .unwrap();
+    let restarted = center_for_a(&chart);
+    assert!((restarted.0 - sampled.0).abs() < 1e-8);
+    assert!((restarted.1 - sampled.1).abs() < 1e-8);
+}
+
+#[test]
+fn pie_row_reorder_moves_slices_with_the_fixed_clock() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    for (id, dimension, scale) in [
+        (
+            "angle",
+            AxisDimension::Angle,
+            GeneralScaleType::AngularCategory,
+        ),
+        (
+            "radius",
+            AxisDimension::Radius,
+            GeneralScaleType::RadialLinear,
+        ),
+    ] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, scale);
+        axis.visible = false;
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |ids: [&str; 3]| GeneralXyInput::Category {
+        ids: Some(
+            ids.iter()
+                .map(|id| GeneralRowId::Text((*id).into()))
+                .collect(),
+        ),
+        categories: vec!["A".into(), "B".into(), "C".into()],
+        category_indices: ids
+            .iter()
+            .map(|id| match *id {
+                "a" => 0,
+                "b" => 1,
+                _ => 2,
+            })
+            .collect(),
+        y: vec![1.0; 3],
+        y_valid: None,
+    };
+    let dataset = chart
+        .create_general_xy_dataset(input(["a", "b", "c"]))
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::pie(0, dataset, "angle", "radius"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    let angle_for_a = |chart: &ChartEngine| {
+        let mut angle = None;
+        chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+            if chart
+                .general_geometry_dataset(dataset)
+                .unwrap()
+                .row_identity(slice.row)
+                == Some(&GeneralRowIdentity::Explicit(GeneralRowId::Text(
+                    "a".into(),
+                )))
+            {
+                angle = Some(slice.sector.mid_angle());
+            }
+        });
+        angle.unwrap()
+    };
+    let source = angle_for_a(&chart);
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(1_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(["c", "b", "a"]))
+        .unwrap();
+    assert!(chart.general_transition_active());
+    assert!((angle_for_a(&chart) - source).abs() < 1e-8);
+    chart.set_general_animation_time_ms(1_100.0);
+    let middle = angle_for_a(&chart);
+    chart.set_general_animation_time_ms(1_200.0);
+    let target = angle_for_a(&chart);
+    assert!((middle - (source + target) / 2.0).abs() < 1e-8);
+    assert!(!chart.general_transition_active());
+    chart.set_general_animation_time_ms(2_000.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(["a", "b", "c"]))
+        .unwrap();
+    chart.set_general_animation_time_ms(2_100.0);
+    let sampled = angle_for_a(&chart);
+    chart
+        .replace_general_xy_dataset(dataset, input(["b", "a", "c"]))
+        .unwrap();
+    assert!((angle_for_a(&chart) - sampled).abs() < 1e-8);
+    chart.set_general_animation_time_ms(2_200.0);
+    let mut slices = Vec::new();
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+        slices.push(slice)
+    });
+    for slice in &slices {
+        let point = slice
+            .sector
+            .plot()
+            .point(slice.sector.mid_angle(), slice.sector.mid_radius())
+            .unwrap();
+        let expected = slices
+            .iter()
+            .rev()
+            .find(|candidate| candidate.sector.contains(point.0, point.1))
+            .map(|candidate| candidate.row);
+        assert_eq!(
+            chart
+                .general_hit_test(0, point.0, point.1, crate::GeneralHitMode::Exact)
+                .map(|hit| hit.row),
+            expected
+        );
+    }
+}
+
+#[test]
+fn polar_transition_matches_reordered_rows_by_identity_and_enters_from_zero() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    for (id, dimension, scale) in [
+        (
+            "angle",
+            AxisDimension::Angle,
+            GeneralScaleType::AngularCategory,
+        ),
+        (
+            "radius",
+            AxisDimension::Radius,
+            GeneralScaleType::RadialLinear,
+        ),
+    ] {
+        let mut axis = GeneralAxisOptions::new(id, 0, dimension, scale);
+        axis.visible = false;
+        chart.add_general_axis(axis).unwrap();
+    }
+    let input = |ids: &[&str], values: &[f64]| GeneralXyInput::Category {
+        ids: Some(
+            ids.iter()
+                .map(|id| crate::GeneralRowId::Text((*id).into()))
+                .collect(),
+        ),
+        categories: vec!["A".into(), "B".into(), "C".into()],
+        category_indices: ids
+            .iter()
+            .map(|id| match *id {
+                "a" => 0,
+                "b" => 1,
+                _ => 2,
+            })
+            .collect(),
+        y: values.to_vec(),
+        y_valid: None,
+    };
+    let dataset = chart
+        .create_general_xy_dataset(input(&["a", "b"], &[1.0, 3.0]))
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::pie(0, dataset, "angle", "radius"))
+        .unwrap();
+    assert!(chart.select_general_row(series, 0));
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart.set_general_animation_time_ms(100.0);
+    chart
+        .replace_general_xy_dataset(dataset, input(&["b", "a", "c"], &[1.0, 3.0, 2.0]))
+        .unwrap();
+    assert_eq!(chart.general_selected_hit().unwrap().row, 1);
+    assert_eq!(
+        chart.general_dataset(dataset).unwrap().y(),
+        &[1.0, 3.0, 2.0]
+    );
+    assert_eq!(
+        chart.general_geometry_dataset(dataset).unwrap().y(),
+        &[3.0, 1.0, 0.0]
+    );
+    chart.set_general_animation_time_ms(200.0);
+    assert_eq!(
+        chart.general_geometry_dataset(dataset).unwrap().y(),
+        &[2.0, 2.0, 1.0]
+    );
+    chart.set_general_animation_time_ms(300.0);
+    assert!(!chart.general_transition_active());
+    assert_eq!(
+        chart.general_geometry_dataset(dataset).unwrap().y(),
+        &[1.0, 3.0, 2.0]
+    );
+}
+
+#[test]
+fn general_transition_skips_retention_above_its_row_budget() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                id,
+                0,
+                dimension,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+    }
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: Some(vec![crate::GeneralRowId::Number(0.0)]),
+            x: vec![0.0],
+            y: vec![1.0],
+            y_valid: None,
+        })
+        .unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::xy_line(0, dataset, "x", "y"))
+        .unwrap();
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    let rows = 16_385;
+    chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::Numeric {
+                ids: Some(
+                    (0..rows)
+                        .map(|row| crate::GeneralRowId::Number(row as f64))
+                        .collect(),
+                ),
+                x: (0..rows).map(|row| row as f64).collect(),
+                y: vec![1.0; rows],
+                y_valid: None,
+            },
+        )
+        .unwrap();
+    assert!(!chart.general_transition_active());
+    assert_eq!(chart.general_dataset(dataset).unwrap().len(), rows);
+}
+
+#[test]
+fn exiting_and_entering_rows_share_one_bounded_presentation_budget() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                id,
+                0,
+                dimension,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+    }
+    let rows = 8_193;
+    let input = |offset: usize| GeneralXyInput::Numeric {
+        ids: Some(
+            (offset..offset + rows)
+                .map(|row| GeneralRowId::Number(row as f64))
+                .collect(),
+        ),
+        x: (offset..offset + rows).map(|row| row as f64).collect(),
+        y: vec![1.0; rows],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(0)).unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::xy_line(0, dataset, "x", "y"))
+        .unwrap();
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart
+        .replace_general_xy_dataset(dataset, input(rows))
+        .unwrap();
+    assert!(!chart.general_transition_active());
+    assert_eq!(chart.general_dataset(dataset).unwrap().len(), rows);
+}
+
+#[test]
+fn polar_exit_union_respects_the_sector_limit() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    for (id, dimension, scale) in [
+        (
+            "angle",
+            AxisDimension::Angle,
+            GeneralScaleType::AngularCategory,
+        ),
+        (
+            "radius",
+            AxisDimension::Radius,
+            GeneralScaleType::RadialLinear,
+        ),
+    ] {
+        chart
+            .add_general_axis(GeneralAxisOptions::new(id, 0, dimension, scale))
+            .unwrap();
+    }
+    let rows = 2_049;
+    let input = |offset: usize| GeneralXyInput::Category {
+        ids: Some(
+            (offset..offset + rows)
+                .map(|row| GeneralRowId::Number(row as f64))
+                .collect(),
+        ),
+        categories: (offset..offset + rows).map(|row| row.to_string()).collect(),
+        category_indices: (0..rows as u32).collect(),
+        y: vec![1.0; rows],
+        y_valid: None,
+    };
+    let dataset = chart.create_general_xy_dataset(input(0)).unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::pie(0, dataset, "angle", "radius"))
+        .unwrap();
+    chart.set_general_transition_duration_ms(200.0).unwrap();
+    chart
+        .replace_general_xy_dataset(dataset, input(rows))
+        .unwrap();
+    assert!(!chart.general_transition_active());
+    assert_eq!(chart.general_dataset(dataset).unwrap().len(), rows);
+}
+
+#[test]
+fn polar_value_families_share_fixed_clock_geometry_and_exact_hits() {
+    for kind in [
+        GeneralSeriesKind::Radar,
+        GeneralSeriesKind::PolarArea,
+        GeneralSeriesKind::RadialBar,
+    ] {
+        let mut chart =
+            ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar)
+                .unwrap();
+        let mut angle = GeneralAxisOptions::new(
+            "angle",
+            0,
+            AxisDimension::Angle,
+            GeneralScaleType::AngularCategory,
+        );
+        angle.visible = false;
+        chart.add_general_axis(angle).unwrap();
+        let mut radius = GeneralAxisOptions::new(
+            "radius",
+            0,
+            AxisDimension::Radius,
+            GeneralScaleType::RadialLinear,
+        );
+        radius.visible = false;
+        radius.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(radius).unwrap();
+        let input = |values| GeneralXyInput::Category {
+            ids: Some(
+                ["a", "b", "c"]
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .to_vec(),
+            ),
+            categories: ["A", "B", "C"].map(str::to_owned).to_vec(),
+            category_indices: vec![0, 1, 2],
+            y: values,
+            y_valid: None,
+        };
+        let dataset = chart
+            .create_general_xy_dataset(input(vec![2.0, 4.0, 6.0]))
+            .unwrap();
+        let options = match kind {
+            GeneralSeriesKind::Radar => GeneralSeriesOptions::radar(0, dataset, "angle", "radius"),
+            GeneralSeriesKind::PolarArea => {
+                GeneralSeriesOptions::polar_area(0, dataset, "angle", "radius")
+            }
+            GeneralSeriesKind::RadialBar => {
+                GeneralSeriesOptions::radial_bar(0, dataset, "angle", "radius")
+            }
+            _ => unreachable!(),
+        };
+        let series = chart.add_general_series(options).unwrap();
+        chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+        chart.set_general_transition_duration_ms(200.0).unwrap();
+        chart.set_general_animation_time_ms(1_000.0);
+        chart
+            .replace_general_xy_dataset(dataset, input(vec![6.0, 8.0, 10.0]))
+            .unwrap();
+        assert!(chart.general_transition_active(), "{kind:?}");
+        chart.set_general_animation_time_ms(1_100.0);
+        assert_eq!(
+            chart.general_dataset(dataset).unwrap().y(),
+            &[6.0, 8.0, 10.0]
+        );
+        let mut geometry = None;
+        if kind == GeneralSeriesKind::Radar {
+            chart.with_general_radar_polygon(
+                chart.general_series(series).unwrap(),
+                |polygon, _, _| {
+                    let vertex = polygon.vertex(0).unwrap();
+                    let center = polygon.plot().center();
+                    let normalized = (vertex.0 - center.0).hypot(vertex.1 - center.1)
+                        / polygon.plot().outer_radius();
+                    geometry = Some((normalized, polygon.plot().point(0.0, 0.2).unwrap()));
+                },
+            );
+        } else {
+            chart.visit_general_polar_value_sectors(
+                chart.general_series(series).unwrap(),
+                |sector| {
+                    if sector.row == 0 {
+                        let (_, normalized) = sector.sector.radial_bounds();
+                        geometry = Some((
+                            normalized,
+                            sector
+                                .sector
+                                .plot()
+                                .point(sector.sector.mid_angle(), 0.2)
+                                .unwrap(),
+                        ));
+                    }
+                },
+            );
+        }
+        let (normalized, inside) = geometry.expect("midpoint geometry");
+        let expected = if kind == GeneralSeriesKind::PolarArea {
+            0.4_f64.sqrt()
+        } else {
+            0.4
+        };
+        assert!((normalized - expected).abs() < 1e-10, "{kind:?}");
+        assert_eq!(
+            chart
+                .general_hit_test(0, inside.0, inside.1, crate::GeneralHitMode::Exact)
+                .unwrap()
+                .row_id,
+            GeneralRowIdentity::Explicit(GeneralRowId::Text("a".into())),
+            "{kind:?}"
+        );
+        assert!(
+            chart.build_frame().panes[0]
+                .main
+                .iter()
+                .any(|prim| matches!(prim, Prim::MeshFill { .. }))
+        );
+        chart.set_general_transition_reduced_motion(true);
+        assert!(!chart.general_transition_active(), "{kind:?}");
+    }
+}
+
+#[test]
+fn missing_polar_row_enters_on_the_same_frame_and_hit_clock_for_every_family() {
+    for kind in [
+        GeneralSeriesKind::Pie,
+        GeneralSeriesKind::Radar,
+        GeneralSeriesKind::PolarArea,
+        GeneralSeriesKind::RadialBar,
+    ] {
+        let mut chart =
+            ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar)
+                .unwrap();
+        let mut angle = GeneralAxisOptions::new(
+            "angle",
+            0,
+            AxisDimension::Angle,
+            GeneralScaleType::AngularCategory,
+        );
+        angle.visible = false;
+        chart.add_general_axis(angle).unwrap();
+        let mut radius = GeneralAxisOptions::new(
+            "radius",
+            0,
+            AxisDimension::Radius,
+            GeneralScaleType::RadialLinear,
+        );
+        radius.visible = false;
+        radius.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(radius).unwrap();
+        let input = |valid| GeneralXyInput::Category {
+            ids: Some(
+                ["a", "b", "c"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect(),
+            ),
+            categories: ["A", "B", "C"].into_iter().map(str::to_owned).collect(),
+            category_indices: vec![0, 1, 2],
+            y: vec![4.0, 2.0, if valid { 6.0 } else { 99.0 }],
+            y_valid: Some(vec![1, 1, u8::from(valid)]),
+        };
+        let dataset = chart.create_general_xy_dataset(input(false)).unwrap();
+        let options = match kind {
+            GeneralSeriesKind::Pie => GeneralSeriesOptions::pie(0, dataset, "angle", "radius"),
+            GeneralSeriesKind::Radar => GeneralSeriesOptions::radar(0, dataset, "angle", "radius"),
+            GeneralSeriesKind::PolarArea => {
+                GeneralSeriesOptions::polar_area(0, dataset, "angle", "radius")
+            }
+            GeneralSeriesKind::RadialBar => {
+                GeneralSeriesOptions::radial_bar(0, dataset, "angle", "radius")
+            }
+            _ => unreachable!(),
+        };
+        let series = chart.add_general_series(options).unwrap();
+        chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+        let mesh_count = |chart: &mut ChartEngine| {
+            chart.build_frame().panes[0]
+                .main
+                .iter()
+                .filter(|prim| matches!(prim, Prim::MeshFill { .. }))
+                .count()
+        };
+        let source_count = mesh_count(&mut chart);
+        assert_eq!(
+            source_count,
+            if kind == GeneralSeriesKind::Radar {
+                1
+            } else {
+                2
+            }
+        );
+        chart.set_general_transition_duration_ms(200.0).unwrap();
+        chart.set_general_animation_time_ms(1_000.0);
+        chart
+            .replace_general_xy_dataset(dataset, input(true))
+            .unwrap();
+        assert!(chart.general_transition_active(), "{kind:?}");
+        assert_eq!(mesh_count(&mut chart), source_count, "{kind:?}");
+        chart.set_general_animation_time_ms(1_100.0);
+        let presentation = chart.general_geometry_dataset(dataset).unwrap();
+        assert_eq!(presentation.y()[2], 3.0, "{kind:?}");
+        assert!(presentation.y_is_valid(2), "{kind:?}");
+        let mut interior = None;
+        if kind == GeneralSeriesKind::Radar {
+            chart.with_general_radar_polygon(
+                chart.general_series(series).unwrap(),
+                |polygon, _, _| {
+                    interior = polygon.plot().point(polygon.angle(2).unwrap(), 0.1);
+                },
+            );
+        } else {
+            let visit = |sector: crate::general_series::GeneralPolarSectorGeometry| {
+                if sector.row == 2 {
+                    interior = sector
+                        .sector
+                        .plot()
+                        .point(sector.sector.mid_angle(), sector.sector.mid_radius());
+                }
+            };
+            if kind == GeneralSeriesKind::Pie {
+                chart.visit_general_pie_slices(chart.general_series(series).unwrap(), visit);
+            } else {
+                chart.visit_general_polar_value_sectors(
+                    chart.general_series(series).unwrap(),
+                    visit,
+                );
+            }
+        }
+        let (x, y) = interior.expect("entering sector has an interior point");
+        assert_eq!(
+            chart
+                .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+                .unwrap()
+                .row_id,
+            GeneralRowIdentity::Explicit(GeneralRowId::Text("c".into())),
+            "{kind:?}",
+        );
+        chart.set_general_animation_time_ms(1_200.0);
+        assert!(!chart.general_transition_active(), "{kind:?}");
+        assert_eq!(
+            mesh_count(&mut chart),
+            if kind == GeneralSeriesKind::Radar {
+                1
+            } else {
+                3
+            }
+        );
+    }
+}
+
+#[test]
+fn radar_polygon_uses_radial_view_for_frame_and_exact_hits() {
+    let mut chart = ChartEngine::new(400.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(true, HorizontalDomain::Polar)
+        .unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "radar-angle",
+        pane,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    chart.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radar-radius",
+        pane,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    chart.add_general_axis(radius).unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["North".into(), "East".into(), "South".into(), "West".into()],
+            category_indices: vec![0, 1, 2, 3],
+            y: vec![4.0, 2.0, 3.0, 1.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::radar(
+            pane,
+            dataset,
+            "radar-angle",
+            "radar-radius",
+        ))
+        .unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("radar-angle"),
+        Some(GeneralAxisDomain::Category(vec![
+            "North".into(),
+            "East".into(),
+            "South".into(),
+            "West".into(),
+        ]))
+    );
+    assert_eq!(
+        chart.general_axis_effective_domain("radar-radius"),
+        Some(GeneralAxisDomain::Numeric([0.0, 4.0]))
+    );
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let frame = chart.build_frame();
+    assert!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::MeshFill { .. }))
+    );
+    assert!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::Polyline { .. }))
+    );
+    let mut inside = None;
+    let mut outside = None;
+    chart.with_general_radar_polygon(chart.general_series(series).unwrap(), |polygon, _, _| {
+        let plot = polygon.plot();
+        inside = plot.point(0.0, 0.4);
+        outside = plot.point(std::f64::consts::FRAC_PI_4, 0.95);
+    });
+    let inside = inside.unwrap();
+    let outside = outside.unwrap();
+    assert_eq!(
+        chart
+            .general_hit_test(pane, inside.0, inside.1, crate::GeneralHitMode::Exact)
+            .unwrap()
+            .series,
+        series
+    );
+    assert!(
+        chart
+            .general_hit_test(pane, outside.0, outside.1, crate::GeneralHitMode::Exact)
+            .is_none()
+    );
+    assert!(
+        chart
+            .replace_general_xy_dataset(
+                dataset,
+                GeneralXyInput::Category {
+                    ids: None,
+                    categories: vec!["North".into(), "East".into(), "South".into()],
+                    category_indices: vec![0, 0, 2],
+                    y: vec![1.0, 2.0, 3.0],
+                    y_valid: None,
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(
+        chart.general_dataset(dataset).unwrap().y(),
+        &[4.0, 2.0, 3.0, 1.0]
+    );
+}
+
+#[test]
+fn polar_area_sectors_share_radial_axis_and_exact_hits() {
+    let mut chart = ChartEngine::new(400.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(true, HorizontalDomain::Polar)
+        .unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "area-angle",
+        pane,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    chart.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "area-radius",
+        pane,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    chart.add_general_axis(radius).unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["A".into(), "B".into(), "C".into(), "D".into()],
+            category_indices: vec![0, 1, 2, 3],
+            y: vec![4.0, 2.0, 0.0, 3.0],
+            y_valid: Some(vec![1, 1, 1, 0]),
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::polar_area(pane, dataset, "area-angle", "area-radius");
+    options.polar.inner_radius = 0.2;
+    options.polar.outer_radius = 0.9;
+    options.polar.pad_angle = 0.05;
+    let series = chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut sectors = Vec::new();
+    chart.visit_general_polar_value_sectors(chart.general_series(series).unwrap(), |geometry| {
+        sectors.push(geometry);
+    });
+    assert_eq!(
+        sectors.iter().map(|sector| sector.row).collect::<Vec<_>>(),
+        [0, 1]
+    );
+    let frame = chart.build_frame();
+    assert!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::MeshFill { .. }))
+    );
+    for geometry in &sectors {
+        let point = geometry
+            .sector
+            .plot()
+            .point(geometry.sector.mid_angle(), geometry.sector.mid_radius())
+            .unwrap();
+        assert_eq!(
+            chart
+                .general_hit_test(pane, point.0, point.1, crate::GeneralHitMode::Exact)
+                .unwrap()
+                .row,
+            geometry.row
+        );
+    }
+    let (cx, cy) = sectors[0].sector.plot().center();
+    assert!(
+        chart
+            .general_hit_test(pane, cx, cy, crate::GeneralHitMode::Exact)
+            .is_none()
+    );
+    assert!(
+        chart
+            .replace_general_xy_dataset(
+                dataset,
+                GeneralXyInput::Category {
+                    ids: None,
+                    categories: vec!["A".into(), "B".into()],
+                    category_indices: vec![0, 1],
+                    y: vec![1.0, -2.0],
+                    y_valid: None,
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(
+        chart.general_dataset(dataset).unwrap().y(),
+        &[4.0, 2.0, 0.0, 3.0]
+    );
+
+    // Half the value fills half the radial length for bars, but half the annular
+    // area for polar area. The shared sector is also the exact hit boundary.
+    let mut bar_options =
+        GeneralSeriesOptions::radial_bar(pane, dataset, "area-angle", "area-radius");
+    bar_options.polar.inner_radius = 0.2;
+    bar_options.polar.outer_radius = 0.9;
+    bar_options.polar.pad_angle = 0.05;
+    let bar = chart.add_general_series(bar_options).unwrap();
+    let legend = chart.general_legend_snapshot(Some(pane));
+    assert_eq!(legend.items.len(), 2);
+    assert_eq!(
+        legend.items[0]
+            .slices
+            .iter()
+            .map(|slice| slice.row)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    assert_eq!(
+        legend.items[1]
+            .slices
+            .iter()
+            .map(|slice| slice.row)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    sectors.clear();
+    chart.visit_general_polar_value_sectors(chart.general_series(series).unwrap(), |geometry| {
+        sectors.push(geometry);
+    });
+    let mut bars = Vec::new();
+    chart.visit_general_polar_value_sectors(chart.general_series(bar).unwrap(), |geometry| {
+        bars.push(geometry);
+    });
+    assert_eq!(
+        bars.iter().map(|sector| sector.row).collect::<Vec<_>>(),
+        [0, 1]
+    );
+    let mid_angle = sectors[1].sector.mid_angle();
+    let plot = sectors[1].sector.plot();
+    let between = plot.point(mid_angle, 0.6).unwrap();
+    assert!(sectors[1].sector.contains(between.0, between.1));
+    assert!(!bars[1].sector.contains(between.0, between.1));
+    assert_eq!(
+        chart
+            .general_hit_test(pane, between.0, between.1, crate::GeneralHitMode::Exact)
+            .unwrap()
+            .series,
+        series
+    );
+    let inside_bar = plot.point(mid_angle, 0.4).unwrap();
+    assert_eq!(
+        chart
+            .general_hit_test(
+                pane,
+                inside_bar.0,
+                inside_bar.1,
+                crate::GeneralHitMode::Exact
+            )
+            .unwrap()
+            .series,
+        bar
+    );
+
+    let mut reversed = GeneralAxisOptions::new(
+        "area-angle",
+        pane,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    reversed.visible = false;
+    reversed.reverse = true;
+    chart.update_general_axis_options(reversed).unwrap();
+    let mut reversed_sectors = Vec::new();
+    chart.visit_general_polar_value_sectors(chart.general_series(series).unwrap(), |geometry| {
+        reversed_sectors.push(geometry);
+    });
+    assert_eq!(reversed_sectors.len(), 2);
+    assert!(
+        (reversed_sectors[1]
+            .sector
+            .mid_angle()
+            .rem_euclid(std::f64::consts::TAU)
+            - 3.0 * std::f64::consts::FRAC_PI_2)
+            .abs()
+            < 1e-12
+    );
+}
+
+#[test]
+fn polar_value_hit_matches_shared_sectors_after_sweep_and_axis_changes() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "angle",
+        0,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    chart.add_general_axis(angle.clone()).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radius",
+        0,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    chart.add_general_axis(radius).unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: ["A", "B", "C", "D", "E"].map(str::to_owned).to_vec(),
+            category_indices: vec![0, 1, 2, 3, 4],
+            y: vec![5.0, 2.0, 4.0, 0.0, 3.0],
+            y_valid: Some(vec![1, 1, 1, 1, 0]),
+        })
+        .unwrap();
+    let mut area_options = GeneralSeriesOptions::polar_area(0, dataset, "angle", "radius");
+    area_options.polar.inner_radius = 0.2;
+    area_options.polar.outer_radius = 0.9;
+    area_options.polar.pad_angle = 0.03;
+    let area = chart.add_general_series(area_options.clone()).unwrap();
+    let mut bar_options = GeneralSeriesOptions::radial_bar(0, dataset, "angle", "radius");
+    bar_options.polar = area_options.polar;
+    let bar = chart.add_general_series(bar_options.clone()).unwrap();
+
+    for (start, end, reversed) in [
+        (0.0, std::f64::consts::TAU, false),
+        (0.4, 3.1, false),
+        (0.4, 3.1, true),
+    ] {
+        area_options.polar.start_angle = start;
+        area_options.polar.end_angle = end;
+        bar_options.polar = area_options.polar;
+        chart
+            .update_general_series_options(area, area_options.clone())
+            .unwrap();
+        chart
+            .update_general_series_options(bar, bar_options.clone())
+            .unwrap();
+        angle.reverse = reversed;
+        chart.update_general_axis_options(angle.clone()).unwrap();
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let mut area_sectors = Vec::new();
+        let mut bar_sectors = Vec::new();
+        chart.visit_general_polar_value_sectors(chart.general_series(area).unwrap(), |item| {
+            area_sectors.push(item)
+        });
+        chart.visit_general_polar_value_sectors(chart.general_series(bar).unwrap(), |item| {
+            bar_sectors.push(item)
+        });
+        let plot = area_sectors[0].sector.plot();
+        for angle_index in 0..180 {
+            for radius_index in 1..20 {
+                let (x, y) = plot
+                    .point(
+                        std::f64::consts::TAU * angle_index as f64 / 180.0,
+                        radius_index as f64 / 20.0,
+                    )
+                    .unwrap();
+                let expected = bar_sectors
+                    .iter()
+                    .find(|item| item.sector.contains(x, y))
+                    .map(|item| (bar, item.row))
+                    .or_else(|| {
+                        area_sectors
+                            .iter()
+                            .find(|item| item.sector.contains(x, y))
+                            .map(|item| (area, item.row))
+                    });
+                let actual = chart
+                    .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+                    .map(|hit| (hit.series, hit.row));
+                assert_eq!(
+                    actual, expected,
+                    "angle={angle_index} radius={radius_index} reversed={reversed}"
+                );
+            }
+        }
+    }
+
+    let mut old_first = None;
+    chart.visit_general_polar_value_sectors(chart.general_series(bar).unwrap(), |item| {
+        if item.row == 0 {
+            old_first = item
+                .sector
+                .plot()
+                .point(item.sector.mid_angle(), item.sector.mid_radius());
+        }
+    });
+    let (x, y) = old_first.unwrap();
+    assert!(
+        chart
+            .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+            .is_some()
+    );
+    chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::Category {
+                ids: None,
+                categories: ["A", "B", "C", "D", "E"].map(str::to_owned).to_vec(),
+                category_indices: vec![0, 1, 2, 3, 4],
+                y: vec![0.0, 2.0, 4.0, 0.0, 3.0],
+                y_valid: Some(vec![1, 1, 1, 1, 0]),
+            },
+        )
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(
+        chart
+            .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+            .is_none()
+    );
+    let bytes = chart.memory_usage().general_series_capacity_bytes;
+    for _ in 0..1_000 {
+        let _ = chart.general_hit_test(0, x, y, crate::GeneralHitMode::Exact);
+    }
+    assert_eq!(chart.memory_usage().general_series_capacity_bytes, bytes);
+}
+
+#[test]
 fn temporal_general_axis_emits_utc_ticks_and_supports_atomic_runtime_view() {
     const JAN_1_2026: i64 = 1_767_225_600_000;
     const JAN_2_2026: i64 = 1_767_312_000_000;

@@ -1,8 +1,11 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
-use aeris_charts_core::scale::general_scale::{BandScale, LinearScale, PointScale};
+use aeris_charts_core::scale::general_scale::{
+    AngularCategoryScale, BandScale, LinearScale, PointScale, PolarPlot, PolarPolygon, PolarSector,
+};
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{LineStyle, LineType};
 use aeris_charts_render::line::{LinePoint, expand_band_into, expand_line_into};
@@ -14,6 +17,8 @@ use crate::{
 };
 
 pub const MAX_GENERAL_SERIES: usize = 1_024;
+pub const MAX_GENERAL_PIE_SLICES: usize = 4_096;
+pub const MAX_GENERAL_RADAR_VALUES: usize = 4_096;
 pub const MAX_GENERAL_REFERENCES: usize = 1_024;
 pub const MAX_GENERAL_SERIES_TITLE_BYTES: usize = 4_096;
 pub const MAX_GENERAL_SERIES_COLOR_BYTES: usize = 256;
@@ -22,11 +27,42 @@ pub const MAX_GENERAL_SERIES_STACK_ID_BYTES: usize = 128;
 pub const MAX_GENERAL_ACCESSIBILITY_ITEMS: usize = 512;
 pub const MAX_GENERAL_BRUSH_ITEMS: usize = 4_096;
 pub const MAX_GENERAL_SHARED_TOOLTIP_ITEMS: usize = 512;
+pub const MAX_GENERAL_LEGEND_SLICES_PER_SERIES: usize = 32;
+pub const MAX_GENERAL_LEGEND_SLICES_PER_SNAPSHOT: usize = 512;
 pub const MIN_GENERAL_POINT_RADIUS: f64 = 1.0;
 pub const MAX_GENERAL_POINT_RADIUS: f64 = 64.0;
 pub const DEFAULT_GENERAL_FILL_OPACITY: f64 = 72.0 / 255.0;
 const SCATTER_GRID_BASE_CELL_CSS: f64 = 32.0;
 const MAX_SCATTER_GRID_CELLS: usize = 65_536;
+const MAX_POLAR_CONTEXT_CACHES: usize = 64;
+const PIE_COLORS: [Color; 8] = [
+    Color::rgb(77, 141, 210),
+    Color::rgb(72, 174, 145),
+    Color::rgb(227, 161, 75),
+    Color::rgb(206, 101, 114),
+    Color::rgb(143, 117, 191),
+    Color::rgb(83, 168, 189),
+    Color::rgb(146, 170, 87),
+    Color::rgb(181, 138, 97),
+];
+
+pub(crate) fn general_polar_fill_color(
+    series: &GeneralSeries,
+    dataset: &crate::GeneralDataset,
+    row: usize,
+) -> Color {
+    let base = dataset
+        .row_color(row)
+        .or_else(|| series.color().and_then(Color::parse_css))
+        .unwrap_or(PIE_COLORS[row % PIE_COLORS.len()]);
+    Color::rgba(
+        base.r(),
+        base.g(),
+        base.b(),
+        ((f64::from(base.a()) / 255.0 * series.fill_opacity()).clamp(0.0, 1.0) * 255.0).round()
+            as u8,
+    )
+}
 
 /// One proposed series and its packed columns for a non-mutating pane validation.
 #[derive(Clone, Debug)]
@@ -111,6 +147,33 @@ pub enum GeneralSeriesKind {
     HeatmapGrid,
     Scatter,
     Bubble,
+    Pie,
+    Radar,
+    RadialBar,
+    PolarArea,
+}
+
+/// Shared polar sector sweep and radial bounds. A positive inner radius makes a pie a donut.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct GeneralPolarOptions {
+    pub start_angle: f64,
+    pub end_angle: f64,
+    pub inner_radius: f64,
+    pub outer_radius: f64,
+    pub pad_angle: f64,
+}
+
+impl Default for GeneralPolarOptions {
+    fn default() -> Self {
+        Self {
+            start_angle: 0.0,
+            end_angle: std::f64::consts::TAU,
+            inner_radius: 0.0,
+            outer_radius: 1.0,
+            pad_angle: 0.0,
+        }
+    }
 }
 
 #[derive(
@@ -225,6 +288,7 @@ pub struct GeneralSeriesOptions {
     pub interpolation: GeneralInterpolation,
     pub connect_missing: bool,
     pub fill_opacity: f64,
+    pub polar: GeneralPolarOptions,
     /// Explicit top and bottom CSS colors for an unstacked area fill.
     pub fill_gradient: Option<[String; 2]>,
     pub baseline_value: Option<f64>,
@@ -271,6 +335,7 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            polar: GeneralPolarOptions::default(),
             fill_gradient: None,
             baseline_value: None,
             baseline_policy: GeneralAreaBaseline::Zero,
@@ -312,6 +377,7 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            polar: GeneralPolarOptions::default(),
             fill_gradient: None,
             baseline_value: None,
             baseline_policy: GeneralAreaBaseline::Zero,
@@ -353,6 +419,7 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            polar: GeneralPolarOptions::default(),
             fill_gradient: None,
             baseline_value: None,
             baseline_policy: GeneralAreaBaseline::Zero,
@@ -405,6 +472,7 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            polar: GeneralPolarOptions::default(),
             fill_gradient: None,
             baseline_value: None,
             baseline_policy: GeneralAreaBaseline::Zero,
@@ -446,6 +514,7 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            polar: GeneralPolarOptions::default(),
             fill_gradient: None,
             baseline_value: None,
             baseline_policy: GeneralAreaBaseline::Zero,
@@ -487,6 +556,7 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            polar: GeneralPolarOptions::default(),
             fill_gradient: None,
             baseline_value: None,
             baseline_policy: GeneralAreaBaseline::Zero,
@@ -528,6 +598,7 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            polar: GeneralPolarOptions::default(),
             fill_gradient: None,
             baseline_value: None,
             baseline_policy: GeneralAreaBaseline::Zero,
@@ -569,6 +640,7 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            polar: GeneralPolarOptions::default(),
             fill_gradient: None,
             baseline_value: None,
             baseline_policy: GeneralAreaBaseline::Zero,
@@ -610,6 +682,7 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            polar: GeneralPolarOptions::default(),
             fill_gradient: None,
             baseline_value: None,
             baseline_policy: GeneralAreaBaseline::Zero,
@@ -651,6 +724,7 @@ impl GeneralSeriesOptions {
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
             fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
+            polar: GeneralPolarOptions::default(),
             fill_gradient: None,
             baseline_value: None,
             baseline_policy: GeneralAreaBaseline::Zero,
@@ -667,6 +741,52 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
         }
+    }
+
+    pub fn pie(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        angle_axis_id: impl Into<String>,
+        radius_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::xy_area(pane, dataset, angle_axis_id, radius_axis_id);
+        options.kind = GeneralSeriesKind::Pie;
+        options.fill_opacity = 1.0;
+        options
+    }
+
+    pub fn radar(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        angle_axis_id: impl Into<String>,
+        radius_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::xy_area(pane, dataset, angle_axis_id, radius_axis_id);
+        options.kind = GeneralSeriesKind::Radar;
+        options
+    }
+
+    pub fn polar_area(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        angle_axis_id: impl Into<String>,
+        radius_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::xy_area(pane, dataset, angle_axis_id, radius_axis_id);
+        options.kind = GeneralSeriesKind::PolarArea;
+        options.fill_opacity = 1.0;
+        options
+    }
+
+    pub fn radial_bar(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        angle_axis_id: impl Into<String>,
+        radius_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::polar_area(pane, dataset, angle_axis_id, radius_axis_id);
+        options.kind = GeneralSeriesKind::RadialBar;
+        options
     }
 }
 
@@ -689,6 +809,7 @@ pub struct GeneralSeries {
     interpolation: GeneralInterpolation,
     connect_missing: bool,
     fill_opacity: f64,
+    polar: GeneralPolarOptions,
     fill_gradient: Option<[String; 2]>,
     baseline_value: Option<f64>,
     baseline_policy: GeneralAreaBaseline,
@@ -726,6 +847,228 @@ pub(crate) struct GeneralScatterGeometry {
     pub(crate) x: f64,
     pub(crate) y: f64,
     pub(crate) radius: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GeneralPolarSectorGeometry {
+    pub(crate) row: usize,
+    pub(crate) sector: PolarSector,
+}
+
+#[derive(Clone)]
+struct GeneralPolarCategoryContext {
+    scene_generation: u64,
+    plot: PolarPlot,
+    angles: AngularCategoryScale,
+    sector_bounds: Option<Vec<(f64, f64)>>,
+    radar_slot_morph: bool,
+    radar_shape_angles: Option<Arc<[(f64, f64)]>>,
+    radar_marker_rows: Option<Vec<Option<usize>>>,
+    radius_scale: NumericAxisScale,
+    rows: Vec<Option<usize>>,
+    radar_radii: Option<Vec<f64>>,
+}
+
+#[derive(Clone, Copy)]
+struct GeneralPieSlice {
+    row: usize,
+    from: f64,
+    to: f64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PieOrderRow {
+    from: [f64; 2],
+    to: [f64; 2],
+}
+
+pub(crate) struct RadarSlotMotion {
+    pub(crate) series_id: GeneralSeriesId,
+    source_radii: Vec<f64>,
+    target_values: Vec<Option<f64>>,
+    target_rows: Vec<Option<usize>>,
+}
+
+pub(crate) struct RadarShapeMotion {
+    pub(crate) series_id: GeneralSeriesId,
+    angles: Arc<[(f64, f64)]>,
+    source_radii: Vec<f64>,
+    source_rows: Vec<Option<usize>>,
+    source_marker_rows: Vec<Option<usize>>,
+    target_values: Vec<Option<f64>>,
+    target_rows: Vec<Option<usize>>,
+    target_marker_rows: Vec<Option<usize>>,
+    target_angles: AngularCategoryScale,
+}
+
+impl RadarShapeMotion {
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.angles.len() * std::mem::size_of::<(f64, f64)>()
+            + self.source_radii.capacity() * std::mem::size_of::<f64>()
+            + self.source_rows.capacity() * std::mem::size_of::<Option<usize>>()
+            + self.source_marker_rows.capacity() * std::mem::size_of::<Option<usize>>()
+            + self.target_values.capacity() * std::mem::size_of::<Option<f64>>()
+            + self.target_rows.capacity() * std::mem::size_of::<Option<usize>>()
+            + self.target_marker_rows.capacity() * std::mem::size_of::<Option<usize>>()
+    }
+}
+
+impl RadarSlotMotion {
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.source_radii.capacity() * std::mem::size_of::<f64>()
+            + self.target_values.capacity() * std::mem::size_of::<Option<f64>>()
+            + self.target_rows.capacity() * std::mem::size_of::<Option<usize>>()
+    }
+}
+
+impl PieOrderRow {
+    fn bounds(self, progress: f64) -> [f64; 2] {
+        [
+            self.from[0] * (1.0 - progress) + self.to[0] * progress,
+            self.from[1] * (1.0 - progress) + self.to[1] * progress,
+        ]
+    }
+}
+
+fn pie_normalized_bounds(dataset: &crate::general_data::GeneralDataset) -> Vec<Option<[f64; 2]>> {
+    let mut bounds = vec![None; dataset.len()];
+    let maximum = dataset
+        .y()
+        .iter()
+        .enumerate()
+        .filter(|(row, value)| dataset.y_is_valid(*row) && **value > 0.0)
+        .map(|(_, value)| *value)
+        .fold(0.0_f64, f64::max);
+    if maximum == 0.0 {
+        return bounds;
+    }
+    let total: f64 = dataset
+        .y()
+        .iter()
+        .enumerate()
+        .filter(|(row, value)| dataset.y_is_valid(*row) && **value > 0.0)
+        .map(|(_, value)| *value / maximum)
+        .sum();
+    let mut accumulated = 0.0;
+    let mut last = None;
+    for (row, value) in dataset.y().iter().enumerate() {
+        if !dataset.y_is_valid(row) || *value <= 0.0 {
+            continue;
+        }
+        let from = accumulated;
+        accumulated += (*value / maximum) / total;
+        bounds[row] = Some([from, accumulated.min(1.0)]);
+        last = Some(row);
+    }
+    if let Some(last) = last {
+        bounds[last].as_mut().unwrap()[1] = 1.0;
+    }
+    bounds
+}
+
+fn radar_rows_by_category(dataset: &crate::general_data::GeneralDataset) -> HashMap<&str, usize> {
+    let mut rows = HashMap::new();
+    if let (Some(categories), Some(indices)) = (dataset.categories(), dataset.category_indices()) {
+        for (row, index) in indices.iter().enumerate() {
+            if let Some(category) = categories.get(*index as usize) {
+                rows.insert(category.as_str(), row);
+            }
+        }
+    }
+    rows
+}
+
+fn radar_angular_scale(count: usize, reverse: bool) -> Option<AngularCategoryScale> {
+    if count == 0 {
+        return None;
+    }
+    let step = std::f64::consts::TAU / count as f64;
+    let start = if reverse { step / 2.0 } else { -step / 2.0 };
+    AngularCategoryScale::new(count, start, !reverse).ok()
+}
+
+fn same_polar_angle(a: f64, b: f64) -> bool {
+    let delta = (a - b).rem_euclid(std::f64::consts::TAU);
+    delta.min(std::f64::consts::TAU - delta) < 1e-12
+}
+
+impl GeneralPieSlice {
+    fn geometry(
+        self,
+        plot: PolarPlot,
+        options: GeneralPolarOptions,
+    ) -> Option<GeneralPolarSectorGeometry> {
+        let pad = options.pad_angle.min(self.to - self.from);
+        let sector = PolarSector::new(
+            plot,
+            self.from + pad / 2.0,
+            self.to - self.from - pad,
+            options.inner_radius,
+            options.outer_radius,
+        )
+        .ok()?;
+        Some(GeneralPolarSectorGeometry {
+            row: self.row,
+            sector,
+        })
+    }
+}
+
+#[derive(Clone)]
+struct GeneralPieContext {
+    scene_generation: u64,
+    plot: PolarPlot,
+    start: f64,
+    end: f64,
+    slices: Vec<GeneralPieSlice>,
+}
+
+fn polar_value_sector(
+    context: &GeneralPolarCategoryContext,
+    dataset: &crate::general_data::GeneralDataset,
+    series: &GeneralSeries,
+    index: usize,
+    sweep_fraction: f64,
+) -> Option<GeneralPolarSectorGeometry> {
+    let row = context.rows.get(index).copied().flatten()?;
+    if !dataset.y_is_valid(row) || dataset.y()[row] <= 0.0 {
+        return None;
+    }
+    let options = series.polar;
+    let fraction = context
+        .radius_scale
+        .coordinate(dataset.y()[row])?
+        .clamp(0.0, 1.0);
+    let outer = if series.kind == GeneralSeriesKind::PolarArea {
+        (options.inner_radius.powi(2)
+            + (options.outer_radius.powi(2) - options.inner_radius.powi(2)) * fraction)
+            .sqrt()
+    } else {
+        options.inner_radius + (options.outer_radius - options.inner_radius) * fraction
+    };
+    if outer <= options.inner_radius {
+        return None;
+    }
+    let (from, to) = context
+        .sector_bounds
+        .as_ref()
+        .and_then(|bounds| bounds.get(index).copied())
+        .or_else(|| context.angles.sector(index))?;
+    let signed_sweep = (to - from) * sweep_fraction;
+    let from = options.start_angle + from * sweep_fraction;
+    let pad = options.pad_angle.min(signed_sweep.abs());
+    let signed_pad = pad.copysign(signed_sweep);
+    let sector = PolarSector::new(
+        context.plot,
+        from + signed_pad / 2.0,
+        signed_sweep - signed_pad,
+        options.inner_radius,
+        outer,
+    )
+    .ok()?;
+    Some(GeneralPolarSectorGeometry { row, sector })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1078,6 +1421,17 @@ pub struct GeneralLegendItem {
     pub title: String,
     pub color: Option<String>,
     pub visible: bool,
+    /// Bounded positive sector rows for pie, polar area and radial bar series.
+    pub slices: Vec<GeneralLegendSlice>,
+    pub slices_truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeneralLegendSlice {
+    pub row: usize,
+    pub label: String,
+    pub value: f64,
+    pub color: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1356,6 +1710,10 @@ impl GeneralSeries {
         self.fill_opacity
     }
 
+    pub fn polar(&self) -> GeneralPolarOptions {
+        self.polar
+    }
+
     pub fn fill_gradient(&self) -> Option<&[String; 2]> {
         self.fill_gradient.as_ref()
     }
@@ -1438,6 +1796,8 @@ pub(crate) struct GeneralSeriesRegistry {
     references: Vec<GeneralReference>,
     next_reference_id: u32,
     scatter_spatial: RefCell<HashMap<GeneralSeriesId, ScatterSpatialIndex>>,
+    polar_contexts: RefCell<HashMap<GeneralSeriesId, GeneralPolarCategoryContext>>,
+    pie_contexts: RefCell<HashMap<GeneralSeriesId, GeneralPieContext>>,
     axis_scans: RefCell<HashMap<GeneralSeriesId, Vec<AxisScanEntry>>>,
     hovered: Option<GeneralInteractionTarget>,
     selected: Option<GeneralInteractionTarget>,
@@ -1453,6 +1813,8 @@ impl GeneralSeriesRegistry {
             references: Vec::new(),
             next_reference_id: 1,
             scatter_spatial: RefCell::new(HashMap::new()),
+            polar_contexts: RefCell::new(HashMap::new()),
+            pie_contexts: RefCell::new(HashMap::new()),
             axis_scans: RefCell::new(HashMap::new()),
             hovered: None,
             selected: None,
@@ -1647,6 +2009,7 @@ impl GeneralSeriesRegistry {
             interpolation: options.interpolation,
             connect_missing: options.connect_missing,
             fill_opacity: options.fill_opacity,
+            polar: options.polar,
             fill_gradient: options.fill_gradient,
             baseline_value: options.baseline_value,
             baseline_policy: options.baseline_policy,
@@ -1674,6 +2037,8 @@ impl GeneralSeriesRegistry {
         };
         self.series.remove(index);
         self.scatter_spatial.get_mut().remove(&id);
+        self.polar_contexts.get_mut().remove(&id);
+        self.pie_contexts.get_mut().remove(&id);
         self.axis_scans.get_mut().remove(&id);
         if self
             .hovered
@@ -1755,6 +2120,32 @@ impl GeneralSeriesRegistry {
                     .map(|entries| entries.capacity() * std::mem::size_of::<AxisScanEntry>())
                     .sum::<usize>()
         });
+        let polar_bytes = self.polar_contexts.try_borrow().map_or(0, |cache| {
+            cache.capacity() * std::mem::size_of::<(GeneralSeriesId, GeneralPolarCategoryContext)>()
+                + cache
+                    .values()
+                    .map(|entry| {
+                        entry.rows.capacity() * std::mem::size_of::<Option<usize>>()
+                            + entry.radar_marker_rows.as_ref().map_or(0, |rows| {
+                                rows.capacity() * std::mem::size_of::<Option<usize>>()
+                            })
+                            + entry.sector_bounds.as_ref().map_or(0, |bounds| {
+                                bounds.capacity() * std::mem::size_of::<(f64, f64)>()
+                            })
+                            + entry
+                                .radar_radii
+                                .as_ref()
+                                .map_or(0, |radii| radii.capacity() * std::mem::size_of::<f64>())
+                    })
+                    .sum::<usize>()
+        });
+        let pie_bytes = self.pie_contexts.try_borrow().map_or(0, |cache| {
+            cache.capacity() * std::mem::size_of::<(GeneralSeriesId, GeneralPieContext)>()
+                + cache
+                    .values()
+                    .map(|entry| entry.slices.capacity() * std::mem::size_of::<GeneralPieSlice>())
+                    .sum::<usize>()
+        });
         let brush_bytes = self.brush.as_ref().map_or(0, |brush| {
             brush.axis_id.capacity()
                 + match &brush.range {
@@ -1772,6 +2163,8 @@ impl GeneralSeriesRegistry {
                 .sum::<usize>()
             + scatter_bytes
             + axis_scan_bytes
+            + polar_bytes
+            + pie_bytes
             + self.references.capacity() * std::mem::size_of::<GeneralReference>()
             + self
                 .references
@@ -1885,6 +2278,7 @@ fn apply_composed_series_options(
     series.interpolation = options.interpolation;
     series.connect_missing = options.connect_missing;
     series.fill_opacity = options.fill_opacity;
+    series.polar = options.polar;
     series.fill_gradient = options.fill_gradient;
     series.baseline_value = options.baseline_value;
     series.baseline_policy = options.baseline_policy;
@@ -1903,6 +2297,21 @@ fn apply_composed_series_options(
 }
 
 impl ChartEngine {
+    pub(crate) fn invalidate_general_dataset_geometry_caches(&self, dataset: GeneralDatasetId) {
+        let Some(registry) = self.general_series.as_ref() else {
+            return;
+        };
+        for series in registry
+            .series
+            .iter()
+            .filter(|series| series.dataset == dataset)
+        {
+            registry.scatter_spatial.borrow_mut().remove(&series.id);
+            registry.polar_contexts.borrow_mut().remove(&series.id);
+            registry.pie_contexts.borrow_mut().remove(&series.id);
+            registry.axis_scans.borrow_mut().remove(&series.id);
+        }
+    }
     /// Validate a complete proposed general pane without changing live state.
     pub fn validate_general_pane_proposal(
         &self,
@@ -1937,7 +2346,8 @@ impl ChartEngine {
         for series in &proposal.series {
             let x_axis = axis(&series.x_axis_id)?;
             let y_axis = axis(&series.y_axis_id)?;
-            if x_axis.dimension != AxisDimension::X || y_axis.dimension != AxisDimension::Y {
+            let (expected_x, expected_y) = series_axis_dimensions(series.kind);
+            if x_axis.dimension != expected_x || y_axis.dimension != expected_y {
                 return Err(invalid("general series axis dimensions are incompatible"));
             }
             validate_general_series_axis_compatibility(
@@ -2079,7 +2489,8 @@ impl ChartEngine {
             }
             let x_axis = axis(&proposed.options.x_axis_id)?;
             let y_axis = axis(&proposed.options.y_axis_id)?;
-            if x_axis.dimension != AxisDimension::X || y_axis.dimension != AxisDimension::Y {
+            let (expected_x, expected_y) = series_axis_dimensions(proposed.options.kind);
+            if x_axis.dimension != expected_x || y_axis.dimension != expected_y {
                 return Err(invalid("general series axis dimensions are incompatible"));
             }
             validate_presentation(&proposed.options)?;
@@ -2470,7 +2881,8 @@ impl ChartEngine {
         if x_axis.pane_id() != pane_id || y_axis.pane_id() != pane_id {
             return Err(invalid("general series axes must belong to its pane"));
         }
-        if x_axis.dimension() != AxisDimension::X || y_axis.dimension() != AxisDimension::Y {
+        let (expected_x, expected_y) = series_axis_dimensions(options.kind);
+        if x_axis.dimension() != expected_x || y_axis.dimension() != expected_y {
             return Err(invalid("general series axis dimensions are incompatible"));
         }
         validate_general_series_axis_compatibility(
@@ -2592,10 +3004,11 @@ impl ChartEngine {
         let target_y = self
             .general_axis(&options.y_axis_id)
             .ok_or_else(|| invalid("general series target Y axis does not exist"))?;
+        let (expected_x, expected_y) = series_axis_dimensions(options.kind);
         if target_x.pane_id() != target_pane_id
             || target_y.pane_id() != target_pane_id
-            || target_x.dimension() != AxisDimension::X
-            || target_y.dimension() != AxisDimension::Y
+            || target_x.dimension() != expected_x
+            || target_y.dimension() != expected_y
         {
             return Err(invalid(
                 "general series target axes must be X/Y axes in its target pane",
@@ -2637,6 +3050,7 @@ impl ChartEngine {
         series.interpolation = options.interpolation;
         series.connect_missing = options.connect_missing;
         series.fill_opacity = options.fill_opacity;
+        series.polar = options.polar;
         series.fill_gradient = options.fill_gradient;
         series.baseline_value = options.baseline_value;
         series.baseline_policy = options.baseline_policy;
@@ -2738,6 +3152,7 @@ impl ChartEngine {
         if registry.is_empty() {
             self.general_series = None;
         }
+        self.prune_general_transitions();
         self.invalidate_frame_all();
         true
     }
@@ -2971,7 +3386,7 @@ impl ChartEngine {
         let Some(plot) = self.general_plot_rect(pane_index) else {
             return;
         };
-        let Some(dataset) = self.general_dataset(series.dataset) else {
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
             return;
         };
         let (Some(categories), Some(category_indices)) =
@@ -3135,9 +3550,15 @@ impl ChartEngine {
             let Some(&axis_index) = axis_lookup.get(category.as_str()) else {
                 continue;
             };
-            let Some((left, right)) = x_scale.bounds(axis_index) else {
+            let Some(bounds) = self
+                .category_motion_bounds(x_axis, category, x_range.0, x_range.1)
+                .or_else(|| x_scale.bounds(axis_index))
+            else {
                 continue;
             };
+            let (left, right) = self
+                .category_row_motion_bounds(x_axis, series.dataset, row, bounds, x_range)
+                .unwrap_or(bounds);
             let full_left = left.min(right).clamp(0.0, plot.width);
             let full_right = left.max(right).clamp(0.0, plot.width);
             let slot_width = (full_right - full_left) / slot_count.max(1) as f64;
@@ -3242,7 +3663,7 @@ impl ChartEngine {
         let Some(plot) = self.general_plot_rect(pane_index) else {
             return;
         };
-        let Some(dataset) = self.general_dataset(series.dataset) else {
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
             return;
         };
         let (Some(categories), Some(category_indices)) =
@@ -3407,9 +3828,15 @@ impl ChartEngine {
             let Some(&axis_index) = axis_lookup.get(category.as_str()) else {
                 continue;
             };
-            let Some((from_y, to_y)) = y_scale.bounds(axis_index) else {
+            let Some(bounds) = self
+                .category_motion_bounds(y_axis, category, y_range.0, y_range.1)
+                .or_else(|| y_scale.bounds(axis_index))
+            else {
                 continue;
             };
+            let (from_y, to_y) = self
+                .category_row_motion_bounds(y_axis, series.dataset, row, bounds, y_range)
+                .unwrap_or(bounds);
             let full_top = from_y.min(to_y).clamp(plot.y, plot_bottom);
             let full_bottom = from_y.max(to_y).clamp(plot.y, plot_bottom);
             let slot_height = (full_bottom - full_top) / slot_count.max(1) as f64;
@@ -3514,7 +3941,7 @@ impl ChartEngine {
         let Some(plot) = self.general_plot_rect(pane_index) else {
             return;
         };
-        let Some(dataset) = self.general_dataset(series.dataset) else {
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
             return;
         };
         let (Some(categories), Some(category_indices), Some(low)) = (
@@ -3585,9 +4012,15 @@ impl ChartEngine {
             let Some(&axis_index) = axis_lookup.get(category.as_str()) else {
                 continue;
             };
-            let Some((left, right)) = x_scale.bounds(axis_index) else {
+            let Some(bounds) = self
+                .category_motion_bounds(x_axis, category, x_range.0, x_range.1)
+                .or_else(|| x_scale.bounds(axis_index))
+            else {
                 continue;
             };
+            let (left, right) = self
+                .category_row_motion_bounds(x_axis, series.dataset, row, bounds, x_range)
+                .unwrap_or(bounds);
             let Some((bar_left, bar_right)) = bar_thickness_bounds(
                 left.min(right).clamp(0.0, plot.width),
                 left.max(right).clamp(0.0, plot.width),
@@ -3855,7 +4288,7 @@ impl ChartEngine {
                         && candidate.y_axis_id == y_axis_id
                         && column_stack_matches(series, candidate)
                 }) {
-                    let Some(dataset) = self.general_dataset(sibling.dataset) else {
+                    let Some(dataset) = self.general_geometry_dataset(sibling.dataset) else {
                         continue;
                     };
                     let (Some(categories), Some(indices)) =
@@ -3914,7 +4347,7 @@ impl ChartEngine {
                         GeneralStackMode::Wiggle => unreachable!("wiggle bounds handled above"),
                     }
                 }
-            } else if let Some(dataset) = self.general_dataset(series.dataset) {
+            } else if let Some(dataset) = self.general_geometry_dataset(series.dataset) {
                 for (row, &value) in dataset.y().iter().enumerate() {
                     if dataset.y_is_valid(row) {
                         extend_numeric_pair(&mut bounds, value);
@@ -3969,7 +4402,7 @@ impl ChartEngine {
                         && candidate.x_axis_id == x_axis_id
                         && horizontal_bar_stack_matches(series, candidate)
                 }) {
-                    let Some(dataset) = self.general_dataset(sibling.dataset) else {
+                    let Some(dataset) = self.general_geometry_dataset(sibling.dataset) else {
                         continue;
                     };
                     let (Some(categories), Some(indices)) =
@@ -4028,7 +4461,7 @@ impl ChartEngine {
                         GeneralStackMode::Wiggle => unreachable!("wiggle bounds handled above"),
                     }
                 }
-            } else if let Some(dataset) = self.general_dataset(series.dataset) {
+            } else if let Some(dataset) = self.general_geometry_dataset(series.dataset) {
                 for (row, &value) in dataset.y().iter().enumerate() {
                     if dataset.y_is_valid(row) {
                         extend_numeric_pair(&mut bounds, value);
@@ -4164,7 +4597,7 @@ impl ChartEngine {
         let Some(plot) = self.general_plot_rect(pane_index) else {
             return;
         };
-        let Some(dataset) = self.general_dataset(series.dataset) else {
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
             return;
         };
         let Some(y_axis) = self.general_axis(&series.y_axis_id) else {
@@ -4328,7 +4761,7 @@ impl ChartEngine {
         let Some(plot) = self.general_plot_rect(pane_index) else {
             return;
         };
-        let Some(dataset) = self.general_dataset(series.dataset) else {
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
             return;
         };
         let (Some(x_axis), Some(y_axis)) = (
@@ -4436,26 +4869,44 @@ impl ChartEngine {
                             .and_then(|scale| scale.coordinate(*value as f64))
                     }),
                 GeneralXKind::Category => {
-                    let axis_index = dataset
+                    let category = dataset
                         .category_indices()
                         .and_then(|values| values.get(row))
                         .and_then(|value| usize::try_from(*value).ok())
-                        .and_then(|index| dataset.categories().and_then(|values| values.get(index)))
-                        .and_then(|category| {
-                            category_lookup
-                                .as_ref()
-                                .and_then(|lookup| lookup.get(category.as_str()))
-                                .copied()
+                        .and_then(|index| {
+                            dataset.categories().and_then(|values| values.get(index))
                         });
-                    axis_index.and_then(|index| match x_axis.scale() {
-                        GeneralScaleType::Band => category_band_scale
-                            .as_ref()
-                            .and_then(|scale| scale.center(index)),
-                        GeneralScaleType::Point => category_point_scale
-                            .as_ref()
-                            .and_then(|scale| scale.coordinate(index)),
-                        _ => None,
-                    })
+                    category
+                        .and_then(|category| {
+                            self.category_motion_bounds(x_axis, category, x_range.0, x_range.1)
+                                .map(|(first, second)| (first + second) / 2.0)
+                                .or_else(|| {
+                                    let index = category_lookup
+                                        .as_ref()
+                                        .and_then(|lookup| lookup.get(category.as_str()))
+                                        .copied()?;
+                                    match x_axis.scale() {
+                                        GeneralScaleType::Band => category_band_scale
+                                            .as_ref()
+                                            .and_then(|scale| scale.center(index)),
+                                        GeneralScaleType::Point => category_point_scale
+                                            .as_ref()
+                                            .and_then(|scale| scale.coordinate(index)),
+                                        _ => None,
+                                    }
+                                })
+                        })
+                        .map(|x| {
+                            self.category_row_motion_bounds(
+                                x_axis,
+                                series.dataset,
+                                row,
+                                (x, x),
+                                x_range,
+                            )
+                            .map(|(first, second)| (first + second) / 2.0)
+                            .unwrap_or(x)
+                        })
                 }
             };
             let Some(x) = x else {
@@ -4489,7 +4940,7 @@ impl ChartEngine {
         let Some(plot) = self.general_plot_rect(pane_index) else {
             return;
         };
-        let Some(dataset) = self.general_dataset(series.dataset) else {
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
             return;
         };
         let Some(low_values) = dataset.low() else {
@@ -4603,26 +5054,44 @@ impl ChartEngine {
                             .and_then(|scale| scale.coordinate(*value as f64))
                     }),
                 GeneralXKind::Category => {
-                    let axis_index = dataset
+                    let category = dataset
                         .category_indices()
                         .and_then(|values| values.get(row))
                         .and_then(|value| usize::try_from(*value).ok())
-                        .and_then(|index| dataset.categories().and_then(|values| values.get(index)))
-                        .and_then(|category| {
-                            category_lookup
-                                .as_ref()
-                                .and_then(|lookup| lookup.get(category.as_str()))
-                                .copied()
+                        .and_then(|index| {
+                            dataset.categories().and_then(|values| values.get(index))
                         });
-                    axis_index.and_then(|index| match x_axis.scale() {
-                        GeneralScaleType::Band => category_band_scale
-                            .as_ref()
-                            .and_then(|scale| scale.center(index)),
-                        GeneralScaleType::Point => category_point_scale
-                            .as_ref()
-                            .and_then(|scale| scale.coordinate(index)),
-                        _ => None,
-                    })
+                    category
+                        .and_then(|category| {
+                            self.category_motion_bounds(x_axis, category, x_range.0, x_range.1)
+                                .map(|(first, second)| (first + second) / 2.0)
+                                .or_else(|| {
+                                    let index = category_lookup
+                                        .as_ref()
+                                        .and_then(|lookup| lookup.get(category.as_str()))
+                                        .copied()?;
+                                    match x_axis.scale() {
+                                        GeneralScaleType::Band => category_band_scale
+                                            .as_ref()
+                                            .and_then(|scale| scale.center(index)),
+                                        GeneralScaleType::Point => category_point_scale
+                                            .as_ref()
+                                            .and_then(|scale| scale.coordinate(index)),
+                                        _ => None,
+                                    }
+                                })
+                        })
+                        .map(|x| {
+                            self.category_row_motion_bounds(
+                                x_axis,
+                                series.dataset,
+                                row,
+                                (x, x),
+                                x_range,
+                            )
+                            .map(|(first, second)| (first + second) / 2.0)
+                            .unwrap_or(x)
+                        })
                 }
             };
             let Some(x) = x else {
@@ -4690,7 +5159,7 @@ impl ChartEngine {
         let Some(plot) = self.general_plot_rect(pane_index) else {
             return;
         };
-        let Some(dataset) = self.general_dataset(series.dataset) else {
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
             return;
         };
         let (Some(y_low_values), Some(y_high_values)) = (dataset.low(), dataset.high()) else {
@@ -4790,7 +5259,16 @@ impl ChartEngine {
                     .ok()
                     .and_then(|scale| {
                         (0..axis_categories.len())
-                            .map(|index| scale.center(index))
+                            .map(|index| {
+                                self.category_motion_bounds(
+                                    x_axis,
+                                    &axis_categories[index],
+                                    x_range.0,
+                                    x_range.1,
+                                )
+                                .map(|(first, second)| (first + second) / 2.0)
+                                .or_else(|| scale.center(index))
+                            })
                             .collect()
                     }),
                     GeneralScaleType::Point => PointScale::new(
@@ -4803,7 +5281,16 @@ impl ChartEngine {
                     .ok()
                     .and_then(|scale| {
                         (0..axis_categories.len())
-                            .map(|index| scale.coordinate(index))
+                            .map(|index| {
+                                self.category_motion_bounds(
+                                    x_axis,
+                                    &axis_categories[index],
+                                    x_range.0,
+                                    x_range.1,
+                                )
+                                .map(|(first, second)| (first + second) / 2.0)
+                                .or_else(|| scale.coordinate(index))
+                            })
                             .collect()
                     }),
                     _ => None,
@@ -4823,7 +5310,18 @@ impl ChartEngine {
                     let x = categories
                         .get(indices[row] as usize)
                         .and_then(|category| category_x.get(category.as_str()))
-                        .copied();
+                        .copied()
+                        .map(|x| {
+                            self.category_row_motion_bounds(
+                                x_axis,
+                                series.dataset,
+                                row,
+                                (x, x),
+                                x_range,
+                            )
+                            .map(|(first, second)| (first + second) / 2.0)
+                            .unwrap_or(x)
+                        });
                     let (Some(x), Some(y)) = (x, y_scale.coordinate(dataset.y()[row])) else {
                         continue;
                     };
@@ -4914,7 +5412,7 @@ impl ChartEngine {
         let Some(plot) = self.general_plot_rect(pane_index) else {
             return;
         };
-        let Some(dataset) = self.general_dataset(series.dataset) else {
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
             return;
         };
         let (
@@ -4999,9 +5497,15 @@ impl ChartEngine {
             let Some(&axis_index) = axis_lookup.get(category.as_str()) else {
                 continue;
             };
-            let Some((band_from, band_to)) = x_scale.bounds(axis_index) else {
+            let Some(bounds) = self
+                .category_motion_bounds(x_axis, category, x_range.0, x_range.1)
+                .or_else(|| x_scale.bounds(axis_index))
+            else {
                 continue;
             };
+            let (band_from, band_to) = self
+                .category_row_motion_bounds(x_axis, series.dataset, row, bounds, x_range)
+                .unwrap_or(bounds);
             let full_left = band_from.min(band_to).clamp(0.0, plot.width);
             let full_right = band_from.max(band_to).clamp(0.0, plot.width);
             let inset = (full_right - full_left) * 0.2;
@@ -5052,7 +5556,7 @@ impl ChartEngine {
         let Some(plot) = self.general_plot_rect(pane_index) else {
             return;
         };
-        let Some(dataset) = self.general_dataset(series.dataset) else {
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
             return;
         };
         if dataset.heatmap_y_numeric().is_some() {
@@ -5187,11 +5691,30 @@ impl ChartEngine {
             else {
                 continue;
             };
-            let (Some((x0, x1)), Some((y0, y1))) =
-                (x_scale.bounds(x_axis_index), y_scale.bounds(y_axis_index))
-            else {
+            let (Some((x0, x1)), Some((y0, y1))) = (
+                self.category_motion_bounds(
+                    x_axis,
+                    &axis_x_categories[x_axis_index],
+                    x_range.0,
+                    x_range.1,
+                )
+                .or_else(|| x_scale.bounds(x_axis_index)),
+                self.category_motion_bounds(
+                    y_axis,
+                    &axis_y_categories[y_axis_index],
+                    y_range.0,
+                    y_range.1,
+                )
+                .or_else(|| y_scale.bounds(y_axis_index)),
+            ) else {
                 continue;
             };
+            let (x0, x1) = self
+                .category_row_motion_bounds(x_axis, series.dataset, row, (x0, x1), x_range)
+                .unwrap_or((x0, x1));
+            let (y0, y1) = self
+                .category_row_motion_bounds(y_axis, series.dataset, row, (y0, y1), y_range)
+                .unwrap_or((y0, y1));
             let left = x0.min(x1).clamp(0.0, plot.width);
             let right = x0.max(x1).clamp(0.0, plot.width);
             let top = y0.min(y1).clamp(plot.y, plot_bottom);
@@ -5373,7 +5896,7 @@ impl ChartEngine {
         }
         let pane_index = self.pane_index_for_id(series.pane_id)?;
         let plot = self.general_plot_rect(pane_index)?;
-        let dataset = self.general_dataset(series.dataset)?;
+        let dataset = self.general_geometry_dataset(series.dataset)?;
         dataset.numeric_x()?;
         let x_axis = self.general_axis(&series.x_axis_id)?;
         let y_axis = self.general_axis(&series.y_axis_id)?;
@@ -5430,7 +5953,7 @@ impl ChartEngine {
         series: &GeneralSeries,
         context: ScatterGeometryContext,
     ) -> Option<ScatterSpatialIndex> {
-        let dataset = self.general_dataset(series.dataset)?;
+        let dataset = self.general_geometry_dataset(series.dataset)?;
         let x_values = dataset.numeric_x()?;
         let mut points = Vec::with_capacity(dataset.len());
         for (row, (&x_value, &y_value)) in x_values.iter().zip(dataset.y()).enumerate() {
@@ -5547,6 +6070,891 @@ impl ChartEngine {
         value
     }
 
+    pub(crate) fn visit_general_pie_slices(
+        &self,
+        series: &GeneralSeries,
+        mut visit: impl FnMut(GeneralPolarSectorGeometry),
+    ) {
+        if series.kind != GeneralSeriesKind::Pie {
+            return;
+        }
+        let _ = self.with_general_pie_context(series, |context| {
+            for slice in &context.slices {
+                if let Some(geometry) = slice.geometry(context.plot, series.polar) {
+                    visit(geometry);
+                }
+            }
+        });
+    }
+
+    pub(crate) fn pie_order_motion_for_dataset(
+        &self,
+        id: crate::GeneralDatasetId,
+        previous: &crate::general_data::GeneralDataset,
+        rows: &[crate::general_data::GeneralTransitionRow],
+    ) -> Option<Vec<Option<PieOrderRow>>> {
+        if rows.len() > MAX_GENERAL_PIE_SLICES
+            || !self.general_series_iter().any(|series| {
+                series.visible()
+                    && series.dataset() == id
+                    && series.kind() == GeneralSeriesKind::Pie
+            })
+        {
+            return None;
+        }
+        let target = self.general_dataset(id)?;
+        let prior_motion = self
+            .general_transitions
+            .iter()
+            .find(|transition| transition.dataset == id)
+            .and_then(|transition| transition.pie_order.as_ref());
+        let mut last_source = None;
+        let reordered = rows.iter().filter_map(|row| row.source).any(|source| {
+            let moved = last_source.is_some_and(|last| source < last);
+            last_source = Some(source);
+            moved
+        });
+        if !reordered && prior_motion.is_none() {
+            return None;
+        }
+        let source_bounds = pie_normalized_bounds(previous);
+        let target_bounds = pie_normalized_bounds(target);
+        let prior_progress = self
+            .general_transitions
+            .iter()
+            .find(|transition| transition.dataset == id)
+            .map(|transition| {
+                ((self.general_transition_time_ms - transition.started_ms)
+                    / self.general_transition_duration_ms)
+                    .clamp(0.0, 1.0)
+            })
+            .unwrap_or(0.0);
+        Some(
+            rows.iter()
+                .map(|mapping| {
+                    let source = mapping.source.and_then(|row| {
+                        prior_motion
+                            .and_then(|motion| motion.get(row).copied().flatten())
+                            .map(|motion| motion.bounds(prior_progress))
+                            .or_else(|| source_bounds.get(row).copied().flatten())
+                    });
+                    let target = mapping
+                        .target
+                        .and_then(|row| target_bounds.get(row).copied().flatten());
+                    match (source, target) {
+                        (Some(from), Some(to)) => Some(PieOrderRow { from, to }),
+                        (None, Some(to)) => {
+                            let center = (to[0] + to[1]) / 2.0;
+                            Some(PieOrderRow {
+                                from: [center, center],
+                                to,
+                            })
+                        }
+                        (Some(from), None) => {
+                            let center = (from[0] + from[1]) / 2.0;
+                            Some(PieOrderRow {
+                                from,
+                                to: [center, center],
+                            })
+                        }
+                        (None, None) => None,
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    pub(crate) fn radar_slot_motions_for_dataset(
+        &self,
+        id: GeneralDatasetId,
+        previous: &crate::general_data::GeneralDataset,
+        rows: &[crate::general_data::GeneralTransitionRow],
+        category_axes: &[crate::general_axes::CategoryAxisMotion],
+        source_domains: &[(String, [f64; 2])],
+    ) -> Option<Vec<RadarSlotMotion>> {
+        let Some(target) = self.general_dataset(id) else {
+            return Some(Vec::new());
+        };
+        let mut motions = Vec::new();
+        let mut retained_bytes = 0;
+        for series in self.general_series_iter().filter(|series| {
+            series.visible()
+                && series.dataset() == id
+                && series.kind() == GeneralSeriesKind::Radar
+                && category_axes
+                    .iter()
+                    .any(|motion| motion.axis_id == series.x_axis_id())
+        }) {
+            let (Some(angle_axis), Some(radius_axis)) = (
+                self.general_axis(series.x_axis_id()),
+                self.general_axis(series.y_axis_id()),
+            ) else {
+                continue;
+            };
+            let (Some(source_categories), Some(target_categories)) = (
+                self.category_axis_values(angle_axis, Some((id, previous)), false, true),
+                self.category_axis_values(angle_axis, None, true, true),
+            ) else {
+                continue;
+            };
+            if source_categories.len() != target_categories.len() || source_categories.len() < 3 {
+                continue;
+            }
+            let Some(domain) = source_domains
+                .iter()
+                .find(|(axis_id, _)| axis_id == series.y_axis_id())
+                .map(|(_, domain)| *domain)
+            else {
+                continue;
+            };
+            let range = if radius_axis.reverse() {
+                (1.0, 0.0)
+            } else {
+                (0.0, 1.0)
+            };
+            let Some(scale) = NumericAxisScale::new(radius_axis.scale(), domain, range.0, range.1)
+            else {
+                continue;
+            };
+            let source_lookup = radar_rows_by_category(previous);
+            let source_radii = self
+                .general_transitions
+                .iter()
+                .any(|transition| transition.dataset == id)
+                .then(|| {
+                    self.with_general_polar_category_context(series, |context| {
+                        context.radar_radii.clone()
+                    })
+                    .flatten()
+                })
+                .flatten()
+                .filter(|radii| radii.len() == source_categories.len())
+                .unwrap_or_else(|| {
+                    source_categories
+                        .iter()
+                        .map(|category| {
+                            source_lookup
+                                .get(category.as_str())
+                                .and_then(|row| {
+                                    previous.y_is_valid(*row).then_some(previous.y()[*row])
+                                })
+                                .and_then(|value| scale.coordinate(value))
+                                .unwrap_or(0.0)
+                                .clamp(0.0, 1.0)
+                        })
+                        .collect()
+                });
+            let target_lookup = radar_rows_by_category(target);
+            let mut presentation_for_target = vec![None; target.len()];
+            for (presentation_row, mapping) in rows.iter().enumerate() {
+                if let Some(target_row) = mapping.target {
+                    presentation_for_target[target_row] = Some(presentation_row);
+                }
+            }
+            let mut target_values = Vec::with_capacity(target_categories.len());
+            let mut target_rows = Vec::with_capacity(target_categories.len());
+            for category in &target_categories {
+                let row = target_lookup.get(category.as_str()).copied();
+                target_values
+                    .push(row.and_then(|row| target.y_is_valid(row).then_some(target.y()[row])));
+                target_rows.push(row.and_then(|row| presentation_for_target[row]));
+            }
+            let motion = RadarSlotMotion {
+                series_id: series.id(),
+                source_radii,
+                target_values,
+                target_rows,
+            };
+            retained_bytes += motion.estimated_bytes();
+            if retained_bytes > crate::MAX_GENERAL_TRANSITION_BYTES / 4 {
+                return None;
+            }
+            motions.push(motion);
+        }
+        Some(motions)
+    }
+
+    pub(crate) fn radar_shape_motions_for_dataset(
+        &self,
+        id: GeneralDatasetId,
+        previous: &crate::general_data::GeneralDataset,
+        rows: &[crate::general_data::GeneralTransitionRow],
+        category_axes: &[crate::general_axes::CategoryAxisMotion],
+        source_domains: &[(String, [f64; 2])],
+    ) -> Option<Vec<RadarShapeMotion>> {
+        let Some(target) = self.general_dataset(id) else {
+            return Some(Vec::new());
+        };
+        let mut motions = Vec::new();
+        let mut retained_bytes = 0;
+        for series in self.general_series_iter().filter(|series| {
+            series.visible()
+                && series.dataset() == id
+                && series.kind() == GeneralSeriesKind::Radar
+                && category_axes
+                    .iter()
+                    .any(|motion| motion.axis_id == series.x_axis_id())
+        }) {
+            let (Some(angle_axis), Some(radius_axis)) = (
+                self.general_axis(series.x_axis_id()),
+                self.general_axis(series.y_axis_id()),
+            ) else {
+                continue;
+            };
+            let (Some(source_categories), Some(target_categories)) = (
+                self.category_axis_values(angle_axis, Some((id, previous)), false, true),
+                self.category_axis_values(angle_axis, None, true, true),
+            ) else {
+                continue;
+            };
+            if source_categories.len() == target_categories.len() {
+                continue;
+            }
+            let (Some(source_angles), Some(target_angles)) = (
+                radar_angular_scale(source_categories.len(), angle_axis.reverse()),
+                radar_angular_scale(target_categories.len(), angle_axis.reverse()),
+            ) else {
+                continue;
+            };
+            let Some(domain) = source_domains
+                .iter()
+                .find(|(axis_id, _)| axis_id == series.y_axis_id())
+                .map(|(_, domain)| *domain)
+            else {
+                continue;
+            };
+            let range = if radius_axis.reverse() {
+                (1.0, 0.0)
+            } else {
+                (0.0, 1.0)
+            };
+            let Some(scale) = NumericAxisScale::new(radius_axis.scale(), domain, range.0, range.1)
+            else {
+                continue;
+            };
+            let mut angles = source_angles
+                .count()
+                .checked_add(target_angles.count())
+                .map(Vec::with_capacity)
+                .unwrap_or_default();
+            for angular in [source_angles, target_angles] {
+                for index in 0..angular.count() {
+                    angles.push(
+                        angular
+                            .center(index)
+                            .unwrap()
+                            .rem_euclid(std::f64::consts::TAU),
+                    );
+                }
+            }
+            angles.sort_by(f64::total_cmp);
+            angles.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+            if angles.len() < 3 || angles.len() > MAX_GENERAL_RADAR_VALUES * 2 {
+                continue;
+            }
+            let mut presentation_for_source = vec![None; previous.len()];
+            let mut presentation_for_target = vec![None; target.len()];
+            for (presentation_row, mapping) in rows.iter().enumerate() {
+                if let Some(source_row) = mapping.source {
+                    presentation_for_source[source_row] = Some(presentation_row);
+                }
+                if let Some(target_row) = mapping.target {
+                    presentation_for_target[target_row] = Some(presentation_row);
+                }
+            }
+            let source_lookup = radar_rows_by_category(previous);
+            let target_lookup = radar_rows_by_category(target);
+            let source_values = source_categories
+                .iter()
+                .map(|category| {
+                    source_lookup
+                        .get(category.as_str())
+                        .and_then(|row| previous.y_is_valid(*row).then_some(previous.y()[*row]))
+                        .and_then(|value| scale.coordinate(value))
+                        .unwrap_or(0.0)
+                        .clamp(0.0, 1.0)
+                })
+                .collect::<Vec<_>>();
+            let unit_plot = PolarPlot::from_rect(0.0, 0.0, 2.0, 2.0).unwrap();
+            let source_polygon = PolarPolygon::new(unit_plot, source_angles, &source_values).ok();
+            let mut prior_shape = None;
+            if self
+                .general_transitions
+                .iter()
+                .any(|transition| transition.dataset == id)
+            {
+                self.with_general_radar_polygon(series, |polygon, old_rows, old_markers| {
+                    prior_shape = Some(
+                        angles
+                            .iter()
+                            .map(|&angle| {
+                                let point = polygon.plot().point(angle, 0.5).unwrap();
+                                let index = polygon.category_at(point.0, point.1);
+                                let row = index
+                                    .and_then(|index| old_rows.get(index).copied().flatten())
+                                    .and_then(|source_row| presentation_for_source[source_row]);
+                                let marker = index
+                                    .filter(|index| {
+                                        polygon
+                                            .angle(*index)
+                                            .is_some_and(|old| same_polar_angle(old, angle))
+                                    })
+                                    .and_then(|index| old_markers.get(index).copied().flatten())
+                                    .and_then(|source_row| presentation_for_source[source_row]);
+                                (polygon.radius_at(angle).unwrap_or(0.0), row, marker)
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+                });
+            }
+            let mut source_radii = Vec::with_capacity(angles.len());
+            let mut source_rows = Vec::with_capacity(angles.len());
+            let mut source_marker_rows = Vec::with_capacity(angles.len());
+            for (index, &angle) in angles.iter().enumerate() {
+                let (radius, row, marker) = prior_shape
+                    .as_ref()
+                    .and_then(|sample| sample.get(index).copied())
+                    .unwrap_or_else(|| {
+                        let slot = source_angles.index_at(angle);
+                        let row = slot
+                            .and_then(|slot| source_categories.get(slot))
+                            .and_then(|category| source_lookup.get(category.as_str()))
+                            .and_then(|row| presentation_for_source[*row]);
+                        let marker = slot
+                            .filter(|slot| {
+                                source_angles
+                                    .center(*slot)
+                                    .is_some_and(|center| same_polar_angle(center, angle))
+                            })
+                            .and(row);
+                        (
+                            source_polygon
+                                .and_then(|polygon| polygon.radius_at(angle))
+                                .unwrap_or(0.0),
+                            row,
+                            marker,
+                        )
+                    });
+                source_radii.push(radius);
+                source_rows.push(row);
+                source_marker_rows.push(marker);
+            }
+            let target_values = target_categories
+                .iter()
+                .map(|category| {
+                    target_lookup
+                        .get(category.as_str())
+                        .and_then(|row| target.y_is_valid(*row).then_some(target.y()[*row]))
+                })
+                .collect();
+            let mut target_rows = Vec::with_capacity(angles.len());
+            let mut target_marker_rows = Vec::with_capacity(angles.len());
+            for &angle in &angles {
+                let slot = target_angles.index_at(angle);
+                let row = slot
+                    .and_then(|slot| target_categories.get(slot))
+                    .and_then(|category| target_lookup.get(category.as_str()))
+                    .and_then(|row| presentation_for_target[*row]);
+                let marker = slot
+                    .filter(|slot| {
+                        target_angles
+                            .center(*slot)
+                            .is_some_and(|center| same_polar_angle(center, angle))
+                    })
+                    .and(row);
+                target_rows.push(row);
+                target_marker_rows.push(marker);
+            }
+            let motion = RadarShapeMotion {
+                series_id: series.id(),
+                angles: Arc::from(
+                    angles
+                        .into_iter()
+                        .map(|angle| (angle, angle))
+                        .collect::<Vec<_>>(),
+                ),
+                source_radii,
+                source_rows,
+                source_marker_rows,
+                target_values,
+                target_rows,
+                target_marker_rows,
+                target_angles,
+            };
+            retained_bytes += motion.estimated_bytes();
+            if retained_bytes > crate::MAX_GENERAL_TRANSITION_BYTES / 4 {
+                return None;
+            }
+            motions.push(motion);
+        }
+        Some(motions)
+    }
+
+    fn build_general_pie_context(&self, series: &GeneralSeries) -> Option<GeneralPieContext> {
+        let pane = self.pane_index_for_id(series.pane_id)?;
+        let plot = self.general_plot_rect(pane)?;
+        let polar_plot = PolarPlot::from_rect(0.0, plot.y, plot.width, plot.height).ok()?;
+        let dataset = self.general_geometry_dataset(series.dataset)?;
+        let max_value = dataset
+            .y()
+            .iter()
+            .enumerate()
+            .filter(|(row, value)| dataset.y_is_valid(*row) && **value > 0.0)
+            .map(|(_, value)| *value)
+            .fold(0.0_f64, f64::max);
+        if max_value == 0.0 {
+            return None;
+        }
+        let total: f64 = dataset
+            .y()
+            .iter()
+            .enumerate()
+            .filter(|(row, value)| dataset.y_is_valid(*row) && **value > 0.0)
+            .map(|(_, value)| *value / max_value)
+            .sum();
+        let last_positive = (0..dataset.len())
+            .rev()
+            .find(|row| dataset.y_is_valid(*row) && dataset.y()[*row] > 0.0);
+        let last_positive = last_positive?;
+        let options = series.polar;
+        let full_sweep = options.end_angle - options.start_angle;
+        let start_angle = options.start_angle.rem_euclid(std::f64::consts::TAU);
+        let end_angle = start_angle + full_sweep;
+        let mut accumulated = 0.0;
+        let mut slices = Vec::with_capacity(dataset.len());
+        let transition = self
+            .general_transitions
+            .iter()
+            .find(|transition| transition.dataset == series.dataset);
+        let motion = transition.and_then(|transition| transition.pie_order.as_ref());
+        let progress = transition.map_or(0.0, |transition| {
+            ((self.general_transition_time_ms - transition.started_ms)
+                / self.general_transition_duration_ms)
+                .clamp(0.0, 1.0)
+        });
+        for (row, value) in dataset.y().iter().enumerate() {
+            if !dataset.y_is_valid(row) || *value <= 0.0 {
+                continue;
+            }
+            let from = start_angle + full_sweep * accumulated;
+            accumulated += (*value / max_value) / total;
+            let to = if row == last_positive {
+                end_angle
+            } else {
+                (start_angle + full_sweep * accumulated).min(end_angle)
+            };
+            let (from, to) = motion
+                .and_then(|motion| motion.get(row).copied().flatten())
+                .map(|motion| {
+                    let [first, second] = motion.bounds(progress);
+                    (
+                        start_angle + full_sweep * first,
+                        start_angle + full_sweep * second,
+                    )
+                })
+                .unwrap_or((from, to));
+            let slice = GeneralPieSlice { row, from, to };
+            if slice.geometry(polar_plot, options).is_some() {
+                slices.push(slice);
+            }
+        }
+        Some(GeneralPieContext {
+            scene_generation: self.frame_invalidation.scene_generation(),
+            plot: polar_plot,
+            start: start_angle,
+            end: end_angle,
+            slices,
+        })
+    }
+
+    fn with_general_pie_context<R>(
+        &self,
+        series: &GeneralSeries,
+        use_context: impl FnOnce(&GeneralPieContext) -> R,
+    ) -> Option<R> {
+        let registry = self.general_series.as_ref()?;
+        let scene = self.frame_invalidation.scene_generation();
+        let current = registry
+            .pie_contexts
+            .borrow()
+            .get(&series.id)
+            .is_some_and(|context| context.scene_generation == scene);
+        if !current {
+            let context = self.build_general_pie_context(series)?;
+            let mut cache = registry.pie_contexts.borrow_mut();
+            cache.retain(|_, entry| entry.scene_generation == scene);
+            if cache.len() >= MAX_POLAR_CONTEXT_CACHES
+                && !cache.contains_key(&series.id)
+                && let Some(oldest) = cache.keys().copied().min_by_key(|id| id.get())
+            {
+                cache.remove(&oldest);
+            }
+            cache.insert(series.id, context);
+        }
+        let cache = registry.pie_contexts.borrow();
+        Some(use_context(cache.get(&series.id)?))
+    }
+
+    fn general_pie_hit(&self, series: &GeneralSeries, x: f64, y: f64) -> Option<usize> {
+        self.with_general_pie_context(series, |context| {
+            if self.general_transitions.iter().any(|transition| {
+                transition.dataset == series.dataset && transition.pie_order.is_some()
+            }) {
+                return context.slices.iter().rev().find_map(|slice| {
+                    let geometry = slice.geometry(context.plot, series.polar)?;
+                    geometry.sector.contains(x, y).then_some(geometry.row)
+                });
+            }
+            let (angle, _) = context.plot.invert(x, y)?;
+            let unwrapped =
+                context.start + (angle - context.start).rem_euclid(std::f64::consts::TAU);
+            if unwrapped >= context.end {
+                return None;
+            }
+            let index = context
+                .slices
+                .partition_point(|slice| slice.from <= unwrapped)
+                .checked_sub(1)?;
+            let slice = context.slices[index];
+            let geometry = slice.geometry(context.plot, series.polar)?;
+            geometry.sector.contains(x, y).then_some(geometry.row)
+        })?
+    }
+
+    fn build_general_polar_category_context(
+        &self,
+        series: &GeneralSeries,
+    ) -> Option<GeneralPolarCategoryContext> {
+        let pane = self.pane_index_for_id(series.pane_id)?;
+        let rect = self.general_plot_rect(pane)?;
+        let plot = PolarPlot::from_rect(0.0, rect.y, rect.width, rect.height).ok()?;
+        let dataset = self.general_geometry_dataset(series.dataset)?;
+        let angle_axis = self.general_axis(&series.x_axis_id)?;
+        let radius_axis = self.general_axis(&series.y_axis_id)?;
+        let GeneralAxisDomain::Category(categories) =
+            self.effective_general_axis_domain(angle_axis)?
+        else {
+            return None;
+        };
+        if categories.is_empty() {
+            return None;
+        }
+        let GeneralAxisDomain::Numeric(domain) = self.effective_general_axis_domain(radius_axis)?
+        else {
+            return None;
+        };
+        let step = std::f64::consts::TAU / categories.len() as f64;
+        let start = if angle_axis.reverse() {
+            step / 2.0
+        } else {
+            -step / 2.0
+        };
+        let angles =
+            AngularCategoryScale::new(categories.len(), start, !angle_axis.reverse()).ok()?;
+        let range = if radius_axis.reverse() {
+            (1.0, 0.0)
+        } else {
+            (0.0, 1.0)
+        };
+        let radius_scale = NumericAxisScale::new(radius_axis.scale(), domain, range.0, range.1)?;
+        let mut axis_indices = HashMap::with_capacity(categories.len());
+        for (index, category) in categories.iter().enumerate() {
+            axis_indices.insert(category.as_str(), index);
+        }
+        let mut rows = vec![None; categories.len()];
+        let dataset_categories = dataset.categories()?;
+        let dataset_indices = dataset.category_indices()?;
+        for (row, &index) in dataset_indices.iter().enumerate() {
+            let category = dataset_categories.get(index as usize)?;
+            if let Some(&axis_index) = axis_indices.get(category.as_str()) {
+                rows[axis_index] = Some(row);
+            }
+        }
+        let sector_bounds = self
+            .general_transitions
+            .iter()
+            .any(|transition| {
+                transition
+                    .category_axes
+                    .iter()
+                    .any(|motion| motion.axis_id == angle_axis.id())
+            })
+            .then(|| {
+                categories
+                    .iter()
+                    .enumerate()
+                    .map(|(index, category)| {
+                        let fallback = angles.sector(index)?;
+                        let current = self
+                            .category_motion_bounds_normalized(angle_axis.id(), category)
+                            .map(|bounds| {
+                                (
+                                    bounds[0] * std::f64::consts::TAU,
+                                    bounds[1] * std::f64::consts::TAU,
+                                )
+                            })
+                            .unwrap_or(fallback);
+                        Some(
+                            rows[index]
+                                .and_then(|row| {
+                                    self.category_row_motion_bounds(
+                                        angle_axis,
+                                        series.dataset,
+                                        row,
+                                        current,
+                                        (0.0, std::f64::consts::TAU),
+                                    )
+                                })
+                                .unwrap_or(current),
+                        )
+                    })
+                    .collect::<Option<Vec<_>>>()
+            })
+            .flatten();
+        let mut radar_radii = if series.kind == GeneralSeriesKind::Radar {
+            let mut radii = vec![0.0; rows.len()];
+            for (index, row) in rows.iter().enumerate() {
+                if let Some(row) = row
+                    && dataset.y_is_valid(*row)
+                {
+                    radii[index] = radius_scale.coordinate(dataset.y()[*row])?.clamp(0.0, 1.0);
+                }
+            }
+            Some(radii)
+        } else {
+            None
+        };
+        let radar_motion = self
+            .general_transitions
+            .iter()
+            .find(|transition| transition.dataset == series.dataset)
+            .and_then(|transition| {
+                transition
+                    .radar_slots
+                    .iter()
+                    .find(|motion| motion.series_id == series.id)
+                    .map(|motion| (transition, motion))
+            });
+        let mut radar_slot_morph = false;
+        if let (Some((transition, motion)), Some(radii)) = (radar_motion, radar_radii.as_mut())
+            && motion.source_radii.len() == radii.len()
+            && motion.target_values.len() == radii.len()
+        {
+            let progress = ((self.general_transition_time_ms - transition.started_ms)
+                / self.general_transition_duration_ms)
+                .clamp(0.0, 1.0);
+            for (index, radius) in radii.iter_mut().enumerate() {
+                let target_radius = motion.target_values[index]
+                    .and_then(|value| radius_scale.coordinate(value))
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0);
+                *radius = motion.source_radii[index] * (1.0 - progress) + target_radius * progress;
+            }
+            if progress >= 0.5 {
+                rows.copy_from_slice(&motion.target_rows);
+            }
+            radar_slot_morph = true;
+        }
+        let radar_shape = self
+            .general_transitions
+            .iter()
+            .find(|transition| transition.dataset == series.dataset)
+            .and_then(|transition| {
+                transition
+                    .radar_shapes
+                    .iter()
+                    .find(|motion| motion.series_id == series.id)
+                    .map(|motion| (transition, motion))
+            });
+        let mut radar_shape_angles = None;
+        let mut radar_marker_rows = None;
+        if let Some((transition, motion)) = radar_shape {
+            let progress = ((self.general_transition_time_ms - transition.started_ms)
+                / self.general_transition_duration_ms)
+                .clamp(0.0, 1.0);
+            let target_radii = motion
+                .target_values
+                .iter()
+                .map(|value| {
+                    value
+                        .and_then(|value| radius_scale.coordinate(value))
+                        .unwrap_or(0.0)
+                        .clamp(0.0, 1.0)
+                })
+                .collect::<Vec<_>>();
+            let target_polygon = PolarPolygon::new(plot, motion.target_angles, &target_radii).ok();
+            let radii = motion
+                .angles
+                .iter()
+                .zip(&motion.source_radii)
+                .map(|((angle, _), source)| {
+                    let target = target_polygon
+                        .and_then(|polygon| polygon.radius_at(*angle))
+                        .unwrap_or(0.0);
+                    source * (1.0 - progress) + target * progress
+                })
+                .collect::<Vec<_>>();
+            rows = if progress < 0.5 {
+                motion.source_rows.clone()
+            } else {
+                motion.target_rows.clone()
+            };
+            radar_marker_rows = Some(if progress < 0.5 {
+                motion.source_marker_rows.clone()
+            } else {
+                motion.target_marker_rows.clone()
+            });
+            radar_radii = Some(radii);
+            radar_shape_angles = Some(Arc::clone(&motion.angles));
+        }
+        Some(GeneralPolarCategoryContext {
+            scene_generation: self.frame_invalidation.scene_generation(),
+            plot,
+            angles,
+            sector_bounds,
+            radar_slot_morph,
+            radar_shape_angles,
+            radar_marker_rows,
+            radius_scale,
+            rows,
+            radar_radii,
+        })
+    }
+
+    fn with_general_polar_category_context<R>(
+        &self,
+        series: &GeneralSeries,
+        use_context: impl FnOnce(&GeneralPolarCategoryContext) -> R,
+    ) -> Option<R> {
+        let registry = self.general_series.as_ref()?;
+        let scene = self.frame_invalidation.scene_generation();
+        let current = registry
+            .polar_contexts
+            .borrow()
+            .get(&series.id)
+            .is_some_and(|context| context.scene_generation == scene);
+        if !current {
+            let context = self.build_general_polar_category_context(series)?;
+            let mut cache = registry.polar_contexts.borrow_mut();
+            cache.retain(|_, entry| entry.scene_generation == scene);
+            if cache.len() >= MAX_POLAR_CONTEXT_CACHES
+                && !cache.contains_key(&series.id)
+                && let Some(oldest) = cache.keys().copied().min_by_key(|id| id.get())
+            {
+                cache.remove(&oldest);
+            }
+            cache.insert(series.id, context);
+        }
+        let cache = registry.polar_contexts.borrow();
+        Some(use_context(cache.get(&series.id)?))
+    }
+
+    pub(crate) fn with_general_radar_polygon(
+        &self,
+        series: &GeneralSeries,
+        mut visit: impl FnMut(PolarPolygon<'_>, &[Option<usize>], &[Option<usize>]),
+    ) {
+        if series.kind != GeneralSeriesKind::Radar {
+            return;
+        }
+        let _ = self.with_general_polar_category_context(series, |context| {
+            if context.rows.len() < 3 {
+                return;
+            }
+            let Some(radii) = context.radar_radii.as_deref() else {
+                return;
+            };
+            let polygon = if let Some(sectors) = context.radar_shape_angles.as_deref() {
+                AngularCategoryScale::new(sectors.len(), 0.0, true).and_then(|angles| {
+                    PolarPolygon::new_with_sectors(context.plot, angles, sectors, radii)
+                })
+            } else if context.radar_slot_morph {
+                PolarPolygon::new(context.plot, context.angles, radii)
+            } else if let Some(sectors) = context.sector_bounds.as_deref() {
+                PolarPolygon::new_with_sectors(context.plot, context.angles, sectors, radii)
+            } else {
+                PolarPolygon::new(context.plot, context.angles, radii)
+            };
+            if let Ok(polygon) = polygon {
+                visit(
+                    polygon,
+                    &context.rows,
+                    context
+                        .radar_marker_rows
+                        .as_deref()
+                        .unwrap_or(&context.rows),
+                );
+            }
+        });
+    }
+
+    pub(crate) fn visit_general_polar_value_sectors(
+        &self,
+        series: &GeneralSeries,
+        mut visit: impl FnMut(GeneralPolarSectorGeometry),
+    ) {
+        if !matches!(
+            series.kind,
+            GeneralSeriesKind::PolarArea | GeneralSeriesKind::RadialBar
+        ) {
+            return;
+        }
+        let _ = self.with_general_polar_category_context(series, |context| {
+            let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
+                return;
+            };
+            let options = series.polar;
+            let sweep_fraction = (options.end_angle - options.start_angle) / std::f64::consts::TAU;
+            for index in 0..context.rows.len() {
+                if let Some(geometry) =
+                    polar_value_sector(context, dataset, series, index, sweep_fraction)
+                {
+                    visit(geometry);
+                }
+            }
+        });
+    }
+
+    fn general_polar_value_hit(&self, series: &GeneralSeries, x: f64, y: f64) -> Option<usize> {
+        self.with_general_polar_category_context(series, |context| {
+            let dataset = self.general_geometry_dataset(series.dataset)?;
+            if context.sector_bounds.is_some() {
+                let fraction =
+                    (series.polar.end_angle - series.polar.start_angle) / std::f64::consts::TAU;
+                return (0..context.rows.len()).rev().find_map(|index| {
+                    let geometry = polar_value_sector(context, dataset, series, index, fraction)?;
+                    geometry.sector.contains(x, y).then_some(geometry.row)
+                });
+            }
+            let (angle, _) = context.plot.invert(x, y)?;
+            let count = context.angles.count();
+            let (first, _) = context.angles.sector(0)?;
+            let (_, last) = context.angles.sector(count - 1)?;
+            let fraction =
+                (series.polar.end_angle - series.polar.start_angle) / std::f64::consts::TAU;
+            let from = series.polar.start_angle + first * fraction;
+            let to = series.polar.start_angle + last * fraction;
+            let low = from.min(to);
+            let high = from.max(to);
+            let unwrapped =
+                angle + ((low - angle) / std::f64::consts::TAU).ceil() * std::f64::consts::TAU;
+            if unwrapped > high {
+                return None;
+            }
+            let base_angle = (unwrapped - series.polar.start_angle) / fraction;
+            let index = context.angles.index_at(base_angle)?;
+            for candidate in [index, (index + count - 1) % count, (index + 1) % count] {
+                if let Some(geometry) =
+                    polar_value_sector(context, dataset, series, candidate, fraction)
+                    && geometry.sector.contains(x, y)
+                {
+                    return Some(geometry.row);
+                }
+            }
+            None
+        })?
+    }
+
     pub(crate) fn visit_general_scatter_points<F>(&self, series: &GeneralSeries, mut visit: F)
     where
         F: FnMut(GeneralScatterGeometry),
@@ -5597,10 +7005,15 @@ impl ChartEngine {
             let Some(dataset) = self.general_dataset(series.dataset) else {
                 continue;
             };
-            let mut consider = |row: usize, distance: f64| {
+            let mut consider = |presentation_row: usize, distance: f64| {
                 if distance > max_distance {
                     return;
                 }
+                let Some(row) =
+                    self.general_transition_target_row(series.dataset, presentation_row)
+                else {
+                    return;
+                };
                 if best
                     .as_ref()
                     .is_some_and(|current| distance >= current.distance)
@@ -5618,6 +7031,29 @@ impl ChartEngine {
                 });
             };
             match series.kind {
+                GeneralSeriesKind::Pie => {
+                    if let Some(row) = self.general_pie_hit(series, x_css, y_css) {
+                        consider(row, 0.0);
+                    }
+                }
+                GeneralSeriesKind::PolarArea | GeneralSeriesKind::RadialBar => {
+                    if let Some(row) = self.general_polar_value_hit(series, x_css, y_css) {
+                        consider(row, 0.0);
+                    }
+                }
+                GeneralSeriesKind::Radar => {
+                    self.with_general_radar_polygon(series, |polygon, rows, _| {
+                        if polygon.contains(x_css, y_css)
+                            && let Some(row) = polygon
+                                .category_at(x_css, y_css)
+                                .and_then(|index| rows.get(index))
+                                .copied()
+                                .flatten()
+                        {
+                            consider(row, 0.0);
+                        }
+                    });
+                }
                 GeneralSeriesKind::XyLine => {
                     if series.interpolation != GeneralInterpolation::Linear {
                         let mut run = Vec::new();
@@ -6311,6 +7747,20 @@ impl ChartEngine {
                     return Err(invalid("general brush category axis has no categories"));
                 }
                 let coordinate_for = |index: usize| -> Option<f64> {
+                    if let Some(moved) = self
+                        .general_axis(axis_id)
+                        .and_then(|axis| {
+                            self.category_motion_bounds(
+                                axis,
+                                &categories[index],
+                                range_from,
+                                range_to,
+                            )
+                        })
+                        .map(|(first, second)| (first + second) / 2.0)
+                    {
+                        return Some(moved);
+                    }
                     match scale_type {
                         GeneralScaleType::Band => BandScale::new(
                             categories.len(),
@@ -6700,8 +8150,12 @@ impl ChartEngine {
                             0.5,
                         )
                         .ok()?;
-                        let from = scale.bounds(from)?;
-                        let to = scale.bounds(to)?;
+                        let from = self
+                            .category_motion_bounds(axis, &values[0], range_from, range_to)
+                            .or_else(|| scale.bounds(from))?;
+                        let to = self
+                            .category_motion_bounds(axis, &values[1], range_from, range_to)
+                            .or_else(|| scale.bounds(to))?;
                         (
                             from.0.min(from.1).min(to.0.min(to.1)),
                             from.0.max(from.1).max(to.0.max(to.1)),
@@ -6716,7 +8170,12 @@ impl ChartEngine {
                             0.5,
                         )
                         .ok()?;
-                        (scale.coordinate(from)?, scale.coordinate(to)?)
+                        let center = |index: usize, category: &str| {
+                            self.category_motion_bounds(axis, category, range_from, range_to)
+                                .map(|(first, second)| (first + second) / 2.0)
+                                .or_else(|| scale.coordinate(index))
+                        };
+                        (center(from, &values[0])?, center(to, &values[1])?)
                     }
                     _ => return None,
                 }
@@ -7007,6 +8466,7 @@ impl ChartEngine {
             return GeneralLegendSnapshot { items: Vec::new() };
         }
         let mut items = Vec::with_capacity(self.general_series_count().min(MAX_GENERAL_SERIES));
+        let mut retained_slices = 0;
         for series in self.general_series_iter() {
             if pane_id.is_some_and(|id| series.pane_id != id) {
                 continue;
@@ -7014,6 +8474,38 @@ impl ChartEngine {
             let Some(pane) = self.pane_index_for_id(series.pane_id) else {
                 continue;
             };
+            let mut slices = Vec::new();
+            let mut slices_truncated = false;
+            if matches!(
+                series.kind,
+                GeneralSeriesKind::Pie
+                    | GeneralSeriesKind::PolarArea
+                    | GeneralSeriesKind::RadialBar
+            ) && let Some(dataset) = self.general_dataset(series.dataset)
+            {
+                for row in 0..dataset.len() {
+                    if !dataset.y_is_valid(row) || dataset.y()[row] <= 0.0 {
+                        continue;
+                    }
+                    if slices.len() == MAX_GENERAL_LEGEND_SLICES_PER_SERIES
+                        || retained_slices == MAX_GENERAL_LEGEND_SLICES_PER_SNAPSHOT
+                    {
+                        slices_truncated = true;
+                        break;
+                    }
+                    slices.push(GeneralLegendSlice {
+                        row,
+                        label: dataset
+                            .row_label(row)
+                            .map(str::to_owned)
+                            .or_else(|| general_x_label(dataset, row))
+                            .unwrap_or_default(),
+                        value: dataset.y()[row],
+                        color: general_polar_fill_color(series, dataset, row).to_css(),
+                    });
+                    retained_slices += 1;
+                }
+            }
             items.push(GeneralLegendItem {
                 series: series.id,
                 pane,
@@ -7021,6 +8513,8 @@ impl ChartEngine {
                 title: series.title.clone(),
                 color: series.color.clone(),
                 visible: series.visible,
+                slices,
+                slices_truncated,
             });
         }
         GeneralLegendSnapshot { items }
@@ -8031,6 +9525,20 @@ fn general_heatmap_y_label(dataset: &crate::GeneralDataset, row: usize) -> Optio
     dataset.heatmap_y_categories()?.get(category_index).cloned()
 }
 
+fn series_axis_dimensions(kind: GeneralSeriesKind) -> (AxisDimension, AxisDimension) {
+    if matches!(
+        kind,
+        GeneralSeriesKind::Pie
+            | GeneralSeriesKind::Radar
+            | GeneralSeriesKind::RadialBar
+            | GeneralSeriesKind::PolarArea
+    ) {
+        (AxisDimension::Angle, AxisDimension::Radius)
+    } else {
+        (AxisDimension::X, AxisDimension::Y)
+    }
+}
+
 fn validate_general_series_axis_compatibility(
     kind: GeneralSeriesKind,
     pane_domain: HorizontalDomain,
@@ -8041,6 +9549,20 @@ fn validate_general_series_axis_compatibility(
     heatmap_y_numeric: bool,
 ) -> Result<(), ChartError> {
     match kind {
+        GeneralSeriesKind::Pie
+        | GeneralSeriesKind::Radar
+        | GeneralSeriesKind::RadialBar
+        | GeneralSeriesKind::PolarArea => {
+            if pane_domain != HorizontalDomain::Polar
+                || dataset_kind != GeneralXKind::Category
+                || x_scale != GeneralScaleType::AngularCategory
+                || y_scale != GeneralScaleType::RadialLinear
+            {
+                return Err(invalid(
+                    "polar series require a polar pane, category/value data, and angular/radial axes",
+                ));
+            }
+        }
         GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea | GeneralSeriesKind::RangeArea => {
             let compatible_x = matches!(
                 (pane_domain, dataset_kind, x_scale),
@@ -8264,6 +9786,44 @@ fn validate_dataset_for_series(
     y_scale: GeneralScaleType,
 ) -> Result<(), ChartError> {
     match kind {
+        GeneralSeriesKind::PolarArea | GeneralSeriesKind::RadialBar => {
+            let (Some(categories), Some(indices)) =
+                (dataset.categories(), dataset.category_indices())
+            else {
+                return Err(invalid("polar area requires category/value data"));
+            };
+            validate_polar_area_rows(categories.len(), indices, dataset.y(), |row| {
+                dataset.y_is_valid(row)
+            })?;
+        }
+        GeneralSeriesKind::Radar => {
+            let (Some(categories), Some(indices)) =
+                (dataset.categories(), dataset.category_indices())
+            else {
+                return Err(invalid("radar requires category/value data"));
+            };
+            validate_radar_rows(categories.len(), indices, dataset.y(), |row| {
+                dataset.y_is_valid(row)
+            })?;
+        }
+        GeneralSeriesKind::Pie => {
+            if dataset.x_kind() != GeneralXKind::Category {
+                return Err(invalid("pie requires category/value data"));
+            }
+            if dataset.len() > MAX_GENERAL_PIE_SLICES {
+                return Err(resource(format!(
+                    "pie exceeds {MAX_GENERAL_PIE_SLICES} slices"
+                )));
+            }
+            if dataset
+                .y()
+                .iter()
+                .enumerate()
+                .any(|(row, value)| dataset.y_is_valid(row) && *value < 0.0)
+            {
+                return Err(invalid("pie values must be nonnegative"));
+            }
+        }
         GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar => {
             if dataset.x_kind() != GeneralXKind::Category {
                 return Err(invalid("bar series require category/value data"));
@@ -8434,6 +9994,64 @@ fn validate_dataset_for_series(
             dataset
                 .size()
                 .ok_or_else(|| invalid("bubble series require a size channel"))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_radar_rows(
+    category_count: usize,
+    indices: &[u32],
+    values: &[f64],
+    is_valid: impl Fn(usize) -> bool,
+) -> Result<(), ChartError> {
+    if category_count == 0 && values.is_empty() {
+        return Ok(());
+    }
+    if category_count < 3 || values.len() < 3 {
+        return Err(invalid("radar requires at least three categories and rows"));
+    }
+    if values.len() > MAX_GENERAL_RADAR_VALUES {
+        return Err(resource(format!(
+            "radar exceeds {MAX_GENERAL_RADAR_VALUES} values"
+        )));
+    }
+    let mut seen = HashSet::with_capacity(indices.len());
+    for (row, &index) in indices.iter().enumerate() {
+        if !seen.insert(index) {
+            return Err(invalid("radar requires at most one row per category"));
+        }
+        if is_valid(row) && values[row] < 0.0 {
+            return Err(invalid("radar values must be nonnegative"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_polar_area_rows(
+    category_count: usize,
+    indices: &[u32],
+    values: &[f64],
+    is_valid: impl Fn(usize) -> bool,
+) -> Result<(), ChartError> {
+    if category_count == 0 && values.is_empty() {
+        return Ok(());
+    }
+    if category_count == 0 || values.is_empty() {
+        return Err(invalid("polar area requires category/value rows"));
+    }
+    if values.len() > MAX_GENERAL_PIE_SLICES {
+        return Err(resource(format!(
+            "polar area exceeds {MAX_GENERAL_PIE_SLICES} sectors"
+        )));
+    }
+    let mut seen = HashSet::with_capacity(indices.len());
+    for (row, &index) in indices.iter().enumerate() {
+        if !seen.insert(index) {
+            return Err(invalid("polar area requires at most one row per category"));
+        }
+        if is_valid(row) && values[row] < 0.0 {
+            return Err(invalid("polar area values must be nonnegative"));
         }
     }
     Ok(())
@@ -8620,6 +10238,60 @@ fn validate_input_for_series(
     y_axis: &crate::GeneralAxis,
 ) -> Result<(), ChartError> {
     match kind {
+        GeneralSeriesKind::PolarArea | GeneralSeriesKind::RadialBar => {
+            let GeneralXyInput::Category {
+                categories,
+                category_indices,
+                y,
+                y_valid,
+                ..
+            } = input
+            else {
+                return Err(invalid(
+                    "a polar area dataset must remain category/value data",
+                ));
+            };
+            validate_polar_area_rows(categories.len(), category_indices, y, |row| {
+                y_valid
+                    .as_ref()
+                    .is_none_or(|valid| valid.get(row).is_some_and(|flag| *flag != 0))
+            })?;
+        }
+        GeneralSeriesKind::Radar => {
+            let GeneralXyInput::Category {
+                categories,
+                category_indices,
+                y,
+                y_valid,
+                ..
+            } = input
+            else {
+                return Err(invalid("a radar dataset must remain category/value data"));
+            };
+            validate_radar_rows(categories.len(), category_indices, y, |row| {
+                y_valid
+                    .as_ref()
+                    .is_none_or(|valid| valid.get(row).is_some_and(|flag| *flag != 0))
+            })?;
+        }
+        GeneralSeriesKind::Pie => {
+            if input.x_kind() != GeneralXKind::Category {
+                return Err(invalid("a pie dataset must remain category/value data"));
+            }
+            if input.y_values().len() > MAX_GENERAL_PIE_SLICES {
+                return Err(resource(format!(
+                    "pie exceeds {MAX_GENERAL_PIE_SLICES} slices"
+                )));
+            }
+            if input.y_values().iter().enumerate().any(|(row, value)| {
+                input
+                    .y_valid_values()
+                    .is_none_or(|valid| valid.get(row).is_some_and(|value| *value != 0))
+                    && *value < 0.0
+            }) {
+                return Err(invalid("pie values must be nonnegative"));
+            }
+        }
         GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar => {
             if input.x_kind() != GeneralXKind::Category {
                 return Err(invalid(
@@ -8864,6 +10536,37 @@ fn validate_logarithmic_input_y(
 }
 
 fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartError> {
+    if matches!(
+        options.kind,
+        GeneralSeriesKind::Pie | GeneralSeriesKind::PolarArea | GeneralSeriesKind::RadialBar
+    ) {
+        let polar = options.polar;
+        let sweep = polar.end_angle - polar.start_angle;
+        if ![
+            polar.start_angle,
+            polar.end_angle,
+            polar.inner_radius,
+            polar.outer_radius,
+            polar.pad_angle,
+            sweep,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+            || sweep <= 0.0
+            || sweep > std::f64::consts::TAU
+            || polar.inner_radius < 0.0
+            || polar.outer_radius > 1.0
+            || polar.inner_radius >= polar.outer_radius
+            || polar.pad_angle < 0.0
+            || polar.pad_angle >= sweep
+        {
+            return Err(invalid(
+                "polar sector bounds require a finite positive sweep of at most one turn, 0 <= inner < outer <= 1, and 0 <= pad < sweep",
+            ));
+        }
+    } else if options.polar != GeneralPolarOptions::default() {
+        return Err(invalid("polar options require a sector series"));
+    }
     if let Some(colors) = options.fill_gradient.as_ref() {
         if !matches!(
             options.kind,
@@ -8975,11 +10678,16 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
     if options.fill_opacity != DEFAULT_GENERAL_FILL_OPACITY
         && !matches!(
             options.kind,
-            GeneralSeriesKind::XyArea | GeneralSeriesKind::RangeArea
+            GeneralSeriesKind::XyArea
+                | GeneralSeriesKind::RangeArea
+                | GeneralSeriesKind::Pie
+                | GeneralSeriesKind::Radar
+                | GeneralSeriesKind::PolarArea
+                | GeneralSeriesKind::RadialBar
         )
     {
         return Err(invalid(
-            "general series fill_opacity is supported only by xy_area and range_area",
+            "general series fill_opacity requires an area or polar fill series",
         ));
     }
     if options.point_symbol != GeneralPointSymbol::Circle
@@ -8989,10 +10697,11 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
                 | GeneralSeriesKind::XyArea
                 | GeneralSeriesKind::RangeArea
                 | GeneralSeriesKind::Scatter
+                | GeneralSeriesKind::Radar
         )
     {
         return Err(invalid(
-            "general series point_symbol is supported only by xy_line, xy_area, range_area, and scatter",
+            "general series point_symbol requires a path, scatter, or radar series",
         ));
     }
     if options.connect_missing
@@ -9018,11 +10727,14 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
     if options.point_markers
         && !matches!(
             options.kind,
-            GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea | GeneralSeriesKind::RangeArea
+            GeneralSeriesKind::XyLine
+                | GeneralSeriesKind::XyArea
+                | GeneralSeriesKind::RangeArea
+                | GeneralSeriesKind::Radar
         )
     {
         return Err(invalid(
-            "general series point_markers is supported only by xy_line, xy_area, and range_area",
+            "general series point_markers requires a path or radar series",
         ));
     }
     if !options.line_width.is_finite() || !(0.5..=32.0).contains(&options.line_width) {

@@ -1,4 +1,4 @@
-//! Host-neutral Cartesian scales for non-financial series.
+//! Host-neutral Cartesian and polar scales for non-financial series.
 //!
 //! These scales deliberately operate on scalar or category-index domains. Category labels remain
 //! caller-owned, so constructing a scale does not duplicate host strings or allocate category
@@ -462,6 +462,588 @@ impl PointScale {
     }
 }
 
+/// Equal angular category slots around a complete circle. Category labels remain engine-owned.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AngularCategoryScale {
+    count: usize,
+    start_angle: f64,
+    direction: f64,
+}
+
+impl AngularCategoryScale {
+    pub fn new(count: usize, start_angle: f64, clockwise: bool) -> Result<Self, ScaleError> {
+        if count == 0 {
+            return Err(ScaleError::DegenerateDomain);
+        }
+        if count > 65_536 {
+            return Err(ScaleError::CategoryCountTooLarge);
+        }
+        if !start_angle.is_finite() {
+            return Err(ScaleError::NonFinite);
+        }
+        Ok(Self {
+            count,
+            start_angle: start_angle.rem_euclid(std::f64::consts::TAU),
+            direction: if clockwise { 1.0 } else { -1.0 },
+        })
+    }
+
+    pub fn count(self) -> usize {
+        self.count
+    }
+
+    /// Unwrapped angular bounds keep the final slot contiguous at the circle seam.
+    pub fn sector(self, index: usize) -> Option<(f64, f64)> {
+        if index >= self.count {
+            return None;
+        }
+        let step = self.direction * std::f64::consts::TAU / self.count as f64;
+        Some((
+            self.start_angle + step * index as f64,
+            self.start_angle + step * (index + 1) as f64,
+        ))
+    }
+
+    pub fn center(self, index: usize) -> Option<f64> {
+        let (start, end) = self.sector(index)?;
+        Some((start + end) / 2.0)
+    }
+
+    /// The start boundary belongs to the following slot in drawing order.
+    pub fn index_at(self, angle: f64) -> Option<usize> {
+        if !angle.is_finite() {
+            return None;
+        }
+        let advance =
+            ((angle - self.start_angle) * self.direction).rem_euclid(std::f64::consts::TAU);
+        Some(
+            ((advance / std::f64::consts::TAU * self.count as f64).floor() as usize)
+                .min(self.count - 1),
+        )
+    }
+}
+
+/// Media-space polar plot. Angle zero points up and positive angles advance clockwise.
+/// Geometry stays in `f64`; executors encode device pixels only after frame construction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PolarPlot {
+    center_x: f64,
+    center_y: f64,
+    outer_radius: f64,
+}
+
+/// A bounded annular sector in media space. The same sweep owns fill geometry and hit testing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PolarSector {
+    plot: PolarPlot,
+    start: f64,
+    sweep: f64,
+    inner: f64,
+    outer: f64,
+    segments: usize,
+}
+
+impl PolarSector {
+    /// `sweep` may be clockwise or counterclockwise and may cover at most one turn.
+    pub fn new(
+        plot: PolarPlot,
+        start: f64,
+        sweep: f64,
+        inner: f64,
+        outer: f64,
+    ) -> Result<Self, ScaleError> {
+        if ![start, sweep, inner, outer]
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            return Err(ScaleError::NonFinite);
+        }
+        if sweep == 0.0
+            || sweep.abs() > std::f64::consts::TAU
+            || inner < 0.0
+            || outer > 1.0
+            || inner >= outer
+        {
+            return Err(ScaleError::DegenerateDomain);
+        }
+        let radius = plot.outer_radius * outer;
+        // A quarter media pixel of sagitta bounds visible arc error until the per-sector
+        // work cap takes over. The cap also bounds a full-circle mesh to 1,024 triangles.
+        let step = if radius <= 0.25 {
+            sweep.abs()
+        } else {
+            2.0 * (1.0 - 0.25 / radius).acos()
+        };
+        let chord_segments = (sweep.abs() / step).ceil() as usize;
+        let turn_segments = (sweep.abs() / (std::f64::consts::TAU / 8.0)).ceil() as usize;
+        let segments = chord_segments.max(turn_segments).clamp(1, 512);
+        Ok(Self {
+            plot,
+            start: start.rem_euclid(std::f64::consts::TAU),
+            sweep,
+            inner,
+            outer,
+            segments,
+        })
+    }
+
+    pub fn triangle_count(self) -> usize {
+        self.segments * if self.inner == 0.0 { 1 } else { 2 }
+    }
+
+    pub fn mid_angle(self) -> f64 {
+        self.start + self.sweep / 2.0
+    }
+
+    pub fn mid_radius(self) -> f64 {
+        (self.inner + self.outer) / 2.0
+    }
+
+    /// Validated inner and outer fractions of the plot radius, shared by leaders and fills.
+    pub fn radial_bounds(self) -> (f64, f64) {
+        (self.inner, self.outer)
+    }
+
+    pub fn plot(self) -> PolarPlot {
+        self.plot
+    }
+
+    /// Visits a nonoverlapping triangle mesh without retaining a path or allocating points.
+    pub fn visit_triangles(self, mut visit: impl FnMut([(f64, f64); 3])) {
+        let center = self.plot.center();
+        for index in 0..self.segments {
+            let angle0 = self.start + self.sweep * index as f64 / self.segments as f64;
+            let angle1 = self.start + self.sweep * (index + 1) as f64 / self.segments as f64;
+            let outer0 = self
+                .plot
+                .point(angle0, self.outer)
+                .expect("validated sector");
+            let outer1 = self
+                .plot
+                .point(angle1, self.outer)
+                .expect("validated sector");
+            if self.inner == 0.0 {
+                visit([center, outer0, outer1]);
+            } else {
+                let inner0 = self
+                    .plot
+                    .point(angle0, self.inner)
+                    .expect("validated sector");
+                let inner1 = self
+                    .plot
+                    .point(angle1, self.inner)
+                    .expect("validated sector");
+                visit([inner0, outer0, outer1]);
+                visit([inner0, outer1, inner1]);
+            }
+        }
+    }
+
+    /// Start edge is included; the end edge belongs to the next sector.
+    pub fn contains(self, x: f64, y: f64) -> bool {
+        let Some((angle, radius)) = self.plot.invert(x, y) else {
+            return false;
+        };
+        if radius < self.inner || radius > self.outer {
+            return false;
+        }
+        if self.sweep.abs() == std::f64::consts::TAU {
+            return true;
+        }
+        let advance =
+            ((angle - self.start) * self.sweep.signum()).rem_euclid(std::f64::consts::TAU);
+        advance < self.sweep.abs()
+    }
+}
+
+/// A closed radial polygon with one radius for each angular category.
+/// Static equal-angle polygons keep constant-work hits; moving vertices use the emitted fan.
+#[derive(Clone, Copy, Debug)]
+pub struct PolarPolygon<'a> {
+    plot: PolarPlot,
+    angles: AngularCategoryScale,
+    moving_sectors: Option<&'a [(f64, f64)]>,
+    ordered_sectors: bool,
+    radii: &'a [f64],
+    has_area: bool,
+}
+
+impl<'a> PolarPolygon<'a> {
+    pub fn vertex_count(self) -> usize {
+        self.radii.len()
+    }
+
+    pub fn plot(self) -> PolarPlot {
+        self.plot
+    }
+
+    pub fn vertex(self, index: usize) -> Option<(f64, f64)> {
+        self.plot
+            .point(self.vertex_angle(index)?, *self.radii.get(index)?)
+    }
+
+    pub fn angle(self, index: usize) -> Option<f64> {
+        self.vertex_angle(index)
+    }
+
+    pub fn category_at(self, x: f64, y: f64) -> Option<usize> {
+        let (angle, _) = self.plot.invert(x, y)?;
+        if self.moving_sectors.is_none() {
+            return self.angles.index_at(angle);
+        }
+        if self.ordered_sectors {
+            let mut low = 0;
+            let mut high = self.radii.len();
+            while low < high {
+                let middle = (low + high) / 2;
+                if self.vertex_angle(middle).unwrap() <= angle {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            let before = low.checked_sub(1).unwrap_or(self.radii.len() - 1);
+            let after = low % self.radii.len();
+            let distance = |index| {
+                let delta =
+                    (angle - self.vertex_angle(index).unwrap()).rem_euclid(std::f64::consts::TAU);
+                delta.min(std::f64::consts::TAU - delta)
+            };
+            return Some(if distance(before) <= distance(after) {
+                before
+            } else {
+                after
+            });
+        }
+        (0..self.radii.len()).min_by(|&a, &b| {
+            let distance = |index| {
+                let delta =
+                    (angle - self.vertex_angle(index).unwrap()).rem_euclid(std::f64::consts::TAU);
+                delta.min(std::f64::consts::TAU - delta)
+            };
+            distance(a).total_cmp(&distance(b))
+        })
+    }
+
+    pub fn new(
+        plot: PolarPlot,
+        angles: AngularCategoryScale,
+        radii: &'a [f64],
+    ) -> Result<Self, ScaleError> {
+        if radii.len() != angles.count() || radii.len() < 3 {
+            return Err(ScaleError::DegenerateDomain);
+        }
+        if radii.iter().any(|radius| !radius.is_finite()) {
+            return Err(ScaleError::NonFinite);
+        }
+        if radii.iter().any(|radius| !(0.0..=1.0).contains(radius)) {
+            return Err(ScaleError::DegenerateDomain);
+        }
+        let has_area = radii
+            .iter()
+            .enumerate()
+            .any(|(index, value)| *value > 0.0 && radii[(index + 1) % radii.len()] > 0.0);
+        Ok(Self {
+            plot,
+            angles,
+            moving_sectors: None,
+            ordered_sectors: false,
+            radii,
+            has_area,
+        })
+    }
+
+    /// Uses sampled sector bounds while category spokes are moving.
+    pub fn new_with_sectors(
+        plot: PolarPlot,
+        angles: AngularCategoryScale,
+        sectors: &'a [(f64, f64)],
+        radii: &'a [f64],
+    ) -> Result<Self, ScaleError> {
+        if sectors.len() != angles.count()
+            || sectors
+                .iter()
+                .any(|(first, second)| !first.is_finite() || !second.is_finite())
+        {
+            return Err(ScaleError::DegenerateDomain);
+        }
+        let mut polygon = Self::new(plot, angles, radii)?;
+        polygon.moving_sectors = Some(sectors);
+        polygon.ordered_sectors = sectors.windows(2).all(|pair| {
+            let a = (pair[0].0 + pair[0].1) / 2.0;
+            let b = (pair[1].0 + pair[1].1) / 2.0;
+            a >= 0.0 && b < std::f64::consts::TAU && a < b
+        });
+        Ok(polygon)
+    }
+
+    fn vertex_angle(self, index: usize) -> Option<f64> {
+        self.moving_sectors
+            .map(|sectors| {
+                sectors
+                    .get(index)
+                    .map(|(first, second)| (first + second) / 2.0)
+            })
+            .unwrap_or_else(|| self.angles.center(index))
+    }
+
+    /// Radius of the filled fan boundary on a ray, in plot-radius units.
+    pub fn radius_at(self, angle: f64) -> Option<f64> {
+        if !angle.is_finite() {
+            return None;
+        }
+        let angle = angle.rem_euclid(std::f64::consts::TAU);
+        let direction = (angle.sin(), -angle.cos());
+        let count = self.radii.len();
+        let edge = |index: usize| {
+            let next = (index + 1) % count;
+            let first = self.vertex_angle(index)?;
+            let second = self.vertex_angle(next)?;
+            let a = (
+                self.radii[index] * first.sin(),
+                -self.radii[index] * first.cos(),
+            );
+            let b = (
+                self.radii[next] * second.sin(),
+                -self.radii[next] * second.cos(),
+            );
+            ray_edge_radius(direction, a, b)
+        };
+        if self.moving_sectors.is_none() {
+            let first = self.angles.center(0)?;
+            let step = self.angles.sector(0)?.1 - self.angles.sector(0)?.0;
+            let advance = ((angle - first) * step.signum()).rem_euclid(std::f64::consts::TAU);
+            let index = ((advance / step.abs()).floor() as usize).min(count - 1);
+            for candidate in [index, (index + 1) % count] {
+                let vertex = self
+                    .vertex_angle(candidate)?
+                    .rem_euclid(std::f64::consts::TAU);
+                let gap = (angle - vertex).abs();
+                if gap.min(std::f64::consts::TAU - gap) < 1e-12 {
+                    return Some(self.radii[candidate]);
+                }
+            }
+            return Some(edge(index).unwrap_or(0.0));
+        }
+        if self.ordered_sectors {
+            let mut low = 0;
+            let mut high = count;
+            while low < high {
+                let middle = (low + high) / 2;
+                if self.vertex_angle(middle).unwrap() <= angle {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            let before = low.checked_sub(1).unwrap_or(count - 1);
+            for candidate in [before, low % count] {
+                let vertex = self
+                    .vertex_angle(candidate)?
+                    .rem_euclid(std::f64::consts::TAU);
+                let gap = (angle - vertex).abs();
+                if gap.min(std::f64::consts::TAU - gap) < 1e-12 {
+                    return Some(self.radii[candidate]);
+                }
+            }
+            return Some(edge(before).unwrap_or(0.0));
+        }
+        Some((0..count).filter_map(edge).fold(0.0, f64::max))
+    }
+
+    pub fn visit_triangles(self, mut visit: impl FnMut([(f64, f64); 3])) {
+        let center = self.plot.center();
+        for index in 0..self.radii.len() {
+            let next = (index + 1) % self.radii.len();
+            let a = self
+                .plot
+                .point(
+                    self.vertex_angle(index).expect("validated category"),
+                    self.radii[index],
+                )
+                .expect("validated radius");
+            let b = self
+                .plot
+                .point(
+                    self.vertex_angle(next).expect("validated category"),
+                    self.radii[next],
+                )
+                .expect("validated radius");
+            visit([center, a, b]);
+        }
+    }
+
+    /// Uses the same center fan as the fill, evaluated in unit coordinates to avoid overflow.
+    pub fn contains(self, x: f64, y: f64) -> bool {
+        let Some((angle, radius)) = self.plot.invert(x, y) else {
+            return false;
+        };
+        if radius > 1.0 {
+            return false;
+        }
+        if radius == 0.0 {
+            if self.ordered_sectors {
+                return self.has_area;
+            }
+            if self.moving_sectors.is_some() {
+                return (0..self.radii.len()).any(|index| {
+                    let next = (index + 1) % self.radii.len();
+                    let a = self.radii[index];
+                    let b = self.radii[next];
+                    a > 0.0
+                        && b > 0.0
+                        && (self.vertex_angle(next).unwrap() - self.vertex_angle(index).unwrap())
+                            .sin()
+                            .abs()
+                            > 1e-12
+                });
+            }
+            return self.has_area;
+        }
+        if self.ordered_sectors {
+            return radius <= self.radius_at(angle).unwrap_or(0.0) + 1e-12;
+        }
+        let point = (radius * angle.sin(), -radius * angle.cos());
+        if self.moving_sectors.is_some() {
+            return (0..self.radii.len()).any(|index| {
+                let next = (index + 1) % self.radii.len();
+                let a_angle = self.vertex_angle(index).unwrap();
+                let b_angle = self.vertex_angle(next).unwrap();
+                let a = (
+                    self.radii[index] * a_angle.sin(),
+                    -self.radii[index] * a_angle.cos(),
+                );
+                let b = (
+                    self.radii[next] * b_angle.sin(),
+                    -self.radii[next] * b_angle.cos(),
+                );
+                fan_triangle_contains(point, a, b)
+            });
+        }
+        // Equal-angle vertices partition the disk into disjoint center-fan wedges, so only
+        // one triangle can contain a noncentral pointer. Dense radar hits remain O(1).
+        let first_angle = self.angles.center(0).expect("validated category");
+        let advance =
+            ((angle - first_angle) * self.angles.direction).rem_euclid(std::f64::consts::TAU);
+        let index = ((advance / std::f64::consts::TAU * self.radii.len() as f64).floor() as usize)
+            .min(self.radii.len() - 1);
+        let next = (index + 1) % self.radii.len();
+        let a_angle = self.angles.center(index).expect("validated category");
+        let b_angle = self.angles.center(next).expect("validated category");
+        let a = (
+            self.radii[index] * a_angle.sin(),
+            -self.radii[index] * a_angle.cos(),
+        );
+        let b = (
+            self.radii[next] * b_angle.sin(),
+            -self.radii[next] * b_angle.cos(),
+        );
+        fan_triangle_contains(point, a, b)
+    }
+}
+
+fn ray_edge_radius(direction: (f64, f64), a: (f64, f64), b: (f64, f64)) -> Option<f64> {
+    let edge = (b.0 - a.0, b.1 - a.1);
+    let denominator = direction.0 * edge.1 - direction.1 * edge.0;
+    if denominator.abs() <= 1e-15 {
+        return None;
+    }
+    let radius = (a.0 * edge.1 - a.1 * edge.0) / denominator;
+    let along_edge = (a.0 * direction.1 - a.1 * direction.0) / denominator;
+    (radius >= -1e-12 && (-1e-12..=1.0 + 1e-12).contains(&along_edge))
+        .then_some(radius.clamp(0.0, 1.0))
+}
+
+fn fan_triangle_contains(point: (f64, f64), a: (f64, f64), b: (f64, f64)) -> bool {
+    let cross_a = a.0 * point.1 - a.1 * point.0;
+    let cross_b = point.0 * b.1 - point.1 * b.0;
+    let cross_edge = (b.0 - a.0) * (point.1 - a.1) - (b.1 - a.1) * (point.0 - a.0);
+    let orientation = a.0 * b.1 - a.1 * b.0;
+    // Trig and inverse-trig roundoff can put a point on a shared ray a few ulps outside
+    // either candidate wedge. This tolerance is in unit-radius coordinates.
+    const EDGE_EPSILON: f64 = 1.0e-12;
+    orientation > 0.0
+        && cross_a >= -EDGE_EPSILON
+        && cross_b >= -EDGE_EPSILON
+        && cross_edge >= -EDGE_EPSILON
+        || orientation < 0.0
+            && cross_a <= EDGE_EPSILON
+            && cross_b <= EDGE_EPSILON
+            && cross_edge <= EDGE_EPSILON
+}
+
+impl PolarPlot {
+    pub fn from_rect(x: f64, y: f64, width: f64, height: f64) -> Result<Self, ScaleError> {
+        if ![x, y, width, height].iter().all(|value| value.is_finite()) {
+            return Err(ScaleError::NonFinite);
+        }
+        if width <= 0.0 || height <= 0.0 {
+            return Err(ScaleError::DegenerateDomain);
+        }
+        let center_x = x + width / 2.0;
+        let center_y = y + height / 2.0;
+        let outer_radius = width.min(height) / 2.0;
+        if !center_x.is_finite()
+            || !center_y.is_finite()
+            || ![
+                center_x - outer_radius,
+                center_x + outer_radius,
+                center_y - outer_radius,
+                center_y + outer_radius,
+            ]
+            .iter()
+            .all(|value| value.is_finite())
+            || outer_radius <= 0.0
+        {
+            return Err(ScaleError::NonFinite);
+        }
+        Ok(Self {
+            center_x,
+            center_y,
+            outer_radius,
+        })
+    }
+
+    pub fn center(self) -> (f64, f64) {
+        (self.center_x, self.center_y)
+    }
+
+    pub fn outer_radius(self) -> f64 {
+        self.outer_radius
+    }
+
+    /// `radius_fraction` may exceed one for labels outside the plot.
+    pub fn point(self, angle_radians: f64, radius_fraction: f64) -> Option<(f64, f64)> {
+        if !angle_radians.is_finite() || !radius_fraction.is_finite() || radius_fraction < 0.0 {
+            return None;
+        }
+        let radius = self.outer_radius * radius_fraction;
+        let point = (
+            self.center_x + radius * angle_radians.sin(),
+            self.center_y - radius * angle_radians.cos(),
+        );
+        (point.0.is_finite() && point.1.is_finite()).then_some(point)
+    }
+
+    /// Returns a clockwise angle in `[0, 2π)` and a radius relative to the plot's outer edge.
+    pub fn invert(self, x: f64, y: f64) -> Option<(f64, f64)> {
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        let dx = x - self.center_x;
+        let dy = y - self.center_y;
+        let radius_fraction = dx.hypot(dy) / self.outer_radius;
+        if !radius_fraction.is_finite() {
+            return None;
+        }
+        if radius_fraction == 0.0 {
+            return Some((0.0, 0.0));
+        }
+        let angle = dx.atan2(-dy).rem_euclid(std::f64::consts::TAU);
+        Some((angle, radius_fraction))
+    }
+}
+
 fn validate_domain(from: f64, to: f64) -> Result<(), ScaleError> {
     if !from.is_finite() || !to.is_finite() {
         return Err(ScaleError::NonFinite);
@@ -567,6 +1149,217 @@ fn normalize_zero(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn polar_plot_maps_clockwise_angles_and_inverts_media_coordinates() {
+        let plot = PolarPlot::from_rect(10.0, 20.0, 200.0, 100.0).unwrap();
+        assert_eq!(plot.center(), (110.0, 70.0));
+        assert_eq!(plot.outer_radius(), 50.0);
+        assert_eq!(plot.point(0.0, 1.0), Some((110.0, 20.0)));
+        let right = plot.point(std::f64::consts::FRAC_PI_2, 1.0).unwrap();
+        assert!((right.0 - 160.0).abs() < 1e-12);
+        assert!((right.1 - 70.0).abs() < 1e-12);
+        for angle in [0.0, 0.2, 1.5, 3.1, 5.8] {
+            let (x, y) = plot.point(angle, 0.75).unwrap();
+            let (back_angle, back_radius) = plot.invert(x, y).unwrap();
+            assert!((back_angle - angle).abs() < 1e-12);
+            assert!((back_radius - 0.75).abs() < 1e-12);
+        }
+        assert_eq!(plot.invert(110.0, 70.0), Some((0.0, 0.0)));
+        assert!(PolarPlot::from_rect(0.0, 0.0, 0.0, 100.0).is_err());
+        assert!(PolarPlot::from_rect(f64::MAX, 0.0, f64::MAX, 100.0).is_err());
+        assert!(PolarPlot::from_rect(1.0e308, 0.0, 1.0e308, 1.0e308).is_err());
+        assert_eq!(plot.point(f64::NAN, 1.0), None);
+        assert_eq!(plot.point(0.0, -1.0), None);
+    }
+
+    #[test]
+    fn angular_categories_share_sector_boundaries_with_pointer_inversion() {
+        let clockwise = AngularCategoryScale::new(4, 0.0, true).unwrap();
+        let counterclockwise = AngularCategoryScale::new(4, 0.0, false).unwrap();
+        assert_eq!(
+            clockwise.sector(0),
+            Some((0.0, std::f64::consts::FRAC_PI_2))
+        );
+        assert_eq!(clockwise.center(0), Some(std::f64::consts::FRAC_PI_4));
+        assert_eq!(clockwise.sector(4), None);
+        for index in 0..4 {
+            assert_eq!(
+                clockwise.index_at(clockwise.center(index).unwrap()),
+                Some(index)
+            );
+            assert_eq!(
+                counterclockwise.index_at(counterclockwise.center(index).unwrap()),
+                Some(index)
+            );
+        }
+        assert_eq!(clockwise.index_at(std::f64::consts::TAU), Some(0));
+        assert_eq!(clockwise.index_at(f64::NAN), None);
+        assert!(AngularCategoryScale::new(0, 0.0, true).is_err());
+        assert!(AngularCategoryScale::new(65_537, 0.0, true).is_err());
+    }
+
+    #[test]
+    fn polar_sector_mesh_and_hits_share_clockwise_and_reverse_boundaries() {
+        let plot = PolarPlot::from_rect(0.0, 0.0, 200.0, 200.0).unwrap();
+        let first = PolarSector::new(plot, 0.0, std::f64::consts::FRAC_PI_2, 0.25, 1.0).unwrap();
+        let next = PolarSector::new(
+            plot,
+            std::f64::consts::FRAC_PI_2,
+            std::f64::consts::FRAC_PI_2,
+            0.25,
+            1.0,
+        )
+        .unwrap();
+        let boundary = plot.point(std::f64::consts::FRAC_PI_2, 0.5).unwrap();
+        assert!(!first.contains(boundary.0, boundary.1));
+        assert!(next.contains(boundary.0, boundary.1));
+        assert!(!first.contains(100.0, 100.0));
+        let mut triangles = 0;
+        first.visit_triangles(|triangle| {
+            triangles += 1;
+            assert!(
+                triangle
+                    .iter()
+                    .all(|point| point.0.is_finite() && point.1.is_finite())
+            );
+        });
+        assert_eq!(triangles, first.triangle_count());
+        assert!(triangles <= 1_024);
+        let reverse = PolarSector::new(plot, 0.0, -std::f64::consts::FRAC_PI_2, 0.0, 1.0).unwrap();
+        let inside = plot.point(7.0 * std::f64::consts::FRAC_PI_4, 0.5).unwrap();
+        assert!(reverse.contains(inside.0, inside.1));
+        assert!(!reverse.contains(boundary.0, boundary.1));
+        assert!(PolarSector::new(plot, 0.0, 0.0, 0.0, 1.0).is_err());
+        assert!(PolarSector::new(plot, 0.0, std::f64::consts::TAU, 1.0, 0.0).is_err());
+        let tiny_plot = PolarPlot::from_rect(0.0, 0.0, 0.1, 0.1).unwrap();
+        let full_circle =
+            PolarSector::new(tiny_plot, 0.0, std::f64::consts::TAU, 0.0, 1.0).unwrap();
+        assert!(full_circle.triangle_count() >= 8);
+    }
+
+    #[test]
+    fn radial_polygon_fill_and_hits_share_a_concave_center_fan() {
+        let plot = PolarPlot::from_rect(0.0, 0.0, 200.0, 200.0).unwrap();
+        let angles = AngularCategoryScale::new(5, 0.0, true).unwrap();
+        let radii = [1.0, 0.1, 1.0, 1.0, 1.0];
+        let polygon = PolarPolygon::new(plot, angles, &radii).unwrap();
+        for (index, radius) in radii.iter().enumerate() {
+            close(
+                polygon.radius_at(angles.center(index).unwrap()).unwrap(),
+                *radius,
+            );
+        }
+        let mut triangles = 0;
+        polygon.visit_triangles(|triangle| {
+            triangles += 1;
+            assert!(
+                triangle
+                    .iter()
+                    .all(|point| point.0.is_finite() && point.1.is_finite())
+            );
+        });
+        assert_eq!(triangles, radii.len());
+        assert!(polygon.contains(100.0, 100.0));
+        let outer_tip = plot.point(angles.center(0).unwrap(), 0.9).unwrap();
+        assert!(polygon.contains(outer_tip.0, outer_tip.1));
+        let concavity = plot.point(angles.center(1).unwrap(), 0.5).unwrap();
+        assert!(!polygon.contains(concavity.0, concavity.1));
+        assert!(!polygon.contains(f64::NAN, 0.0));
+        assert!(PolarPolygon::new(plot, angles, &[1.0, 1.0]).is_err());
+        assert!(PolarPolygon::new(plot, angles, &[1.0, 1.0, f64::NAN, 1.0, 1.0]).is_err());
+        let reverse_angles = AngularCategoryScale::new(65_536, 1.2, false).unwrap();
+        let reverse_radii = vec![1.0; reverse_angles.count()];
+        let reverse = PolarPolygon::new(plot, reverse_angles, &reverse_radii).unwrap();
+        close(
+            reverse
+                .radius_at(reverse_angles.center(60_000).unwrap())
+                .unwrap(),
+            1.0,
+        );
+        let interior = plot
+            .point(reverse_angles.center(60_000).unwrap(), 0.5)
+            .unwrap();
+        assert!(reverse.contains(interior.0, interior.1));
+        let center_hole = [1.0, 0.0, 0.0, 0.0, 1.0];
+        assert!(
+            PolarPolygon::new(plot, angles, &center_hole)
+                .unwrap()
+                .contains(100.0, 100.0)
+        );
+        let empty = [0.0; 5];
+        assert!(
+            !PolarPolygon::new(plot, angles, &empty)
+                .unwrap()
+                .contains(100.0, 100.0)
+        );
+    }
+
+    #[test]
+    fn moving_radial_polygon_hits_the_same_fan_that_it_emits() {
+        let plot = PolarPlot::from_rect(0.0, 0.0, 200.0, 200.0).unwrap();
+        let angles = AngularCategoryScale::new(5, 0.0, true).unwrap();
+        let sectors = [(0.0, 0.4), (1.5, 1.9), (3.5, 3.9), (2.7, 3.1), (5.1, 5.5)];
+        let radii = [0.8; 5];
+        let polygon = PolarPolygon::new_with_sectors(plot, angles, &sectors, &radii).unwrap();
+        for sector in sectors {
+            let angle = (sector.0 + sector.1) / 2.0;
+            close(polygon.radius_at(angle).unwrap(), 0.8);
+        }
+        let mut count = 0;
+        polygon.visit_triangles(|triangle| {
+            count += 1;
+            let point = (
+                (triangle[0].0 + triangle[1].0 + triangle[2].0) / 3.0,
+                (triangle[0].1 + triangle[1].1 + triangle[2].1) / 3.0,
+            );
+            assert!(polygon.contains(point.0, point.1));
+        });
+        assert_eq!(count, 5);
+        let vertex = polygon.vertex(1).unwrap();
+        assert_eq!(polygon.category_at(vertex.0, vertex.1), Some(1));
+    }
+
+    #[test]
+    fn ordered_radial_samples_match_the_emitted_fan_for_hits() {
+        let plot = PolarPlot::from_rect(0.0, 0.0, 200.0, 200.0).unwrap();
+        let centers = [
+            0.0,
+            std::f64::consts::FRAC_PI_2,
+            2.0 * std::f64::consts::PI / 3.0,
+            std::f64::consts::PI,
+            4.0 * std::f64::consts::PI / 3.0,
+            3.0 * std::f64::consts::FRAC_PI_2,
+        ];
+        let sectors = centers.map(|angle| (angle, angle));
+        let radii = [0.2, 0.5, 0.4, 0.7, 0.8, 0.6];
+        let equal = AngularCategoryScale::new(centers.len(), 0.0, true).unwrap();
+        let polygon = PolarPolygon::new_with_sectors(plot, equal, &sectors, &radii).unwrap();
+        for (index, &angle) in centers.iter().enumerate() {
+            close(polygon.radius_at(angle).unwrap(), radii[index]);
+        }
+        for angle_index in 0..360 {
+            let angle = std::f64::consts::TAU * (angle_index as f64 + 0.37) / 360.0;
+            for radius_index in 1..40 {
+                let radius = (radius_index as f64 + 0.13) / 40.0;
+                let point = plot.point(angle, radius).unwrap();
+                let unit = (radius * angle.sin(), -radius * angle.cos());
+                let expected = (0..centers.len()).any(|index| {
+                    let next = (index + 1) % centers.len();
+                    let a = (
+                        radii[index] * centers[index].sin(),
+                        -radii[index] * centers[index].cos(),
+                    );
+                    let b = (
+                        radii[next] * centers[next].sin(),
+                        -radii[next] * centers[next].cos(),
+                    );
+                    fan_triangle_contains(unit, a, b)
+                });
+                assert_eq!(polygon.contains(point.0, point.1), expected);
+            }
+        }
+    }
 
     fn close(actual: f64, expected: f64) {
         assert!(

@@ -1,4 +1,4 @@
-//! Thin browser boundary for engine-owned general Cartesian charts.
+//! Thin browser boundary for engine-owned general charts.
 
 use aeris_charts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
@@ -6,10 +6,10 @@ use aeris_charts_engine::{
     GeneralAxisTick, GeneralBrushEndpoint, GeneralBrushRange, GeneralBrushSnapshot,
     GeneralDatasetId, GeneralHitMode, GeneralInterpolation, GeneralLineStyle,
     GeneralPaneComposition, GeneralPaneProposal, GeneralPaneReferenceComposition,
-    GeneralPaneSeriesComposition, GeneralPointSymbol, GeneralReferenceId, GeneralReferenceOptions,
-    GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId, GeneralSeriesKind,
-    GeneralSeriesOptions, GeneralSeriesProposal, GeneralStackMode, GeneralTooltipSnapshot,
-    GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    GeneralPaneSeriesComposition, GeneralPointSymbol, GeneralPolarOptions, GeneralReferenceId,
+    GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId,
+    GeneralSeriesKind, GeneralSeriesOptions, GeneralSeriesProposal, GeneralStackMode,
+    GeneralTooltipSnapshot, GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use js_sys::{Float64Array, Uint8Array, Uint32Array};
 use serde::Deserialize;
@@ -149,8 +149,10 @@ struct SeriesInput {
     interpolation: Option<String>,
     #[serde(default)]
     connect_missing: bool,
-    #[serde(default = "default_fill_opacity")]
-    fill_opacity: f64,
+    #[serde(default)]
+    fill_opacity: Option<f64>,
+    #[serde(default)]
+    polar: GeneralPolarOptions,
     #[serde(default)]
     fill_gradient: Option<[String; 2]>,
     #[serde(default)]
@@ -336,10 +338,6 @@ fn default_line_width() -> f64 {
     2.0
 }
 
-fn default_fill_opacity() -> f64 {
-    DEFAULT_GENERAL_FILL_OPACITY
-}
-
 fn proposal_series(input: SeriesProposalInput) -> Result<GeneralSeriesProposal, String> {
     let kind = match input.kind.as_str() {
         "xy_line" => GeneralSeriesKind::XyLine,
@@ -350,6 +348,10 @@ fn proposal_series(input: SeriesProposalInput) -> Result<GeneralSeriesProposal, 
         "horizontal_bar" => GeneralSeriesKind::HorizontalBar,
         "scatter" => GeneralSeriesKind::Scatter,
         "bubble" => GeneralSeriesKind::Bubble,
+        "pie" => GeneralSeriesKind::Pie,
+        "radar" => GeneralSeriesKind::Radar,
+        "polar_area" => GeneralSeriesKind::PolarArea,
+        "radial_bar" => GeneralSeriesKind::RadialBar,
         "error_bar" => GeneralSeriesKind::ErrorBar,
         "box_plot" => GeneralSeriesKind::BoxPlot,
         "heatmap_grid" => GeneralSeriesKind::HeatmapGrid,
@@ -359,6 +361,22 @@ fn proposal_series(input: SeriesProposalInput) -> Result<GeneralSeriesProposal, 
     let ids = parse_id_values(columns.ids.take())?;
     let missing = |name: &str| input_error(format!("general proposal is missing {name} columns"));
     let data = match kind {
+        GeneralSeriesKind::Pie
+        | GeneralSeriesKind::Radar
+        | GeneralSeriesKind::PolarArea
+        | GeneralSeriesKind::RadialBar => GeneralXyInput::Category {
+            ids,
+            categories: columns
+                .categories
+                .take()
+                .ok_or_else(|| missing("category"))?,
+            category_indices: columns
+                .category_indices
+                .take()
+                .ok_or_else(|| missing("category index"))?,
+            y: columns.y.take().ok_or_else(|| missing("Y"))?,
+            y_valid: columns.y_valid.take(),
+        },
         GeneralSeriesKind::Bubble => GeneralXyInput::Bubble {
             ids,
             x: columns.x.take().ok_or_else(|| missing("numeric X"))?,
@@ -650,6 +668,18 @@ fn series_options_from_input(
         GeneralSeriesKind::Bubble => {
             GeneralSeriesOptions::bubble(input.pane, dataset, input.x_axis_id, input.y_axis_id)
         }
+        GeneralSeriesKind::Pie => {
+            GeneralSeriesOptions::pie(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        GeneralSeriesKind::Radar => {
+            GeneralSeriesOptions::radar(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        GeneralSeriesKind::PolarArea => {
+            GeneralSeriesOptions::polar_area(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        GeneralSeriesKind::RadialBar => {
+            GeneralSeriesOptions::radial_bar(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
     };
     options.visible = input.visible;
     options.title = input.title;
@@ -661,7 +691,17 @@ fn series_options_from_input(
     options.line_style = line_style(input.line_style.as_deref())?;
     options.interpolation = interpolation(input.interpolation.as_deref())?;
     options.connect_missing = input.connect_missing;
-    options.fill_opacity = input.fill_opacity;
+    options.fill_opacity = input.fill_opacity.unwrap_or({
+        if matches!(
+            kind,
+            GeneralSeriesKind::Pie | GeneralSeriesKind::PolarArea | GeneralSeriesKind::RadialBar
+        ) {
+            1.0
+        } else {
+            DEFAULT_GENERAL_FILL_OPACITY
+        }
+    });
+    options.polar = input.polar;
     options.fill_gradient = input.fill_gradient;
     options.baseline_value = input.baseline_value;
     options.baseline_policy = match input.baseline_policy.as_deref().unwrap_or("zero") {
@@ -716,6 +756,10 @@ fn series_kind_name(kind: GeneralSeriesKind) -> &'static str {
         GeneralSeriesKind::HeatmapGrid => "heatmap_grid",
         GeneralSeriesKind::Scatter => "scatter",
         GeneralSeriesKind::Bubble => "bubble",
+        GeneralSeriesKind::Pie => "pie",
+        GeneralSeriesKind::Radar => "radar",
+        GeneralSeriesKind::PolarArea => "polar_area",
+        GeneralSeriesKind::RadialBar => "radial_bar",
     }
 }
 
@@ -960,6 +1004,18 @@ fn general_brush_value(snapshot: GeneralBrushSnapshot) -> Value {
 }
 
 impl ChartInner {
+    pub fn set_general_transition_duration_result_json(&mut self, duration_ms: f64) -> String {
+        match self.engine.set_general_transition_duration_ms(duration_ms) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn set_general_transition_reduced_motion(&mut self, reduced_motion: bool) {
+        self.engine
+            .set_general_transition_reduced_motion(reduced_motion);
+    }
+
     pub fn add_general_pane_result_json(&mut self, options_json: &str) -> String {
         let input = match parse_json::<PaneInput>(options_json) {
             Ok(input) => input,
@@ -1380,6 +1436,7 @@ impl ChartInner {
             },
             "connect_missing": series.connect_missing(),
             "fill_opacity": series.fill_opacity(),
+            "polar": series.polar(),
             "fill_gradient": series.fill_gradient(),
             "bar_gap": series.bar_gap(),
             "bar_max_width": series.bar_max_width(),
@@ -1457,10 +1514,21 @@ impl ChartInner {
                         GeneralSeriesKind::HeatmapGrid => "heatmap_grid",
                         GeneralSeriesKind::Scatter => "scatter",
                         GeneralSeriesKind::Bubble => "bubble",
+                        GeneralSeriesKind::Pie => "pie",
+                        GeneralSeriesKind::Radar => "radar",
+                        GeneralSeriesKind::PolarArea => "polar_area",
+                        GeneralSeriesKind::RadialBar => "radial_bar",
                     },
                     "title": item.title,
                     "color": item.color,
                     "visible": item.visible,
+                    "slices": item.slices.into_iter().map(|slice| json!({
+                        "row": slice.row,
+                        "label": slice.label,
+                        "value": slice.value,
+                        "color": slice.color,
+                    })).collect::<Vec<_>>(),
+                    "slices_truncated": item.slices_truncated,
                 })
             }).collect::<Vec<_>>()
         })
@@ -1473,6 +1541,21 @@ impl ChartInner {
             Err(error) => return error,
         };
         let (kind, empty) = match kind {
+            "pie" | "radar" | "polar_area" | "radial_bar" => (
+                match kind {
+                    "pie" => GeneralSeriesKind::Pie,
+                    "radar" => GeneralSeriesKind::Radar,
+                    "radial_bar" => GeneralSeriesKind::RadialBar,
+                    _ => GeneralSeriesKind::PolarArea,
+                },
+                GeneralXyInput::Category {
+                    ids: None,
+                    categories: Vec::new(),
+                    category_indices: Vec::new(),
+                    y: Vec::new(),
+                    y_valid: None,
+                },
+            ),
             "xy_line" | "xy_area" | "range_area" | "range_bar" => {
                 let Some(domain) = self.engine.pane_horizontal_domain(input.pane) else {
                     return input_error(format!("{kind} references a stale pane"));

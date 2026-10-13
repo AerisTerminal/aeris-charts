@@ -41,8 +41,8 @@ export type series_kind =
   | feature_series_kind
   | "custom";
 
-/** General Cartesian series currently available through the shared chart engine. */
-export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "range_bar" | "error_bar" | "column" | "horizontal_bar" | "box_plot" | "heatmap_grid" | "scatter" | "bubble";
+/** General series available through the shared chart engine. */
+export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "range_bar" | "error_bar" | "column" | "horizontal_bar" | "box_plot" | "heatmap_grid" | "scatter" | "bubble" | "pie" | "radar" | "polar_area" | "radial_bar";
 export type general_row_id = string | number;
 
 export interface general_xy_row {
@@ -426,6 +426,14 @@ export interface general_series_options {
   connect_missing?: boolean;
   /** Area fill opacity from 0 through 1 (default `72 / 255`). */
   fill_opacity?: number;
+  /** Polar sector sweep and normalized radii. Omitted fields use a full clockwise turn. */
+  polar?: {
+    start_angle?: number;
+    end_angle?: number;
+    inner_radius?: number;
+    outer_radius?: number;
+    pad_angle?: number;
+  };
   /** Top-to-bottom CSS fill colors for area and bar families; area stop alpha is multiplied by `fill_opacity`. */
   fill_gradient?: readonly [string, string];
   /** Explicit numeric fill baseline for an unstacked `xy_area`. */
@@ -556,6 +564,9 @@ export interface general_legend_item {
   title: string;
   color: string | null;
   visible: boolean;
+  /** At most 32 positive polar sectors per series and 512 across one snapshot. */
+  slices: readonly { row: number; label: string; value: number; color: string }[];
+  slices_truncated: boolean;
 }
 
 export interface general_legend_snapshot {
@@ -2602,7 +2613,11 @@ export interface chart_state_v2 {
       | "BoxPlot"
       | "HeatmapGrid"
       | "Scatter"
-      | "Bubble";
+      | "Bubble"
+      | "Pie"
+      | "Radar"
+      | "PolarArea"
+      | "RadialBar";
     pane: number;
     dataset: `dataset-${number}`;
     x_axis_id: string;
@@ -2622,6 +2637,8 @@ export interface chart_state_v2 {
     stack_mode: "Normal" | "Cumulative" | "Silhouette" | "Wiggle" | "Percent" | "Positive";
   }[];
   chart_options: Record<string, unknown>;
+  /** Persisted opt-in duration; active animation progress is runtime-only. */
+  general_transition_duration_ms?: number;
 }
 
 export interface chart_state_v3 {
@@ -2630,6 +2647,8 @@ export interface chart_state_v3 {
   panes: persisted_pane_v1[];
   drawings: persisted_drawing_v1[];
   indicators: unknown[];
+  /** Persisted opt-in duration; active animation progress is runtime-only. */
+  general_transition_duration_ms?: number;
 }
 export type chart_state = chart_state_v1 | chart_state_v2 | chart_state_v3;
 
@@ -4009,6 +4028,8 @@ export interface chart_api {
   /** Move one semantic endpoint by one transformed-percent step or one category. */
   nudge_general_brush(endpoint: "start" | "end", direction: -1 | 1): general_brush_snapshot;
   general_brush_snapshot(): general_brush_snapshot | null;
+  /** Opt-in duration for engine-owned general value transitions (0–5000 ms; zero disables). */
+  set_general_transition_duration(duration_ms: number): void;
   /** Clear the active brush, optionally only when it belongs to `axis`. */
   clear_general_brush(axis?: string | general_axis_api): void;
   /** Notify browser controls after pointer/touch and programmatic brush changes. */

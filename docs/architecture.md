@@ -56,6 +56,50 @@ distinct finite domain endpoints, including spans whose direct subtraction overf
 explicit numeric, temporal, band, or point domains use these scales during
 shared layout and axis-frame construction; temporal coordinates reuse the linear transform over validated
 JavaScript-safe epoch milliseconds while the engine owns UTC calendar interval selection and formatting.
+`PolarPlot` is the host-neutral `f64` media-space transform for the G6 polar families: it resolves a
+center and bounded outer radius from a plot rectangle, maps clockwise angles from twelve o'clock,
+and inverts pointer coordinates using the same convention. `AngularCategoryScale` defines bounded,
+equal category sectors and resolves pointer angles against the same clockwise or reversed order.
+`PolarSector` validates one bounded annular sweep and visits its media-space triangle mesh without
+allocating, using the same radial and angular bounds for exact pointer hits. Each sector emits at
+most 1,024 triangles; visible arc subdivision targets a quarter media pixel until that cap applies.
+`PolarPolygon` visits one center-fan triangle per category from caller-owned normalized
+radii. At rest it checks the one angularly indexed fan triangle in unit coordinates and uses
+constant work for a hit. Ordered sampled rays use a binary search and the same ray-edge boundary
+as the emitted fan; unordered moving rays check the emitted triangles. It retains no point copy.
+The engine retains a bounded
+per-series category projection and radar radii keyed by scene generation, so pointer queries do
+not rebuild the category mapping or scan the values. Polar area and radial bar use that projection
+to test at most three neighboring sector candidates. Pie retains ordered slice boundaries and
+binary-searches the pointer angle. Each cache holds at most 64 series, evicts deterministically,
+and contributes to engine memory accounting; data, axis, layout and option changes advance scene
+generation. The release performance gate measures 4,096-category exact hits and cache capacity.
+Polar axes with effective explicit or automatic domains now emit bounded angular spokes, radial rings, and
+collision-filtered labels through the existing ordered underlay and `AxisFrame`. Explicit polar
+ticks may override generated labels. Browser Canvas2D/WebGPU pixel fixtures and a 1.25× GPUI/native
+window capture cover polar fills; other scale and platform captures retain their separate gates.
+Pie and donut bind the existing category/value dataset to a polar pane's angular
+and radial axes. `GeneralPolarOptions` defines its sweep, inner/outer radius, and angular padding;
+valid positive rows normalize by their maximum before summing, so finite input cannot overflow the
+total. Zero and missing rows do not emit slices. The engine uses `PolarSector` for both exact hits
+and shared-frame `MeshFill` lowering. One ordered mesh groups each sector's triangles so
+Canvas2D and native apply translucent alpha once across their union, while WebGPU receives one
+ordered triangle run and GPUI receives one mesh paint operation with coverage only on exposed
+edges. Sector data labels use bounded shared-frame leaders from the outer edge to collision-filtered
+text within the plot; every executor receives the same ordered line and text primitives.
+Radar binds category/value rows to the same angular and radial axes. Automatic
+angular domains union bound category labels in insertion order; automatic radial domains include
+zero and valid radar values. A bounded per-series polygon projects category values through the
+effective radial view, treats missing categories or values as zero-radius vertices, and shares
+that fan geometry between frame fill and exact hits. The frame emits a single `MeshFill` and closed outline and
+optional row markers through the existing primitive and point pool contract. Radar transitions
+sample fixed spokes or a bounded union of source and target spokes as described below.
+Polar area and radial bar use the same category order, radial view, sector tessellation, and
+exact-hit visitor. Radial bars map value linearly to outer radius. Polar area maps value to
+annular area by interpolating squared radii before taking the square root. Both accept the
+bounded sweep, inner/outer radius, and angular padding in `GeneralPolarOptions`; zero or missing
+values emit no sector. Reverse angular axes reverse sector order. The engine owns selection and
+keyboard navigation for all four families, and the shared transition clock drives their sectors.
 The financial coordinate path does not dispatch through them.
 Existing financial charts therefore continue to instantiate only `TimeScaleCore` and `PriceScaleCore`
 and pay no retained-memory cost for these foundations.
@@ -106,8 +150,11 @@ or symmetric-log transforms consistently for ticks, geometry, hit testing, and r
 runtime view is independent of the configured/automatic base domain and can be reset without rewriting
 axis options. Temporal axes use that same runtime-view contract with whole epoch-millisecond anchors and
 emit bounded UTC millisecond-through-calendar-year ticks through the shared `AxisFrame`; locale injection
-supplies month names without moving date math into a host or backend. Polar tick execution remains deferred
-until its owning transform slice is implemented. Cartesian grid and numeric zero-line policies execute
+supplies month names without moving date math into a host or backend. Polar axes map equal-angle
+categories and linear radial values through the shared transforms; visible rings and spokes use the
+general grid colors and styles and cap output at 512 rules per pane. A visible radial zero ring
+uses the shared zero-line color even when ordinary rings are hidden; coincident polar grid rules
+are deduplicated in device-pixel space. Cartesian grid and numeric zero-line policies execute
 from the same effective domains into the retained pane underlay, below references and series. Axis-local
 grid visibility combines with the chart-wide direction style, coincident device-pixel rules are deduplicated,
 and an enabled zero line replaces a coincident ordinary grid rule. Financial panes allocate no general
@@ -125,6 +172,87 @@ category indices, mismatched columns, and over-limit dictionaries are rejected a
 row counts, category bytes, and ID bytes are bounded, and retained capacity is attributed separately in
 engine memory evidence. A financial-only chart keeps the store absent and therefore retains zero general
 dataset capacity.
+
+The general transition path keeps canonical general datasets at their final values and
+retains a separate presentation dataset for shared geometry and exact hits. An opt-in engine
+duration (zero by default, at most five seconds) and explicit monotonic millisecond clock sample
+updates by stable row identity while the X kind remains compatible. Matched rows can change
+validity for Y, error bounds, and bubble size without snapping the dataset. Adding or removing
+unused optional columns preserves interpolation of shared values;
+new optional bounds begin at the source row value, and a shape-only update with no visible value
+change schedules no frames. Matched numeric X values interpolate in `f64`; matched temporal X
+values interpolate in epoch milliseconds and round to whole milliseconds, so the shared frame
+and exact-hit geometry follow the same sampled position.
+For automatic Cartesian category axes, the engine snapshots normalized source and canonical
+target band or point positions when a dataset changes. Bound series, reference positions,
+ticks, grid rules, linked category coordinates and brush queries resolve through the current axis sample; an
+interruption restarts from that sample. Axis motion lives with the bounded dataset transition
+and contributes to its retained memory limit. Matched rows that change category retain a
+per-row normalized source position and move toward their target category's current axis position;
+an interrupted row resumes from its sampled position. Explicit category domains keep their fixed
+order while allowing these rows to move between fixed slots. An automatic axis keeps departing
+category labels in the bounded presentation registry until the row move ends, then resolves its
+canonical target registry.
+Pie row reordering retains normalized source and target slice bounds by stable identity in the
+same bounded dataset transition. The ordered frame and exact-hit path sample those bounds from
+the engine clock, including an interrupted reorder; overlapping moving slices hit in their
+paint order. Outside a reorder, pie hits keep the cached angular binary search.
+Automatic angular category axes use the same normalized source and target motion for spokes,
+polar-area sectors and radial-bar sectors. Matched rows that change category retain their sampled
+angular source as well. Moving sectors use their shared frame geometry for exact hits; static
+sector hits keep their indexed path. A same-count radar reorder morphs radial values on fixed
+spokes, sampling current radii on interruption. When the category count changes, radar forms a
+bounded sorted union of source and target spoke angles, samples both polygon boundaries on those
+rays, and morphs the radii. The added rays lie on the old or new edges at the respective endpoints,
+so fill area and exact hits do not jump at entry, exit or interruption. Auxiliary rays carry hit
+ownership but emit no duplicate labels or point markers. The frame omits collinear auxiliary
+outline vertices so their device-pixel encoding cannot change the source stroke at transition
+start. Radar motion captures each radial axis domain before data replacement, keeping source
+radii aligned with an automatic scale even when incoming values expand its target domain.
+Moving radar vertices directly can collapse a positive polygon when categories cross; static
+and same-count radar keep their constant-work equal-spoke hit path, while the ordered union uses binary search. Ray sampling
+returns an exact spoke radius at a spoke before evaluating neighboring edges, avoiding a floating
+point miss at a concave vertex. Polar contexts allocate sampled sector bounds only while an
+angular transition is active.
+The GPUI structural fixture runs pie, radar, polar area, and radial bar through the same ordered
+frame used by Canvas2D, including zero and missing rows. The GPUI window-capture harness also
+contains deterministic pie/donut, radar, polar-area, and radial-bar mesh fills and checks four
+flat interior samples against native rasterization at the window's actual device scale. The
+Windows gate also bounds the edge residual to 2% of pixels and 128 channel values. The 1.25×
+official-window capture measured 2,672 differing pixels of 225,000, with a maximum channel delta
+of 101; all four interiors matched within one channel. Other device scales and platforms retain
+their existing structural and platform-specific capture checks.
+The Chromium polar pixel fixture compares the four families through Canvas2D and SwiftShader
+WebGPU under the configured browser device scale. Uniform filled interiors agree within one
+channel value; family-specific bounds cover measured antialiasing residuals at curved edges and
+the radar outline.
+V2 and study V3 chart state persist the duration setting; restore starts at the final canonical
+values and never resumes an in-flight transition. A configured duration selects V2 before general
+data is installed unless study bindings require V3. Legacy V1 state restores the default zero
+duration.
+New rows enter from zero value, while numeric and temporal horizontal error bounds begin collapsed
+at the new X coordinate. Removed rows remain only in a bounded presentation union, shrink toward
+zero in source order, and never resolve to canonical hits; category slots stay present until the
+exit ends. Interruption samples that union, so a returning row resumes from its current value.
+For a matched row whose Y changes between missing and valid, the same presentation row blends
+from or toward zero and changes visibility at the corresponding clock endpoint. Transition updates
+and replacements, including zero-duration and reduced-motion snaps, invalidate dataset geometry
+caches, including scatter indexes, so a final canonical generation cannot reuse an interrupted
+presentation cache.
+Matched error bounds and bubble sizes use the same visibility timing: Y bounds collapse to the
+row value, horizontal bounds to its X coordinate, and bubble size to zero while entering or
+exiting validity. Invalid payload values never enter the interpolation.
+The retained path admits at most 16,384 presentation rows per dataset and at most 4,096 when a
+bound polar family uses the dataset; a larger union applies the target immediately. Numeric and
+temporal X plus value channels interpolate from presentation, automatic numeric domains track the
+sample, interruptions start from the current presentation, and reduced motion snaps to the target.
+Identical visible presentation and target values do not schedule frames; raw payload changes behind
+missing Y, bounds, or size are ignored for scheduling. The engine retains at most 16 active datasets
+and 8 MiB of presentation payload, attributed to general data memory usage. The browser package pins its monotonic clock
+before each general data update, starts its existing animation loop only while the engine requests
+frames, and forwards reduced-motion changes live so an active transition snaps immediately.
+Fixed-clock frame and hit fixtures cover polar and Cartesian families; browser fixtures verify
+public scheduling, interruption, and reduced-motion behavior.
 
 General datasets also own sparse, validated per-row CSS color and point-symbol overrides. Object rows and typed
 column metadata enter the same atomic replace/upsert path; explicit-ID updates replace the affected
@@ -311,6 +439,11 @@ bounded accessibility, exact/nearest hit, brush, reference-component, and legend
 directly from the live series registry in stable engine order, optionally filtered by pane, and retains hidden
 series with their visibility state rather than maintaining a parallel host registry. Shared tooltip grouping,
 semantic brush selection, and reference domain extension likewise do not create browser-owned semantic mirrors.
+For pie, polar area and radial bar, that snapshot also carries positive sector rows with their
+dataset labels, values and exact frame fill colors. The engine caps entries at 32 per series and
+512 per snapshot and reports truncation; zero and missing values have no swatch. Browser legend
+data changes refresh this snapshot, while hidden series retain their slice labels. Slice entries
+are descriptive; series visibility remains the legend's action.
 The browser package's `create_general_legend`, `create_general_tooltip`, and
 `create_general_brush_controls` present those snapshots as default DOM controls. Legend buttons
 mutate stable series handles; the tooltip follows engine-arbitrated crosshair hits; brush buttons
@@ -1358,6 +1491,10 @@ npm run test:pack
 The release performance gate also measures a 100,000-visible-bar volume-profile refresh through frame construction and verifies that unchanged frames retain the calculation revision.
 
 Its Target Q (`crates/aeris_charts_native/examples/perf_gate/indicator_live.rs`) covers live indicator updates through the real engine API for every `IndicatorKind` variant at default parameters, plus exponential Envelopes and Volume, derived price inputs, volume on its own timeline and a Rust custom study. Each case is attached alone to a 10,000-row and a 1,000,000-row history fed as a host does (source bar, then aligned and sparse volume bars) and timed over 1,000 tip appends and 1,000 tip replacements. Each binding's 1M-row p99 must stay within 0.5 ms. Its 1M-row p99 must also be at most 10× its 10k-row p99, with the 10k p99 floored at 0.01 ms for timer and cache noise, where a cost linear in history shows as about 100×. With every case attached together, the 1M-row p99 must stay within 4 ms and the same growth limit, and every output must equal a fresh engine loaded with the final data. The engine test `engine_live_updates_with_every_kind_attached_do_bounded_work_and_match_a_fresh_engine` checks the same bound by work counters: indicator rows read, including derived-input and aligned-volume rows rewritten, and output LOD nodes rewritten.
+
+Target S times 40 release-build pie updates with 2,048 rows per dataset and 512 exiting plus 512 entering identities, including transition sampling and ordered-frame construction. Its p95 budget is 4 ms; the first measured run was 0.61 ms on the maintainer machine.
+
+Target T times 40 release-build category reorder updates with 4,096 stable rows, two shared-axis Cartesian series (column and line), transition sampling and ordered-frame construction. Repeated updates interrupt the preceding motion. Its p95 budget is 12 ms; the first measured run was 7.63 ms on the maintainer machine.
 
 GPUI scene construction is measured by `cargo run -p aeris_charts_render_gpui --example plan_bench --release`, which holds every fixture's p99 lowering time within 2 ms and the zoomed-out indicator fixture (`fixtures::dense_indicator_chart`: 4,000 visible candles, colored overlay volume, and a five-line EMA ribbon) within 200,000 mesh vertices. The always-run test `crates/aeris_charts_render_gpui/tests/dense_chart.rs` checks the same fixture by counts: mesh vertices per line point and GPUI primitives submitted for its quads. `examples/gpui_dense_hover.rs` drives that fixture's crosshair in a real GPUI window and reports frame intervals and paint cost.
 

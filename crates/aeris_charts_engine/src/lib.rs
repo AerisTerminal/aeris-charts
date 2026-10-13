@@ -174,17 +174,19 @@ pub use general_data::{
 pub use general_series::{
     DEFAULT_GENERAL_FILL_OPACITY, GeneralAccessibilityItem, GeneralAccessibilitySnapshot,
     GeneralAreaBaseline, GeneralBrushEndpoint, GeneralBrushRange, GeneralBrushSnapshot,
-    GeneralHitMode, GeneralInterpolation, GeneralLegendItem, GeneralLegendSnapshot,
-    GeneralLineStyle, GeneralPaneComposedReference, GeneralPaneComposedSeries,
-    GeneralPaneComposition, GeneralPaneCompositionResult, GeneralPaneProposal,
-    GeneralPaneReferenceComposition, GeneralPaneSeriesComposition, GeneralPointSymbol,
-    GeneralReference, GeneralReferenceId, GeneralReferenceOptions, GeneralReferenceValue,
-    GeneralSeries, GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralSeriesProposal, GeneralSharedTooltipSnapshot, GeneralStackMode, GeneralTooltipSnapshot,
-    MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_BRUSH_ITEMS, MAX_GENERAL_POINT_RADIUS,
-    MAX_GENERAL_REFERENCES, MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES,
-    MAX_GENERAL_SERIES_GROUP_ID_BYTES, MAX_GENERAL_SERIES_STACK_ID_BYTES,
-    MAX_GENERAL_SERIES_TITLE_BYTES, MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
+    GeneralHitMode, GeneralInterpolation, GeneralLegendItem, GeneralLegendSlice,
+    GeneralLegendSnapshot, GeneralLineStyle, GeneralPaneComposedReference,
+    GeneralPaneComposedSeries, GeneralPaneComposition, GeneralPaneCompositionResult,
+    GeneralPaneProposal, GeneralPaneReferenceComposition, GeneralPaneSeriesComposition,
+    GeneralPointSymbol, GeneralPolarOptions, GeneralReference, GeneralReferenceId,
+    GeneralReferenceOptions, GeneralReferenceValue, GeneralSeries, GeneralSeriesHit,
+    GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions, GeneralSeriesProposal,
+    GeneralSharedTooltipSnapshot, GeneralStackMode, GeneralTooltipSnapshot,
+    MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_BRUSH_ITEMS, MAX_GENERAL_LEGEND_SLICES_PER_SERIES,
+    MAX_GENERAL_LEGEND_SLICES_PER_SNAPSHOT, MAX_GENERAL_POINT_RADIUS, MAX_GENERAL_REFERENCES,
+    MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_GROUP_ID_BYTES,
+    MAX_GENERAL_SERIES_STACK_ID_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES,
+    MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub use host_layout::{
@@ -1796,6 +1798,22 @@ pub enum SyncMismatchPolicy {
     Clear,
 }
 
+const MAX_GENERAL_TRANSITIONS: usize = 16;
+const MAX_GENERAL_TRANSITION_BYTES: usize = 8 * 1024 * 1024;
+const MAX_GENERAL_TRANSITION_ROWS: usize = 16_384;
+
+struct GeneralDatasetTransition {
+    dataset: GeneralDatasetId,
+    from: GeneralDataset,
+    presentation: GeneralDataset,
+    rows: Vec<general_data::GeneralTransitionRow>,
+    category_axes: Vec<general_axes::CategoryAxisMotion>,
+    pie_order: Option<Vec<Option<general_series::PieOrderRow>>>,
+    radar_slots: Vec<general_series::RadarSlotMotion>,
+    radar_shapes: Vec<general_series::RadarShapeMotion>,
+    started_ms: f64,
+}
+
 /// Platform-independent state for one chart instance.
 pub struct ChartEngine {
     pub time_scale: TimeScaleCore,
@@ -1837,6 +1855,10 @@ pub struct ChartEngine {
     general_horizontal_domains: domains::HorizontalDomainRegistry,
     general_axes: general_axes::GeneralAxisRegistry,
     general_data: Option<general_data::GeneralDataStore>,
+    general_transition_duration_ms: f64,
+    general_transition_time_ms: f64,
+    general_transition_reduced_motion: bool,
+    general_transitions: Vec<GeneralDatasetTransition>,
     /// Monotonic freshness guard for V2 import. The optional store is released when empty, but an
     /// issued dataset identity must still prevent a restored dataset from aliasing a stale handle.
     general_dataset_handles_issued: bool,
@@ -2127,6 +2149,10 @@ impl ChartEngine {
             general_horizontal_domains,
             general_axes: general_axes::GeneralAxisRegistry::new(),
             general_data: None,
+            general_transition_duration_ms: 0.0,
+            general_transition_time_ms: 0.0,
+            general_transition_reduced_motion: false,
+            general_transitions: Vec::new(),
             general_dataset_handles_issued: false,
             general_series: None,
             options: ChartOptionsStore::new(),
@@ -2378,7 +2404,57 @@ impl ChartEngine {
             general_data_capacity_bytes: self
                 .general_data
                 .as_ref()
-                .map_or(0, general_data::GeneralDataStore::estimated_bytes),
+                .map_or(0, general_data::GeneralDataStore::estimated_bytes)
+                .saturating_add(
+                    self.general_transitions.capacity()
+                        * std::mem::size_of::<GeneralDatasetTransition>(),
+                )
+                .saturating_add(
+                    self.general_transitions
+                        .iter()
+                        .map(|transition| {
+                            transition
+                                .from
+                                .estimated_bytes()
+                                .saturating_add(transition.presentation.estimated_bytes())
+                                .saturating_add(
+                                    transition.rows.capacity()
+                                        * std::mem::size_of::<general_data::GeneralTransitionRow>(),
+                                )
+                                .saturating_add(
+                                    transition.category_axes.capacity()
+                                        * std::mem::size_of::<general_axes::CategoryAxisMotion>()
+                                        + transition
+                                            .category_axes
+                                            .iter()
+                                            .map(general_axes::CategoryAxisMotion::estimated_bytes)
+                                            .sum::<usize>(),
+                                )
+                                .saturating_add(transition.pie_order.as_ref().map_or(0, |motion| {
+                                    motion.capacity()
+                                        * std::mem::size_of::<Option<general_series::PieOrderRow>>()
+                                }))
+                                .saturating_add(
+                                    transition.radar_slots.capacity()
+                                        * std::mem::size_of::<general_series::RadarSlotMotion>()
+                                        + transition
+                                            .radar_slots
+                                            .iter()
+                                            .map(general_series::RadarSlotMotion::estimated_bytes)
+                                            .sum::<usize>(),
+                                )
+                                .saturating_add(
+                                    transition.radar_shapes.capacity()
+                                        * std::mem::size_of::<general_series::RadarShapeMotion>()
+                                        + transition
+                                            .radar_shapes
+                                            .iter()
+                                            .map(general_series::RadarShapeMotion::estimated_bytes)
+                                            .sum::<usize>(),
+                                )
+                        })
+                        .sum::<usize>(),
+                ),
             general_series_capacity_bytes: self
                 .general_series
                 .as_ref()
@@ -2438,6 +2514,8 @@ impl ChartEngine {
         if bound {
             self.validate_general_dataset_replacement(id, &input)?;
         }
+        let previous = self.general_transition_source(id, bound);
+        let radar_source_domains = self.general_radar_source_domains(id, previous.is_some());
         let store = self.general_data.as_mut().ok_or_else(|| {
             ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
         })?;
@@ -2449,6 +2527,8 @@ impl ChartEngine {
             store.replace(id, input)?;
         }
         if bound {
+            self.start_general_transition(id, previous, &radar_source_domains);
+            self.invalidate_general_dataset_geometry_caches(id);
             self.reconcile_general_interaction_for_dataset(id, 0);
             self.invalidate_frame_all();
         } else {
@@ -2492,6 +2572,8 @@ impl ChartEngine {
         if bound {
             self.validate_general_dataset_replacement(id, &input)?;
         }
+        let previous = self.general_transition_source(id, bound);
+        let radar_source_domains = self.general_radar_source_domains(id, previous.is_some());
         let store = self.general_data.as_mut().ok_or_else(|| {
             ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
         })?;
@@ -2503,6 +2585,8 @@ impl ChartEngine {
             store.upsert(id, input, max_rows)?
         };
         if bound {
+            self.start_general_transition(id, previous, &radar_source_domains);
+            self.invalidate_general_dataset_geometry_caches(id);
             self.reconcile_general_interaction_for_dataset(id, removed_front);
             self.invalidate_frame_all();
         } else {
@@ -2514,6 +2598,364 @@ impl ChartEngine {
     #[doc(hidden)]
     pub fn general_dataset(&self, id: GeneralDatasetId) -> Option<&GeneralDataset> {
         self.general_data.as_ref()?.get(id)
+    }
+
+    pub(crate) fn general_geometry_dataset(&self, id: GeneralDatasetId) -> Option<&GeneralDataset> {
+        self.general_transitions
+            .iter()
+            .find(|transition| transition.dataset == id)
+            .map(|transition| &transition.presentation)
+            .or_else(|| self.general_dataset(id))
+    }
+
+    pub(crate) fn general_transition_target_row(
+        &self,
+        id: GeneralDatasetId,
+        presentation_row: usize,
+    ) -> Option<usize> {
+        self.general_transitions
+            .iter()
+            .find(|transition| transition.dataset == id)
+            .map_or(Some(presentation_row), |transition| {
+                transition.rows.get(presentation_row)?.target
+            })
+    }
+
+    /// Set the duration for general dataset value transitions. Zero applies updates immediately.
+    /// Durations above five seconds are rejected to keep retained state and host scheduling bounded.
+    pub fn set_general_transition_duration_ms(
+        &mut self,
+        duration_ms: f64,
+    ) -> Result<(), ChartError> {
+        if !duration_ms.is_finite() || !(0.0..=5_000.0).contains(&duration_ms) {
+            return Err(ChartError::new(
+                ErrorCode::InvalidOptions,
+                "general transition duration must be between 0 and 5000 ms",
+            ));
+        }
+        self.general_transition_duration_ms = duration_ms;
+        if duration_ms == 0.0 {
+            for transition in &self.general_transitions {
+                self.invalidate_general_dataset_geometry_caches(transition.dataset);
+            }
+            self.general_transitions.clear();
+            self.invalidate_frame_scene();
+        }
+        Ok(())
+    }
+
+    /// A reduced-motion request makes the target state visible and ends scheduling immediately.
+    pub fn set_general_transition_reduced_motion(&mut self, reduced_motion: bool) {
+        self.general_transition_reduced_motion = reduced_motion;
+        if reduced_motion && !self.general_transitions.is_empty() {
+            for transition in &self.general_transitions {
+                self.invalidate_general_dataset_geometry_caches(transition.dataset);
+            }
+            self.general_transitions.clear();
+            self.invalidate_frame_scene();
+        }
+    }
+
+    pub fn general_transition_active(&self) -> bool {
+        !self.general_transitions.is_empty()
+    }
+
+    /// Advance active general transitions with a finite monotonic host clock in milliseconds.
+    pub fn set_general_animation_time_ms(&mut self, time_ms: f64) -> bool {
+        if !time_ms.is_finite() || time_ms < self.general_transition_time_ms {
+            return false;
+        }
+        if time_ms == self.general_transition_time_ms {
+            return true;
+        }
+        self.general_transition_time_ms = time_ms;
+        if self.general_transitions.is_empty() {
+            return true;
+        }
+        for transition in &self.general_transitions {
+            self.invalidate_general_dataset_geometry_caches(transition.dataset);
+        }
+        let duration = self.general_transition_duration_ms;
+        let targets = self.general_data.as_ref();
+        self.general_transitions.retain_mut(|transition| {
+            let elapsed = time_ms - transition.started_ms;
+            if elapsed >= duration || duration == 0.0 {
+                return false;
+            }
+            let Some(target) = targets.and_then(|store| store.get(transition.dataset)) else {
+                return false;
+            };
+            let progress = (elapsed / duration).clamp(0.0, 1.0);
+            transition.presentation.blend_transition(
+                &transition.from,
+                target,
+                &transition.rows,
+                progress,
+            );
+            true
+        });
+        self.invalidate_frame_scene();
+        true
+    }
+
+    fn general_transition_source(
+        &self,
+        id: GeneralDatasetId,
+        bound: bool,
+    ) -> Option<GeneralDataset> {
+        if !bound
+            || self.general_transition_reduced_motion
+            || self.general_transition_duration_ms == 0.0
+        {
+            return None;
+        }
+        let previous = self.general_geometry_dataset(id)?;
+        (previous.len() <= MAX_GENERAL_TRANSITION_ROWS
+            && previous.estimated_bytes() <= MAX_GENERAL_TRANSITION_BYTES / 2)
+            .then(|| previous.clone())
+    }
+
+    fn general_radar_source_domains(
+        &self,
+        id: GeneralDatasetId,
+        transitioning: bool,
+    ) -> Vec<(String, [f64; 2])> {
+        if !transitioning {
+            return Vec::new();
+        }
+        self.general_series_iter()
+            .filter(|series| {
+                series.visible()
+                    && series.dataset() == id
+                    && series.kind() == GeneralSeriesKind::Radar
+            })
+            .filter_map(|series| {
+                let axis = self.general_axis(series.y_axis_id())?;
+                let GeneralAxisDomain::Numeric(domain) =
+                    self.effective_general_axis_domain(axis)?
+                else {
+                    return None;
+                };
+                Some((series.y_axis_id().to_owned(), domain))
+            })
+            .collect()
+    }
+
+    fn start_general_transition(
+        &mut self,
+        id: GeneralDatasetId,
+        previous: Option<GeneralDataset>,
+        radar_source_domains: &[(String, [f64; 2])],
+    ) {
+        let Some(previous) = previous else {
+            self.general_transitions
+                .retain(|transition| transition.dataset != id);
+            return;
+        };
+        let rows = self
+            .general_dataset(id)
+            .filter(|target| {
+                target.len() <= MAX_GENERAL_TRANSITION_ROWS
+                    && target.estimated_bytes() <= MAX_GENERAL_TRANSITION_BYTES / 2
+            })
+            .and_then(|target| previous.transition_rows(target));
+        let category_axes = rows.as_ref().map_or_else(Vec::new, |rows| {
+            self.category_axis_motions_for_dataset(id, &previous, rows)
+        });
+        let pie_order = rows
+            .as_ref()
+            .and_then(|rows| self.pie_order_motion_for_dataset(id, &previous, rows));
+        let radar_slots = rows.as_ref().map_or_else(
+            || Some(Vec::new()),
+            |rows| {
+                self.radar_slot_motions_for_dataset(
+                    id,
+                    &previous,
+                    rows,
+                    &category_axes,
+                    radar_source_domains,
+                )
+            },
+        );
+        let radar_shapes = rows.as_ref().map_or_else(
+            || Some(Vec::new()),
+            |rows| {
+                self.radar_shape_motions_for_dataset(
+                    id,
+                    &previous,
+                    rows,
+                    &category_axes,
+                    radar_source_domains,
+                )
+            },
+        );
+        self.general_transitions
+            .retain(|transition| transition.dataset != id);
+        let (Some(radar_slots), Some(radar_shapes)) = (radar_slots, radar_shapes) else {
+            return;
+        };
+        let Some(target) = self.general_dataset(id) else {
+            return;
+        };
+        if target.len() > MAX_GENERAL_TRANSITION_ROWS
+            || target.estimated_bytes() > MAX_GENERAL_TRANSITION_BYTES / 2
+        {
+            return;
+        }
+        let Some(rows) = rows else {
+            return;
+        };
+        if rows.len() > MAX_GENERAL_TRANSITION_ROWS {
+            return;
+        }
+        if rows.len() > general_series::MAX_GENERAL_PIE_SLICES
+            && self.general_series_iter().any(|series| {
+                series.dataset() == id
+                    && matches!(
+                        series.kind(),
+                        GeneralSeriesKind::Pie
+                            | GeneralSeriesKind::Radar
+                            | GeneralSeriesKind::PolarArea
+                            | GeneralSeriesKind::RadialBar
+                    )
+            })
+        {
+            return;
+        }
+        let retain_source_categories = (!category_axes.is_empty() || pie_order.is_some())
+            && (previous.categories() != target.categories()
+                || previous.heatmap_y_categories() != target.heatmap_y_categories());
+        let mut presentation = if !retain_source_categories
+            && rows.iter().enumerate().all(|(index, row)| {
+                row.target == Some(index)
+                    && row.source.is_none_or(|source| {
+                        previous.y_is_valid(source) == target.y_is_valid(index)
+                            && previous.low_is_valid(source) == target.low_is_valid(index)
+                            && previous.high_is_valid(source) == target.high_is_valid(index)
+                            && previous.x_low_is_valid(source) == target.x_low_is_valid(index)
+                            && previous.x_high_is_valid(source) == target.x_high_is_valid(index)
+                            && previous.size_is_valid(source) == target.size_is_valid(index)
+                    })
+            }) {
+            target.clone()
+        } else {
+            let Some(presentation) = previous.transition_presentation(target, &rows) else {
+                return;
+            };
+            presentation
+        };
+        if presentation.estimated_bytes() > MAX_GENERAL_TRANSITION_BYTES / 2 {
+            return;
+        }
+        let retained_bytes = self
+            .general_transitions
+            .iter()
+            .map(|transition| {
+                transition
+                    .from
+                    .estimated_bytes()
+                    .saturating_add(transition.presentation.estimated_bytes())
+                    .saturating_add(
+                        transition.rows.capacity()
+                            * std::mem::size_of::<general_data::GeneralTransitionRow>(),
+                    )
+                    .saturating_add(
+                        transition.category_axes.capacity()
+                            * std::mem::size_of::<general_axes::CategoryAxisMotion>()
+                            + transition
+                                .category_axes
+                                .iter()
+                                .map(general_axes::CategoryAxisMotion::estimated_bytes)
+                                .sum::<usize>(),
+                    )
+                    .saturating_add(transition.pie_order.as_ref().map_or(0, |motion| {
+                        motion.capacity()
+                            * std::mem::size_of::<Option<general_series::PieOrderRow>>()
+                    }))
+                    .saturating_add(
+                        transition.radar_slots.capacity()
+                            * std::mem::size_of::<general_series::RadarSlotMotion>()
+                            + transition
+                                .radar_slots
+                                .iter()
+                                .map(general_series::RadarSlotMotion::estimated_bytes)
+                                .sum::<usize>(),
+                    )
+                    .saturating_add(
+                        transition.radar_shapes.capacity()
+                            * std::mem::size_of::<general_series::RadarShapeMotion>()
+                            + transition
+                                .radar_shapes
+                                .iter()
+                                .map(general_series::RadarShapeMotion::estimated_bytes)
+                                .sum::<usize>(),
+                    )
+            })
+            .sum::<usize>();
+        if self.general_transitions.len() >= MAX_GENERAL_TRANSITIONS
+            || retained_bytes
+                .saturating_add(previous.estimated_bytes())
+                .saturating_add(presentation.estimated_bytes())
+                .saturating_add(
+                    rows.capacity() * std::mem::size_of::<general_data::GeneralTransitionRow>(),
+                )
+                .saturating_add(
+                    category_axes.capacity()
+                        * std::mem::size_of::<general_axes::CategoryAxisMotion>()
+                        + category_axes
+                            .iter()
+                            .map(general_axes::CategoryAxisMotion::estimated_bytes)
+                            .sum::<usize>(),
+                )
+                .saturating_add(pie_order.as_ref().map_or(0, |motion| {
+                    motion.capacity() * std::mem::size_of::<Option<general_series::PieOrderRow>>()
+                }))
+                .saturating_add(
+                    radar_slots.capacity() * std::mem::size_of::<general_series::RadarSlotMotion>()
+                        + radar_slots
+                            .iter()
+                            .map(general_series::RadarSlotMotion::estimated_bytes)
+                            .sum::<usize>(),
+                )
+                .saturating_add(
+                    radar_shapes.capacity()
+                        * std::mem::size_of::<general_series::RadarShapeMotion>()
+                        + radar_shapes
+                            .iter()
+                            .map(general_series::RadarShapeMotion::estimated_bytes)
+                            .sum::<usize>(),
+                )
+                > MAX_GENERAL_TRANSITION_BYTES
+        {
+            return;
+        }
+        presentation.blend_transition(&previous, target, &rows, 0.0);
+        if category_axes.is_empty()
+            && pie_order.is_none()
+            && presentation.transition_values_match(&previous, target)
+        {
+            return;
+        }
+        self.general_transitions.push(GeneralDatasetTransition {
+            dataset: id,
+            from: previous,
+            presentation,
+            rows,
+            category_axes,
+            pie_order,
+            radar_slots,
+            radar_shapes,
+            started_ms: self.general_transition_time_ms,
+        });
+    }
+
+    pub(crate) fn prune_general_transitions(&mut self) {
+        let bound_datasets = self
+            .general_series_iter()
+            .map(|series| series.dataset())
+            .collect::<Vec<_>>();
+        self.general_transitions
+            .retain(|transition| bound_datasets.contains(&transition.dataset));
     }
 
     #[doc(hidden)]
@@ -2534,6 +2976,8 @@ impl ChartEngine {
         if !store.remove(id) {
             return false;
         }
+        self.general_transitions
+            .retain(|transition| transition.dataset != id);
         if store.is_empty() {
             self.general_data = None;
         }

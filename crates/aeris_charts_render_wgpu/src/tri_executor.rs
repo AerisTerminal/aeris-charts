@@ -436,6 +436,27 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
                 },
             ]);
         }
+        Prim::MeshFill {
+            first_point,
+            point_count,
+            color,
+        } => {
+            let first = *first_point as usize;
+            let Some(end) = first.checked_add(*point_count as usize) else {
+                return;
+            };
+            let Some(mesh) = points.get(first..end) else {
+                return;
+            };
+            if mesh.is_empty()
+                || mesh.len() % 3 != 0
+                || mesh.iter().flatten().any(|value| !value.is_finite())
+            {
+                return;
+            }
+            let color = rgba(*color);
+            out.extend(mesh.iter().map(|pos| TriVertex { pos: *pos, color }));
+        }
         Prim::RoundRect {
             x,
             y,
@@ -496,7 +517,8 @@ pub fn geom_prims_to_tris(
             Prim::Background { .. }
             | Prim::AreaFill { .. }
             | Prim::BandFill { .. }
-            | Prim::BandGradientFill { .. } => {
+            | Prim::BandGradientFill { .. }
+            | Prim::MeshFill { .. } => {
                 geom_prim_to_tris(prim, points, fill);
             }
             _ => geom_prim_to_tris(prim, points, stroke),
@@ -508,6 +530,30 @@ pub fn geom_prims_to_tris(
 mod tests {
     use super::*;
     use aeris_charts_render::color::Color;
+
+    #[test]
+    fn mesh_fill_keeps_one_ordered_triangle_run_and_alpha() {
+        let points = [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+        ];
+        let color = Color::rgba(10, 20, 30, 128);
+        let prim = Prim::MeshFill {
+            first_point: 0,
+            point_count: 6,
+            color,
+        };
+        let mut tris = Vec::new();
+        geom_prim_to_tris(&prim, &points, &mut tris);
+        assert_eq!(tris.len(), 6);
+        assert_eq!(tris[0].pos, points[0]);
+        assert_eq!(tris[5].pos, points[5]);
+        assert!(tris.iter().all(|vertex| vertex.color == rgba(color)));
+    }
     use aeris_charts_render::draw_list::Gradient;
 
     #[test]

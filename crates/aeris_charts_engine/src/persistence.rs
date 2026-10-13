@@ -102,6 +102,8 @@ struct StateV2 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     references: Vec<crate::GeneralReferenceOptions>,
     chart_options: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    general_transition_duration_ms: Option<f64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -112,6 +114,8 @@ struct StateV3 {
     drawings: Vec<DrawingV1>,
     #[serde(default)]
     indicators: Vec<IndicatorV3>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    general_transition_duration_ms: Option<f64>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -178,6 +182,8 @@ struct SeriesV2 {
     connect_missing: bool,
     #[serde(default = "default_general_fill_opacity")]
     fill_opacity: f64,
+    #[serde(default)]
+    polar: crate::GeneralPolarOptions,
     #[serde(default)]
     fill_gradient: Option<[String; 2]>,
     #[serde(default)]
@@ -763,7 +769,7 @@ fn remap_indicator_source(
 }
 
 impl ChartEngine {
-    /// Deterministic JSON of stable chart state. Financial-only charts retain the V1 wire format.
+    /// Deterministic JSON of stable chart state. Plain financial charts retain the V1 wire format.
     pub fn export_state_json(&self) -> Result<String, ChartError> {
         if !self.indicators.is_empty()
             && self
@@ -780,6 +786,7 @@ impl ChartEngine {
             || self.general_dataset_count() != 0
             || self.general_series_count() != 0
             || !self.general_axes(None).is_empty()
+            || self.general_transition_duration_ms > 0.0
         {
             return self.export_state_v2_json();
         }
@@ -842,6 +849,8 @@ impl ChartEngine {
             panes: base.panes,
             drawings: base.drawings,
             indicators,
+            general_transition_duration_ms: (self.general_transition_duration_ms > 0.0)
+                .then_some(self.general_transition_duration_ms),
         })
         .map_err(|error| ChartError::new(ErrorCode::SerializationError, error.to_string()))?;
         if document.len() > PERSISTENCE_MAX_DOCUMENT_BYTES {
@@ -1430,6 +1439,7 @@ impl ChartEngine {
                     interpolation: series.interpolation(),
                     connect_missing: series.connect_missing(),
                     fill_opacity: series.fill_opacity(),
+                    polar: series.polar(),
                     fill_gradient: series.fill_gradient().cloned(),
                     baseline_value: series.baseline_value(),
                     baseline_policy: series.baseline_policy(),
@@ -1470,6 +1480,8 @@ impl ChartEngine {
             series,
             references,
             chart_options: self.options.value().clone(),
+            general_transition_duration_ms: (self.general_transition_duration_ms > 0.0)
+                .then_some(self.general_transition_duration_ms),
         })
         .map_err(|error| ChartError::new(ErrorCode::SerializationError, error.to_string()))?;
         if document.len() > PERSISTENCE_MAX_GENERAL_DOCUMENT_BYTES {
@@ -2125,6 +2137,8 @@ impl ChartEngine {
         self.general_horizontal_domains = crate::domains::HorizontalDomainRegistry::new();
         self.general_axes = crate::general_axes::GeneralAxisRegistry::new();
         self.general_data = None;
+        self.general_transitions.clear();
+        self.general_transition_duration_ms = 0.0;
         self.general_series = None;
         self.drawings = state.drawings;
         self.drawing_anchor_times = state.drawing_anchor_times;
@@ -2246,6 +2260,13 @@ impl ChartEngine {
     }
 
     fn import_state_v3(&mut self, state: StateV3) -> Result<PersistenceRestoreResult, ChartError> {
+        let transition_duration_ms = state.general_transition_duration_ms.unwrap_or(0.0);
+        if !transition_duration_ms.is_finite() || !(0.0..=5_000.0).contains(&transition_duration_ms)
+        {
+            return Err(invalid(
+                "V3 general transition duration must be between 0 and 5000 ms",
+            ));
+        }
         if state.indicators.len() > PERSISTENCE_MAX_INDICATORS {
             return Err(resource("indicator count exceeds the persistence limit"));
         }
@@ -2413,11 +2434,19 @@ impl ChartEngine {
             remapped_outputs.push(outputs);
         }
         self.study_restore_pane_cursor = None;
+        self.general_transition_duration_ms = transition_duration_ms;
         result.schema_version = PERSISTENCE_SCHEMA_VERSION_STUDIES;
         Ok(result)
     }
 
     fn import_state_v2(&mut self, state: StateV2) -> Result<PersistenceRestoreResult, ChartError> {
+        let transition_duration_ms = state.general_transition_duration_ms.unwrap_or(0.0);
+        if !transition_duration_ms.is_finite() || !(0.0..=5_000.0).contains(&transition_duration_ms)
+        {
+            return Err(invalid(
+                "V2 general transition duration must be between 0 and 5000 ms",
+            ));
+        }
         let target_domain = self.pane_horizontal_domain(0);
         let source_has_financial_pane = state
             .panes
@@ -2548,6 +2577,7 @@ impl ChartEngine {
                 interpolation: series.interpolation,
                 connect_missing: series.connect_missing,
                 fill_opacity: series.fill_opacity,
+                polar: series.polar,
                 fill_gradient: series.fill_gradient,
                 baseline_value: series.baseline_value,
                 baseline_policy: series.baseline_policy,
@@ -2589,6 +2619,8 @@ impl ChartEngine {
         self.general_horizontal_domains = staged.general_horizontal_domains;
         self.general_axes = staged.general_axes;
         self.general_data = staged.general_data;
+        self.general_transitions.clear();
+        self.general_transition_duration_ms = transition_duration_ms;
         self.general_dataset_handles_issued = staged.general_dataset_handles_issued;
         self.general_series = staged.general_series;
         self.drawings = staged.drawings;
@@ -2844,6 +2876,7 @@ mod tests {
     #[test]
     fn choppiness_and_atr_bands_v3_round_trip_and_old_layout() {
         let mut chart = settled_chart();
+        chart.set_general_transition_duration_ms(375.0).unwrap();
         let chop = chart.add_choppiness(0, 3).unwrap();
         let bands = chart.add_atr_bands(0, 4, 2.75);
         assert_eq!(bands.len(), 3);
@@ -2858,6 +2891,7 @@ mod tests {
         let document = chart.export_state_json().unwrap();
         let mut restored = settled_chart();
         restored.import_state_json(&document).unwrap();
+        assert_eq!(restored.export_state_json().unwrap(), document);
         let bindings = restored.indicator_bindings();
         assert_eq!(
             bindings[0].kind,
@@ -2898,6 +2932,12 @@ mod tests {
                     .is_err()
             );
         }
+        let mut invalid: serde_json::Value = serde_json::from_str(&document).unwrap();
+        invalid["general_transition_duration_ms"] = serde_json::json!(5_001.0);
+        let mut untouched = settled_chart();
+        let before = untouched.export_state_json().unwrap();
+        assert!(untouched.import_state_json(&invalid.to_string()).is_err());
+        assert_eq!(untouched.export_state_json().unwrap(), before);
 
         // An earlier V3 document with only legacy kind tags still imports unchanged.
         let mut legacy = settled_chart();
@@ -4302,6 +4342,108 @@ mod tests {
     }
 
     #[test]
+    fn v2_pie_polar_options_round_trip_and_reject_invalid_restore_atomically() {
+        let mut source =
+            ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, crate::HorizontalDomain::Polar)
+                .unwrap();
+        let mut angle = crate::GeneralAxisOptions::new(
+            "angle",
+            0,
+            crate::AxisDimension::Angle,
+            crate::GeneralScaleType::AngularCategory,
+        );
+        angle.visible = false;
+        source.add_general_axis(angle).unwrap();
+        let mut radius = crate::GeneralAxisOptions::new(
+            "radius",
+            0,
+            crate::AxisDimension::Radius,
+            crate::GeneralScaleType::RadialLinear,
+        );
+        radius.visible = false;
+        source.add_general_axis(radius).unwrap();
+        let dataset = source
+            .create_general_xy_dataset(crate::GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["A".into(), "B".into()],
+                category_indices: vec![0, 1],
+                y: vec![3.0, 1.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let mut options = crate::GeneralSeriesOptions::pie(0, dataset, "angle", "radius");
+        options.polar.start_angle = 0.25;
+        options.polar.end_angle = 3.5;
+        options.polar.inner_radius = 0.3;
+        options.polar.outer_radius = 0.8;
+        options.polar.pad_angle = 0.04;
+        source.add_general_series(options).unwrap();
+        let radar_data = source
+            .create_general_xy_dataset(crate::GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["North".into(), "East".into(), "South".into(), "West".into()],
+                category_indices: vec![0, 1, 2, 3],
+                y: vec![4.0, 2.0, 3.0, 1.0],
+                y_valid: None,
+            })
+            .unwrap();
+        source
+            .add_general_series(crate::GeneralSeriesOptions::radar(
+                0, radar_data, "angle", "radius",
+            ))
+            .unwrap();
+        let mut polar_area =
+            crate::GeneralSeriesOptions::polar_area(0, radar_data, "angle", "radius");
+        polar_area.polar.inner_radius = 0.1;
+        polar_area.polar.outer_radius = 0.95;
+        polar_area.polar.pad_angle = 0.03;
+        source.add_general_series(polar_area).unwrap();
+        let mut radial_bar =
+            crate::GeneralSeriesOptions::radial_bar(0, radar_data, "angle", "radius");
+        radial_bar.polar.inner_radius = 0.2;
+        radial_bar.polar.outer_radius = 0.85;
+        source.add_general_series(radial_bar).unwrap();
+        let document = source.export_state_json().unwrap();
+        let mut restored =
+            ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, crate::HorizontalDomain::Polar)
+                .unwrap();
+        restored.import_state_json(&document).unwrap();
+        let restored_series = restored.general_series_order(Some(0))[0];
+        let polar = restored.general_series(restored_series).unwrap().polar();
+        assert_eq!(polar.start_angle, 0.25);
+        assert_eq!(polar.end_angle, 3.5);
+        assert_eq!(polar.inner_radius, 0.3);
+        assert_eq!(polar.outer_radius, 0.8);
+        assert_eq!(polar.pad_angle, 0.04);
+        let restored_radar = restored.general_series_order(Some(0))[1];
+        assert_eq!(
+            restored.general_series(restored_radar).unwrap().kind(),
+            crate::GeneralSeriesKind::Radar
+        );
+        assert_eq!(
+            restored.general_axis_effective_domain("radius"),
+            Some(crate::GeneralAxisDomain::Numeric([0.0, 4.0]))
+        );
+        let restored_area = restored.general_series_order(Some(0))[2];
+        let area = restored.general_series(restored_area).unwrap();
+        assert_eq!(area.kind(), crate::GeneralSeriesKind::PolarArea);
+        assert_eq!(area.polar().inner_radius, 0.1);
+        assert_eq!(area.polar().outer_radius, 0.95);
+        assert_eq!(area.polar().pad_angle, 0.03);
+        let restored_bar = restored.general_series_order(Some(0))[3];
+        let bar = restored.general_series(restored_bar).unwrap();
+        assert_eq!(bar.kind(), crate::GeneralSeriesKind::RadialBar);
+        assert_eq!(bar.polar().inner_radius, 0.2);
+        assert_eq!(bar.polar().outer_radius, 0.85);
+
+        let mut invalid: serde_json::Value = serde_json::from_str(&document).unwrap();
+        invalid["series"][0]["polar"]["outer_radius"] = serde_json::json!(0.2);
+        let before = restored.export_state_json().unwrap();
+        assert!(restored.import_state_json(&invalid.to_string()).is_err());
+        assert_eq!(restored.export_state_json().unwrap(), before);
+    }
+
+    #[test]
     fn v2_general_only_round_trip_accepts_fresh_general_first_target() {
         let domain = crate::HorizontalDomain::Category {
             scale: crate::CategoryScaleType::Band,
@@ -4353,13 +4495,36 @@ mod tests {
             .unwrap();
         assert!(chart.set_general_series_visible(line, false));
         assert!(chart.set_general_series_order(Some(0), vec![line, bars]));
+        chart.set_general_transition_duration_ms(240.0).unwrap();
+        chart.set_general_animation_time_ms(1_000.0);
+        chart
+            .replace_general_xy_dataset(
+                dataset,
+                crate::GeneralXyInput::Category {
+                    ids: Some(vec![
+                        crate::GeneralRowId::Text("jan".into()),
+                        crate::GeneralRowId::Text("feb".into()),
+                    ]),
+                    categories: vec!["Jan".into(), "Feb".into()],
+                    category_indices: vec![0, 1],
+                    y: vec![13.0, 19.0],
+                    y_valid: None,
+                },
+            )
+            .unwrap();
+        assert!(chart.general_transition_active());
 
         let document = chart.export_state_json().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&document).unwrap()["general_transition_duration_ms"],
+            serde_json::json!(240.0)
+        );
         let mut restored = ChartEngine::new_with_initial_domain(800.0, 500.0, 1.0, domain).unwrap();
         let old_pane = restored.pane_stable_id(0).unwrap();
         let result = restored.import_state_json(&document).unwrap();
 
         assert_eq!(result.schema_version, 2);
+        assert!(!restored.general_transition_active());
         assert_eq!(restored.export_state_json().unwrap(), document);
         assert_eq!(restored.pane_index_for_id(old_pane), None);
         assert_eq!(restored.pane_horizontal_domain(0), Some(domain));
@@ -4388,6 +4553,40 @@ mod tests {
         assert_eq!(financial_default.export_state_json().unwrap(), document);
         assert!(financial_default.series_entries().is_empty());
         assert!(financial_default.pane_series_ids(0).is_empty());
+    }
+
+    #[test]
+    fn v2_transition_configuration_restores_without_general_data_and_validates_atomically() {
+        let mut source = ChartEngine::new(800.0, 500.0, 1.0);
+        source.set_general_transition_duration_ms(375.0).unwrap();
+        let document = source.export_state_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(value["schema_version"], serde_json::json!(2));
+        assert_eq!(
+            value["general_transition_duration_ms"],
+            serde_json::json!(375.0)
+        );
+
+        let mut target = ChartEngine::new(800.0, 500.0, 1.0);
+        target.import_state_json(&document).unwrap();
+        assert_eq!(target.export_state_json().unwrap(), document);
+        assert!(!target.general_transition_active());
+
+        let before = target.export_state_json().unwrap();
+        let mut invalid = value;
+        invalid["general_transition_duration_ms"] = serde_json::json!(5_001.0);
+        assert!(target.import_state_json(&invalid.to_string()).is_err());
+        assert_eq!(target.export_state_json().unwrap(), before);
+
+        let legacy = ChartEngine::new(800.0, 500.0, 1.0)
+            .export_state_json()
+            .unwrap();
+        let mut configured = ChartEngine::new(800.0, 500.0, 1.0);
+        configured
+            .set_general_transition_duration_ms(375.0)
+            .unwrap();
+        configured.import_state_json(&legacy).unwrap();
+        assert_eq!(configured.export_state_json().unwrap(), legacy);
     }
 
     #[test]

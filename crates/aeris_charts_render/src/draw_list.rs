@@ -247,6 +247,14 @@ pub enum Prim {
         c: [f32; 2],
         color: Color,
     },
+    /// One fill operation over a nonoverlapping triangle mesh in `points[range]`.
+    /// `point_count` is a multiple of three. Executors must blend the mesh as one shape so
+    /// internal triangle edges do not double-apply translucent alpha.
+    MeshFill {
+        first_point: u32,
+        point_count: u32,
+        color: Color,
+    },
     /// Vertical gradient over `rect` (bitmap px) — the reference `layout.background`
     /// `VerticalGradient` painted per pane (pane-widget.ts `_drawBackground` spans the pane's
     /// own bitmap, so a stacked pane each gets the full top→bottom ramp).
