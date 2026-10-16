@@ -8,6 +8,10 @@ The engine is backend-neutral and host-neutral. One canonical state must produce
 
 Source code, tests, and measured release behavior are the implementation truth. This file must change in the same commit whenever the architecture changes.
 
+## Trading held-order boundary
+
+The engine's `Inactive` order status represents a held, non-executable group leg. Its muted token, dashed line, and explicit label distinguish it from a working order in the shared frame across backends. The control cluster omits the cancel cell, and pointer and keyboard input emit neither modify nor cancel intents by default. A host may explicitly opt into those actions through `set_inactive_order_actions_enabled`; switching policy clears any in-progress drag. Broker activation remains host-owned and arrives through the next order snapshot.
+
 ## Data flow
 
 ```text

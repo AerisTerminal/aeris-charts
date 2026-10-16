@@ -167,6 +167,7 @@ pub(crate) fn trading_order_color(
         OrderSide::Sell => style.sell,
     };
     match status {
+        OrderStatus::Inactive => style.inactive,
         OrderStatus::Rejected | OrderStatus::Cancelled | OrderStatus::Expired => style.rejected,
         OrderStatus::PendingSubmit | OrderStatus::PendingModify | OrderStatus::PendingCancel => {
             style.pending
@@ -702,6 +703,13 @@ impl ChartEngine {
         &self,
         order: &crate::WorkingOrder,
     ) -> (TradingControlSegmentKind, String, Color) {
+        if order.status == OrderStatus::Inactive {
+            return (
+                TradingControlSegmentKind::OrderType,
+                "Inactive".to_string(),
+                self.trading_state.style.inactive,
+            );
+        }
         if order.role != OrderRole::Working {
             let (text, color) = self
                 .trading_protection_pnl(order, self.trading_effective_order_price(order))
@@ -743,7 +751,11 @@ impl ChartEngine {
     pub(crate) fn trading_order_cluster_width(&self, order: &crate::WorkingOrder) -> f64 {
         self.trading_quantity_width(&self.trading_order_quantity_text(order))
             + self.trading_value_width(&self.trading_order_detail(order).1)
-            + self.trading_close_width()
+            + if self.trading_order_actionable(order.status) {
+                self.trading_close_width()
+            } else {
+                0.0
+            }
     }
 
     pub(crate) fn trading_position_cluster_width(&self, position: &crate::TradingPosition) -> f64 {
@@ -1016,6 +1028,9 @@ impl ChartEngine {
         order: &crate::WorkingOrder,
         x: f64,
     ) -> crate::TradingHitKind {
+        if !self.trading_order_actionable(order.status) {
+            return crate::TradingHitKind::OrderLine;
+        }
         self.trading_cluster_hit(
             self.trading_marker_start(),
             self.trading_order_cluster_width(order),
@@ -2025,7 +2040,7 @@ impl ChartEngine {
                         // scale with stroke width in every executor, so keeping the hairline also keeps
                         // the hover dashes compact and consistent across DPRs.
                         width: min_line_width,
-                        style: if creating_protection {
+                        style: if order.status == OrderStatus::Inactive || creating_protection {
                             LineStyle::Dashed
                         } else if preview.is_some()
                             || matches!(
@@ -2117,7 +2132,11 @@ impl ChartEngine {
                         },
                     ];
                     let cluster = TradingControlCluster {
-                        segments: &segments,
+                        segments: if self.trading_order_actionable(order.status) {
+                            &segments
+                        } else {
+                            &segments[..2]
+                        },
                         left: main_x,
                         color: base_color,
                         fill: limit_color,

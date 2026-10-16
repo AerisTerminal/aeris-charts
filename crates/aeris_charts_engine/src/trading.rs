@@ -115,6 +115,8 @@ pub enum OrderRole {
 #[serde(rename_all = "snake_case")]
 pub enum OrderStatus {
     PendingSubmit,
+    /// Held by a host-owned group; not executable or actionable by default.
+    Inactive,
     Working,
     PendingModify,
     PartiallyFilled,
@@ -395,6 +397,7 @@ pub struct TradingStyle {
     pub take_profit: Color,
     pub stop_loss: Color,
     pub pending: Color,
+    pub inactive: Color,
     pub rejected: Color,
     pub control: Color,
     pub label: Color,
@@ -434,6 +437,11 @@ impl Default for TradingStyle {
             take_profit: primary,
             stop_loss: negative,
             pending: warning,
+            inactive: Color::rgb(
+                aeris_charts_core::style::DEFAULT_MUTED_FOREGROUND_RGB.0,
+                aeris_charts_core::style::DEFAULT_MUTED_FOREGROUND_RGB.1,
+                aeris_charts_core::style::DEFAULT_MUTED_FOREGROUND_RGB.2,
+            ),
             rejected: Color::rgb(0x78, 0x7b, 0x86),
             control: primary,
             label: Color::rgb(0xff, 0xff, 0xff),
@@ -458,6 +466,7 @@ pub struct TradingStyleOptions {
     pub take_profit: Option<String>,
     pub stop_loss: Option<String>,
     pub pending: Option<String>,
+    pub inactive: Option<String>,
     pub rejected: Option<String>,
     pub control: Option<String>,
     pub label: Option<String>,
@@ -667,6 +676,8 @@ pub(crate) struct TradingState {
     pub round_trips: Vec<TradingRoundTrip>,
     pub host_overlay: HostOverlaySnapshot,
     pub style: TradingStyle,
+    /// Host policy must opt in before a held order can emit modify/cancel intents.
+    pub inactive_order_actions_enabled: bool,
     pub interaction: TradingInteractionState,
     pub feedback_hover: Option<TradingHit>,
     pub feedback_pressed: Option<TradingHit>,
@@ -1031,6 +1042,25 @@ fn validate_unique<'a>(
 }
 
 impl ChartEngine {
+    /// Explicit host policy for held-order modification and cancellation. Disabled by default.
+    pub fn set_inactive_order_actions_enabled(&mut self, enabled: bool) {
+        if self.trading_state.inactive_order_actions_enabled == enabled {
+            return;
+        }
+        self.trading_state.inactive_order_actions_enabled = enabled;
+        self.trading_state.interaction = TradingInteractionState::Idle;
+        self.trading_state.feedback_hover = None;
+        self.trading_state.feedback_pressed = None;
+        self.invalidate_frame_trading();
+        self.invalidate_frame_overlay();
+    }
+
+    pub(crate) fn trading_order_actionable(&self, status: OrderStatus) -> bool {
+        matches!(status, OrderStatus::Working | OrderStatus::PartiallyFilled)
+            || (status == OrderStatus::Inactive
+                && self.trading_state.inactive_order_actions_enabled)
+    }
+
     /// The order or position the trader is working with: the one being dragged, else pressed,
     /// else hovered. It paints above every other trading object so coincident lines never hide
     /// the one under the pointer.
@@ -1419,12 +1449,7 @@ impl ChartEngine {
     }
 
     fn trading_order_drag_preview(&self, order: &WorkingOrder) -> Option<TradingPreview> {
-        if order.role == OrderRole::Working
-            || !matches!(
-                order.status,
-                OrderStatus::Working | OrderStatus::PartiallyFilled
-            )
-        {
+        if order.role == OrderRole::Working || !self.trading_order_actionable(order.status) {
             return None;
         }
         Some(TradingPreview {
@@ -2124,10 +2149,7 @@ impl ChartEngine {
                     return false;
                 };
                 let order = &self.trading_state.orders[index];
-                if !matches!(
-                    order.status,
-                    OrderStatus::Working | OrderStatus::PartiallyFilled
-                ) {
+                if !self.trading_order_actionable(order.status) {
                     return false;
                 }
                 let remaining = (order.quantity - order.filled_quantity).max(0.0);
@@ -2416,6 +2438,7 @@ impl ChartEngine {
             round_trips: snapshot.round_trips,
             host_overlay: prior.host_overlay,
             style: prior.style,
+            inactive_order_actions_enabled: prior.inactive_order_actions_enabled,
             interaction: prior.interaction,
             feedback_hover: prior.feedback_hover,
             feedback_pressed: prior.feedback_pressed,
@@ -2576,6 +2599,7 @@ impl ChartEngine {
         apply!(take_profit);
         apply!(stop_loss);
         apply!(pending);
+        apply!(inactive);
         apply!(rejected);
         apply!(control);
         apply!(label);
@@ -3123,6 +3147,73 @@ mod tests {
             revision: 1,
             annotations: Vec::new(),
         }
+    }
+
+    #[test]
+    fn inactive_order_is_visible_but_neither_draggable_nor_cancellable_by_default() {
+        use aeris_charts_render::draw_list::LineStyle;
+
+        let mut chart = chart_with_market();
+        let mut held = order("held-stop", OrderRole::StopLoss, 99.0);
+        held.status = OrderStatus::Inactive;
+        let id = held.id.clone();
+        chart.update_working_order(held).unwrap();
+        let frame = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
+        assert!(trading.iter().any(|primitive| matches!(
+            primitive,
+            Prim::Text { text, .. } if text == "Inactive"
+        )));
+        assert!(trading.iter().any(|primitive| matches!(
+            primitive,
+            Prim::HLine {
+                style: LineStyle::Dashed,
+                ..
+            }
+        )));
+        let y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 99.0)
+            .unwrap();
+        let (close_x, _) = cancel_center(&mut chart, TradingObjectId::Order(id.clone()));
+        assert!(!matches!(
+            chart.trading_hit_at(close_x, y),
+            Some(TradingHit {
+                kind: TradingHitKind::CancelButton,
+                ..
+            })
+        ));
+        assert_eq!(chart.trading_cursor_at(close_x, y), None);
+        assert!(!chart.trading_activate_at(close_x, y));
+        assert!(!chart.trading_drag_start_at(close_x, y));
+        assert!(!chart.trading_keyboard_start_order(&id));
+        assert!(chart.take_trading_intents().is_empty());
+        assert_eq!(chart.trading_snapshot().orders.len(), 1);
+    }
+
+    #[test]
+    fn held_order_actions_require_explicit_host_policy() {
+        let mut chart = chart_with_market();
+        let mut held = order("held-stop", OrderRole::StopLoss, 99.0);
+        held.status = OrderStatus::Inactive;
+        let id = held.id.clone();
+        chart.update_working_order(held).unwrap();
+        chart.set_inactive_order_actions_enabled(true);
+        let (x, y) = cancel_center(&mut chart, TradingObjectId::Order(id.clone()));
+        assert_eq!(
+            chart.trading_hit_at(x, y).map(|hit| hit.kind),
+            Some(TradingHitKind::CancelButton)
+        );
+        assert!(chart.trading_keyboard_start_order(&id));
+        chart.set_inactive_order_actions_enabled(false);
+        assert!(chart.trading_keyboard_commit().is_none());
+        assert!(chart.take_trading_intents().is_empty());
+        chart.set_inactive_order_actions_enabled(true);
+        assert!(chart.trading_activate_at(x, y));
+        assert_eq!(
+            chart.take_trading_intents()[0].action,
+            TradingIntentAction::CancelOrder
+        );
     }
 
     #[test]
