@@ -39,9 +39,8 @@
   --border-popover-highlight: #ffffffcc;
 
   /* Text */
-  --text-primary: #0a0a0a;
-  --text-default: #0a0a0ad9;
-  --text-secondary: #0a0a0a8c;
+  --text-default: #0a0a0a;
+  --text-secondary: #0a0a0a94;
   --text-muted: #0a0a0a40;
   --text-positive: var(--positive);
   --text-negative: var(--negative);
@@ -51,7 +50,7 @@
      step with --icon / --icon-active: normal text = normal icon colour,
      hover/active text = active icon colour. They are separate tokens on
      purpose, never point one at the other. */
-  --text-interactive: #0a0a0a8c;
+  --text-interactive: #0a0a0a94;
   --text-hover: #0a0a0a;
   --text-active: #0a0a0a;
 
@@ -61,7 +60,7 @@
   --disabled-bg: #0a0a0a0d;
 
   /* Icons — normal and hovered/pressed/selected */
-  --icon: #0a0a0a8c;
+  --icon: #0a0a0a94;
   --icon-active: #0a0a0a;
 
   /* Status — gains / losses, success / failure. Shared with the main platform. */
@@ -166,8 +165,7 @@
   --border-popover-highlight: #ffffff1a;
 
   /* Text */
-  --text-primary: #fafafa;
-  --text-default: #fafafad9;
+  --text-default: #fafafa;
   --text-secondary: #fafafa8c;
   --text-muted: #fafafa40;
   --text-positive: var(--positive);
@@ -260,7 +258,7 @@
 
 html {
   background: var(--surface);
-  color: var(--text-primary);
+  color: var(--text-default);
   font-family: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -270,7 +268,7 @@ body {
   min-height: 100%;
   margin: 0;
   background: var(--surface);
-  color: var(--text-primary);
+  color: var(--text-default);
   font-feature-settings: "rlig" 1, "calt" 1;
 }
 
@@ -342,17 +340,17 @@ input[type="number"] {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-default);
-  color: var(--text-primary);
+  color: var(--text-default);
 }
 
 .nc-muted-surface {
   background: var(--surface-secondary);
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-default);
-  color: var(--text-primary);
+  color: var(--text-default);
 }
 
-.nc-text-primary { color: var(--text-primary); }
+.nc-text-default { color: var(--text-default); }
 .nc-text-muted { color: var(--text-secondary); }
 .nc-text-disabled { color: var(--text-muted); }
 .nc-text-positive,
@@ -390,10 +388,10 @@ input[type="number"] {
 .nc-button--primary:not(:disabled):not([aria-disabled="true"]):active { background: var(--primary-active); }
 .nc-button--primary:disabled,
 .nc-button--primary[aria-disabled="true"] { background: var(--primary-disabled); color: var(--primary-disabled-foreground); }
-.nc-button--outline { background: var(--surface-secondary); border-color: var(--border-secondary); color: var(--text-primary); }
+.nc-button--outline { background: var(--surface-secondary); border-color: var(--border-secondary); color: var(--text-default); }
 .nc-button--outline:not(:disabled):not([aria-disabled="true"]):hover,
 .nc-button--outline:not(:disabled):not([aria-disabled="true"])[aria-expanded="true"] { background: var(--hover-bg); }
-.nc-button--ghost { background: transparent; color: var(--text-primary); }
+.nc-button--ghost { background: transparent; color: var(--text-default); }
 .nc-button--ghost:not(:disabled):not([aria-disabled="true"]):hover,
 .nc-button--ghost:not(:disabled):not([aria-disabled="true"])[aria-expanded="true"] { background: var(--hover-bg); }
 
@@ -403,7 +401,7 @@ input[type="number"] {
   background: var(--surface-secondary);
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-default);
-  color: var(--text-primary);
+  color: var(--text-default);
   outline: none;
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
@@ -435,7 +433,7 @@ input[type="number"] {
   background: var(--nc-tooltip-surface, var(--surface-popover));
   border: 1px solid var(--nc-tooltip-border, var(--border-popover));
   border-radius: var(--radius-default);
-  color: var(--nc-tooltip-foreground, var(--text-primary));
+  color: var(--nc-tooltip-foreground, var(--text-default));
   font-family: var(--nc-tooltip-font-family, -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -457,19 +455,19 @@ input[type="number"] {
   padding: 7px 10px 6px;
   background: color-mix(
     in srgb,
-    var(--nc-tooltip-foreground, var(--text-primary)) 4%,
+    var(--nc-tooltip-foreground, var(--text-default)) 4%,
     var(--nc-tooltip-surface, var(--surface-popover))
   );
-  /* `--border` is primary text at 10%, resolved here over the popover fill. */
+  /* `--border` is default text at 10%, resolved here over the popover fill. */
   border-bottom: 1px solid color-mix(
     in srgb,
-    var(--nc-tooltip-foreground, var(--text-primary)) 10%,
+    var(--nc-tooltip-foreground, var(--text-default)) 10%,
     var(--nc-tooltip-surface, var(--surface-popover))
   );
 }
 
 .aeris_charts-tooltip__timestamp {
-  color: var(--nc-tooltip-foreground, var(--text-primary));
+  color: var(--nc-tooltip-foreground, var(--text-default));
   font-weight: 590 !important;
   white-space: nowrap;
 }
@@ -501,7 +499,7 @@ input[type="number"] {
 }
 
 .aeris_charts-tooltip__value {
-  color: var(--nc-tooltip-foreground, var(--text-primary));
+  color: var(--nc-tooltip-foreground, var(--text-default));
   text-align: right;
   white-space: nowrap;
 }

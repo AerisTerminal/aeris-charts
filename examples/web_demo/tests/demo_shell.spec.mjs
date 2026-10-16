@@ -58,7 +58,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
       return {
         css: {
           surface: token("--surface"),
-          text_primary: token("--text-primary"),
+          text_default: token("--text-default"),
           text_secondary: token("--text-secondary"),
           text_muted: token("--text-muted"),
           primary: token("--primary"),
@@ -91,8 +91,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   const light = await read("light");
   expect(light.css).toEqual({
     surface: "#ffffff",
-    text_primary: "#0a0a0a",
-    text_secondary: "#0a0a0a8c",
+    text_default: "#0a0a0a",
+    text_secondary: "#0a0a0a94",
     text_muted: "#0a0a0a40",
     primary: "#006edd",
     primary_hover_matches: true,
@@ -105,7 +105,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   expect(light.palette).toMatchObject({
     background: "#ffffff",
     foreground: "#0a0a0a",
-    muted_foreground: "#787878",
+    muted_foreground: "#717171",
     primary: "#006edd",
     primary_foreground: "#ffffff",
     primary_hover: "#338be4",
@@ -116,7 +116,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   expect(light.chart).toEqual({
     background: "#ffffff",
     text: "#0a0a0a",
-    muted_text: "#787878",
+    muted_text: "#717171",
     border: "#e6e6e6",
     crosshair: "#0a0a0a26",
     crosshair_label: "#242424",
@@ -127,7 +127,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   const dark = await read("dark");
   expect(dark.css).toEqual({
     surface: "#171717",
-    text_primary: "#fafafa",
+    text_default: "#fafafa",
     text_secondary: "#fafafa8c",
     text_muted: "#fafafa40",
     primary: "#006edd",

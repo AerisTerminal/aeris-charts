@@ -21,7 +21,7 @@
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; overflow: hidden; background: var(--surface); }
   html { -webkit-font-smoothing: antialiased; }
-  body { color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif; font-size: 13px; }
+  body { color: var(--text-default); font-family: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif; font-size: 13px; }
   button, input, select { font: inherit; }
   button { cursor: pointer; }
   button:disabled { color: var(--text-muted); cursor: default; }
@@ -40,7 +40,7 @@
   .lab-title { margin-top: 2px; color: var(--text-secondary); font-size: 11px; }
   #demo_mode_switch { display: flex; gap: 2px; padding: 3px; background: var(--surface-secondary); border: 1px solid var(--border); border-radius: 9px; }
   #demo_mode_switch button { height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 11px; font-weight: 600; }
-  #demo_mode_switch button:hover { background: var(--hover-bg); color: var(--text-primary); }
+  #demo_mode_switch button:hover { background: var(--hover-bg); color: var(--text-default); }
   #demo_mode_switch button[aria-pressed="true"] { background: var(--surface); color: var(--demo-accent-text); box-shadow: 0 0 0 1px var(--border-secondary); }
   .market-summary { display: flex; align-items: center; gap: 10px; min-width: 0; padding-left: 16px; border-left: 1px solid var(--border); }
   .market-symbol { font-size: 13px; font-weight: 600; white-space: nowrap; }
@@ -48,7 +48,7 @@
   .market-price { min-width: 48px; color: var(--demo-bullish-text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .market-price[data-direction="down"] { color: var(--demo-bearish-text); }
   #comparison_controls { display: flex; gap: 6px; align-items: center; margin-left: auto; }
-  #comparison_controls select, #comparison_controls button { height: 40px; color: var(--text-primary); background: var(--surface-secondary); border: 1px solid var(--border-secondary); border-radius: var(--radius-compact); }
+  #comparison_controls select, #comparison_controls button { height: 40px; color: var(--text-default); background: var(--surface-secondary); border: 1px solid var(--border-secondary); border-radius: var(--radius-compact); }
   #comparison_controls select { max-width: 148px; padding: 0 8px; font-size: 12px; }
   #comparison_controls button { padding: 0 10px; font-size: 12px; font-weight: 600; }
   #comparison_controls button:hover:not(:disabled) { background: var(--hover-bg); }
@@ -103,10 +103,10 @@
   #inspector .group h2 { flex-basis: 100%; margin: 0 0 6px; font-size: 13px; font-weight: 600; line-height: 1.4; }
   #inspector label { display: flex; flex: 1 1 100%; gap: 8px; align-items: center; min-width: 0; min-height: 40px; color: var(--text-secondary); font-size: 12px; }
   #inspector label[hidden] { display: none; }
-  #inspector label:has(input[type="checkbox"]), #inspector label:has(input[type="radio"]) { flex: 1 1 44%; cursor: pointer; color: var(--text-primary); }
+  #inspector label:has(input[type="checkbox"]), #inspector label:has(input[type="radio"]) { flex: 1 1 44%; cursor: pointer; color: var(--text-default); }
   #inspector label > select, #inspector label > input:not([type="checkbox"]):not([type="radio"]), #inspector label > span:last-child { margin-left: auto; }
   #inspector label > input[type="range"] + span { margin-left: 0; min-width: 20px; text-align: right; }
-  #inspector button, #inspector select, #inspector input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) { min-height: 40px; max-width: 100%; background: var(--surface-secondary); color: var(--text-primary); border: 1px solid var(--border-secondary); border-radius: var(--radius-compact); }
+  #inspector button, #inspector select, #inspector input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) { min-height: 40px; max-width: 100%; background: var(--surface-secondary); color: var(--text-default); border: 1px solid var(--border-secondary); border-radius: var(--radius-compact); }
   #inspector select, #inspector input[type="text"], #inspector input[type="number"] { width: 160px; padding: 6px 8px; }
   #inspector button { min-width: 40px; padding: 8px 12px; font-size: 12px; }
   #inspector button:hover { background: var(--hover-bg); }
@@ -141,7 +141,7 @@
 
   #chart_wrap { grid-column: 2; grid-row: 1; position: relative; min-width: 0; min-height: 0; background: var(--surface); }
   #chart_container { position: absolute; inset: 0; touch-action: none; overscroll-behavior: none; }
-  #legend { position: absolute; top: 12px; left: 12px; z-index: 3; font-size: 12px; color: var(--text-primary); background: color-mix(in srgb, var(--surface) 88%, transparent); padding: 5px 8px; border-radius: var(--radius-small); pointer-events: none; font-variant-numeric: tabular-nums; }
+  #legend { position: absolute; top: 12px; left: 12px; z-index: 3; font-size: 12px; color: var(--text-default); background: color-mix(in srgb, var(--surface) 88%, transparent); padding: 5px 8px; border-radius: var(--radius-small); pointer-events: none; font-variant-numeric: tabular-nums; }
   #mobile_backdrop { display: none; }
   [data-runtime-chrome="hidden"] #wrap { grid-template-rows: minmax(0, 1fr); }
   [data-runtime-chrome="hidden"] #workspace { grid-template-columns: minmax(0, 1fr); }

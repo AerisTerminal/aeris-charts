@@ -709,7 +709,7 @@ test("tooltip presents themed OHLC market data with explicit volume", async ({ p
     { label: "Low", value: target.expected.low },
     { label: "Volume", value: target.expected.volume },
   ]);
-  // Dark `--surface-popover` (#262626) under dark primary text.
+  // Dark `--surface-popover` (#262626) under dark default text.
   expect(content.background).toBe("rgb(38, 38, 38)");
   expect(content.color).toBe("rgb(250, 250, 250)");
   expect(content.borderRadius).toBe("8px");
@@ -934,7 +934,7 @@ test("brushable area keeps ordinary Area data/axes while pane drag is reserved f
   // The custom background is dark, so the tooltip uses the dark popover tokens rather than the
   // host's layout text and scale-border colors.
   expect(count_near(tooltip_clip, [38, 38, 38], 2), "popover surface").toBeGreaterThan(100);
-  expect(count_near(tooltip_clip, [250, 250, 250], 12), "popover primary text").toBeGreaterThan(5);
+  expect(count_near(tooltip_clip, [250, 250, 250], 12), "popover default text").toBeGreaterThan(5);
   expect(count_near(tooltip_clip, [154, 154, 154], 12), "popover muted text").toBeGreaterThan(5);
   expect(count_near(tooltip_clip, [8, 8, 8], 6), "popover border").toBeGreaterThan(10);
   expect(count_near(tooltip_clip, [241, 226, 211], 12), "no layout text color").toBe(0);

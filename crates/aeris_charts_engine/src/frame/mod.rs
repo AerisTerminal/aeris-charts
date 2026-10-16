@@ -158,7 +158,7 @@ impl DeviceBox {
 }
 
 /// Floating-layer chrome for tooltips, from the painted theme's popover tokens: an opaque
-/// `--surface-popover` fill inside a `--border-popover` hairline, `--text-primary` and
+/// `--surface-popover` fill inside a `--border-popover` hairline, `--text-default` and
 /// `--text-secondary` text, and a 1 px `--border-popover-highlight` inner edge that paints above
 /// the content (see [`PopoverTokens::highlight_prim`]).
 pub(crate) struct PopoverTokens {

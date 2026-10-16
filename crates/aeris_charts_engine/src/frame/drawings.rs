@@ -4559,7 +4559,7 @@ const INFO_LINE_ICON_CSS: f64 = 16.0;
 const INFO_LINE_ICON_GAP_CSS: f64 = 12.0;
 
 /// In-chart chrome colors from the design tokens of the painted theme (the package CSS's
-/// `--surface`, `--border`, `--text-primary`, `--text-secondary`, and accent surface), shared by
+/// `--surface`, `--border`, `--text-default`, `--text-secondary`, and accent surface), shared by
 /// the Info Line card and the box annotations.
 struct ChromeTokens {
     surface: Color,

@@ -134,7 +134,7 @@ test("portable design tokens and disabled controls match the brand contract", as
   const brand_tokens = [
     "surface", "surface-secondary", "surface-subtle", "surface-raised", "surface-overlay", "surface-inverse", "surface-popover",
     "border", "border-secondary", "border-subtle", "border-softer", "border-strong", "border-inverse", "border-popover", "border-popover-highlight",
-    "text-primary", "text-default", "text-secondary", "text-muted", "text-positive", "text-negative", "text-danger",
+    "text-default", "text-secondary", "text-muted", "text-positive", "text-negative", "text-danger",
     "text-warning", "text-interactive", "text-hover", "text-active", "hover-bg", "active-bg", "disabled-bg", "icon",
     "icon-active", "positive", "positive-subtle", "negative", "negative-subtle", "warning", "warning-subtle", "indigo",
     "indigo-subtle", "purple", "purple-subtle", "primary", "primary-hover", "primary-active", "primary-disabled",
@@ -146,7 +146,7 @@ test("portable design tokens and disabled controls match the brand contract", as
     "ring-primary", "radius-default", "radius-medium", "radius-small", "radius-large", "radius-compact", "shadow-1",
     "shadow-2", "shadow-3", "shadow-dialog", "bullish", "bearish", "buy-bubble", "sell-bubble",
   ];
-  const retired = ["primary-ring", "ring", "radius-button", "border-width"];
+  const retired = ["primary-ring", "ring", "radius-button", "border-width", "text-primary"];
   const tokens = () => page.evaluate((names) => {
     const style = getComputedStyle(document.documentElement);
     return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(`--${name}`).trim().toLowerCase()]));
@@ -155,7 +155,7 @@ test("portable design tokens and disabled controls match the brand contract", as
   const dark = await tokens();
   expect(Object.values(dark).every(Boolean)).toBe(true);
   expect(dark).toMatchObject({
-    surface: "#171717", border: "#fafafa1a", "text-primary": "#fafafa", "text-secondary": "#fafafa8c",
+    surface: "#171717", border: "#fafafa1a", "text-default": "#fafafa", "text-secondary": "#fafafa8c",
     "text-muted": "#fafafa40", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
     "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
     "button-fill": "#fafafad9", "radius-compact": "6px", "radius-medium": "14px",
@@ -167,7 +167,7 @@ test("portable design tokens and disabled controls match the brand contract", as
   const light = await tokens();
   expect(Object.values(light).every(Boolean)).toBe(true);
   expect(light).toMatchObject({
-    surface: "#ffffff", border: "#0a0a0a1a", "text-primary": "#0a0a0a", "text-secondary": "#0a0a0a8c",
+    surface: "#ffffff", border: "#0a0a0a1a", "text-default": "#0a0a0a", "text-secondary": "#0a0a0a94",
     "text-muted": "#0a0a0a40", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
     "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
     "button-fill": "#0a0a0af2", "radius-compact": "6px", "radius-medium": "14px",

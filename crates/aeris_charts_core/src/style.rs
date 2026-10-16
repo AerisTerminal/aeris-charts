@@ -31,7 +31,8 @@ mod tests {
         assert_eq!(LIGHT_SURFACE_CSS, "#ffffff");
         assert_eq!(LIGHT_FOREGROUND_CSS, "#0a0a0a");
         assert_eq!(LIGHT_MUTED_CSS, "#fafafa");
-        assert_eq!(LIGHT_MUTED_FOREGROUND_CSS, "#787878");
+        // `--text-secondary` (#0a0a0a94) over white; passes 4.5:1 on every light surface.
+        assert_eq!(LIGHT_MUTED_FOREGROUND_CSS, "#717171");
         assert_eq!(LIGHT_PRIMARY_CSS, "#006edd");
         assert_eq!(LIGHT_PRIMARY_FOREGROUND_CSS, "#ffffff");
         assert_eq!(LIGHT_PRIMARY_HOVER_CSS, "#338be4");
