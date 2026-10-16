@@ -3601,7 +3601,8 @@ impl ChartEngine {
 
     /// A line's statistics card: a rounded panel beside the segment's midpoint (right of it,
     /// left of it, or centered per `stats_position`), on the vertical side the line leaves free
-    /// (above a falling line, below a rising one), kept inside the pane.
+    /// (above a falling line, below a rising one), kept inside the pane. It is painted with the
+    /// brushable-area tooltip's popover chrome: same fill, hairline, radius and inner highlight.
     fn build_info_line_prims(
         &self,
         drawing: &Drawing,
@@ -3623,7 +3624,7 @@ impl ChartEngine {
             return;
         }
         let layout = &self.options.get().layout;
-        let card = ChromeTokens::for_theme(self.surface_theme());
+        let popover = self.popover_tokens();
         let size = INFO_LINE_FONT_CSS * vpr;
         let line_height = INFO_LINE_LINE_HEIGHT_CSS * vpr;
         let row_gap = INFO_LINE_ROW_GAP_CSS * vpr;
@@ -3662,15 +3663,19 @@ impl ChartEngine {
         .min(pane_bottom - height)
         .max(pane_top)
         .round();
+        let card = (left as f32, top as f32, width as f32, height as f32);
+        let ratio = hpr.min(vpr);
+        let radius = (aeris_charts_core::style::RADIUS_COMPACT * ratio).round() as f32;
+        let border = aeris_charts_core::style::border_width_device_px(ratio) as f32;
         out.push(Prim::RoundRect {
-            x: left as f32,
-            y: top as f32,
-            w: width as f32,
-            h: height as f32,
-            radii: [(aeris_charts_core::style::RADIUS_DEFAULT * vpr).round() as f32; 4],
-            fill: card.surface,
-            border_width: aeris_charts_core::style::border_width_device_px(vpr) as f32,
-            border_color: card.border,
+            x: card.0,
+            y: card.1,
+            w: card.2,
+            h: card.3,
+            radii: [radius; 4],
+            fill: popover.surface,
+            border_width: border,
+            border_color: popover.border,
         });
         for (index, (kind, text)) in rows.into_iter().enumerate() {
             let center_y =
@@ -3678,7 +3683,7 @@ impl ChartEngine {
             push_info_line_icon(
                 kind,
                 (left + pad_x + icon / 2.0, center_y),
-                card.muted,
+                popover.muted,
                 vpr,
                 out,
                 points,
@@ -3687,7 +3692,7 @@ impl ChartEngine {
                 x: (left + text_inset) as f32,
                 y: center_y as f32,
                 text,
-                color: card.foreground,
+                color: popover.foreground,
                 size: size as f32,
                 family: layout.font_family.clone(),
                 align: TextAlign::Left,
@@ -3695,6 +3700,7 @@ impl ChartEngine {
                 italic: false,
             });
         }
+        out.push(popover.highlight_prim(card, radius, border));
     }
 
     /// One measuring tool: translucent measured area, crisp boundary rules, start→end arrows,
@@ -4558,9 +4564,10 @@ const INFO_LINE_PAD_BOTTOM_CSS: f64 = 7.0;
 const INFO_LINE_ICON_CSS: f64 = 16.0;
 const INFO_LINE_ICON_GAP_CSS: f64 = 12.0;
 
-/// In-chart chrome colors from the design tokens of the painted theme (the package CSS's
-/// `--surface`, `--border`, `--text-default`, `--text-secondary`, and accent surface), shared by
-/// the Info Line card and the box annotations.
+/// On-chart annotation colors from the design tokens of the painted theme (the package CSS's
+/// `--surface`, `--border`, `--text-default`, `--text-secondary`, and accent surface) for the
+/// note, signpost and callout boxes. Floating cards such as the Info Line statistics and the
+/// tooltips use [`super::PopoverTokens`] instead.
 struct ChromeTokens {
     surface: Color,
     accent: Color,

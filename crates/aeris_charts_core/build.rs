@@ -93,6 +93,7 @@ fn main() {
     ));
     for (field, suffix) in [
         ("small", "SMALL"),
+        ("compact", "COMPACT"),
         ("default", "DEFAULT"),
         ("medium", "MEDIUM"),
         ("large", "LARGE"),

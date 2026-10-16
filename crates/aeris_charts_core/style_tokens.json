@@ -3,6 +3,7 @@
   "border_width": 1.0,
   "radius": {
     "small": 4,
+    "compact": 6,
     "default": 8,
     "medium": 14,
     "large": 999

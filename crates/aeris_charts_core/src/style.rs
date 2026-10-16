@@ -25,6 +25,7 @@ mod tests {
         assert_eq!(DEFAULT_THEME_NAME, "dark");
         assert_eq!(BORDER_WIDTH, 1.0);
         assert_eq!(RADIUS_SMALL, 4.0);
+        assert_eq!(RADIUS_COMPACT, 6.0);
         assert_eq!(RADIUS_DEFAULT, 8.0);
         assert_eq!(RADIUS_MEDIUM, 14.0);
         assert_eq!(RADIUS_LARGE, 999.0);

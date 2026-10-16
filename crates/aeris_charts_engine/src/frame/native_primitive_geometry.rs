@@ -351,7 +351,8 @@ impl ChartEngine {
                     positions[0].1.round()
                 };
                 let device = super::DeviceBox::snap(main_x, top, main_width, main_height, hpr, vpr);
-                let radius = (6.0 * hpr.min(vpr)).round() as f32;
+                let radius =
+                    (aeris_charts_core::style::RADIUS_COMPACT * hpr.min(vpr)).round() as f32;
                 let border = aeris_charts_core::style::border_width_device_px(hpr.min(vpr)) as f32;
                 out.push(Prim::RoundRect {
                     x: device.x,

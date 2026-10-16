@@ -7284,31 +7284,81 @@ fn trend_angle_paints_a_dotted_reference_arc_and_signed_angle() {
     assert!((value - expected).abs() <= 0.01, "{label} vs {expected}");
 }
 
+/// A `RoundRect` edged with a popover token, with its paint index in the pane's main list.
+#[derive(Clone, Copy, Debug)]
+struct PopoverRoundRect {
+    index: usize,
+    rect: (f32, f32, f32, f32),
+    radii: [f32; 4],
+    fill: Color,
+    border_width: f32,
+    border_color: Color,
+}
+
+impl PopoverRoundRect {
+    /// Everything but the placement: the chrome two popover boxes must share.
+    fn style(&self) -> ([f32; 4], Color, f32, Color) {
+        (self.radii, self.fill, self.border_width, self.border_color)
+    }
+}
+
+/// Every `RoundRect` painted with `popover`'s box border or highlight edge, in paint order.
+fn popover_round_rects(
+    main: &[Prim],
+    popover: &crate::frame::PopoverTokens,
+) -> Vec<PopoverRoundRect> {
+    main.iter()
+        .enumerate()
+        .filter_map(|(index, prim)| match *prim {
+            Prim::RoundRect {
+                x,
+                y,
+                w,
+                h,
+                radii,
+                fill,
+                border_width,
+                border_color,
+            } if border_color == popover.border || border_color == popover.highlight => {
+                Some(PopoverRoundRect {
+                    index,
+                    rect: (x, y, w, h),
+                    radii,
+                    fill,
+                    border_width,
+                    border_color,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
-fn info_line_paints_one_theme_token_card_with_three_rows() {
-    use aeris_charts_core::style as tokens;
-    let rgb = |(r, g, b): (u8, u8, u8)| Color::rgb(r, g, b);
-    for (theme, surface, border, foreground) in [
-        (
-            crate::ChartTheme::Dark,
-            tokens::DARK_SURFACE_RGB,
-            tokens::DARK_BORDER_RGB,
-            tokens::DARK_FOREGROUND_RGB,
-        ),
-        (
-            crate::ChartTheme::Light,
-            tokens::LIGHT_SURFACE_RGB,
-            tokens::LIGHT_BORDER_RGB,
-            tokens::LIGHT_FOREGROUND_RGB,
-        ),
-    ] {
+fn info_line_paints_one_popover_card_with_three_rows() {
+    for theme in [crate::ChartTheme::Dark, crate::ChartTheme::Light] {
+        let popover = crate::frame::PopoverTokens::for_theme(theme);
         let mut chart = settled_chart();
+        // The delta tooltip is unavailable on candlesticks.
+        chart.series[0].kind = crate::SeriesKind::Area;
         // Hosts may restyle the background without `set_theme`; the card follows the surface.
         if theme == crate::ChartTheme::Light {
             chart
                 .apply_options(r##"{"layout":{"background":{"color":"#ffffff"}}}"##)
                 .unwrap();
         }
+
+        // The brushable-area tooltip's box and highlight are the reference chrome.
+        let delta = chart
+            .add_delta_tooltip(0, crate::DeltaTooltipOptions::default())
+            .unwrap();
+        assert!(chart.delta_tooltip_mouse_down(chart.time_scale.index_to_coordinate(2)));
+        assert!(chart.delta_tooltip_mouse_move(chart.time_scale.index_to_coordinate(7)));
+        assert!(chart.delta_tooltip_mouse_up());
+        let tooltip = popover_round_rects(&chart.build_frame().panes[0].main, &popover);
+        assert_eq!(tooltip.len(), 2, "{theme:?}: {tooltip:?}");
+        assert!(chart.clear_delta_tooltip(delta));
+
         chart
             .add_drawing(
                 DrawingKind::InfoLine,
@@ -7319,28 +7369,60 @@ fn info_line_paints_one_theme_token_card_with_three_rows() {
             .unwrap();
         let frame = chart.build_frame();
         let main = &frame.panes[0].main;
-        // The card is the package tooltip panel: `--surface` fill, 1 px `--border`, 8 px radius.
-        let cards = main
-            .iter()
-            .filter_map(|prim| match *prim {
-                Prim::RoundRect {
-                    x,
-                    y,
-                    w,
-                    h,
-                    radii,
-                    fill,
-                    border_width,
-                    border_color,
-                } if fill == rgb(surface) && border_color == rgb(border) => {
-                    assert_eq!((radii, border_width), ([8.0; 4], 1.0));
-                    Some((x, y, w, h))
+        let chrome = popover_round_rects(main, &popover);
+        assert_eq!(chrome.len(), 2, "{theme:?}: {chrome:?}");
+        let (card, highlight) = (chrome[0], chrome[1]);
+        assert_eq!(
+            card.style(),
+            ([6.0; 4], popover.surface, 1.0, popover.border),
+            "{theme:?}: the card is the opaque popover box"
+        );
+        assert_eq!(
+            highlight.style(),
+            ([5.0; 4], Color::rgba(0, 0, 0, 0), 1.0, popover.highlight),
+            "{theme:?}: the inner highlight edge"
+        );
+        let (cx, cy, cw, ch) = card.rect;
+        assert_eq!(highlight.rect, (cx + 1.0, cy + 1.0, cw - 2.0, ch - 2.0));
+        // Same chrome as the brushable-area tooltip; only the placement differs.
+        assert_eq!(
+            chrome
+                .iter()
+                .map(PopoverRoundRect::style)
+                .collect::<Vec<_>>(),
+            tooltip
+                .iter()
+                .map(PopoverRoundRect::style)
+                .collect::<Vec<_>>(),
+            "{theme:?}"
+        );
+        let (card_index, highlight_index) = (card.index, highlight.index);
+
+        let inside = |x: f32, y: f32| x >= cx && x <= cx + cw && y >= cy && y <= cy + ch;
+        let mut icon_strokes = 0;
+        for (index, prim) in main.iter().enumerate() {
+            match prim {
+                Prim::Polyline {
+                    first_point, color, ..
+                } if {
+                    let [x, y] = frame.panes[0].points[*first_point as usize];
+                    inside(x, y)
+                } =>
+                {
+                    assert_eq!(*color, popover.muted, "{theme:?}: row icons are muted");
+                    assert!(card_index < index && index < highlight_index);
+                    icon_strokes += 1;
                 }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(cards.len(), 1, "{theme:?}: {cards:?}");
-        let (cx, cy, cw, ch) = cards[0];
+                Prim::Text { x, y, .. } if inside(*x, *y) => {
+                    assert!(
+                        card_index < index && index < highlight_index,
+                        "{theme:?}: the highlight paints above the rows"
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert!(icon_strokes > 0);
         let rows = main
             .iter()
             .filter_map(|prim| match prim {
@@ -7351,8 +7433,8 @@ fn info_line_paints_one_theme_token_card_with_three_rows() {
                     color,
                     size,
                     ..
-                } if *x >= cx && *x <= cx + cw && *y >= cy && *y <= cy + ch => {
-                    assert_eq!((*color, *size), (rgb(foreground), 12.0), "{text}");
+                } if inside(*x, *y) => {
+                    assert_eq!((*color, *size), (popover.foreground, 12.0), "{text}");
                     Some(text.as_str())
                 }
                 _ => None,
@@ -8468,11 +8550,16 @@ fn painted_colors_report_what_the_frame_paints_for_unset_options() {
 fn trend_line_stats_card_follows_its_visibility_setting() {
     let mut chart = settled_chart();
     let id = add_trend(&mut chart);
+    // Count the popover box only; its inner highlight edge is a second, unfilled `RoundRect`.
     let cards = |chart: &mut ChartEngine| {
+        let popover = chart.popover_tokens();
         chart.build_frame().panes[0]
             .main
             .iter()
-            .filter(|prim| matches!(prim, Prim::RoundRect { .. }))
+            .filter(|prim| {
+                matches!(prim, Prim::RoundRect { fill, border_color, .. }
+                    if *fill == popover.surface && *border_color == popover.border)
+            })
             .count()
     };
     let baseline = cards(&mut chart);
