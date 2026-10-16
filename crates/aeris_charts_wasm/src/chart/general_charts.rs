@@ -2,14 +2,16 @@
 
 use aeris_charts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
-    DEFAULT_GENERAL_FILL_OPACITY, GeneralAreaBaseline, GeneralAxisDomain, GeneralAxisOptions,
-    GeneralAxisTick, GeneralBrushEndpoint, GeneralBrushRange, GeneralBrushSnapshot,
-    GeneralDatasetId, GeneralHitMode, GeneralInterpolation, GeneralLineStyle,
-    GeneralPaneComposition, GeneralPaneProposal, GeneralPaneReferenceComposition,
-    GeneralPaneSeriesComposition, GeneralPointSymbol, GeneralPolarOptions, GeneralReferenceId,
-    GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId,
-    GeneralSeriesKind, GeneralSeriesOptions, GeneralSeriesProposal, GeneralStackMode,
-    GeneralTooltipSnapshot, GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    DEFAULT_GENERAL_FILL_OPACITY, FlowLink, FlowNode, FunnelStage, GeneralAreaBaseline,
+    GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralBrushEndpoint,
+    GeneralBrushRange, GeneralBrushSnapshot, GeneralDatasetId, GeneralHitMode,
+    GeneralInterpolation, GeneralLayoutElement, GeneralLayoutInput, GeneralLayoutSeriesId,
+    GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GeneralLineStyle, GeneralPaneComposition,
+    GeneralPaneProposal, GeneralPaneReferenceComposition, GeneralPaneSeriesComposition,
+    GeneralPointSymbol, GeneralPolarOptions, GeneralReferenceId, GeneralReferenceOptions,
+    GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId, GeneralSeriesKind,
+    GeneralSeriesOptions, GeneralSeriesProposal, GeneralStackMode, GeneralTooltipSnapshot,
+    GeneralXyInput, HierarchyNode, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use js_sys::{Float64Array, Uint8Array, Uint32Array};
 use serde::Deserialize;
@@ -26,6 +28,50 @@ struct PaneInput {
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+enum LayoutInput {
+    Funnel {
+        stages: Vec<FunnelStage>,
+    },
+    Hierarchy {
+        nodes: Vec<HierarchyNode>,
+    },
+    Flow {
+        nodes: Vec<FlowNode>,
+        links: Vec<FlowLink>,
+    },
+}
+
+impl From<LayoutInput> for GeneralLayoutInput {
+    fn from(input: LayoutInput) -> Self {
+        match input {
+            LayoutInput::Funnel { stages } => Self::Funnel(stages),
+            LayoutInput::Hierarchy { nodes } => Self::Hierarchy(nodes),
+            LayoutInput::Flow { nodes, links } => Self::Flow { nodes, links },
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct LayoutSeriesInput {
+    pane: usize,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+fn layout_kind(kind: &str) -> Option<GeneralLayoutSeriesKind> {
+    match kind {
+        "funnel" => Some(GeneralLayoutSeriesKind::Funnel),
+        "treemap" => Some(GeneralLayoutSeriesKind::Treemap),
+        "sankey" => Some(GeneralLayoutSeriesKind::Sankey),
+        "sunburst" => Some(GeneralLayoutSeriesKind::Sunburst),
+        _ => None,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 enum DomainInput {
     FinancialTime,
     Continuous {
@@ -38,6 +84,7 @@ enum DomainInput {
         scale: CategoryInput,
     },
     Polar,
+    Layout,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -826,6 +873,7 @@ fn horizontal_domain(input: DomainInput) -> HorizontalDomain {
             },
         },
         DomainInput::Polar => HorizontalDomain::Polar,
+        DomainInput::Layout => HorizontalDomain::Layout,
     }
 }
 
@@ -1004,6 +1052,119 @@ fn general_brush_value(snapshot: GeneralBrushSnapshot) -> Value {
 }
 
 impl ChartInner {
+    pub fn add_layout_series_result_json(
+        &mut self,
+        kind: &str,
+        options_json: &str,
+        data_json: &str,
+    ) -> String {
+        let Some(kind) = layout_kind(kind) else {
+            return input_error("unknown layout series kind");
+        };
+        let options = match parse_json::<LayoutSeriesInput>(options_json) {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
+        let input = match parse_json::<LayoutInput>(data_json) {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
+        let dataset = match self.engine.create_general_layout_dataset(input.into()) {
+            Ok(id) => id,
+            Err(error) => return result_error(&error),
+        };
+        let mut series_options = GeneralLayoutSeriesOptions::new(options.pane, dataset, kind);
+        series_options.title = options.title;
+        if let Some(color) = options.color {
+            series_options.color = color;
+        }
+        match self.engine.add_general_layout_series(series_options) {
+            Ok(series) => result_ok(json!({ "series": series.get(), "dataset": dataset.get() })),
+            Err(error) => {
+                let _ = self.engine.remove_general_layout_dataset(dataset);
+                result_error(&error)
+            }
+        }
+    }
+
+    pub fn replace_layout_data_result_json(&mut self, series: u32, data_json: &str) -> String {
+        let Some(series) = GeneralLayoutSeriesId::from_raw(series) else {
+            return input_error("layout series handle is stale");
+        };
+        let Some(options) = self.engine.general_layout_series_options(series) else {
+            return input_error("layout series handle is stale");
+        };
+        let dataset = options.dataset;
+        let input = match parse_json::<LayoutInput>(data_json) {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
+        match self
+            .engine
+            .replace_general_layout_dataset(dataset, input.into())
+        {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn remove_layout_series_result_json(&mut self, series: u32) -> String {
+        let Some(series) = GeneralLayoutSeriesId::from_raw(series) else {
+            return input_error("layout series handle is stale");
+        };
+        let Some(options) = self.engine.general_layout_series_options(series) else {
+            return input_error("layout series handle is stale");
+        };
+        let dataset = options.dataset;
+        if let Err(error) = self.engine.remove_general_layout_series(series) {
+            return result_error(&error);
+        }
+        match self.engine.remove_general_layout_dataset(dataset) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn layout_hit_test_json(&self, pane: usize, x: f64, y: f64) -> String {
+        let Some(hit) = self.engine.general_layout_hit_test(pane, x, y) else {
+            return "null".into();
+        };
+        let Some(options) = self.engine.general_layout_series_options(hit.series) else {
+            return "null".into();
+        };
+        let Some(input) = self.engine.general_layout_dataset(options.dataset) else {
+            return "null".into();
+        };
+        let (id, label, value) = match (input, hit.element) {
+            (GeneralLayoutInput::Funnel(stages), GeneralLayoutElement::Stage) => {
+                let Some(row) = stages.get(hit.row) else {
+                    return "null".into();
+                };
+                (row.id.as_str(), row.label.as_str(), Some(row.value))
+            }
+            (GeneralLayoutInput::Hierarchy(nodes), GeneralLayoutElement::Node) => {
+                let Some(row) = nodes.get(hit.row) else {
+                    return "null".into();
+                };
+                (row.id.as_str(), row.label.as_str(), row.value)
+            }
+            (GeneralLayoutInput::Flow { nodes, .. }, GeneralLayoutElement::Node) => {
+                let Some(row) = nodes.get(hit.row) else {
+                    return "null".into();
+                };
+                (row.id.as_str(), row.label.as_str(), None)
+            }
+            (GeneralLayoutInput::Flow { links, .. }, GeneralLayoutElement::Link) => {
+                let Some(row) = links.get(hit.row) else {
+                    return "null".into();
+                };
+                (row.source.as_str(), row.target.as_str(), Some(row.value))
+            }
+            _ => return "null".into(),
+        };
+        json!({ "series": hit.series.get(), "element": match hit.element { GeneralLayoutElement::Stage => "stage", GeneralLayoutElement::Node => "node", GeneralLayoutElement::Link => "link" }, "row": hit.row, "id": id, "label": label, "value": value, "title": options.title }).to_string()
+    }
+
     pub fn set_general_transition_duration_result_json(&mut self, duration_ms: f64) -> String {
         match self.engine.set_general_transition_duration_ms(duration_ms) {
             Ok(()) => result_ok(Value::Null),
@@ -1606,7 +1767,12 @@ impl ChartInner {
                         high: Vec::new(),
                         high_valid: None,
                     },
-                    (HorizontalDomain::FinancialTime | HorizontalDomain::Polar, _) => {
+                    (
+                        HorizontalDomain::FinancialTime
+                        | HorizontalDomain::Polar
+                        | HorizontalDomain::Layout,
+                        _,
+                    ) => {
                         return input_error(format!(
                             "{kind} requires a continuous, temporal, or category pane"
                         ));
@@ -1691,7 +1857,9 @@ impl ChartInner {
                         value: Vec::new(),
                         value_valid: None,
                     },
-                    HorizontalDomain::FinancialTime | HorizontalDomain::Polar => {
+                    HorizontalDomain::FinancialTime
+                    | HorizontalDomain::Polar
+                    | HorizontalDomain::Layout => {
                         return input_error(
                             "heatmap_grid requires a category, continuous, or temporal pane",
                         );
@@ -3320,6 +3488,10 @@ mod tests {
             HorizontalDomain::Continuous {
                 scale: ContinuousScaleType::SymmetricLog
             }
+        );
+        assert_eq!(
+            parse_initial_horizontal_domain(r#"{"type":"layout"}"#).unwrap(),
+            HorizontalDomain::Layout
         );
         assert_eq!(parse_ids(r#"[1,"row"]"#).unwrap().unwrap().len(), 2);
         assert!(axis_domain(GeneralScaleType::Linear, Some(json!([0.0, 1.0]))).is_some());

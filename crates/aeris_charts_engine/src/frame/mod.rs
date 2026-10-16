@@ -23,8 +23,8 @@ use aeris_charts_core::model::price_range::PriceRange;
 use aeris_charts_core::scale::price_scale_core::{PriceScaleCore, PriceScaleMode};
 use aeris_charts_core::style::{
     AREA_FILL_FAINT_ALPHA, AREA_FILL_STRONG_ALPHA, DEFAULT_BORDER_RGB, DEFAULT_CROSSHAIR_LABEL_RGB,
-    DEFAULT_CROSSHAIR_LINE_RGB, DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB,
-    MARKET_VOLUME_ALPHA,
+    DEFAULT_CROSSHAIR_LINE_ALPHA, DEFAULT_CROSSHAIR_LINE_RGB, DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB,
+    MARKET_UP_RGB, MARKET_VOLUME_ALPHA,
 };
 use aeris_charts_render::bars::{BarItem, BarsParams, build_bars};
 use aeris_charts_render::candles::{CandleItem, CandlesParams, build_candles};
@@ -54,6 +54,11 @@ mod tests;
 mod trading_geometry;
 
 pub(crate) use drawings::stat_label_height;
+#[cfg(test)]
+pub(crate) use footprint_geometry::{
+    DETAIL_ROW_PADDING, HISTOGRAM_ALPHA, ROW_HEIGHT_CAP, SINGLE_IMBALANCE_ALPHA,
+    footprint_stats_table_height,
+};
 
 #[cfg(test)]
 use conflation::{visible_histogram_rows, visible_ohlc};
@@ -112,10 +117,11 @@ const BASELINE_TOP_LINE: Color = UP;
 const BASELINE_BOTTOM_LINE: Color = DOWN;
 /// Aeris default stroke for line, area, and baseline series (CSS px), matching indicator lines.
 pub(crate) const LINE_WIDTH: f64 = 2.0;
-const CROSSHAIR_COLOR: Color = Color::rgb(
+const CROSSHAIR_COLOR: Color = Color::rgba(
     DEFAULT_CROSSHAIR_LINE_RGB.0,
     DEFAULT_CROSSHAIR_LINE_RGB.1,
     DEFAULT_CROSSHAIR_LINE_RGB.2,
+    DEFAULT_CROSSHAIR_LINE_ALPHA,
 );
 const CROSSHAIR_LABEL_BG: Color = Color::rgb(
     DEFAULT_CROSSHAIR_LABEL_RGB.0,
@@ -148,6 +154,76 @@ impl DeviceBox {
             w: (x1 - x0) as f32,
             h: (y1 - y0) as f32,
         }
+    }
+}
+
+/// Floating-layer chrome for tooltips, from the painted theme's popover tokens: an opaque
+/// `--surface-popover` fill inside a `--border-popover` hairline, `--text-primary` and
+/// `--text-secondary` text, and a 1 px `--border-popover-highlight` inner edge that paints above
+/// the content (see [`PopoverTokens::highlight_prim`]).
+pub(crate) struct PopoverTokens {
+    pub(crate) surface: Color,
+    pub(crate) border: Color,
+    pub(crate) highlight: Color,
+    pub(crate) foreground: Color,
+    pub(crate) muted: Color,
+}
+
+impl PopoverTokens {
+    pub(crate) fn for_theme(theme: crate::ChartTheme) -> Self {
+        use aeris_charts_core::style::*;
+        let (surface, border, (hr, hg, hb), alpha, foreground, muted) = match theme {
+            crate::ChartTheme::Light => (
+                LIGHT_POPOVER_SURFACE_RGB,
+                LIGHT_POPOVER_BORDER_RGB,
+                LIGHT_POPOVER_HIGHLIGHT_RGB,
+                LIGHT_POPOVER_HIGHLIGHT_ALPHA,
+                LIGHT_FOREGROUND_RGB,
+                LIGHT_POPOVER_MUTED_FOREGROUND_RGB,
+            ),
+            crate::ChartTheme::Dark => (
+                DARK_POPOVER_SURFACE_RGB,
+                DARK_POPOVER_BORDER_RGB,
+                DARK_POPOVER_HIGHLIGHT_RGB,
+                DARK_POPOVER_HIGHLIGHT_ALPHA,
+                DARK_FOREGROUND_RGB,
+                DARK_POPOVER_MUTED_FOREGROUND_RGB,
+            ),
+        };
+        let rgb = |(r, g, b): (u8, u8, u8)| Color::rgb(r, g, b);
+        Self {
+            surface: rgb(surface),
+            border: rgb(border),
+            highlight: Color::rgba(hr, hg, hb, alpha),
+            foreground: rgb(foreground),
+            muted: rgb(muted),
+        }
+    }
+
+    /// The inner highlight of a popover box drawn at device `(x, y, w, h)` with corner `radius`
+    /// and an outer border `border` device px wide. Push it after the box's content.
+    pub(crate) fn highlight_prim(
+        &self,
+        (x, y, w, h): (f32, f32, f32, f32),
+        radius: f32,
+        border: f32,
+    ) -> Prim {
+        Prim::RoundRect {
+            x: x + border,
+            y: y + border,
+            w: (w - border * 2.0).max(0.0),
+            h: (h - border * 2.0).max(0.0),
+            radii: [(radius - border).max(0.0); 4],
+            fill: Color::rgba(0, 0, 0, 0),
+            border_width: border,
+            border_color: self.highlight,
+        }
+    }
+}
+
+impl ChartEngine {
+    pub(crate) fn popover_tokens(&self) -> PopoverTokens {
+        PopoverTokens::for_theme(self.surface_theme())
     }
 }
 
@@ -2442,6 +2518,7 @@ impl ChartEngine {
             let general_start = out.main.len();
             let general_interaction =
                 self.build_general_series_frame(pi, hpr, vpr, &mut out.main, &mut out.points);
+            self.build_general_layout_series_frame(pi, hpr, vpr, &mut out.main, &mut out.points);
             if out.main.len() != general_start {
                 retained.series_segments[pi].push(FrameSeriesSegment {
                     series_id: None,
@@ -2628,6 +2705,7 @@ impl ChartEngine {
             range: Option<PriceRange>,
             margins: (f64, f64),
             min_move: f64,
+            footprint: FootprintAutoscale,
         }
 
         let n = self.panes.len().max(1);
@@ -2646,6 +2724,9 @@ impl ChartEngine {
         let mut main_marker_margins = vec![(0.0_f64, 0.0_f64); n];
         let mut left_marker_margins = vec![(0.0_f64, 0.0_f64); n];
         let mut overlay_marker_margins = vec![(0.0_f64, 0.0_f64); n];
+        let mut main_footprint = vec![FootprintAutoscale::default(); n];
+        let mut left_footprint = vec![FootprintAutoscale::default(); n];
+        let mut overlay_footprint = vec![FootprintAutoscale::default(); n];
         let mut named: Vec<Vec<NamedAutoscale>> = self
             .panes
             .iter()
@@ -2660,6 +2741,7 @@ impl ChartEngine {
                             range: None,
                             margins: (0.0, 0.0),
                             min_move: self.scale_autoscale_min_move(pane_index, target),
+                            footprint: FootprintAutoscale::default(),
                         }
                     })
                     .collect()
@@ -2701,6 +2783,7 @@ impl ChartEngine {
             if !minimum.is_finite() || !maximum.is_finite() {
                 continue;
             }
+            let mut footprint_layout = None;
             if s.kind == SeriesKind::Footprint {
                 let Some(state) = s.footprint.as_ref() else {
                     continue;
@@ -2713,6 +2796,14 @@ impl ChartEngine {
                     minimum,
                     maximum,
                 );
+                footprint_layout = Some((
+                    stream.options().row_size(),
+                    state.visual.font_size * footprint_geometry::ROW_HEIGHT_CAP,
+                    footprint_geometry::footprint_stats_table_height(
+                        &state.visual,
+                        self.panes[pane_index].height,
+                    ),
+                ));
             }
             let Some(base_value) = self.series_base_value(s.id, from) else {
                 continue;
@@ -2817,6 +2908,31 @@ impl ChartEngine {
                     None => profile_range,
                 });
             }
+            if let Some((row_size, max_row_px, table)) = footprint_layout {
+                let center = (minimum + maximum) / 2.0;
+                let units_per_px = scale
+                    .price_range_to_logical(&PriceRange::new(center, center + row_size), base_value)
+                    .map(|row| (row.max_value() - row.min_value()).abs() / max_row_px)
+                    .filter(|units| units.is_finite())
+                    .unwrap_or(0.0);
+                let reserve = FootprintAutoscale {
+                    table,
+                    units_per_px,
+                };
+                match scale_target {
+                    PriceScaleTarget::Right => main_footprint[pane_index].merge(reserve),
+                    PriceScaleTarget::Left => left_footprint[pane_index].merge(reserve),
+                    PriceScaleTarget::Overlay => overlay_footprint[pane_index].merge(reserve),
+                    PriceScaleTarget::Named(_) => {
+                        if let Some(entry) = named[pane_index]
+                            .iter_mut()
+                            .find(|entry| entry.target == scale_target)
+                        {
+                            entry.footprint.merge(reserve);
+                        }
+                    }
+                }
+            }
             if s.markers_auto_scale {
                 let margins = marker_auto_scale_margins(&s.markers, self.time_scale.bar_spacing());
                 let target = match scale_target {
@@ -2892,7 +3008,7 @@ impl ChartEngine {
                 0.0
             };
             pane.marker_margin_below = if main_auto {
-                main_marker_margins[i].1
+                main_marker_margins[i].1 + main_footprint[i].table
             } else {
                 0.0
             };
@@ -2902,7 +3018,7 @@ impl ChartEngine {
                 0.0
             };
             pane.left_marker_margin_below = if left_auto {
-                left_marker_margins[i].1
+                left_marker_margins[i].1 + left_footprint[i].table
             } else {
                 0.0
             };
@@ -2912,24 +3028,28 @@ impl ChartEngine {
                 0.0
             };
             pane.overlay_marker_margin_below = if overlay_auto {
-                overlay_marker_margins[i].1
+                overlay_marker_margins[i].1 + overlay_footprint[i].table
             } else {
                 0.0
             };
             pane.refresh_internal_margins();
             if main_auto && let Some(range) = main[i].take() {
+                let range = main_footprint[i].expand(range, pane.price_scale.internal_height());
                 pane.price_scale
                     .apply_autoscale_range(Some(range), scale_min_moves[i][0]);
             }
             if left_auto && let Some(range) = left[i].take() {
+                let range = left_footprint[i].expand(range, pane.left_scale.internal_height());
                 pane.left_scale
                     .apply_autoscale_range(Some(range), scale_min_moves[i][1]);
             }
             if overlay_auto && let Some(range) = overlay[i].take() {
-                pane.overlay_scale.apply_autoscale_range(
-                    Some(range.merge(Some(&PriceRange::new(0.0, 0.0)))),
-                    scale_min_moves[i][2],
+                let range = overlay_footprint[i].expand(
+                    range.merge(Some(&PriceRange::new(0.0, 0.0))),
+                    pane.overlay_scale.internal_height(),
                 );
+                pane.overlay_scale
+                    .apply_autoscale_range(Some(range), scale_min_moves[i][2]);
             }
             for autoscale in &mut named[i] {
                 let PriceScaleTarget::Named(id) = autoscale.target else {
@@ -2940,8 +3060,18 @@ impl ChartEngine {
                 };
                 let auto = entry.scale.is_auto_scale();
                 entry.marker_margin_above = if auto { autoscale.margins.0 } else { 0.0 };
-                entry.marker_margin_below = if auto { autoscale.margins.1 } else { 0.0 };
+                entry.marker_margin_below = if auto {
+                    autoscale.margins.1 + autoscale.footprint.table
+                } else {
+                    0.0
+                };
                 if auto && let Some(range) = autoscale.range.take() {
+                    entry
+                        .scale
+                        .set_internal_margins(entry.marker_margin_above, entry.marker_margin_below);
+                    let range = autoscale
+                        .footprint
+                        .expand(range, entry.scale.internal_height());
                     entry
                         .scale
                         .apply_autoscale_range(Some(range), autoscale.min_move);
@@ -2965,5 +3095,33 @@ impl ChartEngine {
             .iter()
             .map(|m| (m.index, m.weight))
             .collect()
+    }
+}
+
+/// What footprint series ask of one autoscaled price scale: room for the pinned statistics table
+/// below the bars, and a minimum logical span per CSS px so a display row never grows taller
+/// than the row-height cap.
+#[derive(Clone, Copy, Default)]
+struct FootprintAutoscale {
+    table: f64,
+    units_per_px: f64,
+}
+
+impl FootprintAutoscale {
+    fn merge(&mut self, other: Self) {
+        self.table = self.table.max(other.table);
+        self.units_per_px = self.units_per_px.max(other.units_per_px);
+    }
+
+    /// Widens `range` symmetrically until the scale's internal height holds no more than the cap
+    /// allows. Scale coordinates span `internal_height - 1` px, as in `logical_to_coordinate`.
+    fn expand(self, range: PriceRange, internal_height: f64) -> PriceRange {
+        let span = range.max_value() - range.min_value();
+        let needed = self.units_per_px * (internal_height - 1.0).max(1.0);
+        if !needed.is_finite() || needed <= span {
+            return range;
+        }
+        let pad = (needed - span) / 2.0;
+        PriceRange::new(range.min_value() - pad, range.max_value() + pad)
     }
 }

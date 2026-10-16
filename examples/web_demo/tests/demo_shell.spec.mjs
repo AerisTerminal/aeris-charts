@@ -72,7 +72,6 @@ test("design tokens and chart theme projections match the supplied light/dark pa
             === resolvedColor(`color-mix(in srgb, var(--primary) ${name === "dark" ? "22%" : "12%"}, var(--surface))`),
           primary_foreground: token("--primary-foreground"),
           button_fill: token("--button-fill"),
-          border_width: token("--border-width"),
         },
         palette: theme_palette(name),
         chart: {
@@ -92,73 +91,71 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   const light = await read("light");
   expect(light.css).toEqual({
     surface: "#ffffff",
-    text_primary: "#222222",
-    text_secondary: "#646465",
-    text_muted: "#c2c2c2",
+    text_primary: "#0a0a0a",
+    text_secondary: "#0a0a0a8c",
+    text_muted: "#0a0a0a40",
     primary: "#006edd",
     primary_hover_matches: true,
     primary_disabled_matches: true,
     primary_disabled_foreground_matches: true,
     primary_subtle_matches: true,
     primary_foreground: "#ffffff",
-    button_fill: "#333333",
-    border_width: "0.5px",
+    button_fill: "#0a0a0af2",
   });
   expect(light.palette).toMatchObject({
     background: "#ffffff",
-    foreground: "#222222",
-    muted_foreground: "#646465",
+    foreground: "#0a0a0a",
+    muted_foreground: "#787878",
     primary: "#006edd",
     primary_foreground: "#ffffff",
     primary_hover: "#338be4",
-    border: "#e5e5e5",
+    border: "#e6e6e6",
     bullish: "#089981",
     bearish: "#f7525f",
   });
   expect(light.chart).toEqual({
     background: "#ffffff",
-    text: "#222222",
-    muted_text: "#646465",
-    border: "#e5e5e5",
-    crosshair: "#4a4a4a",
-    crosshair_label: "#222222",
+    text: "#0a0a0a",
+    muted_text: "#787878",
+    border: "#e6e6e6",
+    crosshair: "#0a0a0a26",
+    crosshair_label: "#242424",
     bullish: "#089981",
     bearish: "#f7525f",
   });
 
   const dark = await read("dark");
   expect(dark.css).toEqual({
-    surface: "#1f1f1f",
-    text_primary: "#f5f5f5",
-    text_secondary: "#c2c2c2",
-    text_muted: "#808080",
+    surface: "#171717",
+    text_primary: "#fafafa",
+    text_secondary: "#fafafa8c",
+    text_muted: "#fafafa40",
     primary: "#006edd",
     primary_hover_matches: true,
     primary_disabled_matches: true,
     primary_disabled_foreground_matches: true,
     primary_subtle_matches: true,
     primary_foreground: "#ffffff",
-    button_fill: "#f5f5f5",
-    border_width: "0.5px",
+    button_fill: "#fafafad9",
   });
   expect(dark.palette).toMatchObject({
-    background: "#1f1f1f",
-    foreground: "#f5f5f5",
-    muted_foreground: "#c2c2c2",
+    background: "#171717",
+    foreground: "#fafafa",
+    muted_foreground: "#949494",
     primary: "#006edd",
     primary_foreground: "#ffffff",
-    primary_hover: "#065eb7",
-    border: "#333333",
+    primary_hover: "#055db5",
+    border: "#2e2e2e",
     bullish: "#089981",
     bearish: "#f7525f",
   });
   expect(dark.chart).toEqual({
-    background: "#1f1f1f",
-    text: "#f5f5f5",
-    muted_text: "#c2c2c2",
-    border: "#333333",
-    crosshair: "#4a4a4a",
-    crosshair_label: "#222222",
+    background: "#171717",
+    text: "#fafafa",
+    muted_text: "#949494",
+    border: "#2e2e2e",
+    crosshair: "#fafafa1a",
+    crosshair_label: "#262626",
     bullish: "#089981",
     bearish: "#f7525f",
   });
@@ -345,6 +342,7 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
       logical,
       price,
       bar_spacing: window.__chart.time_scale().options().bar_spacing,
+      margins: window.__main.price_scale().options().scale_margins,
     };
   });
   await page.locator('#series_grid [data-series-id="footprint"]').click();
@@ -360,7 +358,7 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
       last_value_visible: footprint?.options().last_value_visible,
       countdown_visible: footprint?.options().countdown_visible,
       bars: bars.length,
-      levels: bars[0]?.levels.length ?? 0,
+      levels: bars.map((bar) => bar.levels.length),
       has_stacked: bars.some((bar) => bar.levels.some(
         (level) => level.stacked_ask_imbalance || level.stacked_bid_imbalance,
       )),
@@ -383,10 +381,9 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
     price_line_visible: true,
     last_value_visible: true,
     countdown_visible: true,
-    bars: 12,
-    levels: 11,
+    bars: 30,
     has_stacked: true,
-    spacing: 72,
+    spacing: 104,
     main_visible: false,
     footprint_scale_id: "right",
     main_scale_id: "right",
@@ -398,7 +395,22 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
   expect(state.footprint_y).toBeCloseTo(state.main_y, 10);
   expect(state.footprint_y).toBeCloseTo(state.sma_y, 10);
 
+  // A dense tape: every bar spans many rows, so the preview reads like production order flow.
+  expect(Math.min(...state.levels)).toBeGreaterThanOrEqual(5);
+  expect(state.levels.reduce((sum, count) => sum + count, 0) / state.levels.length).toBeGreaterThan(14);
+
+  await expect(page.locator("#footprint_style")).toBeVisible();
+  const footprint_style = () => page.evaluate(() => {
+    const options = window.__chart.series_order().find((series) => series.series_type() === "footprint").options();
+    return { cell_mode: options.cell_mode, show_bar_summary: options.show_bar_summary, ask: options.ask_color };
+  });
+  expect(await footprint_style()).toEqual({ cell_mode: "bid_ask", show_bar_summary: true, ask: "#006edd" });
+  await page.locator("#footprint_cell_mode").selectOption("volume_ladder");
+  await page.locator("#footprint_stats").uncheck();
+  expect(await footprint_style()).toEqual({ cell_mode: "volume_ladder", show_bar_summary: false, ask: "#006edd" });
+
   await page.locator('#series_grid [data-series-id="footprint"]').click();
+  await expect(page.locator("#footprint_style")).toBeHidden();
   const restored = await page.evaluate((drawing_id) => {
     const drawing = window.__chart.drawings().find((item) => item.id === drawing_id);
     return {
@@ -408,6 +420,7 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
       drawing_points: drawing?.points(),
       sma_scale_id: window.__footprint_sma.price_scale_id(),
       spacing: window.__chart.time_scale().options().bar_spacing,
+      margins: window.__main.price_scale().options().scale_margins,
     };
   }, anchor.drawing_id);
   expect(restored).toEqual({
@@ -417,7 +430,15 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
     drawing_points: [{ logical: anchor.logical, price: anchor.price }],
     sma_scale_id: "right",
     spacing: anchor.bar_spacing,
+    margins: anchor.margins,
   });
+});
+
+test("a URL-opened footprint shows its own style controls", async ({ page }) => {
+  await open_demo(page, "/?backend=canvas2d&forceFallbackAdapter=1&feature=footprint");
+  expect(await page.evaluate(() => window.__demo_catalogs.series.active_id())).toBe("footprint");
+  await expect(page.locator("#footprint_style")).toBeVisible();
+  await expect(page.locator("#candle_style")).toBeHidden();
 });
 
 test("every feature-lab card activates through its real public API wiring", async ({ page }) => {

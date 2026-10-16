@@ -318,10 +318,11 @@ test("transparent rounded tooltip keeps its outlined interior clear", async ({ b
         autoSize: false,
         backend: requested_backend,
         __force_webgpu_fallback_adapter: true,
-        layout: { background: { type: "solid", color: "rgba(255,255,255,0)" } },
+        // A transparent dark background selects the dark popover over the white host.
+        layout: { background: { type: "solid", color: "rgba(0,0,0,0)" } },
         grid: { vertLines: { visible: false }, horzLines: { visible: false } },
         leftPriceScale: { visible: false },
-        rightPriceScale: { visible: false, borderColor: "#ff00ff" },
+        rightPriceScale: { visible: false },
         timeScale: { visible: false },
       });
       chart.resize(320, 180, 2);
@@ -344,10 +345,9 @@ test("transparent rounded tooltip keeps its outlined interior clear", async ({ b
     await page.mouse.up();
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const png = PNG.sync.read(await page.locator("#round-rect-host").screenshot());
-    const is_border = (x, y) => {
-      const offset = (y * png.width + x) * 4;
-      return png.data[offset] > 240 && png.data[offset + 1] < 30 && png.data[offset + 2] > 240;
-    };
+    const pixel = (x, y) => Array.from(png.data.subarray((y * png.width + x) * 4, (y * png.width + x) * 4 + 3));
+    // Dark `--border-popover` (#080808); nothing else on this chart is that dark.
+    const is_border = (x, y) => pixel(x, y).every((channel) => channel < 20);
     let top = null;
     for (let y = 0; y < 150 && top === null; y += 1) {
       for (let x = 0; x < png.width - 50; x += 1) {
@@ -358,9 +358,13 @@ test("transparent rounded tooltip keeps its outlined interior clear", async ({ b
       }
     }
     expect(top, `${geometry.backend} must paint the tooltip border`).not.toBe(null);
-    for (let dy = 7; dy < 17; dy += 1) {
+    // Rows 0-1 are the 1px border and rows 2-3 the transparent-filled highlight outline at DPR 2.
+    // The strip below them and above the text must be the plain #262626 popover surface: a
+    // border or highlight that floods its interior would darken or lighten it.
+    for (let dy = 5; dy < 10; dy += 1) {
       for (let dx = 8; dx < 48; dx += 1) {
-        expect(is_border(top.x + dx, top.y + dy), `${geometry.backend} border leaked into tooltip at ${dx},${dy}`).toBe(false);
+        const [r, g, b] = pixel(top.x + dx, top.y + dy);
+        expect(Math.max(Math.abs(r - 38), Math.abs(g - 38), Math.abs(b - 38)), `${geometry.backend} outline leaked into tooltip at ${dx},${dy}`).toBeLessThanOrEqual(3);
       }
     }
   }

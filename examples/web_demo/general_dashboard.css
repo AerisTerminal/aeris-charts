@@ -45,7 +45,7 @@
 #general_workspace .general-runtime-badge {
   align-self: center;
   padding: 8px 10px;
-  border: var(--border-width) solid var(--border-secondary);
+  border: 1px solid var(--border-secondary);
   border-radius: 999px;
   background: var(--surface-secondary);
   color: var(--text-secondary);
@@ -64,7 +64,7 @@
 #general_workspace .general-metric {
   min-width: 0;
   padding: 12px 14px;
-  border: var(--border-width) solid var(--border);
+  border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-secondary);
 }
@@ -99,7 +99,7 @@
 #general_workspace .general-toolbar button {
   min-height: 36px;
   padding: 0 12px;
-  border: var(--border-width) solid var(--border-secondary);
+  border: 1px solid var(--border-secondary);
   border-radius: var(--radius-default);
   background: var(--surface-secondary);
   color: var(--text-primary);
@@ -128,7 +128,7 @@
   min-width: 0;
   overflow: hidden;
   contain: layout paint style;
-  border: var(--border-width) solid var(--border);
+  border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--surface-secondary);
   box-shadow: 0 1px 0 rgba(255,255,255,.025) inset;
@@ -162,7 +162,7 @@
   margin-left: auto;
   flex: 0 0 auto;
   padding: 4px 7px;
-  border: var(--border-width) solid var(--border);
+  border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
   color: var(--text-secondary);
@@ -184,7 +184,7 @@
   align-items: center;
   min-height: 42px;
   padding: 9px 14px;
-  border-top: var(--border-width) solid var(--border);
+  border-top: 1px solid var(--border);
   color: var(--text-secondary);
   font-size: 10px;
 }
@@ -203,7 +203,7 @@
   display: none;
   margin: 0 0 16px;
   padding: 12px 14px;
-  border: var(--border-width) solid color-mix(in srgb, var(--bearish) 40%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--bearish) 40%, var(--border));
   border-radius: 10px;
   background: color-mix(in srgb, var(--bearish) 12%, var(--surface-secondary));
   color: var(--bearish);

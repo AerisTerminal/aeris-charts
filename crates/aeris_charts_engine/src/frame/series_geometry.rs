@@ -983,6 +983,7 @@ impl ChartEngine {
             &items,
             &BarsParams {
                 bar_spacing: self.time_scale.bar_spacing(),
+                default_bar_spacing: self.time_scale.options().bar_spacing,
                 horizontal_pixel_ratio: hpr,
                 vertical_pixel_ratio: vpr,
                 open_visible: rs.open_visible,

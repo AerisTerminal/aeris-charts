@@ -297,7 +297,8 @@ export type horizontal_domain_options =
   | { type: "continuous"; scale?: "linear" | "log" | "symlog" }
   | { type: "temporal" }
   | { type: "category"; scale?: "band" | "point" }
-  | { type: "polar" };
+  | { type: "polar" }
+  | { type: "layout" };
 
 export interface general_pane_options {
   preserve_empty?: boolean;
@@ -307,6 +308,35 @@ export interface general_pane_options {
 /** Creation-time topology for the chart's canonical first pane. */
 export interface initial_pane_options {
   horizontal_domain: horizontal_domain_options;
+}
+
+export type layout_series_kind = "funnel" | "treemap" | "sankey" | "sunburst";
+export type layout_input =
+  | { type: "funnel"; stages: readonly { id: string; label: string; value: number }[] }
+  | { type: "hierarchy"; nodes: readonly { id: string; parent: string | null; label: string; value: number | null }[] }
+  | { type: "flow"; nodes: readonly { id: string; label: string }[]; links: readonly { source: string; target: string; value: number }[] };
+
+export interface layout_series_options {
+  pane: number;
+  title?: string;
+  color?: string;
+}
+
+export interface layout_hit {
+  series: number;
+  element: "stage" | "node" | "link";
+  row: number;
+  id: string;
+  label: string;
+  value: number | null;
+  title: string;
+}
+
+export interface layout_series_api {
+  readonly id: number;
+  readonly kind: layout_series_kind;
+  set_data(data: layout_input): void;
+  remove(): void;
 }
 
 export type axis_dimension = "x" | "y" | "angle" | "radius";
@@ -1923,7 +1953,11 @@ export interface series_options {
   open_visible?: boolean;
   /** Bar: draw the close tick on each bar (default `true`). Set false with `open_visible` false for high-low bars. */
   close_visible?: boolean;
-  /** Bar: draw thin bars when the bar spacing is small (reference `thinBars`, default `true`). */
+  /**
+   * Bar: keep the stroke one pixel wide at every zoom (reference `thinBars`, default `true`).
+   * When `false` the stroke follows the bar spacing, growing at most one CSS pixel past its width
+   * at the configured `bar_spacing` and never beyond 3 CSS pixels.
+   */
   thin_bars?: boolean;
   /**
    * Per-series price formatting (reference `priceFormat`). Built-in types (`"price"`/`"volume"`/
@@ -2005,16 +2039,21 @@ export interface footprint_series_options {
   stacked_imbalance_levels: number;
   /** Row presentation; every mode paints the same stored bars (see docs/footprint.md). */
   cell_mode: "bid_ask" | "total" | "delta" | "profile_in_bar" | "volume_ladder" | "horizontal_imbalance" | "bid_ask_histogram";
+  /** Cell number size in CSS px, 6-48. Defaults to 10. */
   font_size: number;
+  /** Sell-aggressor (bid) hue. Defaults to the order-flow sell token `#d9306a`. */
   bid_color: string;
+  /** Buy-aggressor (ask) hue. Defaults to the order-flow buy token `#006edd`. */
   ask_color: string;
   positive_delta_color: string;
   negative_delta_color: string;
   /** `null` follows the live chart layout foreground. */
   text_color: string | null;
+  /** Point-of-control outline. Defaults to the warning token `#ff6900` in both themes. */
   poc_color: string;
   stacked_bid_color: string;
   stacked_ask_color: string;
+  /** Pin the per-bar Delta, Volume, and Vol/sec table to the pane bottom. Defaults to true. */
   show_bar_summary: boolean;
   /** Merge rows in 1-2-5 steps so cells stay legible at the current zoom. Defaults to false. */
   adaptive_rows?: boolean;
@@ -2430,7 +2469,7 @@ export interface drawing_options {
   color: string;
   /** Stroke width in CSS px (default 2; 1 for a rectangle's border). */
   width: number;
-  /** Stroke style (default `"solid"`). */
+  /** Stroke style (default `"dashed"` for Fibonacci tools, including their levels; `"solid"` otherwise). */
   style: line_style;
   /** Rectangle fill (default `""` = the border color at 20% alpha). Unused by other kinds. */
   fill_color: string;
@@ -3973,6 +4012,10 @@ export interface chart_api {
   /** Add a pane bound to an explicit engine-owned horizontal domain. */
   add_pane(options: general_pane_options): pane_api;
   add_axis(options: general_axis_options): general_axis_api;
+  /** Add an axis-free layout family to a `layout` pane. */
+  add_layout_series(kind: layout_series_kind, options: layout_series_options, data: layout_input): layout_series_api;
+  /** Exact engine-owned mark hit in chart CSS pixels. */
+  layout_hit_test(pane: number, x: number, y: number): layout_hit | null;
   /** Validate a complete proposed pane graph and packed data without mutating the chart. */
   validate_general_pane_proposal(
     pane: number,

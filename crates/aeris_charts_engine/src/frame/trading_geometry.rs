@@ -1399,20 +1399,9 @@ impl ChartEngine {
         });
     }
 
-    /// The chart's own border token, used for chrome that belongs to the surface rather than to a
-    /// traded object.
-    fn trading_chrome_border(&self) -> Color {
-        let options = self.options.get();
-        let fallback = aeris_charts_core::style::DEFAULT_BORDER_RGB;
-        Color::parse_css(&options.right_price_scale.border_color)
-            .or_else(|| Color::parse_css(&options.left_price_scale.border_color))
-            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
-            .solid()
-    }
-
-    /// An action tooltip is chart chrome, not part of the object it describes: it follows the
-    /// active theme's surface, border, and text tokens rather than the order's buy/sell color, so
-    /// it reads the same on every line and in both themes.
+    /// An action tooltip is a floating layer, not part of the object it describes: it uses the
+    /// painted theme's popover tokens rather than the order's buy/sell color, so it reads the same
+    /// on every line and in both themes.
     fn push_trading_tooltip(
         &self,
         out: &mut Vec<Prim>,
@@ -1459,27 +1448,36 @@ impl ChartEngine {
         let (top, bottom, text_y) = self.trading_text_box(y + height / 2.0, height, font_size, vpr);
         let left = (x * hpr).round();
         let right = ((x + width) * hpr).round().max(left + 1.0);
+        let popover = self.popover_tokens();
+        let rect = (
+            left as f32,
+            top as f32,
+            (right - left) as f32,
+            (bottom - top) as f32,
+        );
+        let border = Self::trading_border_width(vpr) as f32;
         out.push(Prim::RoundRect {
-            x: left as f32,
-            y: top as f32,
-            w: (right - left) as f32,
-            h: (bottom - top) as f32,
+            x: rect.0,
+            y: rect.1,
+            w: rect.2,
+            h: rect.3,
             radii: [radius.round(); 4],
-            fill: self.trading_chip_background(),
-            border_width: Self::trading_border_width(vpr) as f32,
-            border_color: self.trading_chrome_border(),
+            fill: popover.surface,
+            border_width: border,
+            border_color: popover.border,
         });
         out.push(Prim::Text {
             x: ((left + right) / 2.0) as f32,
             y: text_y as f32,
             text: text.to_string(),
-            color: self.primary_text_color(),
+            color: popover.foreground,
             size: (font_size * vpr) as f32,
             family: self.options.get().layout.font_family.clone(),
             align: TextAlign::Center,
             weight: 400,
             italic: false,
         });
+        out.push(popover.highlight_prim(rect, radius.round(), border));
     }
 
     /// One execution mark centered on `(x_device, mark.y)`, drawn as open strokes with

@@ -4940,16 +4940,29 @@ mod tests {
                 _ => None,
             })
             .expect("tooltip box");
-        // Chart chrome, not the object's chrome: the box takes the theme's surface and border,
-        // never the position's buy/sell color.
+        // A floating layer, not the object's chrome: the box takes the painted theme's popover
+        // tokens, never the position's buy/sell color, and its highlight edge paints over the text.
         let position_color = chart.trading_position_color(PositionSide::Long);
         assert_ne!(border_color, position_color);
         assert_ne!(fill, position_color.solid());
-        let axis_border =
-            Color::parse_css(&chart.options.get().right_price_scale.border_color).unwrap();
-        assert_eq!(border_color, axis_border.solid());
+        let popover = crate::frame::PopoverTokens::for_theme(chart.surface_theme());
+        assert_eq!((fill, border_color), (popover.surface, popover.border));
+        let text_index = trading
+            .iter()
+            .position(|primitive| {
+                matches!(
+                    primitive,
+                    Prim::Text { text, color, .. }
+                        if text == "Close position" && *color == popover.foreground
+                )
+            })
+            .expect("tooltip text in the popover foreground");
+        assert!(trading[text_index..].iter().any(|primitive| matches!(
+            primitive,
+            Prim::RoundRect { border_color, .. } if *border_color == popover.highlight
+        )));
 
-        // Every outlined chip uses the brand's 0.5 CSS px `--border-width`, snapped like a browser
+        // Every outlined chip uses the canonical 1 CSS px border width, snapped like a browser
         // border: whole device pixels, never below one.
         for vpr in [1.0_f64, 1.5, 2.0, 3.0, 4.0] {
             let hairline = (aeris_charts_core::style::BORDER_WIDTH * vpr)

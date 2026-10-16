@@ -18,11 +18,26 @@ pub struct BarItem {
 #[derive(Clone, Copy, Debug)]
 pub struct BarsParams {
     pub bar_spacing: f64,
+    /// The configured, unzoomed bar spacing. A thick bar's stroke is capped relative to the
+    /// width it has there, so zooming in cannot turn bars into slabs.
+    pub default_bar_spacing: f64,
     pub horizontal_pixel_ratio: f64,
     pub vertical_pixel_ratio: f64,
     pub open_visible: bool,
     pub close_visible: bool,
     pub thin_bars: bool,
+}
+
+/// Widest thick-bar stroke at any zoom, in CSS pixels.
+const MAX_THICK_BAR_STROKE: f64 = 3.0;
+
+/// Device-pixel cap for a thick bar's stroke: its width at the configured bar spacing plus one CSS
+/// pixel, never more than [`MAX_THICK_BAR_STROKE`]. At the default 6px spacing that is 1px at
+/// rest and 2px when zoomed in.
+fn thick_bar_stroke_cap(default_bar_spacing: f64, hpr: f64) -> i32 {
+    let at_rest = optimal_bar_width(default_bar_spacing, 1.0).max(1.0);
+    let cap = (at_rest + 1.0).min(MAX_THICK_BAR_STROKE);
+    ((cap * hpr).floor() as i32).max(1)
 }
 
 pub fn build_bars(items: &[BarItem], params: &BarsParams, out: &mut Vec<Prim>) {
@@ -43,11 +58,12 @@ pub fn build_bars(items: &[BarItem], params: &BarsParams, out: &mut Vec<Prim>) {
         }
     }
 
-    // if the scale is compressed, the bar could become less than 1 CSS pixel
+    // if the scale is compressed, the bar could become less than 1 CSS pixel. Tick length keeps
+    // following `bar_width`; only the stroke is capped.
     let bar_line_width = if params.thin_bars {
         bar_width.min(hpr.floor() as i32)
     } else {
-        bar_width
+        bar_width.min(thick_bar_stroke_cap(params.default_bar_spacing, hpr))
     };
 
     let draw_open_close = bar_line_width <= bar_width && params.bar_spacing >= (1.5 * hpr).floor();
@@ -143,6 +159,7 @@ mod tests {
     fn params(bar_spacing: f64, dpr: f64) -> BarsParams {
         BarsParams {
             bar_spacing,
+            default_bar_spacing: 6.0,
             horizontal_pixel_ratio: dpr,
             vertical_pixel_ratio: dpr,
             open_visible: true,
@@ -235,15 +252,57 @@ mod tests {
     fn thick_bars_when_thin_disabled() {
         let mut p = params(10.0, 1.0);
         p.thin_bars = false;
+        p.default_bar_spacing = 10.0;
         let mut out = Vec::new();
         build_bars(&[bar(100.0)], &p, &mut out);
         let body = rects(&out)[0];
-        // line width = bar width = 3; half = 1
+        // at rest at spacing 10 the stroke is the full bar width 3; half = 1
         assert_eq!(body.x, 99);
         assert_eq!(body.w, 3);
         // body extends by half beyond high/low: top 19, bottom 61 -> h 42
         assert_eq!(body.y, 19);
         assert_eq!(body.h, 42);
+    }
+
+    fn thick_stroke(bar_spacing: f64, default_bar_spacing: f64, dpr: f64) -> i32 {
+        let mut p = params(bar_spacing, dpr);
+        p.thin_bars = false;
+        p.default_bar_spacing = default_bar_spacing;
+        let mut out = Vec::new();
+        build_bars(&[bar(100.0)], &p, &mut out);
+        rects(&out)[0].w
+    }
+
+    #[test]
+    fn thick_bar_stroke_grows_one_pixel_on_zoom_and_never_past_three() {
+        // The default 6px spacing rests at 1px and zooms to at most 2px.
+        assert_eq!(thick_stroke(6.0, 6.0, 1.0), 1);
+        assert_eq!(thick_stroke(10.0, 6.0, 1.0), 2);
+        assert_eq!(thick_stroke(50.0, 6.0, 1.0), 2);
+        assert_eq!(thick_stroke(50.0, 6.0, 2.0), 4, "2 CSS px at DPR 2");
+        // A 2px rest width zooms to at most 3px.
+        assert_eq!(thick_stroke(8.0, 8.0, 2.0), 4);
+        assert_eq!(thick_stroke(50.0, 8.0, 1.0), 3);
+        // Nothing exceeds 3px, whatever the configured spacing.
+        assert_eq!(thick_stroke(50.0, 30.0, 1.0), 3);
+        // Zooming out still thins the stroke below its rest width.
+        assert_eq!(thick_stroke(10.0, 10.0, 1.0), 3);
+        assert_eq!(thick_stroke(6.0, 10.0, 1.0), 1);
+    }
+
+    #[test]
+    fn capped_thick_stroke_keeps_full_tick_length() {
+        let mut p = params(50.0, 1.0);
+        p.thin_bars = false;
+        let mut out = Vec::new();
+        build_bars(&[bar(100.0)], &p, &mut out);
+        let rs = rects(&out);
+        // bar width floor(15) -> 15; ticks reach ceil(15 * 1.5) = 23 px from the center at the
+        // capped 2px thickness
+        assert_eq!(rs[0].w, 2);
+        assert_eq!(rs[1].x, 100 - 23);
+        assert_eq!(rs[1].h, 2);
+        assert_eq!(rs[2].x + rs[2].w - 1, 100 + 23);
     }
 
     #[test]

@@ -197,7 +197,11 @@ impl ChartEngine {
             let Some((first_output, first_series)) = group.first().copied() else {
                 continue;
             };
-            let visible = group.iter().any(|(_, series)| series.visible);
+            // The row's eye follows the whole-study toggle; an output hidden through its own style
+            // only drops its value.
+            let visible = self
+                .external_study_visible(output.study_id)
+                .unwrap_or(false);
             let values = if visible {
                 group
                     .iter()

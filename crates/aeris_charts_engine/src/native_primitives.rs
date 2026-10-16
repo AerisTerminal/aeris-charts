@@ -2229,25 +2229,29 @@ mod tests {
                 Some((*fill, *border_width, *border_color, *radii))
             })
             .collect();
-        assert_eq!(tooltip_boxes.len(), 1, "tooltip must not emit a shadow box");
         assert_eq!(
-            tooltip_boxes[0].0,
-            Color::rgb(
-                aeris_charts_core::style::DEFAULT_SURFACE_RGB.0,
-                aeris_charts_core::style::DEFAULT_SURFACE_RGB.1,
-                aeris_charts_core::style::DEFAULT_SURFACE_RGB.2,
-            )
+            tooltip_boxes.len(),
+            2,
+            "the tooltip is its popover box plus the inner highlight, never a shadow box"
         );
+        let popover = crate::frame::PopoverTokens::for_theme(crate::ChartTheme::Dark);
+        assert_eq!(tooltip_boxes[0].0, popover.surface);
         assert!(tooltip_boxes[0].1 > 0.0);
-        assert_eq!(
-            tooltip_boxes[0].2,
-            Color::rgb(
-                aeris_charts_core::style::DEFAULT_BORDER_RGB.0,
-                aeris_charts_core::style::DEFAULT_BORDER_RGB.1,
-                aeris_charts_core::style::DEFAULT_BORDER_RGB.2,
-            )
-        );
+        assert_eq!(tooltip_boxes[0].2, popover.border);
         assert!(tooltip_boxes[0].3.iter().all(|radius| *radius == 6.0));
+        assert_eq!(tooltip_boxes[1].0, Color::rgba(0, 0, 0, 0));
+        assert_eq!(tooltip_boxes[1].2, popover.highlight);
+        assert!(tooltip_boxes[1].3.iter().all(|radius| *radius == 5.0));
+        assert!(
+            matches!(
+                frame.panes[0].main.iter().rev().find(|primitive| matches!(
+                    primitive,
+                    Prim::RoundRect { .. } | Prim::Text { .. }
+                )),
+                Some(Prim::RoundRect { border_color, .. }) if *border_color == popover.highlight
+            ),
+            "the highlight edge paints above the tooltip text"
+        );
         assert!(frame.panes[0].main.iter().any(|primitive| matches!(
             primitive,
             Prim::Rect { color, .. } if *color == Color::rgba(
@@ -2380,28 +2384,37 @@ mod tests {
             )
             .unwrap();
 
-        let frame = chart.build_frame();
-        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            Prim::RoundRect { fill, border_color, radii, .. }
-                if *fill == Color::rgb(0x11, 0x22, 0x33)
-                    && *border_color == Color::rgb(0x44, 0x55, 0x66)
-                    && radii.iter().all(|radius| *radius == 6.0)
-        )));
-        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            Prim::Text { color, family, size, .. }
-                if *color == Color::rgb(0xdd, 0xee, 0xff)
-                    && family == "Theme Test"
-                    && (*size - 17.0).abs() < f32::EPSILON
-        )));
-        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            Prim::Text { color, family, size, .. }
-                if *color == Color::rgb(0x77, 0x88, 0x99)
-                    && family == "Theme Test"
-                    && (*size - 15.0).abs() < f32::EPSILON
-        )));
+        // A custom dark surface selects the dark popover; fonts still follow the layout options.
+        let assert_popover = |chart: &mut ChartEngine, theme: crate::ChartTheme| {
+            let popover = crate::frame::PopoverTokens::for_theme(theme);
+            let frame = chart.build_frame();
+            assert!(frame.panes[0].main.iter().any(|primitive| matches!(
+                primitive,
+                Prim::RoundRect { fill, border_color, radii, .. }
+                    if *fill == popover.surface
+                        && *border_color == popover.border
+                        && radii.iter().all(|radius| *radius == 6.0)
+            )));
+            assert!(frame.panes[0].main.iter().any(|primitive| matches!(
+                primitive,
+                Prim::Text { color, family, size, .. }
+                    if *color == popover.foreground
+                        && family == "Theme Test"
+                        && (*size - 17.0).abs() < f32::EPSILON
+            )));
+            assert!(frame.panes[0].main.iter().any(|primitive| matches!(
+                primitive,
+                Prim::Text { color, family, size, .. }
+                    if *color == popover.muted
+                        && family == "Theme Test"
+                        && (*size - 15.0).abs() < f32::EPSILON
+            )));
+        };
+        assert_popover(&mut chart, crate::ChartTheme::Dark);
+        chart
+            .apply_options(r##"{ "layout": { "background": { "color": "#f4f4f4" } } }"##)
+            .unwrap();
+        assert_popover(&mut chart, crate::ChartTheme::Light);
         assert!(chart.clear_delta_tooltip(primitive));
     }
 

@@ -230,16 +230,20 @@ test("prim text paints on both backends, is pixel-identical, z-orders, caches, a
   await page.mouse.move(hover_bitmap_x / pixel_ratio, (OVER_ANCHOR.y + 1) / pixel_ratio);
   await settle_frames(page);
   const canvas_hover = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
+  // The crosshair line is a translucent theme token, so probe it as a change against the
+  // unhovered frame rather than by color.
+  const hover_changed = (region) => count_different(
+    crop_png(canvas_attached, region.x, region.y, region.w, region.h),
+    crop_png(canvas_hover, region.x, region.y, region.w, region.h),
+  );
   const line_column = { x: hover_bitmap_x - 1, y: OVER_BAND.y + 2, w: 3, h: OVER_BAND.h - 4 };
-  // This fixture uses the light theme, whose border-derived crosshair raster is near black.
-  const crosshairish = (r, g, b) => r < 80 && g < 80 && b < 80;
   expect(
-    count_pixels(canvas_hover, line_column, crosshairish),
+    hover_changed(line_column),
     "house order: primitive main-layer text paints above the crosshair line (main-layer end)",
   ).toBe(0);
   // Sanity that the crosshair is actually hovering (line visible just below the band).
   const line_below = { x: hover_bitmap_x - 1, y: UNDER_BAND.y + UNDER_BAND.h + 8, w: 3, h: 40 };
-  expect(count_pixels(canvas_hover, line_below, crosshairish)).toBeGreaterThan(0);
+  expect(hover_changed(line_below)).toBeGreaterThan(0);
   // Axis strips are a separate overlay above the pane; in-pane text never reaches them.
   const price_axis_diff = count_different(
     crop_png(canvas_before, pane_width, 0, canvas_before.width - pane_width, pane_height),

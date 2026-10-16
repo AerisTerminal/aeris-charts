@@ -31,6 +31,7 @@ import type {
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
   general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_range, general_brush_snapshot, general_legend_snapshot, general_pane_composition, general_pane_composition_result, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
   general_series_kind, general_series_options, general_shared_tooltip_snapshot, general_tooltip_snapshot, general_update_options, general_xy_row,
+  layout_hit, layout_input, layout_series_api, layout_series_kind, layout_series_options,
   box_plot_row, bubble_columns, bubble_row, category_box_columns, category_error_columns, category_heatmap_columns, category_range_columns, category_xy_columns, numeric_error_columns, numeric_heatmap_columns, numeric_range_columns, numeric_xy_columns,
   error_bar_row, heatmap_grid_row, range_area_row, temporal_error_columns, temporal_heatmap_columns, temporal_range_columns, temporal_xy_columns,
   ingestion_diagnostics,
@@ -59,7 +60,13 @@ import {
   DRAWING_KIND_TO_U8, FEATURE_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8,
   is_feature_series_kind, is_footprint_series_kind,
 } from "./types.js";
-import { default_theme_name, theme_options, theme_palette, type theme_name } from "./theme.js";
+import {
+  default_theme_name,
+  popover_palette,
+  theme_options,
+  theme_palette,
+  type theme_name,
+} from "./theme.js";
 
 // ---------------------------------------------------------------------------------------------
 // Implementation
@@ -7179,6 +7186,11 @@ export class chart_impl implements chart_api {
     return this.wasm.format_time_label(time_to_utc_seconds(value));
   }
 
+  /** Tooltip colors for the theme the engine paints, so DOM and engine tooltips always agree. */
+  popover_palette(): popover_palette {
+    return popover_palette(this.wasm.surface_theme_is_light() ? "light" : "dark");
+  }
+
   /** Install the host price/time formatters (reference `localization`). Callbacks cross into wasm. */
   apply_localization(loc: localization_options): void {
     if (loc.price_formatter !== undefined) this.wasm.set_price_formatter(loc.price_formatter);
@@ -7421,6 +7433,33 @@ export class chart_impl implements chart_api {
     );
     this.repaint();
     return new general_axis_impl(created.id, created.handle_token, this);
+  }
+
+  add_layout_series(kind: layout_series_kind, options: layout_series_options, data: layout_input): layout_series_api {
+    const created = parse_general_result<{ series: number; dataset: number }>(
+      this.wasm.add_layout_series_result_json(kind, JSON.stringify(options), JSON.stringify(data)),
+    );
+    let removed = false;
+    this.repaint();
+    return {
+      id: created.series,
+      kind,
+      set_data: (next: layout_input) => {
+        if (removed) throw new AerisChartsError("invalid_handle", "layout series has been removed");
+        parse_general_result<null>(this.wasm.replace_layout_data_result_json(created.series, JSON.stringify(next)));
+        this.repaint();
+      },
+      remove: () => {
+        if (removed) return;
+        parse_general_result<null>(this.wasm.remove_layout_series_result_json(created.series));
+        removed = true;
+        this.repaint();
+      },
+    };
+  }
+
+  layout_hit_test(pane: number, x: number, y: number): layout_hit | null {
+    return JSON.parse(this.wasm.layout_hit_test_json(pane, x, y)) as layout_hit | null;
   }
 
   validate_general_pane_proposal(

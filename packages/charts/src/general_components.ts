@@ -1,4 +1,5 @@
 /** Browser presentation for engine-owned general chart components. */
+import { chart_impl } from "./impl.js";
 import type {
   chart_api,
   general_axis_api,
@@ -8,6 +9,7 @@ import type {
   mouse_event_params,
   pane_api,
 } from "./types.js";
+import type { popover_palette } from "./theme.js";
 
 export interface general_legend_options {
   pane?: number | pane_api;
@@ -248,10 +250,27 @@ export function create_general_tooltip(
   chart_container: HTMLElement,
   options: general_tooltip_options = {},
 ): general_component_handle {
+  if (!(chart instanceof chart_impl)) {
+    throw new Error("engine-owned general tooltips require a Aeris chart instance");
+  }
   const element = document.createElement("div");
   element.setAttribute("role", "tooltip");
   if (options.lang !== undefined) element.lang = options.lang;
-  element.style.cssText = "position:absolute;z-index:5;display:none;pointer-events:none;max-width:min(280px,100%);max-height:100%;overflow:hidden;overflow-wrap:anywhere;padding:7px 10px;border:1px solid #7778;border-radius:5px;background:var(--aeris-tooltip-background,#171c28);color:var(--aeris-tooltip-color,#fff);font:12px/1.4 system-ui,sans-serif;box-shadow:0 3px 12px #0004";
+  // Floating-layer edge: popover fill and hairline, with the 1px highlight as an inset shadow.
+  // Rows carry no background, so the inset edge stays visible like the stylesheet's overlay.
+  element.style.cssText = "position:absolute;z-index:5;display:none;pointer-events:none;max-width:min(280px,100%);max-height:100%;overflow:hidden;overflow-wrap:anywhere;padding:7px 10px;border:1px solid var(--nc-tooltip-border);border-radius:5px;background:var(--aeris-tooltip-background,var(--nc-tooltip-surface));color:var(--aeris-tooltip-color,var(--nc-tooltip-foreground));font:12px/1.4 system-ui,sans-serif;box-shadow:inset 0 0 0 1px var(--nc-tooltip-highlight)";
+  // Resolved on every show so any theme change, including `reset_style_to_defaults`, is followed.
+  // The palettes are shared constants, so identity detects a theme switch.
+  let popover: popover_palette | null = null;
+  const apply_popover = (): void => {
+    const next = chart.popover_palette();
+    if (next === popover) return;
+    popover = next;
+    element.style.setProperty("--nc-tooltip-surface", next.surface);
+    element.style.setProperty("--nc-tooltip-border", next.border);
+    element.style.setProperty("--nc-tooltip-highlight", next.highlight);
+    element.style.setProperty("--nc-tooltip-foreground", next.foreground);
+  };
   const original_position = chart_container.style.position;
   if (getComputedStyle(chart_container).position === "static") chart_container.style.position = "relative";
   chart_container.appendChild(element);
@@ -286,6 +305,7 @@ export function create_general_tooltip(
       row.textContent = `${item.title}: ${options.format_detail?.(item) ?? tooltip_detail(item, format)}`;
       element.appendChild(row);
     }
+    apply_popover();
     element.style.display = "block";
     const width = chart_container.clientWidth;
     const height = chart_container.clientHeight;

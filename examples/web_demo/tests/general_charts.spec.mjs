@@ -1,6 +1,50 @@
 import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
 
+test("layout families render and return typed exact hits through the public chart API", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const results = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const samples = [
+      ["funnel", { type: "funnel", stages: [{ id: "a", label: "A", value: 3 }, { id: "b", label: "B", value: 2 }], }, "stage"],
+      ["treemap", { type: "hierarchy", nodes: [{ id: "root", parent: null, label: "Root", value: null }, { id: "leaf", parent: "root", label: "Leaf", value: 3 }] }, "node"],
+      ["sankey", { type: "flow", nodes: [{ id: "a", label: "A" }, { id: "b", label: "B" }], links: [{ source: "a", target: "b", value: 3 }] }, "node"],
+      ["sunburst", { type: "hierarchy", nodes: [{ id: "root", parent: null, label: "Root", value: null }, { id: "leaf", parent: "root", label: "Leaf", value: 3 }] }, "node"],
+    ];
+    const out = [];
+    for (const [kind, data, element] of samples) {
+      const host = document.createElement("div");
+      Object.assign(host.style, { width: "400px", height: "300px" });
+      document.body.appendChild(host);
+      const chart = await create_chart(host, { backend: "canvas2d", autoSize: false, initialPane: { horizontal_domain: { type: "layout" } } });
+      try {
+        const series = chart.add_layout_series(kind, { pane: 0, title: kind }, data);
+        let hit = null;
+        for (let y = 10; y < 290 && hit === null; y += 10) {
+          for (let x = 10; x < 390 && hit === null; x += 10) {
+            const candidate = chart.layout_hit_test(0, x, y);
+            if (candidate?.element === element) hit = candidate;
+          }
+        }
+        const populated = hit !== null && hit.series === series.id && hit.title === kind;
+        series.set_data(data);
+        series.remove();
+        out.push({ kind, populated, cleared: chart.layout_hit_test(0, 200, 150) === null });
+      } finally {
+        chart.remove();
+        host.remove();
+      }
+    }
+    return out;
+  });
+  expect(results).toEqual([
+    { kind: "funnel", populated: true, cleared: true },
+    { kind: "treemap", populated: true, cleared: true },
+    { kind: "sankey", populated: true, cleared: true },
+    { kind: "sunburst", populated: true, cleared: true },
+  ]);
+});
+
 test("translucent polar fill has matching interior pixels on Canvas2D and WebGPU", async ({ page, browserName }) => {
   test.skip(browserName !== "chromium", "This backend comparison requires WebGPU");
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
@@ -1105,12 +1149,28 @@ test("radar category entry keeps its first Canvas2D frame and center hit", async
     radar.set_data(rows.slice(0, 3));
     const geometry = chart.panes()[0].get_geometry();
     const center = [geometry.width / 2, geometry.top + geometry.height / 2];
-    const before = chart.take_screenshot().toDataURL();
+    const pixels = (canvas) => canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    const before_canvas = chart.take_screenshot();
+    const before = before_canvas.toDataURL();
     chart.set_general_transition_duration(200);
     radar.set_data(rows);
     const started = performance.now();
     const active = chart.wasm.wants_animation();
-    const initial = chart.take_screenshot().toDataURL();
+    const initial_canvas = chart.take_screenshot();
+    // The start frame carries the entering vertex, so Firefox's path AA can round an edge pixel
+    // differently by 1/255 (measured: one pixel on the dark surface); Chromium matches exactly.
+    const [before_pixels, initial_pixels] = [pixels(before_canvas), pixels(initial_canvas)];
+    let start_diff_pixels = 0;
+    let start_diff_max = 0;
+    for (let i = 0; i < before_pixels.length; i += 4) {
+      let delta = 0;
+      for (let channel = 0; channel < 4; channel += 1) {
+        delta = Math.max(delta, Math.abs(before_pixels[i + channel] - initial_pixels[i + channel]));
+      }
+      if (delta !== 0) start_diff_pixels += 1;
+      start_diff_max = Math.max(start_diff_max, delta);
+    }
+    const same_start = start_diff_max <= 1 && start_diff_pixels <= 4;
     chart.wasm.set_animation_time(started + 100);
     const middle_hit = chart.general_hit_test(0, center[0], center[1])?.series === radar.id;
     const middle = chart.take_screenshot().toDataURL();
@@ -1120,7 +1180,7 @@ test("radar category entry keeps its first Canvas2D frame and center hit", async
     const idle = !chart.wasm.wants_animation();
     chart.remove();
     host.remove();
-    return { active, idle, same_start: before === initial, middle_hit, final_hit, changed_middle: before !== middle, changed_final: middle !== after };
+    return { active, idle, same_start, middle_hit, final_hit, changed_middle: before !== middle, changed_final: middle !== after };
   });
   expect(result).toEqual({
     active: true, idle: true, same_start: true,

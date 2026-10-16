@@ -16723,10 +16723,21 @@ fn bar_open_visible_and_thin_bars_reach_the_builder() {
     assert_eq!(rs.len(), 3 * 5);
     assert!(!rs.iter().any(|r| r.w == 3), "thin bodies stay 1px wide");
 
-    // thinBars: false lets the body take the full optimal width (floor(10 * 0.3) = 3).
+    // thinBars: false follows the zoom, but a stroke that rests at 1px on the default 6px spacing
+    // grows only to 2px, not the full optimal width (floor(10 * 0.3) = 3).
     chart.series[0].thin_bars = false;
     let rs = rects(&mut chart);
-    assert!(rs.iter().any(|r| r.w == 3), "thick bodies reach the frame");
+    assert!(rs.iter().any(|r| r.w == 2), "thick bodies reach the frame");
+    assert!(
+        !rs.iter().any(|r| r.w == 3),
+        "zoom never thickens a bar past one extra pixel"
+    );
+    chart.set_bar_spacing(60.0);
+    let rs = rects(&mut chart);
+    assert!(
+        rs.iter().all(|r| r.w <= 2 || r.h <= 2),
+        "deep zoom keeps the 2px stroke"
+    );
 
     // openVisible: false drops the open tick (body + close only).
     chart.series[0].open_visible = false;

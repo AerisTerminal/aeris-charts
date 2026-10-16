@@ -3942,6 +3942,33 @@ impl AerisChart {
             .add_general_series_result_json(kind, options_json)
     }
 
+    pub fn add_layout_series_result_json(
+        &mut self,
+        kind: &str,
+        options_json: &str,
+        data_json: &str,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .add_layout_series_result_json(kind, options_json, data_json)
+    }
+
+    pub fn replace_layout_data_result_json(&mut self, series: u32, data_json: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .replace_layout_data_result_json(series, data_json)
+    }
+
+    pub fn remove_layout_series_result_json(&mut self, series: u32) -> String {
+        self.inner
+            .borrow_mut()
+            .remove_layout_series_result_json(series)
+    }
+
+    pub fn layout_hit_test_json(&self, pane: usize, x: f64, y: f64) -> String {
+        self.inner.borrow().layout_hit_test_json(pane, x, y)
+    }
+
     pub fn set_general_numeric_data_typed(
         &mut self,
         dataset: u32,
@@ -5150,6 +5177,12 @@ impl AerisChart {
             ChartTheme::Dark
         };
         self.inner.borrow_mut().reset_style_to_defaults(theme);
+    }
+
+    /// Whether the painted chart surface selects the light token theme. DOM tooltips choose
+    /// their popover tokens from it, matching the engine-drawn tooltips.
+    pub fn surface_theme_is_light(&self) -> bool {
+        self.inner.borrow().engine.surface_theme() == ChartTheme::Light
     }
 
     /// Current (deep-merged) chart options as a JSON string.

@@ -98,7 +98,7 @@ data without rebuilding the tape. Every mode is painted by the shared frame (`ce
 
 | Mode | Row presentation |
 | --- | --- |
-| `bid_ask` | Bid and ask halves; volume bars grow outward from the center divider over a faint side track. |
+| `bid_ask` | Bid × Ask numbers against the center divider, with a per-row volume histogram on the right. |
 | `total` | One full-width total-volume bar from the left, tinted by the dominant side. |
 | `delta` | One full-width row diverging from the center by signed delta. |
 | `profile_in_bar` | A volume profile inside the bar: one total-volume bar per row from the left, split into bid, ask, and unclassified segments, with no wash on empty space. |
@@ -106,7 +106,7 @@ data without rebuilding the tape. Every mode is painted by the shared frame (`ce
 | `horizontal_imbalance` | Bid × Ask whose highlights compare bid and ask at the same price, using the configured ratio, minimum, and stack length. |
 | `bid_ask_histogram` | Ask (upper half) and bid (lower half) histogram bars on one left baseline and one shared scale, labeled `bid x ask`. |
 
-All modes keep the same POC outline, range line, LOD rules, and bar summary. The horizontal
+All modes keep the same range strip, POC outline, LOD rules, and statistics table. The horizontal
 imbalance projection is computed per visible bar at frame time; it never rewrites the stored
 diagonal flags, which remain the values returned by `footprint_bar`.
 
@@ -187,31 +187,53 @@ primitives on the bound series' price scale.
 
 ## 4. Rendering and LOD
 
-Footprint geometry is constructed in `aeris_charts_engine` as ordinary backend-neutral primitives.
-Backends preserve the resulting order, clipping, alpha, text alignment, and pixel coordinates; no
-executor recalculates POC, delta, or imbalance.
+Footprint geometry is constructed in `aeris_charts_engine` (`frame/footprint_geometry.rs`) as
+ordinary backend-neutral primitives. Backends preserve the resulting order, clipping, alpha, text
+alignment, and pixel coordinates; no executor recalculates POC, delta, or imbalance.
 
-At readable density, each visible bar paints:
+Each cluster takes 90% of its bar slot. In the numbers-bar modes (`bid_ask`, `volume_ladder`,
+`horizontal_imbalance`) at readable density it paints, left to right:
 
-1. optional delta-tinted bar background;
-2. per-level bid and ask cells (or the selected Total/Delta layout);
-3. POC emphasis;
-4. bid/ask imbalance and stacked-imbalance emphasis;
-5. aligned volume text; and
-6. a bounded two-line bar summary containing final, Max, and Min Delta plus total, bid, and ask
-   volume.
+1. a 3 px range strip: one segment per price row from low to high in the bar-direction color,
+   keeping the cells' row gap so it reads as a dashed staircase rather than a candle. Only rows
+   inside the pane draw;
+2. the `bid × ask` numbers on the bare chart surface, bids right-aligned and asks left-aligned
+   against the center divider. A single imbalance tints its half cell; a stacked run fills it
+   opaquely. Both print bold in the higher-contrast glyph color;
+3. a per-row total-volume histogram on the right (26% of the cell area) in the dominant side's
+   hue, on one baseline and one scale per bar; and
+4. the POC outlined in `poc_color`.
 
-Text uses the chart's resolved font family and centered columns. Colors are resolved before frame
-execution, and the default text color follows live chart-theme changes. Max/Min Delta are visible in
-the summary and queryable even when LOD hides text.
+The other modes keep the strip and POC and replace the numbers and histogram as listed above.
+The sell (bid) side defaults to the order-flow sell token `#d9306a` and the buy (ask) side to the
+order-flow buy token `#006edd` (`order_flow` in `style_tokens.json`). The POC defaults to the
+`warning` token `#ff6900`, which both themes share. Unhighlighted numbers follow the layout
+foreground and retokenize on theme changes. Whole volumes below 100K print
+exactly; larger and fractional volumes use compact forms (`1.5K`, `2.5M`).
 
-LOD is selected from horizontal bar width and vertical tick-row height:
+`show_bar_summary` (default true) pins a statistics table to the pane bottom: Delta, Volume, and
+Vol/sec under every visible bar, with the row labels on the pane's left edge. Delta cells are tinted
+by sign, stronger as |delta| approaches the largest visible delta. Vol/sec divides by the interval
+for a closed time bar, by the elapsed time for the forming bar, and by the first-to-last trade span
+for non-time bars. Autoscale reserves the table height so clusters never sit under it; a pane
+shorter than four table heights omits the table. Max/Min Delta stay queryable through
+`footprint_bar`.
 
-- **Detailed:** bid/ask (or selected mode) text, cells, POC, imbalance, and summary.
-  The two-line summary is omitted while the bar is too narrow to fit it without
-  overprinting neighboring bars (`bar_spacing < 9 × font_size`).
-- **Cells:** colored level cells and POC/stacked emphasis, without glyphs.
-- **Summary:** one delta/volume body plus POC marker per bar.
+Autoscale keeps a stored row at most 1.6 font sizes tall, so a narrow-range bar stays a compact
+column of numbers; a manually scaled axis is left alone. Numbers print at `font_size` (default 10
+CSS px) while a row is at least `1.05 × font_size + 2` px tall. Denser rows shrink the cell text
+down to 8 px before numbers give way to cells. Automatic rows (`ticks_per_row == 0`) instead merge
+stored rows in 1-2-5 steps until the configured size fits.
+
+LOD is selected once per frame from bar spacing and row height, so every cluster shares a layout:
+
+- **Detailed:** bar spacing of at least 48 CSS px and legible rows. Zooming out drops the histogram
+  first, then the numbers, so a printed value is never truncated.
+- **Cells:** bar spacing of at least 8 CSS px and rows of at least 2 device px: the strip, one
+  histogram row per level spanning the cell area (imbalanced rows opaque in the imbalance color),
+  and the POC, without glyphs.
+- **Summary:** one delta-colored range body plus POC marker per bar.
+
 Frame work is bounded to the visible logical range. At the densest zoom, Summary mode is already one
 body and one POC marker per visible bar; hidden text does not enter the draw list or text atlas.
 Every backend therefore receives exactly the same chosen LOD.

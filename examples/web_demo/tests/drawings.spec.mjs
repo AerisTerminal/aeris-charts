@@ -174,6 +174,30 @@ test("expanded drawing catalog paints from the same public API on both browser b
   expect(painted[1] / painted[0]).toBeLessThan(1.2);
 });
 
+test("Fibonacci tools default to dashed strokes and levels, and options override them", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  const result = await page.evaluate(({ l0, l1, p_lo, p_hi }) => {
+    const anchors = [{ logical: l0, price: p_lo }, { logical: l1, price: p_hi }];
+    const styles = (drawing) => {
+      const options = drawing.options();
+      return { style: options.style, levels: [...new Set(options.levels.map((level) => level.style))] };
+    };
+    const fibonacci = window.__chart.add_drawing("fibonacci_retracement", anchors);
+    const trend = window.__chart.add_drawing("trend_line", anchors);
+    const created_solid = window.__chart.add_drawing("fibonacci_retracement", anchors, { style: "solid" });
+    const defaults = { fibonacci: styles(fibonacci), trend: styles(trend), created_solid: styles(created_solid) };
+    fibonacci.apply_options({ style: "dotted" });
+    return { ...defaults, edited: styles(fibonacci) };
+  }, s);
+  expect(result).toEqual({
+    fibonacci: { style: "dashed", levels: ["dashed"] },
+    trend: { style: "solid", levels: [] },
+    created_solid: { style: "solid", levels: ["solid"] },
+    edited: { style: "dotted", levels: ["dotted"] },
+  });
+});
+
 async function overlay_cursor(page) {
   return page.evaluate(() => {
     const canvases = document.querySelectorAll("#chart_container canvas");
@@ -1439,8 +1463,8 @@ test("Ctrl magnets the crosshair to the hovered bar's OHLC", async ({ page }) =>
   // price-snaps on Ctrl).
   await page.evaluate(() => window.__chart.set_drawing_tool("trend_line"));
   // The crosshair's horizontal line is the default crosshair color — find the pane row with
-  // the most of it (the dashed line covers the pane width).
-  const CROSS = [74, 74, 74]; // crosshair line token #4a4a4a
+  // the most of it (the line covers the pane width).
+  const CROSS = [218, 218, 218]; // light --border-strong #0a0a0a26 over the white pane
   const crosshair_row = async () => {
     const png = await capture(page);
     const pane_bottom = Math.round((fixture.css_height - fixture.time_axis_height) * PR);

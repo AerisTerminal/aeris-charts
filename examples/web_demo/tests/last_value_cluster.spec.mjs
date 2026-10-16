@@ -8,7 +8,7 @@ import { PNG } from "pngjs";
 
 const LABEL = [247, 82, 95]; // #f7525f — the deterministic final DOWN bar's label color
 const CHIP = LABEL; // the title chip shares the main label color by default
-const BORDER = [51, 51, 51]; // #333333 - dark axis border
+const BORDER = [46, 46, 46]; // #2e2e2e - dark axis border
 const ROW = 15; // 11px axis text + 2*2 padding (compact price row)
 const ROW_CD = 14; // 10px countdown text + 2*2 padding
 

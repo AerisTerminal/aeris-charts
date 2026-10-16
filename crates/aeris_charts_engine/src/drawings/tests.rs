@@ -666,6 +666,59 @@ fn every_tool_defaults_to_a_one_pixel_line_except_the_highlighter() {
 }
 
 #[test]
+fn fibonacci_tools_default_to_dashed_strokes_and_levels_and_others_to_solid() {
+    let mut chart = settled_chart();
+    let mut fibonacci_tools = 0;
+    for spec in crate::drawings::tools::DRAWING_TOOL_SPECS {
+        let expected = if spec.name.starts_with("fibonacci_") {
+            fibonacci_tools += 1;
+            LineStyle::Dashed
+        } else {
+            LineStyle::Solid
+        };
+        assert_eq!(spec.default_style, expected, "{}", spec.name);
+        let drawing = crate::drawings::Drawing::new(1, spec.kind, 0, Vec::new());
+        assert_eq!(drawing.style, expected, "{}", spec.name);
+        let level_style = if expected == LineStyle::Dashed {
+            "dashed"
+        } else {
+            "solid"
+        };
+        assert!(
+            drawing
+                .levels
+                .iter()
+                .all(|level| level.style == level_style),
+            "{}",
+            spec.name
+        );
+    }
+    assert_eq!(fibonacci_tools, 10);
+
+    // A host-supplied style at creation wins over the tool default.
+    let id = chart
+        .add_drawing(
+            DrawingKind::FibonacciRetracement,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 6.0,
+                    price: 12.0,
+                },
+            ],
+            Some(r#"{"style":"solid"}"#),
+        )
+        .unwrap();
+    let drawing = chart.drawing(id).unwrap();
+    assert_eq!(drawing.style, LineStyle::Solid);
+    assert!(drawing.levels.iter().all(|level| level.style == "solid"));
+}
+
+#[test]
 fn touch_profile_expands_anchor_hits_without_changing_precision_hits() {
     let mut chart = settled_chart();
     let id = add_trend(&mut chart);
@@ -3189,10 +3242,11 @@ fn crosshair_hline_y(chart: &mut ChartEngine) -> Option<i32> {
     frame.panes[0].main.iter().find_map(|prim| match prim {
         Prim::HLine { y, color, .. }
             if *color
-                == Color::rgb(
+                == Color::rgba(
                     aeris_charts_core::style::DEFAULT_CROSSHAIR_RGB.0,
                     aeris_charts_core::style::DEFAULT_CROSSHAIR_RGB.1,
                     aeris_charts_core::style::DEFAULT_CROSSHAIR_RGB.2,
+                    aeris_charts_core::style::DEFAULT_CROSSHAIR_ALPHA,
                 ) =>
         {
             Some(*y)
@@ -4416,25 +4470,28 @@ fn a_level_drawings_line_style_restyles_every_painted_level() {
         .filter(|level| level.visible)
         .count();
     assert!(visible > 0);
-    assert_eq!(level_lines(&mut chart, LineStyle::Dashed), 0);
-
-    assert!(chart.drawing_apply_options(id, r#"{"style":"dashed"}"#));
-    let drawing = chart.drawing(id).unwrap();
-    assert!(drawing.levels.iter().all(|level| level.style == "dashed"));
+    // Fibonacci levels paint dashed by default.
     assert_eq!(level_lines(&mut chart, LineStyle::Dashed), visible);
+    assert_eq!(level_lines(&mut chart, LineStyle::Solid), 0);
+
+    assert!(chart.drawing_apply_options(id, r#"{"style":"solid"}"#));
+    let drawing = chart.drawing(id).unwrap();
+    assert!(drawing.levels.iter().all(|level| level.style == "solid"));
+    assert_eq!(level_lines(&mut chart, LineStyle::Solid), visible);
+    assert_eq!(level_lines(&mut chart, LineStyle::Dashed), 0);
 
     // Levels sent alongside the style keep the styles they carry.
     let mut levels = chart.drawing(id).unwrap().levels.clone();
-    levels[0].style = "solid".to_string();
+    levels[0].style = "dashed".to_string();
     let patch = serde_json::json!({ "style": "dotted", "levels": levels });
     assert!(chart.drawing_apply_options(id, &patch.to_string()));
     let drawing = chart.drawing(id).unwrap();
     assert_eq!(drawing.style, LineStyle::Dotted);
-    assert_eq!(drawing.levels[0].style, "solid");
+    assert_eq!(drawing.levels[0].style, "dashed");
     assert!(
         drawing.levels[1..]
             .iter()
-            .all(|level| level.style == "dashed")
+            .all(|level| level.style == "solid")
     );
 }
 

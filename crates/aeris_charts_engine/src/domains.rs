@@ -35,6 +35,8 @@ pub enum HorizontalDomain {
         scale: CategoryScaleType,
     },
     Polar,
+    /// Axis-free space for hierarchy and flow layouts.
+    Layout,
 }
 
 impl HorizontalDomain {

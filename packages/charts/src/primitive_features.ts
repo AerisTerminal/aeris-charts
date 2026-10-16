@@ -29,6 +29,7 @@ import type {
   series_api,
   time,
 } from "./types.js";
+import type { popover_palette } from "./theme.js";
 
 export interface detachable_feature {
   detach(): void;
@@ -684,6 +685,9 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
     top_offset: options.top_offset ?? 20,
     format: options.format,
   };
+  if (!(chart instanceof chart_impl)) {
+    throw new Error("engine-owned tooltips require a Aeris chart instance");
+  }
   const series = current.series
     ?? chart.panes().flatMap((pane) => pane.get_series()).find(is_financial_series);
   if (series === undefined) throw new Error("tooltip requires a chart series");
@@ -734,16 +738,23 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
   tooltip_row_text(low.row, low.value, "");
   tooltip_row_text(volume.row, volume.value, "");
 
+  // Re-resolved on every show: `reset_style_to_defaults` can change the painted theme without an
+  // options event. The palettes are shared constants, so identity detects a theme switch.
+  let popover: popover_palette | null = null;
+  const apply_popover = (): void => {
+    const next = chart.popover_palette();
+    if (next === popover) return;
+    popover = next;
+    element.style.setProperty("--nc-tooltip-surface", next.surface);
+    element.style.setProperty("--nc-tooltip-border", next.border);
+    element.style.setProperty("--nc-tooltip-highlight", next.highlight);
+    element.style.setProperty("--nc-tooltip-foreground", next.foreground);
+    element.style.setProperty("--nc-tooltip-muted", next.muted_foreground);
+  };
   const apply_theme = (): void => {
     const resolved = chart.options() as chart_options;
-    element.style.setProperty("--nc-tooltip-surface", resolved.layout.background.color);
-    element.style.setProperty("--nc-tooltip-foreground", resolved.layout.textColor);
-    element.style.setProperty("--nc-tooltip-muted", resolved.layout.mutedTextColor);
-    element.style.setProperty(
-      "--nc-tooltip-border",
-      resolved.rightPriceScale.borderColor ?? resolved.layout.panes.separatorColor,
-    );
     element.style.setProperty("--nc-tooltip-font-family", resolved.layout.fontFamily);
+    apply_popover();
   };
   apply_theme();
   const on_options_change = (): void => apply_theme();
@@ -820,6 +831,7 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
     const left = snap(x - box.width / 2, parent_box.left + parent.clientLeft);
     const top = snap(above ? y - box.height : y, parent_box.top + parent.clientTop);
     element.style.transform = `translate(${left}px, ${top}px)`;
+    apply_popover();
     element.style.opacity = "1";
   };
   chart.apply_options({

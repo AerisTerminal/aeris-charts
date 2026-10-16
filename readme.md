@@ -266,9 +266,10 @@ Light is the CSS default. Set `data-theme="dark"` (or class `dark`) on a root el
 mode, and apply `theme_options("dark")` to the chart. Host chrome and chart labels default to the
 system UI font stack. Chart font remains an explicit layout option so a host webfont cannot shift
 financial labels until the host sets it.
-Chart defaults use the same semantic roles directly: foreground for axes and value text, and muted
-for crosshair-label surfaces. Crosshair lines use the theme-independent `crosshair_line` token
-(`#4a4a4a`) in both themes.
+Chart defaults use the same semantic roles directly: foreground for axes and value text. Crosshair
+labels sit on the tooltip popover surface in the dark theme and on the dark muted surface in the
+light theme. Crosshair lines are solid and keep each theme's `crosshair_line` alpha: translucent
+`#fafafa1a` in the dark theme and `--border-strong` (`#0a0a0a26`) in the light theme.
 
 ## Repository layout
 

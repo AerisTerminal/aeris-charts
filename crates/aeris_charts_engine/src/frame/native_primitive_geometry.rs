@@ -153,16 +153,7 @@ impl ChartEngine {
         let chart_options = self.options.get();
         let layout = &chart_options.layout;
         let family = layout.font_family.as_str();
-        let foreground =
-            Color::parse_css(&layout.text_color).unwrap_or(Color::rgb(0x13, 0x17, 0x22));
-        let muted_foreground =
-            Color::parse_css(&layout.muted_text_color).unwrap_or(Color::rgb(0x78, 0x7b, 0x86));
-        let border =
-            Color::parse_css(&chart_options.right_price_scale.border_color).unwrap_or(Color::rgb(
-                aeris_charts_core::style::DEFAULT_BORDER_RGB.0,
-                aeris_charts_core::style::DEFAULT_BORDER_RGB.1,
-                aeris_charts_core::style::DEFAULT_BORDER_RGB.2,
-            ));
+        let popover = self.popover_tokens();
         let background = Color::parse_css(&layout.background.color)
             .or_else(|| Color::parse_css(&layout.background.top_color))
             .unwrap_or(Color::rgb(255, 255, 255));
@@ -360,16 +351,17 @@ impl ChartEngine {
                     positions[0].1.round()
                 };
                 let device = super::DeviceBox::snap(main_x, top, main_width, main_height, hpr, vpr);
+                let radius = (6.0 * hpr.min(vpr)).round() as f32;
+                let border = aeris_charts_core::style::border_width_device_px(hpr.min(vpr)) as f32;
                 out.push(Prim::RoundRect {
                     x: device.x,
                     y: device.y,
                     w: device.w,
                     h: device.h,
-                    radii: [(6.0 * hpr.min(vpr)).round() as f32; 4],
-                    fill: background,
-                    border_width: aeris_charts_core::style::border_width_device_px(hpr.min(vpr))
-                        as f32,
-                    border_color: border,
+                    radii: [radius; 4],
+                    fill: popover.surface,
+                    border_width: border,
+                    border_color: popover.border,
                 });
                 if items.len() == 2 && delta_width > 0.0 {
                     // The delta band spans the box's own snapped rows so it meets both borders.
@@ -401,9 +393,9 @@ impl ChartEngine {
                             y: ((y + tooltip_sizes[line_index] * 0.5) * vpr) as f32,
                             text: text.clone(),
                             color: if line_index == 0 {
-                                foreground
+                                popover.foreground
                             } else {
-                                muted_foreground
+                                popover.muted
                             },
                             size: (tooltip_sizes[line_index] * vpr) as f32,
                             family: family.into(),
@@ -435,6 +427,11 @@ impl ChartEngine {
                         y += [primary_size + 4.0, secondary_size + 4.0][index];
                     }
                 }
+                out.push(popover.highlight_prim(
+                    (device.x, device.y, device.w, device.h),
+                    radius,
+                    border,
+                ));
             }
         }
     }

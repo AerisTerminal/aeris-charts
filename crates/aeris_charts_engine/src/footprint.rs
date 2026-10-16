@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use aeris_charts_core::model::data_layer::{SeriesId, SeriesIdError};
 use aeris_charts_core::model::data_validation::{MAX_SAFE_VALUE, MIN_SAFE_VALUE};
-use aeris_charts_core::style::{MARKET_DOWN_RGB, MARKET_UP_RGB};
+use aeris_charts_core::style::{DEFAULT_WARNING_RGB, ORDER_FLOW_BUY_RGB, ORDER_FLOW_SELL_RGB};
 use aeris_charts_render::color::Color;
 
 use crate::{ChartEngine, PriceFormatKind, SeriesKind, SeriesPriceFormat};
@@ -252,9 +252,11 @@ pub struct FootprintVisualOptions {
     pub negative_delta_color: Color,
     /// `None` follows the chart layout foreground and retokenizes on theme changes.
     pub text_color: Option<Color>,
+    /// Point-of-control outline. Defaults to the warning token, which both themes share.
     pub poc_color: Color,
     pub stacked_bid_color: Color,
     pub stacked_ask_color: Color,
+    /// Pin the per-bar statistics table (delta, volume, volume per second) to the pane bottom.
     pub show_bar_summary: bool,
     /// Merge stored rows into display rows that stay legible at the current zoom.
     pub adaptive_rows: bool,
@@ -262,22 +264,31 @@ pub struct FootprintVisualOptions {
 
 impl Default for FootprintVisualOptions {
     fn default() -> Self {
+        let buy = Color::rgb(
+            ORDER_FLOW_BUY_RGB.0,
+            ORDER_FLOW_BUY_RGB.1,
+            ORDER_FLOW_BUY_RGB.2,
+        );
+        let sell = Color::rgb(
+            ORDER_FLOW_SELL_RGB.0,
+            ORDER_FLOW_SELL_RGB.1,
+            ORDER_FLOW_SELL_RGB.2,
+        );
         Self {
             cell_mode: FootprintCellMode::BidAsk,
-            font_size: 11.0,
-            bid_color: Color::rgba(239, 83, 80, 70),
-            ask_color: Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 70),
-            positive_delta_color: Color::rgba(
-                MARKET_UP_RGB.0,
-                MARKET_UP_RGB.1,
-                MARKET_UP_RGB.2,
-                110,
-            ),
-            negative_delta_color: Color::rgba(239, 83, 80, 110),
+            font_size: 10.0,
+            bid_color: sell,
+            ask_color: buy,
+            positive_delta_color: buy,
+            negative_delta_color: sell,
             text_color: None,
-            poc_color: Color::rgb(255, 193, 7),
-            stacked_bid_color: Color::rgb(255, 82, 82),
-            stacked_ask_color: Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2),
+            poc_color: Color::rgb(
+                DEFAULT_WARNING_RGB.0,
+                DEFAULT_WARNING_RGB.1,
+                DEFAULT_WARNING_RGB.2,
+            ),
+            stacked_bid_color: sell,
+            stacked_ask_color: buy,
             show_bar_summary: true,
             adaptive_rows: false,
         }
@@ -3294,9 +3305,9 @@ impl ChartEngine {
                         .iter()
                         .map(|value| {
                             let rgb = if *value >= 0.0 {
-                                MARKET_UP_RGB
+                                ORDER_FLOW_BUY_RGB
                             } else {
-                                MARKET_DOWN_RGB
+                                ORDER_FLOW_SELL_RGB
                             };
                             Color::rgb(rgb.0, rgb.1, rgb.2).0
                         })
@@ -4029,7 +4040,7 @@ fn mark_stacks(levels: &mut [FootprintLevel], minimum: usize, ask: bool) {
 mod tests {
     use super::*;
     use crate::{DrawingKind, DrawingPoint};
-    use aeris_charts_render::draw_list::{LineStyle, Prim};
+    use aeris_charts_render::draw_list::{LineStyle, Prim, TextAlign};
 
     fn trade(
         timestamp_micros: i64,
@@ -4052,19 +4063,46 @@ mod tests {
     }
 
     #[test]
-    fn default_positive_footprint_roles_share_the_market_up_hue() {
+    fn default_footprint_roles_use_the_order_flow_buy_and_sell_tokens() {
         let visual = FootprintVisualOptions::default();
-        let market_up = (MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
         for color in [
             visual.ask_color,
             visual.positive_delta_color,
             visual.stacked_ask_color,
         ] {
-            assert_eq!((color.r(), color.g(), color.b()), market_up);
+            assert_eq!(
+                color,
+                Color::rgb(
+                    ORDER_FLOW_BUY_RGB.0,
+                    ORDER_FLOW_BUY_RGB.1,
+                    ORDER_FLOW_BUY_RGB.2
+                )
+            );
         }
-        assert_eq!(visual.ask_color.a(), 70);
-        assert_eq!(visual.positive_delta_color.a(), 110);
-        assert_eq!(visual.stacked_ask_color.a(), 255);
+        for color in [
+            visual.bid_color,
+            visual.negative_delta_color,
+            visual.stacked_bid_color,
+        ] {
+            assert_eq!(
+                color,
+                Color::rgb(
+                    ORDER_FLOW_SELL_RGB.0,
+                    ORDER_FLOW_SELL_RGB.1,
+                    ORDER_FLOW_SELL_RGB.2
+                )
+            );
+        }
+        assert_eq!(
+            visual.poc_color,
+            Color::rgb(
+                DEFAULT_WARNING_RGB.0,
+                DEFAULT_WARNING_RGB.1,
+                DEFAULT_WARNING_RGB.2
+            ),
+            "the POC outline uses the warning token"
+        );
+        assert_eq!(visual.text_color, None);
     }
 
     #[test]
@@ -5556,8 +5594,15 @@ mod tests {
                 aeris_charts_core::model::data_layer::PointColorChannel::Body,
                 0,
             ),
-            Some(Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2).0),
-            "positive delta uses the market-up color"
+            Some(
+                Color::rgb(
+                    ORDER_FLOW_BUY_RGB.0,
+                    ORDER_FLOW_BUY_RGB.1,
+                    ORDER_FLOW_BUY_RGB.2
+                )
+                .0
+            ),
+            "positive delta uses the order-flow buy color"
         );
         let before = chart.trade_stream_stats(stream).unwrap();
         let mut correction = trade(2_000_000, 100.0, 8.0, AggressorSide::Sell);
@@ -5586,8 +5631,15 @@ mod tests {
                 aeris_charts_core::model::data_layer::PointColorChannel::Body,
                 0,
             ),
-            Some(Color::rgb(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2).0),
-            "corrected negative delta uses the market-down color"
+            Some(
+                Color::rgb(
+                    ORDER_FLOW_SELL_RGB.0,
+                    ORDER_FLOW_SELL_RGB.1,
+                    ORDER_FLOW_SELL_RGB.2
+                )
+                .0
+            ),
+            "corrected negative delta uses the order-flow sell color"
         );
     }
 
@@ -5798,14 +5850,17 @@ mod tests {
     }
 
     #[test]
-    fn footprint_frame_owns_detail_summary_poc_and_stacked_highlights() {
+    fn footprint_frame_owns_numbers_bars_poc_and_stacked_highlights() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        // The pinned statistics table has its own test; leaving it out keeps every rect here
+        // attributable to the cluster.
         let visual = FootprintVisualOptions {
             font_size: 9.0,
+            show_bar_summary: false,
             ..FootprintVisualOptions::default()
         };
         let stacked_ask = visual.stacked_ask_color;
-        let poc = visual.poc_color;
+        let up = visual.ask_color.solid();
         chart
             .configure_footprint_series(
                 0,
@@ -5841,111 +5896,140 @@ mod tests {
         chart.time_scale.set_width(800.0);
         chart.fit_content();
         chart.set_bar_spacing(100.0);
-        let detailed = chart.build_frame();
-        let segment = chart
-            .frame_series_segments(0)
+        let footprint_prims = |chart: &mut ChartEngine| {
+            let frame = chart.build_frame();
+            let segment = chart
+                .frame_series_segments(0)
+                .iter()
+                .find(|segment| segment.series_id == Some(0))
+                .map(|segment| segment.start..segment.end)
+                .unwrap();
+            frame.panes[0].main[segment].to_vec()
+        };
+        // Cell numbers are aligned against the bid × ask divider; the stats table prints
+        // centered, so the alignment separates the cluster from the table.
+        let cell_texts = |prims: &[Prim]| {
+            prims
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::Text {
+                        x,
+                        y,
+                        text,
+                        color,
+                        align,
+                        weight,
+                        ..
+                    } if *align != TextAlign::Center
+                        && text.starts_with(|c: char| c.is_ascii_digit()) =>
+                    {
+                        Some((*x, *y, text.clone(), *color, *align, *weight))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let prims = footprint_prims(&mut chart);
+        let texts = cell_texts(&prims);
+        let printed = texts
             .iter()
-            .find(|segment| segment.series_id == Some(0))
-            .unwrap();
-        let prims = &detailed.panes[0].main[segment.start..segment.end];
-        let texts = prims
-            .iter()
-            .filter_map(|primitive| match primitive {
-                Prim::Text { text, .. } => Some(text.as_str()),
-                _ => None,
-            })
+            .map(|(_, _, text, _, align, _)| (text.as_str(), *align))
             .collect::<Vec<_>>();
-        assert!(
-            texts.contains(&"Δ 70") && texts.contains(&"V 110"),
-            "{texts:?}"
+        // Bids print right-aligned and asks left-aligned on either side of the divider.
+        for expected in [
+            ("10", TextAlign::Right),
+            ("40", TextAlign::Left),
+            ("50", TextAlign::Left),
+        ] {
+            assert!(printed.contains(&expected), "{printed:?}");
+        }
+        // A stacked imbalance fills its half cell opaquely and prints bold, legible glyphs.
+        let (x, y, _, color, _, weight) = texts
+            .iter()
+            .find(|(_, _, text, ..)| text == "50")
+            .unwrap()
+            .clone();
+        assert_eq!(weight, 700);
+        let under = prims.iter().rev().find_map(|primitive| match primitive {
+            Prim::Rect { rect, color }
+                if (rect.x as f32) <= x + 1.0
+                    && x + 1.0 < (rect.x + rect.w) as f32
+                    && (rect.y as f32) <= y
+                    && y < (rect.y + rect.h) as f32 =>
+            {
+                Some(*color)
+            }
+            _ => None,
+        });
+        assert_eq!(under, Some(stacked_ask.solid()));
+        assert_eq!(color, stacked_ask.solid().contrast_srgb());
+        // POC outlines its row in the warning token without covering the numbers.
+        let poc = Color::rgb(
+            DEFAULT_WARNING_RGB.0,
+            DEFAULT_WARNING_RGB.1,
+            DEFAULT_WARNING_RGB.2,
         );
-        // bid x ask cells print both sides of every row.
-        assert!(texts.contains(&"10") && texts.contains(&"40") && texts.contains(&"50"));
-        assert!(prims.iter().any(|primitive| {
-            matches!(primitive, Prim::Rect { color, .. } if *color == stacked_ask.solid())
-        }));
-        // POC outlines its row without covering the numbers.
         let poc_outline = |prims: &[Prim]| {
             prims.iter().any(|primitive| {
                 matches!(primitive, Prim::RoundRect { fill, border_color, border_width, .. }
-                    if fill.a() == 0 && *border_color == poc.solid() && *border_width >= 1.0)
+                    if fill.a() == 0 && *border_color == poc && *border_width >= 1.0)
             })
         };
-        assert!(poc_outline(prims));
-        // The traded range sits on the cluster's left edge in the direction color.
-        let up = FootprintVisualOptions::default().ask_color.solid();
-        assert!(prims.iter().any(|primitive| {
-            matches!(primitive, Prim::Rect { rect, color } if *color == up && rect.w == 2 && rect.h > 1)
-        }));
-        // Imbalance glyphs are bold so the signal scans at a glance.
-        assert!(
-            prims.iter().any(|primitive| {
-                matches!(primitive, Prim::Text { weight, .. } if *weight == 700)
-            })
-        );
-
-        chart.set_theme(crate::ChartTheme::Light);
-        let expected_text = Color::parse_css(&chart.options.get().layout.text_color).unwrap();
-        let themed = chart.build_frame();
-        let segment = chart
-            .frame_series_segments(0)
-            .iter()
-            .find(|segment| segment.series_id == Some(0))
-            .unwrap();
-        let cell_text_colors = themed.panes[0].main[segment.start..segment.end]
+        assert!(poc_outline(&prims));
+        // The range strip on the cluster's left edge steps with the rows: one 3px segment per
+        // price row in the direction color, separated by the row gap, so it reads dashed.
+        let mut strip = prims
             .iter()
             .filter_map(|primitive| match primitive {
-                Prim::Text { text, color, .. }
-                    if text
-                        .chars()
-                        .all(|character| character.is_ascii_digit() || character == '-') =>
-                {
-                    Some(*color)
-                }
+                Prim::Rect { rect, color } if *color == up && rect.w == 3 => Some(*rect),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert!(!cell_text_colors.is_empty());
-        assert!(cell_text_colors.iter().all(|color| *color == expected_text));
+        strip.sort_by_key(|rect| rect.y);
+        assert_eq!(strip.len(), 3, "one segment per row, {strip:?}");
+        assert!(strip.iter().all(|rect| rect.x == strip[0].x));
+        for pair in strip.windows(2) {
+            assert_eq!(pair[0].y + pair[0].h + 1, pair[1].y, "{strip:?}");
+        }
+        // The volume histogram sits right of the numbers in the dominant side's hue.
+        let numbers_right = texts
+            .iter()
+            .map(|(x, ..)| *x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(prims.iter().any(|primitive| {
+            matches!(primitive, Prim::Rect { rect, color }
+                if color.a() == crate::frame::HISTOGRAM_ALPHA && rect.x as f32 > numbers_right)
+        }));
+
+        chart.set_theme(crate::ChartTheme::Light);
+        let light_foreground = Color::parse_css(&chart.options.get().layout.text_color).unwrap();
+        let prims = footprint_prims(&mut chart);
+        let plain = cell_texts(&prims)
+            .into_iter()
+            .filter(|(.., weight)| *weight != 700)
+            .map(|(_, _, _, color, ..)| color)
+            .collect::<Vec<_>>();
+        assert!(!plain.is_empty());
+        assert!(plain.iter().all(|color| *color == light_foreground));
+        assert!(poc_outline(&prims), "both themes share the warning POC");
 
         chart.set_bar_spacing(20.0);
-        let cells = chart.build_frame();
-        let segment = chart
-            .frame_series_segments(0)
-            .iter()
-            .find(|segment| segment.series_id == Some(0))
-            .unwrap();
-        let prims = &cells.panes[0].main[segment.start..segment.end];
-        assert!(
-            !prims
-                .iter()
-                .any(|primitive| matches!(primitive, Prim::Text { .. }))
-        );
-        assert!(poc_outline(prims));
+        let prims = footprint_prims(&mut chart);
+        assert!(cell_texts(&prims).is_empty());
+        assert!(poc_outline(&prims));
+        // Without numbers the histogram spans the cells and carries the stacked signal.
+        assert!(prims.iter().any(|primitive| {
+            matches!(primitive, Prim::Rect { rect, color } if *color == stacked_ask.solid() && rect.w > 3)
+        }));
+
+        chart.set_bar_spacing(3.0);
+        let prims = footprint_prims(&mut chart);
+        assert!(cell_texts(&prims).is_empty());
         assert!(
             prims
                 .iter()
-                .filter(|primitive| matches!(primitive, Prim::Rect { .. }))
-                .count()
-                > 2
+                .any(|primitive| matches!(primitive, Prim::Rect { color, .. } if *color == poc))
         );
-
-        chart.set_bar_spacing(3.0);
-        let summary = chart.build_frame();
-        let segment = chart
-            .frame_series_segments(0)
-            .iter()
-            .find(|segment| segment.series_id == Some(0))
-            .unwrap();
-        let prims = &summary.panes[0].main[segment.start..segment.end];
-        assert!(
-            !prims
-                .iter()
-                .any(|primitive| matches!(primitive, Prim::Text { .. }))
-        );
-        assert!(prims.iter().any(
-            |primitive| matches!(primitive, Prim::Rect { color, .. } if *color == poc.solid())
-        ));
     }
 
     #[test]
@@ -6066,7 +6150,14 @@ mod tests {
         let same_rgb = |color: Color, base: Color| {
             (color.r(), color.g(), color.b()) == (base.r(), base.g(), base.b())
         };
-        let single_imbalance = |color: Color| Color::rgba(color.r(), color.g(), color.b(), 215);
+        let single_imbalance = |color: Color| {
+            Color::rgba(
+                color.r(),
+                color.g(),
+                color.b(),
+                crate::frame::SINGLE_IMBALANCE_ALPHA,
+            )
+        };
         let [bid_ask, _, _, profile, ladder, horizontal, histogram] = &painted;
 
         // Diagonal truth has no imbalance; the horizontal projection marks bid at 100 and ask at
@@ -6094,38 +6185,44 @@ mod tests {
         assert!(split_row, "{profile_rects:?}");
         assert!(texts(profile).contains(&"70".to_string()));
 
-        // The ladder raises every bid track half a row above its ask track.
-        let tracks = |prims: &[Prim], side: Color| {
-            let mut ys = rects(prims)
-                .into_iter()
-                .filter(|(_, color)| color.a() == 26 && same_rgb(*color, side))
-                .map(|(rect, _)| rect.y)
+        // Bids print right-aligned (101, 100) and asks left-aligned (102, 101); screen y grows
+        // downward, so sorting puts the higher price first.
+        let side_ys = |prims: &[Prim], side: TextAlign| {
+            let mut ys = prims
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::Text { y, align, .. } if *align == side => Some(*y),
+                    _ => None,
+                })
                 .collect::<Vec<_>>();
-            ys.sort_unstable();
+            ys.sort_by(f32::total_cmp);
             ys
         };
-        let (ladder_bids, ladder_asks) = (
-            tracks(ladder, base.bid_color),
-            tracks(ladder, base.ask_color),
+        let (bids, asks) = (
+            side_ys(bid_ask, TextAlign::Right),
+            side_ys(bid_ask, TextAlign::Left),
         );
-        assert_eq!(ladder_bids.len(), 3);
-        assert_eq!(ladder_asks.len(), 3);
-        let raise = ladder_asks[0] - ladder_bids[0];
-        let row = ladder_asks[1] - ladder_asks[0];
+        assert_eq!((bids.len(), asks.len()), (2, 2));
+        assert_eq!(bids[0], asks[1], "bid and ask of one row share its center");
+        // The ladder raises every bid half a row above its ask.
+        let (ladder_bids, ladder_asks) = (
+            side_ys(ladder, TextAlign::Right),
+            side_ys(ladder, TextAlign::Left),
+        );
+        let row = asks[1] - asks[0];
+        let raise = ladder_asks[1] - ladder_bids[0];
         assert!(
-            raise > 0 && (raise - row / 2).abs() <= 1,
+            raise > 0.0 && (raise - row / 2.0).abs() <= 1.0,
             "{raise} vs {row}"
         );
+        assert_eq!(ladder_asks, asks);
+        // Numbers bars carry a histogram on the right; the bare surface carries no wash.
         assert!(
-            ladder_bids
+            rects(bid_ask)
                 .iter()
-                .zip(&ladder_asks)
-                .all(|(bid, ask)| ask - bid == raise)
+                .any(|(_, color)| color.a() == crate::frame::HISTOGRAM_ALPHA)
         );
-        assert_eq!(
-            tracks(bid_ask, base.bid_color),
-            tracks(bid_ask, base.ask_color)
-        );
+        assert!(rects(bid_ask).iter().all(|(_, color)| color.a() != 26));
 
         // The histogram stacks ask above bid on one left baseline and one shared scale.
         let histogram_rects = rects(histogram);
@@ -6144,7 +6241,7 @@ mod tests {
     }
 
     #[test]
-    fn footprint_volume_profile_scales_cell_intensity() {
+    fn footprint_histogram_rows_grow_with_volume_on_one_baseline() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         let visual = FootprintVisualOptions {
             font_size: 9.0,
@@ -6194,53 +6291,36 @@ mod tests {
             .find(|segment| segment.series_id == Some(0))
             .unwrap();
         let prims = &frame.panes[0].main[segment.start..segment.end];
-        let mut alphas = prims
-            .iter()
-            .filter_map(|primitive| match primitive {
-                Prim::Rect { rect: _, color }
-                    if color.r() == bid.r() && color.g() == bid.g() && color.b() == bid.b() =>
-                {
-                    Some(color.a())
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        alphas.sort_unstable();
-        alphas.dedup();
-        assert!(
-            alphas.len() >= 2,
-            "quiet and heavy prints must differ in intensity, got {alphas:?}"
-        );
-        assert!(
-            alphas.iter().all(|alpha| *alpha >= 26),
-            "faint cells must keep their shape, got {alphas:?}"
-        );
-        // Profile silhouette: the heavy print's bar must extend further than the
-        // quiet print's bar within the same half-width.
-        let mut bar_widths = prims
+        let histogram = prims
             .iter()
             .filter_map(|primitive| match primitive {
                 Prim::Rect { rect, color }
-                    if color.r() == bid.r()
-                        && color.g() == bid.g()
-                        && color.b() == bid.b()
-                        && color.a() > 26 =>
+                    if *color
+                        == Color::rgba(
+                            bid.r(),
+                            bid.g(),
+                            bid.b(),
+                            crate::frame::HISTOGRAM_ALPHA,
+                        ) =>
                 {
-                    Some(rect.w)
+                    Some((rect.x, rect.w))
                 }
                 _ => None,
             })
             .collect::<Vec<_>>();
-        bar_widths.sort_unstable();
-        bar_widths.dedup();
+        assert_eq!(histogram.len(), 3, "one sell-dominant row per level");
         assert!(
-            bar_widths.len() >= 2,
-            "profile bars must grow with volume, got {bar_widths:?}"
+            histogram.iter().all(|(x, _)| *x == histogram[0].0),
+            "rows share one baseline"
         );
+        let mut widths = histogram.iter().map(|(_, w)| *w).collect::<Vec<_>>();
+        widths.sort_unstable();
+        widths.dedup();
+        assert_eq!(widths.len(), 3, "rows grow with volume, got {widths:?}");
     }
 
     #[test]
-    fn footprint_numbers_keep_the_configured_size_in_tall_rows() {
+    fn footprint_autoscale_caps_row_height_and_keeps_the_configured_font() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         chart
             .configure_footprint_series(
@@ -6266,8 +6346,8 @@ mod tests {
                 },
             )
             .unwrap();
-        // Three levels across a tall pane: rows are far taller than 9px, but numbers stay at the
-        // configured size so zooming in never balloons the text.
+        // Three levels across a tall pane would stretch rows far past the text; autoscale widens
+        // the range so each row stays a compact print, and numbers keep the configured size.
         chart
             .set_footprint_trades(
                 0,
@@ -6287,7 +6367,8 @@ mod tests {
             .iter()
             .find(|segment| segment.series_id == Some(0))
             .unwrap();
-        let sizes = frame.panes[0].main[segment.start..segment.end]
+        let prims = &frame.panes[0].main[segment.start..segment.end];
+        let sizes = prims
             .iter()
             .filter_map(|primitive| match primitive {
                 Prim::Text { size, .. } => Some(*size),
@@ -6299,11 +6380,89 @@ mod tests {
             sizes.iter().all(|size| *size <= 9.0),
             "numbers must stay at the configured 9px, got {sizes:?}"
         );
+        let scale = &chart.panes[0].price_scale;
+        let row = (scale.price_to_coordinate(100.0, 100.0)
+            - scale.price_to_coordinate(101.0, 100.0))
+        .abs();
+        assert!(
+            (row - 9.0 * crate::frame::ROW_HEIGHT_CAP).abs() < 0.01,
+            "autoscale caps the row at {} px, got {row}",
+            9.0 * crate::frame::ROW_HEIGHT_CAP
+        );
+
+        // A manually scaled axis is the user's choice: the cap only shapes autoscale.
+        chart.panes[0].price_scale.set_auto_scale(false);
+        chart.panes[0].price_scale.set_price_range(Some(
+            aeris_charts_core::model::price_range::PriceRange::new(99.5, 102.5),
+        ));
+        chart.build_frame();
+        let scale = &chart.panes[0].price_scale;
+        let manual = (scale.price_to_coordinate(100.0, 100.0)
+            - scale.price_to_coordinate(101.0, 100.0))
+        .abs();
+        assert!(manual > row * 4.0, "{manual} vs {row}");
     }
 
     #[test]
-    fn footprint_summary_drops_out_when_the_bar_cannot_fit_it() {
+    fn footprint_range_strip_draws_only_on_screen_rows() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let visual = FootprintVisualOptions {
+            show_bar_summary: false,
+            ..FootprintVisualOptions::default()
+        };
+        let up = visual.ask_color.solid();
+        chart
+            .configure_footprint_series(
+                0,
+                FootprintSeriesOptions {
+                    aggregation: FootprintAggregationOptions {
+                        tick_size: 1.0,
+                        ticks_per_row: 1,
+                        ..FootprintAggregationOptions::default()
+                    },
+                    visual,
+                },
+            )
+            .unwrap();
+        // Two prints a hundred thousand rows apart: the strip spans the whole traded range, but
+        // only the rows inside the zoomed pane may cost a primitive.
+        chart
+            .set_footprint_trades(
+                0,
+                vec![
+                    trade(1, 100.0, 5.0, AggressorSide::Sell),
+                    trade(2, 100_100.0, 5.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.set_bar_spacing(100.0);
+        chart.panes[0].price_scale.set_auto_scale(false);
+        chart.panes[0].price_scale.set_price_range(Some(
+            aeris_charts_core::model::price_range::PriceRange::new(90.0, 130.0),
+        ));
+        let frame = chart.build_frame();
+        let segment = chart
+            .frame_series_segments(0)
+            .iter()
+            .find(|segment| segment.series_id == Some(0))
+            .unwrap();
+        let strip = frame.panes[0].main[segment.start..segment.end]
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::Rect { rect, color } if *color == up && rect.w == 3))
+            .count();
+        assert!((25..=45).contains(&strip), "{strip} strip segments");
+    }
+
+    #[test]
+    fn dense_footprint_rows_shrink_numbers_to_a_floor_before_dropping_them() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let visual = FootprintVisualOptions {
+            show_bar_summary: false,
+            ..FootprintVisualOptions::default()
+        };
+        let font = visual.font_size;
         chart
             .configure_footprint_series(
                 0,
@@ -6317,39 +6476,208 @@ mod tests {
                         },
                         ..FootprintAggregationOptions::default()
                     },
-                    visual: FootprintVisualOptions {
-                        font_size: 9.0,
-                        ..FootprintVisualOptions::default()
-                    },
+                    visual,
                 },
             )
             .unwrap();
+        let tape = (0..80)
+            .map(|index| {
+                let side = if index % 2 == 0 {
+                    AggressorSide::Sell
+                } else {
+                    AggressorSide::Buy
+                };
+                trade(index + 1, 100.0 + (index / 2) as f64, 40.0, side)
+            })
+            .collect();
+        chart.set_footprint_trades(0, tape).unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.set_bar_spacing(100.0);
+        chart.build_frame();
+        chart.panes[0].price_scale.set_auto_scale(false);
+        let row_px = |chart: &ChartEngine| {
+            let scale = &chart.panes[0].price_scale;
+            (scale.price_to_coordinate(110.0, 100.0) - scale.price_to_coordinate(111.0, 100.0))
+                .abs()
+        };
+        let mut text_at_row = |target: f64| {
+            // The mapping is linear, so one measured correction lands on the target row height.
+            let mut span = 60.0;
+            for _ in 0..2 {
+                chart.panes[0].price_scale.set_price_range(Some(
+                    aeris_charts_core::model::price_range::PriceRange::new(99.0, 99.0 + span),
+                ));
+                chart.build_frame();
+                span *= row_px(&chart) / target;
+            }
+            let frame = chart.build_frame();
+            let row = row_px(&chart);
+            let segment = chart
+                .frame_series_segments(0)
+                .iter()
+                .find(|segment| segment.series_id == Some(0))
+                .unwrap();
+            let sizes = frame.panes[0].main[segment.start..segment.end]
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::Text { size, .. } => Some(f64::from(*size)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            (row, sizes)
+        };
+
+        let (_, roomy) = text_at_row(20.0);
+        assert_eq!(roomy.len(), 80, "every bid and ask prints");
+        assert!(
+            roomy.iter().all(|size| (*size - font).abs() < 1e-3),
+            "{roomy:?}"
+        );
+
+        let (row, dense) = text_at_row(11.0);
+        let expected = (row - crate::frame::DETAIL_ROW_PADDING) / 1.05;
+        assert!(expected < font && expected >= 8.0, "{expected}");
+        assert_eq!(dense.len(), 80, "dense rows still print every number");
+        assert!(
+            dense.iter().all(|size| (*size - expected).abs() < 0.01),
+            "{dense:?} vs {expected}"
+        );
+
+        let (_, crowded) = text_at_row(9.0);
+        assert!(crowded.is_empty(), "rows under the floor draw cells only");
+    }
+
+    #[test]
+    fn footprint_stats_table_pins_to_the_pane_bottom_below_the_bars() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let visual = FootprintVisualOptions {
+            font_size: 9.0,
+            ..FootprintVisualOptions::default()
+        };
+        let (buy, sell) = (visual.positive_delta_color, visual.negative_delta_color);
+        let aggregation = FootprintAggregationOptions {
+            tick_size: 1.0,
+            ticks_per_row: 1,
+            bars: FootprintBarAggregation::Time {
+                interval_micros: 60_000_000,
+                anchor_micros: 0,
+            },
+            ..FootprintAggregationOptions::default()
+        };
+        chart
+            .configure_footprint_series(
+                0,
+                FootprintSeriesOptions {
+                    aggregation,
+                    visual: visual.clone(),
+                },
+            )
+            .unwrap();
+        // A closed minute (delta +60, 120 traded over 60 s) and a forming one (delta -30, 50
+        // traded over the 10 s elapsed so far).
         chart
             .set_footprint_trades(
                 0,
                 vec![
-                    trade(1, 100.0, 5.0, AggressorSide::Sell),
-                    trade(2, 101.0, 50.0, AggressorSide::Sell),
-                    trade(3, 102.0, 200.0, AggressorSide::Sell),
+                    trade(1, 100.0, 30.0, AggressorSide::Sell),
+                    trade(2, 101.0, 90.0, AggressorSide::Buy),
+                    trade(60_000_000, 101.0, 10.0, AggressorSide::Buy),
+                    trade(70_000_000, 102.0, 40.0, AggressorSide::Sell),
                 ],
             )
             .unwrap();
         chart.time_scale.set_width(800.0);
         chart.fit_content();
-        let summaries = |chart: &mut ChartEngine| {
-            chart.build_frame().panes[0]
+        chart.set_bar_spacing(100.0);
+        let frame = chart.build_frame();
+        let pane_bottom = chart.panes[0].top + chart.panes[0].height;
+        let table_top = pane_bottom
+            - crate::frame::footprint_stats_table_height(&visual, chart.panes[0].height);
+        let segment = chart
+            .frame_series_segments(0)
+            .iter()
+            .find(|segment| segment.series_id == Some(0))
+            .unwrap();
+        let prims = &frame.panes[0].main[segment.start..segment.end];
+        let table_texts = prims
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Text { y, text, .. } if f64::from(*y) > table_top => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for expected in [
+            "Delta", "Volume", "Vol/sec", "60", "-30", "120", "50", "2", "5",
+        ] {
+            assert!(
+                table_texts.contains(&expected),
+                "{expected}: {table_texts:?}"
+            );
+        }
+        // Delta cells tint by sign; the strongest visible delta is opaque.
+        let table_fills = prims
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Rect { rect, color } if f64::from(rect.y) > table_top => Some(*color),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(table_fills.contains(&buy.solid()));
+        assert!(table_fills.iter().any(|color| {
+            (color.r(), color.g(), color.b()) == (sell.r(), sell.g(), sell.b()) && color.a() < 255
+        }));
+        // Autoscale reserves the table: every cluster rect ends above it, and the table's
+        // opaque surface reaches the pane bottom.
+        assert!(prims.iter().any(|primitive| matches!(primitive,
+            Prim::Rect { rect, .. } if (f64::from(rect.y + rect.h) - pane_bottom).abs() <= 1.0
+                && (f64::from(rect.y) - table_top).abs() <= 1.0)));
+        let cluster_bottom = prims
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Rect { rect, .. } if f64::from(rect.y) < table_top - 1.0 => {
+                    Some(f64::from(rect.y + rect.h))
+                }
+                _ => None,
+            })
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            cluster_bottom <= table_top + 1.0,
+            "{cluster_bottom} > {table_top}"
+        );
+
+        // Zoomed past the numbers, the table keeps its labels and tinted delta cells.
+        chart.set_bar_spacing(4.0);
+        let frame = chart.build_frame();
+        assert!(
+            frame.panes[0]
                 .main
                 .iter()
-                .filter(
-                    |primitive| matches!(primitive, Prim::Text { text, .. } if text.contains("Δ")),
-                )
-                .count()
-        };
-        chart.set_bar_spacing(100.0);
-        assert!(summaries(&mut chart) > 0);
-        // Below the numbers threshold the summary drops out with the cell numbers.
-        chart.set_bar_spacing(40.0);
-        assert_eq!(summaries(&mut chart), 0);
+                .any(|primitive| matches!(primitive,
+            Prim::Text { text, .. } if text == "Vol/sec"))
+        );
+
+        chart
+            .apply_footprint_series_options(
+                0,
+                FootprintSeriesOptions {
+                    aggregation,
+                    visual: FootprintVisualOptions {
+                        show_bar_summary: false,
+                        ..visual
+                    },
+                },
+            )
+            .unwrap();
+        let frame = chart.build_frame();
+        assert!(
+            !frame.panes[0]
+                .main
+                .iter()
+                .any(|primitive| matches!(primitive,
+            Prim::Text { text, .. } if text == "Delta"))
+        );
+        assert_eq!(chart.panes[0].marker_margin_below, 0.0);
     }
 
     #[test]
@@ -6357,10 +6685,16 @@ mod tests {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         let visual = FootprintVisualOptions {
             font_size: 9.0,
+            show_bar_summary: false,
             ..FootprintVisualOptions::default()
         };
         let stacked_ask = visual.stacked_ask_color;
-        let single = Color::rgba(stacked_ask.r(), stacked_ask.g(), stacked_ask.b(), 215);
+        let single = Color::rgba(
+            stacked_ask.r(),
+            stacked_ask.g(),
+            stacked_ask.b(),
+            crate::frame::SINGLE_IMBALANCE_ALPHA,
+        );
         chart
             .configure_footprint_series(
                 0,
@@ -6410,9 +6744,9 @@ mod tests {
         );
         assert!(
             !prims.iter().any(
-                // The 2px range line shares the up color; only cells count here.
+                // The 3px range strip shares the up color; only cells count here.
                 |primitive| matches!(primitive, Prim::Rect { rect, color }
-                    if *color == stacked_ask.solid() && rect.w > 2)
+                    if *color == stacked_ask.solid() && rect.w > 3)
             ),
             "a run shorter than the stacked threshold must not use the stacked treatment"
         );
@@ -7372,24 +7706,32 @@ mod tests {
             .find(|segment| segment.series_id == Some(footprint))
             .unwrap();
         let prims = &frame.panes[0].main[segment.start..segment.end];
-        let summaries = prims
+        // One POC outline per drawn cluster.
+        let row_heights = prims
             .iter()
-            .filter(
-                |primitive| matches!(primitive, Prim::Text { text, .. } if text.starts_with('Δ')),
-            )
-            .count();
-        assert_eq!(summaries, 2, "only the two tape-covered bars draw clusters");
+            .filter_map(|primitive| match primitive {
+                Prim::RoundRect { h, .. } => Some(*h),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            row_heights.len(),
+            2,
+            "only the two tape-covered bars draw clusters"
+        );
         let font = FootprintVisualOptions::default().font_size;
-        let row_heights = prims.iter().filter_map(|primitive| match primitive {
-            Prim::RoundRect { h, .. } => Some(*h),
-            _ => None,
-        });
         for height in row_heights {
             assert!(
-                f64::from(height) + 1.0 >= font + 5.0,
+                f64::from(height) + 1.0 >= font + crate::frame::DETAIL_ROW_PADDING,
                 "adaptive rows stay legible, got {height}px"
             );
         }
+        assert!(
+            prims
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Text { weight: 500, .. })),
+            "merged rows print their numbers"
+        );
     }
 
     #[test]

@@ -1454,29 +1454,29 @@ impl ChartEngine {
         output: SeriesId,
         style: IndicatorOutputStyle,
     ) -> bool {
-        if !style
-            .line_width
-            .is_none_or(|width| width.is_finite() && width > 0.0)
-            || style.line_style > 4
-            || !style_color_is_valid(style.line_color.as_deref())
-            || !style_color_is_valid(style.up_color.as_deref())
-            || !style_color_is_valid(style.down_color.as_deref())
-            || !style_color_is_valid(style.area_top_color.as_deref())
-            || !style_color_is_valid(style.area_bottom_color.as_deref())
+        if !output_style_is_valid(&style)
+            || !self
+                .indicators
+                .iter()
+                .any(|binding| binding.outputs.contains(&output))
         {
             return false;
         }
-        if !self
-            .indicators
-            .iter()
-            .any(|binding| binding.outputs.contains(&output))
-        {
-            return false;
-        }
+        let visible = style.visible;
+        self.write_output_style(output, style, visible)
+    }
+
+    /// Write a validated output style. `painted_visible` is the series' resulting visibility; it
+    /// goes through `set_series_visible` so autoscale and axes stop following a hidden line.
+    pub(crate) fn write_output_style(
+        &mut self,
+        output: SeriesId,
+        style: IndicatorOutputStyle,
+        painted_visible: bool,
+    ) -> bool {
         let Some(series) = self.series_entry_mut(output) else {
             return false;
         };
-        series.visible = style.visible;
         series.line_color = style.line_color;
         series.line_width = style.line_width;
         series.line_style = style.line_style;
@@ -1486,6 +1486,7 @@ impl ChartEngine {
         series.area_top_color = style.area_top_color;
         series.area_bottom_color = style.area_bottom_color;
         self.invalidate_frame_series(output);
+        self.set_series_visible(output, painted_visible);
         true
     }
 
@@ -5337,6 +5338,20 @@ pub(crate) fn indicator_output_style(series: &SeriesEntry) -> IndicatorOutputSty
         area_top_color: series.area_top_color.clone(),
         area_bottom_color: series.area_bottom_color.clone(),
     }
+}
+
+/// Whether every width, line style, and color in a host style is acceptable, checked before any
+/// series state changes.
+pub(crate) fn output_style_is_valid(style: &IndicatorOutputStyle) -> bool {
+    style
+        .line_width
+        .is_none_or(|width| width.is_finite() && width > 0.0)
+        && style.line_style <= 4
+        && style_color_is_valid(style.line_color.as_deref())
+        && style_color_is_valid(style.up_color.as_deref())
+        && style_color_is_valid(style.down_color.as_deref())
+        && style_color_is_valid(style.area_top_color.as_deref())
+        && style_color_is_valid(style.area_bottom_color.as_deref())
 }
 
 fn style_color_is_valid(value: Option<&str>) -> bool {

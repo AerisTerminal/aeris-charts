@@ -71,9 +71,15 @@ test("tick-driven footprint API preserves delta path, POC, and stacked imbalance
   });
 
   expect(result.type).toBe("footprint");
-  expect(result.options.ask_color).toMatch(/^rgba\(8,153,129,/);
-  expect(result.options.positive_delta_color).toMatch(/^rgba\(8,153,129,/);
-  expect(result.options.stacked_ask_color).toBe("#089981");
+  // Order-flow palette: buy blue and sell rose, with the POC in the shared warning token.
+  for (const key of ["ask_color", "positive_delta_color", "stacked_ask_color"]) {
+    expect(result.options[key]).toBe("#006edd");
+  }
+  for (const key of ["bid_color", "negative_delta_color", "stacked_bid_color"]) {
+    expect(result.options[key]).toBe("#d9306a");
+  }
+  expect(result.options.poc_color).toBe("#ff6900");
+  expect(result.options.show_bar_summary).toBe(true);
   expect(result.bars).toBe(1);
   expect(result.first).toMatchObject({
     logical_index: 0,

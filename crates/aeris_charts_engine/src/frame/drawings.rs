@@ -4477,8 +4477,9 @@ impl ChartEngine {
     }
 
     /// The token theme matching the painted chart background, so in-chart chrome follows the
-    /// surface hosts actually show even when they restyle `layout` without `set_theme`.
-    pub(super) fn surface_theme(&self) -> crate::ChartTheme {
+    /// surface hosts actually show even when they restyle `layout` without `set_theme`. Host DOM
+    /// chrome drawn over the chart (tooltips) selects its tokens from the same theme.
+    pub fn surface_theme(&self) -> crate::ChartTheme {
         let fallback = aeris_charts_core::style::DEFAULT_SURFACE_RGB;
         let background = Color::parse_css(&self.options.get().layout.background.color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));

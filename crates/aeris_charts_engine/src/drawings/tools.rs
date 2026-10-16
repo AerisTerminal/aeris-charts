@@ -6,6 +6,7 @@
 //! and keep only genuinely tool-specific geometry/math in the drawing engine.
 
 use super::DrawingKind;
+use aeris_charts_render::draw_list::LineStyle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DrawingPlacement {
@@ -139,6 +140,9 @@ pub(crate) struct DrawingToolSpec {
     /// Conservative semantic-bounds expansion for curved/freehand interpolation.
     pub(crate) bounds_padding_ratio: f64,
     pub(crate) default_width: f64,
+    /// Stroke style, and for level tools every level's style, of a newly created drawing. Host
+    /// options and later edits override it per drawing.
+    pub(crate) default_style: LineStyle,
     /// Placement commits directly into a platform text-edit session.  The editor itself remains a
     /// host concern, but the decision that this tool requests one is canonical engine metadata.
     pub(crate) requests_text_editor: bool,
@@ -156,6 +160,7 @@ const TREND_LINE: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -171,6 +176,7 @@ const HORIZONTAL_LINE: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -186,6 +192,7 @@ const HORIZONTAL_RAY: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -201,6 +208,7 @@ const VERTICAL_LINE: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Full,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -216,6 +224,7 @@ const RECTANGLE: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -231,6 +240,7 @@ const TEXT: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: true,
 };
 
@@ -246,6 +256,7 @@ const BRUSH: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.25,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -261,6 +272,7 @@ const PATH: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -276,6 +288,7 @@ const LONG_POSITION: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -291,6 +304,7 @@ const SHORT_POSITION: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -306,6 +320,7 @@ const FIXED_RANGE_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Full,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -321,6 +336,7 @@ const ANCHORED_VOLUME_PROFILE: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Full,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -336,6 +352,7 @@ const ANCHORED_VWAP: DrawingToolSpec = DrawingToolSpec {
     price_extent: DrawingPriceExtent::Full,
     bounds_padding_ratio: 0.0,
     default_width: 1.0,
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
 
@@ -354,6 +371,7 @@ const fn measure_spec(kind: DrawingKind, wire_id: u8, name: &'static str) -> Dra
         price_extent: DrawingPriceExtent::Finite,
         bounds_padding_ratio: 0.0,
         default_width: 1.0,
+        default_style: LineStyle::Solid,
         requests_text_editor: false,
     }
 }
@@ -479,54 +497,51 @@ const ARC: DrawingToolSpec = DrawingToolSpec {
 };
 const CURVE: DrawingToolSpec = shape_spec(DrawingKind::Curve, 32, "curve", 3);
 const DOUBLE_CURVE: DrawingToolSpec = shape_spec(DrawingKind::DoubleCurve, 33, "double_curve", 4);
-const FIBONACCI_RETRACEMENT: DrawingToolSpec = DrawingToolSpec {
-    price_extent: DrawingPriceExtent::Full,
-    ..shape_spec(
-        DrawingKind::FibonacciRetracement,
-        36,
-        "fibonacci_retracement",
-        2,
-    )
-};
-const FIBONACCI_EXTENSION: DrawingToolSpec = DrawingToolSpec {
-    price_extent: DrawingPriceExtent::Full,
-    ..shape_spec(
-        DrawingKind::FibonacciExtension,
-        37,
-        "fibonacci_extension",
-        3,
-    )
-};
-const FIBONACCI_CHANNEL: DrawingToolSpec = DrawingToolSpec {
-    price_extent: DrawingPriceExtent::Full,
-    ..shape_spec(DrawingKind::FibonacciChannel, 38, "fibonacci_channel", 3)
-};
-const FIBONACCI_TIME_ZONES: DrawingToolSpec = DrawingToolSpec {
-    price_extent: DrawingPriceExtent::Full,
-    ..shape_spec(
-        DrawingKind::FibonacciTimeZones,
-        39,
-        "fibonacci_time_zones",
-        2,
-    )
-};
-const FIBONACCI_TREND_TIME: DrawingToolSpec = DrawingToolSpec {
-    price_extent: DrawingPriceExtent::Full,
-    ..shape_spec(
-        DrawingKind::FibonacciTrendTime,
-        40,
-        "fibonacci_trend_time",
-        3,
-    )
-};
-const FIBONACCI_SPEED_FAN: DrawingToolSpec = DrawingToolSpec {
-    price_extent: DrawingPriceExtent::Full,
-    ..shape_spec(DrawingKind::FibonacciSpeedFan, 41, "fibonacci_speed_fan", 2)
-};
+/// Fibonacci tools span the full price range and draw dashed by default.
+const fn fibonacci_spec(
+    kind: DrawingKind,
+    wire_id: u8,
+    name: &'static str,
+    count: u8,
+) -> DrawingToolSpec {
+    DrawingToolSpec {
+        price_extent: DrawingPriceExtent::Full,
+        default_style: LineStyle::Dashed,
+        ..shape_spec(kind, wire_id, name, count)
+    }
+}
+
+const FIBONACCI_RETRACEMENT: DrawingToolSpec = fibonacci_spec(
+    DrawingKind::FibonacciRetracement,
+    36,
+    "fibonacci_retracement",
+    2,
+);
+const FIBONACCI_EXTENSION: DrawingToolSpec = fibonacci_spec(
+    DrawingKind::FibonacciExtension,
+    37,
+    "fibonacci_extension",
+    3,
+);
+const FIBONACCI_CHANNEL: DrawingToolSpec =
+    fibonacci_spec(DrawingKind::FibonacciChannel, 38, "fibonacci_channel", 3);
+const FIBONACCI_TIME_ZONES: DrawingToolSpec = fibonacci_spec(
+    DrawingKind::FibonacciTimeZones,
+    39,
+    "fibonacci_time_zones",
+    2,
+);
+const FIBONACCI_TREND_TIME: DrawingToolSpec = fibonacci_spec(
+    DrawingKind::FibonacciTrendTime,
+    40,
+    "fibonacci_trend_time",
+    3,
+);
+const FIBONACCI_SPEED_FAN: DrawingToolSpec =
+    fibonacci_spec(DrawingKind::FibonacciSpeedFan, 41, "fibonacci_speed_fan", 2);
 const FIBONACCI_SPEED_ARCS: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Full,
-    price_extent: DrawingPriceExtent::Full,
-    ..shape_spec(
+    ..fibonacci_spec(
         DrawingKind::FibonacciSpeedArcs,
         42,
         "fibonacci_speed_arcs",
@@ -535,18 +550,15 @@ const FIBONACCI_SPEED_ARCS: DrawingToolSpec = DrawingToolSpec {
 };
 const FIBONACCI_CIRCLES: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Full,
-    price_extent: DrawingPriceExtent::Full,
-    ..shape_spec(DrawingKind::FibonacciCircles, 43, "fibonacci_circles", 2)
+    ..fibonacci_spec(DrawingKind::FibonacciCircles, 43, "fibonacci_circles", 2)
 };
 const FIBONACCI_SPIRAL: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Full,
-    price_extent: DrawingPriceExtent::Full,
-    ..shape_spec(DrawingKind::FibonacciSpiral, 44, "fibonacci_spiral", 2)
+    ..fibonacci_spec(DrawingKind::FibonacciSpiral, 44, "fibonacci_spiral", 2)
 };
 const FIBONACCI_WEDGE: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Full,
-    price_extent: DrawingPriceExtent::Full,
-    ..shape_spec(DrawingKind::FibonacciWedge, 45, "fibonacci_wedge", 3)
+    ..fibonacci_spec(DrawingKind::FibonacciWedge, 45, "fibonacci_wedge", 3)
 };
 const fn pitchfork_spec(kind: DrawingKind, wire_id: u8, name: &'static str) -> DrawingToolSpec {
     DrawingToolSpec {
@@ -658,6 +670,7 @@ const fn text_annotation_spec(
         name,
         placement: DrawingPlacement::ClickAnchors { count },
         handles: DrawingHandleMode::Anchors,
+        default_style: LineStyle::Solid,
         requests_text_editor: true,
         ..TEXT
     }
@@ -676,6 +689,7 @@ const CALLOUT: DrawingToolSpec = DrawingToolSpec {
 /// A price note tags its first anchor's price above a line to its second anchor; the tag shows
 /// the price, so it opens no text editor.
 const PRICE_NOTE: DrawingToolSpec = DrawingToolSpec {
+    default_style: LineStyle::Solid,
     requests_text_editor: false,
     ..text_annotation_spec(DrawingKind::PriceNote, 74, "price_note", 2)
 };

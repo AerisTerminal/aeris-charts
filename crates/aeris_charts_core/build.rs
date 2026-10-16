@@ -109,6 +109,7 @@ fn main() {
             ("primary_foreground", "PRIMARY_FOREGROUND"),
             ("primary_hover", "PRIMARY_HOVER"),
             ("danger", "DANGER"),
+            ("warning", "WARNING"),
             ("muted", "MUTED"),
             ("muted_foreground", "MUTED_FOREGROUND"),
             ("accent", "ACCENT"),
@@ -120,6 +121,10 @@ fn main() {
             ("bearish", "MARKET_DOWN"),
             ("positive_subtle", "POSITIVE_SUBTLE"),
             ("negative_subtle", "NEGATIVE_SUBTLE"),
+            ("popover_surface", "POPOVER_SURFACE"),
+            ("popover_border", "POPOVER_BORDER"),
+            ("popover_highlight", "POPOVER_HIGHLIGHT"),
+            ("popover_muted_foreground", "POPOVER_MUTED_FOREGROUND"),
         ] {
             emit_color(
                 &mut output,
@@ -127,28 +132,41 @@ fn main() {
                 required_string(&tokens, &[theme, field]),
             );
         }
+        // The popover highlight keeps its CSS alpha: it paints above the popover's own content,
+        // so an opaque projection onto the fill alone would be wrong wherever content reaches it.
+        let highlight_alpha = required_u8(&tokens, &[theme, "popover_highlight_alpha"]);
+        output.push_str(&format!(
+            "pub const {prefix}_POPOVER_HIGHLIGHT_ALPHA: u8 = 0x{highlight_alpha:02x};\n"
+        ));
     }
-    // Crosshair chrome is theme-independent: the lines use the one `crosshair_line` token and the
-    // labels the dark-theme secondary surface (`muted`) in both chart modes. Keep these as
-    // generated aliases so every Rust backend and host stays attached to those tokens instead of
-    // maintaining duplicate color values.
-    emit_color(
-        &mut output,
-        "CROSSHAIR_LINE",
-        required_string(&tokens, &["crosshair_line"]),
-    );
-    for prefix in ["LIGHT", "DARK"] {
+    // Crosshair lines keep their CSS alpha: they cross series geometry, so an opaque projection
+    // onto the surface would paint a solid gray bar through every candle they pass.
+    for theme in ["light", "dark"] {
+        let prefix = theme.to_ascii_uppercase();
+        let name = format!("{prefix}_CROSSHAIR_LINE");
+        let css = required_string(&tokens, &[theme, "crosshair_line"]);
+        let (red, green, blue) = rgb(css, &name);
+        let alpha = required_u8(&tokens, &[theme, "crosshair_line_alpha"]);
+        let css = if alpha == 0xff {
+            css.to_owned()
+        } else {
+            format!("{css}{alpha:02x}")
+        };
+        output.push_str(&format!("pub const {name}_CSS: &str = \"{css}\";\n"));
         output.push_str(&format!(
-            "pub const {prefix}_CROSSHAIR_LINE_CSS: &str = CROSSHAIR_LINE_CSS;\n"
+            "pub const {name}_RGB: (u8, u8, u8) = (0x{red:02x}, 0x{green:02x}, 0x{blue:02x});\n"
+        ));
+        output.push_str(&format!("pub const {name}_ALPHA: u8 = 0x{alpha:02x};\n"));
+    }
+    // Crosshair labels are generated aliases so every backend and host stays attached to the
+    // surface tokens: dark labels share the popover surface with tooltips, and light labels use
+    // the dark secondary surface so they stay legible over the white chart.
+    for (prefix, surface) in [("LIGHT", "DARK_MUTED"), ("DARK", "DARK_POPOVER_SURFACE")] {
+        output.push_str(&format!(
+            "pub const {prefix}_CROSSHAIR_LABEL_CSS: &str = {surface}_CSS;\n"
         ));
         output.push_str(&format!(
-            "pub const {prefix}_CROSSHAIR_LINE_RGB: (u8, u8, u8) = CROSSHAIR_LINE_RGB;\n"
-        ));
-        output.push_str(&format!(
-            "pub const {prefix}_CROSSHAIR_LABEL_CSS: &str = DARK_MUTED_CSS;\n"
-        ));
-        output.push_str(&format!(
-            "pub const {prefix}_CROSSHAIR_LABEL_RGB: (u8, u8, u8) = DARK_MUTED_RGB;\n"
+            "pub const {prefix}_CROSSHAIR_LABEL_RGB: (u8, u8, u8) = {surface}_RGB;\n"
         ));
     }
     emit_color(
@@ -166,6 +184,15 @@ fn main() {
         "MARKET_WARNING",
         required_string(&tokens, &["market", "warning"]),
     );
+    // Aggressor-side order-flow hues (footprint buy/ask and sell/bid), deliberately distinct from
+    // the bullish/bearish candle pair so order flow reads as its own instrument.
+    for (field, name) in [("buy", "ORDER_FLOW_BUY"), ("sell", "ORDER_FLOW_SELL")] {
+        emit_color(
+            &mut output,
+            name,
+            required_string(&tokens, &["order_flow", field]),
+        );
+    }
     let volume_alpha = required_u8(&tokens, &["market", "volume_alpha"]);
     output.push_str(&format!(
         "pub const MARKET_VOLUME_ALPHA: u8 = 0x{volume_alpha:02x};\n"
@@ -188,6 +215,7 @@ fn main() {
         "PRIMARY_FOREGROUND",
         "PRIMARY_HOVER",
         "DANGER",
+        "WARNING",
         "MUTED",
         "MUTED_FOREGROUND",
         "ACCENT",
@@ -205,6 +233,9 @@ fn main() {
             "pub const DEFAULT_{suffix}_RGB: (u8, u8, u8) = {default_prefix}_{suffix}_RGB;\n"
         ));
     }
+    output.push_str(&format!(
+        "pub const DEFAULT_CROSSHAIR_LINE_ALPHA: u8 = {default_prefix}_CROSSHAIR_LINE_ALPHA;\n"
+    ));
     output.push_str(&format!(
         "pub const DEFAULT_MARKET_UP_CSS: &str = {default_prefix}_MARKET_UP_CSS;\n"
     ));
@@ -230,6 +261,7 @@ fn main() {
     output.push_str("pub const DEFAULT_CROSSHAIR_CSS: &str = DEFAULT_CROSSHAIR_LINE_CSS;\n");
     output
         .push_str("pub const DEFAULT_CROSSHAIR_RGB: (u8, u8, u8) = DEFAULT_CROSSHAIR_LINE_RGB;\n");
+    output.push_str("pub const DEFAULT_CROSSHAIR_ALPHA: u8 = DEFAULT_CROSSHAIR_LINE_ALPHA;\n");
     output.push_str("pub const LIGHT_SEPARATOR_HOVER_CSS: &str = LIGHT_ACCENT_CSS;\n");
     output.push_str("pub const DARK_SEPARATOR_HOVER_CSS: &str = DARK_ACCENT_CSS;\n");
     output.push_str("pub const DEFAULT_SEPARATOR_HOVER_CSS: &str = DEFAULT_ACCENT_CSS;\n");

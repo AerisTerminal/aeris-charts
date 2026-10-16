@@ -29,7 +29,7 @@
   h1, h2 { text-wrap: balance; }
   p, .hint { text-wrap: pretty; }
   #wrap { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  #bar { z-index: 20; background: var(--surface); border-bottom: var(--border-width) solid var(--border); }
+  #bar { z-index: 20; background: var(--surface); border-bottom: 1px solid var(--border); }
   #app_bar { min-height: 64px; padding: 8px 16px; display: flex; gap: 12px; align-items: center; min-width: 0; }
   .brand-lockup { display: flex; align-items: center; gap: 10px; min-width: 176px; }
   .brand-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: var(--primary); color: var(--primary-foreground); }
@@ -38,23 +38,23 @@
   .brand { font-size: 13px; font-weight: 650; }
   .mobile-heading { display: none; }
   .lab-title { margin-top: 2px; color: var(--text-secondary); font-size: 11px; }
-  #demo_mode_switch { display: flex; gap: 2px; padding: 3px; background: var(--surface-secondary); border: var(--border-width) solid var(--border); border-radius: 9px; }
+  #demo_mode_switch { display: flex; gap: 2px; padding: 3px; background: var(--surface-secondary); border: 1px solid var(--border); border-radius: 9px; }
   #demo_mode_switch button { height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 11px; font-weight: 600; }
   #demo_mode_switch button:hover { background: var(--hover-bg); color: var(--text-primary); }
-  #demo_mode_switch button[aria-pressed="true"] { background: var(--surface); color: var(--demo-accent-text); box-shadow: 0 0 0 var(--border-width) var(--border-secondary); }
-  .market-summary { display: flex; align-items: center; gap: 10px; min-width: 0; padding-left: 16px; border-left: var(--border-width) solid var(--border); }
+  #demo_mode_switch button[aria-pressed="true"] { background: var(--surface); color: var(--demo-accent-text); box-shadow: 0 0 0 1px var(--border-secondary); }
+  .market-summary { display: flex; align-items: center; gap: 10px; min-width: 0; padding-left: 16px; border-left: 1px solid var(--border); }
   .market-symbol { font-size: 13px; font-weight: 600; white-space: nowrap; }
   .market-meta { color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
   .market-price { min-width: 48px; color: var(--demo-bullish-text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .market-price[data-direction="down"] { color: var(--demo-bearish-text); }
   #comparison_controls { display: flex; gap: 6px; align-items: center; margin-left: auto; }
-  #comparison_controls select, #comparison_controls button { height: 40px; color: var(--text-primary); background: var(--surface-secondary); border: var(--border-width) solid var(--border-secondary); border-radius: var(--radius-compact); }
+  #comparison_controls select, #comparison_controls button { height: 40px; color: var(--text-primary); background: var(--surface-secondary); border: 1px solid var(--border-secondary); border-radius: var(--radius-compact); }
   #comparison_controls select { max-width: 148px; padding: 0 8px; font-size: 12px; }
   #comparison_controls button { padding: 0 10px; font-size: 12px; font-weight: 600; }
   #comparison_controls button:hover:not(:disabled) { background: var(--hover-bg); }
   #comparison_clear:disabled { color: var(--text-muted); }
   #quick_actions { display: flex; gap: 2px; align-items: center; }
-  .icon-button, #quick_actions button, #tool_rail button { display: inline-grid; place-items: center; border: var(--border-width) solid transparent; background: transparent; color: var(--icon); }
+  .icon-button, #quick_actions button, #tool_rail button { display: inline-grid; place-items: center; border: 1px solid transparent; background: transparent; color: var(--icon); }
   .icon-button, #quick_actions button { flex-shrink: 0; width: 40px; height: 40px; padding: 0; border-radius: var(--radius-default); }
   .icon-button:hover, #quick_actions button:hover, #tool_rail button:hover { color: var(--icon-active); background: var(--hover-bg); }
   .icon-button:active, #quick_actions button:active, #tool_rail button:active { background: var(--active-bg); }
@@ -78,25 +78,25 @@
   [data-demo-mode="general"] #quick_actions,
   [data-demo-mode="general"] #status,
   [data-demo-mode="general"] #inspector_toggle { display: none; }
-  #tool_rail { z-index: 12; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px; background: var(--surface); border-right: var(--border-width) solid var(--border); }
+  #tool_rail { z-index: 12; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px; background: var(--surface); border-right: 1px solid var(--border); }
   #tool_rail button { width: 60px; min-height: 56px; gap: 4px; padding: 8px 2px; border-radius: var(--radius-default); font-size: 10px; }
   #tool_rail button[aria-current="true"] { color: var(--demo-accent-text); background: color-mix(in srgb, var(--primary) 10%, transparent); border-color: color-mix(in srgb, var(--primary) 25%, transparent); }
   #tool_rail .rail-spacer { flex: 1; }
-  #inspector { z-index: 11; display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--surface); border-left: var(--border-width) solid var(--border); }
+  #inspector { z-index: 11; display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--surface); border-left: 1px solid var(--border); }
   #inspector[data-open="false"] { display: none; }
-  #inspector_header { padding: 18px 20px 16px; border-bottom: var(--border-width) solid var(--border); }
+  #inspector_header { padding: 18px 20px 16px; border-bottom: 1px solid var(--border); }
   #inspector_header h1 { margin: 0; font-size: 16px; font-weight: 600; }
   #inspector_header p { margin: 6px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
   #control_jump_label { display: flex; gap: 12px; align-items: center; margin-top: 16px; color: var(--text-secondary); font-size: 12px; }
   #control_jump { flex: 1; width: 0; }
   #controls_strip { min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 0 20px; scrollbar-width: thin; scrollbar-color: var(--border-secondary) transparent; }
-  #inspector .group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0; padding: 20px 0; border-bottom: var(--border-width) solid var(--border); scroll-margin-top: 0; }
+  #inspector .group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0; padding: 20px 0; border-bottom: 1px solid var(--border); scroll-margin-top: 0; }
   #inspector .group[hidden] { display: none; }
   #drawing_catalog { flex-basis: 100%; }
   #drawing_catalog .drawing_catalog_row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
   #drawing_catalog .drawing_catalog_row > span { min-width: 84px; font-size: 12px; opacity: 0.7; }
   .icon_picker { display: grid; grid-template-columns: repeat(auto-fill, 32px); gap: 4px; flex: 1; min-width: 0; }
-  .icon_picker button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: var(--border-width) solid transparent; border-radius: var(--radius-small); background: transparent; color: var(--icon); }
+  .icon_picker button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-small); background: transparent; color: var(--icon); }
   .icon_picker button:hover { color: var(--icon-active); background: var(--hover-bg); }
   .icon_picker button[aria-pressed="true"] { color: var(--primary-foreground); background: var(--primary); }
   .icon_picker svg { width: 20px; height: 20px; }
@@ -106,7 +106,7 @@
   #inspector label:has(input[type="checkbox"]), #inspector label:has(input[type="radio"]) { flex: 1 1 44%; cursor: pointer; color: var(--text-primary); }
   #inspector label > select, #inspector label > input:not([type="checkbox"]):not([type="radio"]), #inspector label > span:last-child { margin-left: auto; }
   #inspector label > input[type="range"] + span { margin-left: 0; min-width: 20px; text-align: right; }
-  #inspector button, #inspector select, #inspector input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) { min-height: 40px; max-width: 100%; background: var(--surface-secondary); color: var(--text-primary); border: var(--border-width) solid var(--border-secondary); border-radius: var(--radius-compact); }
+  #inspector button, #inspector select, #inspector input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) { min-height: 40px; max-width: 100%; background: var(--surface-secondary); color: var(--text-primary); border: 1px solid var(--border-secondary); border-radius: var(--radius-compact); }
   #inspector select, #inspector input[type="text"], #inspector input[type="number"] { width: 160px; padding: 6px 8px; }
   #inspector button { min-width: 40px; padding: 8px 12px; font-size: 12px; }
   #inspector button:hover { background: var(--hover-bg); }
@@ -137,7 +137,7 @@
   .scenario-grid .feature-card[hidden] { display: none; }
   #feature_empty { display: none; padding: 24px 8px; color: var(--text-secondary); font-size: 12px; text-align: center; }
   #feature_empty[data-visible="true"] { display: block; }
-  #feature_lab_status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: var(--border-width) solid var(--border); color: var(--text-secondary); font-size: 11px; }
+  #feature_lab_status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 11px; }
 
   #chart_wrap { grid-column: 2; grid-row: 1; position: relative; min-width: 0; min-height: 0; background: var(--surface); }
   #chart_container { position: absolute; inset: 0; touch-action: none; overscroll-behavior: none; }
@@ -177,7 +177,7 @@
   }
   @media (max-width: 600px) {
     #app_bar { flex-wrap: wrap; }
-    #comparison_controls { order: 2; flex-basis: 100%; padding-top: 6px; border-top: var(--border-width) solid var(--border); }
+    #comparison_controls { order: 2; flex-basis: 100%; padding-top: 6px; border-top: 1px solid var(--border); }
     #comparison_controls select { max-width: none; flex: 1; }
     #comparison_clear { margin-left: auto; }
   }
@@ -310,6 +310,23 @@
     <div class="group" id="area_style" data-caption="Area style" hidden>
       <h2>Area style</h2>
       <label>color <input type="color" id="area_top" value="#089981"></label>
+    </div>
+
+    <!-- footprint presentation: engine-owned cell modes and the pinned statistics table -->
+    <div class="group" id="footprint_style" data-caption="Footprint style" hidden>
+      <h2>Footprint style</h2>
+      <label>cells
+        <select id="footprint_cell_mode">
+          <option value="bid_ask" selected>Bid × Ask</option>
+          <option value="volume_ladder">Volume ladder</option>
+          <option value="horizontal_imbalance">Horizontal imbalance</option>
+          <option value="bid_ask_histogram">Bid/Ask histogram</option>
+          <option value="delta">Delta</option>
+          <option value="total">Total volume</option>
+          <option value="profile_in_bar">Profile</option>
+        </select>
+      </label>
+      <label title="Delta, Volume, and Volume/sec for every visible bar, pinned to the pane bottom"><input type="checkbox" id="footprint_stats" checked> stats table</label>
     </div>
 
     <div class="group" id="overlays_group" data-caption="Indicators">
@@ -527,9 +544,9 @@
       <label>w <input type="range" id="cross_width" min="1" max="4" step="1" value="1"><span id="cross_width_val">1</span></label>
       <label>style
         <select id="cross_style">
-          <option value="0">solid</option>
+          <option value="0" selected>solid</option>
           <option value="1">dotted</option>
-          <option value="2" selected>dashed</option>
+          <option value="2">dashed</option>
         </select>
       </label>
       <label>label bg <input type="color" id="cross_label_bg" value="#141414"></label>
@@ -1258,15 +1275,16 @@ function sync_drawing_tool_buttons(tool) {
 // A false value means trend-label ink follows the line color. The color input still displays the
 // resolved color, but it is serialized only after the user explicitly changes that control.
 let drawing_text_color_explicit = false;
-// Width likewise templates new drawings only after the user moves the slider, so each tool keeps
-// its engine catalog default (1 px lines, the wide highlighter) until then.
+// Width and stroke style likewise template new drawings only after the user changes them, so each
+// tool keeps its engine catalog default (1 px lines, the wide highlighter, dashed Fibonacci tools)
+// until then.
 let drawing_width_explicit = false;
+let drawing_style_explicit = false;
 function drawing_options_from_inputs(kind = null) {
   const options = {
     position_account_size: Number(document.getElementById("position_account_size").value),
     position_risk_percent: Number(document.getElementById("position_risk_percent").value),
     color: document.getElementById("drawing_color").value,
-    style: document.getElementById("drawing_style").value,
     text_size: Number(document.getElementById("drawing_text_size").value),
     text_weight: Number(document.getElementById("drawing_weight").value),
     text_italic: document.getElementById("drawing_italic").checked,
@@ -1278,6 +1296,9 @@ function drawing_options_from_inputs(kind = null) {
   }
   if (drawing_width_explicit) {
     options.width = Number(document.getElementById("drawing_width").value);
+  }
+  if (drawing_style_explicit) {
+    options.style = document.getElementById("drawing_style").value;
   }
   if (kind === "text") options.text = document.getElementById("drawing_text").value;
   return options;
@@ -1372,6 +1393,7 @@ for (const id of ["position_account_size", "position_risk_percent", "drawing_col
   document.getElementById(id).addEventListener("change", () => {
     if (id === "drawing_text_color") drawing_text_color_explicit = true;
     if (id === "drawing_width") drawing_width_explicit = true;
+    if (id === "drawing_style") drawing_style_explicit = true;
     if (id === "drawing_color" && !drawing_text_color_explicit) {
       document.getElementById("drawing_text_color").value = document.getElementById("drawing_color").value;
     }
@@ -1453,7 +1475,14 @@ function sync_style_visibility(kind) {
   document.getElementById("line_style").hidden = !(kind === "line" || kind === "area" || kind === "baseline");
   document.getElementById("line_color_label").hidden = kind === "area";
   document.getElementById("area_style").hidden = kind !== "area";
+  document.getElementById("footprint_style").hidden = kind !== "footprint";
 }
+document.getElementById("footprint_cell_mode").addEventListener("change", (e) => {
+  window.__demo_catalogs.series.set_footprint_style({ cell_mode: e.target.value });
+});
+document.getElementById("footprint_stats").addEventListener("change", (e) => {
+  window.__demo_catalogs.series.set_footprint_style({ show_bar_summary: e.target.checked });
+});
 
 // Wick/border pickers pin an explicit color only once touched; until then the engine's
 // reference parity fallback keeps each wick/border following its direction's body color, so the
@@ -1861,31 +1890,30 @@ document.getElementById("cross_mode").addEventListener("change", (e) => {
 });
 
 // Crosshair cosmetics drive both lines at once; the engine stores them per line (reference parity).
-function apply_crosshair_style() {
-  const color = document.getElementById("cross_color").value;
-  const width = Number(document.getElementById("cross_width").value);
-  const style = Number(document.getElementById("cross_style").value);
-  const labelBackgroundColor = document.getElementById("cross_label_bg").value;
-  const labelVisible = document.getElementById("cross_label_visible").checked;
-  chart.apply_options({
-    crosshair: {
-      vertLine: { color, width, style, labelBackgroundColor, labelVisible },
-      horzLine: { color, width, style, labelBackgroundColor, labelVisible },
-    },
-  });
+// The color picker has no alpha, so the line color is sent only when it is edited; the other
+// controls keep the theme's translucent crosshair line.
+function apply_crosshair_style(include_color = false) {
+  const line = {
+    width: Number(document.getElementById("cross_width").value),
+    style: Number(document.getElementById("cross_style").value),
+    labelBackgroundColor: document.getElementById("cross_label_bg").value,
+    labelVisible: document.getElementById("cross_label_visible").checked,
+  };
+  if (include_color) line.color = document.getElementById("cross_color").value;
+  chart.apply_options({ crosshair: { vertLine: line, horzLine: { ...line } } });
 }
 document.getElementById("cross_color").addEventListener("input", () => {
-  apply_crosshair_style();
+  apply_crosshair_style(true);
 });
 document.getElementById("cross_width").addEventListener("input", (e) => {
   document.getElementById("cross_width_val").textContent = e.target.value;
   apply_crosshair_style();
 });
-document.getElementById("cross_style").addEventListener("change", apply_crosshair_style);
+document.getElementById("cross_style").addEventListener("change", () => apply_crosshair_style());
 document.getElementById("cross_label_bg").addEventListener("input", () => {
   apply_crosshair_style();
 });
-document.getElementById("cross_label_visible").addEventListener("change", apply_crosshair_style);
+document.getElementById("cross_label_visible").addEventListener("change", () => apply_crosshair_style());
 
 function apply_font() {
   chart.apply_options({
@@ -2009,7 +2037,8 @@ function sync_chart_controls_from_engine() {
 }
 // Startup is read-only from here: reflect the engine into the controls without re-applying it.
 if (parity_fixture === null) sync_chart_controls_from_engine();
-sync_style_visibility("candlestick");
+// A URL-requested advanced series (?feature=footprint) is already active by now.
+sync_style_visibility(window.__demo_catalogs.series.interaction_series().series_type());
 
 // crosshair-move subscription → OHLC legend (the public event API); a hovered primitive
 // object (e.g. the position band) shows its external id alongside.

@@ -3,14 +3,16 @@
 //! A host owns provider subscriptions and computes values. The chart engine owns validation,
 //! generation fencing, series/pane lifecycle, presentation, and group operations.
 
+use crate::indicators::{indicator_output_style, output_style_is_valid};
 use crate::{
-    ChartEngine, EMA_RIBBON_DEFAULT_COLORS, IndicatorChromeOptions,
+    ChartEngine, EMA_RIBBON_DEFAULT_COLORS, IndicatorChromeOptions, IndicatorOutputStyle,
     SEPARATE_INDICATOR_PANE_STRETCH, SeriesId, SeriesKind, SeriesThresholdRegion,
 };
 use aeris_charts_core::model::data_validation::{MAX_SAFE_VALUE, validate_timestamp};
 use std::fmt;
 
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
+const DEFAULT_EXTERNAL_STUDY_LINE_WIDTH: f64 = 2.0;
 const MAX_EXTERNAL_STUDY_TITLE_BYTES: usize = 256;
 const MAX_EXTERNAL_STUDY_LEGEND_LABEL_BYTES: usize = 128;
 
@@ -124,6 +126,11 @@ pub(crate) struct ExternalStudyOutputState {
     settings_available: bool,
     legend_label: Option<String>,
     input_requirements: ExternalStudyInputRequirements,
+    /// The output's own visibility from its style, kept apart from the whole-study toggle so
+    /// showing the study again never brings back a line the host hid. The series paints only
+    /// when both are set.
+    output_visible: bool,
+    study_visible: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -186,17 +193,29 @@ impl ChartEngine {
         }
         validate_descriptor(descriptor)?;
         let columns = prepare_columns(timestamps_unix_nanos, values)?;
-        let existing = self.external_study_outputs.get(&key).cloned();
-        if existing.is_none() && self.external_study_outputs.len() >= MAX_EXTERNAL_STUDY_OUTPUTS {
-            return Err(ExternalStudyError::CapacityExceeded);
-        }
-        let series_id = if let Some(state) = existing {
-            set_series_data(self, state.series_id, &columns)?;
-            state.series_id
+        let existing = self
+            .external_study_outputs
+            .get(&key)
+            .map(|state| (state.series_id, state.output_visible, state.study_visible));
+        let (series_id, output_visible, study_visible) = if let Some(existing) = existing {
+            set_series_data(self, existing.0, &columns)?;
+            existing
         } else {
-            self.install_new_external_study_series(study_id, output_index, descriptor, &columns)?
+            if self.external_study_outputs.len() >= MAX_EXTERNAL_STUDY_OUTPUTS {
+                return Err(ExternalStudyError::CapacityExceeded);
+            }
+            // An output that first arrives while its study is hidden joins it hidden.
+            let study_visible = self.external_study_visible(study_id).unwrap_or(true);
+            let series_id = self.install_new_external_study_series(
+                study_id,
+                output_index,
+                descriptor,
+                &columns,
+            )?;
+            self.set_series_visible(series_id, study_visible);
+            (series_id, true, study_visible)
         };
-        apply_presentation(self, series_id, output_index, descriptor);
+        apply_presentation(self, series_id, descriptor);
         self.external_study_outputs.insert(
             key,
             ExternalStudyOutputState {
@@ -205,6 +224,8 @@ impl ChartEngine {
                 settings_available: descriptor.settings_available,
                 legend_label: descriptor.legend_label.map(str::to_owned),
                 input_requirements: descriptor.input_requirements,
+                output_visible,
+                study_visible,
             },
         );
         Ok(true)
@@ -235,7 +256,8 @@ impl ChartEngine {
             series.title_visible = chrome.name_labels_visible;
             series.last_value_visible = chrome.value_labels_visible;
             series.price_line_visible = chrome.price_lines_visible;
-            series.line_width = Some(2.0);
+            series.line_color = Some(default_output_color(output_index));
+            series.line_width = Some(DEFAULT_EXTERNAL_STUDY_LINE_WIDTH);
             if let Some((kind, precision, min_move)) = source_price_format {
                 series.price_format.kind = kind;
                 series.price_format.precision = precision;
@@ -285,7 +307,6 @@ impl ChartEngine {
         if let Some((key, pane_id, _)) = created_pane {
             self.external_study_panes.insert(key, pane_id);
         }
-        apply_presentation(self, series_id, output_index, descriptor);
         Ok(series_id)
     }
 
@@ -340,39 +361,103 @@ impl ChartEngine {
             .collect()
     }
 
+    /// The whole-study visibility toggle. Outputs hidden through their own style stay hidden
+    /// while the study is shown.
     #[must_use]
     pub fn external_study_visible(&self, study_id: u64) -> Option<bool> {
-        let mut found = false;
-        let mut visible = true;
-        for (&(candidate, _), state) in &self.external_study_outputs {
-            if candidate != study_id {
-                continue;
-            }
-            let Some(series) = self.series_entry(state.series_id) else {
-                continue;
-            };
-            found = true;
-            visible &= series.visible;
-        }
-        found.then_some(visible)
+        self.external_study_outputs
+            .iter()
+            .find_map(|(&(candidate, _), state)| {
+                (candidate == study_id && self.series_entry(state.series_id).is_some())
+                    .then_some(state.study_visible)
+            })
     }
 
     pub fn set_external_study_visible(&mut self, study_id: u64, visible: bool) -> bool {
-        let series_ids = self
-            .external_study_outputs
-            .iter()
-            .filter_map(|(&(candidate, _), state)| {
-                (candidate == study_id).then_some(state.series_id)
-            })
-            .collect::<Vec<_>>();
-        let changed = series_ids.iter().any(|&id| {
-            self.series_entry(id)
-                .is_some_and(|series| series.visible != visible)
-        });
-        for id in series_ids {
+        let mut changed = false;
+        let mut painted = Vec::new();
+        for (&(candidate, _), state) in &mut self.external_study_outputs {
+            if candidate == study_id {
+                changed |= state.study_visible != visible;
+                state.study_visible = visible;
+                painted.push((state.series_id, visible && state.output_visible));
+            }
+        }
+        for (id, visible) in painted {
             self.set_series_visible(id, visible);
         }
         changed
+    }
+
+    /// Current presentation of one output. `visible` is the output's own visibility,
+    /// independent of the whole-study toggle, so a host can persist and restore it as is.
+    #[must_use]
+    pub fn external_study_output_style(
+        &self,
+        study_id: u64,
+        output_index: usize,
+    ) -> Option<IndicatorOutputStyle> {
+        let state = self.external_study_outputs.get(&(study_id, output_index))?;
+        let series = self.series_entry(state.series_id)?;
+        Some(IndicatorOutputStyle {
+            visible: state.output_visible,
+            ..indicator_output_style(series)
+        })
+    }
+
+    /// Replace one output's color, width, line style, and visibility. The style survives later
+    /// data pushes and whole-study visibility toggles. An invalid width, line style, or color is
+    /// rejected before anything changes.
+    pub fn set_external_study_output_style(
+        &mut self,
+        study_id: u64,
+        output_index: usize,
+        style: IndicatorOutputStyle,
+    ) -> bool {
+        let key = (study_id, output_index);
+        let Some(state) = self.external_study_outputs.get(&key) else {
+            return false;
+        };
+        let (series_id, study_visible) = (state.series_id, state.study_visible);
+        if !output_style_is_valid(&style) || self.series_entry(series_id).is_none() {
+            return false;
+        }
+        let output_visible = style.visible;
+        if let Some(state) = self.external_study_outputs.get_mut(&key) {
+            state.output_visible = output_visible;
+        }
+        self.write_output_style(series_id, style, output_visible && study_visible)
+    }
+
+    /// Drop the bookkeeping of outputs whose series were removed directly, so the slot no longer
+    /// counts toward capacity and a later push for that output installs it again instead of
+    /// failing against a dead series.
+    pub(crate) fn forget_removed_external_study_outputs(&mut self, removed: &[SeriesId]) {
+        let before = self.external_study_outputs.len();
+        self.external_study_outputs
+            .retain(|_, state| !removed.contains(&state.series_id));
+        if self.external_study_outputs.len() != before {
+            let outputs = &self.external_study_outputs;
+            self.external_study_panes.retain(|&(study_id, _), _| {
+                outputs.keys().any(|&(candidate, _)| candidate == study_id)
+            });
+        }
+    }
+
+    /// Restore the chart-owned default color and width of every output. Visibility survives,
+    /// matching the reset contract of every other series.
+    pub(crate) fn reset_external_study_styles_to_defaults(&mut self) {
+        let outputs = self
+            .external_study_outputs
+            .iter()
+            .map(|(&(_, output_index), state)| (output_index, state.series_id))
+            .collect::<Vec<_>>();
+        for (output_index, series_id) in outputs {
+            if let Some(series) = self.series_entry_mut(series_id) {
+                series.line_color = Some(default_output_color(output_index));
+                series.line_width = Some(DEFAULT_EXTERNAL_STUDY_LINE_WIDTH);
+            }
+        }
     }
 
     pub fn remove_external_studies(&mut self, study_ids: &[u64]) -> bool {
@@ -518,17 +603,19 @@ fn set_series_data(
         .map_err(|_| ExternalStudyError::InstallationRejected)
 }
 
+fn default_output_color(output_index: usize) -> String {
+    EMA_RIBBON_DEFAULT_COLORS[output_index % EMA_RIBBON_DEFAULT_COLORS.len()].to_owned()
+}
+
+/// Descriptor-driven presentation refreshed on every push. Color and width are set once at
+/// creation and then belong to the host's style, so they are deliberately not touched here.
 fn apply_presentation(
     engine: &mut ChartEngine,
     series_id: SeriesId,
-    output_index: usize,
     descriptor: ExternalStudyOutputDescriptor<'_>,
 ) {
     if let Some(series) = engine.series_entry_mut(series_id) {
         series.title = descriptor.title.to_owned();
-        series.line_color = Some(
-            EMA_RIBBON_DEFAULT_COLORS[output_index % EMA_RIBBON_DEFAULT_COLORS.len()].to_owned(),
-        );
     }
     let threshold = descriptor
         .threshold_region
@@ -651,6 +738,162 @@ mod tests {
         assert!(chart.external_study_outputs().is_empty());
         assert!(!chart.has_external_studies());
         assert_eq!(chart.external_study_for_series(outputs[0].series_id), None);
+    }
+
+    fn install_ribbon(chart: &mut ChartEngine, study_id: u64, generation: u64) {
+        for output_index in 0..5 {
+            assert_eq!(
+                chart.install_external_study_output(
+                    study_id,
+                    output_index,
+                    descriptor("EMA Ribbon", ExternalStudyPaneTarget::Price),
+                    generation,
+                    &[1_000_000_000, 2_000_000_000],
+                    &[Some(1.0), Some(2.0)],
+                ),
+                Ok(true)
+            );
+        }
+    }
+
+    fn painted(chart: &ChartEngine, study_id: u64, output_index: usize) -> bool {
+        let info = chart
+            .external_study_output_info(study_id, output_index)
+            .unwrap();
+        chart.series_entry(info.series_id).unwrap().visible
+    }
+
+    #[test]
+    fn external_study_output_style_survives_pushes_and_study_toggles() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        install_ribbon(&mut chart, 9, 1);
+        let defaults = chart.external_study_output_style(9, 2).unwrap();
+        assert_eq!(
+            defaults.line_color.as_deref(),
+            Some(EMA_RIBBON_DEFAULT_COLORS[2])
+        );
+        assert_eq!(defaults.line_width, Some(DEFAULT_EXTERNAL_STUDY_LINE_WIDTH));
+        assert!(defaults.visible);
+
+        let styled = IndicatorOutputStyle {
+            line_color: Some("#ff00ff".to_owned()),
+            line_width: Some(3.0),
+            line_style: 2,
+            ..defaults.clone()
+        };
+        assert!(chart.set_external_study_output_style(9, 2, styled.clone()));
+        let hidden = IndicatorOutputStyle {
+            visible: false,
+            ..chart.external_study_output_style(9, 4).unwrap()
+        };
+        assert!(chart.set_external_study_output_style(9, 4, hidden));
+        assert!(
+            !chart.set_external_study_output_style(
+                9,
+                1,
+                IndicatorOutputStyle {
+                    line_width: Some(0.0),
+                    ..defaults.clone()
+                }
+            ),
+            "an invalid width is rejected"
+        );
+        assert!(!chart.set_external_study_output_style(9, 5, defaults.clone()));
+
+        install_ribbon(&mut chart, 9, 2);
+        assert_eq!(
+            chart.external_study_output_style(9, 2),
+            Some(styled),
+            "a data push keeps the host style"
+        );
+        assert!(!painted(&chart, 9, 4), "a hidden ribbon line stays hidden");
+        assert!(painted(&chart, 9, 3));
+
+        assert!(chart.set_external_study_visible(9, false));
+        assert_eq!(chart.external_study_visible(9), Some(false));
+        assert!((0..5).all(|index| !painted(&chart, 9, index)));
+        assert!(chart.set_external_study_visible(9, true));
+        assert!(
+            !painted(&chart, 9, 4),
+            "showing the study does not bring back a hidden line"
+        );
+        assert!((0..4).all(|index| painted(&chart, 9, index)));
+        assert!(!chart.external_study_output_style(9, 4).unwrap().visible);
+    }
+
+    #[test]
+    fn external_study_outputs_join_hidden_studies_and_reset_restores_defaults() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let times = [1_000_000_000];
+        let values = [Some(1.0)];
+        let line = descriptor("Study", ExternalStudyPaneTarget::Price);
+        assert_eq!(
+            chart.install_external_study_output(4, 0, line, 1, &times, &values),
+            Ok(true)
+        );
+        assert!(chart.set_external_study_visible(4, false));
+        assert_eq!(
+            chart.install_external_study_output(4, 1, line, 1, &times, &values),
+            Ok(true)
+        );
+        assert!(
+            !painted(&chart, 4, 1),
+            "a late output joins its study hidden"
+        );
+
+        let style = IndicatorOutputStyle {
+            line_color: Some("#123456".to_owned()),
+            line_width: Some(1.0),
+            visible: false,
+            ..chart.external_study_output_style(4, 0).unwrap()
+        };
+        assert!(chart.set_external_study_output_style(4, 0, style));
+        chart.reset_style_to_defaults();
+        let reset = chart.external_study_output_style(4, 0).unwrap();
+        assert_eq!(
+            reset.line_color.as_deref(),
+            Some(EMA_RIBBON_DEFAULT_COLORS[0])
+        );
+        assert_eq!(reset.line_width, Some(DEFAULT_EXTERNAL_STUDY_LINE_WIDTH));
+        assert!(!reset.visible, "a style reset keeps visibility");
+    }
+
+    #[test]
+    fn removing_one_external_output_series_releases_its_slot() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        install_ribbon(&mut chart, 11, 1);
+        let removed = chart.external_study_output_info(11, 3).unwrap().series_id;
+        assert!(chart.remove_series(removed));
+        assert_eq!(chart.external_study_output_info(11, 3), None);
+        assert_eq!(chart.external_study_outputs().len(), 4);
+        assert_eq!(
+            chart.install_external_study_output(
+                11,
+                2,
+                descriptor("EMA Ribbon", ExternalStudyPaneTarget::Price),
+                2,
+                &[1_000_000_000],
+                &[Some(5.0)],
+            ),
+            Ok(true),
+            "the remaining outputs keep updating"
+        );
+        assert_eq!(
+            chart.install_external_study_output(
+                11,
+                3,
+                descriptor("EMA Ribbon", ExternalStudyPaneTarget::Price),
+                2,
+                &[1_000_000_000],
+                &[Some(5.0)],
+            ),
+            Ok(true),
+            "a later push installs the removed output again instead of failing"
+        );
+        assert_ne!(
+            chart.external_study_output_info(11, 3).unwrap().series_id,
+            removed
+        );
     }
 
     #[test]

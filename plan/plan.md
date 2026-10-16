@@ -35,7 +35,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G4 | R4 | Components and interaction | **Complete** | Default legend, tooltip and brush controls; engine selection and semantic linked sync; shared-frame export coverage | G5; manual assistive-technology and calibrated GPUI image evidence remain pending |
 | G5 | R5 | React and framework-neutral authoring | **Complete** | Keyed declarations and mapped rows; atomic shared composition; controlled brush; first-pane ownership; lifecycle, SSR, packed-consumer and browser evidence | G6; manual assistive-technology review remains pending |
 | G6 | R6 | Polar families and transitions | **Complete** | `f64` polar geometry and axes; pie/donut, radar, polar-area and radial-bar paths; single-fill ordered polar mesh; bounded cached hits, slice legends, shared-frame leader labels, pointer and keyboard selection; WASM/TS bindings; opt-in fixed-clock value and numeric/temporal X updates, Cartesian and angular category-axis and matched-row category movement, identity-matched entry and exit rows, missing/valid Y, error-bound and bubble-size motion, pie row-order motion, fixed-spoke and changing-count radar morphs, compatible optional-channel changes, collapsed error-bound entry, persisted duration and browser scheduling; polar and Cartesian family fixed-clock frame/hit fixtures, GPUI/Canvas2D structural fill, bounded Canvas2D/WebGPU pixels, and measured 1.25× GPUI/native polar window parity; strict release performance, six package-size limits, and 735 portable browser tests passed | G7; manual assistive-technology and broader device-scale image evidence remain pending |
-| G7 | R7 | Hierarchy and flow families | **Open** | — | Funnel, treemap, Sankey, sunburst |
+| G7 | R7 | Hierarchy and flow families | **In progress** | Axis-free `layout` pane topology is available in engine, WASM, and TypeScript; lazy typed stage/tree/flow store validates IDs, values, cycles, depth and bounded retained capacity; funnel, treemap, Sankey and sunburst emit shared ordered-frame geometry with direct or cached exact hits; focused financial-isolation, persistence, atomic-store and geometry fixtures pass | Complete host behavior, persistence, accessibility, transitions and parity |
 | G8 | R8 | Parity closure and release readiness | **Open** | — | Full matrix verification against the pinned competitor |
 
 Notes:
@@ -520,7 +520,7 @@ animation scheduling.
 
 ### R7 — Hierarchy and flow families
 
-**Batch:** G7. **Depends on:** the lifecycle, layout and primitive contracts above. **Status:** open.
+**Batch:** G7. **Depends on:** the lifecycle, layout and primitive contracts above. **Status:** in progress.
 
 - [ ] Funnel.
 - [ ] Treemap.

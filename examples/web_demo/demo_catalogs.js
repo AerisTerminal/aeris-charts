@@ -101,63 +101,114 @@ function stacked_series_data(bars, layer_count = 4) {
   });
 }
 
+const FOOTPRINT_TICK = 0.1;
+const FOOTPRINT_BARS = 30;
+const FOOTPRINT_INTERVAL = 3600;
+
+/**
+ * Seeded order-flow tape for the footprint preview. Each bar trades inside its hidden candle's own
+ * range (so price overlays stay aligned) along an open → extreme → extreme → close path, with a
+ * time-at-price profile, a directional bid/ask skew, and occasional initiative runs that produce
+ * stacked imbalances near the extreme the bar moved toward.
+ */
 function footprint_trades(bars) {
-  const tick_size = 0.25;
-  const sample = bars.slice(-12);
+  const rand = demo_rand(0xf007);
+  const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
   const trades = [];
   let trade_id = 1;
-  // Dense center-peaked synthetic flow: heavy middle, tapering edges, alternating
-  // dominant side per bar so delta, POC, and stacked imbalances all show up.
-  // Eleven levels per bar also keeps price rows compact like production flow.
-  const shape = [3, 6, 11, 17, 23, 28, 23, 17, 11, 6, 3];
-  const offsets = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5];
-  for (let bar_index = 0; bar_index < sample.length; bar_index += 1) {
-    const bar = sample[bar_index];
-    const start_seconds = Math.floor(bar.time / 3600) * 3600;
-    const center_level = Math.round(bar.close / tick_size) + (bar_index % 3) - 1;
-    const ask_dominant = bar_index % 2 === 0;
-    const events = [];
-    for (let index = 0; index < offsets.length; index += 1) {
-      const level = center_level + offsets[index];
-      const peak = shape[index];
-      const bid_volume = ask_dominant ? Math.max(2, Math.round(peak * 0.2)) : peak;
-      const ask_volume = ask_dominant ? peak : Math.max(2, Math.round(peak * 0.2));
-      events.push(
-        { level, volume: bid_volume, aggressor: "sell" },
-        { level, volume: ask_volume, aggressor: "buy" },
-      );
+  for (const bar of bars.slice(-FOOTPRINT_BARS)) {
+    const low = Math.round(bar.low / FOOTPRINT_TICK);
+    const high = Math.max(low + 2, Math.round(bar.high / FOOTPRINT_TICK));
+    const open = clamp(Math.round(bar.open / FOOTPRINT_TICK), low, high);
+    const close = clamp(Math.round(bar.close / FOOTPRINT_TICK), low, high);
+    const span = high - low;
+    const bias = (close - open) / span;
+    const poc = Math.round(low + span * (0.3 + rand() * 0.4));
+    const spread = Math.max(1.5, span * (0.2 + rand() * 0.14));
+    const peak = 260 + rand() * 520;
+    // An initiative run of 3-4 levels at the extreme the bar pushed toward.
+    const run_length = rand() < 0.45 ? 3 + Math.floor(rand() * 2) : 0;
+    const run_start = bias >= 0 ? high - run_length - Math.floor(rand() * 2) : low + Math.floor(rand() * 2);
+
+    // Volume per level and side, then spread across every visit of the path.
+    const volume = new Map();
+    for (let level = low; level <= high; level += 1) {
+      const profile = Math.exp(-((level - poc) ** 2) / (2 * spread * spread));
+      const total = Math.max(1, Math.round(peak * profile * (0.7 + rand() * 0.6) + rand() * 6));
+      const in_run = run_length > 0 && level >= run_start && level < run_start + run_length;
+      const ask_share = in_run
+        ? (bias >= 0 ? 0.86 : 0.14) + (rand() - 0.5) * 0.06
+        : clamp(0.5 + bias * 0.26 + (rand() - 0.5) * 0.3, 0.06, 0.94);
+      const ask = Math.round(total * ask_share);
+      volume.set(level, { bid: total - ask, ask, visits: 0 });
     }
-    // Reverse alternate bars so the running path visibly exercises both positive and negative
-    // Max/Min Delta before mean-reverting to the same final accounting.
-    if (!ask_dominant) events.reverse();
-    for (let event_index = 0; event_index < events.length; event_index += 1) {
-      const event = events[event_index];
+    const first = bias >= 0 ? low : high;
+    const second = bias >= 0 ? high : low;
+    const path = [];
+    const walk = (from, to) => {
+      const step = Math.sign(to - from);
+      for (let level = from; level !== to; level += step) path.push(level);
+    };
+    walk(open, first);
+    walk(first, second);
+    walk(second, close);
+    path.push(close);
+    for (const level of path) volume.get(level).visits += 1;
+
+    const start_micros = Math.floor(bar.time / FOOTPRINT_INTERVAL) * FOOTPRINT_INTERVAL * 1_000_000;
+    const step_micros = Math.floor((FOOTPRINT_INTERVAL * 1_000_000) / (path.length * 2 + 1));
+    let sequence = 0;
+    const emit = (level, size, aggressor) => {
+      if (size <= 0) return;
+      sequence += 1;
       trades.push({
-        timestamp_micros: start_seconds * 1_000_000 + event_index * 10_000 + 1,
-        price: event.level * tick_size,
-        volume: event.volume,
-        aggressor: event.aggressor,
-        sequence: event_index,
-        trade_id,
+        timestamp_micros: start_micros + sequence * step_micros,
+        price: Math.round(level * FOOTPRINT_TICK * 1e6) / 1e6,
+        volume: size,
+        aggressor,
+        sequence,
+        trade_id: trade_id++,
         session_id: 1,
       });
-      trade_id += 1;
+    };
+    for (const level of path) {
+      const row = volume.get(level);
+      const bid = Math.round(row.bid / row.visits);
+      const ask = Math.round(row.ask / row.visits);
+      row.visits -= 1;
+      row.bid -= bid;
+      row.ask -= ask;
+      emit(level, bid, "sell");
+      emit(level, ask, "buy");
     }
   }
   return trades;
 }
 
-function use_footprint_spacing(chart) {
+function use_footprint_view(chart, footprint) {
   const scale = chart.time_scale();
   const previous = scale.options();
-  scale.apply_options({ min_bar_spacing: 4, bar_spacing: 72, right_offset: 0 });
-  scale.scroll_to_real_time();
-  return () => scale.apply_options({
-    min_bar_spacing: previous.min_bar_spacing,
-    bar_spacing: previous.bar_spacing,
-    right_offset: previous.right_offset,
-  });
+  const price_scale = footprint.price_scale();
+  const previous_margins = price_scale.options().scale_margins;
+  // Matches the engine's footprint zoom (FOOTPRINT_BAR_SPACING): wide enough for bid × ask numbers
+  // plus the per-row volume histogram.
+  scale.apply_options({ min_bar_spacing: 4, bar_spacing: 104, right_offset: 0 });
+  // Clusters read best using the pane height; the stats table reserves its own bottom band.
+  price_scale.apply_options({ scale_margins: { top: 0.05, bottom: 0.03 } });
+  // One empty slot keeps the forming bar clear of the last-value title chip.
+  scale.scroll_to_position(1, false);
+  return () => {
+    scale.apply_options({
+      min_bar_spacing: previous.min_bar_spacing,
+      bar_spacing: previous.bar_spacing,
+      right_offset: previous.right_offset,
+    });
+    price_scale.apply_options({ scale_margins: previous_margins });
+  };
 }
+
+// Presentation choices survive leaving and reopening the footprint preview.
+const footprint_style = { cell_mode: "bid_ask", show_bar_summary: true };
 
 function series_features(bars, primary_series) {
   const sampled = bars.filter((_, index) => index % 5 === 0);
@@ -173,14 +224,12 @@ function series_features(bars, primary_series) {
           // Footprint replaces the main price series, so it must keep the main scale. Drawings,
           // price indicators, alerts, and trading lines are already bound to this scale.
           price_scale_id: primary_series.price_scale_id(),
-          tick_size: 0.25,
-          interval_seconds: 3600,
+          tick_size: FOOTPRINT_TICK,
+          interval_seconds: FOOTPRINT_INTERVAL,
           imbalance_ratio: 3,
           imbalance_minimum_volume: 20,
           stacked_imbalance_levels: 3,
-          cell_mode: "bid_ask",
-          font_size: 10,
-          show_bar_summary: true,
+          ...footprint_style,
           price_line_visible: true,
           last_value_visible: true,
           countdown_visible: true,
@@ -189,7 +238,7 @@ function series_features(bars, primary_series) {
         footprint.set_trades(footprint_trades(bars));
         return footprint;
       },
-      compose: (chart) => use_footprint_spacing(chart),
+      compose: (chart, footprint) => use_footprint_view(chart, footprint),
     },
     {
       id: "brushable-area", label: "Brushable area", detail: "Drag to compare", icon: "chart", interactive: true,
@@ -695,6 +744,15 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
       active_id() { return active_series?.id ?? null; },
       interaction_series() { return active_series?.handle ?? series; },
       interaction_range() { return active_series?.interaction?.active_range?.() ?? null; },
+      footprint_style() { return { ...footprint_style }; },
+      set_footprint_style(patch) {
+        if (patch.cell_mode !== undefined) footprint_style.cell_mode = patch.cell_mode;
+        if (patch.show_bar_summary !== undefined) footprint_style.show_bar_summary = patch.show_bar_summary;
+        if (active_series?.id === "footprint") {
+          active_series.handle.apply_options(footprint_style);
+          chart.render();
+        }
+      },
       clear: clear_series,
       select_base(value) {
         base_series_choice = value;

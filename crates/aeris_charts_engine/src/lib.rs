@@ -24,6 +24,7 @@ mod footprint;
 mod frame;
 mod general_axes;
 mod general_data;
+mod general_layout;
 mod general_series;
 mod heikin_ashi;
 mod hit_test;
@@ -169,6 +170,12 @@ pub use general_data::{
     GeneralXyInput, MAX_GENERAL_DATASET_CATEGORIES, MAX_GENERAL_DATASET_CATEGORY_BYTES,
     MAX_GENERAL_DATASET_ROWS, MAX_GENERAL_DATASETS, MAX_GENERAL_ROW_ID_BYTES,
     MAX_GENERAL_ROW_ID_BYTES_TOTAL,
+};
+#[doc(hidden)]
+pub use general_layout::{
+    FlowLink, FlowNode, FunnelStage, GeneralLayoutDatasetId, GeneralLayoutElement,
+    GeneralLayoutHit, GeneralLayoutInput, GeneralLayoutSeriesId, GeneralLayoutSeriesKind,
+    GeneralLayoutSeriesOptions, HierarchyNode,
 };
 #[doc(hidden)]
 pub use general_series::{
@@ -1087,6 +1094,8 @@ pub struct SeriesEntry {
     /// `open_visible` and this flag false to render a vertical high-low bar.
     pub close_visible: bool,
     /// reference bar `thinBars` (default true): bar body width capped to the crisp line width.
+    /// When false the stroke follows the zoom but stays within one CSS pixel of its width at the
+    /// configured bar spacing, and never exceeds 3 CSS pixels.
     pub thin_bars: bool,
     /// Presentation-only Heikin Ashi projection. Raw OHLC remains canonical in the data layer.
     pub heikin_ashi: bool,
@@ -1855,6 +1864,7 @@ pub struct ChartEngine {
     general_horizontal_domains: domains::HorizontalDomainRegistry,
     general_axes: general_axes::GeneralAxisRegistry,
     general_data: Option<general_data::GeneralDataStore>,
+    general_layout_data: Option<general_layout::GeneralLayoutStore>,
     general_transition_duration_ms: f64,
     general_transition_time_ms: f64,
     general_transition_reduced_motion: bool,
@@ -2149,6 +2159,7 @@ impl ChartEngine {
             general_horizontal_domains,
             general_axes: general_axes::GeneralAxisRegistry::new(),
             general_data: None,
+            general_layout_data: None,
             general_transition_duration_ms: 0.0,
             general_transition_time_ms: 0.0,
             general_transition_reduced_motion: false,
@@ -2405,6 +2416,11 @@ impl ChartEngine {
                 .general_data
                 .as_ref()
                 .map_or(0, general_data::GeneralDataStore::estimated_bytes)
+                .saturating_add(
+                    self.general_layout_data
+                        .as_ref()
+                        .map_or(0, general_layout::GeneralLayoutStore::estimated_bytes),
+                )
                 .saturating_add(
                     self.general_transitions.capacity()
                         * std::mem::size_of::<GeneralDatasetTransition>(),
@@ -3393,6 +3409,7 @@ impl ChartEngine {
         self.trade_dependents.retain(|stream_id, dependents| {
             live_streams.contains(stream_id) && !dependents.is_empty()
         });
+        self.forget_removed_external_study_outputs(&tombstones);
         self.clear_sequence_axis_if_unused();
         self.series_order.retain(|sid| !tombstones.contains(sid));
         // A hovered series leaving the chart releases the hovered-on-top z-bump with it.
@@ -3542,6 +3559,13 @@ impl ChartEngine {
         }
         let removed_id = self.panes[index].stable_id();
         if removed_id.is_some_and(|pane_id| self.general_series_uses_pane(pane_id)) {
+            return false;
+        }
+        if removed_id.is_some_and(|pane_id| {
+            self.general_layout_data
+                .as_ref()
+                .is_some_and(|store| store.uses_pane(pane_id))
+        }) {
             return false;
         }
         let replacement = if replacing_last {
@@ -5430,6 +5454,7 @@ impl ChartEngine {
             }
         }
         self.reset_indicator_output_styles_to_defaults();
+        self.reset_external_study_styles_to_defaults();
         // The per-series reset above restores plain-series label and price-line defaults; every
         // indicator, study and tape output keeps following the chart-wide indicator chrome policy.
         let _ = self.set_indicator_chrome_options(self.indicator_chrome);

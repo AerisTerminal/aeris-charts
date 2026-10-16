@@ -26,14 +26,22 @@ export interface chart_theme {
   border: string;
   muted_border: string;
   ring: string;
-  /** Crosshair line color. Named themes share the theme-independent `crosshair_line` token. */
+  /** Crosshair line color. Named themes keep the token's alpha so the line stays translucent. */
   crosshair_line: string;
-  /** Crosshair label surface. Named themes alias this to the dark-theme `muted`. */
+  /**
+   * Crosshair label surface. The dark theme shares the tooltip popover surface; the light theme
+   * uses the dark-theme `muted`.
+   */
   crosshair_label: string;
   /** Candle, volume, and other up-market geometry. */
   bullish: string;
   /** Candle, volume, and other down-market geometry. */
   bearish: string;
+}
+
+/** `#rrggbb` plus an alpha byte as CSS; opaque colors stay in their six-digit form. */
+function with_alpha(hex: string, alpha: number): string {
+  return alpha === 255 ? hex : `${hex}${alpha.toString(16).padStart(2, "0")}`;
 }
 
 export const light_theme: chart_theme = {
@@ -48,7 +56,7 @@ export const light_theme: chart_theme = {
   border: style_tokens.light.border,
   muted_border: style_tokens.light.muted_border,
   ring: style_tokens.light.ring,
-  crosshair_line: style_tokens.crosshair_line,
+  crosshair_line: with_alpha(style_tokens.light.crosshair_line, style_tokens.light.crosshair_line_alpha),
   crosshair_label: style_tokens.dark.muted,
   bullish: style_tokens.light.bullish,
   bearish: style_tokens.light.bearish,
@@ -66,8 +74,8 @@ export const dark_theme: chart_theme = {
   border: style_tokens.dark.border,
   muted_border: style_tokens.dark.muted_border,
   ring: style_tokens.dark.ring,
-  crosshair_line: style_tokens.crosshair_line,
-  crosshair_label: style_tokens.dark.muted,
+  crosshair_line: with_alpha(style_tokens.dark.crosshair_line, style_tokens.dark.crosshair_line_alpha),
+  crosshair_label: style_tokens.dark.popover_surface,
   bullish: style_tokens.dark.bullish,
   bearish: style_tokens.dark.bearish,
 };
@@ -78,6 +86,35 @@ export const default_theme_name = style_tokens.default_theme as theme_name;
 
 export function theme_palette(name: theme_name): chart_theme {
   return name === "dark" ? dark_theme : light_theme;
+}
+
+/**
+ * Floating-layer (tooltip) colors: `--surface-popover`, `--border-popover` composited over it,
+ * `--border-popover-highlight` with its CSS alpha, and primary/secondary text over the popover.
+ */
+export interface popover_palette {
+  surface: string;
+  border: string;
+  highlight: string;
+  foreground: string;
+  muted_foreground: string;
+}
+
+function popover_tokens(tokens: typeof style_tokens.light): popover_palette {
+  return {
+    surface: tokens.popover_surface,
+    border: tokens.popover_border,
+    highlight: with_alpha(tokens.popover_highlight, tokens.popover_highlight_alpha),
+    foreground: tokens.foreground,
+    muted_foreground: tokens.popover_muted_foreground,
+  };
+}
+
+const light_popover = popover_tokens(style_tokens.light);
+const dark_popover = popover_tokens(style_tokens.dark);
+
+export function popover_palette(name: theme_name): popover_palette {
+  return name === "dark" ? dark_popover : light_popover;
 }
 
 /**
