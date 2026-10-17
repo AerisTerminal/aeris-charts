@@ -125,8 +125,12 @@ jobs:
         run: npm run test:pack
 
   browser:
-    name: Browser runtime & parity (Playwright)
+    name: Browser runtime & parity (Playwright, shard ${{ matrix.shard }}/3)
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.0
@@ -155,10 +159,11 @@ jobs:
       - name: Run required portable browser suite
         id: portable-browser-suite
         working-directory: examples/web_demo
-        run: npx playwright test
+        run: npx playwright test --shard=${{ matrix.shard }}/3
         env:
           AERIS_CHARTS_PORTABLE_BROWSER: "1"
       - name: Run machine-sensitive reference/GPU/performance evidence
+        if: matrix.shard == 1
         id: machine-evidence
         continue-on-error: true
         working-directory: examples/web_demo
@@ -169,6 +174,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           exit $referenceEvidenceExit
       - name: Run machine-sensitive retention-memory evidence
+        if: matrix.shard == 1
         id: machine-retention-evidence
         continue-on-error: true
         working-directory: examples/web_demo
@@ -176,6 +182,6 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: failure() || steps.machine-evidence.outcome == 'failure' || steps.machine-retention-evidence.outcome == 'failure'
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: examples/web_demo/playwright-report/
           retention-days: 7

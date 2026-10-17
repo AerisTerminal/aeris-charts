@@ -9,6 +9,9 @@ export default defineConfig({
   // GitHub's shared Windows runners are substantially slower than release developer machines.
   // Keep the local feedback ceiling tight while allowing the same assertions to finish in CI.
   timeout: process.env.CI ? 60_000 : 30_000,
+  // Shared Windows CI runners can intermittently stall browser startup or GPU work.
+  // Retry once in a fresh worker; every assertion must still pass.
+  retries: process.env.CI ? 1 : 0,
   fullyParallel: false,
   workers: 1,
   reporter: [["list"], ["html", { open: "never" }]],
