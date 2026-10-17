@@ -7,8 +7,10 @@ export default defineConfig({
   testDir: "./tests",
   globalSetup: "./global_setup.mjs",
   // GitHub's shared Windows runners are substantially slower than release developer machines.
-  // Keep the local feedback ceiling tight while allowing the same assertions to finish in CI.
-  timeout: process.env.CI ? 60_000 : 30_000,
+  // Trace evidence from shared runners showed 13s key presses and 28s visibility checks.
+  // Keep local feedback tight while allowing the same assertions to finish in CI.
+  timeout: process.env.CI ? 120_000 : 30_000,
+  expect: { timeout: process.env.CI ? 30_000 : 5_000 },
   // Shared Windows CI runners can intermittently stall browser startup or GPU work.
   // Retry once in a fresh worker; every assertion must still pass.
   retries: process.env.CI ? 1 : 0,

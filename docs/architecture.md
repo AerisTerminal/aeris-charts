@@ -1549,9 +1549,10 @@ node benchmarks/benchmark.mjs release
 Tag publication requires the Rust, package, and portable Chromium/Firefox/WebKit jobs. Public
 declaration and release-policy guards, V1 fixtures, Node import, and pack smoke are portable blocking
 checks. Deterministic browser/backend pixel comparisons and the native/browser fixture are blocking
-portable Chromium checks. CI distributes the unchanged portable browser suite across three file
+portable Chromium checks. CI distributes the unchanged portable browser suite across eight file
 shards on separate Windows runners; each test still executes its full assertions and one
-fresh-worker retry absorbs an occasional shared-runner stall. The machine-sensitive
+fresh-worker retry and measured CI-specific browser timeouts absorb shared-runner stalls.
+The machine-sensitive
 diagnostic steps run on the first shard only. Configured `perf_gate` budgets run strictly.
 Reference-fidelity screenshots, GPU timings,
 heap sampling, and wall-clock evidence stay in separate non-blocking diagnostic steps; approved hashes
