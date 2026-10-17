@@ -717,14 +717,17 @@ test("structure zones and auction marks share Canvas2D and WebGPU geometry", asy
   expect(coverage_pixels, "primitive AA and text must be exercised").toBeGreaterThan(0);
   expect(count_different(chart_canvas, chart_gpu)).toBe(rounding_pixels + coverage_pixels);
   expect(interior_max, "all fill and alpha-blend interiors stay within two channel units").toBeLessThanOrEqual(2);
-  // Windows SwiftShader, 1100x720 DPR 1: 4,342 strict pixels: 4,060 are 1-2 unit
-  // rect/zone/overlap rounding (4,032 at 1, 28 at 2); 282 are localized contour/glyph
-  // coverage, max 84 on triangle/label edges. The 2,600/40 baseline from
-  // primitives.spec.mjs covers a different scene without this many translucent rects.
+  // Windows SwiftShader, 1100x720 DPR 1: 8,574 strict pixels: 8,146 are 1-2 unit
+  // rect/zone/overlap rounding; 428 are localized contour/glyph coverage, max 87 on
+  // triangle/label edges. About 150 of those sit on the unsnapped 2 px swing-level
+  // stroke, whose edge row lands at ~15% coverage in this pane height (footprint
+  // clusters reserve their summary rows), where Canvas2D and WebGPU AA differ most.
+  // The 2,600/40 baseline from primitives.spec.mjs covers a different scene without
+  // this many translucent rects.
   // backend_parity.spec.mjs also accepts marker AA up to 66 when paint order is exact.
-  // Require the actual non-rounding residual with ~13% count and 6-unit edge margin,
+  // Require the actual non-rounding residual with ~13% count and 3-unit edge margin,
   // rather than hiding a real fill/geometry divergence behind pixelmatch threshold 0.1.
-  expect(coverage_pixels, "whole-chart AA/text residual").toBeLessThanOrEqual(320);
+  expect(coverage_pixels, "whole-chart AA/text residual").toBeLessThanOrEqual(485);
   expect(coverage_max, "whole-chart AA/text maximum channel delta").toBeLessThanOrEqual(90);
   expect(max_channel_delta(chart_canvas, chart_gpu)).toBe(coverage_max);
 });
