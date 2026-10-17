@@ -36,7 +36,7 @@ if (process.argv.includes("--update")) {
   writeFileSync(snapshot_path, snapshot);
   console.log(`updated ${snapshot_path}`);
 } else {
-  assert.equal(readFileSync(snapshot_path, "utf8"), snapshot,
+  assert.equal(readFileSync(snapshot_path, "utf8").replaceAll("\r\n", "\n"), snapshot,
     "public TypeScript declarations changed; review them, then run npm run update:api");
   console.log(`public API snapshot OK (${files.length} declaration files)`);
 }
