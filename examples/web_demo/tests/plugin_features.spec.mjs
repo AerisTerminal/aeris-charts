@@ -1036,12 +1036,13 @@ test("brushable area guides reproject and Escape or double click clears", async 
 
   await page.locator("#chart_container canvas:last-of-type").focus();
   const initial_scroll = await page.evaluate(() => window.__chart.wasm.scroll_position());
-  await page.keyboard.down("Control");
-  await page.keyboard.down("ArrowLeft");
+  // A held kinetic pan travels as far as the key stays down, so a stalled runner can carry both
+  // boundaries out of the pane. Reduced motion makes Ctrl+ArrowLeft one fixed engine step.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.keyboard.press("Control+ArrowLeft");
   await expect.poll(() => page.evaluate(() => window.__chart.wasm.scroll_position()))
     .not.toBeCloseTo(initial_scroll, 8);
-  await page.keyboard.up("ArrowLeft");
-  await page.keyboard.up("Control");
+  await page.emulateMedia({ reducedMotion: null });
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   expect(await page.evaluate(() => window.__reproject_interaction.active_range())).toEqual(committed);
   const panned_probes = await probes();

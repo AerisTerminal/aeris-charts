@@ -1550,8 +1550,10 @@ Tag publication requires the Rust, package, and portable Chromium/Firefox/WebKit
 declaration and release-policy guards, V1 fixtures, Node import, and pack smoke are portable blocking
 checks. Deterministic browser/backend pixel comparisons and the native/browser fixture are blocking
 portable Chromium checks. CI distributes the unchanged portable browser suite across eight file
-shards on separate Windows runners; each test still executes its full assertions and one
-fresh-worker retry and measured CI-specific browser timeouts absorb shared-runner stalls.
+shards on separate Windows Server 2022 runners, pinned because the Windows Server 2025
+`windows-latest` image stalls software-rendered Chromium; each test still executes its full
+assertions and one fresh-worker retry and measured CI-specific browser timeouts absorb
+shared-runner stalls.
 The machine-sensitive
 diagnostic steps run on the first shard only. Configured `perf_gate` budgets run strictly.
 Reference-fidelity screenshots, GPU timings,

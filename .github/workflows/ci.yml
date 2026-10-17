@@ -126,7 +126,9 @@ jobs:
 
   browser:
     name: Browser runtime & parity (Playwright, shard ${{ matrix.shard }}/8)
-    runs-on: windows-latest
+    # The windows-latest image (Windows Server 2025, 20261007) stalls software-rendered Chromium for
+    # tens of seconds per step, so even the last release-green commit now fails there.
+    runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
