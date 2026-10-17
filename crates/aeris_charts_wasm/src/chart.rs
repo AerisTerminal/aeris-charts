@@ -6242,6 +6242,9 @@ impl AerisChart {
     pub fn scroll_to_real_time(&mut self) {
         self.inner.borrow_mut().scroll_to_real_time();
     }
+    pub fn fit_footprint_viewport(&mut self) {
+        self.inner.borrow_mut().fit_footprint_viewport();
+    }
     pub fn reset_time_scale(&mut self) {
         self.inner.borrow_mut().reset_time_scale();
     }

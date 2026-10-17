@@ -112,6 +112,7 @@ fn main() {
             ("danger", "DANGER"),
             ("warning", "WARNING"),
             ("muted", "MUTED"),
+            ("raised", "RAISED"),
             ("muted_foreground", "MUTED_FOREGROUND"),
             ("accent", "ACCENT"),
             ("active", "ACTIVE"),

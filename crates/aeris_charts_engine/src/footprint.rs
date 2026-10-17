@@ -252,14 +252,43 @@ pub struct FootprintVisualOptions {
     pub negative_delta_color: Color,
     /// `None` follows the chart layout foreground and retokenizes on theme changes.
     pub text_color: Option<Color>,
+    /// Tile behind the printed numbers. `None` follows the theme (`--surface-raised` in light,
+    /// `--surface-secondary` in dark) and retokenizes on theme changes.
+    pub cell_color: Option<Color>,
     /// Point-of-control outline. Defaults to the warning token, which both themes share.
     pub poc_color: Color,
     pub stacked_bid_color: Color,
     pub stacked_ask_color: Color,
-    /// Pin the per-bar statistics table (delta, volume, volume per second) to the pane bottom.
+    /// Print each bar's delta and total volume under its cluster.
     pub show_bar_summary: bool,
     /// Merge stored rows into display rows that stay legible at the current zoom.
     pub adaptive_rows: bool,
+    /// Opacity of the per-row volume histogram, 0-1.
+    pub histogram_opacity: f64,
+    /// Opacity of a single imbalance's cell tint, 0-1. Stacked runs stay opaque.
+    pub imbalance_opacity: f64,
+    /// Range strip of a bar that closed at or above its open. `None` follows `ask_color`.
+    pub range_up_color: Option<Color>,
+    /// Range strip of a bar that closed below its open. `None` follows `bid_color`.
+    pub range_down_color: Option<Color>,
+    /// Volume line of the bar summary. `None` follows the cell text color.
+    pub summary_text_color: Option<Color>,
+    /// Unclassified volume in the profile mode. `None` follows the cell text color.
+    pub unclassified_color: Option<Color>,
+    /// Weight of plain cell numbers and the summary volume line, 100-900.
+    pub text_weight: u16,
+    /// Weight of imbalanced cell numbers and the summary delta line, 100-900.
+    pub strong_text_weight: u16,
+    /// `None` follows the chart layout font family.
+    pub font_family: Option<String>,
+    /// Point-of-control outline thickness in CSS px, 1-4.
+    pub poc_width: f64,
+    /// Outline the point-of-control row.
+    pub show_poc: bool,
+    /// Tint imbalanced cells and print them in the strong weight. Imbalance data is unaffected.
+    pub show_imbalances: bool,
+    /// Draw the traded-range strip on each cluster's left edge.
+    pub show_range_strip: bool,
 }
 
 impl Default for FootprintVisualOptions {
@@ -282,6 +311,7 @@ impl Default for FootprintVisualOptions {
             positive_delta_color: buy,
             negative_delta_color: sell,
             text_color: None,
+            cell_color: None,
             poc_color: Color::rgb(
                 DEFAULT_WARNING_RGB.0,
                 DEFAULT_WARNING_RGB.1,
@@ -291,6 +321,19 @@ impl Default for FootprintVisualOptions {
             stacked_ask_color: buy,
             show_bar_summary: true,
             adaptive_rows: false,
+            histogram_opacity: f64::from(crate::frame::HISTOGRAM_ALPHA) / 255.0,
+            imbalance_opacity: f64::from(crate::frame::SINGLE_IMBALANCE_ALPHA) / 255.0,
+            range_up_color: None,
+            range_down_color: None,
+            summary_text_color: None,
+            unclassified_color: None,
+            text_weight: 500,
+            strong_text_weight: 700,
+            font_family: None,
+            poc_width: 1.0,
+            show_poc: true,
+            show_imbalances: true,
+            show_range_strip: true,
         }
     }
 }
@@ -304,9 +347,20 @@ impl FootprintVisualOptions {
         self.positive_delta_color = defaults.positive_delta_color;
         self.negative_delta_color = defaults.negative_delta_color;
         self.text_color = defaults.text_color;
+        self.cell_color = defaults.cell_color;
         self.poc_color = defaults.poc_color;
         self.stacked_bid_color = defaults.stacked_bid_color;
         self.stacked_ask_color = defaults.stacked_ask_color;
+        self.histogram_opacity = defaults.histogram_opacity;
+        self.imbalance_opacity = defaults.imbalance_opacity;
+        self.range_up_color = defaults.range_up_color;
+        self.range_down_color = defaults.range_down_color;
+        self.summary_text_color = defaults.summary_text_color;
+        self.unclassified_color = defaults.unclassified_color;
+        self.text_weight = defaults.text_weight;
+        self.strong_text_weight = defaults.strong_text_weight;
+        self.font_family = defaults.font_family;
+        self.poc_width = defaults.poc_width;
     }
 }
 
@@ -2726,9 +2780,19 @@ impl ChartEngine {
     }
 
     /// Open the footprint viewport: bars wide enough for `bid x ask` numbers, anchored at the
-    /// real-time edge. Hosts call it when the user enters footprint mode, never on rebuilds,
-    /// so the user's own zoom survives tape gaps and settings changes.
+    /// real-time edge, with every footprint price scale back on autoscale so the clusters are in
+    /// view. Hosts call it when the user enters footprint mode, never on rebuilds, so the user's
+    /// own zoom survives tape gaps and settings changes.
     pub fn fit_footprint_viewport(&mut self) {
+        let scales = self
+            .series
+            .iter()
+            .filter(|series| !series.removed && series.kind == SeriesKind::Footprint)
+            .map(|series| (series.pane_index, series.price_scale_target))
+            .collect::<Vec<_>>();
+        for (pane, target) in scales {
+            self.set_price_scale_auto_scale_for(pane, target, true);
+        }
         // A chart that has not been laid out yet has a zero-width time scale, which would clamp
         // the spacing to nothing. Seed it with the CSS width; the first layout narrows it by the
         // axis widths without changing the spacing.
@@ -3698,7 +3762,19 @@ fn validate_projection_sessions(
 }
 
 fn validate_visual_options(options: &FootprintVisualOptions) -> Result<(), FootprintError> {
-    if options.font_size.is_finite() && (6.0..=48.0).contains(&options.font_size) {
+    let within = |value: f64, range: core::ops::RangeInclusive<f64>| range.contains(&value);
+    let weights = 100..=900;
+    let valid = within(options.font_size, 6.0..=48.0)
+        && within(options.histogram_opacity, 0.0..=1.0)
+        && within(options.imbalance_opacity, 0.0..=1.0)
+        && within(options.poc_width, 1.0..=4.0)
+        && weights.contains(&options.text_weight)
+        && weights.contains(&options.strong_text_weight)
+        && options
+            .font_family
+            .as_deref()
+            .is_none_or(|family| !family.trim().is_empty());
+    if valid {
         Ok(())
     } else {
         Err(FootprintError::InvalidVisualOptions)
@@ -4039,7 +4115,7 @@ fn mark_stacks(levels: &mut [FootprintLevel], minimum: usize, ask: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DrawingKind, DrawingPoint};
+    use crate::{DrawingKind, DrawingPoint, PriceScaleTarget};
     use aeris_charts_render::draw_list::{LineStyle, Prim, TextAlign};
 
     fn trade(
@@ -5852,8 +5928,8 @@ mod tests {
     #[test]
     fn footprint_frame_owns_numbers_bars_poc_and_stacked_highlights() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
-        // The pinned statistics table has its own test; leaving it out keeps every rect here
-        // attributable to the cluster.
+        // The bar summary has its own test; leaving it out keeps every primitive here attributable
+        // to the cluster.
         let visual = FootprintVisualOptions {
             font_size: 9.0,
             show_bar_summary: false,
@@ -6549,7 +6625,128 @@ mod tests {
     }
 
     #[test]
-    fn footprint_stats_table_pins_to_the_pane_bottom_below_the_bars() {
+    fn footprint_cells_sit_on_the_theme_tile_and_text_paints_last() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart
+            .configure_footprint_series(
+                0,
+                FootprintSeriesOptions {
+                    aggregation: FootprintAggregationOptions {
+                        tick_size: 1.0,
+                        ticks_per_row: 1,
+                        bars: FootprintBarAggregation::Time {
+                            interval_micros: 60_000_000,
+                            anchor_micros: 0,
+                        },
+                        ..FootprintAggregationOptions::default()
+                    },
+                    visual: FootprintVisualOptions {
+                        font_size: 9.0,
+                        ..FootprintVisualOptions::default()
+                    },
+                },
+            )
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                0,
+                vec![
+                    trade(1, 100.0, 30.0, AggressorSide::Sell),
+                    trade(2, 101.0, 90.0, AggressorSide::Buy),
+                    trade(3, 102.0, 12.0, AggressorSide::Sell),
+                    trade(60_000_000, 101.0, 10.0, AggressorSide::Buy),
+                    trade(70_000_000, 102.0, 40.0, AggressorSide::Sell),
+                ],
+            )
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.set_bar_spacing(100.0);
+        let frame = chart.build_frame();
+        let segment = chart
+            .frame_series_segments(0)
+            .iter()
+            .find(|segment| segment.series_id == Some(0))
+            .unwrap();
+        let prims = &frame.panes[0].main[segment.start..segment.end];
+        let (r, g, b) = aeris_charts_core::style::DARK_MUTED_RGB;
+        let tiles = prims
+            .iter()
+            .filter(|primitive| {
+                matches!(primitive, Prim::Rect { color, .. } if *color == Color::rgb(r, g, b))
+            })
+            .count();
+        assert_eq!(tiles, 5, "one secondary-surface tile per traded row");
+        for (tile_left, tile_right, tile_y) in
+            prims.iter().filter_map(|primitive| match primitive {
+                Prim::Rect { rect, color } if *color == Color::rgb(r, g, b) => {
+                    Some((rect.x, rect.x + rect.w, rect.y))
+                }
+                _ => None,
+            })
+        {
+            assert!(
+                !prims.iter().any(|primitive| matches!(primitive,
+                    Prim::Rect { rect, color } if color.a() == crate::frame::HISTOGRAM_ALPHA
+                        && rect.y == tile_y && (tile_left..tile_right).contains(&rect.x))),
+                "the tile backs the numbers only, never the volume histogram"
+            );
+        }
+        assert!(
+            prims.iter().any(|primitive| matches!(primitive,
+                Prim::Rect { color, .. } if color.a() == crate::frame::HISTOGRAM_ALPHA)),
+            "the histogram draws beside the tiles"
+        );
+        let first_text = prims
+            .iter()
+            .position(|primitive| matches!(primitive, Prim::Text { .. }))
+            .expect("numbers print");
+        assert!(
+            prims[first_text..]
+                .iter()
+                .all(|primitive| matches!(primitive, Prim::Text { .. })),
+            "text is one trailing layer so batching executors draw it in one call"
+        );
+        assert!(
+            !prims[..first_text]
+                .iter()
+                .skip_while(|primitive| matches!(primitive, Prim::Rect { .. }))
+                .any(|primitive| matches!(primitive, Prim::Rect { .. })),
+            "fills precede outlines"
+        );
+
+        let count_tiles = |chart: &mut ChartEngine, tile: Color| {
+            let frame = chart.build_frame();
+            let segment = chart
+                .frame_series_segments(0)
+                .iter()
+                .find(|segment| segment.series_id == Some(0))
+                .unwrap();
+            frame.panes[0].main[segment.start..segment.end]
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::Rect { color, .. } if *color == tile))
+                .count()
+        };
+        chart.set_theme(crate::ChartTheme::Light);
+        let (r, g, b) = aeris_charts_core::style::LIGHT_RAISED_RGB;
+        assert_eq!(
+            count_tiles(&mut chart, Color::rgb(r, g, b)),
+            5,
+            "light cells sit on the raised surface"
+        );
+        let mut options = chart.footprint_series_options(0).unwrap();
+        let custom = Color::rgb(10, 20, 30);
+        options.visual.cell_color = Some(custom);
+        chart.apply_footprint_series_options(0, options).unwrap();
+        assert_eq!(
+            count_tiles(&mut chart, custom),
+            5,
+            "an explicit cell color replaces the theme surface"
+        );
+    }
+
+    #[test]
+    fn footprint_bar_summary_prints_delta_and_volume_under_each_cluster() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         let visual = FootprintVisualOptions {
             font_size: 9.0,
@@ -6574,8 +6771,7 @@ mod tests {
                 },
             )
             .unwrap();
-        // A closed minute (delta +60, 120 traded over 60 s) and a forming one (delta -30, 50
-        // traded over the 10 s elapsed so far).
+        // Delta +60 on 120 traded, then delta -30 on 50 traded.
         chart
             .set_footprint_trades(
                 0,
@@ -6592,70 +6788,66 @@ mod tests {
         chart.set_bar_spacing(100.0);
         let frame = chart.build_frame();
         let pane_bottom = chart.panes[0].top + chart.panes[0].height;
-        let table_top = pane_bottom
-            - crate::frame::footprint_stats_table_height(&visual, chart.panes[0].height);
+        let reserve = crate::frame::footprint_summary_height(&visual, chart.panes[0].height);
+        assert!(reserve > 0.0);
+        assert_eq!(
+            chart.panes[0].marker_margin_below, reserve,
+            "autoscale keeps the lowest summary on screen"
+        );
         let segment = chart
             .frame_series_segments(0)
             .iter()
             .find(|segment| segment.series_id == Some(0))
             .unwrap();
         let prims = &frame.panes[0].main[segment.start..segment.end];
-        let table_texts = prims
-            .iter()
-            .filter_map(|primitive| match primitive {
-                Prim::Text { y, text, .. } if f64::from(*y) > table_top => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        for expected in [
-            "Delta", "Volume", "Vol/sec", "60", "-30", "120", "50", "2", "5",
-        ] {
+        let find = |wanted: &str| {
+            prims
+                .iter()
+                .find_map(|primitive| match primitive {
+                    Prim::Text {
+                        x,
+                        y,
+                        text,
+                        color,
+                        size,
+                        weight,
+                        ..
+                    } if text == wanted => {
+                        Some((f64::from(*x), f64::from(*y), *color, *size, *weight))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{wanted} is missing"))
+        };
+        for (delta, volume, sign) in [("Δ 60", "V 120", buy), ("Δ -30", "V 50", sell)] {
+            let (delta_x, delta_y, delta_color, size, weight) = find(delta);
+            let (volume_x, volume_y, _, _, volume_weight) = find(volume);
+            assert_eq!(delta_color, sign.solid());
+            assert_eq!((weight, volume_weight), (700, 500));
+            assert!((volume_x - delta_x).abs() < 0.5 && volume_y > delta_y);
+            let cluster_bottom = prims
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::Rect { rect, .. } if (f64::from(rect.x) - delta_x).abs() < 50.0 => {
+                        Some(f64::from(rect.y + rect.h))
+                    }
+                    _ => None,
+                })
+                .fold(f64::NEG_INFINITY, f64::max);
+            assert!(cluster_bottom.is_finite());
             assert!(
-                table_texts.contains(&expected),
-                "{expected}: {table_texts:?}"
+                delta_y - f64::from(size) / 2.0 >= cluster_bottom,
+                "{delta} sits under its cluster: {delta_y} vs {cluster_bottom}"
             );
+            assert!(volume_y + f64::from(size) / 2.0 <= pane_bottom);
         }
-        // Delta cells tint by sign; the strongest visible delta is opaque.
-        let table_fills = prims
-            .iter()
-            .filter_map(|primitive| match primitive {
-                Prim::Rect { rect, color } if f64::from(rect.y) > table_top => Some(*color),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert!(table_fills.contains(&buy.solid()));
-        assert!(table_fills.iter().any(|color| {
-            (color.r(), color.g(), color.b()) == (sell.r(), sell.g(), sell.b()) && color.a() < 255
-        }));
-        // Autoscale reserves the table: every cluster rect ends above it, and the table's
-        // opaque surface reaches the pane bottom.
-        assert!(prims.iter().any(|primitive| matches!(primitive,
-            Prim::Rect { rect, .. } if (f64::from(rect.y + rect.h) - pane_bottom).abs() <= 1.0
-                && (f64::from(rect.y) - table_top).abs() <= 1.0)));
-        let cluster_bottom = prims
-            .iter()
-            .filter_map(|primitive| match primitive {
-                Prim::Rect { rect, .. } if f64::from(rect.y) < table_top - 1.0 => {
-                    Some(f64::from(rect.y + rect.h))
-                }
-                _ => None,
-            })
-            .fold(f64::NEG_INFINITY, f64::max);
-        assert!(
-            cluster_bottom <= table_top + 1.0,
-            "{cluster_bottom} > {table_top}"
-        );
 
-        // Zoomed past the numbers, the table keeps its labels and tinted delta cells.
+        // Zoomed past the numbers, the summary goes with them.
         chart.set_bar_spacing(4.0);
         let frame = chart.build_frame();
-        assert!(
-            frame.panes[0]
-                .main
-                .iter()
-                .any(|primitive| matches!(primitive,
-            Prim::Text { text, .. } if text == "Vol/sec"))
-        );
+        assert!(!frame.panes[0].main.iter().any(
+            |primitive| matches!(primitive, Prim::Text { text, .. } if text.starts_with('Δ'))
+        ));
 
         chart
             .apply_footprint_series_options(
@@ -6669,14 +6861,11 @@ mod tests {
                 },
             )
             .unwrap();
+        chart.set_bar_spacing(100.0);
         let frame = chart.build_frame();
-        assert!(
-            !frame.panes[0]
-                .main
-                .iter()
-                .any(|primitive| matches!(primitive,
-            Prim::Text { text, .. } if text == "Delta"))
-        );
+        assert!(!frame.panes[0].main.iter().any(
+            |primitive| matches!(primitive, Prim::Text { text, .. } if text.starts_with('Δ'))
+        ));
         assert_eq!(chart.panes[0].marker_margin_below, 0.0);
     }
 
@@ -6750,6 +6939,198 @@ mod tests {
             ),
             "a run shorter than the stacked threshold must not use the stacked treatment"
         );
+    }
+
+    #[test]
+    fn footprint_style_options_restyle_cells_without_changing_the_bars() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart
+            .configure_footprint_series(
+                0,
+                FootprintSeriesOptions {
+                    aggregation: FootprintAggregationOptions {
+                        tick_size: 1.0,
+                        ticks_per_row: 1,
+                        bars: FootprintBarAggregation::Time {
+                            interval_micros: 60_000_000,
+                            anchor_micros: 0,
+                        },
+                        imbalance: FootprintImbalanceOptions {
+                            ratio: 3.0,
+                            minimum_volume: 20.0,
+                            consecutive_levels: 3,
+                        },
+                    },
+                    visual: FootprintVisualOptions {
+                        font_size: 9.0,
+                        ..FootprintVisualOptions::default()
+                    },
+                },
+            )
+            .unwrap();
+        // Ask 100 at 101 over bid 30 at 100 is a single diagonal imbalance; the bar closes up.
+        // The tick rule classifies later prints, so only the opening print stays unclassified.
+        chart
+            .set_footprint_trades(
+                0,
+                vec![
+                    trade(1, 100.0, 10.0, AggressorSide::Unknown),
+                    trade(2, 100.0, 30.0, AggressorSide::Sell),
+                    trade(3, 101.0, 100.0, AggressorSide::Buy),
+                    trade(4, 102.0, 5.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.set_bar_spacing(100.0);
+        let bars = chart.footprint_bars(0).unwrap().to_vec();
+        let frame_prims = |chart: &mut ChartEngine| {
+            let frame = chart.build_frame();
+            let segment = chart
+                .frame_series_segments(0)
+                .iter()
+                .find(|segment| segment.series_id == Some(0))
+                .unwrap();
+            frame.panes[0].main[segment.start..segment.end].to_vec()
+        };
+        let restyle = |chart: &mut ChartEngine, edit: &dyn Fn(&mut FootprintVisualOptions)| {
+            let mut options = chart.footprint_series_options(0).unwrap();
+            edit(&mut options.visual);
+            chart.apply_footprint_series_options(0, options)
+        };
+        let defaults = FootprintVisualOptions::default();
+        let (ask, stacked_ask) = (defaults.ask_color, defaults.stacked_ask_color);
+        let red = Color::rgb(220, 0, 0);
+        let blue = Color::rgb(0, 0, 220);
+        restyle(&mut chart, &|visual| {
+            visual.histogram_opacity = 0.4;
+            visual.imbalance_opacity = 0.8;
+            visual.range_up_color = Some(red);
+            visual.summary_text_color = Some(blue);
+            visual.text_weight = 400;
+            visual.strong_text_weight = 800;
+            visual.font_family = Some("Mono".to_string());
+            visual.poc_width = 3.0;
+        })
+        .unwrap();
+        let prims = frame_prims(&mut chart);
+        let rect_colors = prims
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Rect { rect, color } => Some((rect.w, *color)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            rect_colors.contains(&(3, red)),
+            "the up strip takes range_up_color"
+        );
+        assert!(
+            rect_colors
+                .iter()
+                .any(|(_, color)| *color == Color::rgba(ask.r(), ask.g(), ask.b(), 102)),
+            "the histogram takes histogram_opacity"
+        );
+        assert!(
+            rect_colors.iter().any(|(_, color)| *color
+                == Color::rgba(stacked_ask.r(), stacked_ask.g(), stacked_ask.b(), 204)),
+            "a single imbalance tint takes imbalance_opacity"
+        );
+        assert!(prims.iter().any(|primitive| matches!(primitive,
+            Prim::RoundRect { border_width, .. } if *border_width == 3.0)));
+        let texts = prims
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Text {
+                    text,
+                    color,
+                    family,
+                    weight,
+                    ..
+                } => Some((text.as_str(), *color, family.as_str(), *weight)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(texts.iter().all(|(.., family, _)| *family == "Mono"));
+        assert!(
+            texts
+                .iter()
+                .any(|(text, _, _, weight)| *text == "100" && *weight == 800),
+            "the imbalanced ask prints in strong_text_weight"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|(text, _, _, weight)| *text == "30" && *weight == 400)
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|(text, color, _, weight)| text.starts_with("V ")
+                    && *color == blue
+                    && *weight == 400),
+            "the summary volume line takes summary_text_color and text_weight"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|(text, _, _, weight)| text.starts_with('Δ') && *weight == 800)
+        );
+
+        restyle(&mut chart, &|visual| {
+            visual.cell_mode = FootprintCellMode::ProfileInBar;
+            visual.unclassified_color = Some(blue);
+        })
+        .unwrap();
+        assert!(
+            frame_prims(&mut chart)
+                .iter()
+                .any(|primitive| matches!(primitive,
+            Prim::Rect { color, .. } if color.solid() == blue))
+        );
+
+        restyle(&mut chart, &|visual| {
+            visual.cell_mode = FootprintCellMode::BidAsk;
+            visual.show_poc = false;
+            visual.show_imbalances = false;
+            visual.show_range_strip = false;
+        })
+        .unwrap();
+        let prims = frame_prims(&mut chart);
+        assert!(
+            !prims
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::RoundRect { .. }))
+        );
+        assert!(!prims.iter().any(|primitive| matches!(primitive,
+            Prim::Rect { color, .. } if *color == red
+                || (color.solid() == stacked_ask.solid() && color.a() == 204))));
+        assert!(
+            prims.iter().any(|primitive| matches!(primitive,
+                Prim::Text { text, weight, .. } if text == "100" && *weight == 400)),
+            "hidden imbalances print in the regular weight"
+        );
+        assert_eq!(
+            chart.footprint_bars(0).unwrap(),
+            bars.as_slice(),
+            "style never rewrites the stored bars"
+        );
+
+        for invalid in [
+            &(|visual: &mut FootprintVisualOptions| visual.histogram_opacity = 1.5)
+                as &dyn Fn(&mut FootprintVisualOptions),
+            &|visual| visual.imbalance_opacity = f64::NAN,
+            &|visual| visual.text_weight = 50,
+            &|visual| visual.strong_text_weight = 1000,
+            &|visual| visual.poc_width = 0.5,
+            &|visual| visual.font_family = Some("  ".to_string()),
+        ] {
+            assert_eq!(
+                restyle(&mut chart, invalid),
+                Err(FootprintError::InvalidVisualOptions)
+            );
+        }
     }
 
     #[test]
@@ -7689,8 +8070,14 @@ mod tests {
         chart
             .update_order_flow_presentation(presentation, tape, false)
             .unwrap();
+        // A user who scaled the price axis by hand gets the clusters back in view.
+        chart.set_price_scale_auto_scale_for(0, PriceScaleTarget::Right, false);
         chart.fit_footprint_viewport();
         assert_eq!(chart.time_scale.bar_spacing(), FOOTPRINT_BAR_SPACING);
+        assert_eq!(
+            chart.price_scale_auto_scale_for(0, PriceScaleTarget::Right),
+            Some(true)
+        );
 
         let frame = chart.build_frame();
         let primary = chart

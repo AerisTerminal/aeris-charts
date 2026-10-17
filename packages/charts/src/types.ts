@@ -2049,14 +2049,42 @@ export interface footprint_series_options {
   negative_delta_color: string;
   /** `null` follows the live chart layout foreground. */
   text_color: string | null;
+  /** Tile behind the printed numbers. `null` follows the theme: `--surface-raised` in light, `--surface-secondary` in dark. */
+  cell_color: string | null;
   /** Point-of-control outline. Defaults to the warning token `#ff6900` in both themes. */
   poc_color: string;
   stacked_bid_color: string;
   stacked_ask_color: string;
-  /** Pin the per-bar Delta, Volume, and Vol/sec table to the pane bottom. Defaults to true. */
+  /** Print each bar's delta and total volume under its cluster. Defaults to true. */
   show_bar_summary: boolean;
   /** Merge rows in 1-2-5 steps so cells stay legible at the current zoom. Defaults to false. */
   adaptive_rows?: boolean;
+  /** Range strip of a bar that closed at or above its open. `null` follows `ask_color`. */
+  range_up_color: string | null;
+  /** Range strip of a bar that closed below its open. `null` follows `bid_color`. */
+  range_down_color: string | null;
+  /** Volume line of the bar summary. `null` follows the cell text color. */
+  summary_text_color: string | null;
+  /** Unclassified volume in the `profile_in_bar` mode. `null` follows the cell text color. */
+  unclassified_color: string | null;
+  /** Per-row volume histogram opacity, 0-1. Defaults to 170/255 (about 0.67). */
+  histogram_opacity: number;
+  /** Single-imbalance cell tint opacity, 0-1; stacked runs stay opaque. Defaults to 150/255 (about 0.59). */
+  imbalance_opacity: number;
+  /** Weight of plain cell numbers and the summary volume line, 100-900. Defaults to 500. */
+  text_weight: number;
+  /** Weight of imbalanced cell numbers and the summary delta line, 100-900. Defaults to 700. */
+  strong_text_weight: number;
+  /** `null` follows the chart layout font family. */
+  font_family: string | null;
+  /** Point-of-control outline thickness in CSS px, 1-4. Defaults to 1. */
+  poc_width: number;
+  /** Outline the point-of-control row. Defaults to true. */
+  show_poc: boolean;
+  /** Tint imbalanced cells and print them in the strong weight; imbalance data is unaffected. Defaults to true. */
+  show_imbalances: boolean;
+  /** Draw the traded-range strip on each cluster's left edge. Defaults to true. */
+  show_range_strip: boolean;
 }
 
 /** Engine-owned price-action transform applied to canonical host OHLC source bars. */
@@ -3056,6 +3084,12 @@ export interface footprint_series_api extends series_api {
   update_trade(trade: footprint_trade): "tip" | "historical";
   footprint_bars(): readonly footprint_bar[];
   footprint_bar(index: number): footprint_bar | null;
+  /**
+   * Open the footprint view: bars wide enough for `bid × ask` numbers at the real-time edge,
+   * with every footprint price scale back on autoscale. Call it when the user enters footprint
+   * mode, not on data updates, so the user's own zoom is kept afterwards.
+   */
+  fit_viewport(): void;
   apply_options(options: Partial<any_series_options> & Partial<footprint_series_options>): void;
   options(): any_series_options & footprint_series_options;
   series_type(): "footprint";

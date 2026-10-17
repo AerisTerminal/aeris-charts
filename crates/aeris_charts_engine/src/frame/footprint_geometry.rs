@@ -2,8 +2,8 @@ use std::borrow::Cow;
 
 use super::*;
 use crate::footprint::{
-    FootprintAggregationOptions, FootprintBar, FootprintBarAggregation, FootprintCellMode,
-    FootprintLevel, footprint_row_merge, footprint_row_price_bounds, horizontal_imbalance_bar,
+    FootprintAggregationOptions, FootprintBar, FootprintCellMode, FootprintLevel,
+    footprint_row_merge, footprint_row_price_bounds, horizontal_imbalance_bar,
     merged_footprint_bar, merged_poc_price,
 };
 
@@ -28,17 +28,19 @@ const GLYPH_ADVANCE: f32 = 0.62;
 const CLUSTER_WIDTH: f64 = 0.9;
 /// Share of the cell area the per-row volume histogram takes beside the printed numbers.
 const HISTOGRAM_SHARE: f64 = 0.26;
-/// Histogram rows encode volume by length, so one opacity keeps the profile calm behind prints.
+/// Default histogram opacity: rows encode volume by length, so one opacity keeps the profile
+/// calm behind prints.
 pub(crate) const HISTOGRAM_ALPHA: u8 = 170;
-/// A single imbalance tints its number's half cell; stacked runs are opaque.
+/// Default tint of a single imbalance's half cell; stacked runs are opaque.
 pub(crate) const SINGLE_IMBALANCE_ALPHA: u8 = 150;
 /// Gap (CSS px) between a printed number and the bid × ask divider.
 const NUMBER_PAD: f64 = 2.0;
-/// Statistics-table row height relative to the font size.
-const STATS_ROW_HEIGHT: f64 = 1.7;
-const STATS_LABELS: [&str; 3] = ["Delta", "Volume", "Vol/sec"];
-/// Horizontal padding (CSS px) around the statistics-table labels.
-const STATS_LABEL_PAD: f64 = 6.0;
+/// Bar-summary text size relative to the font size.
+const SUMMARY_FONT: f64 = 0.9;
+/// Line advance of the two bar-summary lines relative to their text size.
+const SUMMARY_LINE: f64 = 1.2;
+/// Gap (CSS px) between a cluster's low row and its summary.
+const SUMMARY_GAP: f64 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FootprintLod {
@@ -50,12 +52,44 @@ enum FootprintLod {
 #[derive(Clone, Copy)]
 struct FootprintTextStyle<'a> {
     fallback_color: Color,
-    muted_color: Color,
     explicit_text: bool,
     surface: Color,
+    cell_fill: Color,
     size: f32,
     pad: f32,
     family: &'a str,
+    weight: u16,
+    strong_weight: u16,
+}
+
+/// Imbalance flags as drawn: all off when the host hides imbalance highlights, so every cell
+/// mode drops the tint and the strong weight together while the stored truth stays unchanged.
+#[derive(Clone, Copy)]
+struct DrawnImbalance {
+    bid: bool,
+    ask: bool,
+    stacked_bid: bool,
+    stacked_ask: bool,
+}
+
+impl DrawnImbalance {
+    fn of(level: &FootprintLevel, visual: &crate::FootprintVisualOptions) -> Self {
+        let shown = visual.show_imbalances;
+        Self {
+            bid: shown && (level.bid_imbalance || level.stacked_bid_imbalance),
+            ask: shown && (level.ask_imbalance || level.stacked_ask_imbalance),
+            stacked_bid: shown && level.stacked_bid_imbalance,
+            stacked_ask: shown && level.stacked_ask_imbalance,
+        }
+    }
+
+    const fn any(self) -> bool {
+        self.bid || self.ask
+    }
+}
+
+fn opacity_alpha(opacity: f64) -> u8 {
+    (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 /// Device-px column of one cluster: the range strip on the left edge, the printed numbers, then
@@ -112,21 +146,30 @@ pub(crate) fn legible_row_px(font: f64) -> f64 {
     font * TEXT_HEIGHT + DETAIL_ROW_PADDING
 }
 
-/// CSS px height of the pinned statistics table, or 0 when it is off or the pane is too short to
-/// spare it. Autoscale reserves the same height so bars never sit under the table.
-pub(crate) fn footprint_stats_table_height(
+/// CSS px the two-line bar summary takes under a cluster, or 0 when it is off or the pane is too
+/// short to spare it. Autoscale reserves the same height below the lowest bar so its summary stays
+/// on screen.
+pub(crate) fn footprint_summary_height(
     visual: &crate::FootprintVisualOptions,
     pane_height: f64,
 ) -> f64 {
     if !visual.show_bar_summary {
         return 0.0;
     }
-    let height = (visual.font_size * STATS_ROW_HEIGHT).round() * 3.0 + 1.0;
+    let height = (SUMMARY_GAP + 2.0 * visual.font_size * SUMMARY_FONT * SUMMARY_LINE).ceil();
     if pane_height >= height * 4.0 {
         height
     } else {
         0.0
     }
+}
+
+/// The `Δ delta` and `V volume` lines printed under a cluster.
+fn summary_lines(bar: &FootprintBar) -> [String; 2] {
+    [
+        format!("Δ {}", compact_volume(bar.delta)),
+        format!("V {}", compact_volume(bar.total_volume)),
+    ]
 }
 
 impl ChartEngine {
@@ -150,6 +193,7 @@ impl ChartEngine {
         let Some(stream) = self.trade_stream(state.trade_stream_id) else {
             return;
         };
+        let start = out.len();
         let visual = &state.visual;
         let plot = self.data.plot(rs.id);
         let spacing = self.time_scale.bar_spacing();
@@ -196,7 +240,10 @@ impl ChartEngine {
         };
 
         let layout = &self.options.get().layout;
-        let family = layout.font_family.clone();
+        let family = visual
+            .font_family
+            .clone()
+            .unwrap_or_else(|| layout.font_family.clone());
         let foreground = Color::parse_css(&layout.text_color).unwrap_or(Color::rgb(215, 219, 228));
         let fallback_text = visual.text_color.unwrap_or(foreground);
         let surface = Color::parse_css(&layout.background.color).unwrap_or(Color::rgb(
@@ -204,21 +251,26 @@ impl ChartEngine {
             aeris_charts_core::style::DEFAULT_SURFACE_RGB.1,
             aeris_charts_core::style::DEFAULT_SURFACE_RGB.2,
         ));
-        let muted = if surface.luminance() > 160.0 {
-            aeris_charts_core::style::LIGHT_MUTED_FOREGROUND_RGB
-        } else {
-            aeris_charts_core::style::DARK_MUTED_FOREGROUND_RGB
-        };
+        // Light cells use `--surface-raised`: the secondary surface is too close to white to read
+        // as a tile. Dark cells use the opaque `--surface-secondary`, already distinct from the chart.
+        let cell_fill = visual.cell_color.unwrap_or_else(|| {
+            let (r, g, b) = if surface.luminance() > 160.0 {
+                aeris_charts_core::style::LIGHT_RAISED_RGB
+            } else {
+                aeris_charts_core::style::DARK_MUTED_RGB
+            };
+            Color::rgb(r, g, b)
+        });
         let text_style = FootprintTextStyle {
             fallback_color: fallback_text,
-            muted_color: visual
-                .text_color
-                .unwrap_or(Color::rgb(muted.0, muted.1, muted.2)),
             explicit_text: visual.text_color.is_some(),
             surface,
+            cell_fill,
             size: (font_size * vpr) as f32,
             pad: (NUMBER_PAD * hpr).round().max(1.0) as f32,
             family: &family,
+            weight: visual.text_weight,
+            strong_weight: visual.strong_text_weight,
         };
         let cell_style = FootprintTextStyle {
             size: (cell_font.max(1.0) * vpr) as f32,
@@ -293,6 +345,22 @@ impl ChartEngine {
                     lod = FootprintLod::Cells;
                 }
             }
+            // The summary prints with the numbers, and on every cluster or none of them.
+            let summary_style = FootprintTextStyle {
+                size: (font_size * SUMMARY_FONT * vpr) as f32,
+                ..text_style
+            };
+            let summary = lod == FootprintLod::Detailed
+                && footprint_summary_height(visual, scale.height()) > 0.0
+                && {
+                    let column = ClusterColumn::new(0.0, spacing, hpr, false);
+                    let widest = presented
+                        .iter()
+                        .flat_map(|(_, bar)| summary_lines(bar))
+                        .map(|line| text_width(&line, &summary_style))
+                        .fold(0.0_f32, f32::max);
+                    widest + 2.0 * summary_style.pad <= (column.right - column.left) as f32
+                };
             for (x, bar) in &presented {
                 let column = ClusterColumn::new(*x, spacing, hpr, histogram);
                 push_bar_frame(
@@ -309,29 +377,29 @@ impl ChartEngine {
                     &cell_style,
                     poc_color,
                 );
+                if summary {
+                    push_bar_summary(
+                        out,
+                        bar,
+                        column,
+                        scale,
+                        rs.base_value,
+                        vpr,
+                        visual,
+                        &aggregation,
+                        &summary_style,
+                    );
+                }
             }
         }
-
-        let table_css = footprint_stats_table_height(visual, scale.height());
-        if table_css > 0.0 {
-            let last_row = stream.bars().len().saturating_sub(1);
-            push_stats_table(
-                out,
-                &bars,
-                last_row,
-                stored.bars,
-                StatsTableGeometry {
-                    spacing,
-                    bottom: ((scale.pane_offset() + scale.height()) * vpr).round() as i32,
-                    height: (table_css * vpr).round() as i32,
-                    width: (self.pane_w * hpr).round().max(1.0) as i32,
-                    hpr,
-                    vpr,
-                },
-                visual,
-                &text_style,
-            );
-        }
+        // Fills, then outlines, then text: clusters never overlap, so this layering paints the
+        // same pixels while letting batching executors draw the series in a few calls instead of
+        // one per alternating fill and number. The sort is stable within each layer.
+        out[start..].sort_by_key(|primitive| match primitive {
+            Prim::Rect { .. } => 0_u8,
+            Prim::Text { .. } => 2,
+            _ => 1,
+        });
     }
 }
 
@@ -403,16 +471,18 @@ fn push_bar_frame(
     style: &FootprintTextStyle<'_>,
     poc_color: Color,
 ) {
-    push_range_strip(
-        out,
-        bar,
-        column,
-        scale,
-        base_value,
-        vpr,
-        visual,
-        aggregation,
-    );
+    if visual.show_range_strip {
+        push_range_strip(
+            out,
+            bar,
+            column,
+            scale,
+            base_value,
+            vpr,
+            visual,
+            aggregation,
+        );
+    }
     let maxima = bar_volume_maxima(bar);
     let detailed = lod == FootprintLod::Detailed;
     let text = detailed.then_some(style);
@@ -433,6 +503,16 @@ fn push_bar_frame(
             | FootprintCellMode::VolumeLadder
                 if detailed =>
             {
+                // The tile backs the printed numbers only; the histogram stays on the chart surface.
+                out.push(Prim::Rect {
+                    rect: IRect {
+                        x: column.cells_left,
+                        y: cell.top,
+                        w: (column.numbers_right - column.cells_left).max(1),
+                        h: cell.height,
+                    },
+                    color: style.cell_fill,
+                });
                 let bid_raise = if visual.cell_mode == FootprintCellMode::VolumeLadder {
                     full_height / 2
                 } else {
@@ -478,8 +558,9 @@ fn push_bar_frame(
             ),
             _ => push_single_value_row(out, level, column, cell, maxima, visual, text),
         }
-        if level.level == bar.poc_level {
-            push_poc_outline(out, column.cells_left, poc_right, cell, hpr, poc_color);
+        if visual.show_poc && level.level == bar.poc_level {
+            let border = (visual.poc_width * hpr).round().max(1.0) as f32;
+            push_poc_outline(out, column.cells_left, poc_right, cell, border, poc_color);
         }
     }
 }
@@ -511,10 +592,11 @@ fn push_range_strip(
         .row_level(bar.high)
         .min(aggregation.row_level(edge_a.max(edge_b)));
     let color = if bar.close >= bar.open {
-        visual.ask_color.solid()
+        visual.range_up_color.unwrap_or(visual.ask_color)
     } else {
-        visual.bid_color.solid()
-    };
+        visual.range_down_color.unwrap_or(visual.bid_color)
+    }
+    .solid();
     let row_size = aggregation.row_size();
     let half_tick = aggregation.tick_size / 2.0;
     for row in first..=last {
@@ -566,13 +648,16 @@ fn push_range_summary(
         },
         color: body,
     });
+    if !visual.show_poc {
+        return;
+    }
     let poc_y = (scale.price_to_coordinate(poc_price, base_value) * vpr).round() as i32;
     out.push(Prim::Rect {
         rect: IRect {
             x: column.left,
             y: poc_y - 1,
             w: width,
-            h: (vpr.round().max(1.0) as i32 + 1).max(2),
+            h: ((visual.poc_width * vpr).round().max(1.0) as i32 + 1).max(2),
         },
         color: poc_color,
     });
@@ -593,14 +678,15 @@ fn push_bid_ask_row(
     let width = (column.numbers_right - column.cells_left).max(2);
     let split = column.cells_left + width / 2;
     let ask_left = (split + i32::from(width > 3)).min(column.numbers_right);
+    let drawn = DrawnImbalance::of(level, visual);
     let halves = [
         (
             column.cells_left,
             split - column.cells_left,
             cell.top - bid_raise,
             level.bid_volume,
-            level.bid_imbalance || level.stacked_bid_imbalance,
-            level.stacked_bid_imbalance,
+            drawn.bid,
+            drawn.stacked_bid,
             visual.stacked_bid_color,
             TextAlign::Right,
         ),
@@ -609,8 +695,8 @@ fn push_bid_ask_row(
             column.numbers_right - ask_left,
             cell.top,
             level.ask_volume,
-            level.ask_imbalance || level.stacked_ask_imbalance,
-            level.stacked_ask_imbalance,
+            drawn.ask,
+            drawn.stacked_ask,
             visual.stacked_ask_color,
             TextAlign::Left,
         ),
@@ -619,7 +705,7 @@ fn push_bid_ask_row(
         let half_width = half_width.max(1);
         let mut background = Color::rgba(0, 0, 0, 0);
         if imbalanced {
-            background = imbalance_cell(imbalance_color, stacked);
+            background = imbalance_cell(imbalance_color, stacked, visual);
             out.push(Prim::Rect {
                 rect: IRect {
                     x: left,
@@ -670,8 +756,8 @@ fn push_histogram_row(
         return;
     }
     let buy = level.ask_volume >= level.bid_volume;
-    let ask_imbalanced = level.ask_imbalance || level.stacked_ask_imbalance;
-    let bid_imbalanced = level.bid_imbalance || level.stacked_bid_imbalance;
+    let drawn = DrawnImbalance::of(level, visual);
+    let (ask_imbalanced, bid_imbalanced) = (drawn.ask, drawn.bid);
     let color = if mark_imbalance && ask_imbalanced && (buy || !bid_imbalanced) {
         visual.stacked_ask_color.solid()
     } else if mark_imbalance && bid_imbalanced {
@@ -682,7 +768,12 @@ fn push_histogram_row(
         } else {
             visual.bid_color
         };
-        Color::rgba(side.r(), side.g(), side.b(), HISTOGRAM_ALPHA)
+        Color::rgba(
+            side.r(),
+            side.g(),
+            side.b(),
+            opacity_alpha(visual.histogram_opacity),
+        )
     };
     out.push(Prim::Rect {
         rect: IRect {
@@ -723,19 +814,17 @@ fn push_single_value_row(
         };
         (level.delta, base, maxima.abs_delta)
     };
-    let imbalanced = level.bid_imbalance
-        || level.ask_imbalance
-        || level.stacked_bid_imbalance
-        || level.stacked_ask_imbalance;
+    let drawn = DrawnImbalance::of(level, visual);
+    let imbalanced = drawn.any();
     let mut background = Color::rgba(0, 0, 0, 0);
     if imbalanced {
-        let stacked = level.stacked_bid_imbalance || level.stacked_ask_imbalance;
+        let stacked = drawn.stacked_bid || drawn.stacked_ask;
         let side_color = if level.ask_volume >= level.bid_volume {
             visual.stacked_ask_color
         } else {
             visual.stacked_bid_color
         };
-        background = imbalance_cell(side_color, stacked);
+        background = imbalance_cell(side_color, stacked, visual);
         out.push(Prim::Rect {
             rect: IRect {
                 x: left,
@@ -826,7 +915,10 @@ fn push_profile_row(
         for (segment_width, base) in [
             (bid_width, visual.bid_color),
             (ask_width, visual.ask_color),
-            (unknown_width, unknown_color),
+            (
+                unknown_width,
+                visual.unclassified_color.unwrap_or(unknown_color),
+            ),
         ] {
             if segment_width == 0 {
                 continue;
@@ -850,10 +942,7 @@ fn push_profile_row(
             background = widest.1;
         }
     }
-    let imbalanced = level.bid_imbalance
-        || level.ask_imbalance
-        || level.stacked_bid_imbalance
-        || level.stacked_ask_imbalance;
+    let imbalanced = DrawnImbalance::of(level, visual).any();
     if let Some(style) = text
         && total != 0.0
     {
@@ -896,20 +985,23 @@ fn push_bid_ask_histogram_row(
         top: cell.top + ask_height,
         height: (cell.height - ask_height).max(1),
     };
+    let drawn = DrawnImbalance::of(level, visual);
     let sides = [
         (
             ask_cell,
             level.ask_volume,
             visual.ask_color,
-            (level.ask_imbalance || level.stacked_ask_imbalance)
-                .then(|| imbalance_cell(visual.stacked_ask_color, level.stacked_ask_imbalance)),
+            drawn
+                .ask
+                .then(|| imbalance_cell(visual.stacked_ask_color, drawn.stacked_ask, visual)),
         ),
         (
             bid_cell,
             level.bid_volume,
             visual.bid_color,
-            (level.bid_imbalance || level.stacked_bid_imbalance)
-                .then(|| imbalance_cell(visual.stacked_bid_color, level.stacked_bid_imbalance)),
+            drawn
+                .bid
+                .then(|| imbalance_cell(visual.stacked_bid_color, drawn.stacked_bid, visual)),
         ),
     ];
     for (side_cell, volume, base, imbalance) in sides {
@@ -933,10 +1025,7 @@ fn push_bid_ask_histogram_row(
     if level.bid_volume == 0.0 && level.ask_volume == 0.0 {
         return;
     }
-    let imbalanced = level.bid_imbalance
-        || level.ask_imbalance
-        || level.stacked_bid_imbalance
-        || level.stacked_ask_imbalance;
+    let imbalanced = drawn.any();
     push_cell_text(
         out,
         left as f32 + width as f32 / 2.0,
@@ -977,11 +1066,16 @@ fn profile_bar(base: Color, volume: f64, peak: f64) -> Color {
 }
 
 /// Single imbalances tint their cell; stacked runs are opaque so they read at every density.
-fn imbalance_cell(color: Color, stacked: bool) -> Color {
+fn imbalance_cell(color: Color, stacked: bool, visual: &crate::FootprintVisualOptions) -> Color {
     if stacked {
         color.solid()
     } else {
-        Color::rgba(color.r(), color.g(), color.b(), SINGLE_IMBALANCE_ALPHA)
+        Color::rgba(
+            color.r(),
+            color.g(),
+            color.b(),
+            opacity_alpha(visual.imbalance_opacity),
+        )
     }
 }
 
@@ -991,10 +1085,9 @@ fn push_poc_outline(
     left: i32,
     right: i32,
     cell: CellRect,
-    hpr: f64,
+    border: f32,
     poc: Color,
 ) {
-    let border = hpr.round().max(1.0) as f32;
     out.push(Prim::RoundRect {
         x: left as f32,
         y: cell.top as f32,
@@ -1064,172 +1157,53 @@ fn push_cell_text(
         size: style.size,
         family: style.family.to_string(),
         align,
-        weight: if bold { 700 } else { 500 },
+        weight: if bold {
+            style.strong_weight
+        } else {
+            style.weight
+        },
         italic: false,
     });
 }
 
-/// Device-px placement of the pinned statistics table.
-#[derive(Clone, Copy)]
-struct StatsTableGeometry {
-    spacing: f64,
-    bottom: i32,
-    height: i32,
-    width: i32,
-    hpr: f64,
-    vpr: f64,
-}
-
-/// Seconds a bar's volume accumulated over: the full interval for a closed time bar, the elapsed
-/// time for the forming one, and the first-to-last trade span (at least one second) otherwise.
-fn bar_seconds(bar: &FootprintBar, forming: bool, bars: FootprintBarAggregation) -> f64 {
-    let elapsed =
-        ((bar.end_timestamp_micros - bar.start_timestamp_micros) as f64 / 1_000_000.0).max(1.0);
-    match bars {
-        FootprintBarAggregation::Time {
-            interval_micros, ..
-        } => {
-            let interval = (interval_micros as f64 / 1_000_000.0).max(1.0);
-            if forming {
-                elapsed.min(interval)
-            } else {
-                interval
-            }
-        }
-        FootprintBarAggregation::Trades { .. }
-        | FootprintBarAggregation::Volume { .. }
-        | FootprintBarAggregation::Range { .. } => elapsed,
-    }
-}
-
-/// Per-bar Delta, Volume, and Vol/sec rows pinned to the pane bottom. Delta cells are tinted by
-/// sign with strength relative to the largest visible delta; labels sit on the left edge so the
-/// forming bar's statistics beside the price axis stay visible.
+/// `Δ delta` in its sign color over `V volume`, centered under the cluster's low row.
 #[allow(clippy::too_many_arguments)]
-fn push_stats_table(
+fn push_bar_summary(
     out: &mut Vec<Prim>,
-    bars: &[(usize, f64, &FootprintBar)],
-    last_row: usize,
-    aggregation: FootprintBarAggregation,
-    geometry: StatsTableGeometry,
+    bar: &FootprintBar,
+    column: ClusterColumn,
+    scale: &PriceScaleCore,
+    base_value: f64,
+    vpr: f64,
     visual: &crate::FootprintVisualOptions,
+    aggregation: &FootprintAggregationOptions,
     style: &FootprintTextStyle<'_>,
 ) {
-    let top = geometry.bottom - geometry.height;
-    let border = geometry.vpr.round().max(1.0) as i32;
-    let row_height = ((geometry.height - border) / 3).max(1);
-    let foreground = style.fallback_color;
-    let tile = Color::rgba(foreground.r(), foreground.g(), foreground.b(), 14);
-    out.push(Prim::Rect {
-        rect: IRect {
-            x: 0,
-            y: top,
-            w: geometry.width,
-            h: geometry.height,
-        },
-        color: style.surface.solid(),
-    });
-    out.push(Prim::Rect {
-        rect: IRect {
-            x: 0,
-            y: top,
-            w: geometry.width,
-            h: border,
-        },
-        color: Color::rgba(foreground.r(), foreground.g(), foreground.b(), 40),
-    });
-    let row_top = |row: i32| top + border + row * row_height;
-    let peak_delta = bars
-        .iter()
-        .map(|(_, _, bar)| bar.delta.abs())
-        .fold(0.0_f64, f64::max);
-    let gap = geometry.hpr.round().max(1.0) as i32;
-    for (row, x, bar) in bars {
-        let left = ((x - geometry.spacing / 2.0) * geometry.hpr).round() as i32;
-        let right = ((x + geometry.spacing / 2.0) * geometry.hpr).round() as i32 - gap;
-        let width = (right - left).max(1);
-        let delta_fill = if bar.delta == 0.0 || peak_delta <= 0.0 {
-            tile
-        } else {
-            let side = if bar.delta > 0.0 {
-                visual.positive_delta_color
-            } else {
-                visual.negative_delta_color
-            };
-            let strength = (bar.delta.abs() / peak_delta).clamp(0.0, 1.0).powf(0.8);
-            Color::rgba(
-                side.r(),
-                side.g(),
-                side.b(),
-                (40.0 + 215.0 * strength).round() as u8,
-            )
-        };
-        let delta_text = if style.explicit_text {
-            style.fallback_color
-        } else {
-            composite_over(delta_fill, style.surface).contrast_srgb()
-        };
-        let seconds = bar_seconds(bar, *row == last_row, aggregation);
-        let cells = [
-            (delta_fill, compact_volume(bar.delta), delta_text),
-            (tile, compact_volume(bar.total_volume), style.fallback_color),
-            (
-                tile,
-                compact_volume(bar.total_volume / seconds),
-                style.muted_color,
-            ),
-        ];
-        for (index, (fill, text, color)) in cells.into_iter().enumerate() {
-            let cell_top = row_top(index as i32);
-            let cell_height = (row_height - border).max(1);
-            out.push(Prim::Rect {
-                rect: IRect {
-                    x: left,
-                    y: cell_top,
-                    w: width,
-                    h: cell_height,
-                },
-                color: fill,
-            });
-            push_cell_text(
-                out,
-                left as f32 + width as f32 / 2.0,
-                cell_top as f32 + cell_height as f32 / 2.0,
-                TextAlign::Center,
-                width,
-                cell_height,
-                text,
-                style,
-                color,
-                index == 0,
-            );
-        }
-    }
-    let pad = (STATS_LABEL_PAD * geometry.hpr).round() as f32;
-    let label_width = STATS_LABELS
-        .iter()
-        .map(|label| text_width(label, style))
-        .fold(0.0_f32, f32::max)
-        + 2.0 * pad;
-    out.push(Prim::Rect {
-        rect: IRect {
-            x: 0,
-            y: top + border,
-            w: label_width.ceil() as i32,
-            h: geometry.height - border,
-        },
-        color: style.surface.solid(),
-    });
-    for (index, label) in STATS_LABELS.iter().enumerate() {
+    let (low_price, _) = footprint_row_price_bounds(aggregation, bar.low, bar.high);
+    let bottom = (scale.price_to_coordinate(low_price, base_value) * vpr).round() as f32;
+    let line = style.size * SUMMARY_LINE as f32;
+    let x = (column.left + column.right) as f32 / 2.0;
+    let first = bottom + (SUMMARY_GAP * vpr).round() as f32 + line / 2.0;
+    let delta_color = if bar.delta >= 0.0 {
+        visual.positive_delta_color
+    } else {
+        visual.negative_delta_color
+    };
+    let [delta, volume] = summary_lines(bar);
+    let volume_color = visual.summary_text_color.unwrap_or(style.fallback_color);
+    for (y, text, color, weight) in [
+        (first, delta, delta_color.solid(), style.strong_weight),
+        (first + line, volume, volume_color, style.weight),
+    ] {
         out.push(Prim::Text {
-            x: pad,
-            y: row_top(index as i32) as f32 + (row_height - border).max(1) as f32 / 2.0,
-            text: (*label).to_string(),
-            color: style.muted_color,
+            x,
+            y,
+            text,
+            color,
             size: style.size,
             family: style.family.to_string(),
-            align: TextAlign::Left,
-            weight: 500,
+            align: TextAlign::Center,
+            weight,
             italic: false,
         });
     }
@@ -1277,41 +1251,18 @@ mod tests {
     }
 
     #[test]
-    fn volume_rate_uses_the_interval_for_closed_time_bars_and_elapsed_time_otherwise() {
-        let bar = FootprintBar {
-            start_timestamp_micros: 60_000_000,
-            end_timestamp_micros: 75_000_000,
-            ..FootprintBar::default()
-        };
-        let time = FootprintBarAggregation::Time {
-            interval_micros: 60_000_000,
-            anchor_micros: 0,
-        };
-        assert_eq!(bar_seconds(&bar, false, time), 60.0);
-        assert_eq!(bar_seconds(&bar, true, time), 15.0);
-        let trades = FootprintBarAggregation::Trades { trades_per_bar: 10 };
-        assert_eq!(bar_seconds(&bar, false, trades), 15.0);
-        let instant = FootprintBar::default();
-        assert_eq!(
-            bar_seconds(&instant, true, trades),
-            1.0,
-            "never divides by zero"
-        );
-    }
-
-    #[test]
-    fn the_stats_table_reserves_nothing_when_off_or_the_pane_is_too_short() {
+    fn the_bar_summary_reserves_nothing_when_off_or_the_pane_is_too_short() {
         let visual = crate::FootprintVisualOptions::default();
-        let height = footprint_stats_table_height(&visual, 600.0);
+        let height = footprint_summary_height(&visual, 600.0);
         assert_eq!(
             height,
-            (visual.font_size * STATS_ROW_HEIGHT).round() * 3.0 + 1.0
+            (SUMMARY_GAP + 2.0 * visual.font_size * SUMMARY_FONT * SUMMARY_LINE).ceil()
         );
-        assert_eq!(footprint_stats_table_height(&visual, height * 3.0), 0.0);
+        assert_eq!(footprint_summary_height(&visual, height * 3.0), 0.0);
         let off = crate::FootprintVisualOptions {
             show_bar_summary: false,
             ..visual
         };
-        assert_eq!(footprint_stats_table_height(&off, 600.0), 0.0);
+        assert_eq!(footprint_summary_height(&off, 600.0), 0.0);
     }
 }

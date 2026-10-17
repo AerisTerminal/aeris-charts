@@ -2682,6 +2682,9 @@ impl ChartInner {
     pub fn scroll_to_real_time(&mut self) {
         self.engine.scroll_to_real_time();
     }
+    pub fn fit_footprint_viewport(&mut self) {
+        self.engine.fit_footprint_viewport();
+    }
     pub fn reset_time_scale(&mut self) {
         self.engine.reset_time_scale();
     }

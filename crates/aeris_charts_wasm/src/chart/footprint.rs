@@ -44,6 +44,35 @@ fn color(value: &serde_json::Value, key: &str) -> Result<Option<Color>, String> 
         .transpose()
 }
 
+/// `null` clears an optional color back to its theme-following default.
+fn optional_color(value: &serde_json::Value, key: &str) -> Result<Option<Option<Color>>, String> {
+    value
+        .get(key)
+        .map(|value| {
+            if value.is_null() {
+                return Ok(None);
+            }
+            value
+                .as_str()
+                .and_then(Color::parse_css)
+                .map(Some)
+                .ok_or_else(|| format!("{key} must be null or a supported CSS color"))
+        })
+        .transpose()
+}
+
+fn font_weight(value: &serde_json::Value, key: &str) -> Result<Option<u16>, String> {
+    number(value, key)?
+        .map(|weight| {
+            if weight.fract() == 0.0 && (100.0..=900.0).contains(&weight) {
+                Ok(weight as u16)
+            } else {
+                Err(format!("{key} must be an integer from 100 to 900"))
+            }
+        })
+        .transpose()
+}
+
 fn parse_options(json: &str) -> Result<FootprintSeriesOptions, String> {
     let value = serde_json::from_str::<serde_json::Value>(json)
         .map_err(|error| format!("invalid footprint options JSON: {error}"))?;
@@ -161,29 +190,63 @@ fn parse_options(json: &str) -> Result<FootprintSeriesOptions, String> {
     set_color!(ask_color, "ask_color");
     set_color!(positive_delta_color, "positive_delta_color");
     set_color!(negative_delta_color, "negative_delta_color");
-    if let Some(text_color) = value.get("text_color") {
-        options.visual.text_color = if text_color.is_null() {
-            None
-        } else {
-            Some(
-                text_color
-                    .as_str()
-                    .and_then(Color::parse_css)
-                    .ok_or_else(|| {
-                        "text_color must be null or a supported CSS color".to_string()
-                    })?,
-            )
+    macro_rules! set_optional_color {
+        ($field:ident) => {
+            if let Some(color) = optional_color(&value, stringify!($field))? {
+                options.visual.$field = color;
+            }
         };
     }
+    set_optional_color!(text_color);
+    set_optional_color!(cell_color);
+    set_optional_color!(range_up_color);
+    set_optional_color!(range_down_color);
+    set_optional_color!(summary_text_color);
+    set_optional_color!(unclassified_color);
     set_color!(poc_color, "poc_color");
     set_color!(stacked_bid_color, "stacked_bid_color");
     set_color!(stacked_ask_color, "stacked_ask_color");
-    if let Some(show) = boolean(&value, "show_bar_summary")? {
-        options.visual.show_bar_summary = show;
+    macro_rules! set_number {
+        ($field:ident) => {
+            if let Some(number) = number(&value, stringify!($field))? {
+                options.visual.$field = number;
+            }
+        };
     }
-    if let Some(adaptive) = boolean(&value, "adaptive_rows")? {
-        options.visual.adaptive_rows = adaptive;
+    set_number!(histogram_opacity);
+    set_number!(imbalance_opacity);
+    set_number!(poc_width);
+    if let Some(weight) = font_weight(&value, "text_weight")? {
+        options.visual.text_weight = weight;
     }
+    if let Some(weight) = font_weight(&value, "strong_text_weight")? {
+        options.visual.strong_text_weight = weight;
+    }
+    if let Some(family) = value.get("font_family") {
+        options.visual.font_family = if family.is_null() {
+            None
+        } else {
+            Some(
+                family
+                    .as_str()
+                    .filter(|family| !family.trim().is_empty())
+                    .ok_or_else(|| "font_family must be null or a non-empty string".to_string())?
+                    .to_string(),
+            )
+        };
+    }
+    macro_rules! set_flag {
+        ($field:ident) => {
+            if let Some(flag) = boolean(&value, stringify!($field))? {
+                options.visual.$field = flag;
+            }
+        };
+    }
+    set_flag!(show_bar_summary);
+    set_flag!(adaptive_rows);
+    set_flag!(show_poc);
+    set_flag!(show_imbalances);
+    set_flag!(show_range_strip);
     Ok(options)
 }
 
@@ -209,11 +272,25 @@ pub(super) fn options_json(options: &FootprintSeriesOptions) -> String {
         "positive_delta_color": options.visual.positive_delta_color.to_css(),
         "negative_delta_color": options.visual.negative_delta_color.to_css(),
         "text_color": options.visual.text_color.map(|color| color.to_css()),
+        "cell_color": options.visual.cell_color.map(|color| color.to_css()),
         "poc_color": options.visual.poc_color.to_css(),
         "stacked_bid_color": options.visual.stacked_bid_color.to_css(),
         "stacked_ask_color": options.visual.stacked_ask_color.to_css(),
         "show_bar_summary": options.visual.show_bar_summary,
         "adaptive_rows": options.visual.adaptive_rows,
+        "range_up_color": options.visual.range_up_color.map(|color| color.to_css()),
+        "range_down_color": options.visual.range_down_color.map(|color| color.to_css()),
+        "summary_text_color": options.visual.summary_text_color.map(|color| color.to_css()),
+        "unclassified_color": options.visual.unclassified_color.map(|color| color.to_css()),
+        "histogram_opacity": options.visual.histogram_opacity,
+        "imbalance_opacity": options.visual.imbalance_opacity,
+        "text_weight": options.visual.text_weight,
+        "strong_text_weight": options.visual.strong_text_weight,
+        "font_family": options.visual.font_family,
+        "poc_width": options.visual.poc_width,
+        "show_poc": options.visual.show_poc,
+        "show_imbalances": options.visual.show_imbalances,
+        "show_range_strip": options.visual.show_range_strip,
     });
     let fields = match options.aggregation.bars {
         FootprintBarAggregation::Time {

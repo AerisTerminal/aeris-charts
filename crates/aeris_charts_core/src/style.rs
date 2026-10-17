@@ -32,6 +32,7 @@ mod tests {
         assert_eq!(LIGHT_SURFACE_CSS, "#ffffff");
         assert_eq!(LIGHT_FOREGROUND_CSS, "#0a0a0a");
         assert_eq!(LIGHT_MUTED_CSS, "#fafafa");
+        assert_eq!(LIGHT_RAISED_CSS, "#f0f0f0");
         // `--text-secondary` (#0a0a0a94) over white; passes 4.5:1 on every light surface.
         assert_eq!(LIGHT_MUTED_FOREGROUND_CSS, "#717171");
         assert_eq!(LIGHT_PRIMARY_CSS, "#006edd");
@@ -48,6 +49,8 @@ mod tests {
         assert_eq!(DARK_SURFACE_CSS, "#171717");
         assert_eq!(DARK_FOREGROUND_CSS, "#fafafa");
         assert_eq!(DARK_MUTED_CSS, "#242424");
+        // `--surface-raised` (#fafafa14) composited over the dark surface.
+        assert_eq!(DARK_RAISED_CSS, "#292929");
         assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#949494");
         assert_eq!(DARK_PRIMARY_CSS, "#006edd");
         assert_eq!(DARK_PRIMARY_FOREGROUND_CSS, "#ffffff");

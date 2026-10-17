@@ -409,6 +409,42 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
   await page.locator("#footprint_stats").uncheck();
   expect(await footprint_style()).toEqual({ cell_mode: "volume_ladder", show_bar_summary: false, ask: "#006edd" });
 
+  // Every style control reaches the engine through the public footprint options.
+  const style_options = () => page.evaluate(() => {
+    const options = window.__chart.series_order().find((series) => series.series_type() === "footprint").options();
+    const keys = ["show_poc", "show_imbalances", "show_range_strip", "histogram_opacity", "text_weight",
+      "strong_text_weight", "font_family", "poc_width", "range_up_color", "summary_text_color"];
+    return Object.fromEntries(keys.map((key) => [key, options[key]]));
+  });
+  await page.locator("#footprint_show_poc").uncheck();
+  await page.locator("#footprint_show_imbalances").uncheck();
+  await page.locator("#footprint_show_range_strip").uncheck();
+  await page.locator("#footprint_text_weight").selectOption("400");
+  await page.locator("#footprint_strong_text_weight").selectOption("800");
+  await page.locator("#footprint_font_family").selectOption({ label: "Monospace" });
+  await page.locator("#footprint_poc_width").selectOption("3");
+  await page.evaluate(() => {
+    for (const [id, value] of [["footprint_histogram_opacity", "0.4"], ["footprint_range_up_color", "#00aa00"], ["footprint_summary_text_color", "#123456"]]) {
+      const input = document.getElementById(id);
+      input.value = value;
+      input.dispatchEvent(new Event("input"));
+    }
+  });
+  expect(await style_options()).toEqual({
+    show_poc: false,
+    show_imbalances: false,
+    show_range_strip: false,
+    histogram_opacity: 0.4,
+    text_weight: 400,
+    strong_text_weight: 800,
+    font_family: "ui-monospace, Consolas, Menlo, monospace",
+    poc_width: 3,
+    range_up_color: "#00aa00",
+    summary_text_color: "#123456",
+  });
+  await page.locator("#footprint_colors_reset").click();
+  expect(await style_options()).toMatchObject({ range_up_color: null, summary_text_color: null });
+
   await page.locator('#series_grid [data-series-id="footprint"]').click();
   await expect(page.locator("#footprint_style")).toBeHidden();
   const restored = await page.evaluate((drawing_id) => {

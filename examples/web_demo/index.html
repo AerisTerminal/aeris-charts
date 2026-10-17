@@ -312,7 +312,7 @@
       <label>color <input type="color" id="area_top" value="#089981"></label>
     </div>
 
-    <!-- footprint presentation: engine-owned cell modes and the pinned statistics table -->
+    <!-- footprint presentation: engine-owned cell modes and the per-bar summary -->
     <div class="group" id="footprint_style" data-caption="Footprint style" hidden>
       <h2>Footprint style</h2>
       <label>cells
@@ -326,7 +326,40 @@
           <option value="profile_in_bar">Profile</option>
         </select>
       </label>
-      <label title="Delta, Volume, and Volume/sec for every visible bar, pinned to the pane bottom"><input type="checkbox" id="footprint_stats" checked> stats table</label>
+      <label title="Delta and volume under every footprint cluster"><input type="checkbox" id="footprint_stats" checked> bar summary</label>
+      <label><input type="checkbox" id="footprint_show_poc" checked> POC</label>
+      <label><input type="checkbox" id="footprint_show_imbalances" checked> imbalances</label>
+      <label><input type="checkbox" id="footprint_show_range_strip" checked> range strip</label>
+      <label title="Per-row volume histogram opacity">histogram <input type="range" id="footprint_histogram_opacity" min="0" max="1" step="0.01" value="0.67"><span id="footprint_histogram_opacity_val">0.67</span></label>
+      <label title="Single-imbalance tint opacity">imbalance tint <input type="range" id="footprint_imbalance_opacity" min="0" max="1" step="0.01" value="0.59"><span id="footprint_imbalance_opacity_val">0.59</span></label>
+      <label>weight
+        <select id="footprint_text_weight">
+          <option>300</option><option>400</option><option selected>500</option><option>600</option><option>700</option>
+        </select>
+      </label>
+      <label title="Imbalanced numbers and the summary delta">strong weight
+        <select id="footprint_strong_text_weight">
+          <option>500</option><option>600</option><option selected>700</option><option>800</option><option>900</option>
+        </select>
+      </label>
+      <label>font
+        <select id="footprint_font_family">
+          <option value="" selected>Chart font</option>
+          <option value="ui-monospace, Consolas, Menlo, monospace">Monospace</option>
+          <option value="Georgia, serif">Serif</option>
+        </select>
+      </label>
+      <label>POC width
+        <select id="footprint_poc_width">
+          <option selected>1</option><option>2</option><option>3</option><option>4</option>
+        </select>
+      </label>
+      <label>cell <input type="color" id="footprint_cell_color" value="#f0f0f0"></label>
+      <label>strip up <input type="color" id="footprint_range_up_color" value="#006edd"></label>
+      <label>strip down <input type="color" id="footprint_range_down_color" value="#d9306a"></label>
+      <label title="Volume line of the bar summary">summary V <input type="color" id="footprint_summary_text_color" value="#717171"></label>
+      <label title="Unclassified volume in the Profile mode">unclassified <input type="color" id="footprint_unclassified_color" value="#717171"></label>
+      <button id="footprint_colors_reset" title="Return the colors above to the theme defaults">theme colors</button>
     </div>
 
     <div class="group" id="overlays_group" data-caption="Indicators">
@@ -1482,6 +1515,39 @@ document.getElementById("footprint_cell_mode").addEventListener("change", (e) =>
 });
 document.getElementById("footprint_stats").addEventListener("change", (e) => {
   window.__demo_catalogs.series.set_footprint_style({ show_bar_summary: e.target.checked });
+});
+const footprint_style_controls = [
+  ["footprint_show_poc", "show_poc", (input) => input.checked],
+  ["footprint_show_imbalances", "show_imbalances", (input) => input.checked],
+  ["footprint_show_range_strip", "show_range_strip", (input) => input.checked],
+  ["footprint_histogram_opacity", "histogram_opacity", (input) => Number(input.value)],
+  ["footprint_imbalance_opacity", "imbalance_opacity", (input) => Number(input.value)],
+  ["footprint_text_weight", "text_weight", (input) => Number(input.value)],
+  ["footprint_strong_text_weight", "strong_text_weight", (input) => Number(input.value)],
+  ["footprint_font_family", "font_family", (input) => input.value || null],
+  ["footprint_poc_width", "poc_width", (input) => Number(input.value)],
+  ["footprint_cell_color", "cell_color", (input) => input.value],
+  ["footprint_range_up_color", "range_up_color", (input) => input.value],
+  ["footprint_range_down_color", "range_down_color", (input) => input.value],
+  ["footprint_summary_text_color", "summary_text_color", (input) => input.value],
+  ["footprint_unclassified_color", "unclassified_color", (input) => input.value],
+];
+for (const [id, key, read] of footprint_style_controls) {
+  const input = document.getElementById(id);
+  input.addEventListener(input.type === "checkbox" || input.tagName === "SELECT" ? "change" : "input", () => {
+    const label = document.getElementById(`${id}_val`);
+    if (label !== null) label.textContent = input.value;
+    window.__demo_catalogs.series.set_footprint_style({ [key]: read(input) });
+  });
+}
+document.getElementById("footprint_colors_reset").addEventListener("click", () => {
+  window.__demo_catalogs.series.set_footprint_style({
+    cell_color: null,
+    range_up_color: null,
+    range_down_color: null,
+    summary_text_color: null,
+    unclassified_color: null,
+  });
 });
 
 // Wick/border pickers pin an explicit color only once touched; until then the engine's

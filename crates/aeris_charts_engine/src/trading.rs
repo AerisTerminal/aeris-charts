@@ -6099,11 +6099,11 @@ mod tests {
                 );
             }
         }
-        // Solid cells carry strong label text; the value text stays regular.
+        // The solid quantity cell prints regular-weight label text, like the value text.
         assert!(trading.iter().any(|primitive| matches!(
             primitive,
             Prim::Text { text, weight, color, .. }
-                if text == "12" && *weight == 600 && *color == label
+                if text == "12" && *weight == 400 && *color == label
         )));
 
         // At rest the marker paints exactly its body and the hollow value cell.

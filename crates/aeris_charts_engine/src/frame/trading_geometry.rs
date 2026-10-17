@@ -139,8 +139,9 @@ const MARKER_RADIUS: f64 = 2.0;
 /// above and below the glyphs: 11px text in a 16px control at the canonical 12px font.
 const MARKER_FONT_STEP: f64 = 1.0;
 const CONTROL_PAD_Y: f64 = 5.0;
-/// Text weight of solid cells and the TP/SL buttons; value text stays regular.
+/// Text weight of the TP/SL buttons; quantity and value text stay regular.
 const MARKER_STRONG_WEIGHT: u16 = 600;
+const MARKER_REGULAR_WEIGHT: u16 = 400;
 
 /// Opaque `t` mix of `color` over `surface`, the CSS `color-mix(in srgb, …)` of a tint.
 fn mix_over(color: Color, surface: Color, t: f64) -> Color {
@@ -664,7 +665,7 @@ impl ChartEngine {
     /// Quantity cells fit their formatted text instead of reserving a fixed-width box. The upper
     /// bound keeps extreme finite magnitudes from expanding a marker without limit.
     fn trading_quantity_width(&self, text: &str) -> f64 {
-        (self.trading_marker_text_width(text, MARKER_STRONG_WEIGHT) + CELL_PAD_X * 2.0)
+        (self.trading_marker_text_width(text, MARKER_REGULAR_WEIGHT) + CELL_PAD_X * 2.0)
             .ceil()
             .clamp(self.trading_control_height(), MAX_QUANTITY_WIDTH)
     }
@@ -1102,7 +1103,7 @@ impl ChartEngine {
                 color.solid(),
                 0.0,
                 self.trading_state.style.label,
-                MARKER_STRONG_WEIGHT,
+                MARKER_REGULAR_WEIGHT,
             )
         } else {
             let surface = self.trading_chip_background();
@@ -1117,7 +1118,7 @@ impl ChartEngine {
             ) {
                 MARKER_STRONG_WEIGHT
             } else {
-                400
+                MARKER_REGULAR_WEIGHT
             };
             (fill, Self::trading_border_width(vpr), color, weight)
         };
@@ -1318,9 +1319,9 @@ impl ChartEngine {
                 });
             }
             let (text_color, weight) = if segment.filled {
-                (label, MARKER_STRONG_WEIGHT)
+                (label, MARKER_REGULAR_WEIGHT)
             } else {
-                (segment.color, 400)
+                (segment.color, MARKER_REGULAR_WEIGHT)
             };
             self.push_trading_marker_text(
                 out,

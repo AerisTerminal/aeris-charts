@@ -55,10 +55,8 @@ mod trading_geometry;
 
 pub(crate) use drawings::stat_label_height;
 #[cfg(test)]
-pub(crate) use footprint_geometry::{
-    DETAIL_ROW_PADDING, HISTOGRAM_ALPHA, ROW_HEIGHT_CAP, SINGLE_IMBALANCE_ALPHA,
-    footprint_stats_table_height,
-};
+pub(crate) use footprint_geometry::{DETAIL_ROW_PADDING, ROW_HEIGHT_CAP, footprint_summary_height};
+pub(crate) use footprint_geometry::{HISTOGRAM_ALPHA, SINGLE_IMBALANCE_ALPHA};
 
 #[cfg(test)]
 use conflation::{visible_histogram_rows, visible_ohlc};
@@ -2799,7 +2797,7 @@ impl ChartEngine {
                 footprint_layout = Some((
                     stream.options().row_size(),
                     state.visual.font_size * footprint_geometry::ROW_HEIGHT_CAP,
-                    footprint_geometry::footprint_stats_table_height(
+                    footprint_geometry::footprint_summary_height(
                         &state.visual,
                         self.panes[pane_index].height,
                     ),
@@ -2908,7 +2906,7 @@ impl ChartEngine {
                     None => profile_range,
                 });
             }
-            if let Some((row_size, max_row_px, table)) = footprint_layout {
+            if let Some((row_size, max_row_px, summary)) = footprint_layout {
                 let center = (minimum + maximum) / 2.0;
                 let units_per_px = scale
                     .price_range_to_logical(&PriceRange::new(center, center + row_size), base_value)
@@ -2916,7 +2914,7 @@ impl ChartEngine {
                     .filter(|units| units.is_finite())
                     .unwrap_or(0.0);
                 let reserve = FootprintAutoscale {
-                    table,
+                    summary,
                     units_per_px,
                 };
                 match scale_target {
@@ -3008,7 +3006,7 @@ impl ChartEngine {
                 0.0
             };
             pane.marker_margin_below = if main_auto {
-                main_marker_margins[i].1 + main_footprint[i].table
+                main_marker_margins[i].1 + main_footprint[i].summary
             } else {
                 0.0
             };
@@ -3018,7 +3016,7 @@ impl ChartEngine {
                 0.0
             };
             pane.left_marker_margin_below = if left_auto {
-                left_marker_margins[i].1 + left_footprint[i].table
+                left_marker_margins[i].1 + left_footprint[i].summary
             } else {
                 0.0
             };
@@ -3028,7 +3026,7 @@ impl ChartEngine {
                 0.0
             };
             pane.overlay_marker_margin_below = if overlay_auto {
-                overlay_marker_margins[i].1 + overlay_footprint[i].table
+                overlay_marker_margins[i].1 + overlay_footprint[i].summary
             } else {
                 0.0
             };
@@ -3061,7 +3059,7 @@ impl ChartEngine {
                 let auto = entry.scale.is_auto_scale();
                 entry.marker_margin_above = if auto { autoscale.margins.0 } else { 0.0 };
                 entry.marker_margin_below = if auto {
-                    autoscale.margins.1 + autoscale.footprint.table
+                    autoscale.margins.1 + autoscale.footprint.summary
                 } else {
                     0.0
                 };
@@ -3098,18 +3096,18 @@ impl ChartEngine {
     }
 }
 
-/// What footprint series ask of one autoscaled price scale: room for the pinned statistics table
-/// below the bars, and a minimum logical span per CSS px so a display row never grows taller
+/// What footprint series ask of one autoscaled price scale: room for the bar summary below the
+/// lowest cluster, and a minimum logical span per CSS px so a display row never grows taller
 /// than the row-height cap.
 #[derive(Clone, Copy, Default)]
 struct FootprintAutoscale {
-    table: f64,
+    summary: f64,
     units_per_px: f64,
 }
 
 impl FootprintAutoscale {
     fn merge(&mut self, other: Self) {
-        self.table = self.table.max(other.table);
+        self.summary = self.summary.max(other.summary);
         self.units_per_px = self.units_per_px.max(other.units_per_px);
     }
 

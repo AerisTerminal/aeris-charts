@@ -104,6 +104,58 @@ test("tick-driven footprint API preserves delta path, POC, and stacked imbalance
   expect(screenshot.byteLength).toBeGreaterThan(10_000);
 });
 
+test("fit_viewport reopens the footprint view on autoscale", async ({ page }) => {
+  await open_chart(page);
+  const view = await page.evaluate(() => {
+    const chart = window.__chart;
+    chart.remove_series(window.__main);
+    const footprint = chart.add_series("footprint", {
+      tick_size: 1,
+      interval_seconds: 60,
+      price_line_visible: false,
+      last_value_visible: false,
+    });
+    const micros = Math.floor(window.__data[0].time / 60) * 60 * 1_000_000;
+    footprint.set_trades([
+      { timestamp_micros: micros + 1, price: 100, volume: 30, aggressor: "sell" },
+      { timestamp_micros: micros + 2, price: 101, volume: 120, aggressor: "buy" },
+    ]);
+    chart.time_scale().apply_options({ bar_spacing: 600 });
+    footprint.price_scale().apply_options({ auto_scale: false });
+    footprint.fit_viewport();
+    return {
+      spacing: chart.wasm.bar_spacing(),
+      auto_scale: footprint.price_scale().options().auto_scale,
+    };
+  });
+  expect(view).toEqual({ spacing: 104, auto_scale: true });
+});
+
+test("panning a dense footprint reuses cached WebGPU text runs", async ({ page }) => {
+  await page.goto("/?forceFallbackAdapter=1&feature=footprint");
+  await page.waitForFunction(() => window.__demo_catalogs?.series.active_id() === "footprint" && window.__chart?.backend?.() === "webgpu");
+  const frames = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const cache = () => page.evaluate(() => JSON.parse(window.__chart.wasm.text_cache_debug()));
+  const pan = async (positions) => {
+    for (const position of positions) {
+      await page.evaluate((value) => window.__chart.time_scale().scroll_to_position(value, false), position);
+      await frames();
+    }
+  };
+  const outbound = Array.from({ length: 12 }, (_, index) => -index * 2);
+  await pan(outbound);
+  const warmed = await cache();
+  // One footprint frame prints more distinct numbers than a label-scale cache would hold.
+  expect(warmed.entries, "the dense frame's runs stay cached").toBeGreaterThan(256);
+  await pan([...outbound].reverse());
+  await pan(outbound);
+  const revisited = await cache();
+  expect(
+    revisited.rasterizations - warmed.rasterizations,
+    "revisiting already-painted bars must not re-rasterize their numbers",
+  ).toBeLessThan(outbound.length * 4);
+});
+
 test("footprint shared-frame semantics execute through WebGPU", async ({ page }) => {
   await open_chart(page, "webgpu");
   const result = await page.evaluate(() => {

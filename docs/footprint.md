@@ -106,7 +106,7 @@ data without rebuilding the tape. Every mode is painted by the shared frame (`ce
 | `horizontal_imbalance` | Bid × Ask whose highlights compare bid and ask at the same price, using the configured ratio, minimum, and stack length. |
 | `bid_ask_histogram` | Ask (upper half) and bid (lower half) histogram bars on one left baseline and one shared scale, labeled `bid x ask`. |
 
-All modes keep the same range strip, POC outline, LOD rules, and statistics table. The horizontal
+All modes keep the same range strip, POC outline, LOD rules, and bar summary. The horizontal
 imbalance projection is computed per visible bar at frame time; it never rewrites the stored
 diagonal flags, which remain the values returned by `footprint_bar`.
 
@@ -191,33 +191,61 @@ Footprint geometry is constructed in `aeris_charts_engine` (`frame/footprint_geo
 ordinary backend-neutral primitives. Backends preserve the resulting order, clipping, alpha, text
 alignment, and pixel coordinates; no executor recalculates POC, delta, or imbalance.
 
-Each cluster takes 90% of its bar slot. In the numbers-bar modes (`bid_ask`, `volume_ladder`,
-`horizontal_imbalance`) at readable density it paints, left to right:
+Each cluster takes 90% of its bar slot at every zoom. In the numbers-bar modes (`bid_ask`,
+`volume_ladder`, `horizontal_imbalance`) at readable density it paints, left to right:
 
 1. a 3 px range strip: one segment per price row from low to high in the bar-direction color,
    keeping the cells' row gap so it reads as a dashed staircase rather than a candle. Only rows
    inside the pane draw;
-2. the `bid × ask` numbers on the bare chart surface, bids right-aligned and asks left-aligned
-   against the center divider. A single imbalance tints its half cell; a stacked run fills it
-   opaquely. Both print bold in the higher-contrast glyph color;
+2. the `bid × ask` numbers on a per-row tile behind the numbers only, so the histogram stays on
+   the chart surface. The tile is `--surface-raised` in the light theme, where the secondary
+   surface is too close to white to read as a tile, and the opaque `--surface-secondary` in the
+   dark theme. Bids are right-aligned and asks left-aligned against the center divider. A single
+   imbalance tints its half cell; a stacked run fills it opaquely. Both print in the strong weight
+   in the higher-contrast glyph color;
 3. a per-row total-volume histogram on the right (26% of the cell area) in the dominant side's
    hue, on one baseline and one scale per bar; and
 4. the POC outlined in `poc_color`.
 
-The other modes keep the strip and POC and replace the numbers and histogram as listed above.
+The other modes keep the strip and POC and replace the numbers and histogram as
+listed above. Each footprint series emits its fills first, then outlines, then text. Clusters never
+overlap, so the pixels are unchanged, and batching executors draw a series in a few calls instead
+of one per alternating fill and number (the WebGPU demo frame dropped from 402 to 19 draw calls).
 The sell (bid) side defaults to the order-flow sell token `#d9306a` and the buy (ask) side to the
 order-flow buy token `#006edd` (`order_flow` in `style_tokens.json`). The POC defaults to the
 `warning` token `#ff6900`, which both themes share. Unhighlighted numbers follow the layout
 foreground and retokenize on theme changes. Whole volumes below 100K print
 exactly; larger and fractional volumes use compact forms (`1.5K`, `2.5M`).
 
-`show_bar_summary` (default true) pins a statistics table to the pane bottom: Delta, Volume, and
-Vol/sec under every visible bar, with the row labels on the pane's left edge. Delta cells are tinted
-by sign, stronger as |delta| approaches the largest visible delta. Vol/sec divides by the interval
-for a closed time bar, by the elapsed time for the forming bar, and by the first-to-last trade span
-for non-time bars. Autoscale reserves the table height so clusters never sit under it; a pane
-shorter than four table heights omits the table. Max/Min Delta stay queryable through
+`show_bar_summary` (default true) prints a two-line summary under every cluster, centered below
+its low row: `Δ` delta in the strong weight in the delta sign color, then `V` total volume in the
+foreground color, at 90% of `font_size`. The summary draws with the cell numbers (Detailed LOD) and only when
+every visible bar's summary fits its cluster, so zooming out drops it together with the numbers.
+Autoscale reserves the summary height below the lowest cluster so its summary stays on screen; a
+pane shorter than four summary heights omits it. Max/Min Delta stay queryable through
 `footprint_bar`.
+
+Style options restyle the same geometry and never change the stored bars or the layout. Every
+default matches the description above:
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `cell_color` | `null` (theme tile) | Tile behind the printed numbers. |
+| `text_color` | `null` (layout foreground) | Unhighlighted cell numbers. |
+| `summary_text_color` | `null` (cell text color) | Summary `V` line. |
+| `unclassified_color` | `null` (cell text color) | Unclassified volume in `profile_in_bar`. |
+| `range_up_color`, `range_down_color` | `null` (`ask_color`, `bid_color`) | Range strip of up and down bars. |
+| `histogram_opacity` | 170/255 | Per-row volume histogram, 0-1. |
+| `imbalance_opacity` | 150/255 | Single-imbalance tint, 0-1; stacked runs stay opaque. |
+| `text_weight` | 500 | Plain numbers and the summary `V` line, 100-900. |
+| `strong_text_weight` | 700 | Imbalanced numbers and the summary `Δ` line, 100-900. |
+| `font_family` | `null` (layout font) | Every footprint glyph. |
+| `poc_width` | 1 | POC outline thickness in CSS px, 1-4. |
+| `show_poc` | true | POC outline, and the POC marker in Summary LOD. |
+| `show_imbalances` | true | Imbalance tints and strong weight; imbalance data is unaffected. |
+| `show_range_strip` | true | Range strip; its space stays reserved. |
+
+Out-of-range values reject the whole options update.
 
 Autoscale keeps a stored row at most 1.6 font sizes tall, so a narrow-range bar stays a compact
 column of numbers; a manually scaled axis is left alone. Numbers print at `font_size` (default 10
@@ -270,9 +298,10 @@ ingest; object conversion is reserved for the low-frequency single-event API.
 
 The TypeScript package exposes a dedicated `footprint_series_api` from
 `chart.add_series("footprint", options)`. Its input is `footprint_trade`, not `series_data`; generic
-OHLC `set_data` is rejected for this kind. Queries expose bar OHLC, price levels, POC, final/Max/Min
-Delta, delta percentage, bid/ask/unknown/total volume, session delta, and stacked flags. Chart-level
-methods create CVD and delta dependents, `add_big_trades` returns a handle for options, snapshot, and
+OHLC `set_data` is rejected for this kind. `fit_viewport()` opens the footprint view (the engine's
+`fit_footprint_viewport`). Queries expose bar OHLC, price levels, POC, final/Max/Min Delta, delta
+percentage, bid/ask/unknown/total volume, session delta, and stacked flags. Chart-level methods
+create CVD and delta dependents, `add_big_trades` returns a handle for options, snapshot, and
 removal, and stream methods query revision/telemetry. Data-change notifications use
 `full` for replacement/historical reconstruction and `update` for a true tip update.
 

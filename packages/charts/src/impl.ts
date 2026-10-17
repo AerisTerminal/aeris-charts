@@ -3025,6 +3025,14 @@ class footprint_series_impl extends series_impl implements footprint_series_api 
     return JSON.parse(this.chart.wasm.footprint_bar_json(this.id, index)) as footprint_bar | null;
   }
 
+  fit_viewport(): void {
+    this.assert_live();
+    this.chart.wasm.cancel_scroll_animation();
+    this.chart.wasm.cancel_keyboard_scroll();
+    this.chart.wasm.fit_footprint_viewport();
+    this.chart.repaint();
+  }
+
   set_data(): void {
     this.assert_live();
     throw new AerisChartsError(

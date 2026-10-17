@@ -15,10 +15,13 @@ use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::TextAlign;
 use aeris_charts_render_wgpu::AtlasSlot;
 
-/// Cache capacity in runs. Plugin text is label-scale (a handful of distinct runs per frame);
-/// 256 bounds atlas churn while never thrashing a realistic frame. Eviction only drops the
-/// cache entry (the atlas texels stay until the atlas itself resets — tracked by epoch).
-pub const TEXT_RUN_CACHE_CAPACITY: usize = 256;
+/// Cache capacity in runs. A footprint frame prints several hundred distinct cell numbers, so
+/// the cache must hold more than one dense frame or every pan frame re-rasterizes them all
+/// (measured: ~257 `fillText` + `getImageData` round trips per frame at the former 256). 2048
+/// is about what the 1024² label atlas packs at label-scale run sizes, so the atlas resets (and
+/// clears the cache by epoch) before the LRU scan matters. Eviction only drops the cache entry
+/// (the atlas texels stay until the atlas itself resets — tracked by epoch).
+pub const TEXT_RUN_CACHE_CAPACITY: usize = 2048;
 
 /// f32 bits of the subpixel fraction of `v` — the cache key's AA-phase discriminator. Bit
 /// exactness is deliberate: the host recomputes a run's position with the same f64 math every

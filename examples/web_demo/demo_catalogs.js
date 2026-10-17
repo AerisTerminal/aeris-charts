@@ -190,11 +190,12 @@ function use_footprint_view(chart, footprint) {
   const previous = scale.options();
   const price_scale = footprint.price_scale();
   const previous_margins = price_scale.options().scale_margins;
-  // Matches the engine's footprint zoom (FOOTPRINT_BAR_SPACING): wide enough for bid × ask numbers
-  // plus the per-row volume histogram.
+  // The configured spacing matches the engine's footprint zoom (FOOTPRINT_BAR_SPACING), so a time
+  // scale reset returns to readable clusters instead of candle-width bars.
   scale.apply_options({ min_bar_spacing: 4, bar_spacing: 104, right_offset: 0 });
-  // Clusters read best using the pane height; the stats table reserves its own bottom band.
+  // Clusters read best using the pane height; autoscale reserves room for the bar summary.
   price_scale.apply_options({ scale_margins: { top: 0.05, bottom: 0.03 } });
+  footprint.fit_viewport();
   // One empty slot keeps the forming bar clear of the last-value title chip.
   scale.scroll_to_position(1, false);
   return () => {
@@ -746,8 +747,7 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
       interaction_range() { return active_series?.interaction?.active_range?.() ?? null; },
       footprint_style() { return { ...footprint_style }; },
       set_footprint_style(patch) {
-        if (patch.cell_mode !== undefined) footprint_style.cell_mode = patch.cell_mode;
-        if (patch.show_bar_summary !== undefined) footprint_style.show_bar_summary = patch.show_bar_summary;
+        Object.assign(footprint_style, patch);
         if (active_series?.id === "footprint") {
           active_series.handle.apply_options(footprint_style);
           chart.render();

@@ -423,6 +423,13 @@ export class offscreen_chart {
     this.render();
   }
 
+  /** Open the footprint view: readable cluster zoom at the real-time edge with footprint autoscale. */
+  fit_footprint_viewport(): void {
+    this.assert_live();
+    this.wasm.fit_footprint_viewport();
+    this.render();
+  }
+
   resize(width: number, height: number, dpr = this.dpr): void {
     this.assert_live();
     this.width = Math.max(width, 1);
