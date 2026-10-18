@@ -5097,13 +5097,14 @@ fn explicit_numeric_ticks_drive_labels_grids_clipping_and_live_updates() {
     assert!(axis.labels.iter().any(|label| label.text == "5"));
     assert!(!axis.labels.iter().any(|label| label.text == "Outside"));
     let frame = chart.build_frame();
+    // The tick at 0 lies on the left Y axis line, which already marks that edge.
     assert_eq!(
         frame.panes[pane]
             .under
             .iter()
             .filter(|primitive| matches!(primitive, Prim::VLine { .. }))
             .count(),
-        2
+        1
     );
 
     let handle = chart.general_axis("ticks-x").unwrap().handle();
@@ -5182,6 +5183,76 @@ fn explicit_category_and_temporal_ticks_use_typed_values_and_labels() {
     let frame = temporal.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
     assert!(frame.labels.iter().any(|label| label.text == "Open"));
     assert!(frame.labels.iter().any(|label| label.text == "2 Jan"));
+}
+
+#[test]
+fn general_axis_lines_are_whole_device_pixels_and_never_doubled_by_edge_rules() {
+    for dpr in [1.0, 1.25, 1.5, 2.0] {
+        let mut chart = ChartEngine::new_with_initial_domain(
+            637.0,
+            401.0,
+            dpr,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+        chart
+            .apply_options(
+                r#"{"grid":{"vertLines":{"visible":true},"horzLines":{"visible":true}}}"#,
+            )
+            .unwrap();
+        let pane = 0;
+        let mut x = GeneralAxisOptions::new("x", pane, AxisDimension::X, GeneralScaleType::Linear);
+        x.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(x).unwrap();
+        let mut y = GeneralAxisOptions::new("y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+        y.domain = GeneralAxisDomain::Numeric([0.0, 80.0]);
+        chart.add_general_axis(y).unwrap();
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+        let plot = chart.general_plot_rect(pane).unwrap();
+        let bottom = ((plot.y + plot.height) * dpr).round() as i32;
+        let frame = chart.build_frame();
+        let under = &frame.panes[pane].under;
+        assert!(
+            under.iter().any(|p| matches!(p, Prim::VLine { .. })),
+            "dpr {dpr}"
+        );
+        assert!(
+            under.iter().any(|p| matches!(p, Prim::HLine { .. })),
+            "dpr {dpr}"
+        );
+        for primitive in under {
+            match primitive {
+                Prim::VLine { x, .. } => {
+                    assert!(x.abs() > 1, "dpr {dpr}: rule beside Y axis at {x}")
+                }
+                Prim::HLine { y, .. } => {
+                    assert!(
+                        (y - bottom).abs() > 1,
+                        "dpr {dpr}: rule beside X axis at {y}"
+                    )
+                }
+                _ => {}
+            }
+        }
+
+        let axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let mut prims = Vec::new();
+        chart.build_axis_primitives_into(&axis, &mut prims);
+        let border = aeris_charts_core::style::border_width_device_px(dpr) as i32;
+        let rules = prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { rect, .. } if rect.w <= 2 && rect.h > 20 => Some(rect.w),
+                Prim::Rect { rect, .. } if rect.h <= 2 && rect.w > 20 => Some(rect.h),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rules.len(), 2, "dpr {dpr}: {rules:?}");
+        assert!(rules.iter().all(|w| *w == border), "dpr {dpr}: {rules:?}");
+    }
 }
 
 #[test]

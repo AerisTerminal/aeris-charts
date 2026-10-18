@@ -1000,6 +1000,31 @@ impl ChartEngine {
         let right = (plot.width * hpr).round() as i32;
         let vertical_width = hpr.floor().max(1.0) as i32;
         let horizontal_width = vpr.floor().max(1.0) as i32;
+        // A rule on a plot edge that carries an axis line would sit beside that line and read as
+        // one doubled, thicker axis. The axis line already marks that edge.
+        let mut axis_edges = [false; 4];
+        for axis in self.general_axes.iter().filter(|axis| {
+            axis.pane_id == pane_id
+                && axis.visible
+                && matches!(axis.dimension, AxisDimension::X | AxisDimension::Y)
+        }) {
+            match axis.position {
+                Some(AxisPosition::Left) => axis_edges[0] = true,
+                Some(AxisPosition::Right) => axis_edges[1] = true,
+                Some(AxisPosition::Top) => axis_edges[2] = true,
+                Some(AxisPosition::Bottom) => axis_edges[3] = true,
+                None => {}
+            }
+        }
+        let on_vertical_axis =
+            |x: i32| axis_edges[0] && x.abs() <= 1 || axis_edges[1] && (x - right).abs() <= 1;
+        let on_horizontal_axis = |y: i32| {
+            axis_edges[2] && (y - top).abs() <= 1 || axis_edges[3] && (y - bottom).abs() <= 1
+        };
+        vertical_grid.retain(|x| !on_vertical_axis(*x));
+        vertical_zero.retain(|x| !on_vertical_axis(*x));
+        horizontal_grid.retain(|y| !on_horizontal_axis(*y));
+        horizontal_zero.retain(|y| !on_horizontal_axis(*y));
         for x in vertical_grid {
             if !seen_vertical_zero.contains(&x) {
                 out.push(Prim::VLine {
@@ -1224,11 +1249,14 @@ impl ChartEngine {
                     }
                 };
 
+                // Whole device pixels, like the financial price-scale borders: a 1 CSS px rule at a
+                // fractional DPR would otherwise round to one or two device pixels by position.
+                let line = aeris_charts_core::style::border_width_device_px(self.dpr) / self.dpr;
                 let (line_x, line_y, line_w, line_h) = match position {
-                    AxisPosition::Top => (strip_x, strip_y + strip_h - 1.0, strip_w, 1.0),
-                    AxisPosition::Bottom => (strip_x, strip_y, strip_w, 1.0),
-                    AxisPosition::Left => (strip_x + strip_w - 1.0, strip_y, 1.0, strip_h),
-                    AxisPosition::Right => (strip_x, strip_y, 1.0, strip_h),
+                    AxisPosition::Top => (strip_x, strip_y + strip_h - line, strip_w, line),
+                    AxisPosition::Bottom => (strip_x, strip_y, strip_w, line),
+                    AxisPosition::Left => (strip_x + strip_w - line, strip_y, line, strip_h),
+                    AxisPosition::Right => (strip_x, strip_y, line, strip_h),
                 };
                 out.bands.push(AxisBand {
                     x: line_x,

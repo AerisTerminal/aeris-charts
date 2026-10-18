@@ -668,28 +668,16 @@
       <div id="legend">O — H — L — C —</div>
     </main>
     <main id="general_workspace" aria-label="General charts workspace">
-      <section class="general-hero">
-        <div>
-          <span class="general-eyebrow">General charts</span>
-          <h1>Analytics dashboard</h1>
-          <p>Every released Cartesian series runs here through the same Aeris engine and package lifecycle as the financial workspace.</p>
-        </div>
-        <div class="general-runtime-badge" id="general_runtime_badge">Waiting for viewport…</div>
-      </section>
-      <section class="general-metrics" aria-label="General dashboard summary">
-        <div class="general-metric"><strong>13</strong><span>live examples</span></div>
-        <div class="general-metric"><strong>10</strong><span>series kinds</span></div>
-        <div class="general-metric"><strong>4</strong><span>composition patterns</span></div>
-        <div class="general-metric"><strong id="general_metric_ready">0</strong><span>live charts active</span></div>
-      </section>
       <div class="general-error" id="general_dashboard_error" role="alert"></div>
       <div class="general-toolbar" role="group" aria-label="General chart filters">
-        <span>Show</span>
+        <h1>General charts</h1>
         <button type="button" data-general-filter="all" aria-pressed="true">All</button>
         <button type="button" data-general-filter="trend" aria-pressed="false">Trends</button>
         <button type="button" data-general-filter="bar" aria-pressed="false">Bars</button>
         <button type="button" data-general-filter="distribution" aria-pressed="false">Distribution</button>
         <button type="button" data-general-filter="dense" aria-pressed="false">Dense data</button>
+        <span class="general-spacer"></span>
+        <div class="general-runtime-badge" id="general_runtime_badge">Waiting for viewport…</div>
       </div>
       <section class="general-chart-grid" id="general_chart_grid" aria-label="General chart examples"></section>
     </main>

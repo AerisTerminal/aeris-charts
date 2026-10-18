@@ -2,12 +2,10 @@ import { create_chart, create_general_legend, create_general_tooltip } from "./d
 
 let dashboard_root = null;
 let chart_grid = null;
-let metric_ready = null;
 let runtime_badge = null;
 let dashboard_error = null;
 let requested_backend = "auto";
 let active_theme = "dark";
-const MAX_ACTIVE_CHARTS = 4;
 
 const palette = {
   blue: "#4c8bf5",
@@ -21,7 +19,7 @@ const palette = {
 const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const month_rows = (values) => values.map((y, index) => ({ id: index, x: months[index], y }));
 const axes = (x_scale, x_title, y_title) => [
-  { id: "x", dimension: "x", scale: x_scale, title: x_title, grid_visible: false },
+  { id: "x", dimension: "x", scale: x_scale, title: x_title, grid_visible: true },
   { id: "y", dimension: "y", scale: "linear", title: y_title, grid_visible: true },
 ];
 
@@ -75,7 +73,7 @@ const examples = [
     horizontal_domain: { type: "continuous", scale: "linear" },
     axes: [
       { id: "x", dimension: "x", scale: "linear", title: "Pipeline", grid_visible: true },
-      { id: "y", dimension: "y", scale: "band", title: "Stage", grid_visible: false },
+      { id: "y", dimension: "y", scale: "band", title: "Stage", grid_visible: true },
     ],
     series: [{ kind: "horizontal_bar", title: "Pipeline", color: palette.violet, data_labels: true, data: [
       { x: "Qualified", y: 82 }, { x: "Discovery", y: 67 }, { x: "Proposal", y: 49 }, { x: "Security", y: 36 }, { x: "Contract", y: 24 },
@@ -109,7 +107,7 @@ const examples = [
     title: "Delivery windows", description: "Category range bars show low/high delivery estimates as exact rectangular marks.", label: "range_bar", category: "bar",
     horizontal_domain: { type: "category", scale: "band" },
     axes: [
-      { id: "x", dimension: "x", scale: "band", title: "Team", grid_visible: false },
+      { id: "x", dimension: "x", scale: "band", title: "Team", grid_visible: true },
       { id: "y", dimension: "y", scale: "linear", title: "Days", grid_visible: true },
     ],
     series: [{ kind: "range_bar", title: "Delivery", color: palette.amber, data: [
@@ -170,20 +168,16 @@ function create_card(example, index) {
   card.className = "general-chart-card";
   card.dataset.category = example.category;
   card.dataset.chartIndex = String(index);
+  card.setAttribute("aria-label", example.title);
   card.innerHTML = `
-    <div class="general-card-header">
-      <div class="general-card-copy"><h2>${example.title}</h2><p>${example.description}</p></div>
-      <span class="general-kind-pill">${example.label}</span>
-    </div>
     <div class="general-chart-host" role="group" aria-label="${example.title} chart"></div>
-    <div class="general-card-footer"><div class="general-card-legends"></div><span class="general-spacer"></span><span class="general-ready-state">loading</span></div>`;
+    <div class="general-card-legends"></div>`;
   return card;
 }
 
 async function mount_example(example, card) {
   const host = card.querySelector(".general-chart-host");
   const legends = card.querySelector(".general-card-legends");
-  const ready_state = card.querySelector(".general-ready-state");
   const chart = await create_chart(host, {
     autoSize: true,
     // Auto tries WebGPU first. Unsupported browsers and machines without an available adapter
@@ -191,7 +185,7 @@ async function mount_example(example, card) {
     backend: requested_backend,
     theme: active_theme,
     initialPane: { horizontal_domain: example.horizontal_domain },
-    grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+    grid: { vertLines: { visible: true }, horzLines: { visible: true } },
     // This page is a vertically scrolling dashboard. Wheel/pinch gestures belong to the page,
     // otherwise every chart card traps the user's scroll and makes the workspace feel frozen.
     handle_scroll: {
@@ -234,11 +228,6 @@ async function mount_example(example, card) {
     format_value: (value) => Number(value).toLocaleString(),
   });
   chart.render();
-  const backend_status = chart.backend_status();
-  ready_state.textContent = chart.backend() === "webgpu"
-    ? "WebGPU"
-    : backend_status.requested_backend === "auto" ? "Canvas2D fallback" : "Canvas2D";
-  ready_state.title = backend_status.detail ?? "";
 
   return {
     chart,
@@ -250,7 +239,6 @@ async function mount_example(example, card) {
       tooltip.detach();
       legend.detach();
       chart.remove();
-      ready_state.textContent = "paused";
     },
   };
 }
@@ -259,11 +247,9 @@ let errors = [];
 let states = [];
 let observer = null;
 let dashboard_active = false;
-let visibility_clock = 0;
 
 function update_runtime_status() {
   const active = states.flatMap((state) => state.entry === null ? [] : [state.entry]);
-  metric_ready.textContent = String(active.length);
   const backend_counts = new Map();
   for (const entry of active) backend_counts.set(entry.chart.backend(), (backend_counts.get(entry.chart.backend()) ?? 0) + 1);
   const fallback = active
@@ -275,7 +261,7 @@ function update_runtime_status() {
   runtime_badge.title = fallback?.detail ?? "";
   runtime_badge.textContent = summary === ""
     ? `${requested_backend === "auto" ? "WebGPU preferred" : "Canvas2D requested"} · waiting for viewport`
-    : `${summary} live${fallback ? ` · WebGPU fallback (${fallback.reason})` : ""} · max ${MAX_ACTIVE_CHARTS}`;
+    : `${summary} live${fallback ? ` · WebGPU fallback (${fallback.reason})` : ""}`;
 }
 
 function update_error_status() {
@@ -304,7 +290,6 @@ async function mount_state(state) {
     console.error(`General dashboard failed to mount ${state.example.title}`, error);
     state.failed = true;
     state.card.dataset.mounted = "failed";
-    state.card.querySelector(".general-ready-state").textContent = "failed";
     errors.push({ title: state.example.title, message: error?.message ?? String(error) });
     update_error_status();
   } finally {
@@ -313,18 +298,19 @@ async function mount_state(state) {
   }
 }
 
+// Charts mount lazily as they approach the viewport and then stay mounted while the dashboard is
+// active. Unmounting on scroll would blank every card the user scrolls back to until its chart
+// re-initializes; only leaving the dashboard or filtering a card out releases its chart.
 function reconcile_active_charts() {
   if (!dashboard_active) return;
-  const selected = new Set(
-    states
-      .filter((state) => state.visible && !state.card.hidden && !state.failed)
-      .sort((left, right) => left.distance - right.distance || left.index - right.index)
-      .slice(0, MAX_ACTIVE_CHARTS),
-  );
   for (const state of states) {
-    state.desired = selected.has(state);
-    if (state.desired) void mount_state(state);
-    else unmount_state(state);
+    if (state.card.hidden || state.failed) {
+      state.desired = false;
+      unmount_state(state);
+    } else if (state.visible) {
+      state.desired = true;
+      void mount_state(state);
+    }
   }
 }
 
@@ -343,16 +329,9 @@ function ensure_observer() {
       const state = states[Number(observed.target.dataset.chartIndex)];
       if (state === undefined) continue;
       state.visible = observed.isIntersecting;
-      state.last_visible = observed.isIntersecting ? ++visibility_clock : state.last_visible;
-      const root_center = observed.rootBounds === null
-        ? window.innerHeight / 2
-        : (observed.rootBounds.top + observed.rootBounds.bottom) / 2;
-      state.distance = Math.abs(
-        (observed.boundingClientRect.top + observed.boundingClientRect.bottom) / 2 - root_center,
-      );
     }
     reconcile_active_charts();
-  }, { root: dashboard_root, rootMargin: "32px 0px", threshold: 0.15 });
+  }, { root: dashboard_root, rootMargin: "400px 0px" });
 }
 
 function set_active(active) {
@@ -382,7 +361,6 @@ export function install_general_dashboard({ root, backend = "auto", theme = "dar
 
   dashboard_root = root;
   chart_grid = root.querySelector("#general_chart_grid");
-  metric_ready = root.querySelector("#general_metric_ready");
   runtime_badge = root.querySelector("#general_runtime_badge");
   dashboard_error = root.querySelector("#general_dashboard_error");
   requested_backend = backend === "canvas2d" ? "canvas2d" : "auto";
@@ -391,7 +369,6 @@ export function install_general_dashboard({ root, backend = "auto", theme = "dar
   states = [];
   observer = null;
   dashboard_active = false;
-  visibility_clock = 0;
   chart_grid.replaceChildren();
 
   states = examples.map((example, index) => {
@@ -405,8 +382,6 @@ export function install_general_dashboard({ root, backend = "auto", theme = "dar
       mounting: null,
       failed: false,
       visible: false,
-      last_visible: 0,
-      distance: Number.POSITIVE_INFINITY,
       desired: false,
       index,
     };

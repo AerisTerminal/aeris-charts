@@ -96,14 +96,20 @@ impl ChartEngine {
                 }
             };
 
+            // A band authored as whole device pixels keeps that exact size wherever it lands;
+            // rounding both edges independently could add or drop a pixel on a border.
+            let snap = |start: f64, len: f64| {
+                let whole = len.round();
+                if whole >= 1.0 && (len - whole).abs() < 1e-6 {
+                    (start.round(), whole)
+                } else {
+                    (start, len)
+                }
+            };
             for band in &axis_frame.bands {
-                rect(
-                    band.x * dpr,
-                    band.y * dpr,
-                    band.width * dpr,
-                    band.height * dpr,
-                    band.color,
-                );
+                let (x, w) = snap(band.x * dpr, band.width * dpr);
+                let (y, h) = snap(band.y * dpr, band.height * dpr);
+                rect(x, y, w, h, band.color);
             }
 
             // Built-in price-scale borders belong to financial panes. General-only charts reserve

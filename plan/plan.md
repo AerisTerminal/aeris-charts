@@ -331,6 +331,12 @@ the same structure and colors and hides the engine tooltip while attached. The g
 caption hack was removed. This supersedes the earlier "no crosshair rules" note for the index-axis
 cursor only; general panes still paint no horizontal crosshair rule or axis tags.
 
+A follow-up post-G7 presentation fix, also without closing an R8 item, makes general axis lines
+one whole device pixel at every DPR, drops grid and zero rules that would double an axis line, and
+snaps the GPUI element origin to device pixels so scrolled charts keep crisp rules. The GPUI gallery
+and browser dashboard drop card headers and enable grids, and the browser dashboard keeps charts
+mounted after they scroll out of view instead of re-creating them blank.
+
 ## Known gaps
 
 Remaining source-confirmed gaps from the 2026-09-23 review and the 2026-10-18 post-G7 changes. R3–R7 closed the earlier Cartesian,

@@ -81,11 +81,15 @@ struct Transform {
 }
 
 impl Transform {
+    /// The element origin is snapped to the device-pixel grid. A scrolled or fractionally laid
+    /// out element otherwise shifts every integer-aligned device rect by a sub-pixel phase, and
+    /// GPUI antialiases a one-pixel rule across two lighter pixels.
     fn new(viewport: AerisViewport, scale_factor: f32) -> Self {
+        let inv_scale = 1.0 / scale_factor;
         Self {
-            offset_x: viewport.offset_x,
-            offset_y: viewport.offset_y,
-            inv_scale: 1.0 / scale_factor,
+            offset_x: (viewport.offset_x * scale_factor).round() * inv_scale,
+            offset_y: (viewport.offset_y * scale_factor).round() * inv_scale,
+            inv_scale,
         }
     }
 
@@ -500,7 +504,7 @@ impl GpuiChartRenderer {
         let started = std::time::Instant::now();
         self.shaped_text.reset_counters();
         let background_bounds = Bounds {
-            origin: point(px(viewport.offset_x), px(viewport.offset_y)),
+            origin: Transform::new(viewport, scale_factor).point(0.0, 0.0),
             size: size(px(viewport.width), px(viewport.height)),
         };
         window.paint_quad(fill(background_bounds, to_background(prepared.background)));
@@ -1357,6 +1361,23 @@ mod tests {
         let b = t.bounds(DeviceRect::new(0.0, 0.0, 200.0, 100.0));
         assert_eq!(f32::from(b.origin.x), 10.0);
         assert_eq!(f32::from(b.size.width), 100.0);
+    }
+
+    #[test]
+    fn transform_snaps_a_scrolled_origin_to_whole_device_pixels() {
+        for scale in [1.0_f32, 1.25, 1.5, 2.0] {
+            for offset in [0.0_f32, 10.3, 117.61, -42.45] {
+                let t = Transform::new(AerisViewport::new(offset, offset, 800.0, 600.0), scale);
+                for device in [0.0_f32, 1.0, 37.0] {
+                    let x = f32::from(t.x(device)) * scale;
+                    assert!(
+                        (x - x.round()).abs() < 1e-3,
+                        "scale {scale} offset {offset} device {device} lands at {x}"
+                    );
+                    assert!((f32::from(t.x(0.0)) - offset).abs() <= 0.5 / scale + 1e-4);
+                }
+            }
+        }
     }
 
     #[test]

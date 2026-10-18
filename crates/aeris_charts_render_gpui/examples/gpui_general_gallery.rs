@@ -197,7 +197,6 @@ fn general_input(kind: GeneralSeriesKind) -> GeneralXyInput {
 }
 struct ChartCard {
     title: &'static str,
-    caption: &'static str,
     engine: ChartEngine,
     renderer: GpuiChartRenderer,
     frame: ChartFrame,
@@ -207,12 +206,7 @@ struct ChartCard {
 }
 
 impl ChartCard {
-    fn new_layout(
-        kind: GeneralLayoutSeriesKind,
-        title: &'static str,
-        caption: &'static str,
-        color: &str,
-    ) -> Self {
+    fn new_layout(kind: GeneralLayoutSeriesKind, title: &'static str, color: &str) -> Self {
         let mut engine =
             ChartEngine::new_with_initial_domain(520.0, 310.0, 1.0, HorizontalDomain::Layout)
                 .expect("a layout pane can be the initial pane");
@@ -229,7 +223,6 @@ impl ChartCard {
             .expect("the gallery series binds");
         Self {
             title,
-            caption,
             engine,
             renderer: GpuiChartRenderer::new(),
             frame: ChartFrame::default(),
@@ -239,13 +232,7 @@ impl ChartCard {
         }
     }
 
-    fn new_general(
-        kind: GeneralSeriesKind,
-        title: &'static str,
-        caption: &'static str,
-        color: &str,
-        donut: bool,
-    ) -> Self {
+    fn new_general(kind: GeneralSeriesKind, title: &'static str, color: &str, donut: bool) -> Self {
         use GeneralSeriesKind as Kind;
         let polar = matches!(
             kind,
@@ -304,16 +291,17 @@ impl ChartCard {
         };
         let mut x_axis = GeneralAxisOptions::new("x", 0, x_dimension, x_scale);
         let mut y_axis = GeneralAxisOptions::new("y", 0, y_dimension, y_scale);
-        // Radar reads against its polar grid; sector families show proportions without one.
-        if kind == Kind::Radar {
+        // Cartesian and radar charts read against a grid; sector families show proportions
+        // without one, and heatmap cells already tile the plot.
+        if polar && kind != Kind::Radar {
+            x_axis.visible = false;
+            y_axis.visible = false;
+        } else if kind != Kind::HeatmapGrid {
             engine
                 .apply_options(
                     r#"{"grid":{"vertLines":{"visible":true},"horzLines":{"visible":true}}}"#,
                 )
-                .expect("radar grid options");
-        } else if polar {
-            x_axis.visible = false;
-            y_axis.visible = false;
+                .expect("gallery grid options");
         }
         engine.add_general_axis(x_axis).expect("gallery X axis");
         engine.add_general_axis(y_axis).expect("gallery Y axis");
@@ -362,7 +350,6 @@ impl ChartCard {
             .expect("gallery general series");
         Self {
             title,
-            caption,
             engine,
             renderer: GpuiChartRenderer::new(),
             frame: ChartFrame::default(),
@@ -465,30 +452,8 @@ impl Render for ChartCard {
             .rounded_lg()
             .border_1()
             .border_color(rgb(0xdfe6ef))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .h(px(52.0))
-                    .flex_shrink_0()
-                    .px_4()
-                    .border_b_1()
-                    .border_color(rgb(0xe9eef5))
-                    .child(
-                        div()
-                            .text_size(px(15.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(rgb(0x18283d))
-                            .child(self.title),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(rgb(0x60748c))
-                            .child(self.caption),
-                    ),
-            )
+            .overflow_hidden()
+            .p_2()
             .child(
                 div()
                     .id(self.title)
@@ -549,131 +514,33 @@ impl Gallery {
         use GeneralSeriesKind as Kind;
         let mut cards = Vec::with_capacity(20);
         let general = [
-            (Kind::XyLine, "Line", "Continuous values", "#3b82f6", false),
-            (Kind::XyArea, "Area", "Filled trend", "#0ea5e9", false),
-            (
-                Kind::Column,
-                "Columns",
-                "Category comparison",
-                "#6366f1",
-                false,
-            ),
-            (
-                Kind::HorizontalBar,
-                "Horizontal bars",
-                "Ranked categories",
-                "#14b8a6",
-                false,
-            ),
-            (
-                Kind::Scatter,
-                "Scatter",
-                "X/Y relationship",
-                "#f97316",
-                false,
-            ),
-            (
-                Kind::Bubble,
-                "Bubble",
-                "Size as a third value",
-                "#8b5cf6",
-                false,
-            ),
-            (
-                Kind::RangeArea,
-                "Range area",
-                "Low and high band",
-                "#06b6d4",
-                false,
-            ),
-            (
-                Kind::RangeBar,
-                "Range bars",
-                "Low and high intervals",
-                "#64748b",
-                false,
-            ),
-            (
-                Kind::ErrorBar,
-                "Error bars",
-                "X and Y uncertainty",
-                "#ef4444",
-                false,
-            ),
-            (
-                Kind::BoxPlot,
-                "Box plot",
-                "Distribution summary",
-                "#a855f7",
-                false,
-            ),
-            (
-                Kind::HeatmapGrid,
-                "Heatmap",
-                "Category grid values",
-                "#0284c7",
-                false,
-            ),
-            (Kind::Pie, "Pie", "Category proportions", "#f59e0b", false),
-            (
-                Kind::Pie,
-                "Donut",
-                "Pie with an inner radius",
-                "#f59e0b",
-                true,
-            ),
-            (
-                Kind::Radar,
-                "Radar",
-                "Values around spokes",
-                "#10b981",
-                false,
-            ),
-            (
-                Kind::PolarArea,
-                "Polar area",
-                "Value-scaled sectors",
-                "#eab308",
-                false,
-            ),
-            (
-                Kind::RadialBar,
-                "Radial bars",
-                "Value-scaled arcs",
-                "#e11d48",
-                false,
-            ),
+            (Kind::XyLine, "Line", "#3b82f6", false),
+            (Kind::XyArea, "Area", "#0ea5e9", false),
+            (Kind::Column, "Columns", "#6366f1", false),
+            (Kind::HorizontalBar, "Horizontal bars", "#14b8a6", false),
+            (Kind::Scatter, "Scatter", "#f97316", false),
+            (Kind::Bubble, "Bubble", "#8b5cf6", false),
+            (Kind::RangeArea, "Range area", "#06b6d4", false),
+            (Kind::RangeBar, "Range bars", "#64748b", false),
+            (Kind::ErrorBar, "Error bars", "#ef4444", false),
+            (Kind::BoxPlot, "Box plot", "#a855f7", false),
+            (Kind::HeatmapGrid, "Heatmap", "#0284c7", false),
+            (Kind::Pie, "Pie", "#f59e0b", false),
+            (Kind::Pie, "Donut", "#f59e0b", true),
+            (Kind::Radar, "Radar", "#10b981", false),
+            (Kind::PolarArea, "Polar area", "#eab308", false),
+            (Kind::RadialBar, "Radial bars", "#e11d48", false),
         ];
-        for (kind, title, caption, color, donut) in general {
-            cards.push(cx.new(move |_| ChartCard::new_general(kind, title, caption, color, donut)));
+        for (kind, title, color, donut) in general {
+            cards.push(cx.new(move |_| ChartCard::new_general(kind, title, color, donut)));
         }
-        for (kind, title, caption, color) in [
-            (
-                GeneralLayoutSeriesKind::Funnel,
-                "Funnel",
-                "Hover or click a stage",
-                "#3b82f6",
-            ),
-            (
-                GeneralLayoutSeriesKind::Treemap,
-                "Treemap",
-                "Revenue by product",
-                "#10b981",
-            ),
-            (
-                GeneralLayoutSeriesKind::Sankey,
-                "Sankey",
-                "Traffic to conversions",
-                "#8b5cf6",
-            ),
-            (
-                GeneralLayoutSeriesKind::Sunburst,
-                "Sunburst",
-                "Nested revenue",
-                "#f59e0b",
-            ),
+        for (kind, title, color) in [
+            (GeneralLayoutSeriesKind::Funnel, "Funnel", "#3b82f6"),
+            (GeneralLayoutSeriesKind::Treemap, "Treemap", "#10b981"),
+            (GeneralLayoutSeriesKind::Sankey, "Sankey", "#8b5cf6"),
+            (GeneralLayoutSeriesKind::Sunburst, "Sunburst", "#f59e0b"),
         ] {
-            cards.push(cx.new(move |_| ChartCard::new_layout(kind, title, caption, color)));
+            cards.push(cx.new(move |_| ChartCard::new_layout(kind, title, color)));
         }
         Self { cards }
     }
@@ -693,42 +560,15 @@ impl Render for Gallery {
                     .children(pair.iter().cloned())
             })
             .collect::<Vec<_>>();
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(rgb(0xf3f6fa))
-            .text_color(rgb(0x18283d))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .justify_center()
-                    .h(px(78.0))
-                    .flex_shrink_0()
-                    .px_6()
-                    .child(
-                        div()
-                            .text_size(px(22.0))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .child("Aeris Charts  /  General gallery"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(rgb(0x60748c))
-                            .child("20 live examples · Cartesian, statistical, polar and layout · scroll for all families"),
-                    ),
-            )
-            .child(
-                div()
-                    .id("gallery-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .p_4()
-                    .child(div().flex().flex_col().gap_4().children(rows)),
-            )
+        div().flex().flex_col().size_full().bg(rgb(0xf3f6fa)).child(
+            div()
+                .id("gallery-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .p_4()
+                .child(div().flex().flex_col().gap_4().children(rows)),
+        )
     }
 }
 fn main() {

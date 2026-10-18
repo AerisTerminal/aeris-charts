@@ -133,7 +133,9 @@ Canvas2D/WebGPU interior pixel fixtures cover the four layout fills, and a GPUI/
 structural fixture covers their shared frame marks and focused marker at DPR 1, 1.5 and 2.
 The GPUI general gallery runs 20 live general-chart examples across Cartesian, statistical,
 polar, and layout families through the shared frame and executor in a scrollable native window;
-pointer samples use the standard GPUI input adapter.
+pointer samples use the standard GPUI input adapter. Gallery and browser-dashboard cards carry only
+the chart (plus its legend in the browser) with grids enabled; browser cards mount as they approach
+the viewport and stay mounted until the dashboard deactivates or a filter hides them.
 A funnel series uses
 the same ordered `MeshFill` stream as other general geometry: each stage's trapezoid tapers from
 its value to the next stage, with the final stage tapering to zero. A cached dataset maximum
@@ -237,7 +239,10 @@ uses the shared zero-line color even when ordinary rings are hidden; coincident 
 are deduplicated in device-pixel space. Cartesian grid and numeric zero-line policies execute
 from the same effective domains into the retained pane underlay, below references and series. Axis-local
 grid visibility combines with the chart-wide direction style, coincident device-pixel rules are deduplicated,
-and an enabled zero line replaces a coincident ordinary grid rule. Financial panes allocate no general
+and an enabled zero line replaces a coincident ordinary grid rule. Grid and zero rules within one device
+pixel of a plot edge that carries a visible axis line are omitted, so they never read as a doubled axis.
+General axis lines use the canonical whole-device-pixel border width, and the axis-layer converter keeps
+any band authored in whole device pixels at that exact size. Financial panes allocate no general
 axis storage and retain their established price/time axis output unchanged.
 
 General charts follow Recharts presentation defaults. Automatic linear and radial-linear domains
@@ -1202,7 +1207,7 @@ keep their respective platform encodings behind the same frame contract.
 
 ### `aeris_charts_render_gpui`
 
-The native GPUI executor. It converts the prepared primitive stream into GPUI scene operations and owns GPUI-specific text, image caches, geometry conversion, backend metrics, and fixtures. It must not fork chart behavior or recalculate engine geometry.
+The native GPUI executor. It converts the prepared primitive stream into GPUI scene operations and owns GPUI-specific text, image caches, geometry conversion, backend metrics, and fixtures. It must not fork chart behavior or recalculate engine geometry. The element origin is snapped to the device-pixel grid before device coordinates are divided into logical px, so a scrolled or fractionally laid-out chart keeps every integer-aligned rule exactly on whole device pixels instead of antialiasing it across two lighter ones.
 
 Its `input` module is the one GPUI adapter for the engine input controller, shared by every GPUI host (the `gpui_probe` example and Aeris Terminal). `GpuiChartInput` converts GPUI mouse, wheel (native line units mapped to the shared DOM-equivalent wheel scale), trackpad pinch, modifier, and key events into engine input against the chart canvas's top-left window position (`set_canvas_bounds`) and a monotonic clock; `cursor_style` is the single `ChartCursor` → `CursorStyle` mapping (on Windows, whose GPUI backend draws hand cursors as the arrow, vertically dragged trading lines use the vertical-resize cursor); `text_edit_key` applies platform text-editing conventions to the engine typing session, with clipboard shortcuts layered on in `key_down`; and `install_text_metrics` installs the native text measurer and cap-height metric. A host binds each GPUI listener with one adapter call and never routes chart input itself. The repository's interactive Linux probes enable GPUI's Wayland and X11 platforms; macOS and Windows continue through GPUI's native platform selection. CI compiles and tests the GPUI backend on all three operating systems.
 

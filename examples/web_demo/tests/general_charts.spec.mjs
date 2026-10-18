@@ -1146,7 +1146,6 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
     summary: window.__generalDashboard.summary,
     active: window.__generalDashboard.active_summary(),
     cards: document.querySelectorAll("#general_workspace .general-chart-card").length,
-    ready: document.getElementById("general_metric_ready")?.textContent,
     runtime: document.getElementById("general_runtime_badge")?.textContent,
     mode: document.getElementById("workspace")?.dataset.demoMode,
   }));
@@ -1155,8 +1154,8 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
   expect(result.errors).toEqual([]);
   expect(result.cards).toBe(14);
   expect(result.mode).toBe("general");
-  expect(Number(result.ready)).toBeGreaterThan(0);
-  expect(Number(result.ready)).toBeLessThan(14);
+  expect(result.active.length).toBeGreaterThan(0);
+  expect(result.active.length).toBeLessThan(14);
   if (browserName === "chromium") {
     expect(result.runtime).toContain("WebGPU");
     expect(result.active.every((entry) => entry.backend === "webgpu")).toBe(true);
@@ -1198,11 +1197,17 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
   await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(5);
   await page.getByRole("button", { name: "All" }).click();
   await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(14);
+  const first_card = page.locator("#general_workspace .general-chart-card").first();
   const last = page.locator("#general_workspace .general-chart-card").last();
   await last.scrollIntoViewIfNeeded();
   await expect(last).toHaveAttribute("data-mounted", "true");
   await page.waitForTimeout(500);
-  expect(await page.locator('#general_workspace .general-chart-card[data-mounted="true"]').count()).toBeLessThanOrEqual(4);
+  // Charts scrolled past stay mounted, so scrolling back never shows a blank card.
+  await expect(first_card).toHaveAttribute("data-mounted", "true");
+  await first_card.scrollIntoViewIfNeeded();
+  await expect(first_card).toHaveAttribute("data-mounted", "true");
+  // Cards carry only the chart and its legend: no header, description, or status footer.
+  expect(await page.locator("#general_workspace .general-chart-card h2, #general_workspace .general-chart-card p").count()).toBe(0);
 
   // Product attribution is not part of the chart surface. The hosts contain canvases/tooltips only;
   // legacy attribution options are retired and cannot inject a mark back into general charts.
