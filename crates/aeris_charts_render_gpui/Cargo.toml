@@ -61,6 +61,10 @@ workspace = true
 # The probe needs a real GPUI window, so it only builds with the backend feature. Without this,
 # `cargo build --workspace` would try to compile it (and GPUI) unconditionally.
 [[example]]
+name = "gpui_general_gallery"
+required-features = ["gpui-backend"]
+
+[[example]]
 name = "gpui_probe"
 required-features = ["gpui-backend"]
 

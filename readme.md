@@ -153,6 +153,10 @@ framework-neutral and React combined examples live in `examples/all_in_one/`.
 The [general chart authoring guide](docs/general_authoring.md) covers composable declarations,
 general-only first-pane setup, controlled brushing, and Recharts migration mappings.
 
+To inspect the native GPUI rendering of the Cartesian, statistical, polar, and layout families, run from the repository root:
+
+    cargo run -p aeris_charts_render_gpui --features gpui-backend --example gpui_general_gallery
+
 The optimized WASM binary is shipped beside the ESM entry and resolves there automatically. Bundlers
 that require an explicit asset URL may import `@aeristerminal/aeris-charts/wasm` (or their normal URL-loader
 form of that export) and pass the resulting URL to `initWasm()` before creating a chart; no `pkg/`,

@@ -131,6 +131,9 @@ cleared when its dataset or series disappears.
 The browser controller applies focus color and size to that marker.
 Canvas2D/WebGPU interior pixel fixtures cover the four layout fills, and a GPUI/Canvas2D
 structural fixture covers their shared frame marks and focused marker at DPR 1, 1.5 and 2.
+The GPUI general gallery runs 20 live general-chart examples across Cartesian, statistical,
+polar, and layout families through the shared frame and executor in a scrollable native window;
+pointer samples use the standard GPUI input adapter.
 A funnel series uses
 the same ordered `MeshFill` stream as other general geometry: each stage's trapezoid tapers from
 its value to the next stage, with the final stage tapering to zero. A cached dataset maximum
