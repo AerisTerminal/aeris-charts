@@ -1377,6 +1377,9 @@ pub struct GeneralTooltipSnapshot {
     pub q3: Option<f64>,
     pub size: Option<f64>,
     pub title: String,
+    /// Opaque identity color of the row's mark: the sector fill for polar series, else the row
+    /// color, the series color or the default line color.
+    pub color: Color,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1800,6 +1803,8 @@ pub(crate) struct GeneralSeriesRegistry {
     pie_contexts: RefCell<HashMap<GeneralSeriesId, GeneralPieContext>>,
     axis_scans: RefCell<HashMap<GeneralSeriesId, Vec<AxisScanEntry>>>,
     hovered: Option<GeneralInteractionTarget>,
+    /// `hovered` is the anchor of an index-axis hover rather than an exact mark hit.
+    hover_axis: bool,
     selected: Option<GeneralInteractionTarget>,
     accessibility_focused: Option<GeneralInteractionTarget>,
     brush: Option<GeneralBrushSelection>,
@@ -1817,6 +1822,7 @@ impl GeneralSeriesRegistry {
             pie_contexts: RefCell::new(HashMap::new()),
             axis_scans: RefCell::new(HashMap::new()),
             hovered: None,
+            hover_axis: false,
             selected: None,
             accessibility_focused: None,
             brush: None,
@@ -7531,14 +7537,19 @@ impl ChartEngine {
         x_css: f64,
         y_css: f64,
     ) -> Option<GeneralSeriesHit> {
-        let hit = self.general_hit_test(pane_index, x_css, y_css, GeneralHitMode::Exact);
+        let dimension = self.general_axis_hover_dimension(pane_index);
+        let hit = match dimension {
+            Some(dimension) => self.general_axis_hover_hit(pane_index, x_css, y_css, dimension),
+            None => self.general_hit_test(pane_index, x_css, y_css, GeneralHitMode::Exact),
+        };
         let next = hit.as_ref().map(GeneralInteractionTarget::from);
-        let changed = self
-            .general_series
-            .as_ref()
-            .is_some_and(|registry| registry.hovered != next);
+        let axis = dimension.is_some();
+        let changed = self.general_series.as_ref().is_some_and(|registry| {
+            registry.hovered != next || (next.is_some() && registry.hover_axis != axis)
+        });
         if let Some(registry) = self.general_series.as_mut() {
             registry.hovered = next;
+            registry.hover_axis = axis;
         }
         if changed {
             self.invalidate_frame_overlay();
@@ -7564,6 +7575,61 @@ impl ChartEngine {
             .hovered
             .as_ref()
             .map(GeneralInteractionTarget::hit)
+    }
+
+    /// Whether the hovered target is an index-axis hover anchor (cursor, dots, shared tooltip)
+    /// rather than an exact mark hit (hover ring, item tooltip).
+    pub(crate) fn general_hover_is_axis(&self) -> bool {
+        self.general_series
+            .as_ref()
+            .is_some_and(|registry| registry.hover_axis && registry.hovered.is_some())
+    }
+
+    /// The rows an axis-mode hover activates in `pane_index`: every line or area row sharing
+    /// the anchor's index datum. They draw an active dot like the financial crosshair marker.
+    pub(crate) fn general_axis_hover_dot_rows(
+        &self,
+        pane_index: usize,
+    ) -> Vec<(GeneralSeriesId, usize)> {
+        let mut rows = Vec::new();
+        if !self.general_hover_is_axis() {
+            return rows;
+        }
+        let Some((anchor_id, anchor_row)) = self.general_hovered_key() else {
+            return rows;
+        };
+        let Some(anchor) = self.general_series(anchor_id) else {
+            return rows;
+        };
+        let Some(anchor_dataset) = self.general_dataset(anchor.dataset) else {
+            return rows;
+        };
+        if self.pane_index_for_id(anchor.pane_id) != Some(pane_index) {
+            return rows;
+        }
+        for series in self.general_series_iter().filter(|series| {
+            series.visible
+                && series.pane_id == anchor.pane_id
+                && matches!(
+                    series.kind,
+                    GeneralSeriesKind::XyLine
+                        | GeneralSeriesKind::XyArea
+                        | GeneralSeriesKind::RangeArea
+                )
+        }) {
+            let Some(dataset) = self.general_dataset(series.dataset) else {
+                continue;
+            };
+            for row in 0..dataset.len() {
+                if general_rows_share_horizontal_datum(anchor_dataset, anchor_row, dataset, row) {
+                    rows.push((series.id, row));
+                    if rows.len() >= MAX_GENERAL_SHARED_TOOLTIP_ITEMS {
+                        return rows;
+                    }
+                }
+            }
+        }
+        rows
     }
 
     pub(crate) fn general_hovered_key(&self) -> Option<(GeneralSeriesId, usize)> {
@@ -8254,7 +8320,7 @@ impl ChartEngine {
         let matches =
             |target: &GeneralInteractionTarget| target.series == series && target.row == row;
         (
-            registry.hovered.as_ref().is_some_and(matches)
+            (!registry.hover_axis && registry.hovered.as_ref().is_some_and(matches))
                 || registry.accessibility_focused.as_ref().is_some_and(matches),
             registry.selected.as_ref().is_some_and(matches),
         )
@@ -8354,6 +8420,17 @@ impl ChartEngine {
             .then(|| general_heatmap_y_label(dataset, row))
             .flatten();
         let is_box_plot = series.kind == GeneralSeriesKind::BoxPlot;
+        let color = match series.kind {
+            GeneralSeriesKind::Pie
+            | GeneralSeriesKind::PolarArea
+            | GeneralSeriesKind::RadialBar => general_polar_fill_color(series, dataset, row),
+            _ => dataset.row_color(row).unwrap_or_else(|| {
+                series
+                    .color()
+                    .and_then(Color::parse_css)
+                    .unwrap_or(crate::DEFAULT_LINE_COLOR)
+            }),
+        };
         Some(GeneralTooltipSnapshot {
             series: series_id,
             row,
@@ -8405,6 +8482,7 @@ impl ChartEngine {
                 .size()
                 .and_then(|values| dataset.size_is_valid(row).then(|| values[row])),
             title: series.title.clone(),
+            color: Color::rgb(color.r(), color.g(), color.b()),
         })
     }
 

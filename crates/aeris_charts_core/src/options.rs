@@ -465,6 +465,22 @@ pub struct ChartOptions {
     pub auto_size: bool,
     #[serde(rename = "hoveredSeriesOnTop")]
     pub hovered_series_on_top: bool,
+    #[serde(rename = "generalTooltip")]
+    pub general_tooltip: GeneralTooltipOptions,
+}
+
+/// The engine-drawn hover tooltip of general (non-financial) panes. It is part of the ordered
+/// frame, so every executor paints the same box; hosts that draw their own tooltip turn it off.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GeneralTooltipOptions {
+    pub visible: bool,
+}
+
+impl Default for GeneralTooltipOptions {
+    fn default() -> Self {
+        Self { visible: true }
+    }
 }
 
 impl Default for ChartOptions {
@@ -479,6 +495,7 @@ impl Default for ChartOptions {
             time_scale: TimeAxisOptions::default(),
             auto_size: false,
             hovered_series_on_top: true,
+            general_tooltip: GeneralTooltipOptions::default(),
         }
     }
 }
@@ -702,6 +719,7 @@ mod tests {
             DEFAULT_CROSSHAIR_LABEL_CSS
         );
         assert!(o.hovered_series_on_top);
+        assert!(o.general_tooltip.visible);
         assert!(!o.auto_size);
         // Axis border cosmetics use the canonical border everywhere.
         assert!(o.right_price_scale.visible);
@@ -797,6 +815,7 @@ mod tests {
             },
             "autoSize": true,
             "hoveredSeriesOnTop": false,
+            "generalTooltip": { "visible": false },
             "hostExtension": { "keep": 42 }
         }));
 
@@ -827,6 +846,7 @@ mod tests {
         assert_eq!(options.watermark.horz_align, "center");
         assert!(options.auto_size);
         assert!(!options.hovered_series_on_top);
+        assert!(!options.general_tooltip.visible);
 
         let raw = store.value();
         assert_eq!(raw["timeScale"]["barSpacing"], 17);

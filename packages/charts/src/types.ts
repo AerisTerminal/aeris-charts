@@ -555,6 +555,8 @@ export interface general_tooltip_snapshot {
   /** Bubble size channel, or null for missing size/non-bubble series. */
   size: number | null;
   title: string;
+  /** Opaque CSS identity color of the row's mark (sector fill, row color or series color). */
+  color: string;
 }
 
 export interface general_shared_tooltip_snapshot {
@@ -1764,6 +1766,13 @@ export interface chart_options {
    * hit-test ties never change, so promotion cannot oscillate hover.
    */
   hoveredSeriesOnTop: boolean;
+  /**
+   * Engine-drawn hover tooltip and index-axis cursor line for general panes (default visible).
+   * Cartesian panes with an index axis hover the nearest X datum or category band and list every
+   * series there; other panes describe the item under the pointer. Hidden while a
+   * `create_general_tooltip` DOM tooltip is attached.
+   */
+  generalTooltip: { visible: boolean };
   /** Custom label formatters (reference `localization`). Package-level; carries JS callbacks. */
   localization: localization_options;
   /** Enable/disable panning gestures (reference `handleScroll`). Default `true`. Package-level. */

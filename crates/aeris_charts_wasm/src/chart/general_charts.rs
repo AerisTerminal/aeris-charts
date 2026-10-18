@@ -1032,7 +1032,7 @@ fn general_tooltip_value(snapshot: GeneralTooltipSnapshot) -> Value {
         "label": snapshot.label, "value": snapshot.value, "low": snapshot.low, "high": snapshot.high,
         "x_low": snapshot.x_low, "x_high": snapshot.x_high,
         "q1": snapshot.q1, "q3": snapshot.q3,
-        "size": snapshot.size, "title": snapshot.title,
+        "size": snapshot.size, "title": snapshot.title, "color": snapshot.color.to_css(),
     })
 }
 

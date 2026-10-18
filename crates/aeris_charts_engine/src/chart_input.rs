@@ -2303,14 +2303,16 @@ impl ChartEngine {
             return;
         }
         self.clear_volume_profile_selection();
-        let general_hit = !drawing_hit
-            && self
-                .pane_at_y(y)
-                .and_then(|pane| self.update_general_hover(pane, x, y))
-                .is_some();
-        if general_hit {
-            self.select_general_hovered();
-        } else {
+        // Hover may follow the index axis, but a click selects only the mark under the pointer.
+        let general_hit = (!drawing_hit)
+            .then(|| self.pane_at_y(y))
+            .flatten()
+            .and_then(|pane| {
+                self.update_general_hover(pane, x, y)?;
+                self.general_hit_test(pane, x, y, crate::GeneralHitMode::Exact)
+            })
+            .is_some_and(|hit| self.select_general_row(hit.series, hit.row));
+        if !general_hit {
             self.clear_general_selection();
         }
         let layout_hit = !drawing_hit

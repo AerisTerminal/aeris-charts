@@ -8688,9 +8688,13 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
         "a missing row must leave the visual and hit-test gap empty"
     );
 
+    let hovered = chart
+        .update_general_hover(pane, midpoint.0, midpoint.1)
+        .unwrap();
     assert_eq!(
-        chart.update_general_hover(pane, midpoint.0, midpoint.1),
-        Some(hit.clone())
+        (hovered.series, hovered.row),
+        (hit.series, hit.row),
+        "line hover follows the nearest X datum; ties keep the first row"
     );
     assert!(chart.select_general_hovered());
     let selected = chart.build_frame();

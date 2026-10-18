@@ -2149,6 +2149,56 @@ impl ChartEngine {
         };
         entry.semantic_values.get(index).copied()
     }
+
+    /// Tooltip parts of the hovered layout item in `pane_index`: item label, series title,
+    /// semantic value, and the item's painted color.
+    pub(crate) fn general_layout_hover_tooltip(
+        &self,
+        pane_index: usize,
+    ) -> Option<(String, String, Option<f64>, Color)> {
+        let hit = self.general_layout_hovered_hit()?;
+        let store = self.general_layout_data.as_ref()?;
+        let series = store.series.iter().find(|series| series.id == hit.series)?;
+        if self.pane_index_for_id(series.pane_id) != Some(pane_index) {
+            return None;
+        }
+        let entry = store.entry(series.options.dataset)?;
+        let (label, color) = match (&entry.input, hit.element) {
+            (GeneralLayoutInput::Funnel(stages), GeneralLayoutElement::Stage) => {
+                (stages.get(hit.row)?.label.clone(), series.color)
+            }
+            (GeneralLayoutInput::Hierarchy(nodes), GeneralLayoutElement::Node) => (
+                nodes.get(hit.row)?.label.clone(),
+                treemap_color(series.color, hit.row),
+            ),
+            (GeneralLayoutInput::Flow { nodes, .. }, GeneralLayoutElement::Node) => (
+                nodes.get(hit.row)?.label.clone(),
+                treemap_color(series.color, hit.row),
+            ),
+            (GeneralLayoutInput::Flow { nodes, links }, GeneralLayoutElement::Link) => {
+                let link = links.get(hit.row)?;
+                let name = |id: &str| {
+                    nodes
+                        .iter()
+                        .find(|node| node.id == id)
+                        .map_or(id, |node| node.label.as_str())
+                        .to_owned()
+                };
+                (
+                    format!("{} → {}", name(&link.source), name(&link.target)),
+                    series.color,
+                )
+            }
+            _ => return None,
+        };
+        Some((
+            label,
+            series.options.title.clone(),
+            self.general_layout_hit_value(hit),
+            color,
+        ))
+    }
+
     pub fn general_layout_accessibility_snapshot(
         &self,
         series_id: GeneralLayoutSeriesId,

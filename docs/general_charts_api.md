@@ -32,7 +32,17 @@ pane filtering is read-only and V2 restore reconstructs the same semantic entrie
 Cross-series tooltip grouping is also engine-owned. `chart.general_shared_tooltip(series, row)` returns the
 visible rows in the same pane whose exact horizontal datum matches the anchor. Ordering is stable series order
 then row order; duplicate X values are preserved, hidden series are excluded, and a heatmap may contribute more
-than one cell for one X coordinate/category.
+than one cell for one X coordinate/category. Every item and shared snapshot carries `color`, the opaque
+identity color of the row's mark (sector fill for pie, polar area and radial bar; otherwise the row color,
+series color or default line color).
+
+General hover is drawn by the engine by default. Cartesian panes with an index-axis series hover the nearest
+X datum or category band, like Recharts' axis tooltip: the chart paints a cursor line in the crosshair
+`vertLine` style (a horizontal line for horizontal bars), an active dot on each line and area at that datum,
+and a popover tooltip with the date or category header and one colored row per shared item. Other panes
+describe the item under the pointer. `chart.apply_options({ generalTooltip: { visible: false } })` hides the
+tooltip; `crosshair.vertLine.visible` controls the cursor. The tooltip is part of the ordered frame, so it
+matches across Canvas2D, WebGPU, GPUI and native rendering.
 
 General range selection uses `chart.set_general_brush(axis, from_coordinate, to_coordinate)`. The browser sends
 CSS-pixel endpoints once; Rust converts them immediately into a numeric, temporal, or category range and owns

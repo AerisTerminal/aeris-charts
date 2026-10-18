@@ -10,7 +10,8 @@ and renderers described in [architecture.md](architecture.md).
 the pane. Fragments and conditional children are supported. `GeneralAxis`, `GeneralSeries`,
 `MappedGeneralSeries`, `GeneralDataLabels`, and `GeneralReference` are declarations; they do not
 draw React elements. `GeneralLegend`, `GeneralTooltip`, and `GeneralBrushControls` mount the
-package's accessible default DOM controls. Arbitrary wrapper components cannot stand in for a
+package's accessible default DOM controls. Every general pane already has an engine-drawn hover
+tooltip; `GeneralTooltip` replaces it with a DOM tooltip of the same style while mounted. Arbitrary wrapper components cannot stand in for a
 declaration; render their returned declarations as direct pane children.
 
 ```tsx

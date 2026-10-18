@@ -277,11 +277,14 @@ export function create_general_tooltip(
     throw new Error("engine-owned general tooltips require a Aeris chart instance");
   }
   const element = document.createElement("div");
+  element.className = "aeris_charts-tooltip";
   element.setAttribute("role", "tooltip");
   if (options.lang !== undefined) element.lang = options.lang;
-  // Floating-layer edge: popover fill and hairline, with the 1px highlight as an inset shadow.
-  // Rows carry no background, so the inset edge stays visible like the stylesheet's overlay.
-  element.style.cssText = "position:absolute;z-index:5;display:none;pointer-events:none;max-width:min(280px,100%);max-height:100%;overflow:hidden;overflow-wrap:anywhere;padding:7px 10px;border:1px solid var(--nc-tooltip-border);border-radius:5px;background:var(--aeris-tooltip-background,var(--nc-tooltip-surface));color:var(--aeris-tooltip-color,var(--nc-tooltip-foreground));font:12px/1.4 system-ui,sans-serif;box-shadow:inset 0 0 0 1px var(--nc-tooltip-highlight)";
+  // The financial tooltip's layout inline, so the look holds without the optional stylesheet.
+  // The 1px highlight is an inset shadow because rows carry no background.
+  element.style.cssText = "position:absolute;z-index:5;display:none;pointer-events:none;box-sizing:border-box;min-width:min(156px,100%);max-width:min(280px,100%);max-height:100%;overflow:hidden;overflow-wrap:anywhere;border:1px solid var(--nc-tooltip-border);border-radius:var(--radius-default,4px);background:var(--aeris-tooltip-background,var(--nc-tooltip-surface));color:var(--aeris-tooltip-color,var(--nc-tooltip-foreground));font-size:12px;line-height:16px;font-variant-numeric:tabular-nums;box-shadow:inset 0 0 0 1px var(--nc-tooltip-highlight)";
+  // The engine's own tooltip would duplicate this one until the last DOM tooltip detaches.
+  chart.retain_dom_general_tooltip(true);
   // Resolved on every show so any theme change, including `reset_style_to_defaults`, is followed.
   // The palettes are shared constants, so identity detects a theme switch.
   let popover: popover_palette | null = null;
@@ -293,6 +296,7 @@ export function create_general_tooltip(
     element.style.setProperty("--nc-tooltip-border", next.border);
     element.style.setProperty("--nc-tooltip-highlight", next.highlight);
     element.style.setProperty("--nc-tooltip-foreground", next.foreground);
+    element.style.setProperty("--nc-tooltip-muted", next.muted_foreground);
   };
   const original_position = chart_container.style.position;
   if (getComputedStyle(chart_container).position === "static") chart_container.style.position = "relative";
@@ -312,12 +316,44 @@ export function create_general_tooltip(
       element.style.display = "none";
       return;
     }
-    const heading = document.createElement("strong");
+    const header = document.createElement("div");
+    header.className = "aeris_charts-tooltip__header";
+    header.style.cssText = "padding:7px 10px 6px;background:color-mix(in srgb,var(--nc-tooltip-foreground) 4%,var(--nc-tooltip-surface));border-bottom:1px solid color-mix(in srgb,var(--nc-tooltip-foreground) 10%,var(--nc-tooltip-surface))";
+    const heading = document.createElement("div");
+    heading.className = "aeris_charts-tooltip__timestamp";
+    heading.style.cssText = "font-weight:590;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
+    header.appendChild(heading);
+    const body = document.createElement("div");
+    body.className = "aeris_charts-tooltip__body";
+    body.style.cssText = "display:grid;gap:2px;padding:6px 10px 7px";
+    const add_row = (color: string | null, title: string, detail: string): void => {
+      const row = document.createElement("div");
+      row.className = "aeris_charts-tooltip__row";
+      row.style.cssText = "display:flex;gap:12px;align-items:baseline;justify-content:space-between";
+      const label = document.createElement("span");
+      label.className = "aeris_charts-tooltip__label";
+      label.style.cssText = "display:flex;align-items:center;gap:6px;min-width:0;color:var(--nc-tooltip-muted)";
+      if (color !== null) {
+        const dot = document.createElement("span");
+        dot.style.cssText = `flex:none;width:8px;height:8px;border-radius:50%;background:${color}`;
+        label.appendChild(dot);
+      }
+      label.appendChild(document.createTextNode(title));
+      // Assistive technology reads "title: value" although the columns show no separator.
+      const separator = document.createElement("span");
+      separator.textContent = ": ";
+      separator.style.cssText = "position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap";
+      label.appendChild(separator);
+      const value = document.createElement("span");
+      value.className = "aeris_charts-tooltip__value";
+      value.style.cssText = "text-align:right;white-space:nowrap";
+      value.textContent = detail;
+      row.append(label, value);
+      body.appendChild(row);
+    };
     if (layout != null) {
       heading.textContent = layout.label;
-      const row = document.createElement("div");
-      row.textContent = `${layout.title}: ${layout.value == null ? "no value" : format(layout.value)}`;
-      element.replaceChildren(heading, row);
+      add_row(null, layout.title, layout.value == null ? "No value" : format(layout.value));
     } else if (hit != null) {
       const items = options.mode === "item"
         ? [chart.general_series_order().find((series) => series.id === hit.series)?.data_at(hit.row)].filter(
@@ -328,14 +364,13 @@ export function create_general_tooltip(
         element.style.display = "none";
         return;
       }
-      heading.textContent = items[0]?.label ?? items[0]?.x_label ?? "";
-      element.replaceChildren(heading);
+      // Shared rows describe one X datum; an item tooltip can name the row by its own label.
+      heading.textContent = (options.mode === "item" ? items[0]?.label : null) ?? items[0]?.x_label ?? "";
       for (const item of items) {
-        const row = document.createElement("div");
-        row.textContent = `${item.title}: ${options.format_detail?.(item) ?? tooltip_detail(item, format)}`;
-        element.appendChild(row);
+        add_row(item.color, item.title, options.format_detail?.(item) ?? tooltip_detail(item, format));
       }
     }
+    element.replaceChildren(header, body);
     apply_popover();
     element.style.display = "block";
     const width = chart_container.clientWidth;
@@ -366,6 +401,7 @@ export function create_general_tooltip(
       chart.unsubscribe_crosshair_move(on_crosshair);
       element.remove();
       chart_container.style.position = original_position;
+      chart.retain_dom_general_tooltip(false);
     },
   };
 }

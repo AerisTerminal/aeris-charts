@@ -2208,31 +2208,17 @@ impl ChartEngine {
         {
             return None;
         }
-        let category_x = || {
-            let index = usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
-            Some(GeneralAxisSyncValue::Category {
-                value: dataset.categories()?.get(index)?.clone(),
-            })
-        };
         let x = if series.kind() == GeneralSeriesKind::HorizontalBar {
             dataset
                 .y_is_valid(row)
                 .then(|| GeneralAxisSyncValue::Numeric {
                     value: dataset.y()[row],
                 })
-        } else if let Some(values) = dataset.numeric_x() {
-            values
-                .get(row)
-                .map(|value| GeneralAxisSyncValue::Numeric { value: *value })
-        } else if let Some(values) = dataset.temporal_x_epoch_ms() {
-            values
-                .get(row)
-                .map(|value| GeneralAxisSyncValue::Temporal { value: *value })
         } else {
-            category_x()
+            general_index_sync_value(dataset, row)
         }?;
         let y = if series.kind() == GeneralSeriesKind::HorizontalBar {
-            category_x()
+            general_index_sync_value(dataset, row)
         } else if series.kind() == GeneralSeriesKind::HeatmapGrid {
             if let Some(values) = dataset.heatmap_y_numeric() {
                 values
@@ -2261,6 +2247,185 @@ impl ChartEngine {
         })
     }
 
+    /// The hover dimension of a pane whose marks follow an index axis (the Recharts `axis`
+    /// tooltip): a pane with an index-axis Cartesian family and no polar family. Horizontal bars
+    /// put their category axis on Y. Other panes hover the exact mark under the pointer.
+    pub(crate) fn general_axis_hover_dimension(&self, pane_index: usize) -> Option<AxisDimension> {
+        let pane_id = self.pane_stable_id(pane_index)?;
+        let mut dimension = None;
+        for series in self
+            .general_series_iter()
+            .filter(|series| series.visible() && series.pane_id() == pane_id)
+        {
+            match series.kind() {
+                GeneralSeriesKind::Pie
+                | GeneralSeriesKind::Radar
+                | GeneralSeriesKind::RadialBar
+                | GeneralSeriesKind::PolarArea => return None,
+                kind if dimension.is_none() && general_kind_uses_axis_hover(kind) => {
+                    dimension = Some(general_index_dimension(kind));
+                }
+                _ => {}
+            }
+        }
+        dimension
+    }
+
+    /// The row whose index-axis position is nearest the pointer among the pane's index-axis
+    /// series of `dimension`. Like an exact hit, a pointer outside the plot hovers nothing.
+    pub(crate) fn general_axis_hover_hit(
+        &self,
+        pane_index: usize,
+        x_css: f64,
+        y_css: f64,
+        dimension: AxisDimension,
+    ) -> Option<crate::GeneralSeriesHit> {
+        if !x_css.is_finite() || !y_css.is_finite() {
+            return None;
+        }
+        let pane_id = self.pane_stable_id(pane_index)?;
+        let plot = self.general_plot_rect(pane_index)?;
+        if x_css < 0.0 || x_css >= plot.width || y_css < plot.y || y_css >= plot.y + plot.height {
+            return None;
+        }
+        let pointer = if dimension == AxisDimension::Y {
+            y_css
+        } else {
+            x_css
+        };
+        let mut best: Option<(f64, crate::GeneralSeriesId, usize)> = None;
+        for series in self.general_series_iter().filter(|series| {
+            series.visible()
+                && series.pane_id() == pane_id
+                && general_kind_uses_axis_hover(series.kind())
+                && general_index_dimension(series.kind()) == dimension
+        }) {
+            let Some(dataset) = self.general_dataset(series.dataset()) else {
+                continue;
+            };
+            let Some(axis) = self.general_index_axis(series, dimension) else {
+                continue;
+            };
+            let Some((from, to)) = general_sync_axis_range(axis, &plot) else {
+                continue;
+            };
+            let Some(domain) = self.effective_general_axis_domain(axis) else {
+                continue;
+            };
+            let (low, high) = (from.min(to), from.max(to));
+            let mut consider = |row: usize, coordinate: Option<f64>| {
+                let Some(coordinate) = coordinate.filter(|value| (low..=high).contains(value))
+                else {
+                    return;
+                };
+                let distance = (coordinate - pointer).abs();
+                if best.is_none_or(|(current, _, _)| distance < current) {
+                    best = Some((distance, series.id(), row));
+                }
+            };
+            match domain {
+                GeneralAxisDomain::Numeric(bounds) => {
+                    let (Some(values), Some(scale)) = (
+                        dataset.numeric_x(),
+                        NumericAxisScale::new(axis.scale, bounds, from, to),
+                    ) else {
+                        continue;
+                    };
+                    for (row, value) in values.iter().enumerate() {
+                        consider(row, scale.coordinate(*value));
+                    }
+                }
+                GeneralAxisDomain::Temporal(bounds) => {
+                    let (Some(values), Some(scale)) = (
+                        dataset.temporal_x_epoch_ms(),
+                        temporal_linear_scale(bounds, from, to),
+                    ) else {
+                        continue;
+                    };
+                    for (row, value) in values.iter().enumerate() {
+                        consider(row, scale.coordinate(*value as f64));
+                    }
+                }
+                GeneralAxisDomain::Category(values) => {
+                    let (Some(indices), Some(categories)) =
+                        (dataset.category_indices(), dataset.categories())
+                    else {
+                        continue;
+                    };
+                    let positions: HashMap<&str, usize> = values
+                        .iter()
+                        .enumerate()
+                        .map(|(index, value)| (value.as_str(), index))
+                        .collect();
+                    let coordinates: Vec<Option<f64>> = categories
+                        .iter()
+                        .map(|category| {
+                            positions.get(category.as_str()).and_then(|&index| {
+                                general_sync_category_coordinate(
+                                    axis,
+                                    values.len(),
+                                    from,
+                                    to,
+                                    index,
+                                )
+                            })
+                        })
+                        .collect();
+                    for (row, index) in indices.iter().enumerate() {
+                        let coordinate = usize::try_from(*index)
+                            .ok()
+                            .and_then(|index| coordinates.get(index).copied().flatten());
+                        consider(row, coordinate);
+                    }
+                }
+                GeneralAxisDomain::Auto => {}
+            }
+        }
+        let (distance, series, row) = best?;
+        let dataset = self.general_dataset(self.general_series(series)?.dataset())?;
+        Some(crate::GeneralSeriesHit {
+            series,
+            row,
+            row_id: dataset.row_identity(row)?.clone(),
+            distance,
+        })
+    }
+
+    /// The index-axis cursor of an axis-mode hover in `pane_index`: its dimension and its
+    /// pane-local X (or chart-space Y for horizontal bars), centered on a band like the marks.
+    pub(crate) fn general_axis_hover_cursor(
+        &self,
+        pane_index: usize,
+    ) -> Option<(AxisDimension, f64)> {
+        if !self.general_hover_is_axis() {
+            return None;
+        }
+        let (series_id, row) = self.general_hovered_key()?;
+        let series = self.general_series(series_id)?;
+        if self.pane_index_for_id(series.pane_id()) != Some(pane_index) {
+            return None;
+        }
+        let dimension = general_index_dimension(series.kind());
+        let dataset = self.general_dataset(series.dataset())?;
+        let axis = self.general_index_axis(series, dimension)?;
+        let plot = self.general_plot_rect(pane_index)?;
+        let value = general_index_sync_value(dataset, row)?;
+        self.general_sync_coordinate(axis, &value, &plot)
+            .map(|coordinate| (dimension, coordinate))
+    }
+
+    fn general_index_axis(
+        &self,
+        series: &crate::GeneralSeries,
+        dimension: AxisDimension,
+    ) -> Option<&GeneralAxis> {
+        self.general_axis(if dimension == AxisDimension::Y {
+            series.y_axis_id()
+        } else {
+            series.x_axis_id()
+        })
+    }
+
     pub(crate) fn apply_external_general_crosshair(
         &mut self,
         position: &GeneralCrosshairSyncPosition,
@@ -2286,12 +2451,15 @@ impl ChartEngine {
         let Some(y) = self.general_sync_coordinate(y_axis, &position.y, &plot) else {
             return false;
         };
-        if self.crosshair == Some((x, y)) {
-            return false;
+        let changed = self.crosshair != Some((x, y));
+        if changed {
+            self.crosshair = Some((x, y));
+            self.invalidate_frame_overlay();
         }
-        self.crosshair = Some((x, y));
-        self.invalidate_frame_overlay();
-        true
+        // A linked chart shows the same hover feedback as its source: cursor, dots, tooltip.
+        let previous = self.general_hovered_key();
+        self.update_general_hover(pane_index, x, y);
+        changed || previous != self.general_hovered_key()
     }
 
     fn general_sync_coordinate(
@@ -2320,6 +2488,47 @@ impl ChartEngine {
         };
         (coordinate >= from.min(to) && coordinate <= from.max(to)).then_some(coordinate)
     }
+}
+
+/// Cartesian families whose hover follows their index axis instead of the exact mark.
+pub(crate) fn general_kind_uses_axis_hover(kind: GeneralSeriesKind) -> bool {
+    matches!(
+        kind,
+        GeneralSeriesKind::XyLine
+            | GeneralSeriesKind::XyArea
+            | GeneralSeriesKind::RangeArea
+            | GeneralSeriesKind::RangeBar
+            | GeneralSeriesKind::ErrorBar
+            | GeneralSeriesKind::Column
+            | GeneralSeriesKind::HorizontalBar
+            | GeneralSeriesKind::BoxPlot
+    )
+}
+
+fn general_index_dimension(kind: GeneralSeriesKind) -> AxisDimension {
+    if kind == GeneralSeriesKind::HorizontalBar {
+        AxisDimension::Y
+    } else {
+        AxisDimension::X
+    }
+}
+
+/// A row's index-axis datum: its numeric, temporal, or category X.
+fn general_index_sync_value(dataset: &GeneralDataset, row: usize) -> Option<GeneralAxisSyncValue> {
+    if let Some(values) = dataset.numeric_x() {
+        return values
+            .get(row)
+            .map(|value| GeneralAxisSyncValue::Numeric { value: *value });
+    }
+    if let Some(values) = dataset.temporal_x_epoch_ms() {
+        return values
+            .get(row)
+            .map(|value| GeneralAxisSyncValue::Temporal { value: *value });
+    }
+    let index = usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
+    Some(GeneralAxisSyncValue::Category {
+        value: dataset.categories()?.get(index)?.clone(),
+    })
 }
 
 fn general_sync_axis_range(axis: &GeneralAxis, plot: &GeneralPlotRect) -> Option<(f64, f64)> {

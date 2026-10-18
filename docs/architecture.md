@@ -123,8 +123,8 @@ discovers layout series through stable chart handles, pages their semantic snaps
 keyboard navigation and live announcements, and forwards selection keys to that controller.
 Replacing a shared layout dataset notifies every bound browser series handle, so subscribers
 refresh their semantic view together. Restored handles remain stable until removal or disposal.
-The browser's built-in general tooltip consumes layout hover values as a single semantic item;
-layout panes have no shared horizontal tooltip domain.
+The engine-drawn general tooltip and the browser DOM general tooltip describe layout hover as a
+single semantic item; layout panes have no shared horizontal tooltip domain.
 The keyboard-focused layout item gets one engine-owned circle stroke in the ordered frame,
 positioned from cached mark geometry (or an internal hierarchy node's cached region) and
 cleared when its dataset or series disappears.
@@ -540,8 +540,10 @@ The browser package's `create_general_legend`, `create_general_tooltip`, and
 `create_general_brush_controls` present those snapshots as default DOM controls. Legend buttons
 mutate stable series handles; the tooltip follows engine-arbitrated crosshair hits; brush buttons
 call semantic engine operations. Hosts attach and detach these DOM components, and may supply
-localized labels, language attributes, and display formatting. The tooltip wraps long content
-inside the host bounds. The shared accessibility sweep leaves these package-owned interactive
+localized labels, language attributes, and display formatting. The DOM tooltip uses the financial
+tooltip's `.aeris_charts-tooltip` structure with the snapshot's engine-resolved row color, wraps long
+content inside the host bounds, and hides the engine-drawn general tooltip while at least one DOM
+tooltip is attached, restoring the prior `generalTooltip.visible` value when the last detaches. The shared accessibility sweep leaves these package-owned interactive
 components keyboard reachable even when mounted inside the chart host. DOM tooltip content is
 outside the ordered frame and frame-image exports;
 engine-rendered marks, references, and labels remain in that export path.
@@ -860,9 +862,25 @@ General item hover emits an X/Y semantic value with its axis IDs. The receiving 
 those values through its own axis domains and pane geometry, locating the target pane by axis ID;
 missing categories or out-of-view
 values are ignored. The hover event is emitted when the hovered row changes, and pointer leave
-emits the shared clear-crosshair event. General panes keep the synced hover position for tooltips
-and promotion but paint no crosshair rules or axis tags, matching Recharts; GPUI hosts release the
-pointer through `GpuiChartInput::hover_changed` when it leaves the chart.
+emits the shared clear-crosshair event. A synced target runs the same general hover update as a
+local pointer, so it shows the same cursor line and active dots. General panes paint no crosshair
+rules or axis tags; GPUI hosts release the pointer through `GpuiChartInput::hover_changed` when it
+leaves the chart.
+
+General hover follows Recharts' axis tooltip. A pane with a visible index-axis series (line, area,
+range area, range bar, error bar, column, horizontal bar, box plot) and no polar series hovers the
+nearest index datum or category band anywhere in the plot, not only over a mark; other panes keep
+exact item hover. The engine stores that anchor as the hovered row with an axis flag, suppresses the
+item hover ring in axis mode, and keeps primary click on the exact hit, so selection still needs a
+mark under the pointer. The frame paints the index-axis cursor (the crosshair `vertLine` style, a
+horizontal rule for horizontal bars) in its own segment beneath the general marks, a background-ringed
+active dot on every line/area series sharing the anchor datum, and, in the overlay, a tooltip in the
+financial tooltip's popover style: a tinted date or category header, then one row per shared item with
+its identity color dot, muted title, and right-aligned value, truncated with "+N more" to fit the pane
+and flipped away from the pane edges. Because the tooltip is ordered-frame text and shapes, Canvas2D,
+WebGPU, GPUI, and native executors paint it identically. `generalTooltip.visible` (default `true`,
+preserved by `reset_style_to_defaults`) turns off the tooltip only; the cursor follows crosshair
+visibility.
 
 Secondary clicks use the engine-owned Chart Context query. It resolves chart-space coordinates,
 pane, time, logical index, hit series, and price on that series' exact scale (or the pane's canonical

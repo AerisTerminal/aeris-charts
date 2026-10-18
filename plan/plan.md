@@ -36,7 +36,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G5 | R5 | React and framework-neutral authoring | **Complete** | Keyed declarations and mapped rows; atomic shared composition; controlled brush; first-pane ownership; lifecycle, SSR, packed-consumer and browser evidence | G6; manual assistive-technology review remains pending |
 | G6 | R6 | Polar families and transitions | **Complete** | `f64` polar geometry and axes; pie/donut, radar, polar-area and radial-bar paths; single-fill ordered polar mesh; bounded cached hits, slice legends, shared-frame leader labels, pointer and keyboard selection; WASM/TS bindings; opt-in fixed-clock value and numeric/temporal X updates, Cartesian and angular category-axis and matched-row category movement, identity-matched entry and exit rows, missing/valid Y, error-bound and bubble-size motion, pie row-order motion, fixed-spoke and changing-count radar morphs, compatible optional-channel changes, collapsed error-bound entry, persisted duration and browser scheduling; polar and Cartesian family fixed-clock frame/hit fixtures, GPUI/Canvas2D structural fill, bounded Canvas2D/WebGPU pixels, and measured 1.25× GPUI/native polar window parity; strict release performance, six package-size limits, and 735 portable browser tests passed | G7; manual assistive-technology and broader device-scale image evidence remain pending |
 | G7 | R7 | Hierarchy and flow families | **Complete** | Axis-free `layout` pane topology is available in engine, WASM, and TypeScript; lazy typed stage/tree/flow store validates IDs, values, cycles, depth and bounded retained capacity; funnel, treemap, Sankey and sunburst emit shared ordered-frame geometry with direct or cached exact hits; focused financial-isolation, persistence, atomic-store and geometry fixtures pass; V2 layout data/series round-trip and public restored-series handles, pointer hover/click/Escape and focused-key selection, bounded accessibility snapshots integrated with browser keyboard navigation and announcements, shared-frame visual focus, shared-dataset update fanout, built-in pointer tooltip and toggling legend, opt-in shared-frame labels, atomic live presentation patches, and fixed-clock compatible value transitions are implemented with focused engine/browser evidence; four-family Canvas2D/WebGPU interior pixels and GPUI/Canvas2D structural focus/mark parity pass | G8; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence remain for parity closure |
-| G8 | R8 | Parity closure and release readiness | **Open** | — | Full matrix verification against the pinned competitor |
+| G8 | R8 | Parity closure and release readiness | **Open** | No R8 checklist item closed. Post-G7 GPUI general gallery (`fb6ea5e`) and Recharts presentation-default correction (`867029a`) landed | Full matrix verification against the pinned competitor, including a recheck of the G2 rows against the `867029a` defaults |
 
 Notes:
 
@@ -246,7 +246,8 @@ focus through visibility and reorder changes; the tooltip uses engine hits and b
 snapshots. The engine input controller owns mouse and touch brush drags, cancellation, keyboard
 selection, and semantic endpoint steps. Linked general charts exchange source/revision guarded
 axis views and crosshair values; category identities and axis IDs allow unequal datasets and pane
-orders without feedback loops. General crosshair rules now render from the shared frame, and a
+orders without feedback loops. General crosshair rules rendered from the shared frame (superseded
+by `867029a`, which removes general crosshair ink; see the post-G7 corrections below), and a
 native regression checks general image export against the live frame and view restoration. Public
 browser tests cover localization, overflow, focus, keyboard and touch controls, synchronization,
 and resize. The portable Chromium/Firefox/WebKit gate passed 603 tests with 22 intended skips;
@@ -301,15 +302,45 @@ namespace/release guards, 764 portable Chromium/Firefox/WebKit tests with 28 int
 and all six policy-v7 package-size thresholds. Manual assistive-technology review, competitor
 screenshot comparison and calibrated GPUI window pixels remain for G8 parity closure.
 
+Two post-G7 commits on 2026-10-18 change general presentation without closing an R8 checklist
+item. `fb6ea5e` adds the `gpui_general_gallery` example: 20 live, scrollable GPUI charts covering
+all 15 general series kinds, a donut variant and the four layout families through the shared frame
+and the GPUI input adapter. `867029a` aligns general charts with Recharts presentation defaults.
+General panes paint no crosshair rules or axis tags; hover stays engine state for tooltips,
+promotion and sync, and GPUI hosts release the pointer on hover exit. Financial price and time
+strips are reserved only when a financial-time pane exists, so general-only charts lose their empty
+gutters. Automatic linear and radial domains include zero and round outward to a 1/2/5 step.
+Vertical category axes list the first category at the top. Plot sides without an axis keep a
+margin, and the plot scissor extends 6 px so edge markers stay whole. Polar angle labels sit
+outside the ring. Its gate passed formatting, warning-denying workspace and wasm32 Clippy,
+workspace tests, GPUI crate tests with `gpui-backend`, the native performance gate (an earlier
+noisy run was re-measured against a HEAD baseline), package install/lint/build/typecheck/pack, and
+770 Playwright tests after two general specs were updated for the new defaults. The verified G2
+scale/axis and responsive-layout evidence predates these default changes, so G8 must recheck those
+rows. The gallery is a manual inspection tool, not calibrated GPUI window evidence.
+
+A later post-G7 change makes general hover visible in every host without closing an R8 item.
+Cartesian panes with an index-axis series use Recharts' axis hover: the nearest X datum or
+category band anywhere in the plot, a crosshair-styled cursor line (horizontal for horizontal
+bars), active dots on line and area series, and an engine-drawn tooltip in the financial tooltip
+style with series color dots. Other panes keep exact item hover with the same tooltip, and layout
+panes describe the hovered stage, node or link. Click selection still needs a mark under the
+pointer. The tooltip is ordered-frame content, so GPUI and the browser paint it identically;
+`generalTooltip.visible` (default `true`) hides it, and the DOM `create_general_tooltip` now uses
+the same structure and colors and hides the engine tooltip while attached. The gallery's header
+caption hack was removed. This supersedes the earlier "no crosshair rules" note for the index-axis
+cursor only; general panes still paint no horizontal crosshair rule or axis tags.
+
 ## Known gaps
 
-Remaining source-confirmed gaps from the 2026-09-23 review. R3–R7 closed the earlier Cartesian,
+Remaining source-confirmed gaps from the 2026-09-23 review and the 2026-10-18 post-G7 changes. R3–R7 closed the earlier Cartesian,
 component, authoring, polar, hierarchy and flow gaps. Full parity evidence remains open.
 Earlier test counts and timings are historical observations in Git history, not proof of current completion.
 
 | Gap | Evidence | Required correction | Phase |
 | --- | --- | --- | --- |
 | Parity evidence | Automated layout-family contracts and cross-backend fixtures pass; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence are still due | Collect phase-closure evidence and record any differences against the pinned competitor | R8 |
+| G2 evidence after default changes | `867029a` changed automatic domains, vertical category order, general-only gutters and plot clipping after the G2 rows were verified | Recheck the scales/axes and responsive-layout rows against the new defaults with current fixtures and screenshots | R8 |
 
 These are not an exhaustive defect audit. Coverage-matrix rows are required coverage to audit, not
 assertions that every listed feature is absent.
@@ -583,13 +614,13 @@ platform capabilities beyond the competitor's browser rendering model.
 | Line, area, range and scatter/bubble | Partial (items 1–8 delivered; range bars are tracked below) | Linear/step/curved interpolation, gap/connection policy, baselines, symbols, active marks, fills/strokes and error bounds | R3 |
 | Bars and stacks | Partial (range bars delivered) | Both orientations, groups, sizing/gaps, corners, per-item styling, mixed signs, range bars, stack order and required offset modes | R3 |
 | Box plots and heatmaps | Partial | Preserve existing extra families; complete color domains, legends, missing values and interaction | R3 |
-| Scales and axes | Verified (G2, 2026-10-10) | Numeric/log/symlog, temporal, category/point, reversed/multiple axes, explicit/auto domains, ticks, formatting, overflow and grid policy | R2 |
+| Scales and axes | Verified (G2, 2026-10-10); defaults revised in `867029a`, recheck in R8 | Numeric/log/symlog, temporal, category/point, reversed/multiple axes, explicit/auto domains, ticks, formatting, overflow and grid policy | R2 |
 | Pie/donut, radar, radial bar, polar area | Partial | Polar layout, start/end angles, inner/outer radii, padding, labels/leaders, angular/radial axes and interactions | R6 |
 | Funnel, treemap, Sankey, sunburst | Partial (G7 family contracts and automated executor fixtures pass; manual parity evidence pending) | Purpose-built deterministic bounded layouts, data contracts, styling, labels, hits, accessibility and updates | R7 |
 | Legend and tooltip | Partial | Default usable components, visibility controls, item/shared modes, placement, formatting, ordering, custom content and touch/keyboard behavior | R4 |
 | References, labels, titles and grids | Partial | Engine layout and domain contribution, overlap/overflow policy, background/foreground order, style and export consistency | R2, R4 |
 | Brush, selection and synchronization | Partial | Pointer/touch/keyboard controls, semantic range handles, domain-aware pan/zoom, linked charts and feedback-loop prevention | R4 |
-| Responsive layout | Verified (G2, 2026-10-10) | Zero-size/hidden/revealed containers, constrained/aspect sizing, DPR/font changes, small plots and bounded layout convergence | R1, R2 |
+| Responsive layout | Verified (G2, 2026-10-10); general-only gutters revised in `867029a`, recheck in R8 | Zero-size/hidden/revealed containers, constrained/aspect sizing, DPR/font changes, small plots and bounded layout convergence | R1, R2 |
 | React authoring | Partial | Composable axes/series/components, typed data mapping, controlled updates, stable identities, Strict Mode, failure cleanup and SSR-safe import | R5 |
 | Customization | Partial | Per-item styles, symbols, gradients, dash patterns, label/tooltip formatting, bounded custom marks and explicit host-only content boundaries | R3–R5 |
 | Animation | Partial for general transitions | Enter/update/exit and interruption with stable identities, bounded retained state, shared timing semantics and reduced motion | R6 |

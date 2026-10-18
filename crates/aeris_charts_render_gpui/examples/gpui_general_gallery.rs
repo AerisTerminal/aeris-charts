@@ -5,8 +5,8 @@ use aeris_charts_core::options::ChartTheme;
 use aeris_charts_engine::{
     AxisDimension, CategoryScaleType, ChartEngine, ChartFrame, ContinuousScaleType,
     FinancialFrameRequest, FlowLink, FlowNode, FunnelStage, GeneralAxisOptions, GeneralLayoutInput,
-    GeneralLayoutSeriesId, GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GeneralScaleType,
-    GeneralSeriesKind, GeneralSeriesOptions, GeneralXyInput, HierarchyNode, HorizontalDomain,
+    GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GeneralScaleType, GeneralSeriesKind,
+    GeneralSeriesOptions, GeneralXyInput, HierarchyNode, HorizontalDomain,
 };
 use aeris_charts_render::draw_list::Prim;
 use aeris_charts_render_gpui::{
@@ -199,7 +199,6 @@ struct ChartCard {
     title: &'static str,
     caption: &'static str,
     engine: ChartEngine,
-    series: Option<GeneralLayoutSeriesId>,
     renderer: GpuiChartRenderer,
     frame: ChartFrame,
     axis: Vec<Prim>,
@@ -225,14 +224,13 @@ impl ChartCard {
         options.title = title.into();
         options.color = color.into();
         options.data_labels = true;
-        let series = engine
+        engine
             .add_general_layout_series(options)
             .expect("the gallery series binds");
         Self {
             title,
             caption,
             engine,
-            series: Some(series),
             renderer: GpuiChartRenderer::new(),
             frame: ChartFrame::default(),
             axis: Vec::new(),
@@ -366,7 +364,6 @@ impl ChartCard {
             title,
             caption,
             engine,
-            series: None,
             renderer: GpuiChartRenderer::new(),
             frame: ChartFrame::default(),
             axis: Vec::new(),
@@ -447,32 +444,6 @@ impl ChartCard {
             eprintln!("general gallery paint failed: {error}");
         }
     }
-
-    fn item_text(&self) -> String {
-        let Some(series) = self.series else {
-            return self.caption.into();
-        };
-        let hit = self
-            .engine
-            .general_layout_hovered_hit()
-            .or_else(|| self.engine.general_layout_selected_hit());
-        let Some(hit) = hit else {
-            return self.caption.into();
-        };
-        self.engine
-            .general_layout_accessibility_snapshot(series, 0, 512)
-            .and_then(|snapshot| {
-                snapshot
-                    .items
-                    .into_iter()
-                    .find(|item| item.element == hit.element && item.row == hit.row)
-            })
-            .map(|item| match item.value {
-                Some(value) => format!("{}  ·  {value:.0}", item.label),
-                None => item.label,
-            })
-            .unwrap_or_else(|| self.caption.into())
-    }
 }
 
 impl Render for ChartCard {
@@ -515,7 +486,7 @@ impl Render for ChartCard {
                         div()
                             .text_size(px(12.0))
                             .text_color(rgb(0x60748c))
-                            .child(self.item_text()),
+                            .child(self.caption),
                     ),
             )
             .child(

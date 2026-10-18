@@ -5190,7 +5190,10 @@ impl ChartEngine {
             if changed {
                 self.invalidate_frame_overlay();
             }
-            return changed;
+            // A linked general hover ends with its source's crosshair.
+            let hovered = self.general_hovered_key().is_some();
+            self.clear_general_hover();
+            return changed || hovered;
         };
         let Some(index) = self.time_to_index(
             position.time,

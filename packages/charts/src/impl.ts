@@ -3931,6 +3931,8 @@ export class chart_impl implements chart_api {
   };
   /** Crosshair position tracked TS-side (for crosshair-less screenshots); `null` when hidden. */
   private last_crosshair: { x: number; y: number } | null = null;
+  private dom_general_tooltips = 0;
+  private engine_general_tooltip_visible = true;
   /** Last hover hit-test result (Phase C-d), refreshed on crosshair moves; feeds event params. */
   private hover: {
     series_id: number | null;
@@ -7334,6 +7336,27 @@ export class chart_impl implements chart_api {
 
   options(): unknown {
     return JSON.parse(this.wasm.options_json());
+  }
+
+  /**
+   * Hide the engine-drawn general tooltip while at least one DOM replacement is attached, then
+   * restore the setting the first one found. A no-op after `remove()`, so detaching a component
+   * after its chart is safe.
+   */
+  retain_dom_general_tooltip(retain: boolean): void {
+    if (this.removed) return;
+    if (retain) {
+      if (this.dom_general_tooltips++ > 0) return;
+      this.engine_general_tooltip_visible = (this.options() as chart_options).generalTooltip.visible;
+      this.set_engine_general_tooltip(false);
+    } else if (this.dom_general_tooltips > 0 && --this.dom_general_tooltips === 0) {
+      this.set_engine_general_tooltip(this.engine_general_tooltip_visible);
+    }
+  }
+
+  private set_engine_general_tooltip(visible: boolean): void {
+    this.wasm.apply_options(JSON.stringify({ generalTooltip: { visible } }));
+    this.repaint();
   }
 
   backend(): "webgpu" | "canvas2d" {

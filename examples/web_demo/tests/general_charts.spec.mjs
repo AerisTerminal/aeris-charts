@@ -4237,7 +4237,7 @@ test("general axis view sync crosses the public browser boundary without echoes"
   expect(result).toMatchObject({ applied: true, duplicate: false, changed: true, echoes: [], reset_applied: true, stale: false, invalid: false });
 });
 
-test("general point crosshair sync uses semantic values across unequal categories", async ({ page }) => {
+test("general point crosshair sync uses semantic values across unequal categories and clears the target cursor", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const point = await page.evaluate(async () => {
     const { create_chart } = await import("/dist/aeris_charts_financial.js");
@@ -4288,8 +4288,8 @@ test("general point crosshair sync uses semantic values across unequal categorie
     kind: "general_crosshair",
     position: expect.objectContaining({ x: { type: "category", value: "B" } }),
   }));
-  // General panes keep the synced hover state but paint no crosshair, so the target is unchanged.
-  expect(moved).toMatchObject({ applied: true, changed: false, echoes: [] });
+  // The target paints its own index-axis cursor at the synced category.
+  expect(moved).toMatchObject({ applied: true, changed: true, echoes: [] });
   await page.mouse.move(700, 650);
   const left = await page.evaluate(() => {
     const { source, target, target_before } = window.__generalSyncFixture;

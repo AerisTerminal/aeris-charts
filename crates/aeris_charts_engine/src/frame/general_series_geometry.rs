@@ -99,6 +99,28 @@ fn push_general_bar_fill(
     }
 }
 
+/// The active dot of an axis-mode hover, drawn like the financial crosshair marker: a 4 px disc
+/// inside a 2 px ring of the chart background. `x`/`y` are device px.
+fn push_general_active_dot(
+    out: &mut Vec<Prim>,
+    x: f64,
+    y: f64,
+    color: Color,
+    background: Color,
+    vpr: f64,
+) {
+    for (radius, fill) in [(6.0, background), (4.0, color)] {
+        out.push(Prim::Circle {
+            cx: x as f32,
+            cy: y as f32,
+            radius: (radius * vpr) as f32,
+            fill,
+            stroke_width: 0.0,
+            stroke: fill,
+        });
+    }
+}
+
 fn push_general_point_symbol(
     out: &mut Vec<Prim>,
     symbol: GeneralPointSymbol,
@@ -162,14 +184,20 @@ impl ChartEngine {
         vpr: f64,
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
-    ) -> [Option<Prim>; 2] {
+    ) -> Vec<Prim> {
         let mut interaction = [None, None];
         let Some(pane_id) = self.pane_stable_id(pane_index) else {
-            return interaction;
+            return Vec::new();
         };
         let Some(plot) = self.general_plot_rect(pane_index) else {
-            return interaction;
+            return Vec::new();
         };
+        let dot_rows = self.general_axis_hover_dot_rows(pane_index);
+        let mut active_dots = Vec::new();
+        let dot_background = super::css_color(
+            &self.options.get().layout.background.color,
+            Color::rgb(0xff, 0xff, 0xff),
+        );
         let layout = &self.options.get().layout;
         let label_size = layout.font_size.max(1.0);
         let label_color = self.primary_text_color();
@@ -570,6 +598,16 @@ impl ChartEngine {
                                 plot.width - 4.0,
                                 None,
                             );
+                            if dot_rows.contains(&(series.id(), geometry.row)) {
+                                push_general_active_dot(
+                                    &mut active_dots,
+                                    geometry.x * hpr,
+                                    geometry.high_y * vpr,
+                                    dataset.row_color(geometry.row).unwrap_or(color),
+                                    dot_background,
+                                    vpr,
+                                );
+                            }
                             let (hovered, selected) =
                                 self.general_row_interaction(series.id(), geometry.row);
                             if hovered || selected {
@@ -657,6 +695,16 @@ impl ChartEngine {
                             plot.width - 4.0,
                             None,
                         );
+                        if dot_rows.contains(&(series.id(), geometry.row)) {
+                            push_general_active_dot(
+                                &mut active_dots,
+                                geometry.x * hpr,
+                                geometry.y * vpr,
+                                dataset.row_color(geometry.row).unwrap_or(color),
+                                dot_background,
+                                vpr,
+                            );
+                        }
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
@@ -806,6 +854,18 @@ impl ChartEngine {
                             plot.width - 4.0,
                             None,
                         );
+                        if dot_rows.contains(&(series.id(), geometry.row)) {
+                            for y in [geometry.low_y, geometry.high_y] {
+                                push_general_active_dot(
+                                    &mut active_dots,
+                                    geometry.x * hpr,
+                                    y * vpr,
+                                    dataset.row_color(geometry.row).unwrap_or(color),
+                                    dot_background,
+                                    vpr,
+                                );
+                            }
+                        }
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
@@ -1296,7 +1356,8 @@ impl ChartEngine {
         self.push_general_reference_marks(pane_id, plot, hpr, vpr, out);
         out.extend(leader_primitives);
         out.extend(label_primitives);
-        interaction
+        active_dots.extend(interaction.into_iter().flatten());
+        active_dots
     }
 
     fn push_general_reference_regions(

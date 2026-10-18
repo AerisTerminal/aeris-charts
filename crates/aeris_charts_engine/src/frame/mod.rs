@@ -47,6 +47,7 @@ mod drawings;
 mod feature_geometry;
 mod footprint_geometry;
 mod general_series_geometry;
+mod general_tooltip;
 mod native_primitive_geometry;
 mod series_geometry;
 #[cfg(test)]
@@ -2229,6 +2230,7 @@ impl ChartEngine {
                     &mut cache.overlay.prims,
                 );
                 self.build_native_delta_tooltip_frame(pi, hpr, vpr, &mut cache.overlay.prims);
+                self.build_general_tooltip_frame(pi, hpr, vpr, &mut cache.overlay.prims);
                 if let Some((from, _)) = visible {
                     self.build_selection_anchors_frame(
                         pi,
@@ -2513,6 +2515,19 @@ impl ChartEngine {
             // General-domain panes cannot contain financial series. Their engine-owned geometry
             // still enters the same ordered `main` primitive stream and receives a retained-group
             // segment so the WebGPU path consumes exactly what Canvas2D/GPUI/native consume.
+            // The axis-hover cursor paints under the marks and follows hover, so it carries the
+            // overlay revision in its own segment ahead of the scene-revision marks.
+            let cursor_start = out.main.len();
+            self.build_general_axis_cursor_frame(pi, hpr, vpr, &mut out.main);
+            if out.main.len() != cursor_start {
+                retained.series_segments[pi].push(FrameSeriesSegment {
+                    series_id: None,
+                    start: cursor_start,
+                    end: out.main.len(),
+                    revision: self.frame_invalidation.overlay,
+                    coordinate_revision: self.frame_invalidation.coordinate,
+                });
+            }
             let general_start = out.main.len();
             let general_interaction =
                 self.build_general_series_frame(pi, hpr, vpr, &mut out.main, &mut out.points);
@@ -2530,7 +2545,7 @@ impl ChartEngine {
                 });
             }
             let start = out.main.len();
-            out.main.extend(general_interaction.into_iter().flatten());
+            out.main.extend(general_interaction);
             if out.main.len() != start {
                 retained.series_segments[pi].push(FrameSeriesSegment {
                     series_id: None,
@@ -2559,7 +2574,7 @@ impl ChartEngine {
                 let right = (x1 * hpr).round().max(left as f64) as u32;
                 let bottom = (y1 * vpr).round().max(top as f64) as u32;
                 out.plot_scissor = Some([left, top, right - left, bottom - top]);
-                out.plot_range = [general_start, out.main.len()];
+                out.plot_range = [cursor_start, out.main.len()];
                 // The plot clip nests inside the pane clip, so the pane clip must also admit the
                 // horizontal overflow or edge marks are still cut at the pane edge.
                 let [pane_x, pane_y, pane_w, pane_h] = out.scissor;
