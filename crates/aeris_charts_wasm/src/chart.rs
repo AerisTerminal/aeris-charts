@@ -3953,6 +3953,15 @@ impl AerisChart {
             .add_layout_series_result_json(kind, options_json, data_json)
     }
 
+    pub fn layout_series_options_json(&self, series: u32) -> String {
+        self.inner.borrow().layout_series_options_json(series)
+    }
+
+    pub fn update_layout_series_result_json(&mut self, series: u32, patch_json: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .update_layout_series_result_json(series, patch_json)
+    }
     pub fn replace_layout_data_result_json(&mut self, series: u32, data_json: &str) -> String {
         self.inner
             .borrow_mut()
@@ -3967,6 +3976,36 @@ impl AerisChart {
 
     pub fn layout_hit_test_json(&self, pane: usize, x: f64, y: f64) -> String {
         self.inner.borrow().layout_hit_test_json(pane, x, y)
+    }
+
+    pub fn layout_accessibility_json(&self, series: u32, offset: usize, limit: usize) -> String {
+        self.inner
+            .borrow()
+            .layout_accessibility_json(series, offset, limit)
+    }
+    pub fn layout_series_catalog_json(&self) -> String {
+        self.inner.borrow().layout_series_catalog_json()
+    }
+
+    pub fn layout_selected_hit_json(&self) -> String {
+        self.inner.borrow().layout_selected_hit_json()
+    }
+
+    pub fn set_layout_accessibility_focus(
+        &mut self,
+        series: u32,
+        element: &str,
+        row: usize,
+        color: &str,
+        size: f64,
+    ) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_layout_accessibility_focus(series, element, row, color, size)
+    }
+
+    pub fn clear_layout_accessibility_focus(&mut self) {
+        self.inner.borrow_mut().clear_layout_accessibility_focus();
     }
 
     pub fn set_general_numeric_data_typed(
@@ -5392,7 +5431,7 @@ impl AerisChart {
 
     /// Route a key from a focused accessibility target through the engine's target bindings.
     /// `target` is `price-axis:<pane>`, `time-axis`, `separator:<pane>`, `drawing:<id>`,
-    /// or `general-row:<series>:<row>`.
+    /// `general-row:<series>:<row>`, or `layout-item:<series>:<element>:<row>`.
     pub fn input_target_key_down(&mut self, target: &str, key: &str, modifier_bits: u8) -> bool {
         use aeris_charts_engine::ChartFocusTarget;
         let (kind, index) = target.split_once(':').unwrap_or((target, ""));
@@ -5411,6 +5450,34 @@ impl AerisChart {
                 return false;
             };
             ChartFocusTarget::GeneralDatum { series, row }
+        } else if kind == "layout-item" {
+            let Some((series, rest)) = index.split_once(':') else {
+                return false;
+            };
+            let Some((element, row)) = rest.split_once(':') else {
+                return false;
+            };
+            let Some(series) = series
+                .parse::<u32>()
+                .ok()
+                .and_then(aeris_charts_engine::GeneralLayoutSeriesId::from_raw)
+            else {
+                return false;
+            };
+            let element = match element {
+                "stage" => aeris_charts_engine::GeneralLayoutElement::Stage,
+                "node" => aeris_charts_engine::GeneralLayoutElement::Node,
+                "link" => aeris_charts_engine::GeneralLayoutElement::Link,
+                _ => return false,
+            };
+            let Ok(row) = row.parse::<usize>() else {
+                return false;
+            };
+            ChartFocusTarget::LayoutDatum {
+                series,
+                element,
+                row,
+            }
         } else {
             let index = index.parse::<usize>().ok();
             match (kind, index) {
@@ -5425,13 +5492,15 @@ impl AerisChart {
             }
         };
         let modifiers = input_modifiers_from_u8(modifier_bits);
-        let Some(chart_key) =
-            (if matches!(target, ChartFocusTarget::GeneralDatum { .. }) && key == " " {
-                Some(aeris_charts_engine::ChartKey::Enter)
-            } else {
-                chart_key_from_dom(key, modifiers)
-            })
-        else {
+        let Some(chart_key) = (if matches!(
+            target,
+            ChartFocusTarget::GeneralDatum { .. } | ChartFocusTarget::LayoutDatum { .. }
+        ) && key == " "
+        {
+            Some(aeris_charts_engine::ChartKey::Enter)
+        } else {
+            chart_key_from_dom(key, modifiers)
+        }) else {
             return false;
         };
         self.inner

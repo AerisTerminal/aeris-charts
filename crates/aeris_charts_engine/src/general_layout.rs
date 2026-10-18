@@ -11,7 +11,7 @@ use crate::domains::HorizontalDomain;
 use crate::general_axes::GeneralPlotRect;
 use crate::{ChartEngine, ChartError, ErrorCode, PaneId};
 use aeris_charts_render::color::Color;
-use aeris_charts_render::draw_list::{IRect, Prim};
+use aeris_charts_render::draw_list::{IRect, Prim, TextAlign};
 
 const MAX_LAYOUT_DATASETS: usize = 64;
 const MAX_LAYOUT_SERIES: usize = 64;
@@ -55,13 +55,32 @@ pub struct GeneralLayoutHit {
     pub row: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GeneralLayoutElement {
     Stage,
     Node,
     Link,
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct GeneralLayoutAccessibilityItem {
+    pub element: GeneralLayoutElement,
+    pub row: usize,
+    pub id: String,
+    pub label: String,
+    pub value: Option<f64>,
+    pub selected: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct GeneralLayoutAccessibilitySnapshot {
+    pub series: GeneralLayoutSeriesId,
+    pub title: String,
+    pub total: usize,
+    pub offset: usize,
+    pub items: Vec<GeneralLayoutAccessibilityItem>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GeneralLayoutSeriesKind {
     Funnel,
@@ -77,6 +96,14 @@ pub struct GeneralLayoutSeriesOptions {
     pub kind: GeneralLayoutSeriesKind,
     pub title: String,
     pub color: String,
+    #[serde(default)]
+    pub data_labels: bool,
+    #[serde(default = "layout_visible_default")]
+    pub visible: bool,
+}
+
+pub(crate) fn layout_visible_default() -> bool {
+    true
 }
 
 impl GeneralLayoutSeriesOptions {
@@ -91,6 +118,8 @@ impl GeneralLayoutSeriesOptions {
             kind,
             title: String::new(),
             color: "#4682b4".into(),
+            data_labels: false,
+            visible: true,
         }
     }
 }
@@ -143,6 +172,57 @@ impl GeneralLayoutInput {
             _ => 0.0,
         }
     }
+    fn semantic_values(&self) -> Vec<f64> {
+        match self {
+            Self::Funnel(stages) => stages.iter().map(|stage| stage.value).collect(),
+            Self::Hierarchy(nodes) => {
+                let maximum = nodes
+                    .iter()
+                    .filter_map(|node| node.value)
+                    .fold(0.0_f64, f64::max);
+                let weights = hierarchy_layout_tree(nodes).map(|(_, _, weights)| weights);
+                nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(row, node)| {
+                        node.value.unwrap_or_else(|| {
+                            weights
+                                .as_ref()
+                                .map_or(0.0, |weights| weights[row] * maximum)
+                                .min(f64::MAX)
+                        })
+                    })
+                    .collect()
+            }
+            Self::Flow { nodes, links } => {
+                let ids: HashMap<&str, usize> = nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(row, node)| (node.id.as_str(), row))
+                    .collect();
+                let mut totals = vec![(0.0_f64, 0.0_f64); nodes.len()];
+                for link in links {
+                    let source = ids[link.source.as_str()];
+                    let target = ids[link.target.as_str()];
+                    totals[source].1 = (totals[source].1 + link.value).min(f64::MAX);
+                    totals[target].0 = (totals[target].0 + link.value).min(f64::MAX);
+                }
+                totals
+                    .into_iter()
+                    .map(|(incoming, outgoing)| incoming.max(outgoing))
+                    .chain(links.iter().map(|link| link.value))
+                    .collect()
+            }
+        }
+    }
+
+    fn semantic_value_count(&self) -> usize {
+        match self {
+            Self::Funnel(stages) => stages.len(),
+            Self::Hierarchy(nodes) => nodes.len(),
+            Self::Flow { nodes, links } => nodes.len() + links.len(),
+        }
+    }
     fn validate(&self) -> Result<(), ChartError> {
         match self {
             Self::Funnel(stages) => {
@@ -159,7 +239,9 @@ impl GeneralLayoutInput {
             Self::Hierarchy(nodes) => validate_hierarchy(nodes)?,
             Self::Flow { nodes, links } => validate_flow(nodes, links)?,
         }
-        if self.estimated_bytes() > MAX_LAYOUT_DATASET_BYTES {
+        if self.estimated_bytes() + self.semantic_value_count() * std::mem::size_of::<f64>()
+            > MAX_LAYOUT_DATASET_BYTES
+        {
             return Err(resource_limit(
                 "layout dataset retained capacity exceeds limit",
             ));
@@ -207,6 +289,113 @@ struct LayoutDatasetEntry {
     id: GeneralLayoutDatasetId,
     input: GeneralLayoutInput,
     funnel_max: f64,
+    semantic_values: Vec<f64>,
+    transition: Option<LayoutTransition>,
+}
+
+struct LayoutTransition {
+    from: GeneralLayoutInput,
+    presentation: GeneralLayoutInput,
+    presentation_funnel_max: f64,
+    started_ms: f64,
+}
+
+impl LayoutDatasetEntry {
+    fn display_input(&self) -> &GeneralLayoutInput {
+        self.transition
+            .as_ref()
+            .map_or(&self.input, |motion| &motion.presentation)
+    }
+
+    fn display_funnel_max(&self) -> f64 {
+        self.transition
+            .as_ref()
+            .map_or(self.funnel_max, |motion| motion.presentation_funnel_max)
+    }
+}
+
+impl LayoutTransition {
+    fn estimated_bytes(&self) -> usize {
+        self.from
+            .estimated_bytes()
+            .saturating_add(self.presentation.estimated_bytes())
+    }
+}
+
+fn layout_transition_compatible(from: &GeneralLayoutInput, to: &GeneralLayoutInput) -> bool {
+    match (from, to) {
+        (GeneralLayoutInput::Funnel(a), GeneralLayoutInput::Funnel(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(left, right)| left.id == right.id)
+        }
+        (GeneralLayoutInput::Hierarchy(a), GeneralLayoutInput::Hierarchy(b)) => {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|(left, right)| {
+                    left.id == right.id
+                        && left.parent == right.parent
+                        && left.value.is_some() == right.value.is_some()
+                })
+        }
+        (
+            GeneralLayoutInput::Flow {
+                nodes: an,
+                links: al,
+            },
+            GeneralLayoutInput::Flow {
+                nodes: bn,
+                links: bl,
+            },
+        ) => {
+            an.len() == bn.len()
+                && al.len() == bl.len()
+                && an.iter().zip(bn).all(|(left, right)| left.id == right.id)
+                && al
+                    .iter()
+                    .zip(bl)
+                    .all(|(left, right)| left.source == right.source && left.target == right.target)
+        }
+        _ => false,
+    }
+}
+
+fn blend_layout_input(
+    from: &GeneralLayoutInput,
+    to: &GeneralLayoutInput,
+    out: &mut GeneralLayoutInput,
+    progress: f64,
+) {
+    let blend = |a: f64, b: f64| (a * (1.0 - progress) + b * progress).min(f64::MAX);
+    match (from, to, out) {
+        (
+            GeneralLayoutInput::Funnel(a),
+            GeneralLayoutInput::Funnel(b),
+            GeneralLayoutInput::Funnel(out),
+        ) => {
+            for ((left, right), item) in a.iter().zip(b).zip(out) {
+                item.value = blend(left.value, right.value);
+            }
+        }
+        (
+            GeneralLayoutInput::Hierarchy(a),
+            GeneralLayoutInput::Hierarchy(b),
+            GeneralLayoutInput::Hierarchy(out),
+        ) => {
+            for ((left, right), item) in a.iter().zip(b).zip(out) {
+                if let (Some(x), Some(y)) = (left.value, right.value) {
+                    item.value = Some(blend(x, y));
+                }
+            }
+        }
+        (
+            GeneralLayoutInput::Flow { links: a, .. },
+            GeneralLayoutInput::Flow { links: b, .. },
+            GeneralLayoutInput::Flow { links: out, .. },
+        ) => {
+            for ((left, right), item) in a.iter().zip(b).zip(out) {
+                item.value = blend(left.value, right.value);
+            }
+        }
+        _ => unreachable!("layout transition topology validated before interpolation"),
+    }
 }
 
 pub(crate) struct GeneralLayoutStore {
@@ -214,6 +403,11 @@ pub(crate) struct GeneralLayoutStore {
     next_id: u32,
     series: Vec<LayoutSeriesEntry>,
     next_series_id: u32,
+    hovered: Option<GeneralLayoutHit>,
+    selected: Option<GeneralLayoutHit>,
+    focused: Option<GeneralLayoutHit>,
+    focus_color: Color,
+    focus_size: f64,
 }
 
 struct LayoutSeriesEntry {
@@ -303,6 +497,7 @@ fn point_in_triangle(p: (f64, f64), a: (f64, f64), b: (f64, f64), c: (f64, f64))
 
 struct SankeyCache {
     plot: GeneralPlotRect,
+    column_count: usize,
     nodes: Vec<TreemapShape>,
     links: Vec<SankeyLinkShape>,
 }
@@ -339,6 +534,7 @@ impl SankeyLinkShape {
 struct TreemapCache {
     plot: GeneralPlotRect,
     shapes: Vec<TreemapShape>,
+    bounds: Vec<Option<GeneralPlotRect>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -430,16 +626,34 @@ fn funnel_shape_at(
     })
 }
 
-fn treemap_shapes(nodes: &[HierarchyNode], plot: GeneralPlotRect) -> Vec<TreemapShape> {
+fn treemap_cache(nodes: &[HierarchyNode], plot: GeneralPlotRect) -> TreemapCache {
+    let mut cache = TreemapCache {
+        plot,
+        shapes: Vec::new(),
+        bounds: Vec::new(),
+    };
     if nodes.is_empty() || plot.width <= 0.0 || plot.height <= 0.0 {
-        return Vec::new();
+        return cache;
     }
     let Some((root, children, weights)) = hierarchy_layout_tree(nodes) else {
-        return Vec::new();
+        return cache;
     };
-    let mut shapes = Vec::with_capacity(nodes.len());
-    layout_treemap_node(root, plot, &children, &weights, &mut shapes);
-    shapes
+    cache.shapes = Vec::with_capacity(nodes.len());
+    cache.bounds = vec![None; nodes.len()];
+    layout_treemap_node(
+        root,
+        plot,
+        &children,
+        &weights,
+        &mut cache.shapes,
+        &mut cache.bounds,
+    );
+    cache
+}
+
+#[cfg(test)]
+fn treemap_shapes(nodes: &[HierarchyNode], plot: GeneralPlotRect) -> Vec<TreemapShape> {
+    treemap_cache(nodes, plot).shapes
 }
 
 fn hierarchy_layout_tree(nodes: &[HierarchyNode]) -> Option<(usize, Vec<Vec<usize>>, Vec<f64>)> {
@@ -495,10 +709,12 @@ fn layout_treemap_node(
     children: &[Vec<usize>],
     weights: &[f64],
     shapes: &mut Vec<TreemapShape>,
+    bounds: &mut [Option<GeneralPlotRect>],
 ) {
     if rect.width <= 0.0 || rect.height <= 0.0 || weights[node] <= 0.0 {
         return;
     }
+    bounds[node] = Some(rect);
     if children[node].is_empty() {
         shapes.push(TreemapShape { row: node, rect });
         return;
@@ -560,6 +776,7 @@ fn layout_treemap_node(
                     children,
                     weights,
                     shapes,
+                    bounds,
                 );
                 y += height;
             }
@@ -589,6 +806,7 @@ fn layout_treemap_node(
                     children,
                     weights,
                     shapes,
+                    bounds,
                 );
                 x += width;
             }
@@ -600,20 +818,26 @@ fn layout_treemap_node(
 }
 
 impl LayoutSeriesEntry {
+    fn with_treemap_cache<R>(
+        &self,
+        nodes: &[HierarchyNode],
+        plot: GeneralPlotRect,
+        f: impl FnOnce(&TreemapCache) -> R,
+    ) -> R {
+        let mut cache = self.treemap.borrow_mut();
+        if cache.as_ref().is_none_or(|cached| cached.plot != plot) {
+            *cache = Some(treemap_cache(nodes, plot));
+        }
+        f(cache.as_ref().expect("treemap cache initialized"))
+    }
+
     fn with_treemap<R>(
         &self,
         nodes: &[HierarchyNode],
         plot: GeneralPlotRect,
         f: impl FnOnce(&[TreemapShape]) -> R,
     ) -> R {
-        let mut cache = self.treemap.borrow_mut();
-        if cache.as_ref().is_none_or(|cached| cached.plot != plot) {
-            *cache = Some(TreemapCache {
-                plot,
-                shapes: treemap_shapes(nodes, plot),
-            });
-        }
-        f(&cache.as_ref().expect("treemap cache initialized").shapes)
+        self.with_treemap_cache(nodes, plot, |cache| f(&cache.shapes))
     }
 }
 
@@ -723,6 +947,7 @@ impl LayoutSeriesEntry {
 fn sankey_shapes(nodes: &[FlowNode], links: &[FlowLink], plot: GeneralPlotRect) -> SankeyCache {
     let mut cache = SankeyCache {
         plot,
+        column_count: 0,
         nodes: Vec::new(),
         links: Vec::new(),
     };
@@ -765,6 +990,7 @@ fn sankey_shapes(nodes: &[FlowNode], links: &[FlowLink], plot: GeneralPlotRect) 
         }
     }
     let column_count = columns.iter().copied().max().unwrap_or(0) + 1;
+    cache.column_count = column_count;
     let mut incoming_weight = vec![0.0; nodes.len()];
     let mut outgoing_weight = vec![0.0; nodes.len()];
     for link in links {
@@ -874,6 +1100,39 @@ impl GeneralLayoutStore {
             next_id: 1,
             series: Vec::new(),
             next_series_id: 1,
+            hovered: None,
+            selected: None,
+            focused: None,
+            focus_color: Color::rgb(41, 98, 255),
+            focus_size: 14.0,
+        }
+    }
+
+    fn contains_hit(&self, hit: GeneralLayoutHit) -> bool {
+        let Some(series) = self
+            .series
+            .iter()
+            .find(|series| series.id == hit.series && series.options.visible)
+        else {
+            return false;
+        };
+        let Some(input) = self.get(series.options.dataset) else {
+            return false;
+        };
+        match (input, hit.element) {
+            (GeneralLayoutInput::Funnel(stages), GeneralLayoutElement::Stage) => {
+                hit.row < stages.len()
+            }
+            (GeneralLayoutInput::Hierarchy(nodes), GeneralLayoutElement::Node) => {
+                hit.row < nodes.len()
+            }
+            (GeneralLayoutInput::Flow { nodes, .. }, GeneralLayoutElement::Node) => {
+                hit.row < nodes.len()
+            }
+            (GeneralLayoutInput::Flow { links, .. }, GeneralLayoutElement::Link) => {
+                hit.row < links.len()
+            }
+            _ => false,
         }
     }
 
@@ -881,9 +1140,11 @@ impl GeneralLayoutStore {
         if self.entries.len() >= MAX_LAYOUT_DATASETS {
             return Err(resource_limit("too many layout datasets"));
         }
+        let semantic_values = input.semantic_values();
         if self
             .reserved_bytes()
             .saturating_add(input.estimated_bytes())
+            .saturating_add(semantic_values.capacity() * std::mem::size_of::<f64>())
             > MAX_LAYOUT_STORE_BYTES
         {
             return Err(resource_limit(
@@ -903,6 +1164,8 @@ impl GeneralLayoutStore {
             id,
             input,
             funnel_max,
+            semantic_values,
+            transition: None,
         });
         self.next_id = next;
         Ok(id)
@@ -920,6 +1183,8 @@ impl GeneralLayoutStore {
         &mut self,
         id: GeneralLayoutDatasetId,
         input: GeneralLayoutInput,
+        animate: bool,
+        time_ms: f64,
     ) -> Result<(), ChartError> {
         input.validate()?;
         let index = self
@@ -950,19 +1215,81 @@ impl GeneralLayoutStore {
             .filter(|series| series.options.dataset == id)
             .map(|series| cache_reservation(series.options.kind, &input))
             .sum::<usize>();
+        let semantic_values = input.semantic_values();
         let retained = self
             .reserved_bytes()
             .saturating_sub(self.entries[index].input.estimated_bytes())
+            .saturating_sub(
+                self.entries[index].semantic_values.capacity() * std::mem::size_of::<f64>(),
+            )
+            .saturating_sub(
+                self.entries[index]
+                    .transition
+                    .as_ref()
+                    .map_or(0, LayoutTransition::estimated_bytes),
+            )
             .saturating_sub(cache_before)
             .saturating_add(input.estimated_bytes())
+            .saturating_add(semantic_values.capacity() * std::mem::size_of::<f64>())
             .saturating_add(cache_after);
         if retained > MAX_LAYOUT_STORE_BYTES {
             return Err(resource_limit(
                 "layout store retained capacity exceeds limit",
             ));
         }
+        let source = self.entries[index].display_input();
+        let animate = animate
+            && self
+                .series
+                .iter()
+                .any(|series| series.options.dataset == id && series.options.visible);
+        let transition_bytes = source
+            .estimated_bytes()
+            .saturating_add(input.estimated_bytes());
+        let transition_from = if animate
+            && source != &input
+            && layout_transition_compatible(source, &input)
+            && retained.saturating_add(transition_bytes) <= MAX_LAYOUT_STORE_BYTES
+        {
+            Some(source.clone())
+        } else {
+            None
+        };
         self.entries[index].funnel_max = input.funnel_max();
         self.entries[index].input = input;
+        self.entries[index].semantic_values = semantic_values;
+        self.entries[index].transition = transition_from.map(|from| {
+            let mut presentation = self.entries[index].input.clone();
+            blend_layout_input(&from, &self.entries[index].input, &mut presentation, 0.0);
+            let presentation_funnel_max = presentation.funnel_max();
+            LayoutTransition {
+                from,
+                presentation,
+                presentation_funnel_max,
+                started_ms: time_ms,
+            }
+        });
+        if self.hovered.is_some_and(|hit| {
+            self.series
+                .iter()
+                .any(|series| series.id == hit.series && series.options.dataset == id)
+        }) {
+            self.hovered = None;
+        }
+        if self.selected.is_some_and(|hit| {
+            self.series
+                .iter()
+                .any(|series| series.id == hit.series && series.options.dataset == id)
+        }) {
+            self.selected = None;
+        }
+        if self.focused.is_some_and(|hit| {
+            self.series
+                .iter()
+                .any(|series| series.id == hit.series && series.options.dataset == id)
+        }) {
+            self.focused = None;
+        }
         for series in &self.series {
             if series.options.dataset == id {
                 *series.treemap.borrow_mut() = None;
@@ -971,6 +1298,53 @@ impl GeneralLayoutStore {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn transition_active(&self) -> bool {
+        self.entries.iter().any(|entry| entry.transition.is_some())
+    }
+
+    pub(crate) fn finish_transitions(&mut self) {
+        self.invalidate_transition_caches();
+        for entry in &mut self.entries {
+            entry.transition = None;
+        }
+    }
+
+    pub(crate) fn advance_transitions(&mut self, time_ms: f64, duration_ms: f64) {
+        self.invalidate_transition_caches();
+        for entry in &mut self.entries {
+            let Some(motion) = entry.transition.as_mut() else {
+                continue;
+            };
+            let elapsed = time_ms - motion.started_ms;
+            if elapsed >= duration_ms || duration_ms == 0.0 {
+                entry.transition = None;
+            } else {
+                blend_layout_input(
+                    &motion.from,
+                    &entry.input,
+                    &mut motion.presentation,
+                    (elapsed / duration_ms).clamp(0.0, 1.0),
+                );
+                motion.presentation_funnel_max = motion.presentation.funnel_max();
+            }
+        }
+    }
+
+    fn invalidate_transition_caches(&self) {
+        for series in &self.series {
+            if !self
+                .entries
+                .iter()
+                .any(|entry| entry.id == series.options.dataset && entry.transition.is_some())
+            {
+                continue;
+            }
+            *series.treemap.borrow_mut() = None;
+            *series.sankey.borrow_mut() = None;
+            *series.sunburst.borrow_mut() = None;
+        }
     }
 
     fn remove(&mut self, id: GeneralLayoutDatasetId) -> Result<(), ChartError> {
@@ -1002,6 +1376,8 @@ impl GeneralLayoutStore {
                         + series.options.color.capacity()
                         + series.treemap.borrow().as_ref().map_or(0, |cache| {
                             cache.shapes.capacity() * std::mem::size_of::<TreemapShape>()
+                                + cache.bounds.capacity()
+                                    * std::mem::size_of::<Option<GeneralPlotRect>>()
                         })
                         + series.sankey.borrow().as_ref().map_or(0, |cache| {
                             cache.nodes.capacity() * std::mem::size_of::<TreemapShape>()
@@ -1015,7 +1391,14 @@ impl GeneralLayoutStore {
             + self
                 .entries
                 .iter()
-                .map(|entry| entry.input.estimated_bytes())
+                .map(|entry| {
+                    entry.input.estimated_bytes()
+                        + entry.semantic_values.capacity() * std::mem::size_of::<f64>()
+                        + entry
+                            .transition
+                            .as_ref()
+                            .map_or(0, LayoutTransition::estimated_bytes)
+                })
                 .sum::<usize>()
     }
 
@@ -1025,7 +1408,14 @@ impl GeneralLayoutStore {
             + self
                 .entries
                 .iter()
-                .map(|entry| entry.input.estimated_bytes())
+                .map(|entry| {
+                    entry.input.estimated_bytes()
+                        + entry.semantic_values.capacity() * std::mem::size_of::<f64>()
+                        + entry
+                            .transition
+                            .as_ref()
+                            .map_or(0, LayoutTransition::estimated_bytes)
+                })
                 .sum::<usize>()
             + self
                 .series
@@ -1104,9 +1494,37 @@ impl GeneralLayoutStore {
             .iter()
             .position(|series| series.id == id)
             .ok_or_else(|| invalid_handle("layout series handle is stale"))?;
+        let dataset = self.series[index].options.dataset;
         self.series.remove(index);
         self.series.shrink_to_fit();
+        if !self
+            .series
+            .iter()
+            .any(|series| series.options.dataset == dataset)
+            && let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == dataset)
+        {
+            entry.transition = None;
+        }
+        if self.hovered.is_some_and(|hit| hit.series == id) {
+            self.hovered = None;
+        }
+        if self.selected.is_some_and(|hit| hit.series == id) {
+            self.selected = None;
+        }
+        if self.focused.is_some_and(|hit| hit.series == id) {
+            self.focused = None;
+        }
         Ok(())
+    }
+
+    pub(crate) fn persistence_datasets(
+        &self,
+    ) -> impl Iterator<Item = (GeneralLayoutDatasetId, &GeneralLayoutInput)> {
+        self.entries.iter().map(|entry| (entry.id, &entry.input))
+    }
+
+    pub(crate) fn persistence_series(&self) -> impl Iterator<Item = &GeneralLayoutSeriesOptions> {
+        self.series.iter().map(|entry| &entry.options)
     }
 
     pub(crate) fn uses_pane(&self, pane_id: PaneId) -> bool {
@@ -1131,7 +1549,9 @@ impl GeneralLayoutSeriesKind {
 fn cache_reservation(kind: GeneralLayoutSeriesKind, input: &GeneralLayoutInput) -> usize {
     match (kind, input) {
         (GeneralLayoutSeriesKind::Treemap, GeneralLayoutInput::Hierarchy(nodes)) => {
-            2 * nodes.len() * std::mem::size_of::<TreemapShape>()
+            2 * nodes.len()
+                * (std::mem::size_of::<TreemapShape>()
+                    + std::mem::size_of::<Option<GeneralPlotRect>>())
         }
         (GeneralLayoutSeriesKind::Sunburst, GeneralLayoutInput::Hierarchy(nodes)) => {
             2 * nodes.len() * std::mem::size_of::<SunburstShape>()
@@ -1145,6 +1565,40 @@ fn cache_reservation(kind: GeneralLayoutSeriesKind, input: &GeneralLayoutInput) 
 }
 
 impl ChartEngine {
+    fn push_general_layout_label(
+        &self,
+        out: &mut Vec<Prim>,
+        label: &str,
+        bounds: GeneralPlotRect,
+        fill: Color,
+        hpr: f64,
+        vpr: f64,
+    ) -> bool {
+        if label.is_empty() || !bounds.width.is_finite() || !bounds.height.is_finite() {
+            return false;
+        }
+        let layout = &self.options.get().layout;
+        let size = layout.font_size.clamp(9.0, 18.0);
+        if bounds.height < size + 6.0 {
+            return false;
+        }
+        let width = self.measure_text_run(label, size, &layout.font_family, 400, false);
+        if !width.is_finite() || width + 10.0 > bounds.width {
+            return false;
+        }
+        out.push(Prim::Text {
+            x: ((bounds.x + bounds.width * 0.5) * hpr) as f32,
+            y: ((bounds.y + bounds.height * 0.5) * vpr) as f32,
+            text: label.to_owned(),
+            color: fill.contrast_text_over(Color::rgb(255, 255, 255)),
+            size: (size * vpr) as f32,
+            family: layout.font_family.clone(),
+            align: TextAlign::Center,
+            weight: 400,
+            italic: false,
+        });
+        true
+    }
     pub(crate) fn build_general_layout_series_frame(
         &self,
         pane_index: usize,
@@ -1165,11 +1619,11 @@ impl ChartEngine {
         for series in store
             .series
             .iter()
-            .filter(|series| series.pane_id == pane_id)
+            .filter(|series| series.pane_id == pane_id && series.options.visible)
         {
             if let (GeneralLayoutSeriesKind::Sunburst, Some(entry)) =
                 (series.options.kind, store.entry(series.options.dataset))
-                && let GeneralLayoutInput::Hierarchy(nodes) = &entry.input
+                && let GeneralLayoutInput::Hierarchy(nodes) = entry.display_input()
             {
                 series.with_sunburst(nodes, plot, |cache| {
                     for shape in &cache.shapes {
@@ -1181,17 +1635,37 @@ impl ChartEngine {
                                     .map(|(x, y)| [(x * hpr) as f32, (y * vpr) as f32]),
                             );
                         }
+                        let fill = treemap_color(series.color, shape.row);
                         out.push(Prim::MeshFill {
                             first_point,
                             point_count: (shape.segments() * 6) as u32,
-                            color: treemap_color(series.color, shape.row),
+                            color: fill,
                         });
+                        if series.options.data_labels {
+                            let radius = (shape.inner + shape.outer) * 0.5;
+                            let angle = (shape.start + shape.end) * 0.5;
+                            self.push_general_layout_label(
+                                out,
+                                &nodes[shape.row].label,
+                                GeneralPlotRect {
+                                    x: shape.cx + radius * angle.cos()
+                                        - (shape.end - shape.start) * radius * 0.4,
+                                    y: shape.cy + radius * angle.sin()
+                                        - (shape.outer - shape.inner) * 0.5,
+                                    width: (shape.end - shape.start) * radius * 0.8,
+                                    height: shape.outer - shape.inner,
+                                },
+                                fill,
+                                hpr,
+                                vpr,
+                            );
+                        }
                     }
                 });
             }
             if let (GeneralLayoutSeriesKind::Sankey, Some(entry)) =
                 (series.options.kind, store.entry(series.options.dataset))
-                && let GeneralLayoutInput::Flow { nodes, links } = &entry.input
+                && let GeneralLayoutInput::Flow { nodes, links } = entry.display_input()
             {
                 series.with_sankey(nodes, links, plot, |cache| {
                     for link in &cache.links {
@@ -1237,6 +1711,7 @@ impl ChartEngine {
                         let x1 = ((node.rect.x + node.rect.width) * hpr).round() as i32;
                         let y1 = ((node.rect.y + node.rect.height) * vpr).round() as i32;
                         if x1 > x0 && y1 > y0 {
+                            let fill = treemap_color(series.color, node.row);
                             out.push(Prim::Rect {
                                 rect: IRect {
                                     x: x0,
@@ -1244,15 +1719,60 @@ impl ChartEngine {
                                     w: x1 - x0,
                                     h: y1 - y0,
                                 },
-                                color: treemap_color(series.color, node.row),
+                                color: fill,
                             });
+                            if series.options.data_labels
+                                && !self.push_general_layout_label(
+                                    out,
+                                    &nodes[node.row].label,
+                                    node.rect,
+                                    fill,
+                                    hpr,
+                                    vpr,
+                                )
+                            {
+                                let stride = if cache.column_count > 1 {
+                                    (plot.width - node.rect.width) / (cache.column_count - 1) as f64
+                                } else {
+                                    plot.width
+                                };
+                                let column = if stride > 0.0 {
+                                    ((node.rect.x - plot.x) / stride).round() as usize
+                                } else {
+                                    0
+                                };
+                                let gap = (stride - node.rect.width).max(0.0);
+                                let right =
+                                    cache.column_count == 1 || column + 1 < cache.column_count;
+                                let label_x = if right {
+                                    node.rect.x + node.rect.width + gap * 0.5
+                                } else {
+                                    node.rect.x - gap * 0.5
+                                };
+                                let surface =
+                                    Color::parse_css(&self.options.get().layout.background.color)
+                                        .unwrap_or(Color::rgb(255, 255, 255));
+                                self.push_general_layout_label(
+                                    out,
+                                    &nodes[node.row].label,
+                                    GeneralPlotRect {
+                                        x: label_x - gap * 0.5,
+                                        y: node.rect.y,
+                                        width: gap,
+                                        height: node.rect.height,
+                                    },
+                                    surface,
+                                    hpr,
+                                    vpr,
+                                );
+                            }
                         }
                     }
                 });
             }
             if let (GeneralLayoutSeriesKind::Treemap, Some(entry)) =
                 (series.options.kind, store.entry(series.options.dataset))
-                && let GeneralLayoutInput::Hierarchy(nodes) = &entry.input
+                && let GeneralLayoutInput::Hierarchy(nodes) = entry.display_input()
             {
                 series.with_treemap(nodes, plot, |shapes| {
                     for shape in shapes {
@@ -1267,24 +1787,32 @@ impl ChartEngine {
                                 w: x1 - x0,
                                 h: y1 - y0,
                             };
-                            out.push(Prim::Rect {
-                                rect,
-                                color: treemap_color(series.color, shape.row),
-                            });
+                            let fill = treemap_color(series.color, shape.row);
+                            out.push(Prim::Rect { rect, color: fill });
                             out.push(Prim::RectFrame {
                                 rect,
                                 border: 1,
                                 color: Color::rgba(255, 255, 255, 96),
                             });
+                            if series.options.data_labels {
+                                self.push_general_layout_label(
+                                    out,
+                                    &nodes[shape.row].label,
+                                    shape.rect,
+                                    fill,
+                                    hpr,
+                                    vpr,
+                                );
+                            }
                         }
                     }
                 });
             }
             if let (GeneralLayoutSeriesKind::Funnel, Some(entry)) =
                 (series.options.kind, store.entry(series.options.dataset))
-                && let GeneralLayoutInput::Funnel(stages) = &entry.input
+                && let GeneralLayoutInput::Funnel(stages) = entry.display_input()
             {
-                visit_funnel_shapes(stages, entry.funnel_max, plot, |shape| {
+                visit_funnel_shapes(stages, entry.display_funnel_max(), plot, |shape| {
                     let [a, b, c, d] = shape.vertices();
                     let first_point = points.len() as u32;
                     points.extend(
@@ -1295,6 +1823,107 @@ impl ChartEngine {
                         point_count: 6,
                         color: series.color,
                     });
+                    if series.options.data_labels {
+                        self.push_general_layout_label(
+                            out,
+                            &stages[shape.row].label,
+                            GeneralPlotRect {
+                                x: shape.center_x
+                                    - (shape.top_half_width + shape.bottom_half_width) * 0.5,
+                                y: shape.top_y,
+                                width: shape.top_half_width + shape.bottom_half_width,
+                                height: shape.bottom_y - shape.top_y,
+                            },
+                            series.color,
+                            hpr,
+                            vpr,
+                        );
+                    }
+                });
+            }
+        }
+        if let Some(hit) = store.focused
+            && let Some(series) = store.series.iter().find(|series| {
+                series.id == hit.series && series.pane_id == pane_id && series.options.visible
+            })
+            && let Some(entry) = store.entry(series.options.dataset)
+        {
+            let position = match (entry.display_input(), series.options.kind, hit.element) {
+                (
+                    GeneralLayoutInput::Funnel(stages),
+                    GeneralLayoutSeriesKind::Funnel,
+                    GeneralLayoutElement::Stage,
+                ) => funnel_shape_at(stages, entry.display_funnel_max(), plot, hit.row)
+                    .map(|shape| (shape.center_x, (shape.top_y + shape.bottom_y) * 0.5)),
+                (
+                    GeneralLayoutInput::Hierarchy(nodes),
+                    GeneralLayoutSeriesKind::Treemap,
+                    GeneralLayoutElement::Node,
+                ) => series.with_treemap_cache(nodes, plot, |cache| {
+                    cache
+                        .bounds
+                        .get(hit.row)
+                        .copied()
+                        .flatten()
+                        .map(|rect| (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5))
+                }),
+                (
+                    GeneralLayoutInput::Hierarchy(nodes),
+                    GeneralLayoutSeriesKind::Sunburst,
+                    GeneralLayoutElement::Node,
+                ) => series.with_sunburst(nodes, plot, |cache| {
+                    cache
+                        .shapes
+                        .iter()
+                        .find(|shape| shape.row == hit.row)
+                        .map(|shape| {
+                            let radius = (shape.inner + shape.outer) * 0.5;
+                            let angle = (shape.start + shape.end) * 0.5;
+                            (
+                                shape.cx + radius * angle.cos(),
+                                shape.cy + radius * angle.sin(),
+                            )
+                        })
+                        .or_else(|| {
+                            nodes
+                                .get(hit.row)
+                                .filter(|node| node.parent.is_none())
+                                .map(|_| (plot.x + plot.width * 0.5, plot.y + plot.height * 0.5))
+                        })
+                }),
+                (
+                    GeneralLayoutInput::Flow { nodes, links },
+                    GeneralLayoutSeriesKind::Sankey,
+                    element,
+                ) => series.with_sankey(nodes, links, plot, |cache| match element {
+                    GeneralLayoutElement::Node => cache
+                        .nodes
+                        .iter()
+                        .find(|shape| shape.row == hit.row)
+                        .map(|shape| {
+                            (
+                                shape.rect.x + shape.rect.width * 0.5,
+                                shape.rect.y + shape.rect.height * 0.5,
+                            )
+                        }),
+                    GeneralLayoutElement::Link => cache
+                        .links
+                        .iter()
+                        .find(|shape| shape.row == hit.row)
+                        .map(|shape| ((shape.x0 + shape.x1) * 0.5, shape.y_at(0.5))),
+                    GeneralLayoutElement::Stage => None,
+                }),
+                _ => None,
+            };
+            if let Some((x, y)) = position {
+                let ratio = hpr.min(vpr);
+                out.push(Prim::Circle {
+                    cx: (x * hpr) as f32,
+                    cy: (y * vpr) as f32,
+                    radius: (store.focus_size * ratio * 0.5) as f32,
+                    fill: Color::rgba(0, 0, 0, 0),
+                    stroke_width: (2.0 * ratio) as f32,
+                    stroke: store.focus_color,
                 });
             }
         }
@@ -1316,11 +1945,11 @@ impl ChartEngine {
             .series
             .iter()
             .rev()
-            .filter(|series| series.pane_id == pane_id)
+            .filter(|series| series.pane_id == pane_id && series.options.visible)
         {
             if let (GeneralLayoutSeriesKind::Sunburst, Some(entry)) =
                 (series.options.kind, store.entry(series.options.dataset))
-                && let GeneralLayoutInput::Hierarchy(nodes) = &entry.input
+                && let GeneralLayoutInput::Hierarchy(nodes) = entry.display_input()
             {
                 let row = series.with_sunburst(nodes, plot, |cache| {
                     cache
@@ -1340,7 +1969,7 @@ impl ChartEngine {
             }
             if let (GeneralLayoutSeriesKind::Sankey, Some(entry)) =
                 (series.options.kind, store.entry(series.options.dataset))
-                && let GeneralLayoutInput::Flow { nodes, links } = &entry.input
+                && let GeneralLayoutInput::Flow { nodes, links } = entry.display_input()
             {
                 let hit = series.with_sankey(nodes, links, plot, |cache| {
                     cache
@@ -1368,7 +1997,7 @@ impl ChartEngine {
             }
             if let (GeneralLayoutSeriesKind::Treemap, Some(entry)) =
                 (series.options.kind, store.entry(series.options.dataset))
-                && let GeneralLayoutInput::Hierarchy(nodes) = &entry.input
+                && let GeneralLayoutInput::Hierarchy(nodes) = entry.display_input()
             {
                 let hit = series.with_treemap(nodes, plot, |shapes| {
                     shapes
@@ -1387,11 +2016,11 @@ impl ChartEngine {
             }
             if let (GeneralLayoutSeriesKind::Funnel, Some(entry)) =
                 (series.options.kind, store.entry(series.options.dataset))
-                && let GeneralLayoutInput::Funnel(stages) = &entry.input
+                && let GeneralLayoutInput::Funnel(stages) = entry.display_input()
                 && !stages.is_empty()
             {
                 let row = (((y - plot.y) / plot.height) * stages.len() as f64).floor() as usize;
-                if let Some(shape) = funnel_shape_at(stages, entry.funnel_max, plot, row)
+                if let Some(shape) = funnel_shape_at(stages, entry.display_funnel_max(), plot, row)
                     && shape.contains(x, y)
                 {
                     return Some(GeneralLayoutHit {
@@ -1403,6 +2032,231 @@ impl ChartEngine {
             }
         }
         None
+    }
+
+    pub fn update_general_layout_hover(
+        &mut self,
+        pane: usize,
+        x: f64,
+        y: f64,
+    ) -> Option<GeneralLayoutHit> {
+        let hit = self.general_layout_hit_test(pane, x, y);
+        if let Some(store) = self.general_layout_data.as_mut() {
+            store.hovered = hit;
+        }
+        hit
+    }
+
+    pub fn clear_general_layout_hover(&mut self) {
+        if let Some(store) = self.general_layout_data.as_mut() {
+            store.hovered = None;
+        }
+    }
+
+    pub fn general_layout_hovered_hit(&self) -> Option<GeneralLayoutHit> {
+        self.general_layout_data.as_ref()?.hovered
+    }
+
+    pub fn select_general_layout_hovered(&mut self) -> bool {
+        let Some(store) = self.general_layout_data.as_mut() else {
+            return false;
+        };
+        store.selected = store.hovered;
+        store.selected.is_some()
+    }
+
+    pub fn select_general_layout_item(
+        &mut self,
+        series_id: GeneralLayoutSeriesId,
+        element: GeneralLayoutElement,
+        row: usize,
+    ) -> bool {
+        let Some(store) = self.general_layout_data.as_mut() else {
+            return false;
+        };
+        let hit = GeneralLayoutHit {
+            series: series_id,
+            element,
+            row,
+        };
+        if !store.contains_hit(hit) {
+            return false;
+        }
+        store.selected = Some(hit);
+        true
+    }
+    pub fn set_general_layout_accessibility_focus(
+        &mut self,
+        hit: GeneralLayoutHit,
+        color: &str,
+        size: f64,
+    ) -> bool {
+        let Some(parsed) = Color::parse_css(color) else {
+            return false;
+        };
+        if !size.is_finite() || !(4.0..=128.0).contains(&size) {
+            return false;
+        }
+        let Some(store) = self.general_layout_data.as_mut() else {
+            return false;
+        };
+        if !store.contains_hit(hit) {
+            return false;
+        }
+        if store.focused == Some(hit) && store.focus_color == parsed && store.focus_size == size {
+            return true;
+        }
+        store.focused = Some(hit);
+        store.focus_color = parsed;
+        store.focus_size = size;
+        self.invalidate_frame_all();
+        true
+    }
+
+    pub fn clear_general_layout_accessibility_focus(&mut self) {
+        if let Some(store) = self.general_layout_data.as_mut()
+            && store.focused.take().is_some()
+        {
+            self.invalidate_frame_all();
+        }
+    }
+
+    pub fn general_layout_accessibility_focused_hit(&self) -> Option<GeneralLayoutHit> {
+        self.general_layout_data.as_ref()?.focused
+    }
+    pub fn clear_general_layout_selection(&mut self) {
+        if let Some(store) = self.general_layout_data.as_mut() {
+            store.selected = None;
+        }
+    }
+
+    pub fn general_layout_selected_hit(&self) -> Option<GeneralLayoutHit> {
+        self.general_layout_data.as_ref()?.selected
+    }
+
+    pub fn general_layout_hit_value(&self, hit: GeneralLayoutHit) -> Option<f64> {
+        let store = self.general_layout_data.as_ref()?;
+        let series = store.series.iter().find(|series| series.id == hit.series)?;
+        let entry = store.entry(series.options.dataset)?;
+        let index = match (&entry.input, hit.element) {
+            (GeneralLayoutInput::Funnel(_), GeneralLayoutElement::Stage)
+            | (GeneralLayoutInput::Hierarchy(_), GeneralLayoutElement::Node)
+            | (GeneralLayoutInput::Flow { .. }, GeneralLayoutElement::Node) => hit.row,
+            (GeneralLayoutInput::Flow { nodes, .. }, GeneralLayoutElement::Link) => {
+                nodes.len().checked_add(hit.row)?
+            }
+            _ => return None,
+        };
+        entry.semantic_values.get(index).copied()
+    }
+    pub fn general_layout_accessibility_snapshot(
+        &self,
+        series_id: GeneralLayoutSeriesId,
+        offset: usize,
+        limit: usize,
+    ) -> Option<GeneralLayoutAccessibilitySnapshot> {
+        let store = self.general_layout_data.as_ref()?;
+        let series = store.series.iter().find(|series| series.id == series_id)?;
+        let entry = store.entry(series.options.dataset)?;
+        let input = &entry.input;
+        let selected = store.selected;
+        let limit = limit.min(512);
+        let (total, items) = match input {
+            GeneralLayoutInput::Funnel(stages) => (
+                stages.len(),
+                stages
+                    .iter()
+                    .enumerate()
+                    .skip(offset)
+                    .take(limit)
+                    .map(|(row, stage)| GeneralLayoutAccessibilityItem {
+                        element: GeneralLayoutElement::Stage,
+                        row,
+                        id: stage.id.clone(),
+                        label: stage.label.clone(),
+                        value: Some(stage.value),
+                        selected: selected
+                            == Some(GeneralLayoutHit {
+                                series: series_id,
+                                element: GeneralLayoutElement::Stage,
+                                row,
+                            }),
+                    })
+                    .collect(),
+            ),
+            GeneralLayoutInput::Hierarchy(nodes) => (
+                nodes.len(),
+                nodes
+                    .iter()
+                    .enumerate()
+                    .skip(offset)
+                    .take(limit)
+                    .map(|(row, node)| GeneralLayoutAccessibilityItem {
+                        element: GeneralLayoutElement::Node,
+                        row,
+                        id: node.id.clone(),
+                        label: node.label.clone(),
+                        value: entry.semantic_values.get(row).copied(),
+
+                        selected: selected
+                            == Some(GeneralLayoutHit {
+                                series: series_id,
+                                element: GeneralLayoutElement::Node,
+                                row,
+                            }),
+                    })
+                    .collect(),
+            ),
+            GeneralLayoutInput::Flow { nodes, links } => {
+                let mut items = Vec::with_capacity(limit.min(nodes.len() + links.len()));
+                for row in offset..(offset.saturating_add(limit)).min(nodes.len() + links.len()) {
+                    let (element, id, label, value) = if row < nodes.len() {
+                        let node = &nodes[row];
+                        (
+                            GeneralLayoutElement::Node,
+                            node.id.clone(),
+                            node.label.clone(),
+                            entry.semantic_values.get(row).copied(),
+                        )
+                    } else {
+                        let link_row = row - nodes.len();
+                        let link = &links[link_row];
+                        (
+                            GeneralLayoutElement::Link,
+                            format!("{}→{}", link.source, link.target),
+                            format!("{} to {}", link.source, link.target),
+                            entry.semantic_values.get(row).copied(),
+                        )
+                    };
+                    let element_row = if row < nodes.len() {
+                        row
+                    } else {
+                        row - nodes.len()
+                    };
+                    items.push(GeneralLayoutAccessibilityItem {
+                        element,
+                        row: element_row,
+                        id,
+                        label,
+                        value,
+                        selected: selected
+                            == Some(GeneralLayoutHit {
+                                series: series_id,
+                                element,
+                                row: element_row,
+                            }),
+                    });
+                }
+                (nodes.len() + links.len(), items)
+            }
+        };
+        Some(GeneralLayoutAccessibilitySnapshot {
+            series: series_id,
+            title: series.options.title.clone(),
+            total,
+            offset: offset.min(total),
+            items,
+        })
     }
     pub fn add_general_layout_series(
         &mut self,
@@ -1426,6 +2280,69 @@ impl ChartEngine {
         Ok(id)
     }
 
+    pub fn update_general_layout_series_presentation(
+        &mut self,
+        id: GeneralLayoutSeriesId,
+        title: String,
+        color: String,
+        data_labels: bool,
+        visible: bool,
+    ) -> Result<(), ChartError> {
+        if title.len() > 1_024 || color.len() > 64 {
+            return Err(resource_limit("layout series option text exceeds limit"));
+        }
+        let parsed = Color::parse_css(&color).ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidOptions, "invalid layout series color")
+        })?;
+        let store = self
+            .general_layout_data
+            .as_mut()
+            .ok_or_else(|| invalid_handle("layout series handle is stale"))?;
+        let index = store
+            .series
+            .iter()
+            .position(|series| series.id == id)
+            .ok_or_else(|| invalid_handle("layout series handle is stale"))?;
+        let retained = store
+            .reserved_bytes()
+            .saturating_sub(store.series[index].options.title.capacity())
+            .saturating_sub(store.series[index].options.color.capacity())
+            .saturating_add(title.capacity())
+            .saturating_add(color.capacity());
+        if retained > MAX_LAYOUT_STORE_BYTES {
+            return Err(resource_limit(
+                "layout store retained capacity exceeds limit",
+            ));
+        }
+        let series = &mut store.series[index];
+        series.options.title = title;
+        series.options.color = color;
+        series.options.data_labels = data_labels;
+        series.options.visible = visible;
+        series.color = parsed;
+        if !visible {
+            let dataset = series.options.dataset;
+            if store.hovered.is_some_and(|hit| hit.series == id) {
+                store.hovered = None;
+            }
+            if store.selected.is_some_and(|hit| hit.series == id) {
+                store.selected = None;
+            }
+            if store.focused.is_some_and(|hit| hit.series == id) {
+                store.focused = None;
+            }
+            if !store
+                .series
+                .iter()
+                .any(|bound| bound.options.dataset == dataset && bound.options.visible)
+                && let Some(entry) = store.entries.iter_mut().find(|entry| entry.id == dataset)
+            {
+                entry.transition = None;
+            }
+        }
+        self.invalidate_frame_all();
+        Ok(())
+    }
     pub fn remove_general_layout_series(
         &mut self,
         id: GeneralLayoutSeriesId,
@@ -1458,6 +2375,14 @@ impl ChartEngine {
         self.general_layout_data.as_ref()?.get(id)
     }
 
+    pub fn general_layout_dataset_is_bound(&self, id: GeneralLayoutDatasetId) -> bool {
+        self.general_layout_data.as_ref().is_some_and(|store| {
+            store
+                .series
+                .iter()
+                .any(|series| series.options.dataset == id)
+        })
+    }
     pub fn general_layout_series_options(
         &self,
         id: GeneralLayoutSeriesId,
@@ -1486,7 +2411,13 @@ impl ChartEngine {
         self.general_layout_data
             .as_mut()
             .ok_or_else(|| invalid_handle("layout dataset handle is stale"))?
-            .replace(id, input)?;
+            .replace(
+                id,
+                input,
+                self.general_transition_duration_ms > 0.0
+                    && !self.general_transition_reduced_motion,
+                self.general_transition_time_ms,
+            )?;
         self.invalidate_frame_all();
         Ok(())
     }
@@ -2390,6 +3321,55 @@ mod tests {
             chart.general_layout_hit_test(0, center_x, plot.y + plot.height * 5.0 / 6.0),
             None
         );
+        let pointer = crate::PointerInput {
+            x: center_x,
+            y: plot.y + plot.height / 6.0,
+            ..Default::default()
+        };
+        chart.input_pointer_move(pointer, false);
+        assert_eq!(chart.input_hover(), crate::ChartHover::Layout);
+        assert_eq!(chart.general_layout_hovered_hit().unwrap().row, 0);
+        chart.input_pointer_down(pointer, 1);
+        chart.input_pointer_up(pointer);
+        assert_eq!(chart.general_layout_selected_hit().unwrap().row, 0);
+        let accessible = chart
+            .general_layout_accessibility_snapshot(series, 0, 1)
+            .unwrap();
+        assert_eq!(accessible.total, 3);
+        assert_eq!(accessible.items.len(), 1);
+        assert!(accessible.items[0].selected);
+        assert_eq!(accessible.items[0].label, "Top");
+        assert!(chart.input_target_key_down(
+            crate::ChartFocusTarget::LayoutDatum {
+                series,
+                element: GeneralLayoutElement::Stage,
+                row: 1,
+            },
+            crate::ChartKey::Enter,
+            crate::InputModifiers::default(),
+        ));
+        assert_eq!(chart.general_layout_selected_hit().unwrap().row, 1);
+        assert!(chart.input_key_down(
+            crate::ChartKey::Escape,
+            crate::InputModifiers::default(),
+            false,
+            0.0,
+        ));
+        assert!(chart.general_layout_selected_hit().is_none());
+        chart.input_pointer_down(pointer, 1);
+        chart.input_pointer_up(pointer);
+        assert!(chart.general_layout_selected_hit().is_some());
+        chart
+            .replace_general_layout_dataset(
+                dataset,
+                GeneralLayoutInput::Funnel(vec![FunnelStage {
+                    id: "replacement".into(),
+                    label: "Replacement".into(),
+                    value: 1.0,
+                }]),
+            )
+            .unwrap();
+        assert!(chart.general_layout_selected_hit().is_none());
         chart.remove_general_layout_series(series).unwrap();
         assert_eq!(
             chart
@@ -2400,5 +3380,585 @@ mod tests {
         );
         chart.remove_general_layout_dataset(dataset).unwrap();
         assert_eq!(chart.memory_usage().general_data_capacity_bytes, 0);
+    }
+    #[test]
+    fn layout_accessibility_pages_have_derived_tree_and_flow_values() {
+        let mut chart = chart();
+        let tree = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Hierarchy(hierarchy(&[3.0, 2.0])))
+            .unwrap();
+        let series = chart
+            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
+                0,
+                tree,
+                GeneralLayoutSeriesKind::Treemap,
+            ))
+            .unwrap();
+        let root = chart
+            .general_layout_accessibility_snapshot(series, 0, 1)
+            .unwrap();
+        assert_eq!(root.total, 3);
+        assert_eq!(root.items[0].label, "Root");
+        assert_eq!(root.items[0].value, Some(5.0));
+        assert_eq!(
+            chart.general_layout_hit_value(GeneralLayoutHit {
+                series,
+                element: GeneralLayoutElement::Node,
+                row: 0,
+            }),
+            Some(5.0)
+        );
+        let leaf = chart
+            .general_layout_accessibility_snapshot(series, 1, 1)
+            .unwrap();
+        assert_eq!(leaf.items[0].value, Some(3.0));
+        assert!(
+            chart
+                .general_layout_accessibility_snapshot(series, 3, 1)
+                .unwrap()
+                .items
+                .is_empty()
+        );
+
+        let flow = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Flow {
+                nodes: vec![
+                    FlowNode {
+                        id: "source".into(),
+                        label: "Source".into(),
+                    },
+                    FlowNode {
+                        id: "target".into(),
+                        label: "Target".into(),
+                    },
+                ],
+                links: vec![FlowLink {
+                    source: "source".into(),
+                    target: "target".into(),
+                    value: 7.0,
+                }],
+            })
+            .unwrap();
+        let flow_series = chart
+            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
+                0,
+                flow,
+                GeneralLayoutSeriesKind::Sankey,
+            ))
+            .unwrap();
+        let snapshot = chart
+            .general_layout_accessibility_snapshot(flow_series, 0, usize::MAX)
+            .unwrap();
+        assert_eq!(snapshot.total, 3);
+        assert_eq!(snapshot.items.len(), 3);
+        assert_eq!(snapshot.items[0].value, Some(7.0));
+        assert_eq!(snapshot.items[1].value, Some(7.0));
+        assert_eq!(snapshot.items[2].element, GeneralLayoutElement::Link);
+        assert_eq!(snapshot.items[2].value, Some(7.0));
+        assert_eq!(
+            chart.general_layout_hit_value(GeneralLayoutHit {
+                series: flow_series,
+                element: GeneralLayoutElement::Link,
+                row: 0,
+            }),
+            Some(7.0)
+        );
+    }
+    #[test]
+    fn opt_in_layout_labels_share_the_ordered_frame_for_all_families() {
+        let cases = [
+            (
+                GeneralLayoutSeriesKind::Funnel,
+                GeneralLayoutInput::Funnel(vec![FunnelStage {
+                    id: "stage".into(),
+                    label: "Stage".into(),
+                    value: 4.0,
+                }]),
+                "Stage",
+            ),
+            (
+                GeneralLayoutSeriesKind::Treemap,
+                GeneralLayoutInput::Hierarchy(hierarchy(&[4.0])),
+                "Leaf 0",
+            ),
+            (
+                GeneralLayoutSeriesKind::Sankey,
+                GeneralLayoutInput::Flow {
+                    nodes: vec![
+                        FlowNode {
+                            id: "source".into(),
+                            label: "Source".into(),
+                        },
+                        FlowNode {
+                            id: "target".into(),
+                            label: "Target".into(),
+                        },
+                    ],
+                    links: vec![FlowLink {
+                        source: "source".into(),
+                        target: "target".into(),
+                        value: 4.0,
+                    }],
+                },
+                "Source",
+            ),
+            (
+                GeneralLayoutSeriesKind::Sunburst,
+                GeneralLayoutInput::Hierarchy(hierarchy(&[4.0])),
+                "Leaf 0",
+            ),
+        ];
+        for (kind, input, label) in cases {
+            let mut chart = chart();
+            let dataset = chart.create_general_layout_dataset(input).unwrap();
+            let mut options = GeneralLayoutSeriesOptions::new(0, dataset, kind);
+            options.data_labels = true;
+            chart.add_general_layout_series(options).unwrap();
+            chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+            let frame = chart.build_frame();
+            assert!(
+                frame.panes[0]
+                    .main
+                    .iter()
+                    .any(|prim| { matches!(prim, Prim::Text { text, .. } if text == label) }),
+                "{kind:?} label absent from the ordered frame"
+            );
+        }
+    }
+    #[test]
+    fn keyboard_layout_focus_is_a_shared_frame_primitive_and_clears_with_data() {
+        let cases = [
+            (
+                GeneralLayoutSeriesKind::Funnel,
+                GeneralLayoutInput::Funnel(vec![FunnelStage {
+                    id: "stage".into(),
+                    label: "Stage".into(),
+                    value: 4.0,
+                }]),
+                GeneralLayoutElement::Stage,
+                0,
+            ),
+            (
+                GeneralLayoutSeriesKind::Treemap,
+                GeneralLayoutInput::Hierarchy(hierarchy(&[4.0])),
+                GeneralLayoutElement::Node,
+                1,
+            ),
+            (
+                GeneralLayoutSeriesKind::Sunburst,
+                GeneralLayoutInput::Hierarchy(hierarchy(&[4.0])),
+                GeneralLayoutElement::Node,
+                1,
+            ),
+            (
+                GeneralLayoutSeriesKind::Sankey,
+                GeneralLayoutInput::Flow {
+                    nodes: vec![
+                        FlowNode {
+                            id: "a".into(),
+                            label: "A".into(),
+                        },
+                        FlowNode {
+                            id: "b".into(),
+                            label: "B".into(),
+                        },
+                    ],
+                    links: vec![FlowLink {
+                        source: "a".into(),
+                        target: "b".into(),
+                        value: 4.0,
+                    }],
+                },
+                GeneralLayoutElement::Link,
+                0,
+            ),
+        ];
+        for (kind, input, element, row) in cases {
+            let mut chart = chart();
+            let dataset = chart.create_general_layout_dataset(input.clone()).unwrap();
+            let series = chart
+                .add_general_layout_series(GeneralLayoutSeriesOptions::new(0, dataset, kind))
+                .unwrap();
+            let hit = GeneralLayoutHit {
+                series,
+                element,
+                row,
+            };
+            assert!(!chart.set_general_layout_accessibility_focus(hit, "bad-color", 14.0));
+            assert!(!chart.set_general_layout_accessibility_focus(
+                GeneralLayoutHit { row: 99, ..hit },
+                "#2962ff",
+                14.0
+            ));
+            assert!(chart.set_general_layout_accessibility_focus(hit, "#2962ff", 14.0));
+            assert_eq!(chart.general_layout_accessibility_focused_hit(), Some(hit));
+            chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+            let frame = chart.build_frame();
+            assert!(
+                frame.panes[0]
+                    .main
+                    .iter()
+                    .any(|prim| matches!(prim, Prim::Circle { radius, .. } if *radius > 0.0)),
+                "{kind:?} focus marker absent"
+            );
+            if matches!(
+                kind,
+                GeneralLayoutSeriesKind::Treemap | GeneralLayoutSeriesKind::Sunburst
+            ) {
+                let root = GeneralLayoutHit { row: 0, ..hit };
+                assert!(chart.set_general_layout_accessibility_focus(root, "#2962ff", 14.0));
+                assert!(
+                    chart.build_frame().panes[0]
+                        .main
+                        .iter()
+                        .any(|prim| matches!(prim, Prim::Circle { .. })),
+                    "{kind:?} root focus marker absent"
+                );
+            }
+            chart
+                .replace_general_layout_dataset(dataset, input)
+                .unwrap();
+            assert_eq!(chart.general_layout_accessibility_focused_hit(), None);
+            assert!(
+                !chart.build_frame().panes[0]
+                    .main
+                    .iter()
+                    .any(|prim| matches!(prim, Prim::Circle { .. }))
+            );
+        }
+    }
+    #[test]
+    fn compatible_layout_values_interpolate_on_the_shared_clock() {
+        let hierarchy_from = GeneralLayoutInput::Hierarchy(hierarchy(&[3.0, 1.0]));
+        let hierarchy_to = GeneralLayoutInput::Hierarchy(hierarchy(&[1.0, 3.0]));
+        let cases = [
+            (
+                GeneralLayoutSeriesKind::Funnel,
+                GeneralLayoutInput::Funnel(vec![
+                    FunnelStage {
+                        id: "a".into(),
+                        label: "A".into(),
+                        value: 10.0,
+                    },
+                    FunnelStage {
+                        id: "b".into(),
+                        label: "B".into(),
+                        value: 5.0,
+                    },
+                ]),
+                GeneralLayoutInput::Funnel(vec![
+                    FunnelStage {
+                        id: "a".into(),
+                        label: "A".into(),
+                        value: 10.0,
+                    },
+                    FunnelStage {
+                        id: "b".into(),
+                        label: "B".into(),
+                        value: 10.0,
+                    },
+                ]),
+            ),
+            (
+                GeneralLayoutSeriesKind::Treemap,
+                hierarchy_from.clone(),
+                hierarchy_to.clone(),
+            ),
+            (
+                GeneralLayoutSeriesKind::Sankey,
+                GeneralLayoutInput::Flow {
+                    nodes: vec![
+                        FlowNode {
+                            id: "a".into(),
+                            label: "A".into(),
+                        },
+                        FlowNode {
+                            id: "b".into(),
+                            label: "B".into(),
+                        },
+                        FlowNode {
+                            id: "c".into(),
+                            label: "C".into(),
+                        },
+                    ],
+                    links: vec![
+                        FlowLink {
+                            source: "a".into(),
+                            target: "b".into(),
+                            value: 3.0,
+                        },
+                        FlowLink {
+                            source: "a".into(),
+                            target: "c".into(),
+                            value: 1.0,
+                        },
+                    ],
+                },
+                GeneralLayoutInput::Flow {
+                    nodes: vec![
+                        FlowNode {
+                            id: "a".into(),
+                            label: "A".into(),
+                        },
+                        FlowNode {
+                            id: "b".into(),
+                            label: "B".into(),
+                        },
+                        FlowNode {
+                            id: "c".into(),
+                            label: "C".into(),
+                        },
+                    ],
+                    links: vec![
+                        FlowLink {
+                            source: "a".into(),
+                            target: "b".into(),
+                            value: 1.0,
+                        },
+                        FlowLink {
+                            source: "a".into(),
+                            target: "c".into(),
+                            value: 3.0,
+                        },
+                    ],
+                },
+            ),
+            (
+                GeneralLayoutSeriesKind::Sunburst,
+                hierarchy_from,
+                hierarchy_to,
+            ),
+        ];
+        for (kind, from, to) in cases {
+            let mut chart = chart();
+            let dataset = chart.create_general_layout_dataset(from).unwrap();
+            chart
+                .add_general_layout_series(GeneralLayoutSeriesOptions::new(0, dataset, kind))
+                .unwrap();
+            chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+            chart.set_general_transition_duration_ms(200.0).unwrap();
+            assert!(chart.set_general_animation_time_ms(1_000.0));
+            let original = chart.build_frame().panes[0].clone();
+            chart
+                .replace_general_layout_dataset(dataset, to.clone())
+                .unwrap();
+            assert_eq!(chart.general_layout_dataset(dataset), Some(&to));
+            assert!(chart.general_transition_active());
+            let probe = if kind == GeneralLayoutSeriesKind::Funnel {
+                let plot = chart.general_plot_rect(0).unwrap();
+                Some((plot.x + plot.width * 0.65, plot.y + plot.height * 0.75))
+            } else {
+                None
+            };
+            if let Some((x, y)) = probe {
+                assert!(chart.general_layout_hit_test(0, x, y).is_none());
+            }
+            assert_eq!(
+                chart.build_frame().panes[0],
+                original,
+                "{kind:?} initial motion frame"
+            );
+            assert!(chart.set_general_animation_time_ms(1_100.0));
+            let middle = chart.build_frame().panes[0].clone();
+            assert_ne!(middle, original, "{kind:?} motion did not advance");
+            if let Some((x, y)) = probe {
+                assert_eq!(chart.general_layout_hit_test(0, x, y).unwrap().row, 1);
+            }
+            assert!(!chart.set_general_animation_time_ms(1_050.0));
+            assert!(chart.set_general_animation_time_ms(1_200.0));
+            assert!(!chart.general_transition_active());
+            let end = chart.build_frame().panes[0].clone();
+            assert_ne!(end, middle, "{kind:?} motion did not complete");
+        }
+    }
+    #[test]
+    fn layout_motion_interrupts_from_presentation_and_reduced_motion_finishes() {
+        let input = |second: f64| {
+            GeneralLayoutInput::Funnel(vec![
+                FunnelStage {
+                    id: "a".into(),
+                    label: "A".into(),
+                    value: 10.0,
+                },
+                FunnelStage {
+                    id: "b".into(),
+                    label: "B".into(),
+                    value: second,
+                },
+            ])
+        };
+        let mut chart = chart();
+        let dataset = chart.create_general_layout_dataset(input(5.0)).unwrap();
+        let series = chart
+            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
+                0,
+                dataset,
+                GeneralLayoutSeriesKind::Funnel,
+            ))
+            .unwrap();
+        chart.set_general_transition_duration_ms(200.0).unwrap();
+        assert!(chart.set_general_animation_time_ms(1_000.0));
+        chart
+            .replace_general_layout_dataset(dataset, input(10.0))
+            .unwrap();
+        assert!(chart.set_general_animation_time_ms(1_100.0));
+        let displayed = |chart: &ChartEngine| match chart
+            .general_layout_data
+            .as_ref()
+            .unwrap()
+            .entry(dataset)
+            .unwrap()
+            .display_input()
+        {
+            GeneralLayoutInput::Funnel(stages) => stages[1].value,
+            _ => unreachable!(),
+        };
+        assert_eq!(displayed(&chart), 7.5);
+        chart
+            .replace_general_layout_dataset(dataset, input(1.0))
+            .unwrap();
+        assert_eq!(displayed(&chart), 7.5);
+        assert!(chart.set_general_animation_time_ms(1_200.0));
+        assert!((displayed(&chart) - 4.25).abs() < 1e-10);
+        chart.set_general_transition_reduced_motion(true);
+        assert!(!chart.general_transition_active());
+        assert_eq!(displayed(&chart), 1.0);
+        chart.set_general_transition_reduced_motion(false);
+        chart
+            .replace_general_layout_dataset(dataset, input(8.0))
+            .unwrap();
+        assert!(chart.general_transition_active());
+        chart
+            .replace_general_layout_dataset(
+                dataset,
+                GeneralLayoutInput::Funnel(vec![FunnelStage {
+                    id: "only".into(),
+                    label: "Only".into(),
+                    value: 2.0,
+                }]),
+            )
+            .unwrap();
+        assert!(!chart.general_transition_active());
+        chart
+            .replace_general_layout_dataset(
+                dataset,
+                GeneralLayoutInput::Funnel(vec![FunnelStage {
+                    id: "only".into(),
+                    label: "Only".into(),
+                    value: 4.0,
+                }]),
+            )
+            .unwrap();
+        assert!(chart.general_transition_active());
+        chart.remove_general_layout_series(series).unwrap();
+        assert!(!chart.general_transition_active());
+        assert!(chart.memory_usage().general_data_capacity_bytes < MAX_LAYOUT_STORE_BYTES);
+    }
+    #[test]
+    fn layout_presentation_mutation_is_atomic_and_changes_frame_text() {
+        let mut chart = chart();
+        let dataset = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Funnel(vec![FunnelStage {
+                id: "one".into(),
+                label: "Visible".into(),
+                value: 4.0,
+            }]))
+            .unwrap();
+        let series = chart
+            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
+                0,
+                dataset,
+                GeneralLayoutSeriesKind::Funnel,
+            ))
+            .unwrap();
+        let before = chart.general_layout_series_options(series).unwrap().clone();
+        assert_eq!(
+            chart
+                .update_general_layout_series_presentation(
+                    series,
+                    "Changed".into(),
+                    "not-a-color".into(),
+                    true,
+                    true,
+                )
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidOptions,
+        );
+        assert_eq!(chart.general_layout_series_options(series), Some(&before));
+        chart
+            .update_general_layout_series_presentation(
+                series,
+                "Changed".into(),
+                "#008800".into(),
+                true,
+                true,
+            )
+            .unwrap();
+        chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+        let frame = chart.build_frame();
+        assert!(
+            frame.panes[0]
+                .main
+                .iter()
+                .any(|prim| { matches!(prim, Prim::Text { text, .. } if text == "Visible") })
+        );
+        let options = chart.general_layout_series_options(series).unwrap();
+        assert_eq!(options.title, "Changed");
+        assert_eq!(options.color, "#008800");
+        assert!(options.data_labels);
+        let hit = GeneralLayoutHit {
+            series,
+            element: GeneralLayoutElement::Stage,
+            row: 0,
+        };
+        chart.set_general_transition_duration_ms(200.0).unwrap();
+        assert!(chart.set_general_animation_time_ms(1_000.0));
+        chart
+            .replace_general_layout_dataset(
+                dataset,
+                GeneralLayoutInput::Funnel(vec![FunnelStage {
+                    id: "one".into(),
+                    label: "Visible".into(),
+                    value: 6.0,
+                }]),
+            )
+            .unwrap();
+        assert!(chart.general_transition_active());
+        assert!(chart.select_general_layout_item(series, GeneralLayoutElement::Stage, 0));
+        assert!(chart.set_general_layout_accessibility_focus(hit, "#2962ff", 14.0));
+        chart
+            .update_general_layout_series_presentation(
+                series,
+                "Changed".into(),
+                "#008800".into(),
+                true,
+                false,
+            )
+            .unwrap();
+        assert!(!chart.general_transition_active());
+        assert_eq!(chart.general_layout_selected_hit(), None);
+        assert_eq!(chart.general_layout_accessibility_focused_hit(), None);
+        assert!(
+            !chart.build_frame().panes[0]
+                .main
+                .iter()
+                .any(|prim| matches!(prim, Prim::MeshFill { .. }))
+        );
+        chart
+            .update_general_layout_series_presentation(
+                series,
+                "Changed".into(),
+                "#008800".into(),
+                true,
+                true,
+            )
+            .unwrap();
+        assert!(
+            chart.build_frame().panes[0]
+                .main
+                .iter()
+                .any(|prim| matches!(prim, Prim::MeshFill { .. }))
+        );
     }
 }

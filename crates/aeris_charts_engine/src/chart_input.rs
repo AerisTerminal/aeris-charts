@@ -284,6 +284,11 @@ pub enum ChartFocusTarget {
         series: GeneralSeriesId,
         row: usize,
     },
+    LayoutDatum {
+        series: crate::GeneralLayoutSeriesId,
+        element: crate::GeneralLayoutElement,
+        row: usize,
+    },
 }
 
 /// Paint layer of a host primitive hit, lowest first (reference `zOrder`).
@@ -321,6 +326,8 @@ pub enum ChartHover {
     VolumeProfile(NativePrimitiveId),
     /// A general-series item; read it through [`ChartEngine::general_hovered_hit`].
     General,
+    /// An axis-free layout item; read it through [`ChartEngine::general_layout_hovered_hit`].
+    Layout,
 }
 
 /// A secondary click resolved by the engine. Menus, clipboard, and order UI stay host-owned.
@@ -619,6 +626,7 @@ impl ChartEngine {
         self.set_hovered_text(None);
         self.set_hovered_drawing(None);
         self.clear_general_hover();
+        self.clear_general_layout_hover();
         self.refresh_input_cursor();
     }
 
@@ -1612,6 +1620,10 @@ impl ChartEngine {
                     self.clear_general_selection();
                     cancelled = true;
                 }
+                if self.general_layout_selected_hit().is_some() {
+                    self.clear_general_layout_selection();
+                    cancelled = true;
+                }
                 if self.general_brush_state().is_some() {
                     self.clear_general_brush();
                     self.push_input_event(ChartInputEvent::GeneralBrushChanged);
@@ -1773,6 +1785,28 @@ impl ChartEngine {
                 true
             }
             ChartFocusTarget::GeneralDatum { .. } => false,
+            ChartFocusTarget::LayoutDatum { .. } if key == ChartKey::Escape => {
+                self.input_key_down(key, modifiers, false, 0.0)
+            }
+            ChartFocusTarget::LayoutDatum {
+                series,
+                element,
+                row,
+            } if key == ChartKey::Enter
+                && !modifiers.alt
+                && !modifiers.control
+                && !modifiers.meta =>
+            {
+                if !self.select_general_layout_item(series, element, row) {
+                    return false;
+                }
+                self.set_selected_drawing(None);
+                self.set_selected_series(None);
+                self.clear_general_selection();
+                self.clear_volume_profile_selection();
+                true
+            }
+            ChartFocusTarget::LayoutDatum { .. } => false,
         };
         if handled {
             self.stop_input_motion();
@@ -2279,7 +2313,18 @@ impl ChartEngine {
         } else {
             self.clear_general_selection();
         }
-        let series = (!drawing_hit && !general_hit)
+        let layout_hit = !drawing_hit
+            && !general_hit
+            && self
+                .pane_at_y(y)
+                .and_then(|pane| self.update_general_layout_hover(pane, x, y))
+                .is_some();
+        if layout_hit {
+            self.select_general_layout_hovered();
+        } else {
+            self.clear_general_layout_selection();
+        }
+        let series = (!drawing_hit && !general_hit && !layout_hit)
             .then(|| self.hit_test_series(x, y))
             .flatten();
         self.set_selected_series(series);
@@ -2424,6 +2469,7 @@ impl ChartEngine {
         primitive: Option<HostPrimitiveHit>,
     ) -> ChartHover {
         self.set_hovered_volume_profile(None);
+        self.clear_general_layout_hover();
         let Some(pane) = self.pane_at_y(y) else {
             self.set_hovered_series(None);
             self.set_hovered_text(None);
@@ -2497,6 +2543,10 @@ impl ChartEngine {
         if general {
             self.set_hovered_series(None);
             return ChartHover::General;
+        }
+        if self.update_general_layout_hover(pane, x, y).is_some() {
+            self.set_hovered_series(None);
+            return ChartHover::Layout;
         }
         if let Some(hit) = primitive {
             self.set_hovered_series(hit.series);
@@ -2639,7 +2689,10 @@ impl ChartEngine {
         if self.general_brush_input_active_at(y) {
             return ChartCursor::Crosshair;
         }
-        if self.hovered_series().is_some() || self.hovered_volume_profile_indicator().is_some() {
+        if self.hovered_series().is_some()
+            || self.hovered_volume_profile_indicator().is_some()
+            || self.general_layout_hovered_hit().is_some()
+        {
             return ChartCursor::Pointer;
         }
         ChartCursor::Crosshair

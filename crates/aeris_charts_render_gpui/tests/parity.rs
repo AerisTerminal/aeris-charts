@@ -19,9 +19,11 @@
 //! records a bounded residual for.
 
 use aeris_charts_engine::{
-    AxisDimension, CategoryScaleType, ChartEngine, ContinuousScaleType, GeneralAxisDomain,
-    GeneralAxisOptions, GeneralReferenceOptions, GeneralReferenceValue, GeneralRowId,
-    GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, IndicatorInputSource,
+    AxisDimension, CategoryScaleType, ChartEngine, ContinuousScaleType, FlowLink, FlowNode,
+    FunnelStage, GeneralAxisDomain, GeneralAxisOptions, GeneralLayoutElement, GeneralLayoutHit,
+    GeneralLayoutInput, GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions,
+    GeneralReferenceOptions, GeneralReferenceValue, GeneralRowId, GeneralScaleType,
+    GeneralSeriesOptions, GeneralXyInput, HierarchyNode, HorizontalDomain, IndicatorInputSource,
     IndicatorKind, IndicatorOutputStyle, OrderId, OrderKind, OrderRole, OrderSide, OrderStatus,
     PositionId, PositionSide, SeriesKind, TradingPosition, TradingPriceScale, WorkingOrder,
 };
@@ -1702,6 +1704,116 @@ fn xy_scatter_engine_frame_reaches_canvas_and_gpui_path_routes() {
             metrics.paths >= 3,
             "DPR {dpr}: GPUI must lower scatter circles to paths ({metrics:?})"
         );
+    }
+}
+
+#[test]
+fn layout_families_and_keyboard_focus_lower_without_drops_on_both_executors() {
+    let hierarchy = GeneralLayoutInput::Hierarchy(vec![
+        HierarchyNode {
+            id: "root".into(),
+            parent: None,
+            label: "Root".into(),
+            value: None,
+        },
+        HierarchyNode {
+            id: "leaf".into(),
+            parent: Some("root".into()),
+            label: "Leaf".into(),
+            value: Some(3.0),
+        },
+    ]);
+    let cases = [
+        (
+            GeneralLayoutSeriesKind::Funnel,
+            GeneralLayoutInput::Funnel(vec![FunnelStage {
+                id: "a".into(),
+                label: "A".into(),
+                value: 3.0,
+            }]),
+            GeneralLayoutElement::Stage,
+            0,
+        ),
+        (
+            GeneralLayoutSeriesKind::Treemap,
+            hierarchy.clone(),
+            GeneralLayoutElement::Node,
+            0,
+        ),
+        (
+            GeneralLayoutSeriesKind::Sankey,
+            GeneralLayoutInput::Flow {
+                nodes: vec![
+                    FlowNode {
+                        id: "a".into(),
+                        label: "A".into(),
+                    },
+                    FlowNode {
+                        id: "b".into(),
+                        label: "B".into(),
+                    },
+                ],
+                links: vec![FlowLink {
+                    source: "a".into(),
+                    target: "b".into(),
+                    value: 3.0,
+                }],
+            },
+            GeneralLayoutElement::Link,
+            0,
+        ),
+        (
+            GeneralLayoutSeriesKind::Sunburst,
+            hierarchy,
+            GeneralLayoutElement::Node,
+            1,
+        ),
+    ];
+    for dpr in [1.0, 1.5, 2.0] {
+        for (kind, input, element, row) in &cases {
+            let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+            let pane = engine
+                .add_pane_with_domain(true, HorizontalDomain::Layout)
+                .unwrap();
+            let dataset = engine.create_general_layout_dataset(input.clone()).unwrap();
+            let series = engine
+                .add_general_layout_series(GeneralLayoutSeriesOptions::new(pane, dataset, *kind))
+                .unwrap();
+            assert!(engine.set_general_layout_accessibility_focus(
+                GeneralLayoutHit {
+                    series,
+                    element: *element,
+                    row: *row
+                },
+                "#2962ff",
+                14.0
+            ));
+            engine.recompute_layout_with_measure(
+                true,
+                |text, _| text.len() as f64 * 7.0,
+                |_, _| 0.0,
+            );
+            let frame = engine.build_frame();
+            let pane_frame = &frame.panes[pane];
+            assert!(
+                pane_frame
+                    .main
+                    .iter()
+                    .any(|prim| matches!(prim, Prim::Circle { .. })),
+                "{kind:?} DPR {dpr} focus"
+            );
+            let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+            let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+            assert_eq!(metrics.dropped_prims, 0, "{kind:?} DPR {dpr}: {metrics:?}");
+            assert!(
+                canvas.path_fills + canvas.rects.len() > 0,
+                "{kind:?} DPR {dpr} Canvas2D mark"
+            );
+            assert!(
+                metrics.paths + metrics.quads > 0,
+                "{kind:?} DPR {dpr} GPUI mark"
+            );
+        }
     }
 }
 

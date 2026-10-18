@@ -26,7 +26,7 @@ test("layout families render and return typed exact hits through the public char
             if (candidate?.element === element) hit = candidate;
           }
         }
-        const populated = hit !== null && hit.series === series.id && hit.title === kind;
+        const populated = hit !== null && hit.series === series.id && hit.title === kind && hit.value === 3;
         series.set_data(data);
         series.remove();
         out.push({ kind, populated, cleared: chart.layout_hit_test(0, 200, 150) === null });
@@ -45,6 +45,437 @@ test("layout families render and return typed exact hits through the public char
   ]);
 });
 
+test("layout families survive public V2 export and restore", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const makeHost = () => {
+      const host = document.createElement("div");
+      Object.assign(host.style, { width: "400px", height: "300px" });
+      document.body.appendChild(host);
+      return host;
+    };
+    const firstHost = makeHost();
+    const first = await create_chart(firstHost, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "layout" } },
+    });
+    const samples = [
+      ["funnel", { type: "funnel", stages: [{ id: "a", label: "A", value: 3 }, { id: "b", label: "B", value: 2 }] }],
+      ["treemap", { type: "hierarchy", nodes: [{ id: "root", parent: null, label: "Root", value: null }, { id: "leaf", parent: "root", label: "Leaf", value: 3 }] }],
+      ["sankey", { type: "flow", nodes: [{ id: "a", label: "A" }, { id: "b", label: "B" }], links: [{ source: "a", target: "b", value: 3 }] }],
+      ["sunburst", { type: "hierarchy", nodes: [{ id: "root", parent: null, label: "Root", value: null }, { id: "leaf", parent: "root", label: "Leaf", value: 3 }] }],
+    ];
+    let snapshot;
+    let originalHits;
+    const hits = (chart) => {
+      const result = [];
+      for (let y = 10; y < 290; y += 10) {
+        for (let x = 10; x < 390; x += 10) {
+          result.push(chart.layout_hit_test(0, x, y));
+        }
+      }
+      return result;
+    };
+    try {
+      for (const [kind, data] of samples) first.add_layout_series(kind, { pane: 0, title: kind }, data);
+      snapshot = first.export_state();
+      originalHits = hits(first);
+    } finally {
+      first.remove();
+      firstHost.remove();
+    }
+    const secondHost = makeHost();
+    const second = await create_chart(secondHost, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "layout" } },
+    });
+    try {
+      second.import_state(snapshot);
+      const restored = second.export_state();
+
+      const handles = second.layout_series();
+      const result = {
+        equal: JSON.stringify(restored) === JSON.stringify(snapshot),
+        datasetCount: restored.layout_datasets?.length,
+        seriesCount: restored.layout_series?.length,
+        hitsEqual: JSON.stringify(hits(second)) === JSON.stringify(originalHits),
+        catalogKinds: handles.map((handle) => handle.kind),
+        accessibleStage: handles[0].accessibility_snapshot(0, 1).items[0],
+      };
+      handles[0].apply_options({ title: "Updated", color: "#008800", data_labels: true });
+      result.updatedOptions = handles[0].options();
+      try { handles[0].apply_options({ color: "bad-color" }); } catch (error) { result.invalidStyle = error.code; }
+      result.styleUnchanged = JSON.stringify(handles[0].options()) === JSON.stringify(result.updatedOptions);
+      handles[0].set_data({ type: "funnel", stages: [{ id: "updated", label: "Updated", value: 7 }] });
+      result.updatedValue = second.export_state().layout_datasets[0].input.Funnel[0].value;
+      handles[0].remove();
+      result.afterRemoval = second.layout_series().length;
+      return result;
+    } finally {
+      second.remove();
+      secondHost.remove();
+    }
+  });
+  expect(result).toEqual({
+    equal: true, datasetCount: 4, seriesCount: 4, hitsEqual: true,
+    catalogKinds: ["funnel", "treemap", "sankey", "sunburst"], updatedValue: 7, afterRemoval: 3,
+    accessibleStage: { element: "stage", row: 0, id: "a", label: "A", value: 3, selected: false },
+    updatedOptions: { pane: 0, title: "Updated", color: "#008800", data_labels: true, visible: true },
+    invalidStyle: "invalid_options", styleUnchanged: true,
+  });
+});
+test("restored layout series sharing a dataset remove independently", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "300px" });
+    document.body.appendChild(host);
+    const create = () => create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "layout" } },
+    });
+    let chart = await create();
+    const data = { type: "hierarchy", nodes: [
+      { id: "root", parent: null, label: "Root", value: null },
+      { id: "leaf", parent: "root", label: "Leaf", value: 3 },
+    ] };
+    chart.add_layout_series("treemap", { pane: 0 }, data);
+    chart.add_layout_series("sunburst", { pane: 0 }, data);
+    const state = chart.export_state();
+    chart.remove();
+    state.layout_series[1].dataset = state.layout_series[0].dataset;
+    state.layout_datasets.pop();
+    chart = await create();
+    try {
+      chart.import_state(state);
+      const [map, burst] = chart.layout_series();
+      let notifications = 0;
+      burst.subscribe_data_changed(() => { notifications += 1; });
+      map.set_data({ type: "hierarchy", nodes: [
+        { id: "root", parent: null, label: "Root", value: null },
+        { id: "leaf", parent: "root", label: "Leaf", value: 9 },
+      ] });
+      const sharedValue = burst.accessibility_snapshot(0, 2).items[1].value;
+      map.remove();
+      const afterFirst = chart.layout_series().length;
+      const datasetAfterFirst = chart.export_state().layout_datasets.length;
+      burst.remove();
+      return {
+        afterFirst, datasetAfterFirst, sharedValue, notifications,
+        afterSecond: chart.layout_series().length,
+        datasetAfterSecond: chart.export_state().layout_datasets?.length ?? 0,
+      };
+    } finally {
+      chart.remove();
+      host.remove();
+    }
+  });
+  expect(result).toEqual({ afterFirst: 1, datasetAfterFirst: 1, sharedValue: 9, notifications: 1,
+    afterSecond: 0, datasetAfterSecond: 0 });
+});
+test("layout series participate in keyboard accessibility and refresh after restore", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const initial = await page.evaluate(async () => {
+    const api = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "300px" });
+    document.body.appendChild(host);
+    const chart = await api.create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "layout" } },
+    });
+    const accessibility = api.enable_accessibility(chart);
+    const series = chart.add_layout_series("funnel", { pane: 0, title: "Stages" }, {
+      type: "funnel", stages: [{ id: "a", label: "Alpha", value: 10 }, { id: "b", label: "Beta", value: 4 }],
+    });
+    await Promise.resolve();
+    window.__layout_a11y = { chart, host, series, accessibility };
+    accessibility.focus(0);
+    return { label: host.querySelector(".aeris_charts-a11y-layer")?.getAttribute("aria-label"),
+      stableHandle: chart.layout_series()[0] === series };
+  });
+  expect(initial.stableHandle).toBe(true);
+  expect(initial.label).toContain("Stages");
+  const beforeFocus = await page.evaluate(() => window.__layout_a11y.chart.take_screenshot().toDataURL());
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => page.evaluate(() =>
+    window.__layout_a11y.host.querySelector(".aeris_charts-a11y-live-region")?.textContent)).toContain("Alpha");
+  const afterFocus = await page.evaluate(() => window.__layout_a11y.chart.take_screenshot().toDataURL());
+  const beforePixels = PNG.sync.read(Buffer.from(beforeFocus.split(",")[1], "base64"));
+  const afterPixels = PNG.sync.read(Buffer.from(afterFocus.split(",")[1], "base64"));
+  let focusPixels = 0;
+  for (let index = 0; index < beforePixels.data.length; index += 4) {
+    if (beforePixels.data[index] !== afterPixels.data[index]
+      || beforePixels.data[index + 1] !== afterPixels.data[index + 1]
+      || beforePixels.data[index + 2] !== afterPixels.data[index + 2]) focusPixels += 1;
+  }
+  expect(focusPixels).toBeGreaterThan(10);
+  await page.keyboard.press("Enter");
+  expect(await page.evaluate(() => window.__layout_a11y.chart.layout_selected_hit()?.id)).toBe("a");
+  await page.keyboard.press("Escape");
+  expect(await page.evaluate(() => window.__layout_a11y.chart.layout_selected_hit())).toBeNull();
+  const updatedLabel = await page.evaluate(() => {
+    const { host, series } = window.__layout_a11y;
+    series.apply_options({ title: "Updated stages" });
+    return host.querySelector(".aeris_charts-a11y-layer")?.getAttribute("aria-label");
+  });
+  expect(updatedLabel).toContain("Updated stages");
+  const restored = await page.evaluate(async () => {
+    const { chart, series, host, accessibility } = window.__layout_a11y;
+    const state = chart.export_state();
+    accessibility.detach(); chart.remove(); host.remove();
+    let stale = false;
+    try { series.options(); } catch (error) { stale = error.code === "invalid_handle"; }
+    const api = await import("/dist/aeris_charts_financial.js");
+    const nextHost = document.createElement("div");
+    Object.assign(nextHost.style, { width: "400px", height: "300px" });
+    document.body.appendChild(nextHost);
+    const nextChart = await api.create_chart(nextHost, { backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "layout" } } });
+    const nextAccessibility = api.enable_accessibility(nextChart);
+    nextChart.import_state(state);
+    const label = nextHost.querySelector(".aeris_charts-a11y-layer")?.getAttribute("aria-label");
+    const stableRestoredHandle = nextChart.layout_series()[0] === nextChart.layout_series()[0];
+    nextAccessibility.detach(); nextChart.remove(); nextHost.remove();
+    delete window.__layout_a11y;
+    return { stale, label, stableRestoredHandle };
+  });
+  expect(restored).toEqual({ stale: true, label: expect.stringContaining("Updated stages"), stableRestoredHandle: true });
+});
+test("layout legend toggles visibility and persists it through V2 restore", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const id = await page.evaluate(async () => {
+    const api = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "300px" });
+    document.body.appendChild(host);
+    const chart = await api.create_chart(host, { backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "layout" } } });
+    const legendHost = document.createElement("div");
+    document.body.appendChild(legendHost);
+    const legend = api.create_general_legend(chart, legendHost, { pane: 0 });
+    const series = chart.add_layout_series("funnel", { pane: 0, title: "Stages" }, {
+      type: "funnel", stages: [{ id: "a", label: "Alpha", value: 5 }],
+    });
+    window.__layout_legend = { api, chart, host, legendHost, legend, series };
+    return series.id;
+  });
+  const button = page.locator(`[data-series="layout:${id}"]`);
+  await expect(button).toHaveAttribute("aria-label", "Hide Stages");
+  await button.click();
+  const hidden = await page.evaluate(() => {
+    const { chart, series } = window.__layout_legend;
+    return { option: series.options().visible, persisted: chart.export_state().layout_series[0].visible,
+      hit: chart.layout_hit_test(0, 200, 150) };
+  });
+  expect(hidden).toEqual({ option: false, persisted: false, hit: null });
+  const restored = await page.evaluate(async () => {
+    const { api, chart, host, legendHost, legend } = window.__layout_legend;
+    const state = chart.export_state();
+    legend.detach(); chart.remove(); host.remove(); legendHost.remove();
+    const nextHost = document.createElement("div");
+    Object.assign(nextHost.style, { width: "400px", height: "300px" });
+    document.body.appendChild(nextHost);
+    const nextChart = await api.create_chart(nextHost, { backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "layout" } } });
+    const nextLegendHost = document.createElement("div");
+    document.body.appendChild(nextLegendHost);
+    const nextLegend = api.create_general_legend(nextChart, nextLegendHost, { pane: 0 });
+    nextChart.import_state(state);
+    window.__layout_legend = { chart: nextChart, host: nextHost, legendHost: nextLegendHost, legend: nextLegend };
+    return nextChart.layout_series()[0].options().visible;
+  });
+  expect(restored).toBe(false);
+  const restoredButton = page.locator(`[data-series="layout:${id}"]`);
+  await expect(restoredButton).toHaveAttribute("aria-label", "Show Stages");
+  await restoredButton.click();
+  expect(await page.evaluate(() => window.__layout_legend.chart.layout_series()[0].options().visible)).toBe(true);
+  await page.evaluate(() => {
+    const { chart, host, legendHost, legend } = window.__layout_legend;
+    legend.detach(); chart.remove(); host.remove(); legendHost.remove(); delete window.__layout_legend;
+  });
+});
+test("layout funnel routes pointer hover, click selection, Escape and replacement through the public host", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const point = await page.evaluate(async () => {
+    const api = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "300px", position: "fixed", left: "0px", top: "0px", zIndex: "9999" });
+    document.body.appendChild(host);
+    const chart = await api.create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "layout" } },
+    });
+    const series = chart.add_layout_series("funnel", { pane: 0, title: "Stages" }, {
+      type: "funnel", stages: [{ id: "top", label: "Top", value: 10 }, { id: "bottom", label: "Bottom", value: 4 }],
+    });
+    const tooltip = api.create_general_tooltip(chart, host, { pane: 0 });
+    let location = null;
+    for (let y = 10; y < 290 && location === null; y += 10) {
+      for (let x = 10; x < 390 && location === null; x += 10) {
+        if (chart.layout_hit_test(0, x, y)?.id === "top") location = { x, y };
+      }
+    }
+    window.__layout_input = { chart, series, host, tooltip, hovers: [] };
+    chart.subscribe_crosshair_move((event) => window.__layout_input.hovers.push(event.layout_hit));
+    const bounds = host.getBoundingClientRect();
+    return location && { x: bounds.left + location.x, y: bounds.top + location.y };
+  });
+  expect(point).not.toBeNull();
+  await page.mouse.move(point.x, point.y);
+  await expect.poll(() => page.evaluate(() => window.__layout_input.hovers.at(-1)?.id)).toBe("top");
+  await expect.poll(() => page.evaluate(() =>
+    window.__layout_input.host.querySelector('[role="tooltip"]')?.textContent)).toContain("Stages: 10");
+  await page.mouse.click(point.x, point.y);
+  expect(await page.evaluate(() => window.__layout_input.chart.layout_selected_hit()?.id)).toBe("top");
+  await page.evaluate(() => window.__layout_input.series.set_data({
+    type: "funnel", stages: [{ id: "new", label: "New", value: 5 }],
+  }));
+  expect(await page.evaluate(() => window.__layout_input.chart.layout_selected_hit())).toBeNull();
+  await page.waitForTimeout(550); // Keep the next click outside the engine's 500 ms double-click window.
+  await page.mouse.click(point.x, point.y);
+  expect(await page.evaluate(() => window.__layout_input.chart.layout_selected_hit()?.id)).toBe("new");
+  await page.keyboard.press("Escape");
+  expect(await page.evaluate(() => window.__layout_input.chart.layout_selected_hit())).toBeNull();
+  await page.evaluate(() => {
+    window.__layout_input.tooltip.detach();
+    window.__layout_input.chart.remove();
+    window.__layout_input.host.remove();
+    delete window.__layout_input;
+  });
+});
+test("opt-in layout labels reach Canvas2D pixels", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const captures = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const frames = [];
+    for (const data_labels of [false, true]) {
+      const host = document.createElement("div");
+      Object.assign(host.style, { width: "400px", height: "300px" });
+      document.body.appendChild(host);
+      const chart = await create_chart(host, {
+        backend: "canvas2d", autoSize: false,
+        initialPane: { horizontal_domain: { type: "layout" } },
+      });
+      try {
+        chart.add_layout_series("funnel", { pane: 0, data_labels }, {
+          type: "funnel", stages: [{ id: "one", label: "Visible label", value: 5 }],
+        });
+        frames.push(chart.take_screenshot().toDataURL());
+      } finally {
+        chart.remove();
+        host.remove();
+      }
+    }
+    return frames;
+  });
+  const images = captures.map((data) => PNG.sync.read(Buffer.from(data.split(",")[1], "base64")));
+  expect(images[0].width).toBe(images[1].width);
+  expect(images[0].height).toBe(images[1].height);
+  let differing = 0;
+  for (let index = 0; index < images[0].data.length; index += 4) {
+    if (images[0].data[index] !== images[1].data[index]
+      || images[0].data[index + 1] !== images[1].data[index + 1]
+      || images[0].data[index + 2] !== images[1].data[index + 2]) differing += 1;
+  }
+  expect(differing).toBeGreaterThan(20);
+});
+test("layout value updates use the shared browser animation clock and settle", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const started = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "300px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "layout" } } });
+    const series = chart.add_layout_series("funnel", { pane: 0 }, {
+      type: "funnel", stages: [
+        { id: "a", label: "A", value: 10 }, { id: "b", label: "B", value: 2 },
+      ],
+    });
+    chart.set_general_transition_duration(200);
+    const before = chart.take_screenshot().toDataURL();
+    series.set_data({ type: "funnel", stages: [
+      { id: "a", label: "A", value: 10 }, { id: "b", label: "B", value: 10 },
+    ] });
+    window.__layout_motion = { chart, host, before };
+    return { active: chart.wasm.wants_animation(), scheduled: chart.anim_frame !== null };
+  });
+  expect(started).toEqual({ active: true, scheduled: true });
+  await expect.poll(() => page.evaluate(() => window.__layout_motion.chart.wasm.wants_animation())).toBe(false);
+  const after = await page.evaluate(() => {
+    const { chart, host, before } = window.__layout_motion;
+    const after = chart.take_screenshot().toDataURL();
+    const stopped = chart.anim_frame === null;
+    chart.remove(); host.remove(); delete window.__layout_motion;
+    return { before, after, stopped };
+  });
+  expect(after.stopped).toBe(true);
+  const beforePixels = PNG.sync.read(Buffer.from(after.before.split(",")[1], "base64"));
+  const afterPixels = PNG.sync.read(Buffer.from(after.after.split(",")[1], "base64"));
+  let changed = 0;
+  for (let index = 0; index < beforePixels.data.length; index += 4) {
+    if (beforePixels.data[index] !== afterPixels.data[index]
+      || beforePixels.data[index + 1] !== afterPixels.data[index + 1]
+      || beforePixels.data[index + 2] !== afterPixels.data[index + 2]) changed += 1;
+  }
+  expect(changed).toBeGreaterThan(100);
+});
+test("layout family fill interiors agree between Canvas2D and WebGPU", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "This backend comparison requires WebGPU");
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const samples = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const cases = [
+      ["funnel", { type: "funnel", stages: [{ id: "a", label: "A", value: 3 }, { id: "b", label: "B", value: 2 }] }, "stage"],
+      ["treemap", { type: "hierarchy", nodes: [{ id: "root", parent: null, label: "Root", value: null }, { id: "leaf", parent: "root", label: "Leaf", value: 3 }] }, "node"],
+      ["sankey", { type: "flow", nodes: [{ id: "a", label: "A" }, { id: "b", label: "B" }], links: [{ source: "a", target: "b", value: 3 }] }, "node"],
+      ["sunburst", { type: "hierarchy", nodes: [{ id: "root", parent: null, label: "Root", value: null }, { id: "leaf", parent: "root", label: "Leaf", value: 3 }] }, "node"],
+    ];
+    const result = [];
+    for (const [kind, data, element] of cases) {
+      const frames = [];
+      for (const backend of ["canvas2d", "webgpu"]) {
+        const host = document.createElement("div");
+        Object.assign(host.style, { width: "400px", height: "300px" });
+        document.body.appendChild(host);
+        const chart = await create_chart(host, { backend, autoSize: false,
+          __force_webgpu_fallback_adapter: true,
+          initialPane: { horizontal_domain: { type: "layout" } } });
+        try {
+          chart.add_layout_series(kind, { pane: 0, color: "#4682b4" }, data);
+          let point = null;
+          for (let y = 15; y < 285 && point === null; y += 5) {
+            for (let x = 15; x < 385 && point === null; x += 5) {
+              const hit = chart.layout_hit_test(0, x, y);
+              if (hit?.element !== element) continue;
+              if ([[x - 2, y], [x + 2, y], [x, y - 2], [x, y + 2]].every(([px, py]) =>
+                chart.layout_hit_test(0, px, py)?.id === hit.id)) point = { x, y };
+            }
+          }
+          frames.push({ backend: chart.backend(), point, png: chart.take_screenshot().toDataURL() });
+        } finally { chart.remove(); host.remove(); }
+      }
+      result.push({ kind, frames });
+    }
+    return result;
+  });
+  for (const { kind, frames } of samples) {
+    expect(frames.map((frame) => frame.backend)).toEqual(["canvas2d", "webgpu"]);
+    expect(frames[0].point, `${kind} interior hit`).not.toBeNull();
+    expect(frames[1].point).toEqual(frames[0].point);
+    const images = frames.map(({ png }) => PNG.sync.read(Buffer.from(png.split(",")[1], "base64")));
+    const { x, y } = frames[0].point;
+    const offset = (y * images[0].width + x) * 4;
+    for (let channel = 0; channel < 4; channel++) {
+      expect(Math.abs(images[0].data[offset + channel] - images[1].data[offset + channel]),
+        `${kind} interior channel ${channel}`).toBeLessThanOrEqual(3);
+    }
+  }
+});
 test("translucent polar fill has matching interior pixels on Canvas2D and WebGPU", async ({ page, browserName }) => {
   test.skip(browserName !== "chromium", "This backend comparison requires WebGPU");
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");

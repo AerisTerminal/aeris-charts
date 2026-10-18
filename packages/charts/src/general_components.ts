@@ -5,6 +5,7 @@ import type {
   general_axis_api,
   general_brush_snapshot,
   general_series_api,
+  layout_series_api,
   general_tooltip_snapshot,
   mouse_event_params,
   pane_api,
@@ -14,6 +15,7 @@ import type { popover_palette } from "./theme.js";
 export interface general_legend_options {
   pane?: number | pane_api;
   format_title?: (title: string, series: general_series_api) => string;
+  format_layout_title?: (title: string, series: layout_series_api) => string;
   label?: string;
   lang?: string;
   format_action?: (visible: boolean, title: string) => string;
@@ -195,6 +197,27 @@ export function create_general_legend(
       }
       root.appendChild(group);
     }
+    for (const handle of chart.layout_series(pane)) {
+      const item = handle.options();
+      const title = item.title && item.title.length > 0 ? item.title : handle.kind;
+      const visible = item.visible !== false;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.series = `layout:${handle.id}`;
+      button.setAttribute("aria-pressed", String(visible));
+      button.setAttribute("aria-label", options.format_action?.(visible, title)
+        ?? `${visible ? "Hide" : "Show"} ${title}`);
+      button.style.cssText = "display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:2px 8px;border:1px solid currentColor;border-radius:4px;background:transparent;color:inherit;cursor:pointer";
+      button.style.opacity = visible ? "1" : "0.55";
+      const swatch = document.createElement("span");
+      swatch.setAttribute("aria-hidden", "true");
+      swatch.style.cssText = `display:inline-block;width:10px;height:10px;border-radius:50%;background:${item.color ?? "#4682b4"}`;
+      const label = document.createElement("span");
+      label.textContent = options.format_layout_title?.(title, handle) ?? title;
+      button.append(swatch, label);
+      button.addEventListener("click", () => { handle.set_visible(!handle.options().visible); refresh(); });
+      root.appendChild(button);
+    }
     if (focused_series !== undefined) {
       for (const button of root.querySelectorAll<HTMLButtonElement>("button")) {
         if (button.dataset.series === focused_series) {
@@ -223,7 +246,7 @@ export function create_general_legend(
 
 export interface general_tooltip_options {
   mode?: "item" | "shared";
-  /** Restrict pointer tooltips to one pane; omitted uses every general pane. */
+  /** Restrict pointer tooltips to one pane; omitted uses every general or layout pane. */
   pane?: number | pane_api;
   format_value?: (value: number) => string;
   format_detail?: (item: general_tooltip_snapshot) => string | undefined;
@@ -244,7 +267,7 @@ function tooltip_detail(item: general_tooltip_snapshot, format: (value: number) 
   return parts.join(" · ") || item.label || "No value";
 }
 
-/** Default pointer tooltip driven by engine hits and engine-owned item/shared snapshots. */
+/** Default pointer tooltip driven by engine hits and semantic item/shared snapshots. */
 export function create_general_tooltip(
   chart: chart_api,
   chart_container: HTMLElement,
@@ -283,27 +306,35 @@ export function create_general_tooltip(
     if (detached) return;
     const event = last_event;
     const hit = event?.general_hit;
-    if (hit == null || event?.point == null ||
+    const layout = event?.layout_hit;
+    if ((hit == null && layout == null) || event?.point == null ||
       (options.pane !== undefined && event.pane_index !== pane_index(options.pane))) {
       element.style.display = "none";
       return;
     }
-    const items = options.mode === "item"
-      ? [chart.general_series_order().find((series) => series.id === hit.series)?.data_at(hit.row)].filter(
-          (item): item is general_tooltip_snapshot => item != null,
-        )
-      : chart.general_shared_tooltip(hit.series, hit.row)?.items;
-    if (items == null || items.length === 0) {
-      element.style.display = "none";
-      return;
-    }
     const heading = document.createElement("strong");
-    heading.textContent = items[0]?.label ?? items[0]?.x_label ?? "";
-    element.replaceChildren(heading);
-    for (const item of items) {
+    if (layout != null) {
+      heading.textContent = layout.label;
       const row = document.createElement("div");
-      row.textContent = `${item.title}: ${options.format_detail?.(item) ?? tooltip_detail(item, format)}`;
-      element.appendChild(row);
+      row.textContent = `${layout.title}: ${layout.value == null ? "no value" : format(layout.value)}`;
+      element.replaceChildren(heading, row);
+    } else if (hit != null) {
+      const items = options.mode === "item"
+        ? [chart.general_series_order().find((series) => series.id === hit.series)?.data_at(hit.row)].filter(
+            (item): item is general_tooltip_snapshot => item != null,
+          )
+        : chart.general_shared_tooltip(hit.series, hit.row)?.items;
+      if (items == null || items.length === 0) {
+        element.style.display = "none";
+        return;
+      }
+      heading.textContent = items[0]?.label ?? items[0]?.x_label ?? "";
+      element.replaceChildren(heading);
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.textContent = `${item.title}: ${options.format_detail?.(item) ?? tooltip_detail(item, format)}`;
+        element.appendChild(row);
+      }
     }
     apply_popover();
     element.style.display = "block";

@@ -10,6 +10,8 @@ import type {
   drawing_api,
   general_accessibility_snapshot,
   general_series_api,
+  layout_accessibility_snapshot,
+  layout_series_api,
   pane_api,
   localization_options,
   series_api,
@@ -31,7 +33,7 @@ type general_accessibility_series = general_series_api & {
   unsubscribe_data_changed(handler: () => void): void;
 };
 
-type accessibility_series = series_api | general_accessibility_series;
+type accessibility_series = series_api | general_accessibility_series | layout_series_api;
 
 function is_financial_series(series: series_api | general_series_api | unknown): series is series_api {
   return typeof series === "object" && series !== null && "series_type" in series && "data_by_index" in series;
@@ -42,7 +44,12 @@ function is_general_series(series: series_api | general_series_api | unknown): s
     && "x_axis_id" in series && "subscribe_data_changed" in series;
 }
 
-function is_accessibility_series(series: series_api | general_series_api | unknown): series is accessibility_series {
+function is_layout_series(series: unknown): series is layout_series_api {
+  return typeof series === "object" && series !== null && "accessibility_snapshot" in series
+    && "set_data" in series && !("x_axis_id" in series);
+}
+
+function is_accessibility_series(series: series_api | general_series_api | unknown): series is series_api | general_accessibility_series {
   return is_financial_series(series) || is_general_series(series);
 }
 
@@ -230,6 +237,7 @@ class PaneAccessibility {
   private series: accessibility_series[] = [];
   private points: readonly series_data[] = [];
   private general_snapshot: general_accessibility_snapshot | null = null;
+  private layout_snapshot: layout_accessibility_snapshot | null = null;
   private subscriptions = new Map<accessibility_series, () => void>();
   private focus_handle: { series: series_api; handle: native_accessibility_focus_handle } | null = null;
   private dirty = new Set<accessibility_series>();
@@ -238,6 +246,7 @@ class PaneAccessibility {
   private focused = false;
   private shortcuts_open = false;
   private owns_general_focus = false;
+  private owns_layout_focus = false;
   private high_contrast = false;
   private contrast_queries: MediaQueryList[] = [];
 
@@ -329,7 +338,10 @@ class PaneAccessibility {
 
   sync_series(): void {
     const active = this.active_series();
-    const current = this.pane.get_series().filter(is_accessibility_series);
+    const current: accessibility_series[] = [
+      ...this.pane.get_series().filter(is_accessibility_series),
+      ...this.controller.chart.layout_series(this.pane_index).filter((series) => series.options().visible !== false),
+    ];
     for (const [series, handler] of this.subscriptions) {
       if (!current.includes(series)) {
         series.unsubscribe_data_changed(handler);
@@ -377,6 +389,7 @@ class PaneAccessibility {
     this.focus_handle?.handle.detach();
     this.focus_handle = null;
     this.clear_owned_general_focus();
+    this.clear_owned_layout_focus();
     this.subscriptions.clear();
     this.layer.remove();
   }
@@ -426,6 +439,13 @@ class PaneAccessibility {
       case "Enter":
       case " ": {
         const active = this.active_series();
+        const layout_item = is_layout_series(active) ? this.layout_item(this.point_index) : undefined;
+        if (is_layout_series(active) && layout_item !== undefined
+          && this.engine_target_key(event, `layout-item:${active.id}:${layout_item.element}:${layout_item.row}`)) {
+          this.refresh_points();
+          this.writer.write(`Selected ${this.describe_point(this.point_index)}`);
+          break;
+        }
         const item = is_general_series(active) ? this.general_item(this.point_index) : undefined;
         if (is_general_series(active) && item !== undefined
           && this.engine_target_key(event, `general-row:${active.id}:${item.row}`)) {
@@ -437,6 +457,14 @@ class PaneAccessibility {
       }
       case "Escape": {
         const active = this.active_series();
+        if (is_layout_series(active)) {
+          const item = this.layout_item(this.point_index);
+          if (item !== undefined && this.engine_target_key(event, `layout-item:${active.id}:${item.element}:${item.row}`)) {
+            this.refresh_points();
+            this.writer.write("Selection cleared.");
+          }
+          break;
+        }
         if (!is_general_series(active)) return;
         const item = this.general_item(this.point_index);
         if (item === undefined || !this.engine_target_key(event, `general-row:${active.id}:${item.row}`)) return;
@@ -571,7 +599,16 @@ class PaneAccessibility {
   }
 
   private on_data_changed(series: accessibility_series): void {
-    if (this.focused && series === this.active_series()) {
+    if (is_layout_series(series) && series === this.active_series()) {
+      const previous = this.layout_item(this.point_index);
+      this.refresh_points();
+      const next = this.layout_item(this.point_index);
+      if (previous !== undefined && (next?.id !== previous.id || next.element !== previous.element)) {
+        this.point_index = -1;
+      }
+      this.layer.setAttribute("aria-label", this.pane_label());
+      this.update_focus_ring();
+    } else if (this.focused && series === this.active_series()) {
       this.refresh_points();
       this.update_focus_ring();
     }
@@ -590,10 +627,12 @@ class PaneAccessibility {
     if (series === undefined) {
       this.points = [];
       this.general_snapshot = null;
+      this.layout_snapshot = null;
       this.point_index = -1;
       return;
     }
     if (is_general_series(series)) {
+      this.layout_snapshot = null;
       this.points = [];
       const total = series.accessibility_snapshot(0, 0).total_rows;
       const chart = this.controller.chart as chart_api & {
@@ -609,7 +648,17 @@ class PaneAccessibility {
       this.general_snapshot = series.accessibility_snapshot(offset, MAX_VISIBLE_QUERY_POINTS);
       return;
     }
+    if (is_layout_series(series)) {
+      this.points = [];
+      this.general_snapshot = null;
+      const total = series.accessibility_snapshot(0, 0).total;
+      this.point_index = Math.min(this.point_index, total - 1);
+      const offset = this.point_index < 0 ? 0 : Math.max(0, this.point_index - Math.floor(MAX_VISIBLE_QUERY_POINTS / 2));
+      this.layout_snapshot = series.accessibility_snapshot(offset, MAX_VISIBLE_QUERY_POINTS);
+      return;
+    }
     this.general_snapshot = null;
+    this.layout_snapshot = null;
     this.points = this.query_points(series);
     this.point_index = Math.min(this.point_index, this.points.length - 1);
   }
@@ -638,7 +687,8 @@ class PaneAccessibility {
 
   private point_count(): number {
     const series = this.active_series();
-    return is_general_series(series) ? (this.general_snapshot?.total_rows ?? 0) : this.points.length;
+    return is_general_series(series) ? (this.general_snapshot?.total_rows ?? 0)
+      : is_layout_series(series) ? (this.layout_snapshot?.total ?? 0) : this.points.length;
   }
 
   private general_item(index: number): general_accessibility_snapshot["items"][number] | undefined {
@@ -655,6 +705,21 @@ class PaneAccessibility {
       );
       snapshot = series.accessibility_snapshot(offset, MAX_VISIBLE_QUERY_POINTS);
       this.general_snapshot = snapshot;
+    }
+    return snapshot.items[index - snapshot.offset];
+  }
+
+  private layout_item(index: number): layout_accessibility_snapshot["items"][number] | undefined {
+    const series = this.active_series();
+    if (!is_layout_series(series) || index < 0) return undefined;
+    let snapshot = this.layout_snapshot;
+    if (snapshot === null || index < snapshot.offset || index >= snapshot.offset + snapshot.items.length) {
+      const total = snapshot?.total ?? series.accessibility_snapshot(0, 0).total;
+      if (index >= total) return undefined;
+      const offset = Math.min(Math.max(0, total - MAX_VISIBLE_QUERY_POINTS),
+        Math.max(0, index - Math.floor(MAX_VISIBLE_QUERY_POINTS / 2)));
+      snapshot = series.accessibility_snapshot(offset, MAX_VISIBLE_QUERY_POINTS);
+      this.layout_snapshot = snapshot;
     }
     return snapshot.items[index - snapshot.offset];
   }
@@ -734,14 +799,14 @@ class PaneAccessibility {
   }
 
   private first_visible_index(): number {
-    if (is_general_series(this.active_series())) return 0;
+    if (is_general_series(this.active_series()) || is_layout_series(this.active_series())) return 0;
     const range = this.controller.chart.time_scale().get_visible_logical_range();
     if (range === null || this.points.length === 0) return 0;
     return clamp(this.lower_bound(this.points, Math.ceil(range.from)), 0, this.points.length - 1);
   }
 
   private scroll_into_view(): void {
-    if (is_general_series(this.active_series())) return;
+    if (is_general_series(this.active_series()) || is_layout_series(this.active_series())) return;
     const point = this.points[this.point_index];
     const logical = point === undefined ? null : this.logical_index(point);
     const scale = this.controller.chart.time_scale();
@@ -761,6 +826,7 @@ class PaneAccessibility {
 
   private zoom(zoom_in: boolean): void {
     const active = this.active_series();
+    if (is_layout_series(active)) return;
     if (is_general_series(active)) {
       const item = this.general_item(this.point_index);
       const axis = this.controller.chart.axes(this.pane_index).find((candidate) => candidate.id === active.x_axis_id);
@@ -808,6 +874,12 @@ class PaneAccessibility {
         ? snapshot.title
         : this.controller.options.messages.default_series_label(index + 1);
     }
+    if (is_layout_series(series)) {
+      const snapshot = this.layout_snapshot?.series === series.id
+        ? this.layout_snapshot : series.accessibility_snapshot(0, 0);
+      return snapshot.title.length > 0 ? snapshot.title
+        : this.controller.options.messages.default_series_label(index + 1);
+    }
     const custom = this.controller.options.series_label;
     if (custom !== undefined) return custom(series, index);
     const title = series.options().title ?? "";
@@ -842,6 +914,12 @@ class PaneAccessibility {
 
   private describe_point(index: number): string {
     const series = this.active_series();
+    if (is_layout_series(series)) {
+      const item = this.layout_item(index);
+      if (item === undefined) return "";
+      const value = item.value === null ? this.controller.options.messages.no_value : this.format_value(item.value, series);
+      return `${this.series_label(series, this.series_index)}, ${item.element} ${item.label}, ${value}. Item ${index + 1} of ${this.layout_snapshot?.total ?? 0}${item.selected ? ", selected" : ""}.`;
+    }
     if (is_general_series(series)) {
       const item = this.general_item(index);
       if (item === undefined) return "";
@@ -917,6 +995,13 @@ class PaneAccessibility {
 
   private describe_chart(): string {
     const active = this.active_series();
+    if (is_layout_series(active)) {
+      const snapshot = active.accessibility_snapshot(0, MAX_VISIBLE_QUERY_POINTS);
+      const label = this.series_label(active, this.series_index);
+      const suffix = snapshot.total > snapshot.items.length ? " Use the arrow keys to navigate all items." : "";
+      return snapshot.total === 0 ? this.controller.options.messages.no_data(label, "")
+        : `${label} with ${snapshot.total} layout items.${suffix}`;
+    }
     if (is_general_series(active)) return this.describe_general_chart(active);
     const label = this.series_label(this.active_series(), this.series_index);
     const scoped = this.scoped_points(this.points);
@@ -1001,6 +1086,15 @@ class PaneAccessibility {
   }
 
   private update_summary(series: accessibility_series): string {
+    if (is_layout_series(series)) {
+      const meta = series.accessibility_snapshot(0, 0);
+      const snapshot = series.accessibility_snapshot(Math.max(0, meta.total - MAX_VISIBLE_QUERY_POINTS), MAX_VISIBLE_QUERY_POINTS);
+      const latest = snapshot.items.at(-1);
+      return this.controller.options.messages.series_update(
+        this.series_label(series, this.series.indexOf(series)), meta.total, "",
+        latest === undefined ? this.controller.options.messages.no_value : `${latest.label}, ${this.format_value(latest.value, series)}`,
+      );
+    }
     if (is_general_series(series)) {
       const meta = series.accessibility_snapshot(0, 0);
       const offset = Math.max(0, meta.total_rows - MAX_VISIBLE_QUERY_POINTS);
@@ -1047,6 +1141,23 @@ class PaneAccessibility {
 
   private update_focus_ring(): void {
     const active = this.active_series();
+    if (is_layout_series(active)) {
+      this.focus_handle?.handle.set(null, this.focus_options_json());
+      this.clear_owned_general_focus();
+      const item = this.layout_item(this.point_index);
+      const chart = this.controller.chart as chart_api & {
+        set_layout_accessibility_focus(hit: Pick<layout_accessibility_snapshot["items"][number], "element" | "row"> & { series: number }, color: string, size: number): boolean;
+      };
+      if (this.focused && this.controller.options.show_focus_indicator && item !== undefined
+        && chart.set_layout_accessibility_focus({ series: active.id, element: item.element, row: item.row },
+          this.controller.options.focus_indicator_color, this.controller.options.focus_indicator_size)) {
+        this.owns_layout_focus = true;
+      } else {
+        this.clear_owned_layout_focus();
+      }
+      return;
+    }
+    this.clear_owned_layout_focus();
     if (is_general_series(active)) {
       this.focus_handle?.handle.set(null, this.focus_options_json());
       const item = this.general_item(this.point_index);
@@ -1078,7 +1189,7 @@ class PaneAccessibility {
 
   private sync_focus_handle(): void {
     const active = this.active_series();
-    if (is_general_series(active)) {
+    if (is_general_series(active) || is_layout_series(active)) {
       this.focus_handle?.handle.detach();
       this.focus_handle = null;
       return;
@@ -1095,6 +1206,13 @@ class PaneAccessibility {
     const chart = this.controller.chart as chart_api & { clear_general_accessibility_focus(): void };
     chart.clear_general_accessibility_focus();
     this.owns_general_focus = false;
+  }
+
+  private clear_owned_layout_focus(): void {
+    if (!this.owns_layout_focus) return;
+    const chart = this.controller.chart as chart_api & { clear_layout_accessibility_focus(): void };
+    chart.clear_layout_accessibility_focus();
+    this.owns_layout_focus = false;
   }
 
   private style_outline(): void {

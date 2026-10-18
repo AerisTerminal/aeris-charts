@@ -35,7 +35,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G4 | R4 | Components and interaction | **Complete** | Default legend, tooltip and brush controls; engine selection and semantic linked sync; shared-frame export coverage | G5; manual assistive-technology and calibrated GPUI image evidence remain pending |
 | G5 | R5 | React and framework-neutral authoring | **Complete** | Keyed declarations and mapped rows; atomic shared composition; controlled brush; first-pane ownership; lifecycle, SSR, packed-consumer and browser evidence | G6; manual assistive-technology review remains pending |
 | G6 | R6 | Polar families and transitions | **Complete** | `f64` polar geometry and axes; pie/donut, radar, polar-area and radial-bar paths; single-fill ordered polar mesh; bounded cached hits, slice legends, shared-frame leader labels, pointer and keyboard selection; WASM/TS bindings; opt-in fixed-clock value and numeric/temporal X updates, Cartesian and angular category-axis and matched-row category movement, identity-matched entry and exit rows, missing/valid Y, error-bound and bubble-size motion, pie row-order motion, fixed-spoke and changing-count radar morphs, compatible optional-channel changes, collapsed error-bound entry, persisted duration and browser scheduling; polar and Cartesian family fixed-clock frame/hit fixtures, GPUI/Canvas2D structural fill, bounded Canvas2D/WebGPU pixels, and measured 1.25× GPUI/native polar window parity; strict release performance, six package-size limits, and 735 portable browser tests passed | G7; manual assistive-technology and broader device-scale image evidence remain pending |
-| G7 | R7 | Hierarchy and flow families | **In progress** | Axis-free `layout` pane topology is available in engine, WASM, and TypeScript; lazy typed stage/tree/flow store validates IDs, values, cycles, depth and bounded retained capacity; funnel, treemap, Sankey and sunburst emit shared ordered-frame geometry with direct or cached exact hits; focused financial-isolation, persistence, atomic-store and geometry fixtures pass | Complete host behavior, persistence, accessibility, transitions and parity |
+| G7 | R7 | Hierarchy and flow families | **Complete** | Axis-free `layout` pane topology is available in engine, WASM, and TypeScript; lazy typed stage/tree/flow store validates IDs, values, cycles, depth and bounded retained capacity; funnel, treemap, Sankey and sunburst emit shared ordered-frame geometry with direct or cached exact hits; focused financial-isolation, persistence, atomic-store and geometry fixtures pass; V2 layout data/series round-trip and public restored-series handles, pointer hover/click/Escape and focused-key selection, bounded accessibility snapshots integrated with browser keyboard navigation and announcements, shared-frame visual focus, shared-dataset update fanout, built-in pointer tooltip and toggling legend, opt-in shared-frame labels, atomic live presentation patches, and fixed-clock compatible value transitions are implemented with focused engine/browser evidence; four-family Canvas2D/WebGPU interior pixels and GPUI/Canvas2D structural focus/mark parity pass | G8; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence remain for parity closure |
 | G8 | R8 | Parity closure and release readiness | **Open** | — | Full matrix verification against the pinned competitor |
 
 Notes:
@@ -47,7 +47,7 @@ Notes:
   The scales/axes and responsive-layout matrix rows are Verified. Other rows remain Partial
   because they include later-phase behavior.
 
-Six of eight delivery batches are complete. G7 is in progress and G8 is open. Batch completion
+Seven of eight delivery batches are complete. G8 is open. Batch completion
 does not imply full parity-matrix verification.
 
 ## How work is delivered
@@ -288,16 +288,28 @@ one channel; 2,672 of 225,000 edge pixels differed, with maximum channel delta 1
 configured 2%/128 limits. Manual assistive-technology review, competitor screenshot comparison,
 and further device-scale/platform window captures remain evidence work for parity closure.
 
+G7 delivers funnel, treemap, Sankey and sunburst as dedicated typed layout families in the shared
+engine. Each has validated bounded input, deterministic frame geometry and exact hits, live
+presentation handles, V2 persistence, opt-in labels, pointer and keyboard selection, bounded
+accessibility snapshots, built-in tooltip and legend behavior, and compatible fixed-clock value
+transitions. Browser fixtures exercise public handles, shared datasets, restore, focus, animation
+and Canvas2D/WebGPU interior pixels. GPUI/Canvas2D structural focus and mark parity passed at
+DPR 1, 1.5 and 2. The 2026-10-18 batch gate passed formatting, warning-denying workspace and
+wasm32 Clippy, workspace tests, package install/lint/build/typecheck/pack, SSR and public API/
+namespace/release guards, 764 portable Chromium/Firefox/WebKit tests with 28 intended skips,
+36 GPUI parity tests, 7 GPUI replay tests, the isolated strict native release performance gate,
+and all six policy-v7 package-size thresholds. Manual assistive-technology review, competitor
+screenshot comparison and calibrated GPUI window pixels remain for G8 parity closure.
+
 ## Known gaps
 
-Remaining source-confirmed gaps from the 2026-09-23 review. R3–R6 closed the earlier Cartesian,
-component, authoring, and polar gaps; hierarchy/flow foundations are implemented, while the full
-family contracts and parity evidence remain open. Earlier test counts and timings are
-historical observations in Git history, not proof of current completion.
+Remaining source-confirmed gaps from the 2026-09-23 review. R3–R7 closed the earlier Cartesian,
+component, authoring, polar, hierarchy and flow gaps. Full parity evidence remains open.
+Earlier test counts and timings are historical observations in Git history, not proof of current completion.
 
 | Gap | Evidence | Required correction | Phase |
 | --- | --- | --- | --- |
-| Chart breadth | Funnel, treemap, Sankey and sunburst have bounded typed stores, ordered-frame geometry and exact hits, but their host behavior and full parity evidence are incomplete | Finish persistence, accessibility, interaction, transitions, cross-backend fixtures and batch gates | R7 |
+| Parity evidence | Automated layout-family contracts and cross-backend fixtures pass; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence are still due | Collect phase-closure evidence and record any differences against the pinned competitor | R8 |
 
 These are not an exhaustive defect audit. Coverage-matrix rows are required coverage to audit, not
 assertions that every listed feature is absent.
@@ -524,13 +536,13 @@ animation scheduling.
 
 ### R7 — Hierarchy and flow families
 
-**Batch:** G7. **Depends on:** the lifecycle, layout and primitive contracts above. **Status:** in progress.
+**Batch:** G7. **Depends on:** the lifecycle, layout and primitive contracts above. **Status:** complete.
 
-- [ ] Funnel.
-- [ ] Treemap.
-- [ ] Sankey.
-- [ ] Sunburst, using shared polar geometry where appropriate.
-- [ ] G7 full gate green; batch committed and pushed.
+- [x] Funnel.
+- [x] Treemap.
+- [x] Sankey.
+- [x] Sunburst, using shared polar geometry where appropriate.
+- [x] G7 full gate green; batch committed and pushed.
 
 Each is a dedicated engine layout family with typed validated inputs; do not reuse incompatible XY
 storage merely to avoid a proper owner.
@@ -573,7 +585,7 @@ platform capabilities beyond the competitor's browser rendering model.
 | Box plots and heatmaps | Partial | Preserve existing extra families; complete color domains, legends, missing values and interaction | R3 |
 | Scales and axes | Verified (G2, 2026-10-10) | Numeric/log/symlog, temporal, category/point, reversed/multiple axes, explicit/auto domains, ticks, formatting, overflow and grid policy | R2 |
 | Pie/donut, radar, radial bar, polar area | Partial | Polar layout, start/end angles, inner/outer radii, padding, labels/leaders, angular/radial axes and interactions | R6 |
-| Funnel, treemap, Sankey, sunburst | Partial (layout/data/geometry/hits implemented; full family contracts pending) | Purpose-built deterministic bounded layouts, data contracts, styling, labels, hits, accessibility and updates | R7 |
+| Funnel, treemap, Sankey, sunburst | Partial (G7 family contracts and automated executor fixtures pass; manual parity evidence pending) | Purpose-built deterministic bounded layouts, data contracts, styling, labels, hits, accessibility and updates | R7 |
 | Legend and tooltip | Partial | Default usable components, visibility controls, item/shared modes, placement, formatting, ordering, custom content and touch/keyboard behavior | R4 |
 | References, labels, titles and grids | Partial | Engine layout and domain contribution, overlap/overflow policy, background/foreground order, style and export consistency | R2, R4 |
 | Brush, selection and synchronization | Partial | Pointer/touch/keyboard controls, semantic range handles, domain-aware pan/zoom, linked charts and feedback-loop prevention | R4 |

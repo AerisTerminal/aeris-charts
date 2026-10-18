@@ -115,8 +115,23 @@ leaf weights, derived internal weights, and at most 32 levels; flows cap directe
 The store caps rows, links, text, per-dataset capacity and aggregate retained capacity, releases
 its allocation when empty, and uses monotonic dataset handles so removal cannot retarget a stale
 handle. Series admission reserves worst-case geometry cache capacity within the aggregate store
-limit; data replacement rechecks that reservation before invalidating bound caches. Host
-interaction and presentation paths are still being implemented. A funnel series uses
+limit; data replacement rechecks that reservation before invalidating bound caches. Engine input now resolves exact layout hover after pane primitives and general marks,
+selects a layout item on primary click, clears selection on Escape, and clears stale hits
+when source data or series are replaced or removed. Focused layout-item Enter/Space
+selection also routes through the input controller. The browser accessibility controller
+discovers layout series through stable chart handles, pages their semantic snapshots for
+keyboard navigation and live announcements, and forwards selection keys to that controller.
+Replacing a shared layout dataset notifies every bound browser series handle, so subscribers
+refresh their semantic view together. Restored handles remain stable until removal or disposal.
+The browser's built-in general tooltip consumes layout hover values as a single semantic item;
+layout panes have no shared horizontal tooltip domain.
+The keyboard-focused layout item gets one engine-owned circle stroke in the ordered frame,
+positioned from cached mark geometry (or an internal hierarchy node's cached region) and
+cleared when its dataset or series disappears.
+The browser controller applies focus color and size to that marker.
+Canvas2D/WebGPU interior pixel fixtures cover the four layout fills, and a GPUI/Canvas2D
+structural fixture covers their shared frame marks and focused marker at DPR 1, 1.5 and 2.
+A funnel series uses
 the same ordered `MeshFill` stream as other general geometry: each stage's trapezoid tapers from
 its value to the next stage, with the final stage tapering to zero. A cached dataset maximum
 normalizes width without summing potentially huge finite values; exact hits compute the row from
@@ -136,6 +151,33 @@ is tessellated into bounded shared-frame triangles, and its hit test checks thos
 zero-weight subtrees emit no sectors. Plot changes rebuild the cache, and data replacement clears
 it alongside the treemap and Sankey caches.
 The layout pane blocks financial series and cannot be removed while a layout series is bound.
+V2 state stores layout datasets and series in input order with dataset references, preserving
+shared input identity and styles. Restore validates the complete layout graph in the staged
+engine before installing it; older V2 documents without layout records remain valid. The
+browser layout-series catalog returns live handles after restore for subsequent updates/removal.
+Title, color and label-visibility patches validate atomically in the layout store; removing
+one restored series releases its dataset only after the final bound series is gone.
+Layout series visibility is part of the same persisted presentation state. Hidden series
+remain in the live catalog and built-in legend but emit no marks or hits, and hiding clears
+their pointer selection and accessibility focus. The browser legend toggles that engine state
+through the stable layout handle and refreshes on import and presentation changes.
+An update to a dataset with no visible bound layout series applies immediately; hiding its
+last visible series releases any active transition so the host scheduler can stop.
+Each layout series exposes a bounded 512-item accessibility page of semantic stage, node,
+and link labels and values; hierarchy totals and Sankey node totals derive once from validated
+input into a dataset-owned value cache counted against the store limit. Hover hit JSON and
+accessibility pages read the same cached values.
+Opt-in layout labels use engine-measured layout typography and ordered-frame text. Funnel,
+treemap and sunburst labels appear only when they fit their mark; Sankey nodes first try
+the node rectangle, then the adjacent column gap. Every backend receives the same text run.
+Compatible layout value updates reuse the general chart's fixed monotonic clock, duration,
+reduced-motion policy, and browser animation scheduler. The dataset retains its canonical
+target while a bounded prior/presentation pair interpolates funnel stage weights, hierarchy
+leaf weights, or Sankey link weights; frame geometry and exact hits use that presentation.
+An interrupted update starts from the current presentation. A topology or identity change
+applies immediately, and expiration, reduced motion, or final series removal releases prior geometry and stops
+scheduling. The layout store counts retained transition inputs against its aggregate limit;
+updates that cannot reserve motion memory still install their validated target immediately.
 Existing financial charts therefore continue to instantiate only `TimeScaleCore` and `PriceScaleCore`
 and pay no retained-memory cost for these foundations.
 

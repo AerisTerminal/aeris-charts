@@ -173,7 +173,8 @@ pub use general_data::{
 };
 #[doc(hidden)]
 pub use general_layout::{
-    FlowLink, FlowNode, FunnelStage, GeneralLayoutDatasetId, GeneralLayoutElement,
+    FlowLink, FlowNode, FunnelStage, GeneralLayoutAccessibilityItem,
+    GeneralLayoutAccessibilitySnapshot, GeneralLayoutDatasetId, GeneralLayoutElement,
     GeneralLayoutHit, GeneralLayoutInput, GeneralLayoutSeriesId, GeneralLayoutSeriesKind,
     GeneralLayoutSeriesOptions, HierarchyNode,
 };
@@ -2655,6 +2656,9 @@ impl ChartEngine {
                 self.invalidate_general_dataset_geometry_caches(transition.dataset);
             }
             self.general_transitions.clear();
+            if let Some(store) = self.general_layout_data.as_mut() {
+                store.finish_transitions();
+            }
             self.invalidate_frame_scene();
         }
         Ok(())
@@ -2663,17 +2667,24 @@ impl ChartEngine {
     /// A reduced-motion request makes the target state visible and ends scheduling immediately.
     pub fn set_general_transition_reduced_motion(&mut self, reduced_motion: bool) {
         self.general_transition_reduced_motion = reduced_motion;
-        if reduced_motion && !self.general_transitions.is_empty() {
+        if reduced_motion && (self.general_transition_active()) {
             for transition in &self.general_transitions {
                 self.invalidate_general_dataset_geometry_caches(transition.dataset);
             }
             self.general_transitions.clear();
+            if let Some(store) = self.general_layout_data.as_mut() {
+                store.finish_transitions();
+            }
             self.invalidate_frame_scene();
         }
     }
 
     pub fn general_transition_active(&self) -> bool {
         !self.general_transitions.is_empty()
+            || self
+                .general_layout_data
+                .as_ref()
+                .is_some_and(|store| store.transition_active())
     }
 
     /// Advance active general transitions with a finite monotonic host clock in milliseconds.
@@ -2685,8 +2696,18 @@ impl ChartEngine {
             return true;
         }
         self.general_transition_time_ms = time_ms;
-        if self.general_transitions.is_empty() {
+        if self.general_transitions.is_empty()
+            && !self
+                .general_layout_data
+                .as_ref()
+                .is_some_and(|store| store.transition_active())
+        {
             return true;
+        }
+        if let Some(store) = self.general_layout_data.as_mut()
+            && store.transition_active()
+        {
+            store.advance_transitions(time_ms, self.general_transition_duration_ms);
         }
         for transition in &self.general_transitions {
             self.invalidate_general_dataset_geometry_caches(transition.dataset);

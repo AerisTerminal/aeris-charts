@@ -58,8 +58,19 @@ struct LayoutSeriesInput {
     title: String,
     #[serde(default)]
     color: Option<String>,
+    #[serde(default)]
+    data_labels: bool,
+    #[serde(default = "default_true")]
+    visible: bool,
 }
 
+#[derive(Deserialize)]
+struct LayoutPresentationPatch {
+    title: Option<String>,
+    color: Option<String>,
+    data_labels: Option<bool>,
+    visible: Option<bool>,
+}
 fn layout_kind(kind: &str) -> Option<GeneralLayoutSeriesKind> {
     match kind {
         "funnel" => Some(GeneralLayoutSeriesKind::Funnel),
@@ -1075,6 +1086,8 @@ impl ChartInner {
         };
         let mut series_options = GeneralLayoutSeriesOptions::new(options.pane, dataset, kind);
         series_options.title = options.title;
+        series_options.data_labels = options.data_labels;
+        series_options.visible = options.visible;
         if let Some(color) = options.color {
             series_options.color = color;
         }
@@ -1087,6 +1100,50 @@ impl ChartInner {
         }
     }
 
+    pub fn layout_series_options_json(&self, series: u32) -> String {
+        let Some(series) = GeneralLayoutSeriesId::from_raw(series) else {
+            return "null".into();
+        };
+        self.engine
+            .general_layout_series_options(series)
+            .map_or(Value::Null, |options| {
+                json!({
+                    "pane": options.pane,
+                    "title": options.title,
+                    "color": options.color,
+                    "data_labels": options.data_labels,
+                    "visible": options.visible,
+                })
+            })
+            .to_string()
+    }
+
+    pub fn update_layout_series_result_json(&mut self, series: u32, patch_json: &str) -> String {
+        let Some(series) = GeneralLayoutSeriesId::from_raw(series) else {
+            return input_error("layout series handle is stale");
+        };
+        let patch = match parse_json::<LayoutPresentationPatch>(patch_json) {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
+        let Some(options) = self.engine.general_layout_series_options(series) else {
+            return input_error("layout series handle is stale");
+        };
+        let title = patch.title.unwrap_or_else(|| options.title.clone());
+        let color = patch.color.unwrap_or_else(|| options.color.clone());
+        let data_labels = patch.data_labels.unwrap_or(options.data_labels);
+        let visible = patch.visible.unwrap_or(options.visible);
+        match self.engine.update_general_layout_series_presentation(
+            series,
+            title,
+            color,
+            data_labels,
+            visible,
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
     pub fn replace_layout_data_result_json(&mut self, series: u32, data_json: &str) -> String {
         let Some(series) = GeneralLayoutSeriesId::from_raw(series) else {
             return input_error("layout series handle is stale");
@@ -1119,6 +1176,9 @@ impl ChartInner {
         if let Err(error) = self.engine.remove_general_layout_series(series) {
             return result_error(&error);
         }
+        if self.engine.general_layout_dataset_is_bound(dataset) {
+            return result_ok(Value::Null);
+        }
         match self.engine.remove_general_layout_dataset(dataset) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
@@ -1126,43 +1186,119 @@ impl ChartInner {
     }
 
     pub fn layout_hit_test_json(&self, pane: usize, x: f64, y: f64) -> String {
-        let Some(hit) = self.engine.general_layout_hit_test(pane, x, y) else {
+        self.engine
+            .general_layout_hit_test(pane, x, y)
+            .map_or(Value::Null, |hit| self.layout_hit_value(hit))
+            .to_string()
+    }
+
+    pub fn layout_accessibility_json(&self, series: u32, offset: usize, limit: usize) -> String {
+        let Some(series) = GeneralLayoutSeriesId::from_raw(series) else {
             return "null".into();
         };
+        self.engine
+            .general_layout_accessibility_snapshot(series, offset, limit)
+            .map_or(Value::Null, |snapshot| json!(snapshot))
+            .to_string()
+    }
+    pub fn layout_series_catalog_json(&self) -> String {
+        let entries = self
+            .engine
+            .general_layout_series_ids()
+            .into_iter()
+            .filter_map(|id| {
+                let options = self.engine.general_layout_series_options(id)?;
+                Some(json!({
+                    "id": id.get(),
+                    "pane": options.pane,
+                    "dataset": options.dataset.get(),
+                    "visible": options.visible,
+                    "kind": match options.kind {
+                        GeneralLayoutSeriesKind::Funnel => "funnel",
+                        GeneralLayoutSeriesKind::Treemap => "treemap",
+                        GeneralLayoutSeriesKind::Sankey => "sankey",
+                        GeneralLayoutSeriesKind::Sunburst => "sunburst",
+                    },
+                }))
+            })
+            .collect::<Vec<_>>();
+        Value::Array(entries).to_string()
+    }
+    pub fn layout_selected_hit_json(&self) -> String {
+        self.engine
+            .general_layout_selected_hit()
+            .map_or(Value::Null, |hit| self.layout_hit_value(hit))
+            .to_string()
+    }
+
+    pub fn set_layout_accessibility_focus(
+        &mut self,
+        series: u32,
+        element: &str,
+        row: usize,
+        color: &str,
+        size: f64,
+    ) -> bool {
+        let Some(series) = GeneralLayoutSeriesId::from_raw(series) else {
+            return false;
+        };
+        let element = match element {
+            "stage" => GeneralLayoutElement::Stage,
+            "node" => GeneralLayoutElement::Node,
+            "link" => GeneralLayoutElement::Link,
+            _ => return false,
+        };
+        self.engine.set_general_layout_accessibility_focus(
+            aeris_charts_engine::GeneralLayoutHit {
+                series,
+                element,
+                row,
+            },
+            color,
+            size,
+        )
+    }
+
+    pub fn clear_layout_accessibility_focus(&mut self) {
+        self.engine.clear_general_layout_accessibility_focus();
+    }
+
+    pub(super) fn layout_hit_value(&self, hit: aeris_charts_engine::GeneralLayoutHit) -> Value {
         let Some(options) = self.engine.general_layout_series_options(hit.series) else {
-            return "null".into();
+            return Value::Null;
         };
         let Some(input) = self.engine.general_layout_dataset(options.dataset) else {
-            return "null".into();
+            return Value::Null;
         };
-        let (id, label, value) = match (input, hit.element) {
+        let (id, label) = match (input, hit.element) {
             (GeneralLayoutInput::Funnel(stages), GeneralLayoutElement::Stage) => {
                 let Some(row) = stages.get(hit.row) else {
-                    return "null".into();
+                    return Value::Null;
                 };
-                (row.id.as_str(), row.label.as_str(), Some(row.value))
+                (row.id.as_str(), row.label.as_str())
             }
             (GeneralLayoutInput::Hierarchy(nodes), GeneralLayoutElement::Node) => {
                 let Some(row) = nodes.get(hit.row) else {
-                    return "null".into();
+                    return Value::Null;
                 };
-                (row.id.as_str(), row.label.as_str(), row.value)
+                (row.id.as_str(), row.label.as_str())
             }
             (GeneralLayoutInput::Flow { nodes, .. }, GeneralLayoutElement::Node) => {
                 let Some(row) = nodes.get(hit.row) else {
-                    return "null".into();
+                    return Value::Null;
                 };
-                (row.id.as_str(), row.label.as_str(), None)
+                (row.id.as_str(), row.label.as_str())
             }
             (GeneralLayoutInput::Flow { links, .. }, GeneralLayoutElement::Link) => {
                 let Some(row) = links.get(hit.row) else {
-                    return "null".into();
+                    return Value::Null;
                 };
-                (row.source.as_str(), row.target.as_str(), Some(row.value))
+                (row.source.as_str(), row.target.as_str())
             }
-            _ => return "null".into(),
+            _ => return Value::Null,
         };
-        json!({ "series": hit.series.get(), "element": match hit.element { GeneralLayoutElement::Stage => "stage", GeneralLayoutElement::Node => "node", GeneralLayoutElement::Link => "link" }, "row": hit.row, "id": id, "label": label, "value": value, "title": options.title }).to_string()
+        let value = self.engine.general_layout_hit_value(hit);
+        json!({ "series": hit.series.get(), "element": match hit.element { GeneralLayoutElement::Stage => "stage", GeneralLayoutElement::Node => "node", GeneralLayoutElement::Link => "link" }, "row": hit.row, "id": id, "label": label, "value": value, "title": options.title })
     }
 
     pub fn set_general_transition_duration_result_json(&mut self, duration_ms: f64) -> String {

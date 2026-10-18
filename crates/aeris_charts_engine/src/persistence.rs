@@ -100,6 +100,10 @@ struct StateV2 {
     datasets: Vec<DatasetV2>,
     series: Vec<SeriesV2>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    layout_datasets: Vec<LayoutDatasetV2>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    layout_series: Vec<LayoutSeriesV2>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     references: Vec<crate::GeneralReferenceOptions>,
     chart_options: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -155,6 +159,25 @@ struct DatasetV2 {
     colors: Option<Vec<Option<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     symbols: Option<Vec<Option<String>>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LayoutDatasetV2 {
+    id: String,
+    input: crate::GeneralLayoutInput,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LayoutSeriesV2 {
+    dataset: String,
+    pane: usize,
+    kind: crate::GeneralLayoutSeriesKind,
+    title: String,
+    color: String,
+    #[serde(default)]
+    data_labels: bool,
+    #[serde(default = "crate::general_layout::layout_visible_default")]
+    visible: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -785,6 +808,7 @@ impl ChartEngine {
             .any(|pane| pane.general_horizontal_domain.is_some())
             || self.general_dataset_count() != 0
             || self.general_series_count() != 0
+            || self.general_layout_data.is_some()
             || !self.general_axes(None).is_empty()
             || self.general_transition_duration_ms > 0.0
         {
@@ -1458,6 +1482,42 @@ impl ChartEngine {
                 })
             })
             .collect::<Result<Vec<_>, ChartError>>()?;
+        let mut layout_dataset_ids = HashMap::new();
+        let layout_datasets = self
+            .general_layout_data
+            .as_ref()
+            .into_iter()
+            .flat_map(|store| store.persistence_datasets())
+            .enumerate()
+            .map(|(index, (handle, input))| {
+                let id = format!("layout-dataset-{}", index + 1);
+                layout_dataset_ids.insert(handle, id.clone());
+                LayoutDatasetV2 {
+                    id,
+                    input: input.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let layout_series = self
+            .general_layout_data
+            .as_ref()
+            .into_iter()
+            .flat_map(|store| store.persistence_series())
+            .map(|options| {
+                Ok(LayoutSeriesV2 {
+                    dataset: layout_dataset_ids
+                        .get(&options.dataset)
+                        .cloned()
+                        .ok_or_else(|| invalid("layout series has no live dataset"))?,
+                    pane: options.pane,
+                    kind: options.kind,
+                    title: options.title.clone(),
+                    color: options.color.clone(),
+                    data_labels: options.data_labels,
+                    visible: options.visible,
+                })
+            })
+            .collect::<Result<Vec<_>, ChartError>>()?;
         let references = self
             .general_reference_iter()
             .map(|reference| {
@@ -1478,6 +1538,8 @@ impl ChartEngine {
             axes,
             datasets,
             series,
+            layout_datasets,
+            layout_series,
             references,
             chart_options: self.options.value().clone(),
             general_transition_duration_ms: (self.general_transition_duration_ms > 0.0)
@@ -2488,6 +2550,7 @@ impl ChartEngine {
             || self.general_dataset_count() != 0
             || self.general_dataset_handles_issued
             || self.general_series_count() != 0
+            || self.general_layout_data.is_some()
             || self.general_reference_count() != 0
             || self.general_axes.has_issued_handles()
         {
@@ -2595,6 +2658,34 @@ impl ChartEngine {
                 stack_mode: series.stack_mode,
             })?;
         }
+        let mut layout_datasets = HashMap::new();
+        for dataset in state.layout_datasets {
+            if layout_datasets.contains_key(&dataset.id) {
+                return Err(invalid(format!(
+                    "duplicate layout dataset id {:?}",
+                    dataset.id
+                )));
+            }
+            let id = staged.create_general_layout_dataset(dataset.input)?;
+            layout_datasets.insert(dataset.id, id);
+        }
+        for series in state.layout_series {
+            let dataset = *layout_datasets.get(&series.dataset).ok_or_else(|| {
+                invalid(format!(
+                    "layout series references unknown dataset {:?}",
+                    series.dataset
+                ))
+            })?;
+            staged.add_general_layout_series(crate::GeneralLayoutSeriesOptions {
+                pane: series.pane,
+                dataset,
+                kind: series.kind,
+                title: series.title,
+                color: series.color,
+                data_labels: series.data_labels,
+                visible: series.visible,
+            })?;
+        }
         let options_json = serde_json::to_string(&state.chart_options)
             .map_err(|error| invalid(format!("invalid V2 chart_options: {error}")))?;
         staged
@@ -2623,6 +2714,7 @@ impl ChartEngine {
         self.general_transition_duration_ms = transition_duration_ms;
         self.general_dataset_handles_issued = staged.general_dataset_handles_issued;
         self.general_series = staged.general_series;
+        self.general_layout_data = staged.general_layout_data;
         self.drawings = staged.drawings;
         self.drawing_anchor_times = staged.drawing_anchor_times;
         self.drawing_time_anchors.clear();
@@ -4441,6 +4533,105 @@ mod tests {
         let before = restored.export_state_json().unwrap();
         assert!(restored.import_state_json(&invalid.to_string()).is_err());
         assert_eq!(restored.export_state_json().unwrap(), before);
+    }
+
+    #[test]
+    fn v2_layout_series_round_trip_preserves_shared_data_and_rejects_invalid_import_atomically() {
+        let mut source = ChartEngine::new_with_initial_domain(
+            400.0,
+            300.0,
+            1.0,
+            crate::HorizontalDomain::Layout,
+        )
+        .unwrap();
+        let input = crate::GeneralLayoutInput::Hierarchy(vec![
+            crate::HierarchyNode {
+                id: "root".into(),
+                parent: None,
+                label: "Root".into(),
+                value: None,
+            },
+            crate::HierarchyNode {
+                id: "leaf".into(),
+                parent: Some("root".into()),
+                label: "Leaf".into(),
+                value: Some(3.0),
+            },
+        ]);
+        let dataset = source.create_general_layout_dataset(input.clone()).unwrap();
+        let mut treemap = crate::GeneralLayoutSeriesOptions::new(
+            0,
+            dataset,
+            crate::GeneralLayoutSeriesKind::Treemap,
+        );
+        treemap.title = "Map".into();
+        treemap.color = "#ff0000".into();
+        treemap.data_labels = true;
+        treemap.visible = false;
+        source.add_general_layout_series(treemap).unwrap();
+        source
+            .add_general_layout_series(crate::GeneralLayoutSeriesOptions::new(
+                0,
+                dataset,
+                crate::GeneralLayoutSeriesKind::Sunburst,
+            ))
+            .unwrap();
+        let document = source.export_state_json().unwrap();
+        let mut target = ChartEngine::new_with_initial_domain(
+            400.0,
+            300.0,
+            1.0,
+            crate::HorizontalDomain::Layout,
+        )
+        .unwrap();
+        target.import_state_json(&document).unwrap();
+        let ids = target.general_layout_series_ids();
+        assert_eq!(ids.len(), 2);
+        let map = target.general_layout_series_options(ids[0]).unwrap();
+        let burst = target.general_layout_series_options(ids[1]).unwrap();
+        assert_eq!(map.dataset, burst.dataset);
+        assert_eq!(map.title, "Map");
+        assert_eq!(map.color, "#ff0000");
+        assert!(map.data_labels);
+        assert!(!map.visible);
+        assert!(burst.visible);
+        assert_eq!(target.general_layout_dataset(map.dataset), Some(&input));
+        assert_eq!(target.export_state_json().unwrap(), document);
+
+        let mut legacy: serde_json::Value = serde_json::from_str(&document).unwrap();
+        for series in legacy["layout_series"].as_array_mut().unwrap() {
+            series.as_object_mut().unwrap().remove("visible");
+        }
+        let mut legacy_target = ChartEngine::new_with_initial_domain(
+            400.0,
+            300.0,
+            1.0,
+            crate::HorizontalDomain::Layout,
+        )
+        .unwrap();
+        legacy_target
+            .import_state_json(&legacy.to_string())
+            .unwrap();
+        assert!(legacy_target.general_layout_series_ids().iter().all(|&id| {
+            legacy_target
+                .general_layout_series_options(id)
+                .unwrap()
+                .visible
+        }));
+
+        let mut invalid: serde_json::Value = serde_json::from_str(&document).unwrap();
+        invalid["layout_datasets"][0]["input"]["Hierarchy"][1]["parent"] =
+            serde_json::json!("missing");
+        let mut fresh = ChartEngine::new_with_initial_domain(
+            400.0,
+            300.0,
+            1.0,
+            crate::HorizontalDomain::Layout,
+        )
+        .unwrap();
+        let before = fresh.export_state_json().unwrap();
+        assert!(fresh.import_state_json(&invalid.to_string()).is_err());
+        assert_eq!(fresh.export_state_json().unwrap(), before);
     }
 
     #[test]

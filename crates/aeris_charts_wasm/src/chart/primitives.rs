@@ -298,12 +298,13 @@ impl ChartInner {
     }
 
     fn hover_json(&self, hover: ChartHover, primitive: Option<&PrimitiveHit>) -> String {
-        let (series_id, object_id, cursor, general_hit) = match hover {
-            ChartHover::None => (None, None, None, None),
+        let (series_id, object_id, cursor, general_hit, layout_hit) = match hover {
+            ChartHover::None => (None, None, None, None, None),
             ChartHover::HostPrimitive(hit) => (
                 hit.series,
                 primitive.and_then(|primitive| primitive.external_id.clone()),
                 primitive.and_then(|primitive| primitive.cursor.clone()),
+                None,
                 None,
             ),
             ChartHover::Drawing { id, cursor } => (
@@ -311,18 +312,27 @@ impl ChartInner {
                 Some(format!("drawing:{id}")),
                 Some(cursor.to_string()),
                 None,
+                None,
             ),
-            ChartHover::Series(id) => (Some(id), None, None, None),
+            ChartHover::Series(id) => (Some(id), None, None, None, None),
             ChartHover::VolumeProfile(id) => {
-                (None, Some(format!("volume_profile:{id}")), None, None)
+                (None, Some(format!("volume_profile:{id}")), None, None, None)
             }
-            ChartHover::General => (None, None, None, self.engine.general_hovered_hit()),
+            ChartHover::General => (None, None, None, self.engine.general_hovered_hit(), None),
+            ChartHover::Layout => (
+                None,
+                None,
+                None,
+                None,
+                self.engine.general_layout_hovered_hit(),
+            ),
         };
         serde_json::json!({
             "series_id": series_id,
             "object_id": object_id,
             "cursor": cursor,
             "general_hit": general_hit.as_ref().map(super::general_charts::general_hit_value),
+            "layout_hit": layout_hit.map(|hit| self.layout_hit_value(hit)),
         })
         .to_string()
     }

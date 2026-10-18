@@ -320,6 +320,9 @@ export interface layout_series_options {
   pane: number;
   title?: string;
   color?: string;
+  /** Show labels only when the engine-measured text fits inside the mark. */
+  data_labels?: boolean;
+  visible?: boolean;
 }
 
 export interface layout_hit {
@@ -332,10 +335,32 @@ export interface layout_hit {
   title: string;
 }
 
+export interface layout_accessibility_item {
+  element: "stage" | "node" | "link";
+  row: number;
+  id: string;
+  label: string;
+  value: number | null;
+  selected: boolean;
+}
+
+export interface layout_accessibility_snapshot {
+  series: number;
+  title: string;
+  total: number;
+  offset: number;
+  items: layout_accessibility_item[];
+}
 export interface layout_series_api {
   readonly id: number;
   readonly kind: layout_series_kind;
   set_data(data: layout_input): void;
+  options(): layout_series_options;
+  apply_options(options: Partial<Omit<layout_series_options, "pane">>): void;
+  set_visible(visible: boolean): void;
+  subscribe_data_changed(handler: () => void): void;
+  unsubscribe_data_changed(handler: () => void): void;
+  accessibility_snapshot(offset?: number, limit?: number): layout_accessibility_snapshot;
   remove(): void;
 }
 
@@ -1167,6 +1192,8 @@ export interface mouse_event_params {
   hovered_series: series_api | general_series_api | null;
   /** Exact engine-owned mark hit for a general series, otherwise `null`. */
   general_hit: general_series_hit | null;
+  /** Exact engine-owned hit for an axis-free layout item. */
+  layout_hit: layout_hit | null;
   /**
    * The `external_id` a primitive's `hit_test` reported for the hovered object (reference
    * `MouseEventParams.hoveredObjectId`), or `null` when no primitive is hit.
@@ -1421,7 +1448,7 @@ export type ema_ribbon_options = readonly [
 
 /** Series lifecycle event (platform chrome: legend chips, indicator counts). */
 export interface series_change_event {
-  series: series_api | general_series_api;
+  series: series_api | general_series_api | layout_series_api;
   pane_index: number;
 }
 export type series_change_handler = (event: series_change_event) => void;
@@ -2702,6 +2729,17 @@ export interface chart_state_v2 {
     group_id: string | null;
     stack_id: string | null;
     stack_mode: "Normal" | "Cumulative" | "Silhouette" | "Wiggle" | "Percent" | "Positive";
+  }[];
+  /** Layout records are absent in older V2 documents. */
+  layout_datasets?: { id: `layout-dataset-${number}`; input: Record<string, unknown> }[];
+  layout_series?: {
+    dataset: `layout-dataset-${number}`;
+    pane: number;
+    kind: "Funnel" | "Treemap" | "Sankey" | "Sunburst";
+    title: string;
+    color: string;
+    data_labels?: boolean;
+    visible?: boolean;
   }[];
   chart_options: Record<string, unknown>;
   /** Persisted opt-in duration; active animation progress is runtime-only. */
@@ -4048,8 +4086,12 @@ export interface chart_api {
   add_axis(options: general_axis_options): general_axis_api;
   /** Add an axis-free layout family to a `layout` pane. */
   add_layout_series(kind: layout_series_kind, options: layout_series_options, data: layout_input): layout_series_api;
+  /** Live layout series in frame order, including those restored from V2 state. */
+  layout_series(pane?: number): layout_series_api[];
   /** Exact engine-owned mark hit in chart CSS pixels. */
   layout_hit_test(pane: number, x: number, y: number): layout_hit | null;
+  /** Selection from the engine input controller; Escape or data replacement clears it. */
+  layout_selected_hit(): layout_hit | null;
   /** Validate a complete proposed pane graph and packed data without mutating the chart. */
   validate_general_pane_proposal(
     pane: number,
