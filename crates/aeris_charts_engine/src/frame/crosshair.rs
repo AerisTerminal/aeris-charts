@@ -41,6 +41,12 @@ impl ChartEngine {
         {
             return;
         }
+        // General panes follow the general-chart convention: hover feedback comes from the
+        // hovered mark, never a free-floating crosshair. The pointer position is still retained
+        // for hit testing, tooltips, and linked-chart sync.
+        if !self.pane_uses_financial_time(pane_index) {
+            return;
+        }
         let ch = &self.options.get().crosshair;
         let vert_color = css_color(&ch.vert_line.color, CROSSHAIR_COLOR);
         let horz_color = css_color(&ch.horz_line.color, CROSSHAIR_COLOR);
@@ -53,32 +59,6 @@ impl ChartEngine {
         let vert_style = crate::line_style_from_u8(ch.vert_line.style);
         let horz_style = crate::line_style_from_u8(ch.horz_line.style);
         let pane = &self.panes[pane_index];
-        if self.pane_horizontal_domain(pane_index) != Some(HorizontalDomain::FinancialTime) {
-            if self.pane_at_y(y_css) != Some(pane_index) {
-                return;
-            }
-            if ch.vert_line.visible {
-                out.push(Prim::VLine {
-                    x: (x_css * hpr).round() as i32,
-                    y0: (pane.top * vpr).round() as i32,
-                    y1: ((pane.top + pane.height) * vpr).round() as i32,
-                    width: vert_width,
-                    style: vert_style,
-                    color: vert_color,
-                });
-            }
-            if ch.horz_line.visible {
-                out.push(Prim::HLine {
-                    y: (y_css * vpr).round() as i32,
-                    x0: 0,
-                    x1: pane_w_px,
-                    width: horz_width,
-                    style: horz_style,
-                    color: horz_color,
-                });
-            }
-            return;
-        }
         if self
             .pane_at_y(y_css)
             .and_then(|index| self.pane_horizontal_domain(index))

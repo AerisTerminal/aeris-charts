@@ -306,6 +306,11 @@ impl ChartEngine {
     }
 
     pub fn price_scale_visible_for(&self, pane: usize, target: PriceScaleTarget) -> bool {
+        // General panes own their axes; financial price scales never reserve or paint a strip
+        // beside them.
+        if !self.pane_uses_financial_time(pane) {
+            return false;
+        }
         match target {
             PriceScaleTarget::Right => self.options.get().right_price_scale.visible,
             PriceScaleTarget::Left => self.options.get().left_price_scale.visible,

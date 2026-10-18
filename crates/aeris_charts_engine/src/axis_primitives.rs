@@ -106,7 +106,10 @@ impl ChartEngine {
                 );
             }
 
-            if self.left_axis_w > 0.0 && left_scale.border_visible {
+            // Built-in price-scale borders belong to financial panes. General-only charts reserve
+            // side strips for their own axes and plot margins, which draw their own rules.
+            let financial = self.has_financial_time_pane();
+            if financial && self.left_axis_w > 0.0 && left_scale.border_visible {
                 rect(
                     (pane_left * dpr).round() - f64::from(border_w),
                     0.0,
@@ -115,7 +118,7 @@ impl ChartEngine {
                     left_border,
                 );
             }
-            if self.axis_w > 0.0 && right_scale.border_visible {
+            if financial && self.axis_w > 0.0 && right_scale.border_visible {
                 rect(
                     ((pane_left + pane_w) * dpr).round(),
                     0.0,
@@ -124,7 +127,7 @@ impl ChartEngine {
                     right_border,
                 );
             }
-            if time_scale.border_visible && self.time_axis_visible {
+            if time_scale.border_visible && self.time_axis_shown() {
                 rect(
                     0.0,
                     (pane_h * dpr).round(),
@@ -152,7 +155,7 @@ impl ChartEngine {
                     );
                 }
             }
-            if time_scale.border_visible && self.time_ticks_visible && self.time_axis_visible {
+            if time_scale.border_visible && self.time_ticks_visible && self.time_axis_shown() {
                 let y0 = (pane_h * dpr).round();
                 for x in &axis_frame.time_ticks {
                     rect(

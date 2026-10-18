@@ -321,7 +321,8 @@ test("layout funnel routes pointer hover, click selection, Escape and replacemen
     window.__layout_input = { chart, series, host, tooltip, hovers: [] };
     chart.subscribe_crosshair_move((event) => window.__layout_input.hovers.push(event.layout_hit));
     const bounds = host.getBoundingClientRect();
-    return location && { x: bounds.left + location.x, y: bounds.top + location.y };
+    const geometry = chart.panes()[0].get_geometry();
+    return location && { x: bounds.left + geometry.left + location.x, y: bounds.top + location.y };
   });
   expect(point).not.toBeNull();
   await page.mouse.move(point.x, point.y);
@@ -4287,7 +4288,8 @@ test("general point crosshair sync uses semantic values across unequal categorie
     kind: "general_crosshair",
     position: expect.objectContaining({ x: { type: "category", value: "B" } }),
   }));
-  expect(moved).toMatchObject({ applied: true, changed: true, echoes: [] });
+  // General panes keep the synced hover state but paint no crosshair, so the target is unchanged.
+  expect(moved).toMatchObject({ applied: true, changed: false, echoes: [] });
   await page.mouse.move(700, 650);
   const left = await page.evaluate(() => {
     const { source, target, target_before } = window.__generalSyncFixture;

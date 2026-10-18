@@ -3557,6 +3557,16 @@ impl ChartEngine {
         self.pane_horizontal_domain(index) == Some(HorizontalDomain::FinancialTime)
     }
 
+    pub(crate) fn has_financial_time_pane(&self) -> bool {
+        (0..self.panes.len()).any(|index| self.pane_uses_financial_time(index))
+    }
+
+    /// Whether the financial time-axis strip is painted and reserved. The option alone is not
+    /// enough: a chart whose panes are all general domains has no financial time to label.
+    pub(crate) fn time_axis_shown(&self) -> bool {
+        self.time_axis_visible && self.has_financial_time_pane()
+    }
+
     /// reference chart-model.ts `removePane`: rejects out-of-range indices and a non-empty last
     /// pane. An empty preserved last pane is retired in place and replaced by a fresh default pane,
     /// preserving the engine's one-pane invariant without keeping the removed identity alive.
@@ -4962,7 +4972,7 @@ impl ChartEngine {
     /// chart height for the pane content area and report it from their `time_scale_height()`
     /// gestures getter.
     pub fn time_axis_height(&self) -> f64 {
-        if self.time_axis_visible {
+        if self.time_axis_shown() {
             self.axis_metrics()
                 .time_strip_height()
                 .max(self.time_axis_minimum_height)

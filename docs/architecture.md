@@ -240,6 +240,18 @@ grid visibility combines with the chart-wide direction style, coincident device-
 and an enabled zero line replaces a coincident ordinary grid rule. Financial panes allocate no general
 axis storage and retain their established price/time axis output unchanged.
 
+General charts follow Recharts presentation defaults. Automatic linear and radial-linear domains
+include zero (logarithmic domains excluded) and round outward to the tightest 1/2/5 tick step that
+fits the axis tick count, or five intervals (`aeris_charts_core` `nice_linear_domain`), so the
+top data point never sits on the plot edge. Vertical category axes list the first category at the
+top (`GeneralAxis::range_reversed`); geometry, hits, grid, ticks, brush, and sync share that range.
+Financial price-scale strips, their borders and crosshair tags, and the financial time-axis strip
+are reserved and painted only when the chart has a financial-time pane; a general-only chart gives
+its plot the full pane. A plot side without a general axis keeps `general_plot_margin` (half an
+axis text line plus 2 px, at least 8 px) so edge tick labels and marks stay inside the pane.
+A visible polar angle axis shrinks the ring (`general_polar_plot`) to place its category labels
+outside the outer ring along each spoke; radius ticks use the same five intervals as the domain.
+
 Category runtime views are bounded index windows over the current configured or automatic registry.
 Zoom anchors use a category identity in the visible window, pan advances by a rounded visible-window
 fraction, and registry changes clamp the window without retaining stale category strings.
@@ -848,8 +860,9 @@ General item hover emits an X/Y semantic value with its axis IDs. The receiving 
 those values through its own axis domains and pane geometry, locating the target pane by axis ID;
 missing categories or out-of-view
 values are ignored. The hover event is emitted when the hovered row changes, and pointer leave
-emits the shared clear-crosshair event. The shared frame draws crosshair rules directly at general
-pane coordinates; it does not snap them to the financial bar index.
+emits the shared clear-crosshair event. General panes keep the synced hover position for tooltips
+and promotion but paint no crosshair rules or axis tags, matching Recharts; GPUI hosts release the
+pointer through `GpuiChartInput::hover_changed` when it leaves the chart.
 
 Secondary clicks use the engine-owned Chart Context query. It resolves chart-space coordinates,
 pane, time, logical index, hit series, and price on that series' exact scale (or the pane's canonical
@@ -1339,7 +1352,9 @@ separate stable pane identity and intentionally issues fresh live IDs during res
 The ordered frame contract contains pane backgrounds and grids, idle indicator geometry, idle drawings, ordinary series geometry, active series/drawings/previews, custom-series contributions spliced at their paint marks, pane chrome, trading regions, trading/alerts, crosshair overlays, axes, labels, and text, plus per-series and per-drawing segment ranges for retained backend groups. `series_order`/`drawings` stay the stable saved orders; the frame derives the effective paint order without rewriting them, and series/drawing hit tests tie-break on stable order so promotion cannot oscillate hover. Backends preserve ordering, clipping, blending, and coordinate conversion. A backend may batch compatible adjacent primitives only when visible output is unchanged.
 General-domain panes additionally carry a device-pixel plot scissor and the contiguous
 range of general marks, references, labels and interaction ink inside `main` to which
-it applies. Canvas2D, WebGPU, GPUI and native use that shared range and scissor;
+it applies. The scissor extends `GENERAL_PLOT_OVERFLOW` (6 px) past the plot, clamped to the pane
+height, and the pane scissor widens to contain it, so markers and strokes on a domain edge stay
+whole while panned or zoomed marks stay off axis labels. Canvas2D, WebGPU, GPUI and native use that shared range and scissor;
 financial panes retain the original pane clip, while pane underlay/chrome and the
 unscissored axis layer remain visible outside the general plot. Exact and nearest
 general hits reject positions outside the same plot bounds before testing any mark.

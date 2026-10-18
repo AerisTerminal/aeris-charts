@@ -2543,12 +2543,29 @@ impl ChartEngine {
             if !self.pane_uses_financial_time(pi)
                 && let Some(plot) = self.general_plot_rect(pi)
             {
-                let left = (plot.x * hpr).round().max(0.0) as u32;
-                let top = (plot.y * vpr).round().max(0.0) as u32;
-                let right = ((plot.x + plot.width) * hpr).round().max(left as f64) as u32;
-                let bottom = ((plot.y + plot.height) * vpr).round().max(top as f64) as u32;
+                let overflow = crate::general_axes::GENERAL_PLOT_OVERFLOW;
+                let (pane_top, pane_bottom) = self
+                    .panes
+                    .get(pi)
+                    .map_or((plot.y, plot.y + plot.height), |pane| {
+                        (pane.top, pane.top + pane.height)
+                    });
+                let x0 = (plot.x - overflow).max(0.0);
+                let x1 = (plot.x + plot.width + overflow).min(self.css_width.max(x0));
+                let y0 = (plot.y - overflow).max(pane_top);
+                let y1 = (plot.y + plot.height + overflow).min(pane_bottom.max(y0));
+                let left = (x0 * hpr).round().max(0.0) as u32;
+                let top = (y0 * vpr).round().max(0.0) as u32;
+                let right = (x1 * hpr).round().max(left as f64) as u32;
+                let bottom = (y1 * vpr).round().max(top as f64) as u32;
                 out.plot_scissor = Some([left, top, right - left, bottom - top]);
                 out.plot_range = [general_start, out.main.len()];
+                // The plot clip nests inside the pane clip, so the pane clip must also admit the
+                // horizontal overflow or edge marks are still cut at the pane edge.
+                let [pane_x, pane_y, pane_w, pane_h] = out.scissor;
+                let pane_right = (pane_x + pane_w).max(right);
+                let pane_x = pane_x.min(left);
+                out.scissor = [pane_x, pane_y, pane_right - pane_x, pane_h];
             }
             // Trailing creation previews (brush + pending) from retained, topmost among chart
             // content but still below chrome/trading (protected layers) and clipped to the pane.

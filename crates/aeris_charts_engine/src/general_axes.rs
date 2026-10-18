@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use aeris_charts_core::format::time_formatter::MonthNames;
 use aeris_charts_core::scale::general_scale::{
     AngularCategoryScale, BandScale, DEFAULT_SYMLOG_CONSTANT, LinearScale, LogScale, PointScale,
-    PolarPlot, SymLogScale,
+    PolarPlot, SymLogScale, nice_linear_domain,
 };
 use aeris_charts_core::scale::time_tick_marks::{civil_from_timestamp, days_from_civil};
 use aeris_charts_core::style::DEFAULT_BORDER_RGB;
@@ -326,6 +326,15 @@ impl GeneralAxis {
         self.reverse
     }
 
+    /// Whether the domain maps from the end of the plot range toward its start. Vertical
+    /// category axes list their first category at the top, the opposite of a numeric Y axis
+    /// that grows upward, so `reverse` flips that top-down default.
+    pub(crate) fn range_reversed(&self) -> bool {
+        let top_down = self.dimension == AxisDimension::Y
+            && matches!(self.scale, GeneralScaleType::Band | GeneralScaleType::Point);
+        self.reverse != top_down
+    }
+
     pub fn visible(&self) -> bool {
         self.visible
     }
@@ -534,6 +543,20 @@ impl GeneralAxisRegistry {
     }
 }
 
+/// Clearance on a general plot side without an axis: at least half an axis text line, so a tick
+/// label centered on the plot edge fits completely inside the pane.
+pub(crate) fn general_plot_margin(metrics: AxisMetrics) -> f64 {
+    (metrics.axis / 2.0 + 2.0).max(8.0)
+}
+
+/// How far general series marks may paint past the plot rectangle. Marks sitting exactly on a
+/// domain edge (a point marker, a whisker cap, a stroke) stay whole instead of being cut in half,
+/// while panned or zoomed data is still kept off the axis labels.
+pub(crate) const GENERAL_PLOT_OVERFLOW: f64 = 6.0;
+
+/// Space between a polar plot's outer ring and its angle-axis labels.
+const POLAR_ANGLE_LABEL_GAP: f64 = 6.0;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GeneralPlotRect {
     pub x: f64,
@@ -598,7 +621,7 @@ impl ChartEngine {
             })
             .collect();
         for axis in self.general_axes.iter_mut() {
-            if !axis.visible || !matches!(axis.dimension, AxisDimension::Y) {
+            if !axis.visible || !matches!(axis.dimension, AxisDimension::Y | AxisDimension::Angle) {
                 axis.layout_thickness = 0.0;
                 continue;
             }
@@ -612,6 +635,11 @@ impl ChartEngine {
                 .into_iter()
                 .map(|label| measure(&label, false))
                 .fold(0.0_f64, f64::max);
+            if axis.dimension == AxisDimension::Angle {
+                // Angle labels sit outside the outer ring; the polar plot reserves this width.
+                axis.layout_thickness = widest_tick;
+                continue;
+            }
             let tick_strip = AxisMetrics::price_strip_width(
                 widest_tick.max(AxisMetrics::DEFAULT_TEXT_WIDTH),
                 0.0,
@@ -638,14 +666,21 @@ impl ChartEngine {
             PriceScaleSide::Right => AxisPosition::Right,
         };
         let budget = self.general_vertical_axis_budget(pane_index);
-        fitting_thickness(
+        let axes = fitting_thickness(
             self.general_axes
                 .iter()
                 .filter(|axis| axis.pane_id == pane_id && axis.visible)
                 .filter(|axis| axis.position == Some(position))
                 .map(vertical_axis_thickness),
             budget,
-        )
+        );
+        // Mixed charts keep the financial gutters; only general-only charts need a margin on a
+        // side without an axis so edge marks and edge-aligned labels do not touch the canvas.
+        if axes == 0.0 && !self.has_financial_time_pane() {
+            general_plot_margin(self.axis_metrics())
+        } else {
+            axes
+        }
     }
 
     pub(crate) fn general_plot_rect(&self, pane_index: usize) -> Option<GeneralPlotRect> {
@@ -662,14 +697,53 @@ impl ChartEngine {
                 (pane.height - 1.0).max(0.0) * 0.45,
             )
         };
-        let top = side_height(AxisPosition::Top);
-        let bottom = side_height(AxisPosition::Bottom);
+        // A side without an axis keeps a margin so the top tick label, edge markers, and layout
+        // marks stay inside the pane instead of touching or crossing its edge.
+        let margin = general_plot_margin(metrics);
+        let or_margin = |thickness: f64| if thickness > 0.0 { thickness } else { margin };
+        let top = or_margin(side_height(AxisPosition::Top));
+        let bottom = or_margin(side_height(AxisPosition::Bottom));
         Some(GeneralPlotRect {
             x: self.pane_left,
             y: pane.top + top,
             width: self.pane_w,
             height: (pane.height - top - bottom).max(1.0),
         })
+    }
+
+    /// The polar plot of a pane in pane-local X. A visible angle axis labels its categories
+    /// outside the outer ring, so the ring shrinks to leave that room inside the plot rect.
+    pub(crate) fn general_polar_plot(&self, pane_index: usize) -> Option<PolarPlot> {
+        let plot = self.general_plot_rect(pane_index)?;
+        let pane_id = self.pane_stable_id(pane_index)?;
+        let metrics = self.axis_metrics();
+        let widest_angle_label = self
+            .general_axes
+            .iter()
+            .filter(|axis| {
+                axis.pane_id == pane_id && axis.visible && axis.dimension == AxisDimension::Angle
+            })
+            .map(|axis| {
+                if axis.layout_thickness > 0.0 {
+                    axis.layout_thickness
+                } else {
+                    AxisMetrics::DEFAULT_TEXT_WIDTH
+                }
+            })
+            .reduce(f64::max);
+        let (room_x, room_y) = widest_angle_label.map_or((0.0, 0.0), |width| {
+            // Label extent and gap, plus the 2 px edge clearance labels keep from the plot rect.
+            (
+                width + POLAR_ANGLE_LABEL_GAP + 2.0,
+                metrics.axis + POLAR_ANGLE_LABEL_GAP + 2.0,
+            )
+        });
+        let width = plot.width - 2.0 * room_x;
+        let height = plot.height - 2.0 * room_y;
+        if width < 1.0 || height < 1.0 {
+            return PolarPlot::from_rect(0.0, plot.y, plot.width, plot.height).ok();
+        }
+        PolarPlot::from_rect(room_x, plot.y + room_y, width, height).ok()
     }
 
     pub(crate) fn append_general_grid_frame(
@@ -724,7 +798,7 @@ impl ChartEngine {
         let mut seen_horizontal_zero = HashSet::new();
         let mut polar_grid_count = 0;
 
-        if let Ok(polar) = PolarPlot::from_rect(0.0, plot.y, plot.width, plot.height) {
+        if let Some(polar) = self.general_polar_plot(pane_index) {
             let (cx, cy) = polar.center();
             let mut seen_polar_rings = HashSet::new();
             let mut seen_polar_spokes = HashSet::new();
@@ -845,7 +919,7 @@ impl ChartEngine {
         {
             let range = match axis.dimension {
                 AxisDimension::X => {
-                    if axis.reverse {
+                    if axis.range_reversed() {
                         (plot.width, 0.0)
                     } else {
                         (0.0, plot.width)
@@ -853,7 +927,7 @@ impl ChartEngine {
                 }
                 AxisDimension::Y => {
                     let bottom = plot.y + plot.height;
-                    if axis.reverse {
+                    if axis.range_reversed() {
                         (plot.y, bottom)
                     } else {
                         (bottom, plot.y)
@@ -1007,8 +1081,7 @@ impl ChartEngine {
                 .filter(|axis| axis.pane_id == pane_id && axis.visible)
             {
                 if matches!(axis.dimension, AxisDimension::Angle | AxisDimension::Radius) {
-                    let Ok(polar) = PolarPlot::from_rect(plot.x, plot.y, plot.width, plot.height)
-                    else {
+                    let Some(polar) = self.general_polar_plot(pane_index) else {
                         continue;
                     };
                     let Some(domain) = self.effective_general_axis_domain(axis) else {
@@ -1029,19 +1102,21 @@ impl ChartEngine {
                             continue;
                         }
                         let (x, y) = if axis.dimension == AxisDimension::Angle {
-                            let inset = width / 2.0 + metrics.axis / 2.0 + 4.0;
-                            let fraction =
-                                ((polar.outer_radius() - inset) / polar.outer_radius()).max(0.0);
-                            let Some(point) = polar.point(tick.coordinate, fraction) else {
+                            // Center the label box just outside the ring along its spoke.
+                            let extent = tick.coordinate.sin().abs() * width / 2.0
+                                + tick.coordinate.cos().abs() * metrics.axis / 2.0;
+                            let fraction = (polar.outer_radius() + POLAR_ANGLE_LABEL_GAP + extent)
+                                / polar.outer_radius();
+                            let Some((x, y)) = polar.point(tick.coordinate, fraction) else {
                                 continue;
                             };
-                            point
+                            (plot.x + x, y)
                         } else {
                             let Some((_, y)) = polar.point(0.0, tick.coordinate) else {
                                 continue;
                             };
                             (
-                                polar.center().0 + width / 2.0 + 4.0,
+                                plot.x + polar.center().0 + width / 2.0 + 4.0,
                                 y.max(plot.y + metrics.axis / 2.0 + 2.0),
                             )
                         };
@@ -1167,12 +1242,20 @@ impl ChartEngine {
                     AxisDimension::X => {
                         let from = plot.x;
                         let to = plot.x + plot.width;
-                        if axis.reverse { (to, from) } else { (from, to) }
+                        if axis.range_reversed() {
+                            (to, from)
+                        } else {
+                            (from, to)
+                        }
                     }
                     AxisDimension::Y => {
                         let from = plot.y + plot.height;
                         let to = plot.y;
-                        if axis.reverse { (to, from) } else { (from, to) }
+                        if axis.range_reversed() {
+                            (to, from)
+                        } else {
+                            (from, to)
+                        }
                     }
                     AxisDimension::Angle | AxisDimension::Radius => continue,
                 };
@@ -1711,11 +1794,24 @@ impl ChartEngine {
                     extend_numeric_bounds(&mut bounds, high);
                     include_zero = true;
                 }
-                if include_zero && axis.scale != GeneralScaleType::Logarithmic {
+                // Automatic linear-family axes start at zero, like general-chart convention
+                // (Recharts' default [0, auto]); bars, stacks, and radial values always did.
+                if (include_zero || bounds.is_some()) && axis.scale != GeneralScaleType::Logarithmic
+                {
                     extend_numeric_bounds(&mut bounds, 0.0);
                 }
                 bounds.and_then(|(low, high)| {
                     expanded_numeric_domain_for_scale(axis.scale, low, high)
+                        .map(|domain| match axis.scale {
+                            GeneralScaleType::Linear | GeneralScaleType::RadialLinear => {
+                                nice_linear_domain(
+                                    domain[0],
+                                    domain[1],
+                                    axis.tick_count.map_or(5, usize::from),
+                                )
+                            }
+                            _ => domain,
+                        })
                         .and_then(|domain| {
                             padded_numeric_domain(axis.scale, domain, axis.domain_padding)
                         })
@@ -2228,14 +2324,14 @@ impl ChartEngine {
 
 fn general_sync_axis_range(axis: &GeneralAxis, plot: &GeneralPlotRect) -> Option<(f64, f64)> {
     match axis.dimension {
-        AxisDimension::X => Some(if axis.reverse {
+        AxisDimension::X => Some(if axis.range_reversed() {
             (plot.width, 0.0)
         } else {
             (0.0, plot.width)
         }),
         AxisDimension::Y => {
             let bottom = plot.y + plot.height;
-            Some(if axis.reverse {
+            Some(if axis.range_reversed() {
                 (plot.y, bottom)
             } else {
                 (bottom, plot.y)
@@ -2499,6 +2595,11 @@ fn axis_ticks(
             let span = (range_to - range_from).abs();
             let target = axis.tick_count.map_or_else(
                 || {
+                    // Radius ticks map onto a 0..1 ring fraction, not pixels; use the same five
+                    // intervals the automatic radius domain is rounded to.
+                    if axis.dimension == AxisDimension::Radius {
+                        return 5;
+                    }
                     (span / (metrics.axis + axis.min_tick_gap + 8.0))
                         .floor()
                         .clamp(2.0, 10.0) as usize
@@ -4313,11 +4414,12 @@ mod tests {
         let frame = target.build_frame();
         let general_pane = target.general_axis_pane_index("category-x").unwrap();
         let general_segments = target.frame_pane_segments(general_pane).unwrap();
+        // General panes keep the synced hover position but paint no crosshair lines.
         assert!(
-            frame.panes[general_pane].main
+            !frame.panes[general_pane].main
                 [general_segments.trading_end..general_segments.overlay_end]
                 .iter()
-                .any(|prim| matches!(prim, Prim::VLine { .. }))
+                .any(|prim| matches!(prim, Prim::VLine { .. } | Prim::HLine { .. }))
         );
         let financial_segments = target.frame_pane_segments(0).unwrap();
         assert!(

@@ -1,6 +1,7 @@
 //! Interactive GPUI gallery for every general series family.
 //! Run with: cargo run -p aeris_charts_render_gpui --features gpui-backend --example gpui_general_gallery
 
+use aeris_charts_core::options::ChartTheme;
 use aeris_charts_engine::{
     AxisDimension, CategoryScaleType, ChartEngine, ChartFrame, ContinuousScaleType,
     FinancialFrameRequest, FlowLink, FlowNode, FunnelStage, GeneralAxisOptions, GeneralLayoutInput,
@@ -216,6 +217,7 @@ impl ChartCard {
         let mut engine =
             ChartEngine::new_with_initial_domain(520.0, 310.0, 1.0, HorizontalDomain::Layout)
                 .expect("a layout pane can be the initial pane");
+        engine.set_theme(ChartTheme::Light);
         let dataset = engine
             .create_general_layout_dataset(input(kind))
             .expect("gallery data is valid");
@@ -268,6 +270,7 @@ impl ChartCard {
         };
         let mut engine = ChartEngine::new_with_initial_domain(520.0, 310.0, 1.0, domain)
             .expect("a general pane can be the initial pane");
+        engine.set_theme(ChartTheme::Light);
         let (x_dimension, x_scale, y_dimension, y_scale) = if polar {
             (
                 AxisDimension::Angle,
@@ -303,7 +306,14 @@ impl ChartCard {
         };
         let mut x_axis = GeneralAxisOptions::new("x", 0, x_dimension, x_scale);
         let mut y_axis = GeneralAxisOptions::new("y", 0, y_dimension, y_scale);
-        if polar {
+        // Radar reads against its polar grid; sector families show proportions without one.
+        if kind == Kind::Radar {
+            engine
+                .apply_options(
+                    r#"{"grid":{"vertLines":{"visible":true},"horzLines":{"visible":true}}}"#,
+                )
+                .expect("radar grid options");
+        } else if polar {
             x_axis.visible = false;
             y_axis.visible = false;
         }
@@ -471,6 +481,7 @@ impl Render for ChartCard {
         let down_entity = cx.entity();
         let up_entity = cx.entity();
         let outside_entity = cx.entity();
+        let hover_entity = cx.entity();
         let prepaint = cx.entity();
         let paint = cx.entity();
         div()
@@ -509,8 +520,15 @@ impl Render for ChartCard {
             )
             .child(
                 div()
+                    .id(self.title)
                     .flex_1()
                     .min_h_0()
+                    .on_hover(move |hovered, _, app| {
+                        hover_entity.update(app, |card, cx| {
+                            card.input.hover_changed(&mut card.engine, *hovered);
+                            cx.notify();
+                        });
+                    })
                     .on_mouse_move(move |event, _, app| {
                         move_entity.update(app, |card, cx| {
                             card.input.mouse_move(&mut card.engine, event);

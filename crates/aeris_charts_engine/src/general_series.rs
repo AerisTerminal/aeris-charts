@@ -3426,7 +3426,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -3696,7 +3696,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -3983,7 +3983,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -4608,7 +4608,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -4784,7 +4784,7 @@ impl ChartEngine {
             (0.0, plot.width)
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -4965,7 +4965,7 @@ impl ChartEngine {
             (0.0, plot.width)
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5125,7 +5125,7 @@ impl ChartEngine {
             return None;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5184,7 +5184,7 @@ impl ChartEngine {
             (0.0, plot.width)
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5464,7 +5464,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5609,7 +5609,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5764,7 +5764,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5914,7 +5914,7 @@ impl ChartEngine {
             (0.0, plot.width)
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.reverse() {
+        let y_range = if y_axis.range_reversed() {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5937,7 +5937,7 @@ impl ChartEngine {
                 x_scale: x_axis.scale(),
                 y_scale: y_axis.scale(),
                 x_reverse: x_axis.reverse(),
-                y_reverse: y_axis.reverse(),
+                y_reverse: y_axis.range_reversed(),
                 radius: radius.to_bits(),
             },
             x_scale,
@@ -6492,8 +6492,7 @@ impl ChartEngine {
 
     fn build_general_pie_context(&self, series: &GeneralSeries) -> Option<GeneralPieContext> {
         let pane = self.pane_index_for_id(series.pane_id)?;
-        let plot = self.general_plot_rect(pane)?;
-        let polar_plot = PolarPlot::from_rect(0.0, plot.y, plot.width, plot.height).ok()?;
+        let polar_plot = self.general_polar_plot(pane)?;
         let dataset = self.general_geometry_dataset(series.dataset)?;
         let max_value = dataset
             .y()
@@ -6626,8 +6625,7 @@ impl ChartEngine {
         series: &GeneralSeries,
     ) -> Option<GeneralPolarCategoryContext> {
         let pane = self.pane_index_for_id(series.pane_id)?;
-        let rect = self.general_plot_rect(pane)?;
-        let plot = PolarPlot::from_rect(0.0, rect.y, rect.width, rect.height).ok()?;
+        let plot = self.general_polar_plot(pane)?;
         let dataset = self.general_geometry_dataset(series.dataset)?;
         let angle_axis = self.general_axis(&series.x_axis_id)?;
         let radius_axis = self.general_axis(&series.y_axis_id)?;
@@ -7685,7 +7683,7 @@ impl ChartEngine {
                 pane_id,
                 axis.dimension(),
                 axis.scale(),
-                axis.reverse(),
+                axis.range_reversed(),
                 axis.band_padding_inner(),
                 axis.band_padding_outer(),
                 domain,
@@ -8106,7 +8104,7 @@ impl ChartEngine {
         let plot = self.general_plot_rect(pane_index)?;
         let (range_from, range_to) = match brush.dimension {
             AxisDimension::X => {
-                if axis.reverse() {
+                if axis.range_reversed() {
                     (plot.width, 0.0)
                 } else {
                     (0.0, plot.width)
@@ -8114,7 +8112,7 @@ impl ChartEngine {
             }
             AxisDimension::Y => {
                 let bottom = plot.y + plot.height;
-                if axis.reverse() {
+                if axis.range_reversed() {
                     (plot.y, bottom)
                 } else {
                     (bottom, plot.y)
@@ -9319,6 +9317,10 @@ fn heatmap_center_bounds(
     (high > low).then_some((low, high))
 }
 
+/// Frame points are encoded as `f32`, so a pointer on a displayed fill edge can land a few
+/// ulps outside the `f64` geometry; such points still count as inside the fill.
+const FILL_EDGE_TOLERANCE: f64 = 1e-3;
+
 fn distance_to_area_segment(
     x: f64,
     y: f64,
@@ -9337,8 +9339,8 @@ fn distance_to_area_segment(
     let top_y = y0 + (y1 - y0) * position;
     if x >= x0.min(x1)
         && x <= x0.max(x1)
-        && y >= top_y.min(baseline_y)
-        && y <= top_y.max(baseline_y)
+        && y >= top_y.min(baseline_y) - FILL_EDGE_TOLERANCE
+        && y <= top_y.max(baseline_y) + FILL_EDGE_TOLERANCE
     {
         return (0.0, position);
     }
@@ -9372,7 +9374,11 @@ fn distance_to_band_segment(
     };
     let low_y = low0 + (low1 - low0) * position;
     let high_y = high0 + (high1 - high0) * position;
-    if x >= x0.min(x1) && x <= x0.max(x1) && y >= low_y.min(high_y) && y <= low_y.max(high_y) {
+    if x >= x0.min(x1)
+        && x <= x0.max(x1)
+        && y >= low_y.min(high_y) - FILL_EDGE_TOLERANCE
+        && y <= low_y.max(high_y) + FILL_EDGE_TOLERANCE
+    {
         return (0.0, position);
     }
     let distance = [

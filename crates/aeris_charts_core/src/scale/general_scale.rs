@@ -1086,6 +1086,52 @@ fn validate_category_inputs(
     Ok(())
 }
 
+/// Extend a linear domain outward to the tightest multiples of a 1/2/5 step that cover it in at
+/// most `target_intervals` intervals, so both ends land on clean tick values. Non-finite or
+/// degenerate input, or an extension that would overflow, returns the ascending input unchanged.
+pub fn nice_linear_domain(from: f64, to: f64, target_intervals: usize) -> [f64; 2] {
+    let low = from.min(to);
+    let high = from.max(to);
+    if target_intervals == 0 || !low.is_finite() || !high.is_finite() || low >= high {
+        return [low, high];
+    }
+    let count = target_intervals.min(MAX_GENERAL_TICKS - 1) as f64;
+    let mut step = nice_step((high - low) / count);
+    // The first candidate is at least span / count, so a few larger 1/2/5 steps always suffice
+    // once the outward rounding of both ends is accounted for.
+    for _ in 0..4 {
+        if !step.is_finite() || step <= 0.0 {
+            break;
+        }
+        let first = (low / step).floor();
+        let last = (high / step).ceil();
+        let nice_low = first * step;
+        let nice_high = last * step;
+        if !nice_low.is_finite() || !nice_high.is_finite() || nice_low >= nice_high {
+            break;
+        }
+        if last - first <= count {
+            return [normalize_zero(nice_low), normalize_zero(nice_high)];
+        }
+        step = next_nice_step(step);
+    }
+    [low, high]
+}
+
+/// The next larger step in the 1, 2, 5, 10 sequence.
+fn next_nice_step(step: f64) -> f64 {
+    let power = 10.0_f64.powf(step.log10().floor());
+    let mantissa = (step / power).round();
+    let factor = if mantissa < 2.0 {
+        2.0
+    } else if mantissa < 5.0 {
+        5.0
+    } else {
+        10.0
+    };
+    factor * power
+}
+
 fn nice_step(raw_step: f64) -> f64 {
     if !raw_step.is_finite() || raw_step <= 0.0 {
         return f64::NAN;
@@ -1430,6 +1476,23 @@ mod tests {
         let reversed = LinearScale::new(9.3, -0.7, 0.0, 100.0).unwrap();
         assert_eq!(reversed.ticks(5), vec![8.0, 6.0, 4.0, 2.0, 0.0]);
         assert!(reversed.ticks(0).is_empty());
+    }
+
+    #[test]
+    fn nice_linear_domains_take_the_tightest_clean_step() {
+        assert_eq!(nice_linear_domain(0.0, 72.0, 5), [0.0, 80.0]);
+        assert_eq!(nice_linear_domain(0.0, 81.0, 5), [0.0, 100.0]);
+        assert_eq!(nice_linear_domain(-5.0, 5.0, 5), [-5.0, 5.0]);
+        assert_eq!(nice_linear_domain(-3.5, 11.5, 5), [-5.0, 15.0]);
+        assert_eq!(nice_linear_domain(0.0, 7.0, 5), [0.0, 8.0]);
+        assert_eq!(nice_linear_domain(72.0, 0.0, 5), [0.0, 80.0]);
+        assert_eq!(nice_linear_domain(0.0, 0.3, 5), [0.0, 0.30000000000000004]);
+        assert_eq!(nice_linear_domain(1.0, 1.0, 5), [1.0, 1.0]);
+        assert_eq!(
+            nice_linear_domain(-f64::MAX, f64::MAX, 5),
+            [-f64::MAX, f64::MAX]
+        );
+        assert_eq!(nice_linear_domain(2.0, 3.0, 0), [2.0, 3.0]);
     }
 
     #[test]

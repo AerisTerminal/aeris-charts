@@ -775,7 +775,7 @@ impl ChartEngine {
                 };
                 // A hidden time axis (reference `timeScale.visible` false) drops its whole strip,
                 // tick labels and tick stubs included.
-                if !self.time_axis_visible {
+                if !self.time_axis_shown() {
                     continue;
                 }
                 let x = self.pane_left + self.time_scale.index_to_coordinate(index);
@@ -1151,7 +1151,7 @@ impl ChartEngine {
                     });
                 }
             }
-            if drawing.axis_bands_visible && self.time_axis_visible {
+            if drawing.axis_bands_visible && self.time_axis_shown() {
                 let left = first.0.min(second.0).max(0.0);
                 let right = first.0.max(second.0).min(self.pane_w);
                 if right >= left {
@@ -1255,7 +1255,7 @@ impl ChartEngine {
                 });
             }
         }
-        if drawing.show_labels && self.time_axis_visible {
+        if drawing.show_labels && self.time_axis_shown() {
             for (point, (x, _)) in points.iter().zip([first, second]) {
                 if x < 0.0 || x > self.pane_w {
                     continue;
@@ -1409,7 +1409,7 @@ impl ChartEngine {
                 });
             }
         }
-        if axes.date() && self.time_axis_visible {
+        if axes.date() && self.time_axis_shown() {
             for point in &drawing.points {
                 let index = point.logical.round() as i64;
                 let x = self.time_scale.index_to_coordinate(index);
@@ -1571,7 +1571,7 @@ impl ChartEngine {
     where
         F: Fn(&str, bool) -> f64,
     {
-        if !self.time_axis_visible {
+        if !self.time_axis_shown() {
             return;
         }
         let metrics = self.axis_metrics();
@@ -2919,7 +2919,7 @@ impl ChartEngine {
                 });
             }
         }
-        if ch.vert_line.label_visible && x_css <= self.pane_w && self.time_axis_visible {
+        if ch.vert_line.label_visible && x_css <= self.pane_w && self.time_axis_shown() {
             let index = self.snapped_crosshair_index(x_css);
             // Deterministic time-based charts may have display-only projected timestamps in the
             // empty area on either side of canonical data. Sequence axes still return `None`.

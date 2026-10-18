@@ -119,6 +119,14 @@ impl GpuiChartInput {
         engine.input_pointer_move(input, event.dragging());
     }
 
+    /// Chart hover enter/exit from GPUI's `on_hover`. Leaving releases the pointer, its hover
+    /// promotions, and the crosshair so nothing stays highlighted after the pointer exits.
+    pub fn hover_changed(&self, engine: &mut ChartEngine, hovered: bool) {
+        if !hovered {
+            engine.input_pointer_leave();
+        }
+    }
+
     /// Primary-button release, including a release outside the chart.
     pub fn mouse_up(&self, engine: &mut ChartEngine, event: &MouseUpEvent) {
         let input = self.pointer(engine, event.position, &event.modifiers);
@@ -549,6 +557,37 @@ mod wheel_tests {
             chart.take_input_events(),
             vec![aeris_charts_engine::ChartInputEvent::DoubleClick { x: 300.0, y: 150.0 }]
         );
+    }
+
+    #[test]
+    fn gpui_hover_exit_releases_the_crosshair() {
+        let adapter = GpuiChartInput::default();
+        let mut chart = ChartEngine::new(640.0, 360.0, 1.0);
+        let times: Vec<f64> = (0..200).map(|i| 1_000.0 + i as f64 * 60.0).collect();
+        chart
+            .set_series_data(
+                0,
+                &times,
+                &[100.0; 200],
+                &[102.0; 200],
+                &[99.0; 200],
+                &[101.0; 200],
+            )
+            .unwrap();
+        chart.recompute_layout_with_measure(true, |_, _| 48.0, |_, _| 48.0);
+        chart.fit_content();
+        adapter.mouse_move(
+            &mut chart,
+            &MouseMoveEvent {
+                position: point(px(250.0), px(150.0)),
+                ..MouseMoveEvent::default()
+            },
+        );
+        assert!(chart.crosshair.is_some());
+        adapter.hover_changed(&mut chart, true);
+        assert!(chart.crosshair.is_some());
+        adapter.hover_changed(&mut chart, false);
+        assert!(chart.crosshair.is_none());
     }
 
     #[test]

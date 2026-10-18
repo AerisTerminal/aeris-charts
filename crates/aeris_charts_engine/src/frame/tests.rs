@@ -766,7 +766,10 @@ fn polar_axes_emit_shared_labels_spokes_and_rings() {
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
 
     let axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
-    for expected in ["North", "East", "South", "West", "50", "100"] {
+    // The outer radius tick shares the top spoke with the first category label outside the
+    // ring; the category wins the collision.
+    assert!(!axis.labels.iter().any(|label| label.text == "100"));
+    for expected in ["North", "East", "South", "West", "0", "50"] {
         assert!(
             axis.labels.iter().any(|label| label.text == expected),
             "missing {expected}; labels: {:?}",
@@ -1315,7 +1318,7 @@ fn polar_data_labels_emit_collision_free_shared_frame_leaders() {
         })
         .collect::<Vec<_>>();
     for (index, rect) in bounds.iter().enumerate() {
-        assert!(rect[0] >= 2.0 && rect[2] <= plot.width - 2.0);
+        assert!(rect[0] >= plot.x + 2.0 && rect[2] <= plot.x + plot.width - 2.0);
         assert!(rect[1] >= plot.y + 2.0 && rect[3] <= plot.y + plot.height - 2.0);
         for other in &bounds[..index] {
             assert!(
@@ -3349,11 +3352,11 @@ fn automatic_general_domain_tracks_transition_presentation() {
             .effective_general_axis_domain(chart.general_axis("y").unwrap())
             .unwrap()
     };
-    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([2.0, 4.0]));
+    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([0.0, 4.0]));
     chart.set_general_animation_time_ms(1_100.0);
-    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([4.0, 6.0]));
+    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([0.0, 6.0]));
     chart.set_general_animation_time_ms(1_200.0);
-    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([6.0, 8.0]));
+    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([0.0, 8.0]));
 }
 
 #[test]
@@ -7649,8 +7652,8 @@ fn wiggle_bars_share_weighted_baselines_with_auto_domain_in_both_orientations() 
             Some(GeneralAxisDomain::Numeric(domain)) => domain,
             other => panic!("unexpected wiggle domain: {other:?}"),
         };
-        assert!((low + 4.0 / 3.0).abs() < 1e-12);
-        assert!((high - 14.0 / 3.0).abs() < 1e-12);
+        // The weighted wiggle extent [-4/3, 14/3] rounds out to clean ticks.
+        assert_eq!([low, high], [-2.0, 6.0]);
         chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
         let plot = chart.general_plot_rect(pane).unwrap();
         let mut first = Vec::new();
@@ -7816,8 +7819,7 @@ fn wiggle_areas_align_boundaries_with_the_auto_domain_and_exact_hit() {
         Some(GeneralAxisDomain::Numeric(domain)) => domain,
         other => panic!("unexpected wiggle area domain: {other:?}"),
     };
-    assert!((low + 4.0 / 3.0).abs() < 1e-12);
-    assert!((high - 14.0 / 3.0).abs() < 1e-12);
+    assert_eq!([low, high], [-2.0, 6.0]);
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
     let mut first = Vec::new();
     let mut second = Vec::new();
@@ -7831,7 +7833,8 @@ fn wiggle_areas_align_boundaries_with_the_auto_domain_and_exact_hit() {
     assert_eq!(second.len(), 2);
     assert!((first[1].high_y - second[1].low_y).abs() < 1e-9);
     let plot = chart.general_plot_rect(pane).unwrap();
-    assert!((first[1].low_y - (plot.y + plot.height)).abs() < 1e-9);
+    let fraction = (-4.0 / 3.0 - low) / (high - low);
+    assert!((first[1].low_y - (plot.y + plot.height * (1.0 - fraction))).abs() < 1e-9);
     let hit = chart
         .general_hit_test(
             pane,
@@ -7847,7 +7850,7 @@ fn wiggle_areas_align_boundaries_with_the_auto_domain_and_exact_hit() {
 fn cumulative_and_silhouette_stacks_keep_mixed_sign_prefixes_in_domain_and_geometry() {
     for mode in [GeneralStackMode::Cumulative, GeneralStackMode::Silhouette] {
         let expected_domain = if mode == GeneralStackMode::Silhouette {
-            [-3.5, 11.5]
+            [-5.0, 15.0]
         } else {
             [-5.0, 10.0]
         };
@@ -8236,7 +8239,7 @@ fn horizontal_bars_use_category_y_geometry_and_stack_on_numeric_x() {
     );
     assert_eq!(
         chart.general_axis_effective_domain("bar-x"),
-        Some(GeneralAxisDomain::Numeric([-6.0, 15.0]))
+        Some(GeneralAxisDomain::Numeric([-10.0, 15.0]))
     );
 
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
@@ -8250,6 +8253,10 @@ fn horizontal_bars_use_category_y_geometry_and_stack_on_numeric_x() {
     });
     assert_eq!(first_geometry.len(), 2);
     assert_eq!(second_geometry.len(), 2);
+    assert!(
+        first_geometry[0].top < first_geometry[1].top,
+        "vertical category axes list the first category at the top"
+    );
     assert!((first_geometry[0].top - second_geometry[0].top).abs() < 1e-9);
     assert!((first_geometry[0].bottom - second_geometry[0].bottom).abs() < 1e-9);
     assert!(
@@ -9557,6 +9564,166 @@ fn xy_line_log_axes_retain_non_positive_rows_as_geometry_gaps() {
 }
 
 #[test]
+fn polar_angle_labels_sit_outside_the_ring_with_clean_radius_ticks() {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(520.0, 310.0, 1.0, HorizontalDomain::Polar).unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "angle",
+            0,
+            AxisDimension::Angle,
+            GeneralScaleType::AngularCategory,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "radius",
+            0,
+            AxisDimension::Radius,
+            GeneralScaleType::RadialLinear,
+        ))
+        .unwrap();
+    let categories = ["North", "South", "East", "West", "Online", "Partner"];
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: categories.map(str::to_owned).to_vec(),
+            category_indices: (0..6).collect(),
+            y: vec![35.0, 56.0, 42.0, 68.0, 51.0, 74.0],
+            y_valid: None,
+        })
+        .unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::radar(0, dataset, "angle", "radius"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert_eq!(
+        chart.general_axis_effective_domain("radius"),
+        Some(GeneralAxisDomain::Numeric([0.0, 80.0]))
+    );
+
+    let plot = chart.general_plot_rect(0).unwrap();
+    let polar = chart.general_polar_plot(0).unwrap();
+    let (center_x, center_y) = polar.center();
+    let mut axis = AxisFrame::default();
+    chart.append_general_axis_frame(&mut axis, &|text, _| text.len() as f64 * 7.0);
+    for name in categories {
+        let label = axis
+            .labels
+            .iter()
+            .find(|label| label.text == name)
+            .unwrap_or_else(|| panic!("{name} angle label must fit"));
+        let distance = (label.x - plot.x - center_x).hypot(label.y - center_y);
+        assert!(
+            distance > polar.outer_radius(),
+            "{name} must sit outside the ring, not over the data"
+        );
+    }
+    let radius_ticks: Vec<f64> = axis
+        .labels
+        .iter()
+        .filter_map(|label| label.text.parse().ok())
+        .collect();
+    assert!(radius_ticks.len() >= 3);
+    assert!(radius_ticks.iter().all(|value| value % 20.0 == 0.0));
+
+    let frame = chart.build_frame();
+    assert!(frame.panes[0].points.iter().all(|point| {
+        (f64::from(point[0]) - plot.x - center_x).hypot(f64::from(point[1]) - center_y)
+            <= polar.outer_radius() + 0.5
+    }));
+}
+
+#[test]
+fn general_only_charts_use_recharts_chrome_domains_and_hover() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        520.0,
+        310.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            0,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            0,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0, 2.0, 3.0],
+            y: vec![12.0, 47.0, 31.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let mut line = GeneralSeriesOptions::xy_line(0, dataset, "x", "y");
+    line.point_markers = true;
+    chart.add_general_series(line).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    assert_eq!(
+        chart.general_axis_effective_domain("y"),
+        Some(GeneralAxisDomain::Numeric([0.0, 50.0])),
+        "automatic numeric domains start at zero and end on a clean tick"
+    );
+    assert_eq!(
+        chart.general_axis_effective_domain("x"),
+        Some(GeneralAxisDomain::Numeric([0.0, 3.0]))
+    );
+
+    assert_eq!(chart.time_axis_height(), 0.0);
+    assert!(!chart.price_scale_visible_for(0, PriceScaleTarget::Right));
+    assert!(!chart.price_scale_visible_for(0, PriceScaleTarget::Left));
+    let plot = chart.general_plot_rect(0).unwrap();
+    let margin = crate::general_axes::general_plot_margin(chart.axis_metrics());
+    assert!(
+        (520.0 - (plot.x + plot.width) - margin).abs() < 1e-9,
+        "no financial price strip is reserved beside a general plot"
+    );
+    assert!((plot.y - margin).abs() < 1e-9);
+
+    chart.input_pointer_move(
+        crate::PointerInput {
+            x: plot.x + plot.width / 2.0,
+            y: plot.y + plot.height / 2.0,
+            ..crate::PointerInput::default()
+        },
+        false,
+    );
+    let frame = chart.build_frame();
+    let segments = chart.frame_pane_segments(0).unwrap();
+    assert!(
+        !frame.panes[0].main[segments.trading_end..segments.overlay_end]
+            .iter()
+            .any(|prim| matches!(prim, Prim::VLine { .. } | Prim::HLine { .. })),
+        "general plots paint no crosshair"
+    );
+    let clip = frame.panes[0].plot_scissor.expect("general plot clip");
+    let pane_clip = frame.panes[0].scissor;
+    assert!(
+        f64::from(clip[1]) < plot.y && f64::from(clip[0]) < plot.x,
+        "marks on a domain edge are not cut in half"
+    );
+    assert!(
+        pane_clip[0] <= clip[0] && pane_clip[0] + pane_clip[2] >= clip[0] + clip[2],
+        "the pane clip admits the plot overflow it contains"
+    );
+}
+
+#[test]
 fn general_paths_do_not_hit_axis_strips_after_y_view_changes() {
     let mut chart = ChartEngine::new(520.0, 320.0, 1.0);
     let pane = chart
@@ -9598,10 +9765,15 @@ fn general_paths_do_not_hit_axis_strips_after_y_view_changes() {
         "financial pane keeps its original scissor"
     );
     let plot_clip = frame.panes[pane].plot_scissor.expect("general plot clip");
-    assert_eq!(plot_clip[1], plot.y.round() as u32);
+    let overflow = crate::general_axes::GENERAL_PLOT_OVERFLOW;
+    let pane_top = chart.panes[pane].top;
+    assert_eq!(
+        plot_clip[1],
+        (plot.y - overflow).max(pane_top).round() as u32
+    );
     assert_eq!(
         plot_clip[3],
-        (plot.y + plot.height).round() as u32 - plot_clip[1]
+        (plot.y + plot.height + overflow).round() as u32 - plot_clip[1]
     );
     let [start, end] = frame.panes[pane].plot_range;
     assert!(end > start);
@@ -10064,7 +10236,7 @@ fn xy_area_stacks_by_x_identity_with_normal_and_percent_geometry() {
 
     assert_eq!(
         chart.general_axis_effective_domain("stack-area-y"),
-        Some(GeneralAxisDomain::Numeric([-3.0, 5.0]))
+        Some(GeneralAxisDomain::Numeric([-4.0, 6.0]))
     );
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
     let mut first_geometry = Vec::new();
@@ -10459,7 +10631,7 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
     assert_eq!(geometry.len(), 2);
     assert_eq!(
         chart.general_axis_effective_domain("x"),
-        Some(GeneralAxisDomain::Numeric([100.0, 200.0]))
+        Some(GeneralAxisDomain::Numeric([0.0, 200.0]))
     );
     assert_eq!(
         chart.general_tooltip_snapshot(series, 0).unwrap().x_label,
@@ -11095,11 +11267,12 @@ fn range_area_preserves_gaps_fills_band_hits_rows_and_exposes_bounds() {
 
     let from = geometry[0];
     let to = geometry[1];
+    // Probe left of the midpoint: an exact midpoint ties between the two rows.
     let hit = chart
         .general_hit_test(
             pane,
-            (from.x + to.x) * 0.5,
-            (from.low_y + from.high_y + to.low_y + to.high_y) * 0.25,
+            from.x + (to.x - from.x) * 0.4,
+            (from.low_y + from.high_y) * 0.3 + (to.low_y + to.high_y) * 0.2,
             crate::GeneralHitMode::Exact,
         )
         .unwrap();

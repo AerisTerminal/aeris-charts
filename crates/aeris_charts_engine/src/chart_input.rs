@@ -1378,7 +1378,7 @@ impl ChartEngine {
         self.set_crosshair_ohlc_magnet(false);
         self.clear_trading_hover();
         self.clear_pointer_hover();
-        self.input.cursor = ChartCursor::Crosshair;
+        self.refresh_input_cursor();
         self.input.frame_dirty = true;
     }
 
@@ -1396,7 +1396,7 @@ impl ChartEngine {
         self.set_separator_hover(None);
         self.clear_pointer_hover();
         self.input.pointer = None;
-        self.input.cursor = ChartCursor::Crosshair;
+        self.refresh_input_cursor();
         self.input.frame_dirty = true;
     }
 
@@ -2617,7 +2617,11 @@ impl ChartEngine {
 
     fn resolve_input_cursor(&self) -> ChartCursor {
         let Some((x, y)) = self.input.pointer else {
-            return ChartCursor::Crosshair;
+            return if self.pane_horizontal_domain(0) == Some(HorizontalDomain::FinancialTime) {
+                ChartCursor::Crosshair
+            } else {
+                ChartCursor::Default
+            };
         };
         let options = self.input.options;
         if let Some(press) = self.input.press {
@@ -2695,13 +2699,22 @@ impl ChartEngine {
         {
             return ChartCursor::Pointer;
         }
-        ChartCursor::Crosshair
+        if self
+            .pane_at_y(y)
+            .and_then(|pane| self.pane_horizontal_domain(pane))
+            == Some(HorizontalDomain::FinancialTime)
+        {
+            ChartCursor::Crosshair
+        } else {
+            ChartCursor::Default
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aeris_charts_render::draw_list::Prim;
 
     const BARS: usize = 60;
 
@@ -2773,6 +2786,25 @@ mod tests {
             .unwrap();
         relayout(&mut chart);
         chart
+    }
+
+    #[test]
+    fn general_plot_hover_uses_default_cursor_without_losing_hover_position() {
+        let mut chart =
+            ChartEngine::new_with_initial_domain(640.0, 400.0, 1.0, HorizontalDomain::Layout)
+                .unwrap();
+        relayout(&mut chart);
+        chart.input_pointer_move(at(120.0, 100.0), false);
+        assert_eq!(chart.crosshair, Some((120.0, 100.0)));
+        assert_eq!(chart.input_cursor(), ChartCursor::Default);
+        assert!(
+            !chart.build_frame().panes[0]
+                .main
+                .iter()
+                .any(|primitive| { matches!(primitive, Prim::VLine { .. } | Prim::HLine { .. }) })
+        );
+        chart.input_pointer_leave();
+        assert_eq!(chart.input_cursor(), ChartCursor::Default);
     }
 
     #[test]

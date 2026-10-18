@@ -1452,7 +1452,7 @@ impl ChartEngine {
         let domain = self.effective_general_axis_domain(axis)?;
         let (from, to, low, high) = match axis.dimension() {
             AxisDimension::X => {
-                let range = if axis.reverse() {
+                let range = if axis.range_reversed() {
                     (plot.width, 0.0)
                 } else {
                     (0.0, plot.width)
@@ -1461,7 +1461,7 @@ impl ChartEngine {
             }
             AxisDimension::Y => {
                 let bottom = plot.y + plot.height;
-                let range = if axis.reverse() {
+                let range = if axis.range_reversed() {
                     (plot.y, bottom)
                 } else {
                     (bottom, plot.y)
