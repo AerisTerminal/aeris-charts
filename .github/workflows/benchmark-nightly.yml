@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  RUSTUP_TOOLCHAIN: 1.99.0
+  RUSTUP_TOOLCHAIN: 1.99.1
   AERIS_CHARTS_BENCH_ENV_CLASS: shared-ci
   AERIS_CHARTS_BENCH_ENV_ID: github-ubuntu-nightly
 
@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
