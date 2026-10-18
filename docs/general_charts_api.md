@@ -19,7 +19,7 @@ hierarchy/flow series names remain proposals until their implementations and rel
 React `GeneralPane` supports keyed arrays and direct axis, series, reference, label, legend,
 tooltip, and brush declarations. `MappedGeneralSeries` maps typed application rows before the
 engine transaction; brush controls support controlled and uncontrolled ranges. See
-[general chart authoring](general-authoring.md) for composition, lifecycle, and migration examples.
+[general chart authoring](general_authoring.md) for composition, lifecycle, and migration examples.
 
 General-series legend metadata is engine-owned. `chart.general_legend_snapshot(pane?)` returns bounded
 series metadata in stable engine order, including pane, kind, title, color, and visibility. Hidden series remain

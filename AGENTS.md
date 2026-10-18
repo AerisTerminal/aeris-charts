@@ -29,18 +29,10 @@ Markdown documentation may be added when it has a durable repository purpose. Do
 
 Keep `docs/architecture.md` synchronized with the code. Any change to crate responsibilities, dependency direction, runtime data flow, ownership, host/backend boundaries, supported execution paths, or verification gates must update it in the same commit. Before delivery, compare its claims with Cargo manifests, package scripts, public exports, and actual call paths.
 
-## Ponytail workflow
+## Repository authorship and tools
 
-Use the matching Ponytail skill when available:
-
-- `ponytail` for implementation, refactoring, fixes, and design after tracing the real path.
-- `ponytail-review` for diff-level over-engineering reviews.
-- `ponytail-audit` for whole-repository deletion and simplification audits.
-- `ponytail-debt` for collecting deliberate `ponytail:` deferrals.
-- `ponytail-gain` for the standard impact scoreboard.
-- `ponytail-help` for Ponytail workflow guidance.
-
-Ponytail removes accidental complexity. It must not simplify away render parity, chart math, deterministic state, bounded resources, recovery, accessibility, platform-native behavior, error handling, tests, or explicit requirements. Hard-but-correct beats easy-but-fragile.
+- Do not add co-author, contributor, AI-tool, or assistant credit to commits or pull requests. Do not add Co-authored-by or similar trailers. Preserve the maintainer as the sole credited author for new work.
+- Use operating-system native tools for repository searches, edits, file moves, and codebase maintenance. On Windows, use PowerShell and native command-line tools. Do not use Python or other ad hoc scripting languages to edit or manage the codebase.
 
 ## Engineering rules
 
