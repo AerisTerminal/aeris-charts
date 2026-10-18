@@ -8,14 +8,14 @@ use crate::{AxisDimension, GeneralTooltipSnapshot};
 const POINTER_OFFSET: f64 = 12.0;
 const MIN_WIDTH: f64 = 156.0;
 const PADDING_X: f64 = 10.0;
-const HEADER_PADDING_TOP: f64 = 7.0;
-const HEADER_PADDING_BOTTOM: f64 = 6.0;
-const BODY_PADDING_TOP: f64 = 6.0;
-const BODY_PADDING_BOTTOM: f64 = 7.0;
+const PADDING_Y: f64 = 7.0;
+const HEADER_GAP: f64 = 4.0;
 const ROW_GAP: f64 = 2.0;
 const COLUMN_GAP: f64 = 12.0;
-const DOT_DIAMETER: f64 = 8.0;
-const DOT_GAP: f64 = 6.0;
+/// Series markers are short vertical bars, matching the general legend swatches.
+const MARKER_WIDTH: f64 = 3.0;
+const MARKER_HEIGHT: f64 = 10.0;
+const MARKER_GAP: f64 = 6.0;
 const HEADER_WEIGHT: u16 = 590;
 
 struct TooltipRow {
@@ -27,17 +27,6 @@ struct TooltipRow {
 struct TooltipContent {
     header: String,
     rows: Vec<TooltipRow>,
-}
-
-fn mix(base: Color, over: Color, amount: f64) -> Color {
-    let channel = |from: u8, to: u8| {
-        (f64::from(from) + (f64::from(to) - f64::from(from)) * amount).round() as u8
-    };
-    Color::rgb(
-        channel(base.r(), over.r()),
-        channel(base.g(), over.g()),
-        channel(base.b(), over.b()),
-    )
 }
 
 fn opaque(color: Color) -> Color {
@@ -187,9 +176,9 @@ impl ChartEngine {
         })
     }
 
-    /// The general hover tooltip: the financial tooltip's popover box (tinted header with a
-    /// divider, muted names, right-aligned values) with one color dot per row, placed beside
-    /// the pointer and flipped to stay inside the pane.
+    /// The general hover tooltip: one single-tone popover box (bold heading, muted names,
+    /// right-aligned values) with one color bar per row, placed beside the pointer and flipped
+    /// to stay inside the pane.
     pub(super) fn build_general_tooltip_frame(
         &self,
         pane_index: usize,
@@ -217,11 +206,9 @@ impl ChartEngine {
         let family = layout.font_family.as_str();
         let size = layout.font_size.max(1.0);
         let line = size + 4.0;
-        let header_height = HEADER_PADDING_TOP + line + HEADER_PADDING_BOTTOM;
-        let body_padding = BODY_PADDING_TOP + BODY_PADDING_BOTTOM;
+        let chrome = 2.0 + PADDING_Y * 2.0 + line + HEADER_GAP;
         // Keep the box inside the pane: rows that do not fit collapse into a final count row.
-        let fit = ((pane.height - 2.0 - header_height - 1.0 - body_padding + ROW_GAP)
-            / (line + ROW_GAP))
+        let fit = ((pane.height - chrome + ROW_GAP) / (line + ROW_GAP))
             .floor()
             .max(1.0) as usize;
         if content.rows.len() > fit {
@@ -246,7 +233,10 @@ impl ChartEngine {
             .map(|row| {
                 let name = measure(&row.name, 400);
                 let value = measure(&row.value, 400);
-                DOT_DIAMETER + DOT_GAP + name + if value > 0.0 { COLUMN_GAP + value } else { 0.0 }
+                MARKER_WIDTH
+                    + MARKER_GAP
+                    + name
+                    + if value > 0.0 { COLUMN_GAP + value } else { 0.0 }
             })
             .fold(0.0_f64, f64::max);
         let width =
@@ -254,8 +244,7 @@ impl ChartEngine {
                 .max(MIN_WIDTH)
                 .ceil();
         let rows = content.rows.len() as f64;
-        let body_height = body_padding + rows * line + (rows - 1.0).max(0.0) * ROW_GAP;
-        let height = (2.0 + header_height + 1.0 + body_height).ceil();
+        let height = (chrome + rows * line + (rows - 1.0).max(0.0) * ROW_GAP).ceil();
 
         let pane_bottom = pane.top + pane.height;
         let mut left = pointer_x + POINTER_OFFSET;
@@ -286,27 +275,6 @@ impl ChartEngine {
             border_width: border,
             border_color: popover.border,
         });
-        let header_bottom = ((top + 1.0 + header_height) * vpr).round() as f32;
-        let inner_radius = (radius - border).max(0.0);
-        out.push(Prim::RoundRect {
-            x: device.x + border,
-            y: device.y + border,
-            w: (device.w - border * 2.0).max(0.0),
-            h: (header_bottom - device.y - border).max(0.0),
-            radii: [inner_radius, inner_radius, 0.0, 0.0],
-            fill: mix(popover.surface, popover.foreground, 0.04),
-            border_width: 0.0,
-            border_color: popover.surface,
-        });
-        out.push(Prim::Rect {
-            rect: IRect {
-                x: (device.x + border) as i32,
-                y: header_bottom as i32,
-                w: (device.w - border * 2.0).max(0.0) as i32,
-                h: border as i32,
-            },
-            color: mix(popover.surface, popover.foreground, 0.10),
-        });
         let text_left = left + 1.0 + PADDING_X;
         let text_right = left + width - 1.0 - PADDING_X;
         let text =
@@ -327,28 +295,30 @@ impl ChartEngine {
             out,
             &content.header,
             text_left,
-            top + 1.0 + HEADER_PADDING_TOP + line * 0.5,
+            top + 1.0 + PADDING_Y + line * 0.5,
             popover.foreground,
             TextAlign::Left,
             HEADER_WEIGHT,
         );
-        let mut row_top = top + 1.0 + header_height + 1.0 + BODY_PADDING_TOP;
+        let mut row_top = top + 1.0 + PADDING_Y + line + HEADER_GAP;
         for row in &content.rows {
             let center_y = row_top + line * 0.5;
             if let Some(color) = row.color {
-                out.push(Prim::Circle {
-                    cx: ((text_left + DOT_DIAMETER * 0.5) * hpr) as f32,
-                    cy: (center_y * vpr) as f32,
-                    radius: (DOT_DIAMETER * 0.5 * ratio) as f32,
-                    fill: color,
-                    stroke_width: 0.0,
-                    stroke: color,
+                let marker_top = ((center_y - MARKER_HEIGHT * 0.5) * vpr).round();
+                out.push(Prim::Rect {
+                    rect: IRect {
+                        x: (text_left * hpr).round() as i32,
+                        y: marker_top as i32,
+                        w: (MARKER_WIDTH * hpr).round().max(1.0) as i32,
+                        h: (MARKER_HEIGHT * vpr).round().max(1.0) as i32,
+                    },
+                    color,
                 });
             }
             text(
                 out,
                 &row.name,
-                text_left + DOT_DIAMETER + DOT_GAP,
+                text_left + MARKER_WIDTH + MARKER_GAP,
                 center_y,
                 popover.muted,
                 TextAlign::Left,
@@ -509,10 +479,21 @@ mod tests {
             );
         }
         for color in [REVENUE, COST] {
-            assert!(tooltip.iter().any(
-                |prim| matches!(prim, Prim::Circle { fill, radius, .. } if *fill == color && *radius == 4.0)
-            ));
+            assert!(
+                tooltip
+                    .iter()
+                    .any(|prim| matches!(prim, Prim::Rect { rect, color: fill }
+                    if *fill == color && rect.w == 3 && rect.h == 10)),
+                "each row carries a vertical color bar"
+            );
         }
+        assert!(
+            !tooltip
+                .iter()
+                .any(|prim| matches!(prim, Prim::RoundRect { radii, .. }
+                if radii[0] > 0.0 && radii[3] == 0.0)),
+            "a single-tone box: no tinted header band"
+        );
         let (x, y, w, h) = tooltip_box(&tooltip);
         assert!(
             f64::from(x) > pointer.0 + chart.pane_left,
@@ -580,8 +561,8 @@ mod tests {
                     .filter(|prim| matches!(prim, Prim::Circle { fill, radius, .. }
                         if *fill == color && *radius == 4.0))
                     .count(),
-                2,
-                "one active dot per line plus one tooltip dot"
+                1,
+                "one active dot per line; the tooltip marks rows with bars"
             );
         }
         assert_eq!(

@@ -645,12 +645,112 @@ fn set_backend_visibility(
         .set_property("visibility", if use_webgpu { "hidden" } else { "visible" });
 }
 
-/// Sizes all three canvases to `(bw, bh)` device pixels while pinning their CSS box to the real
-/// displayed size, then resizes + repaints the engine. Shared by the initial bind and every
-/// observer callback.
+fn is_scroll_container(element: &web_sys::Element, window: &web_sys::Window) -> bool {
+    let Ok(Some(style)) = window.get_computed_style(element) else {
+        return false;
+    };
+    let scrolls = |axis: &str| {
+        style
+            .get_property_value(axis)
+            .is_ok_and(|value| value == "auto" || value == "scroll")
+    };
+    (scrolls("overflow-x") || scrolls("overflow-y"))
+        && (element.scroll_height() > element.client_height()
+            || element.scroll_width() > element.client_width())
+}
+
+/// Where the compositor actually places `element` (its padding box when `padding`), in device
+/// pixels. Layout positions are fractional at 125%/150% scaling, but a scrolled layer is snapped:
+/// Chromium rounds a scroll container's content origin to a whole device pixel and scrolls it by
+/// whole device pixels, so the element keeps its fractional offset relative to that rounded origin,
+/// not the one `getBoundingClientRect` reports. Measured in Chromium at 1.25, 1.5 and 1.75 with the
+/// scroll container both at rest and scrolled.
+fn composited_device_origin(
+    element: &web_sys::Element,
+    padding: bool,
+    dpr: f64,
+    window: &web_sys::Window,
+) -> (f64, f64) {
+    let inset = |e: &web_sys::Element| {
+        let rect = e.get_bounding_client_rect();
+        (
+            (rect.left() + f64::from(e.client_left())) * dpr,
+            (rect.top() + f64::from(e.client_top())) * dpr,
+        )
+    };
+    let (x, y) = if padding {
+        inset(element)
+    } else {
+        let rect = element.get_bounding_client_rect();
+        (rect.left() * dpr, rect.top() * dpr)
+    };
+    let mut parent = element.parent_element();
+    while let Some(scroller) = parent {
+        let tag = scroller.tag_name();
+        // The root scroller's origin is the viewport origin, already whole device pixels.
+        if tag.eq_ignore_ascii_case("html") || tag.eq_ignore_ascii_case("body") {
+            break;
+        }
+        if is_scroll_container(&scroller, window) {
+            let (origin_x, origin_y) = composited_device_origin(&scroller, true, dpr, window);
+            let (layout_x, layout_y) = inset(&scroller);
+            let (scroll_x, scroll_y) = (
+                f64::from(scroller.scroll_left()) * dpr,
+                f64::from(scroller.scroll_top()) * dpr,
+            );
+            return (
+                origin_x.round() - scroll_x.round() + (x - layout_x + scroll_x),
+                origin_y.round() - scroll_y.round() + (y - layout_y + scroll_y),
+            );
+        }
+        parent = scroller.parent_element();
+    }
+    (x, y)
+}
+
+/// Shifts `canvases` back by the fractional part of the container's composited device position and
+/// pins their CSS box to exactly `bitmap / dpr`, so each bitmap pixel covers one device pixel. A
+/// fractional placement makes the compositor resample the canvas, smearing every 1px rule across
+/// two or three device pixels.
+fn align_to_device_grid(container: &web_sys::Element, canvases: &[&web_sys::HtmlCanvasElement]) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let rect = container.get_bounding_client_rect();
+    // A hidden or detached container keeps whatever size it was last given; see auto-resize.
+    if rect.width() < 2.0 || rect.height() < 2.0 {
+        return;
+    }
+    // Without `devicePixelContentBoxSize` (WebKit) the bitmap is only round(css * dpr), so a
+    // `bitmap / dpr` box could overhang the container and the composited position is unknown:
+    // keep the canvases exactly on the container box there.
+    if !supports_device_pixel_content_box() {
+        for canvas in canvases {
+            let style = canvas.style();
+            let _ = style.set_property("width", &format!("{}px", rect.width()));
+            let _ = style.set_property("height", &format!("{}px", rect.height()));
+            let _ = style.remove_property("transform");
+        }
+        return;
+    }
+    let dpr = window.device_pixel_ratio().max(f64::EPSILON);
+    let (x, y) = composited_device_origin(container, false, dpr, &window);
+    let shift = |device: f64| -device.rem_euclid(1.0) / dpr;
+    let transform = format!("translate({}px, {}px)", shift(x), shift(y));
+    for canvas in canvases {
+        let style = canvas.style();
+        let _ = style.set_property("width", &format!("{}px", f64::from(canvas.width()) / dpr));
+        let _ = style.set_property("height", &format!("{}px", f64::from(canvas.height()) / dpr));
+        let _ = style.set_property("transform", &transform);
+    }
+}
+
+/// Sizes all three canvases to `(bw, bh)` device pixels on the device-pixel grid, then resizes +
+/// repaints the engine. Shared by the initial bind and every observer callback.
 #[allow(clippy::too_many_arguments)] // three canvases + the full size/DPR tuple
 fn apply_device_size(
     inner: &Rc<RefCell<ChartInner>>,
+    container: &web_sys::HtmlElement,
     gpu_pane: &web_sys::HtmlCanvasElement,
     fallback_pane: &web_sys::HtmlCanvasElement,
     overlay: &web_sys::HtmlCanvasElement,
@@ -663,10 +763,8 @@ fn apply_device_size(
     for c in [gpu_pane, fallback_pane, overlay] {
         c.set_width(bw_u);
         c.set_height(bh_u);
-        let style = c.style();
-        let _ = style.set_property("width", &format!("{css_w}px"));
-        let _ = style.set_property("height", &format!("{css_h}px"));
     }
+    align_to_device_grid(container, &[gpu_pane, fallback_pane, overlay]);
     // Exact effective ratio -> the engine's internal round(css*dpr) lands back on (bw, bh),
     // so surface, canvas backing store and physical pixels all agree.
     let dpr = bw / css_w.max(1.0);
@@ -1438,6 +1536,7 @@ impl AerisChart {
             };
             apply_device_size(
                 &inner,
+                &container_cb,
                 &gpu_pane,
                 &fallback_pane,
                 &overlay,
@@ -1470,6 +1569,7 @@ impl AerisChart {
                 .unwrap_or(1.0);
             apply_device_size(
                 &self.inner,
+                &container,
                 self.gpu_pane.as_ref().expect("HTML canvas checked above"),
                 self.fallback_pane
                     .as_ref()
@@ -1487,6 +1587,16 @@ impl AerisChart {
             _callback: callback,
         });
         Ok(())
+    }
+
+    /// Places the chart canvases on the device-pixel grid under `container` after a manual resize.
+    /// Auto-resize does this on every size or ratio change.
+    pub fn align_to_device_pixels(&self, container: web_sys::HtmlElement) {
+        if let (Some(gpu_pane), Some(fallback_pane), Some(overlay)) =
+            (&self.gpu_pane, &self.fallback_pane, &self.overlay)
+        {
+            align_to_device_grid(&container, &[gpu_pane, fallback_pane, overlay]);
+        }
     }
 
     /// Disconnect the engine-owned resize observer so manual sizing becomes authoritative again.

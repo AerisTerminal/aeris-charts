@@ -12,10 +12,11 @@ test("crosshair plus chip emits an exact host request and host alert lines stay 
   const probe = await page.evaluate(() => {
     window.__alert_requests = [];
     window.__chart.subscribe_crosshair_action((request) => window.__alert_requests.push(request));
-    const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
+    // Media coordinates are container-relative; the canvases may sit on the device-pixel grid.
+    const origin = window.__chart.chart_element().getBoundingClientRect();
     return {
-      x: overlay.left + window.__chart.time_scale().width() - 11.5,
-      y: overlay.top + window.__main.price_to_coordinate(104),
+      x: origin.left + window.__chart.time_scale().width() - 11.5,
+      y: origin.top + window.__main.price_to_coordinate(104),
     };
   });
 

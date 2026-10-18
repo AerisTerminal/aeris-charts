@@ -399,7 +399,8 @@ test("Touch Events use the controller long-press deadline and next-tap exit", as
   const result = await page.evaluate(async () => {
     const chart = window.__chart;
     const overlay = chart.chart_element().querySelector("canvas:last-of-type");
-    const rect = overlay.getBoundingClientRect();
+    // Media coordinates are container-relative; the canvases may sit on the device-pixel grid.
+    const rect = chart.chart_element().getBoundingClientRect();
     const x = rect.left + chart.wasm.pane_left() + chart.wasm.time_scale_width() / 2;
     const y = rect.top + chart.wasm.pane_height(0) / 2;
     const touch = (identifier, clientX) => new Touch({

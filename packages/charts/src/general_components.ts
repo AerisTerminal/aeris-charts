@@ -133,7 +133,7 @@ export function create_general_legend(
   root.setAttribute("role", "group");
   root.setAttribute("aria-label", options.label ?? "Chart legend");
   if (options.lang !== undefined) root.lang = options.lang;
-  root.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;align-items:center";
+  root.style.cssText = "display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center";
   container.appendChild(root);
   let detached = false;
 
@@ -157,11 +157,11 @@ export function create_general_legend(
       button.setAttribute("aria-pressed", String(item.visible));
       button.setAttribute("aria-label", options.format_action?.(item.visible, item.title)
         ?? `${item.visible ? "Hide" : "Show"} ${item.title}`);
-      button.style.cssText = "display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:2px 8px;border:1px solid currentColor;border-radius:4px;background:transparent;color:inherit;cursor:pointer";
+      button.style.cssText = "display:inline-flex;align-items:center;gap:6px;min-height:20px;padding:0 2px;border:0;border-radius:2px;background:transparent;color:inherit;font:inherit;line-height:16px;cursor:pointer";
       button.style.opacity = item.visible ? "1" : "0.55";
       const swatch = document.createElement("span");
       swatch.setAttribute("aria-hidden", "true");
-      swatch.style.cssText = "display:inline-block;width:10px;height:10px;border-radius:50%;background:currentColor";
+      swatch.style.cssText = "display:inline-block;flex:none;width:3px;height:12px;background:currentColor";
       if (item.color !== null) swatch.style.color = item.color;
       const label = document.createElement("span");
       label.textContent = options.format_title?.(item.title, handle) ?? item.title;
@@ -182,7 +182,7 @@ export function create_general_legend(
           entry.style.cssText = "display:inline-flex;align-items:center;gap:4px;white-space:nowrap";
           const marker = document.createElement("span");
           marker.setAttribute("aria-hidden", "true");
-          marker.style.cssText = `display:inline-block;width:10px;height:10px;border-radius:50%;background:${slice.color}`;
+          marker.style.cssText = `display:inline-block;flex:none;width:3px;height:12px;background:${slice.color}`;
           const name = document.createElement("span");
           name.textContent = `${slice.label}: ${slice.value}`;
           entry.append(marker, name);
@@ -207,11 +207,11 @@ export function create_general_legend(
       button.setAttribute("aria-pressed", String(visible));
       button.setAttribute("aria-label", options.format_action?.(visible, title)
         ?? `${visible ? "Hide" : "Show"} ${title}`);
-      button.style.cssText = "display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:2px 8px;border:1px solid currentColor;border-radius:4px;background:transparent;color:inherit;cursor:pointer";
+      button.style.cssText = "display:inline-flex;align-items:center;gap:6px;min-height:20px;padding:0 2px;border:0;border-radius:2px;background:transparent;color:inherit;font:inherit;line-height:16px;cursor:pointer";
       button.style.opacity = visible ? "1" : "0.55";
       const swatch = document.createElement("span");
       swatch.setAttribute("aria-hidden", "true");
-      swatch.style.cssText = `display:inline-block;width:10px;height:10px;border-radius:50%;background:${item.color ?? "#4682b4"}`;
+      swatch.style.cssText = `display:inline-block;flex:none;width:3px;height:12px;background:${item.color ?? "#4682b4"}`;
       const label = document.createElement("span");
       label.textContent = options.format_layout_title?.(title, handle) ?? title;
       button.append(swatch, label);
@@ -318,14 +318,14 @@ export function create_general_tooltip(
     }
     const header = document.createElement("div");
     header.className = "aeris_charts-tooltip__header";
-    header.style.cssText = "padding:7px 10px 6px;background:color-mix(in srgb,var(--nc-tooltip-foreground) 4%,var(--nc-tooltip-surface));border-bottom:1px solid color-mix(in srgb,var(--nc-tooltip-foreground) 10%,var(--nc-tooltip-surface))";
+    header.style.cssText = "padding:7px 10px 0;background:none;border-bottom:0";
     const heading = document.createElement("div");
     heading.className = "aeris_charts-tooltip__timestamp";
     heading.style.cssText = "font-weight:590;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
     header.appendChild(heading);
     const body = document.createElement("div");
     body.className = "aeris_charts-tooltip__body";
-    body.style.cssText = "display:grid;gap:2px;padding:6px 10px 7px";
+    body.style.cssText = "display:grid;gap:2px;padding:4px 10px 7px;background:none";
     const add_row = (color: string | null, title: string, detail: string): void => {
       const row = document.createElement("div");
       row.className = "aeris_charts-tooltip__row";
@@ -335,7 +335,7 @@ export function create_general_tooltip(
       label.style.cssText = "display:flex;align-items:center;gap:6px;min-width:0;color:var(--nc-tooltip-muted)";
       if (color !== null) {
         const dot = document.createElement("span");
-        dot.style.cssText = `flex:none;width:8px;height:8px;border-radius:50%;background:${color}`;
+        dot.style.cssText = `flex:none;align-self:center;width:3px;height:10px;background:${color}`;
         label.appendChild(dot);
       }
       label.appendChild(document.createTextNode(title));
