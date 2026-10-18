@@ -543,10 +543,11 @@ data changes refresh this snapshot, while hidden series retain their slice label
 are descriptive; series visibility remains the legend's action.
 The browser package's `create_general_legend`, `create_general_tooltip`, and
 `create_general_brush_controls` present those snapshots as default DOM controls. Legend buttons
-mutate stable series handles; the tooltip follows engine-arbitrated crosshair hits; brush buttons
+are borderless with vertical color-bar markers and mutate stable series handles; the tooltip follows engine-arbitrated crosshair hits; brush buttons
 call semantic engine operations. Hosts attach and detach these DOM components, and may supply
 localized labels, language attributes, and display formatting. The DOM tooltip uses the financial
-tooltip's `.aeris_charts-tooltip` structure with the snapshot's engine-resolved row color, wraps long
+tooltip's `.aeris_charts-tooltip` structure on one surface tone (no tinted header band, unlike the
+financial tooltip) with a vertical bar in the snapshot's engine-resolved row color, wraps long
 content inside the host bounds, and hides the engine-drawn general tooltip while at least one DOM
 tooltip is attached, restoring the prior `generalTooltip.visible` value when the last detaches. The shared accessibility sweep leaves these package-owned interactive
 components keyboard reachable even when mounted inside the chart host. DOM tooltip content is
