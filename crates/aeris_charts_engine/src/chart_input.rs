@@ -3828,7 +3828,11 @@ mod tests {
         assert!(chart.take_trading_intents().is_empty());
 
         chart.set_selected_drawing(None);
-        chart.input_pointer_move(at(ax + 300.0, y), false);
+        // Left of the position drawing, so neither the drawing nor the order marker's controls
+        // sit under the pointer.
+        let bare_x = ax - 100.0;
+        assert!(bare_x > 0.0 && bare_x < chart.trading_marker_start());
+        chart.input_pointer_move(at(bare_x, y), false);
         assert_eq!(
             chart.input_cursor(),
             ChartCursor::VerticalGrab,

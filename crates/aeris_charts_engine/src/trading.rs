@@ -1091,9 +1091,11 @@ impl ChartEngine {
         })
     }
 
-    /// Positions and orders bottom to top: positions, then orders, each in snapshot order, with
-    /// the promoted object moved to the top. Frame construction paints in this order and hit
-    /// testing walks it in reverse, so what is on top is what the pointer grabs.
+    /// Orders and positions bottom to top: orders, then positions, each in snapshot order, with
+    /// the promoted object moved to the top. A position stays above a stop or target resting on
+    /// its price so its live PnL stays readable until the pointer picks the order. Frame
+    /// construction paints in this order and hit testing walks it in reverse, so what is on top
+    /// is what the pointer grabs.
     pub(crate) fn trading_paint_items(
         &self,
     ) -> impl DoubleEndedIterator<Item = TradingPaintItem<'_>> + '_ {
@@ -1113,16 +1115,18 @@ impl ChartEngine {
             None => None,
         };
         state
-            .positions
+            .orders
             .iter()
-            .filter(move |position| promoted != Some(PromotedTradingObject::Position(&position.id)))
-            .map(TradingPaintItem::Position)
+            .filter(move |order| promoted != Some(PromotedTradingObject::Order(&order.id)))
+            .map(TradingPaintItem::Order)
             .chain(
                 state
-                    .orders
+                    .positions
                     .iter()
-                    .filter(move |order| promoted != Some(PromotedTradingObject::Order(&order.id)))
-                    .map(TradingPaintItem::Order),
+                    .filter(move |position| {
+                        promoted != Some(PromotedTradingObject::Position(&position.id))
+                    })
+                    .map(TradingPaintItem::Position),
             )
             .chain(top)
     }
@@ -4150,6 +4154,70 @@ mod tests {
     }
 
     #[test]
+    fn a_position_paints_over_a_stop_on_its_price_until_the_stop_is_hovered() {
+        let mut chart = chart_with_market();
+        let mut held = position(PositionSide::Long);
+        held.average_price = 101.0;
+        let mut stop = order("sl-1", OrderRole::StopLoss, 101.0);
+        stop.kind = OrderKind::Stop;
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                positions: vec![held],
+                orders: vec![stop],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        chart.build_frame();
+        let y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
+            .unwrap();
+        let top_item = |chart: &ChartEngine| {
+            chart
+                .trading_paint_items()
+                .last()
+                .map(|item| item.object_id())
+        };
+        let position_id = TradingObjectId::Position(id("position-1", PositionId::new));
+        let stop_id = TradingObjectId::Order(id("sl-1", OrderId::new));
+        let position_color = chart.trading_position_color(PositionSide::Long);
+        let stop_color = chart.trading_style().stop_loss;
+        // Whether the position's marker body paints after (over) the stop's on the shared row.
+        let position_body_on_top = |chart: &mut ChartEngine| {
+            let frame = chart.build_frame();
+            let segments = chart.frame_pane_segments(0).unwrap();
+            let last_body = |color: Color| {
+                frame.panes[0].main[segments.drawings_end..segments.trading_end]
+                    .iter()
+                    .rposition(|primitive| {
+                        matches!(primitive, Prim::RoundRect { y: top, h, fill, .. }
+                            if *fill == color && f64::from(*top) <= y && f64::from(top + h) >= y)
+                    })
+                    .expect("both markers paint on the shared price")
+            };
+            last_body(position_color) > last_body(stop_color)
+        };
+
+        // At rest the live position stays on top of the stop resting on its price.
+        assert_eq!(top_item(&chart), Some(position_id.clone()));
+        assert!(position_body_on_top(&mut chart));
+
+        // Hovering the stop's draggable line brings the stop to the top so it can be grabbed.
+        let body_x = chart.trading_marker_start() + 40.0;
+        assert_eq!(
+            chart.trading_hit_at(body_x, y).map(|hit| hit.object),
+            Some(stop_id.clone())
+        );
+        chart.set_trading_hover(body_x, y);
+        assert_eq!(top_item(&chart), Some(stop_id));
+        assert!(!position_body_on_top(&mut chart));
+
+        // Leaving restores the position on top.
+        chart.set_trading_hover(body_x, y + 80.0);
+        assert!(chart.trading_state.feedback_hover.is_none());
+        assert_eq!(top_item(&chart), Some(position_id));
+        assert!(position_body_on_top(&mut chart));
+    }
+    #[test]
     fn touch_profile_expands_order_line_hits_to_a_44px_target() {
         let mut chart = chart_with_market();
         chart
@@ -4628,10 +4696,10 @@ mod tests {
                 assert!(texts.contains(&text), "missing protection control {text:?}");
             }
             assert!(texts.iter().all(|text| *text != "×"));
-            // The compact marker: 11px text in a 16px control at the canonical 12px font.
-            assert_eq!(chart.trading_marker_font_size(), 11.0);
+            // 12px text in a 20px control at the canonical 12px font.
+            assert_eq!(chart.trading_marker_font_size(), 12.0);
             let expected_height = chart.trading_control_height() as f32;
-            assert_eq!(expected_height, 16.0);
+            assert_eq!(expected_height, 20.0);
             let round_rect_heights = trading
                 .iter()
                 .filter_map(|primitive| match primitive {

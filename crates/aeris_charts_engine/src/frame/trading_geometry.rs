@@ -122,23 +122,21 @@ impl<'a> TradingControlCluster<'a> {
     }
 }
 
-const CELL_PAD_X: f64 = 6.0;
+const CELL_PAD_X: f64 = 8.0;
 const MAX_QUANTITY_WIDTH: f64 = 120.0;
 /// The value cell holds PnL or the order type. Its floor keeps a ticking PnL from resizing the
 /// marker (and moving the close cell under the pointer) until the value outgrows it.
 const VALUE_MIN_WIDTH: f64 = 76.0;
 const MAX_VALUE_WIDTH: f64 = 180.0;
-const PROTECTION_BUTTON_WIDTH: f64 = 24.0;
+const PROTECTION_BUTTON_WIDTH: f64 = 28.0;
 const PROTECTION_BUTTON_GAP: f64 = 3.0;
 /// Separation between independent annotation chips.
 const ANNOTATION_GAP: f64 = 5.0;
 const ORDER_MARKER_SPAN: f64 = 304.0;
 /// Corner radius of every marker control, in CSS px.
 const MARKER_RADIUS: f64 = 2.0;
-/// Markers set their text one step below the axis font, so the compact control keeps clear air
-/// above and below the glyphs: 11px text in a 16px control at the canonical 12px font.
-const MARKER_FONT_STEP: f64 = 1.0;
-const CONTROL_PAD_Y: f64 = 5.0;
+/// Vertical air around marker text: 12px text in a 20px control at the canonical 12px font.
+const CONTROL_PAD_Y: f64 = 8.0;
 /// Text weight of the TP/SL buttons; quantity and value text stay regular.
 const MARKER_STRONG_WEIGHT: u16 = 600;
 const MARKER_REGULAR_WEIGHT: u16 = 400;
@@ -558,7 +556,7 @@ impl ChartEngine {
 
     /// Text size of every marker control: quantity, value, close, TP/SL, and annotation chips.
     pub(crate) fn trading_marker_font_size(&self) -> f64 {
-        (self.options.get().layout.font_size - MARKER_FONT_STEP).max(1.0)
+        self.options.get().layout.font_size.max(1.0)
     }
 
     pub(crate) fn trading_control_height(&self) -> f64 {
