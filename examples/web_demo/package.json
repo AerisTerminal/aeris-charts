@@ -9,14 +9,14 @@
   },
   "devDependencies": {
     "@hugeicons/core-free-icons": "^4.3.5",
-    "@playwright/test": "1.63.0",
-    "axe-core": "^4.12.1",
+    "@playwright/test": "1.64.1",
+    "axe-core": "^4.14.0",
     "esbuild": "^0.28.2",
     "lightweight-charts": "5.2.1",
     "pixelmatch": "7.2.0",
     "pngjs": "7.0.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "recharts": "3.10.1"
   }
 }

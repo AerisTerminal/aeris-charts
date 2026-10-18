@@ -86,8 +86,8 @@
   "devDependencies": {
     "@types/react": "^19.3.0",
     "esbuild": "^0.28.2",
-    "oxlint": "^1.86.0",
-    "react": "^19.3.0",
+    "oxlint": "^1.88.0",
+    "react": "^19.3.1",
     "typescript": "^7.0.2"
   }
 }

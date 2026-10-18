@@ -1,5 +1,6 @@
 import React, { StrictMode } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import { renderToString } from "react-dom/server";
 
 import {
@@ -840,8 +841,8 @@ export async function exerciseReactControlledBrush(): Promise<Record<string, unk
       return current?.type === "category" && current.from === "Jan";
     });
     const updated = live.general_brush_snapshot()?.range;
-    render(undefined);
-    await new Promise((resolve) => requestAnimationFrame(resolve));
+    // The Clear click below must reach an uncontrolled control, so commit the release first.
+    flushSync(() => render(undefined));
     const clear = Array.from(brush.querySelectorAll("button")).find((button) => button.textContent === "Clear");
     (clear as HTMLButtonElement).click();
     const uncontrolled = live.general_brush_snapshot();
@@ -1870,7 +1871,8 @@ export async function mountReactFormatterFixture(): Promise<Record<string, unkno
   });
   window.__reactFormatters = {
     async rerender(generation) {
-      render(generation);
+      // Formatter refresh runs in a passive effect; a frame count does not order it in WebKit.
+      flushSync(() => render(generation));
       await frames(3);
       return observe();
     },
