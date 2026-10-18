@@ -42,7 +42,7 @@ export type series_kind =
   | "custom";
 
 /** General series available through the shared chart engine. */
-export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "range_bar" | "error_bar" | "column" | "horizontal_bar" | "box_plot" | "heatmap_grid" | "scatter" | "bubble" | "pie" | "radar" | "polar_area" | "radial_bar";
+export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "range_bar" | "error_bar" | "column" | "histogram" | "horizontal_bar" | "box_plot" | "heatmap_grid" | "scatter" | "bubble" | "pie" | "radar" | "polar_area" | "radial_bar";
 export type general_row_id = string | number;
 
 export interface general_xy_row {
@@ -109,6 +109,12 @@ export interface heatmap_grid_row {
   color?: string;
   /** Optional symbol for point marks. */
   symbol?: "circle" | "square" | "diamond" | "triangle";
+}
+
+/** One histogram sample. The engine bins samples; a null value is retained but not counted. */
+export interface histogram_row {
+  id?: general_row_id;
+  value: number | null;
 }
 
 export interface numeric_xy_columns {
@@ -251,6 +257,13 @@ export interface category_box_columns {
   max_valid?: Uint8Array;
 }
 
+/** Typed histogram samples; `values_valid` marks missing samples with 0. */
+export interface histogram_columns {
+  ids?: readonly general_row_id[];
+  values: Float64Array;
+  values_valid?: Uint8Array;
+}
+
 export interface category_heatmap_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
@@ -313,7 +326,11 @@ export interface initial_pane_options {
 export type layout_series_kind = "funnel" | "treemap" | "sankey" | "sunburst";
 export type layout_input =
   | { type: "funnel"; stages: readonly { id: string; label: string; value: number }[] }
-  | { type: "hierarchy"; nodes: readonly { id: string; parent: string | null; label: string; value: number | null }[] }
+  | {
+      type: "hierarchy";
+      /** `color_value` is a signed leaf metric (for example a percent change) that shades a treemap cell up or down by magnitude. */
+      nodes: readonly { id: string; parent: string | null; label: string; value: number | null; color_value?: number }[];
+    }
   | { type: "flow"; nodes: readonly { id: string; label: string }[]; links: readonly { source: string; target: string; value: number }[] };
 
 export interface layout_series_options {
@@ -403,6 +420,8 @@ export interface general_axis_options {
   zero_line?: boolean;
   /** Draw this axis's ticks as plot grid rules, subject to the chart-wide grid direction. */
   grid_visible?: boolean;
+  /** Draw the axis line along the plot edge. Ticks and labels are unaffected. */
+  line_visible?: boolean;
 }
 
 /** Options that can change without replacing an axis or its scale/domain family. */
@@ -519,6 +538,22 @@ export interface general_series_options {
   stack_id?: string;
   /** Bar/xy_area stack policy. Nondefault modes require `stack_id`; `wiggle` minimizes weighted baseline movement. */
   stack_mode?: "normal" | "cumulative" | "silhouette" | "wiggle" | "percent" | "positive";
+  /** Engine-side binning for `histogram` series; other kinds reject non-default values. */
+  histogram?: general_histogram_options;
+}
+
+export interface general_histogram_options {
+  /**
+   * Exact number of equal-width bins spanning the sample range (1..1000). Omitted uses
+   * Sturges' rule with a 1/2/5-rounded width aligned to multiples of that width.
+   */
+  bin_count?: number | null;
+  /** Bin width aligned to multiples of itself; overrides `bin_count`. At most 1000 bins. */
+  bin_width?: number | null;
+  /** Bin height measure (default `count`); `density` makes bar areas sum to one. */
+  normalization?: "count" | "percent" | "density";
+  /** Running totals from the left; cumulative density is the empirical CDF ending at one. */
+  cumulative?: boolean;
 }
 
 /** Presentation-only subset retained for callers that do not need compatible axis rebinding. */
@@ -546,7 +581,7 @@ export interface general_tooltip_snapshot {
   low: number | null;
   /** Upper range bound, or null for a missing bound/non-range series. */
   high: number | null;
-  /** Numeric X error bounds, or null when missing/not an error-bar series. */
+  /** Numeric X error bounds or histogram bin edges, or null when missing/not applicable. */
   x_low: number | null;
   x_high: number | null;
   /** Box-plot quartiles, or null for missing quartiles/non-box series. */
@@ -655,13 +690,13 @@ export interface general_series_api {
   /** Mutate presentation and compatible pane/axis bindings while retaining identity and data. */
   apply_options(options: Partial<general_series_options>): void;
   set_visible(visible: boolean): void;
-  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[]): void;
-  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns): void;
+  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[]): void;
+  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns): void;
   /** Update existing rows and append missing rows by explicit `id`, atomically. */
-  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[], options?: general_update_options): void;
+  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[], options?: general_update_options): void;
   /** Typed-column form of {@link update_data}; `ids` is required at runtime. */
   update_data_typed(
-    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns,
+    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns,
     options?: general_update_options,
   ): void;
   data_at(row: number): general_tooltip_snapshot | null;
@@ -1773,6 +1808,13 @@ export interface chart_options {
    * `create_general_tooltip` DOM tooltip is attached.
    */
   generalTooltip: { visible: boolean };
+  /**
+   * Engine-drawn legend below general plots (default hidden): a series-color pill and title per
+   * series, one entry per pie, polar-area or radial-bar slice, and one per layout series. Clicking
+   * a series or layout entry toggles its visibility and notifies `subscribe_general_legend_change`.
+   * Painted by the engine, so GPUI and browser hosts show the same legend.
+   */
+  generalLegend: { visible: boolean };
   /** Custom label formatters (reference `localization`). Package-level; carries JS callbacks. */
   localization: localization_options;
   /** Enable/disable panning gestures (reference `handleScroll`). Default `true`. Package-level. */
@@ -2712,6 +2754,7 @@ export interface chart_state_v2 {
       | "RangeBar"
       | "ErrorBar"
       | "Column"
+      | "Histogram"
       | "HorizontalBar"
       | "BoxPlot"
       | "HeatmapGrid"
@@ -2738,6 +2781,13 @@ export interface chart_state_v2 {
     group_id: string | null;
     stack_id: string | null;
     stack_mode: "Normal" | "Cumulative" | "Silhouette" | "Wiggle" | "Percent" | "Positive";
+    /** Absent in documents written before histogram series. */
+    histogram?: {
+      bin_count: number | null;
+      bin_width: number | null;
+      normalization: "Count" | "Percent" | "Density";
+      cumulative: boolean;
+    };
   }[];
   /** Layout records are absent in older V2 documents. */
   layout_datasets?: { id: `layout-dataset-${number}`; input: Record<string, unknown> }[];
@@ -3266,7 +3316,7 @@ export interface general_pane_series_composition {
   key: string;
   kind: general_series_kind;
   options: Omit<general_series_options, "pane"> & { pane?: number };
-  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[];
+  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[];
   current?: general_series_api;
 }
 
@@ -4108,7 +4158,7 @@ export interface chart_api {
     series: readonly {
       kind: general_series_kind;
       options: Omit<general_series_options, "pane"> & { pane?: number };
-      data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[];
+      data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[];
     }[],
     references: readonly general_reference_options[],
   ): void;

@@ -24,7 +24,9 @@ mod footprint;
 mod frame;
 mod general_axes;
 mod general_data;
+mod general_histogram;
 mod general_layout;
+mod general_legend;
 mod general_series;
 mod heikin_ashi;
 mod hit_test;
@@ -182,17 +184,18 @@ pub use general_layout::{
 pub use general_series::{
     DEFAULT_GENERAL_FILL_OPACITY, GeneralAccessibilityItem, GeneralAccessibilitySnapshot,
     GeneralAreaBaseline, GeneralBrushEndpoint, GeneralBrushRange, GeneralBrushSnapshot,
-    GeneralHitMode, GeneralInterpolation, GeneralLegendItem, GeneralLegendSlice,
-    GeneralLegendSnapshot, GeneralLineStyle, GeneralPaneComposedReference,
-    GeneralPaneComposedSeries, GeneralPaneComposition, GeneralPaneCompositionResult,
-    GeneralPaneProposal, GeneralPaneReferenceComposition, GeneralPaneSeriesComposition,
-    GeneralPointSymbol, GeneralPolarOptions, GeneralReference, GeneralReferenceId,
-    GeneralReferenceOptions, GeneralReferenceValue, GeneralSeries, GeneralSeriesHit,
-    GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions, GeneralSeriesProposal,
-    GeneralSharedTooltipSnapshot, GeneralStackMode, GeneralTooltipSnapshot,
-    MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_BRUSH_ITEMS, MAX_GENERAL_LEGEND_SLICES_PER_SERIES,
-    MAX_GENERAL_LEGEND_SLICES_PER_SNAPSHOT, MAX_GENERAL_POINT_RADIUS, MAX_GENERAL_REFERENCES,
-    MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_GROUP_ID_BYTES,
+    GeneralHistogramNormalization, GeneralHistogramOptions, GeneralHitMode, GeneralInterpolation,
+    GeneralLegendItem, GeneralLegendSlice, GeneralLegendSnapshot, GeneralLineStyle,
+    GeneralPaneComposedReference, GeneralPaneComposedSeries, GeneralPaneComposition,
+    GeneralPaneCompositionResult, GeneralPaneProposal, GeneralPaneReferenceComposition,
+    GeneralPaneSeriesComposition, GeneralPointSymbol, GeneralPolarOptions, GeneralReference,
+    GeneralReferenceId, GeneralReferenceOptions, GeneralReferenceValue, GeneralSeries,
+    GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
+    GeneralSeriesProposal, GeneralSharedTooltipSnapshot, GeneralStackMode, GeneralTooltipSnapshot,
+    MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_BRUSH_ITEMS, MAX_GENERAL_HISTOGRAM_BINS,
+    MAX_GENERAL_LEGEND_SLICES_PER_SERIES, MAX_GENERAL_LEGEND_SLICES_PER_SNAPSHOT,
+    MAX_GENERAL_POINT_RADIUS, MAX_GENERAL_REFERENCES, MAX_GENERAL_SERIES,
+    MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_GROUP_ID_BYTES,
     MAX_GENERAL_SERIES_STACK_ID_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES,
     MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
 };
@@ -1874,6 +1877,7 @@ pub struct ChartEngine {
     /// issued dataset identity must still prevent a restored dataset from aliasing a stale handle.
     general_dataset_handles_issued: bool,
     general_series: Option<general_series::GeneralSeriesRegistry>,
+    general_legend_cache: RefCell<general_legend::GeneralLegendCache>,
     pub options: ChartOptionsStore,
     theme: ChartTheme,
     background_color_follows_theme: bool,
@@ -2167,6 +2171,7 @@ impl ChartEngine {
             general_transitions: Vec::new(),
             general_dataset_handles_issued: false,
             general_series: None,
+            general_legend_cache: RefCell::default(),
             options: ChartOptionsStore::new(),
             theme: ChartTheme::default(),
             background_color_follows_theme: true,
@@ -2530,6 +2535,7 @@ impl ChartEngine {
         let bound = self.general_series_uses_dataset(id);
         if bound {
             self.validate_general_dataset_replacement(id, &input)?;
+            self.validate_general_histogram_replacement(id, &input)?;
         }
         let previous = self.general_transition_source(id, bound);
         let radar_source_domains = self.general_radar_source_domains(id, previous.is_some());
@@ -2588,6 +2594,7 @@ impl ChartEngine {
         let bound = self.general_series_uses_dataset(id);
         if bound {
             self.validate_general_dataset_replacement(id, &input)?;
+            self.validate_general_histogram_upsert(id, &input, max_rows)?;
         }
         let previous = self.general_transition_source(id, bound);
         let radar_source_domains = self.general_radar_source_domains(id, previous.is_some());

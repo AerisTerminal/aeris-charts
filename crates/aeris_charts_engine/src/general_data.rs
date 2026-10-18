@@ -21,6 +21,8 @@ pub enum GeneralXKind {
     Numeric,
     Temporal,
     Category,
+    /// Unordered one-dimensional samples with no X coordinate, binned by histogram series.
+    Values,
 }
 
 /// Explicit row identity accepted by the general-data boundary.
@@ -212,6 +214,12 @@ pub enum GeneralXyInput {
         value: Vec<f64>,
         value_valid: Option<Vec<u8>>,
     },
+    /// One-dimensional samples for distribution series such as histograms.
+    Values {
+        ids: Option<Vec<GeneralRowId>>,
+        values: Vec<f64>,
+        values_valid: Option<Vec<u8>>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -236,6 +244,8 @@ enum GeneralXColumn {
         categories: Vec<String>,
         indices: Vec<u32>,
     },
+    /// Sample-only rows; the samples live in the Y column.
+    Values,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -436,6 +446,7 @@ impl GeneralDataset {
             GeneralXColumn::Numeric(_) => GeneralXKind::Numeric,
             GeneralXColumn::Temporal(_) => GeneralXKind::Temporal,
             GeneralXColumn::Category { .. } => GeneralXKind::Category,
+            GeneralXColumn::Values => GeneralXKind::Values,
         }
     }
 
@@ -595,6 +606,7 @@ impl GeneralDataset {
                     + categories.iter().map(String::capacity).sum::<usize>()
                     + indices.capacity() * std::mem::size_of::<u32>()
             }
+            GeneralXColumn::Values => 0,
         };
         self.identities.capacity() * std::mem::size_of::<GeneralRowIdentity>()
             + identity_text
@@ -788,7 +800,7 @@ impl GeneralDataset {
         let source_x = |row: usize| match &self.x {
             GeneralXColumn::Numeric(values) => values[row],
             GeneralXColumn::Temporal(values) => values[row] as f64,
-            GeneralXColumn::Category { .. } => self.y[row],
+            GeneralXColumn::Category { .. } | GeneralXColumn::Values => self.y[row],
         };
         Some(Self {
             id: target.id,
@@ -1022,17 +1034,19 @@ impl GeneralDataset {
                 || from.temporal_x_epoch_ms().unwrap()[source.unwrap()] as f64,
                 |row| values[row] as f64,
             ),
-            GeneralXColumn::Category { .. } => source.map_or(0.0, |source| from.y[source]),
+            GeneralXColumn::Category { .. } | GeneralXColumn::Values => {
+                source.map_or(0.0, |source| from.y[source])
+            }
         };
         let source_x = |row: usize| match &from.x {
             GeneralXColumn::Numeric(values) => values[row],
             GeneralXColumn::Temporal(values) => values[row] as f64,
-            GeneralXColumn::Category { .. } => from.y[row],
+            GeneralXColumn::Category { .. } | GeneralXColumn::Values => from.y[row],
         };
         let target_x = |row: usize| match &target.x {
             GeneralXColumn::Numeric(values) => values[row],
             GeneralXColumn::Temporal(values) => values[row] as f64,
-            GeneralXColumn::Category { .. } => target.y[row],
+            GeneralXColumn::Category { .. } | GeneralXColumn::Values => target.y[row],
         };
         if let (Some(current), Some(to)) = (self.x_low.as_mut(), target.x_low.as_ref()) {
             for (row, current) in current.iter_mut().enumerate() {
@@ -1242,6 +1256,7 @@ impl GeneralXyInput {
             | Self::ErrorCategory { .. }
             | Self::BoxCategory { .. }
             | Self::HeatmapCategoryCategory { .. } => GeneralXKind::Category,
+            Self::Values { .. } => GeneralXKind::Values,
         }
     }
 
@@ -1268,7 +1283,8 @@ impl GeneralXyInput {
             Self::BoxCategory { median, .. } => median,
             Self::HeatmapCategoryCategory { value, .. }
             | Self::HeatmapNumericNumeric { value, .. }
-            | Self::HeatmapTemporalNumeric { value, .. } => value,
+            | Self::HeatmapTemporalNumeric { value, .. }
+            | Self::Values { values: value, .. } => value,
             Self::RangeNumeric { high, .. }
             | Self::RangeTemporal { high, .. }
             | Self::RangeCategory { high, .. } => high,
@@ -1287,7 +1303,11 @@ impl GeneralXyInput {
             Self::BoxCategory { median_valid, .. } => median_valid.as_deref(),
             Self::HeatmapCategoryCategory { value_valid, .. }
             | Self::HeatmapNumericNumeric { value_valid, .. }
-            | Self::HeatmapTemporalNumeric { value_valid, .. } => value_valid.as_deref(),
+            | Self::HeatmapTemporalNumeric { value_valid, .. }
+            | Self::Values {
+                values_valid: value_valid,
+                ..
+            } => value_valid.as_deref(),
             Self::RangeNumeric { high_valid, .. }
             | Self::RangeTemporal { high_valid, .. }
             | Self::RangeCategory { high_valid, .. } => high_valid.as_deref(),
@@ -2006,6 +2026,38 @@ impl GeneralXyInput {
                     heatmap_y_category_indices: None,
                 })
             }
+            Self::Values {
+                ids,
+                values,
+                values_valid,
+            } => {
+                validate_row_count(values.len())?;
+                validate_common(
+                    values.len(),
+                    ids.as_deref(),
+                    &values,
+                    values_valid.as_deref(),
+                )?;
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Values,
+                    y: values,
+                    y_valid: normalize_validity(values_valid),
+                    low: None,
+                    low_valid: None,
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
+                    size: None,
+                    size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
+                })
+            }
         }
     }
 }
@@ -2683,6 +2735,7 @@ impl GeneralDataStore {
                 GeneralXColumn::Numeric(_) => GeneralXKind::Numeric,
                 GeneralXColumn::Temporal(_) => GeneralXKind::Temporal,
                 GeneralXColumn::Category { .. } => GeneralXKind::Category,
+                GeneralXColumn::Values => GeneralXKind::Values,
             }
         {
             return Err(invalid_data(
@@ -2977,6 +3030,7 @@ impl GeneralDataStore {
                     GeneralXColumn::Numeric(values) => values.push(0.0),
                     GeneralXColumn::Temporal(values) => values.push(0),
                     GeneralXColumn::Category { indices, .. } => indices.push(0),
+                    GeneralXColumn::Values => {}
                 }
                 dataset.y.push(0.0);
                 if let Some(validity) = dataset.y_valid.as_mut() {
@@ -3037,6 +3091,7 @@ impl GeneralDataStore {
                 ) => {
                     target[target_row] = category_remap[source[source_row] as usize];
                 }
+                (GeneralXColumn::Values, GeneralXColumn::Values) => {}
                 _ => unreachable!("general X kinds were validated before mutation"),
             }
             if let (Some(target), Some(source)) = (
@@ -3147,6 +3202,7 @@ impl GeneralDataStore {
                     GeneralXColumn::Category { indices, .. } => {
                         indices.drain(..trim);
                     }
+                    GeneralXColumn::Values => {}
                 }
                 dataset.y.drain(..trim);
                 if let Some(validity) = dataset.y_valid.as_mut() {
@@ -3237,6 +3293,7 @@ impl GeneralDataStore {
                         GeneralXColumn::Category { indices, .. } => {
                             indices.shrink_to(bounded_capacity)
                         }
+                        GeneralXColumn::Values => {}
                     }
                 }
             }
@@ -3288,6 +3345,28 @@ impl GeneralDataStore {
         dataset.symbols = next_symbols;
         dataset.generation = generation;
         Ok(removed_front)
+    }
+
+    /// Resolve the dataset an explicit-ID upsert would produce without changing the store.
+    pub(crate) fn preview_upsert(
+        &self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+        max_rows: Option<usize>,
+    ) -> Result<GeneralDataset, ChartError> {
+        let dataset = self.get(id).cloned().ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
+        })?;
+        let mut preview = Self {
+            datasets: vec![dataset],
+            next_dataset_id: self.next_dataset_id,
+            next_generated_row_id: self.next_generated_row_id,
+        };
+        preview.upsert(id, input, max_rows)?;
+        preview
+            .datasets
+            .pop()
+            .ok_or_else(|| resource("general upsert preview lost its dataset"))
     }
 
     pub(crate) fn remove(&mut self, id: GeneralDatasetId) -> bool {

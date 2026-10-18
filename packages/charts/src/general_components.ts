@@ -161,7 +161,7 @@ export function create_general_legend(
       button.style.opacity = item.visible ? "1" : "0.55";
       const swatch = document.createElement("span");
       swatch.setAttribute("aria-hidden", "true");
-      swatch.style.cssText = "display:inline-block;flex:none;width:3px;height:12px;background:currentColor";
+      swatch.style.cssText = "display:inline-block;flex:none;width:4px;height:12px;border-radius:2px;background:currentColor";
       if (item.color !== null) swatch.style.color = item.color;
       const label = document.createElement("span");
       label.textContent = options.format_title?.(item.title, handle) ?? item.title;
@@ -182,7 +182,7 @@ export function create_general_legend(
           entry.style.cssText = "display:inline-flex;align-items:center;gap:4px;white-space:nowrap";
           const marker = document.createElement("span");
           marker.setAttribute("aria-hidden", "true");
-          marker.style.cssText = `display:inline-block;flex:none;width:3px;height:12px;background:${slice.color}`;
+          marker.style.cssText = `display:inline-block;flex:none;width:4px;height:12px;border-radius:2px;background:${slice.color}`;
           const name = document.createElement("span");
           name.textContent = `${slice.label}: ${slice.value}`;
           entry.append(marker, name);
@@ -211,7 +211,7 @@ export function create_general_legend(
       button.style.opacity = visible ? "1" : "0.55";
       const swatch = document.createElement("span");
       swatch.setAttribute("aria-hidden", "true");
-      swatch.style.cssText = `display:inline-block;flex:none;width:3px;height:12px;background:${item.color ?? "#4682b4"}`;
+      swatch.style.cssText = `display:inline-block;flex:none;width:4px;height:12px;border-radius:2px;background:${item.color ?? "#4682b4"}`;
       const label = document.createElement("span");
       label.textContent = options.format_layout_title?.(title, handle) ?? title;
       button.append(swatch, label);
@@ -335,7 +335,7 @@ export function create_general_tooltip(
       label.style.cssText = "display:flex;align-items:center;gap:6px;min-width:0;color:var(--nc-tooltip-muted)";
       if (color !== null) {
         const dot = document.createElement("span");
-        dot.style.cssText = `flex:none;align-self:center;width:3px;height:10px;background:${color}`;
+        dot.style.cssText = `flex:none;align-self:center;width:4px;height:10px;border-radius:2px;background:${color}`;
         label.appendChild(dot);
       }
       label.appendChild(document.createTextNode(title));

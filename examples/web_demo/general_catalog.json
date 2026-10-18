@@ -1,0 +1,810 @@
+{
+  "categories": [
+    { "id": "trend", "label": "Lines & areas" },
+    { "id": "bar", "label": "Bars" },
+    { "id": "distribution", "label": "Distribution" },
+    { "id": "scale", "label": "Scales & axes" },
+    { "id": "polar", "label": "Polar" },
+    { "id": "layout", "label": "Layout" }
+  ],
+  "examples": [
+    {
+      "id": "revenue_trend", "title": "Revenue trend", "category": "trend",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "xy_line", "title": "Revenue", "color": "#4c8bf5", "point_markers": true, "data": [
+          { "x": "Jan", "y": 42 }, { "x": "Feb", "y": 47 }, { "x": "Mar", "y": 45 }, { "x": "Apr", "y": 54 },
+          { "x": "May", "y": 58 }, { "x": "Jun", "y": 61 }, { "x": "Jul", "y": 66 }, { "x": "Aug", "y": 64 },
+          { "x": "Sep", "y": 72 }, { "x": "Oct", "y": 77 }, { "x": "Nov", "y": 81 }, { "x": "Dec", "y": 88 }
+        ] }
+      ]
+    },
+    {
+      "id": "interpolation_modes", "title": "Interpolation modes", "category": "trend",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "xy_line", "title": "Linear", "color": "#4c8bf5", "interpolation": "linear", "data": [
+          { "x": 0, "y": 12 }, { "x": 1, "y": 18 }, { "x": 2, "y": 15 }, { "x": 3, "y": 24 }, { "x": 4, "y": 21 },
+          { "x": 5, "y": 30 }, { "x": 6, "y": 26 }, { "x": 7, "y": 34 }, { "x": 8, "y": 31 }, { "x": 9, "y": 38 }
+        ] },
+        { "kind": "xy_line", "title": "Monotone", "color": "#28b7a4", "interpolation": "monotone", "data": [
+          { "x": 0, "y": 26 }, { "x": 1, "y": 32 }, { "x": 2, "y": 29 }, { "x": 3, "y": 38 }, { "x": 4, "y": 35 },
+          { "x": 5, "y": 44 }, { "x": 6, "y": 40 }, { "x": 7, "y": 48 }, { "x": 8, "y": 45 }, { "x": 9, "y": 52 }
+        ] },
+        { "kind": "xy_line", "title": "Natural", "color": "#8b6df6", "interpolation": "natural", "data": [
+          { "x": 0, "y": 40 }, { "x": 1, "y": 46 }, { "x": 2, "y": 43 }, { "x": 3, "y": 52 }, { "x": 4, "y": 49 },
+          { "x": 5, "y": 58 }, { "x": 6, "y": 54 }, { "x": 7, "y": 62 }, { "x": 8, "y": 59 }, { "x": 9, "y": 66 }
+        ] },
+        { "kind": "xy_line", "title": "Step after", "color": "#e4a11b", "interpolation": "step_after", "data": [
+          { "x": 0, "y": 54 }, { "x": 1, "y": 60 }, { "x": 2, "y": 57 }, { "x": 3, "y": 66 }, { "x": 4, "y": 63 },
+          { "x": 5, "y": 72 }, { "x": 6, "y": 68 }, { "x": 7, "y": 76 }, { "x": 8, "y": 73 }, { "x": 9, "y": 80 }
+        ] }
+      ]
+    },
+    {
+      "id": "line_styles", "title": "Line styles and point symbols", "category": "trend",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "xy_line", "title": "Solid", "color": "#4c8bf5", "line_style": "solid", "point_markers": true, "point_symbol": "circle", "point_radius": 4, "data": [
+          { "x": "W1", "y": 62 }, { "x": "W2", "y": 66 }, { "x": "W3", "y": 64 }, { "x": "W4", "y": 71 }, { "x": "W5", "y": 74 }, { "x": "W6", "y": 79 }
+        ] },
+        { "kind": "xy_line", "title": "Dashed", "color": "#28b7a4", "line_style": "dashed", "point_markers": true, "point_symbol": "square", "point_radius": 4, "data": [
+          { "x": "W1", "y": 48 }, { "x": "W2", "y": 52 }, { "x": "W3", "y": 55 }, { "x": "W4", "y": 53 }, { "x": "W5", "y": 59 }, { "x": "W6", "y": 63 }
+        ] },
+        { "kind": "xy_line", "title": "Dotted", "color": "#8b6df6", "line_style": "dotted", "point_markers": true, "point_symbol": "diamond", "point_radius": 5, "data": [
+          { "x": "W1", "y": 34 }, { "x": "W2", "y": 37 }, { "x": "W3", "y": 41 }, { "x": "W4", "y": 39 }, { "x": "W5", "y": 44 }, { "x": "W6", "y": 47 }
+        ] },
+        { "kind": "xy_line", "title": "Thick", "color": "#e46f61", "line_width": 4, "point_markers": true, "point_symbol": "triangle", "point_radius": 5, "data": [
+          { "x": "W1", "y": 20 }, { "x": "W2", "y": 24 }, { "x": "W3", "y": 22 }, { "x": "W4", "y": 28 }, { "x": "W5", "y": 27 }, { "x": "W6", "y": 32 }
+        ] }
+      ]
+    },
+    {
+      "id": "missing_values", "title": "Missing values", "category": "trend",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "xy_line", "title": "Gaps kept", "color": "#4c8bf5", "point_markers": true, "data": [
+          { "x": 1, "y": 30 }, { "x": 2, "y": 34 }, { "x": 3, "y": null }, { "x": 4, "y": 41 }, { "x": 5, "y": 39 },
+          { "x": 6, "y": null }, { "x": 7, "y": null }, { "x": 8, "y": 50 }, { "x": 9, "y": 54 }, { "x": 10, "y": 57 }
+        ] },
+        { "kind": "xy_line", "title": "Gaps bridged", "color": "#e4a11b", "connect_missing": true, "line_style": "dashed", "point_markers": true, "data": [
+          { "x": 1, "y": 14 }, { "x": 2, "y": 19 }, { "x": 3, "y": null }, { "x": 4, "y": 25 }, { "x": 5, "y": 23 },
+          { "x": 6, "y": null }, { "x": 7, "y": null }, { "x": 8, "y": 33 }, { "x": 9, "y": 36 }, { "x": 10, "y": 40 }
+        ] }
+      ]
+    },
+    {
+      "id": "gradient_area", "title": "Gradient area", "category": "trend",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "xy_area", "title": "Active users", "color": "#25a8c7", "interpolation": "monotone", "fill_opacity": 1,
+          "fill_gradient": ["rgba(37, 168, 199, 0.55)", "rgba(37, 168, 199, 0.02)"], "data": [
+          { "x": "Jan", "y": 22 }, { "x": "Feb", "y": 24 }, { "x": "Mar", "y": 23 }, { "x": "Apr", "y": 27 },
+          { "x": "May", "y": 29 }, { "x": "Jun", "y": 31 }, { "x": "Jul", "y": 33 }, { "x": "Aug", "y": 32 },
+          { "x": "Sep", "y": 35 }, { "x": "Oct", "y": 37 }, { "x": "Nov", "y": 39 }, { "x": "Dec", "y": 42 }
+        ] }
+      ]
+    },
+    {
+      "id": "area_baseline", "title": "Area against a baseline", "category": "trend",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "xy_area", "title": "Utilization vs 50% target", "color": "#8b6df6", "baseline_value": 50, "interpolation": "monotone", "data": [
+          { "x": 1, "y": 46 }, { "x": 2, "y": 49 }, { "x": 3, "y": 53 }, { "x": 4, "y": 57 }, { "x": 5, "y": 55 }, { "x": 6, "y": 51 },
+          { "x": 7, "y": 47 }, { "x": 8, "y": 44 }, { "x": 9, "y": 48 }, { "x": 10, "y": 54 }, { "x": 11, "y": 58 }, { "x": 12, "y": 60 }
+        ] }
+      ]
+    },
+    {
+      "id": "stacked_area", "title": "Stacked areas", "category": "trend",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "xy_area", "title": "Search", "color": "#4c8bf5", "stack_id": "traffic", "data": [
+          { "x": "Mon", "y": 32 }, { "x": "Tue", "y": 36 }, { "x": "Wed", "y": 34 }, { "x": "Thu", "y": 39 }, { "x": "Fri", "y": 42 }, { "x": "Sat", "y": 28 }, { "x": "Sun", "y": 25 }
+        ] },
+        { "kind": "xy_area", "title": "Social", "color": "#28b7a4", "stack_id": "traffic", "data": [
+          { "x": "Mon", "y": 18 }, { "x": "Tue", "y": 21 }, { "x": "Wed", "y": 24 }, { "x": "Thu", "y": 22 }, { "x": "Fri", "y": 27 }, { "x": "Sat", "y": 31 }, { "x": "Sun", "y": 29 }
+        ] },
+        { "kind": "xy_area", "title": "Direct", "color": "#e4a11b", "stack_id": "traffic", "data": [
+          { "x": "Mon", "y": 12 }, { "x": "Tue", "y": 13 }, { "x": "Wed", "y": 12 }, { "x": "Thu", "y": 15 }, { "x": "Fri", "y": 16 }, { "x": "Sat", "y": 11 }, { "x": "Sun", "y": 10 }
+        ] }
+      ]
+    },
+    {
+      "id": "percent_area", "title": "Percent-stacked areas", "category": "trend",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "xy_area", "title": "Core", "color": "#4c8bf5", "stack_id": "portfolio", "stack_mode": "percent", "data": [
+          { "x": "Q1", "y": 52 }, { "x": "Q2", "y": 49 }, { "x": "Q3", "y": 46 }, { "x": "Q4", "y": 43 }
+        ] },
+        { "kind": "xy_area", "title": "Growth", "color": "#28b7a4", "stack_id": "portfolio", "stack_mode": "percent", "data": [
+          { "x": "Q1", "y": 28 }, { "x": "Q2", "y": 31 }, { "x": "Q3", "y": 34 }, { "x": "Q4", "y": 36 }
+        ] },
+        { "kind": "xy_area", "title": "New", "color": "#e4a11b", "stack_id": "portfolio", "stack_mode": "percent", "data": [
+          { "x": "Q1", "y": 20 }, { "x": "Q2", "y": 20 }, { "x": "Q3", "y": 20 }, { "x": "Q4", "y": 21 }
+        ] }
+      ]
+    },
+    {
+      "id": "streamgraph", "title": "Streamgraph", "category": "trend",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear" },
+        { "id": "y", "dimension": "y", "scale": "linear", "visible": false }
+      ],
+      "series": [
+        { "kind": "xy_area", "title": "Rock", "color": "#4c8bf5", "stack_id": "genres", "stack_mode": "wiggle", "interpolation": "monotone", "data": [
+          { "x": 1, "y": 12 }, { "x": 2, "y": 15 }, { "x": 3, "y": 19 }, { "x": 4, "y": 17 }, { "x": 5, "y": 13 }, { "x": 6, "y": 10 }, { "x": 7, "y": 9 }, { "x": 8, "y": 11 }
+        ] },
+        { "kind": "xy_area", "title": "Pop", "color": "#8b6df6", "stack_id": "genres", "stack_mode": "wiggle", "interpolation": "monotone", "data": [
+          { "x": 1, "y": 8 }, { "x": 2, "y": 10 }, { "x": 3, "y": 13 }, { "x": 4, "y": 18 }, { "x": 5, "y": 22 }, { "x": 6, "y": 20 }, { "x": 7, "y": 17 }, { "x": 8, "y": 15 }
+        ] },
+        { "kind": "xy_area", "title": "Jazz", "color": "#28b7a4", "stack_id": "genres", "stack_mode": "wiggle", "interpolation": "monotone", "data": [
+          { "x": 1, "y": 6 }, { "x": 2, "y": 5 }, { "x": 3, "y": 6 }, { "x": 4, "y": 8 }, { "x": 5, "y": 9 }, { "x": 6, "y": 12 }, { "x": 7, "y": 14 }, { "x": 8, "y": 13 }
+        ] },
+        { "kind": "xy_area", "title": "Electronic", "color": "#e4a11b", "stack_id": "genres", "stack_mode": "wiggle", "interpolation": "monotone", "data": [
+          { "x": 1, "y": 3 }, { "x": 2, "y": 4 }, { "x": 3, "y": 6 }, { "x": 4, "y": 9 }, { "x": 5, "y": 14 }, { "x": 6, "y": 18 }, { "x": 7, "y": 21 }, { "x": 8, "y": 24 }
+        ] }
+      ]
+    },
+    {
+      "id": "forecast_band", "title": "Forecast with confidence band", "category": "trend",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "range_area", "title": "80% interval", "color": "#28b7a4", "interpolation": "monotone", "data": [
+          { "x": 1, "low": 42, "high": 57 }, { "x": 2, "low": 44, "high": 61 }, { "x": 3, "low": 48, "high": 66 }, { "x": 4, "low": 51, "high": 70 },
+          { "x": 5, "low": 55, "high": 75 }, { "x": 6, "low": 58, "high": 79 }, { "x": 7, "low": 62, "high": 84 }, { "x": 8, "low": 66, "high": 89 }
+        ] },
+        { "kind": "xy_line", "title": "Median forecast", "color": "#1f8f80", "line_style": "dashed", "interpolation": "monotone", "data": [
+          { "x": 1, "y": 49 }, { "x": 2, "y": 52 }, { "x": 3, "y": 57 }, { "x": 4, "y": 60 },
+          { "x": 5, "y": 65 }, { "x": 6, "y": 68 }, { "x": 7, "y": 73 }, { "x": 8, "y": 77 }
+        ] }
+      ]
+    },
+    {
+      "id": "channel_columns", "title": "Columns with labels and rounded corners", "category": "bar",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "column", "title": "Revenue", "color": "#4c8bf5", "data_labels": true, "bar_corner_radius": 6, "bar_max_width": 56, "data": [
+          { "x": "Direct", "y": 74 }, { "x": "Partner", "y": 51 }, { "x": "Market", "y": 38 }, { "x": "Retail", "y": 62 }, { "x": "API", "y": 83 }
+        ] }
+      ]
+    },
+    {
+      "id": "gradient_columns", "title": "Gradient columns with per-bar colors", "category": "bar",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "column", "title": "Signups", "color": "#8b6df6", "bar_corner_radius": 4, "bar_gap": 8,
+          "fill_gradient": ["#8b6df6", "rgba(139, 109, 246, 0.25)"], "data": [
+          { "x": "Mon", "y": 34 }, { "x": "Tue", "y": 41 }, { "x": "Wed", "y": 39 }, { "x": "Thu", "y": 47 },
+          { "x": "Fri", "y": 52 }, { "x": "Sat", "y": 22, "color": "#e46f61" }, { "x": "Sun", "y": 18, "color": "#e46f61" }
+        ] }
+      ]
+    },
+    {
+      "id": "grouped_columns", "title": "Grouped columns", "category": "bar",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "column", "title": "North", "color": "#4c8bf5", "group_id": "regions", "bar_corner_radius": 3, "data": [
+          { "x": "Q1", "y": 48 }, { "x": "Q2", "y": 57 }, { "x": "Q3", "y": 63 }, { "x": "Q4", "y": 71 }
+        ] },
+        { "kind": "column", "title": "South", "color": "#8b6df6", "group_id": "regions", "bar_corner_radius": 3, "data": [
+          { "x": "Q1", "y": 39 }, { "x": "Q2", "y": 46 }, { "x": "Q3", "y": 52 }, { "x": "Q4", "y": 65 }
+        ] },
+        { "kind": "column", "title": "West", "color": "#28b7a4", "group_id": "regions", "bar_corner_radius": 3, "data": [
+          { "x": "Q1", "y": 31 }, { "x": "Q2", "y": 35 }, { "x": "Q3", "y": 44 }, { "x": "Q4", "y": 49 }
+        ] }
+      ]
+    },
+    {
+      "id": "stacked_columns", "title": "Stacked columns", "category": "bar",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "column", "title": "Core", "color": "#4c8bf5", "group_id": "mix", "stack_id": "revenue", "data": [
+          { "x": "Q1", "y": 34 }, { "x": "Q2", "y": 39 }, { "x": "Q3", "y": 43 }, { "x": "Q4", "y": 47 }
+        ] },
+        { "kind": "column", "title": "Growth", "color": "#28b7a4", "group_id": "mix", "stack_id": "revenue", "data": [
+          { "x": "Q1", "y": 13 }, { "x": "Q2", "y": 16 }, { "x": "Q3", "y": 21 }, { "x": "Q4", "y": 25 }
+        ] },
+        { "kind": "column", "title": "Services", "color": "#e4a11b", "group_id": "mix", "stack_id": "revenue", "data": [
+          { "x": "Q1", "y": 9 }, { "x": "Q2", "y": 11 }, { "x": "Q3", "y": 12 }, { "x": "Q4", "y": 14 }
+        ] }
+      ]
+    },
+    {
+      "id": "percent_columns", "title": "Percent-stacked columns", "category": "bar",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "column", "title": "Mobile", "color": "#4c8bf5", "stack_id": "devices", "stack_mode": "percent", "data": [
+          { "x": "2021", "y": 41 }, { "x": "2022", "y": 48 }, { "x": "2023", "y": 55 }, { "x": "2024", "y": 61 }
+        ] },
+        { "kind": "column", "title": "Desktop", "color": "#8b6df6", "stack_id": "devices", "stack_mode": "percent", "data": [
+          { "x": "2021", "y": 49 }, { "x": "2022", "y": 44 }, { "x": "2023", "y": 38 }, { "x": "2024", "y": 33 }
+        ] },
+        { "kind": "column", "title": "Tablet", "color": "#e4a11b", "stack_id": "devices", "stack_mode": "percent", "data": [
+          { "x": "2021", "y": 10 }, { "x": "2022", "y": 8 }, { "x": "2023", "y": 7 }, { "x": "2024", "y": 6 }
+        ] }
+      ]
+    },
+    {
+      "id": "bull_bear_columns", "title": "Buy and sell volume side by side", "category": "bar",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "column", "title": "Buy volume", "color": "#089981", "group_id": "flow", "bar_corner_radius": 3, "data": [
+          { "x": "Mon", "y": 42 }, { "x": "Tue", "y": 38 }, { "x": "Wed", "y": 51 }, { "x": "Thu", "y": 47 }, { "x": "Fri", "y": 55 }
+        ] },
+        { "kind": "column", "title": "Sell volume", "color": "#f23645", "group_id": "flow", "bar_corner_radius": 3, "data": [
+          { "x": "Mon", "y": 31 }, { "x": "Tue", "y": 44 }, { "x": "Wed", "y": 36 }, { "x": "Thu", "y": 29 }, { "x": "Fri", "y": 40 }
+        ] }
+      ]
+    },
+    {
+      "id": "pipeline_bars", "title": "Horizontal bars", "category": "bar",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear" },
+        { "id": "y", "dimension": "y", "scale": "band" }
+      ],
+      "series": [
+        { "kind": "horizontal_bar", "title": "Pipeline", "color": "#8b6df6", "data_labels": true, "bar_corner_radius": 4, "data": [
+          { "x": "Qualified", "y": 82 }, { "x": "Discovery", "y": 67 }, { "x": "Proposal", "y": 49 }, { "x": "Security", "y": 36 }, { "x": "Contract", "y": 24 }
+        ] }
+      ]
+    },
+    {
+      "id": "stacked_bars", "title": "Stacked horizontal bars", "category": "bar",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear" },
+        { "id": "y", "dimension": "y", "scale": "band" }
+      ],
+      "series": [
+        { "kind": "horizontal_bar", "title": "Agree", "color": "#28b7a4", "stack_id": "survey", "data": [
+          { "x": "Pricing", "y": 46 }, { "x": "Support", "y": 61 }, { "x": "Docs", "y": 38 }, { "x": "Speed", "y": 70 }
+        ] },
+        { "kind": "horizontal_bar", "title": "Neutral", "color": "#9aa4b2", "stack_id": "survey", "data": [
+          { "x": "Pricing", "y": 30 }, { "x": "Support", "y": 24 }, { "x": "Docs", "y": 35 }, { "x": "Speed", "y": 18 }
+        ] },
+        { "kind": "horizontal_bar", "title": "Disagree", "color": "#e46f61", "stack_id": "survey", "data": [
+          { "x": "Pricing", "y": 24 }, { "x": "Support", "y": 15 }, { "x": "Docs", "y": 27 }, { "x": "Speed", "y": 12 }
+        ] }
+      ]
+    },
+    {
+      "id": "delivery_windows", "title": "Range bars", "category": "bar",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "range_bar", "title": "Delivery weeks", "color": "#e4a11b", "data": [
+          { "x": "Core", "low": 4, "high": 9 }, { "x": "Growth", "low": 7, "high": 13 },
+          { "x": "Platform", "low": 3, "high": 8 }, { "x": "Data", "low": 9, "high": 16 }
+        ] }
+      ]
+    },
+    {
+      "id": "dual_axis", "title": "Columns and line on two Y axes", "category": "bar",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear", "position": "left", "title": "Revenue" },
+        { "id": "y2", "dimension": "y", "scale": "linear", "position": "right", "title": "Margin %", "grid_visible": false, "zero_line": false }
+      ],
+      "series": [
+        { "kind": "column", "title": "Revenue", "color": "#4c8bf5", "bar_corner_radius": 3, "data": [
+          { "x": "Q1", "y": 120 }, { "x": "Q2", "y": 138 }, { "x": "Q3", "y": 151 }, { "x": "Q4", "y": 176 }
+        ] },
+        { "kind": "xy_line", "title": "Margin %", "color": "#e4a11b", "y_axis_id": "y2", "point_markers": true, "data": [
+          { "x": "Q1", "y": 18.5 }, { "x": "Q2", "y": 21.2 }, { "x": "Q3", "y": 19.8 }, { "x": "Q4", "y": 24.1 }
+        ] }
+      ]
+    },
+    {
+      "id": "scatter_symbols", "title": "Scatter with symbols", "category": "distribution",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "scatter", "title": "Search", "color": "#25a8c7", "point_radius": 5, "point_symbol": "circle", "data": [
+          { "x": 12, "y": 36 }, { "x": 17, "y": 41 }, { "x": 19, "y": 52 }, { "x": 24, "y": 58 }, { "x": 28, "y": 69 }, { "x": 31, "y": 65 }
+        ] },
+        { "kind": "scatter", "title": "Social", "color": "#8b6df6", "point_radius": 5, "point_symbol": "square", "data": [
+          { "x": 9, "y": 22 }, { "x": 14, "y": 30 }, { "x": 21, "y": 33 }, { "x": 26, "y": 44 }, { "x": 33, "y": 47 }, { "x": 38, "y": 55 }
+        ] },
+        { "kind": "scatter", "title": "Events", "color": "#e46f61", "point_radius": 6, "point_symbol": "triangle", "data": [
+          { "x": 16, "y": 60 }, { "x": 22, "y": 71 }, { "x": 29, "y": 80 }, { "x": 36, "y": 78 }, { "x": 42, "y": 88 }, { "x": 47, "y": 95 }
+        ] }
+      ]
+    },
+    {
+      "id": "market_bubbles", "title": "Bubble", "category": "distribution",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear", "domain_padding": 0.08 },
+        { "id": "y", "dimension": "y", "scale": "linear", "domain_padding": 0.08 }
+      ],
+      "series": [
+        { "kind": "bubble", "title": "Segments", "color": "#8b6df6", "data": [
+          { "x": 72, "y": 38, "size": 196, "label": "Enterprise" }, { "x": 54, "y": 57, "size": 144, "label": "Mid-market" },
+          { "x": 36, "y": 74, "size": 100, "label": "SMB" }, { "x": 24, "y": 88, "size": 64, "label": "Startup" },
+          { "x": 81, "y": 24, "size": 81, "label": "Public sector" }
+        ] }
+      ]
+    },
+    {
+      "id": "category_error_bars", "title": "Error bars", "category": "distribution",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "error_bar", "title": "Conversion", "color": "#e46f61", "point_radius": 6, "data": [
+          { "x": "Control", "y": 4.8, "y_low": 4.2, "y_high": 5.4 }, { "x": "A", "y": 5.7, "y_low": 5.0, "y_high": 6.5 },
+          { "x": "B", "y": 6.3, "y_low": 5.5, "y_high": 7.1 }, { "x": "C", "y": 5.4, "y_low": 4.8, "y_high": 6.0 }
+        ] }
+      ]
+    },
+    {
+      "id": "numeric_error_bars", "title": "Two-dimensional error bars", "category": "distribution",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear", "domain_padding": 0.06 },
+        { "id": "y", "dimension": "y", "scale": "linear", "domain_padding": 0.06 }
+      ],
+      "series": [
+        { "kind": "error_bar", "title": "Calibration", "color": "#4c8bf5", "point_radius": 4, "data": [
+          { "x": 1.0, "y": 2.1, "x_low": 0.8, "x_high": 1.2, "y_low": 1.8, "y_high": 2.4 },
+          { "x": 2.0, "y": 3.9, "x_low": 1.7, "x_high": 2.3, "y_low": 3.4, "y_high": 4.4 },
+          { "x": 3.0, "y": 6.2, "x_low": 2.8, "x_high": 3.2, "y_low": 5.7, "y_high": 6.6 },
+          { "x": 4.0, "y": 7.8, "x_low": 3.6, "x_high": 4.4, "y_low": 7.1, "y_high": 8.6 },
+          { "x": 5.0, "y": 10.1, "x_low": 4.7, "x_high": 5.3, "y_low": 9.3, "y_high": 10.8 }
+        ] }
+      ]
+    },
+    {
+      "id": "latency_box", "title": "Box plot", "category": "distribution",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "box_plot", "title": "Latency (ms)", "color": "#4c8bf5", "box_fill_color": "rgba(76, 139, 245, 0.22)", "box_median_color": "#e4a11b", "data": [
+          { "x": "US-E", "min": 18, "q1": 23, "median": 29, "q3": 37, "max": 52 }, { "x": "US-W", "min": 22, "q1": 28, "median": 34, "q3": 41, "max": 58 },
+          { "x": "EU", "min": 31, "q1": 38, "median": 45, "q3": 55, "max": 72 }, { "x": "APAC", "min": 44, "q1": 53, "median": 62, "q3": 75, "max": 96 }
+        ] }
+      ]
+    },
+    {
+      "id": "return_histogram", "title": "Histogram with automatic bins", "category": "distribution",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear", "title": "Daily return %" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "histogram", "title": "Days", "color": "#4c8bf5", "bar_corner_radius": 2, "bar_gap": 1, "data": [
+          { "value": -0.25 }, { "value": 1.39 }, { "value": -0.38 }, { "value": 1.96 }, { "value": 0.66 }, { "value": -0.38 }, { "value": 0.46 }, { "value": 0.29 },
+          { "value": 0.69 }, { "value": 0.53 }, { "value": -2.53 }, { "value": -0.53 }, { "value": -1.25 }, { "value": 0.52 }, { "value": -1.39 }, { "value": 0.53 },
+          { "value": -0.88 }, { "value": -1.67 }, { "value": -0.15 }, { "value": 0.3 }, { "value": 1.32 }, { "value": -0.14 }, { "value": 0.98 }, { "value": 0.99 },
+          { "value": 1.27 }, { "value": -0.75 }, { "value": 0.12 }, { "value": -1.31 }, { "value": 1.76 }, { "value": 1.82 }, { "value": 1.6 }, { "value": 1.32 },
+          { "value": -0.24 }, { "value": 0.49 }, { "value": -0.7 }, { "value": 0.99 }, { "value": -0.25 }, { "value": -3.26 }, { "value": -1.49 }, { "value": -0.16 },
+          { "value": 1.64 }, { "value": -2.16 }, { "value": -0.3 }, { "value": -2.27 }, { "value": -0.82 }, { "value": -0.19 }, { "value": 0.7 }, { "value": 0.03 },
+          { "value": -2 }, { "value": 0.9 }, { "value": -0.33 }, { "value": 2.79 }, { "value": 0.27 }, { "value": 0.7 }, { "value": 1.43 }, { "value": 0.9 },
+          { "value": -1.42 }, { "value": -1.61 }, { "value": 0.65 }, { "value": 1.03 }, { "value": 1 }, { "value": 2.15 }, { "value": -1.97 }, { "value": -0.33 },
+          { "value": -1.01 }, { "value": 1.19 }, { "value": 0.93 }, { "value": 0.47 }, { "value": -0.93 }, { "value": -0.63 }, { "value": -1.18 }, { "value": -0.91 },
+          { "value": -2.44 }, { "value": 0.05 }, { "value": 0.84 }, { "value": -0.22 }, { "value": -1.42 }, { "value": 2.12 }, { "value": 2.04 }, { "value": -0.85 },
+          { "value": 2.06 }, { "value": 2.05 }, { "value": -0.08 }, { "value": -0.52 }, { "value": -2.08 }, { "value": -0.05 }, { "value": 2.28 }, { "value": 2.01 },
+          { "value": 0.16 }, { "value": 1.48 }, { "value": -0.09 }, { "value": 0.99 }, { "value": -1.88 }, { "value": -0.87 }, { "value": -0.3 }, { "value": 1.52 },
+          { "value": 1.07 }, { "value": -2.48 }, { "value": -0.92 }, { "value": -0.62 }, { "value": -0.62 }, { "value": -1.39 }, { "value": -0.36 }, { "value": 0.59 },
+          { "value": -0.9 }, { "value": 0.07 }, { "value": -2.53 }, { "value": 1.78 }, { "value": 0.43 }, { "value": -1.09 }, { "value": 2.11 }, { "value": 2.1 },
+          { "value": 1.21 }, { "value": -0.74 }, { "value": 1.07 }, { "value": 0.56 }, { "value": -0.78 }, { "value": 1.35 }, { "value": 0.13 }, { "value": -1.81 }
+        ] }
+      ]
+    },
+    {
+      "id": "latency_histogram", "title": "Histogram with 5 ms bins in percent", "category": "distribution",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear", "title": "Latency (ms)" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "histogram", "title": "Requests %", "color": "#28b7a4", "bar_corner_radius": 2, "bar_gap": 1,
+          "histogram": { "bin_width": 5, "normalization": "percent" }, "data": [
+          { "value": 47 }, { "value": 48 }, { "value": 49 }, { "value": 57 }, { "value": 61 }, { "value": 36 }, { "value": 51 }, { "value": 34 },
+          { "value": 40 }, { "value": 40 }, { "value": 38 }, { "value": 66 }, { "value": 26 }, { "value": 24 }, { "value": 25 }, { "value": 48 },
+          { "value": 68 }, { "value": 41 }, { "value": 28 }, { "value": 48 }, { "value": 30 }, { "value": 29 }, { "value": 54 }, { "value": 26 },
+          { "value": 29 }, { "value": 88 }, { "value": 39 }, { "value": 45 }, { "value": 49 }, { "value": 23 }, { "value": 35 }, { "value": 31 },
+          { "value": 25 }, { "value": 34 }, { "value": 35 }, { "value": 58 }, { "value": 30 }, { "value": 62 }, { "value": 77 }, { "value": 30 },
+          { "value": 37 }, { "value": 42 }, { "value": 35 }, { "value": 45 }, { "value": 32 }, { "value": 27 }, { "value": 31 }, { "value": 24 },
+          { "value": 55 }, { "value": 35 }, { "value": 56 }, { "value": 32 }, { "value": 51 }, { "value": 38 }, { "value": 40 }, { "value": 48 },
+          { "value": 62 }, { "value": 49 }, { "value": 36 }, { "value": 66 }, { "value": 26 }, { "value": 48 }, { "value": 35 }, { "value": 50 },
+          { "value": 31 }, { "value": 43 }, { "value": 53 }, { "value": 29 }, { "value": 28 }, { "value": 72 }, { "value": 30 }, { "value": 32 },
+          { "value": 20 }, { "value": 40 }, { "value": 32 }, { "value": 25 }, { "value": 24 }, { "value": 78 }, { "value": 42 }, { "value": 53 },
+          { "value": 40 }, { "value": 41 }, { "value": 38 }, { "value": 60 }, { "value": 58 }, { "value": 27 }, { "value": 25 }, { "value": 28 },
+          { "value": 54 }, { "value": 48 }, { "value": 44 }, { "value": 22 }, { "value": 19 }, { "value": 22 }, { "value": 29 }, { "value": 45 },
+          { "value": 33 }, { "value": 24 }, { "value": 30 }, { "value": 42 }, { "value": 39 }, { "value": 34 }, { "value": 21 }, { "value": 54 },
+          { "value": 61 }, { "value": 51 }, { "value": 71 }, { "value": 34 }, { "value": 38 }, { "value": 34 }, { "value": 21 }, { "value": 22 },
+          { "value": 28 }, { "value": 32 }, { "value": 48 }, { "value": 33 }, { "value": 46 }, { "value": 36 }, { "value": 57 }, { "value": 33 }
+        ] }
+      ]
+    },
+    {
+      "id": "cumulative_histogram", "title": "Cumulative distribution", "category": "distribution",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear", "title": "Daily return %" },
+        { "id": "y", "dimension": "y", "scale": "linear", "domain": [0, 1] }
+      ],
+      "series": [
+        { "kind": "histogram", "title": "Share of days", "color": "#8b6df6", "bar_gap": 1,
+          "histogram": { "bin_width": 0.5, "normalization": "density", "cumulative": true }, "data": [
+          { "value": -0.25 }, { "value": 1.39 }, { "value": -0.38 }, { "value": 1.96 }, { "value": 0.66 }, { "value": -0.38 }, { "value": 0.46 }, { "value": 0.29 },
+          { "value": 0.69 }, { "value": 0.53 }, { "value": -2.53 }, { "value": -0.53 }, { "value": -1.25 }, { "value": 0.52 }, { "value": -1.39 }, { "value": 0.53 },
+          { "value": -0.88 }, { "value": -1.67 }, { "value": -0.15 }, { "value": 0.3 }, { "value": 1.32 }, { "value": -0.14 }, { "value": 0.98 }, { "value": 0.99 },
+          { "value": 1.27 }, { "value": -0.75 }, { "value": 0.12 }, { "value": -1.31 }, { "value": 1.76 }, { "value": 1.82 }, { "value": 1.6 }, { "value": 1.32 },
+          { "value": -0.24 }, { "value": 0.49 }, { "value": -0.7 }, { "value": 0.99 }, { "value": -0.25 }, { "value": -3.26 }, { "value": -1.49 }, { "value": -0.16 },
+          { "value": 1.64 }, { "value": -2.16 }, { "value": -0.3 }, { "value": -2.27 }, { "value": -0.82 }, { "value": -0.19 }, { "value": 0.7 }, { "value": 0.03 },
+          { "value": -2 }, { "value": 0.9 }, { "value": -0.33 }, { "value": 2.79 }, { "value": 0.27 }, { "value": 0.7 }, { "value": 1.43 }, { "value": 0.9 },
+          { "value": -1.42 }, { "value": -1.61 }, { "value": 0.65 }, { "value": 1.03 }, { "value": 1 }, { "value": 2.15 }, { "value": -1.97 }, { "value": -0.33 },
+          { "value": -1.01 }, { "value": 1.19 }, { "value": 0.93 }, { "value": 0.47 }, { "value": -0.93 }, { "value": -0.63 }, { "value": -1.18 }, { "value": -0.91 },
+          { "value": -2.44 }, { "value": 0.05 }, { "value": 0.84 }, { "value": -0.22 }, { "value": -1.42 }, { "value": 2.12 }, { "value": 2.04 }, { "value": -0.85 },
+          { "value": 2.06 }, { "value": 2.05 }, { "value": -0.08 }, { "value": -0.52 }, { "value": -2.08 }, { "value": -0.05 }, { "value": 2.28 }, { "value": 2.01 },
+          { "value": 0.16 }, { "value": 1.48 }, { "value": -0.09 }, { "value": 0.99 }, { "value": -1.88 }, { "value": -0.87 }, { "value": -0.3 }, { "value": 1.52 },
+          { "value": 1.07 }, { "value": -2.48 }, { "value": -0.92 }, { "value": -0.62 }, { "value": -0.62 }, { "value": -1.39 }, { "value": -0.36 }, { "value": 0.59 },
+          { "value": -0.9 }, { "value": 0.07 }, { "value": -2.53 }, { "value": 1.78 }, { "value": 0.43 }, { "value": -1.09 }, { "value": 2.11 }, { "value": 2.1 },
+          { "value": 1.21 }, { "value": -0.74 }, { "value": 1.07 }, { "value": 0.56 }, { "value": -0.78 }, { "value": 1.35 }, { "value": 0.13 }, { "value": -1.81 }
+        ] }
+      ]
+    },
+    {
+      "id": "engagement_heatmap", "title": "Heatmap", "category": "distribution", "grid": false,
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band", "grid_visible": false },
+        { "id": "y", "dimension": "y", "scale": "band", "grid_visible": false }
+      ],
+      "series": [
+        { "kind": "heatmap_grid", "title": "Sessions", "color": "#25a8c7", "heatmap_low_color": "#e0f2fe", "heatmap_high_color": "#0369a1", "data": [
+          { "x": "09", "y": "Mon", "value": 18 }, { "x": "11", "y": "Mon", "value": 33 }, { "x": "13", "y": "Mon", "value": 48 }, { "x": "15", "y": "Mon", "value": 45 }, { "x": "17", "y": "Mon", "value": 60 },
+          { "x": "09", "y": "Tue", "value": 31 }, { "x": "11", "y": "Tue", "value": 46 }, { "x": "13", "y": "Tue", "value": 43 }, { "x": "15", "y": "Tue", "value": 58 }, { "x": "17", "y": "Tue", "value": 73 },
+          { "x": "09", "y": "Wed", "value": 44 }, { "x": "11", "y": "Wed", "value": 41 }, { "x": "13", "y": "Wed", "value": 56 }, { "x": "15", "y": "Wed", "value": 71 }, { "x": "17", "y": "Wed", "value": 68 },
+          { "x": "09", "y": "Thu", "value": 39 }, { "x": "11", "y": "Thu", "value": 54 }, { "x": "13", "y": "Thu", "value": 69 }, { "x": "15", "y": "Thu", "value": 66 }, { "x": "17", "y": "Thu", "value": 81 },
+          { "x": "09", "y": "Fri", "value": 52 }, { "x": "11", "y": "Fri", "value": 67 }, { "x": "13", "y": "Fri", "value": 64 }, { "x": "15", "y": "Fri", "value": 79 }, { "x": "17", "y": "Fri", "value": 94 }
+        ] }
+      ]
+    },
+    {
+      "id": "log_scale", "title": "Logarithmic Y axis", "category": "scale",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point" },
+        { "id": "y", "dimension": "y", "scale": "log" }
+      ],
+      "series": [
+        { "kind": "xy_line", "title": "Registered users", "color": "#4c8bf5", "point_markers": true, "data": [
+          { "x": "2016", "y": 120 }, { "x": "2017", "y": 480 }, { "x": "2018", "y": 1900 }, { "x": "2019", "y": 7200 }, { "x": "2020", "y": 21000 },
+          { "x": "2021", "y": 64000 }, { "x": "2022", "y": 150000 }, { "x": "2023", "y": 390000 }, { "x": "2024", "y": 820000 }
+        ] }
+      ]
+    },
+    {
+      "id": "symlog_scale", "title": "Symmetric log Y axis", "category": "scale",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point" },
+        { "id": "y", "dimension": "y", "scale": "symlog" }
+      ],
+      "series": [
+        { "kind": "xy_line", "title": "Net flow", "color": "#25a8c7", "point_markers": true, "data": [
+          { "x": "W1", "y": -5200 }, { "x": "W2", "y": -840 }, { "x": "W3", "y": -46 }, { "x": "W4", "y": -3 },
+          { "x": "W5", "y": 4 }, { "x": "W6", "y": 62 }, { "x": "W7", "y": 910 }, { "x": "W8", "y": 7300 }
+        ] }
+      ]
+    },
+    {
+      "id": "time_axis", "title": "Time axis", "category": "scale",
+      "horizontal_domain": { "type": "temporal" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "temporal" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "xy_area", "title": "Daily orders", "color": "#28b7a4", "interpolation": "monotone", "data": [
+          { "x": 1704067200000, "y": 182 }, { "x": 1704153600000, "y": 205 }, { "x": 1704240000000, "y": 198 }, { "x": 1704326400000, "y": 221 },
+          { "x": 1704412800000, "y": 240 }, { "x": 1704499200000, "y": 176 }, { "x": 1704585600000, "y": 168 }, { "x": 1704672000000, "y": 214 },
+          { "x": 1704758400000, "y": 236 }, { "x": 1704844800000, "y": 229 }, { "x": 1704931200000, "y": 251 }, { "x": 1705017600000, "y": 262 },
+          { "x": 1705104000000, "y": 190 }, { "x": 1705190400000, "y": 181 }, { "x": 1705276800000, "y": 233 }, { "x": 1705363200000, "y": 247 },
+          { "x": 1705449600000, "y": 255 }, { "x": 1705536000000, "y": 249 }, { "x": 1705622400000, "y": 271 }, { "x": 1705708800000, "y": 204 },
+          { "x": 1705795200000, "y": 196 }, { "x": 1705881600000, "y": 258 }, { "x": 1705968000000, "y": 266 }, { "x": 1706054400000, "y": 279 }
+        ] }
+      ]
+    },
+    {
+      "id": "references", "title": "Reference line, region and dot", "category": "scale",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "references": [
+        { "kind": "region", "x_axis_id": "x", "y_axis_id": "y", "x_from": 4, "x_to": 7, "y_from": 0, "y_to": 100, "fill_color": "rgba(228, 161, 27, 0.14)" },
+        { "kind": "line", "axis_id": "y", "value": 70, "color": "#e46f61", "line_width": 1.5, "extend_domain": true },
+        { "kind": "dot", "x_axis_id": "x", "y_axis_id": "y", "x": 9, "y": 82, "color": "#e46f61", "radius": 5 }
+      ],
+      "series": [
+        { "kind": "xy_line", "title": "Throughput", "color": "#4c8bf5", "data": [
+          { "x": 1, "y": 52 }, { "x": 2, "y": 58 }, { "x": 3, "y": 55 }, { "x": 4, "y": 41 }, { "x": 5, "y": 38 },
+          { "x": 6, "y": 44 }, { "x": 7, "y": 61 }, { "x": 8, "y": 67 }, { "x": 9, "y": 82 }, { "x": 10, "y": 74 }
+        ] }
+      ]
+    },
+    {
+      "id": "reversed_axis", "title": "Reversed Y axis", "category": "scale",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point" },
+        { "id": "y", "dimension": "y", "scale": "linear", "reverse": true, "domain": [1, 10], "zero_line": false }
+      ],
+      "series": [
+        { "kind": "xy_line", "title": "Rank: Aeris", "color": "#4c8bf5", "point_markers": true, "data": [
+          { "x": "W1", "y": 9 }, { "x": "W2", "y": 7 }, { "x": "W3", "y": 6 }, { "x": "W4", "y": 4 }, { "x": "W5", "y": 3 }, { "x": "W6", "y": 1 }
+        ] },
+        { "kind": "xy_line", "title": "Rank: Rival", "color": "#9aa4b2", "point_markers": true, "data": [
+          { "x": "W1", "y": 2 }, { "x": "W2", "y": 2 }, { "x": "W3", "y": 3 }, { "x": "W4", "y": 3 }, { "x": "W5", "y": 4 }, { "x": "W6", "y": 5 }
+        ] }
+      ]
+    },
+    {
+      "id": "three_axes", "title": "Three Y axes on both sides", "category": "scale",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear", "position": "left", "title": "Price" },
+        { "id": "volume", "dimension": "y", "scale": "linear", "position": "right", "title": "Volume", "grid_visible": false },
+        { "id": "volatility", "dimension": "y", "scale": "linear", "position": "right", "title": "Volatility %", "grid_visible": false, "zero_line": false }
+      ],
+      "series": [
+        { "kind": "column", "title": "Volume", "color": "#9aa4b2", "y_axis_id": "volume", "bar_corner_radius": 2, "data": [
+          { "x": "Jan", "y": 820 }, { "x": "Feb", "y": 640 }, { "x": "Mar", "y": 910 }, { "x": "Apr", "y": 1180 }, { "x": "May", "y": 760 }, { "x": "Jun", "y": 990 }
+        ] },
+        { "kind": "xy_line", "title": "Price", "color": "#4c8bf5", "point_markers": true, "data": [
+          { "x": "Jan", "y": 182 }, { "x": "Feb", "y": 176 }, { "x": "Mar", "y": 191 }, { "x": "Apr", "y": 204 }, { "x": "May", "y": 198 }, { "x": "Jun", "y": 213 }
+        ] },
+        { "kind": "xy_line", "title": "Volatility %", "color": "#e4a11b", "line_style": "dashed", "y_axis_id": "volatility", "data": [
+          { "x": "Jan", "y": 18.2 }, { "x": "Feb", "y": 21.5 }, { "x": "Mar", "y": 16.8 }, { "x": "Apr", "y": 24.1 }, { "x": "May", "y": 19.6 }, { "x": "Jun", "y": 15.3 }
+        ] }
+      ]
+    },
+    {
+      "id": "hidden_axis_lines", "title": "Axis lines hidden", "category": "scale",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point", "line_visible": false },
+        { "id": "y", "dimension": "y", "scale": "linear", "line_visible": false }
+      ],
+      "series": [
+        { "kind": "xy_area", "title": "Sessions", "color": "#25a8c7", "interpolation": "monotone", "data": [
+          { "x": "Mon", "y": 32 }, { "x": "Tue", "y": 41 }, { "x": "Wed", "y": 38 }, { "x": "Thu", "y": 52 }, { "x": "Fri", "y": 47 }, { "x": "Sat", "y": 29 }, { "x": "Sun", "y": 24 }
+        ] }
+      ]
+    },
+    {
+      "id": "pie", "title": "Pie", "category": "polar", "grid": false,
+      "horizontal_domain": { "type": "polar" },
+      "axes": [
+        { "id": "x", "dimension": "angle", "scale": "angular_category", "visible": false },
+        { "id": "y", "dimension": "radius", "scale": "radial_linear", "visible": false }
+      ],
+      "series": [
+        { "kind": "pie", "title": "Traffic source", "data_labels": true, "data": [
+          { "x": "Search", "y": 42 }, { "x": "Direct", "y": 23 }, { "x": "Social", "y": 17 }, { "x": "Email", "y": 11 }, { "x": "Other", "y": 7 }
+        ] }
+      ]
+    },
+    {
+      "id": "donut", "title": "Donut with padded slices", "category": "polar", "grid": false,
+      "horizontal_domain": { "type": "polar" },
+      "axes": [
+        { "id": "x", "dimension": "angle", "scale": "angular_category", "visible": false },
+        { "id": "y", "dimension": "radius", "scale": "radial_linear", "visible": false }
+      ],
+      "series": [
+        { "kind": "pie", "title": "Spend", "polar": { "inner_radius": 0.55, "pad_angle": 0.03 }, "data": [
+          { "x": "Cloud", "y": 38 }, { "x": "People", "y": 31 }, { "x": "Tools", "y": 14 }, { "x": "Travel", "y": 9 }, { "x": "Office", "y": 8 }
+        ] }
+      ]
+    },
+    {
+      "id": "half_donut", "title": "Half donut", "category": "polar", "grid": false,
+      "horizontal_domain": { "type": "polar" },
+      "axes": [
+        { "id": "x", "dimension": "angle", "scale": "angular_category", "visible": false },
+        { "id": "y", "dimension": "radius", "scale": "radial_linear", "visible": false }
+      ],
+      "series": [
+        { "kind": "pie", "title": "Seats", "polar": { "start_angle": -1.5707963267948966, "end_angle": 1.5707963267948966, "inner_radius": 0.5, "pad_angle": 0.02 }, "data": [
+          { "x": "Blue", "y": 182 }, { "x": "Green", "y": 64 }, { "x": "Amber", "y": 41 }, { "x": "Red", "y": 163 }
+        ] }
+      ]
+    },
+    {
+      "id": "radar", "title": "Radar", "category": "polar",
+      "horizontal_domain": { "type": "polar" },
+      "axes": [
+        { "id": "x", "dimension": "angle", "scale": "angular_category" },
+        { "id": "y", "dimension": "radius", "scale": "radial_linear" }
+      ],
+      "series": [
+        { "kind": "radar", "title": "Aeris", "color": "#4c8bf5", "point_markers": true, "data": [
+          { "x": "Speed", "y": 92 }, { "x": "Accuracy", "y": 81 }, { "x": "Coverage", "y": 74 }, { "x": "Cost", "y": 66 }, { "x": "Support", "y": 88 }, { "x": "Ease", "y": 79 }
+        ] },
+        { "kind": "radar", "title": "Baseline", "color": "#e4a11b", "point_markers": true, "data": [
+          { "x": "Speed", "y": 64 }, { "x": "Accuracy", "y": 72 }, { "x": "Coverage", "y": 81 }, { "x": "Cost", "y": 78 }, { "x": "Support", "y": 58 }, { "x": "Ease", "y": 70 }
+        ] }
+      ]
+    },
+    {
+      "id": "polar_area", "title": "Polar area", "category": "polar", "grid": false,
+      "horizontal_domain": { "type": "polar" },
+      "axes": [
+        { "id": "x", "dimension": "angle", "scale": "angular_category", "visible": false },
+        { "id": "y", "dimension": "radius", "scale": "radial_linear", "visible": false }
+      ],
+      "series": [
+        { "kind": "polar_area", "title": "Incidents", "data": [
+          { "x": "Mon", "y": 12 }, { "x": "Tue", "y": 19 }, { "x": "Wed", "y": 15 }, { "x": "Thu", "y": 24 }, { "x": "Fri", "y": 29 }, { "x": "Sat", "y": 9 }, { "x": "Sun", "y": 6 }
+        ] }
+      ]
+    },
+    {
+      "id": "radial_bars", "title": "Radial bars", "category": "polar", "grid": false,
+      "horizontal_domain": { "type": "polar" },
+      "axes": [
+        { "id": "x", "dimension": "angle", "scale": "angular_category", "visible": false },
+        { "id": "y", "dimension": "radius", "scale": "radial_linear", "visible": false }
+      ],
+      "series": [
+        { "kind": "radial_bar", "title": "Goal progress", "polar": { "inner_radius": 0.25 }, "data": [
+          { "x": "Sales", "y": 86 }, { "x": "Hiring", "y": 64 }, { "x": "Uptime", "y": 99 }, { "x": "NPS", "y": 71 }
+        ] }
+      ]
+    },
+    {
+      "id": "funnel", "title": "Funnel", "category": "layout", "grid": false,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "funnel", "title": "Conversion", "color": "#4c8bf5", "data_labels": true, "data": { "type": "funnel", "stages": [
+          { "id": "visit", "label": "Visitors", "value": 120 }, { "id": "interest", "label": "Interested", "value": 89 },
+          { "id": "trial", "label": "Trial", "value": 63 }, { "id": "proposal", "label": "Proposal", "value": 42 }, { "id": "won", "label": "Won", "value": 27 }
+        ] } }
+      ]
+    },
+    {
+      "id": "treemap", "title": "Treemap", "category": "layout", "grid": false,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "treemap", "title": "Market cap, daily change", "color": "#089981", "data_labels": true, "data": { "type": "hierarchy", "nodes": [
+          { "id": "market", "parent": null, "label": "Market", "value": null },
+          { "id": "tech", "parent": "market", "label": "Technology", "value": null },
+          { "id": "finance", "parent": "market", "label": "Finance", "value": null },
+          { "id": "health", "parent": "market", "label": "Health care", "value": null },
+          { "id": "energy", "parent": "market", "label": "Energy", "value": null },
+          { "id": "aapl", "parent": "tech", "label": "AAPL", "value": 3400, "color_value": 1.2 },
+          { "id": "msft", "parent": "tech", "label": "MSFT", "value": 3100, "color_value": 0.6 },
+          { "id": "nvda", "parent": "tech", "label": "NVDA", "value": 2900, "color_value": 3.4 },
+          { "id": "googl", "parent": "tech", "label": "GOOGL", "value": 2100, "color_value": -0.8 },
+          { "id": "jpm", "parent": "finance", "label": "JPM", "value": 580, "color_value": 0.4 },
+          { "id": "bac", "parent": "finance", "label": "BAC", "value": 310, "color_value": -1.1 },
+          { "id": "gs", "parent": "finance", "label": "GS", "value": 160, "color_value": -2.3 },
+          { "id": "lly", "parent": "health", "label": "LLY", "value": 720, "color_value": 2.1 },
+          { "id": "unh", "parent": "health", "label": "UNH", "value": 480, "color_value": -3.0 },
+          { "id": "jnj", "parent": "health", "label": "JNJ", "value": 380, "color_value": 0.2 },
+          { "id": "xom", "parent": "energy", "label": "XOM", "value": 470, "color_value": -0.5 },
+          { "id": "cvx", "parent": "energy", "label": "CVX", "value": 290, "color_value": -1.6 }
+        ] } }
+      ]
+    },
+    {
+      "id": "sankey", "title": "Sankey", "category": "layout", "grid": false,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "sankey", "title": "Acquisition", "color": "#8b6df6", "data_labels": true, "data": { "type": "flow",
+          "nodes": [
+            { "id": "Visitors", "label": "Visitors" }, { "id": "Organic", "label": "Organic" }, { "id": "Paid", "label": "Paid" },
+            { "id": "Trial", "label": "Trial" }, { "id": "Direct", "label": "Direct" }, { "id": "Won", "label": "Won" }
+          ],
+          "links": [
+            { "source": "Visitors", "target": "Organic", "value": 64 }, { "source": "Visitors", "target": "Paid", "value": 42 },
+            { "source": "Organic", "target": "Trial", "value": 39 }, { "source": "Paid", "target": "Trial", "value": 28 },
+            { "source": "Organic", "target": "Direct", "value": 25 }, { "source": "Paid", "target": "Direct", "value": 14 },
+            { "source": "Trial", "target": "Won", "value": 45 }, { "source": "Direct", "target": "Won", "value": 27 }
+          ] } }
+      ]
+    },
+    {
+      "id": "sunburst", "title": "Sunburst", "category": "layout", "grid": false,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "sunburst", "title": "Revenue", "color": "#e4a11b", "data_labels": true, "data": { "type": "hierarchy", "nodes": [
+          { "id": "all", "parent": null, "label": "Revenue", "value": null },
+          { "id": "product", "parent": "all", "label": "Product", "value": null },
+          { "id": "service", "parent": "all", "label": "Services", "value": null },
+          { "id": "other", "parent": "all", "label": "Other", "value": null },
+          { "id": "core", "parent": "product", "label": "Core", "value": 44 },
+          { "id": "mobile", "parent": "product", "label": "Mobile", "value": 24 },
+          { "id": "support", "parent": "service", "label": "Support", "value": 18 },
+          { "id": "advisory", "parent": "service", "label": "Advisory", "value": 10 },
+          { "id": "license", "parent": "other", "label": "Licensing", "value": 8 },
+          { "id": "partner", "parent": "other", "label": "Partners", "value": 6 }
+        ] } }
+      ]
+    }
+  ]
+}

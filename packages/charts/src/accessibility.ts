@@ -837,8 +837,14 @@ class PaneAccessibility {
         this.update_focus_ring();
         return;
       }
-      if (active.kind !== "scatter" && active.kind !== "bubble" && active.kind !== "xy_line" && active.kind !== "xy_area" && active.kind !== "range_area" && active.kind !== "range_bar" && active.kind !== "error_bar") return;
-      const anchor = item === undefined ? 0 : Number(item.x_label);
+      const histogram = active.kind === "histogram";
+      if (!histogram && active.kind !== "scatter" && active.kind !== "bubble" && active.kind !== "xy_line" && active.kind !== "xy_area" && active.kind !== "range_area" && active.kind !== "range_bar" && active.kind !== "error_bar") return;
+      // Histogram labels are bin intervals; zoom around the bin center instead.
+      const anchor = item === undefined
+        ? 0
+        : histogram && item.x_low !== null && item.x_high !== null
+          ? (item.x_low + item.x_high) / 2
+          : Number(item.x_label);
       if (!Number.isFinite(anchor) || !["linear", "log", "symlog"].includes(scale)) return;
       axis.zoom(zoom_in ? 1.25 : 0.8, anchor);
       this.update_focus_ring();

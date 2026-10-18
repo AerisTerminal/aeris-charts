@@ -1,4 +1,4 @@
-import { create_chart, create_general_legend, create_general_tooltip } from "./dist/aeris_charts_financial.js";
+import { create_chart } from "./dist/aeris_charts_financial.js";
 
 let dashboard_root = null;
 let chart_grid = null;
@@ -7,161 +7,10 @@ let dashboard_error = null;
 let requested_backend = "auto";
 let active_theme = "dark";
 
-const palette = {
-  blue: "#4c8bf5",
-  violet: "#8b6df6",
-  teal: "#28b7a4",
-  amber: "#e4a11b",
-  coral: "#e46f61",
-  cyan: "#25a8c7",
-};
-
-const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const month_rows = (values) => values.map((y, index) => ({ id: index, x: months[index], y }));
-const axes = (x_scale) => [
-  { id: "x", dimension: "x", scale: x_scale, grid_visible: true },
-  { id: "y", dimension: "y", scale: "linear", grid_visible: true },
-];
-
-const examples = [
-  {
-    title: "Revenue trend", description: "A category-point line tracks monthly revenue across the year.", label: "xy_line", category: "trend",
-    horizontal_domain: { type: "category", scale: "point" }, axes: axes("point"),
-    series: [{ kind: "xy_line", title: "Revenue", color: palette.blue, data: month_rows([42, 47, 45, 54, 58, 61, 66, 64, 72, 77, 81, 88]) }],
-  },
-  {
-    title: "Margin area", description: "A filled area demonstrates ordered categorical trends and automatic Y scaling.", label: "xy_area", category: "trend",
-    horizontal_domain: { type: "category", scale: "point" }, axes: axes("point"),
-    series: [{ kind: "xy_area", title: "Margin", color: palette.teal, data: month_rows([22, 24, 23, 27, 29, 31, 33, 32, 35, 37, 39, 42]) }],
-  },
-  {
-    title: "Channel revenue", description: "Standard columns show a compact category comparison with data labels.", label: "column", category: "bar",
-    horizontal_domain: { type: "category", scale: "band" }, axes: axes("band"),
-    series: [{ kind: "column", title: "Revenue", color: palette.blue, data_labels: true, data: [
-      { x: "Direct", y: 74 }, { x: "Partner", y: 51 }, { x: "Market", y: 38 }, { x: "Retail", y: 62 }, { x: "API", y: 83 },
-    ] }],
-  },
-  {
-    title: "Regional comparison", description: "Grouped columns place two series side by side inside each category band.", label: "grouped columns", category: "bar",
-    horizontal_domain: { type: "category", scale: "band" }, axes: axes("band"),
-    series: [
-      { kind: "column", title: "North", color: palette.blue, group_id: "regions", data: [
-        { x: "Q1", y: 48 }, { x: "Q2", y: 57 }, { x: "Q3", y: 63 }, { x: "Q4", y: 71 },
-      ] },
-      { kind: "column", title: "South", color: palette.violet, group_id: "regions", data: [
-        { x: "Q1", y: 39 }, { x: "Q2", y: 46 }, { x: "Q3", y: 52 }, { x: "Q4", y: 65 },
-      ] },
-    ],
-  },
-  {
-    title: "Revenue mix", description: "Three series accumulate into a normal stack for each quarter.", label: "stacked columns", category: "bar",
-    horizontal_domain: { type: "category", scale: "band" }, axes: axes("band"),
-    series: [
-      { kind: "column", title: "Core", color: palette.blue, group_id: "mix", stack_id: "revenue", stack_mode: "normal", data: [
-        { x: "Q1", y: 34 }, { x: "Q2", y: 39 }, { x: "Q3", y: 43 }, { x: "Q4", y: 47 },
-      ] },
-      { kind: "column", title: "Growth", color: palette.teal, group_id: "mix", stack_id: "revenue", stack_mode: "normal", data: [
-        { x: "Q1", y: 13 }, { x: "Q2", y: 16 }, { x: "Q3", y: 21 }, { x: "Q4", y: 25 },
-      ] },
-      { kind: "column", title: "Services", color: palette.amber, group_id: "mix", stack_id: "revenue", stack_mode: "normal", data: [
-        { x: "Q1", y: 9 }, { x: "Q2", y: 11 }, { x: "Q3", y: 12 }, { x: "Q4", y: 14 },
-      ] },
-    ],
-  },
-  {
-    title: "Pipeline by stage", description: "Horizontal bars bind numeric X to a category Y axis for ranked comparisons.", label: "horizontal_bar", category: "bar",
-    horizontal_domain: { type: "continuous", scale: "linear" },
-    axes: [
-      { id: "x", dimension: "x", scale: "linear", grid_visible: true },
-      { id: "y", dimension: "y", scale: "band", grid_visible: true },
-    ],
-    series: [{ kind: "horizontal_bar", title: "Pipeline", color: palette.violet, data_labels: true, data: [
-      { x: "Qualified", y: 82 }, { x: "Discovery", y: 67 }, { x: "Proposal", y: 49 }, { x: "Security", y: 36 }, { x: "Contract", y: 24 },
-    ] }],
-  },
-  {
-    title: "Spend efficiency", description: "Independent numeric axes show the relationship between spend and revenue.", label: "scatter", category: "distribution",
-    horizontal_domain: { type: "continuous", scale: "linear" }, axes: axes("linear"),
-    series: [{ kind: "scatter", title: "Campaigns", color: palette.cyan, point_radius: 5, data: [
-      { x: 12, y: 36 }, { x: 17, y: 41 }, { x: 19, y: 52 }, { x: 24, y: 58 }, { x: 28, y: 69 },
-      { x: 31, y: 65 }, { x: 36, y: 78 }, { x: 42, y: 88 }, { x: 45, y: 81 }, { x: 51, y: 96 },
-    ] }],
-  },
-  {
-    title: "Market opportunity", description: "Bubble size adds a third quantitative channel to an XY comparison.", label: "bubble", category: "distribution",
-    horizontal_domain: { type: "continuous", scale: "linear" }, axes: axes("linear"),
-    series: [{ kind: "bubble", title: "Segments", color: palette.violet, data: [
-      { x: 72, y: 38, size: 196, label: "Enterprise" }, { x: 54, y: 57, size: 144, label: "Mid-market" },
-      { x: 36, y: 74, size: 100, label: "SMB" }, { x: 24, y: 88, size: 64, label: "Startup" }, { x: 81, y: 24, size: 81, label: "Public sector" },
-    ] }],
-  },
-  {
-    title: "Forecast band", description: "Low/high bounds form a confidence band over an ordered numeric horizon.", label: "range_area", category: "trend",
-    horizontal_domain: { type: "continuous", scale: "linear" }, axes: axes("linear"),
-    series: [{ kind: "range_area", title: "80% interval", color: palette.teal, data: [
-      { x: 1, low: 42, high: 57 }, { x: 2, low: 44, high: 61 }, { x: 3, low: 48, high: 66 }, { x: 4, low: 51, high: 70 },
-      { x: 5, low: 55, high: 75 }, { x: 6, low: 58, high: 79 }, { x: 7, low: 62, high: 84 }, { x: 8, low: 66, high: 89 },
-    ] }],
-  },
-  {
-    title: "Delivery windows", description: "Category range bars show low/high delivery estimates as exact rectangular marks.", label: "range_bar", category: "bar",
-    horizontal_domain: { type: "category", scale: "band" },
-    axes: [
-      { id: "x", dimension: "x", scale: "band", grid_visible: true },
-      { id: "y", dimension: "y", scale: "linear", grid_visible: true },
-    ],
-    series: [{ kind: "range_bar", title: "Delivery", color: palette.amber, data: [
-      { x: "Core", low: 4, high: 9 }, { x: "Growth", low: 7, high: 13 },
-      { x: "Platform", low: 3, high: 8 }, { x: "Data", low: 9, high: 16 },
-    ] }],
-  },
-  {
-    title: "Experiment uncertainty", description: "Category-centered error bars show measured values with Y confidence bounds.", label: "error_bar", category: "distribution",
-    horizontal_domain: { type: "category", scale: "point" }, axes: axes("point"),
-    series: [{ kind: "error_bar", title: "Conversion", color: palette.coral, point_radius: 6, data: [
-      { x: "Control", y: 4.8, y_low: 4.2, y_high: 5.4 }, { x: "A", y: 5.7, y_low: 5.0, y_high: 6.5 },
-      { x: "B", y: 6.3, y_low: 5.5, y_high: 7.1 }, { x: "C", y: 5.4, y_low: 4.8, y_high: 6.0 },
-    ] }],
-  },
-  {
-    title: "Latency distribution", description: "Five-number summaries render through the box-plot geometry path.", label: "box_plot", category: "distribution",
-    horizontal_domain: { type: "category", scale: "band" }, axes: axes("band"),
-    series: [{ kind: "box_plot", title: "Latency", color: palette.blue, data: [
-      { x: "US-E", min: 18, q1: 23, median: 29, q3: 37, max: 52 }, { x: "US-W", min: 22, q1: 28, median: 34, q3: 41, max: 58 },
-      { x: "EU", min: 31, q1: 38, median: 45, q3: 55, max: 72 }, { x: "APAC", min: 44, q1: 53, median: 62, q3: 75, max: 96 },
-    ] }],
-  },
-  {
-    title: "Engagement heatmap", description: "A weekday × hour grid exercises two categorical dimensions and dense cells.", label: "heatmap_grid", category: "dense",
-    horizontal_domain: { type: "category", scale: "band" },
-    axes: [
-      { id: "x", dimension: "x", scale: "band", grid_visible: false },
-      { id: "y", dimension: "y", scale: "band", grid_visible: false },
-    ],
-    series: [{ kind: "heatmap_grid", title: "Sessions", color: palette.cyan, data: (() => {
-      const days = ["Mon", "Tue", "Wed", "Thu", "Fri"];
-      const hours = ["09", "11", "13", "15", "17"];
-      return days.flatMap((day, d) => hours.map((hour, h) => ({
-        id: `${day}-${hour}`, x: hour, y: day, value: 18 + d * 7 + h * 9 + ((d + h) % 3) * 6,
-      })));
-    })() }],
-  },
-  {
-    title: "Portfolio composition", description: "Percent-stacked areas align by category identity and normalize each quarter.", label: "stacked area", category: "trend",
-    horizontal_domain: { type: "category", scale: "point" }, axes: axes("point"),
-    series: [
-      { kind: "xy_area", title: "Core", color: palette.blue, stack_id: "portfolio", stack_mode: "percent", data: [
-        { x: "Q1", y: 52 }, { x: "Q2", y: 49 }, { x: "Q3", y: 46 }, { x: "Q4", y: 43 },
-      ] },
-      { kind: "xy_area", title: "Growth", color: palette.teal, stack_id: "portfolio", stack_mode: "percent", data: [
-        { x: "Q1", y: 28 }, { x: "Q2", y: 31 }, { x: "Q3", y: 34 }, { x: "Q4", y: 36 },
-      ] },
-      { kind: "xy_area", title: "New", color: palette.amber, stack_id: "portfolio", stack_mode: "percent", data: [
-        { x: "Q1", y: 20 }, { x: "Q2", y: 20 }, { x: "Q3", y: 20 }, { x: "Q4", y: 21 },
-      ] },
-    ],
-  },
-];
+// The GPUI gallery (`gpui_general_gallery`) renders this same catalog, so both hosts show
+// identical examples through the shared engine frame.
+const catalog = await (await fetch(new URL("./general_catalog.json", import.meta.url))).json();
+const examples = catalog.examples;
 
 function create_card(example, index) {
   const card = document.createElement("article");
@@ -169,15 +18,17 @@ function create_card(example, index) {
   card.dataset.category = example.category;
   card.dataset.chartIndex = String(index);
   card.setAttribute("aria-label", example.title);
-  card.innerHTML = `
-    <div class="general-chart-host" role="group" aria-label="${example.title} chart"></div>
-    <div class="general-card-legends"></div>`;
+  const host = document.createElement("div");
+  host.className = "general-chart-host";
+  host.setAttribute("role", "group");
+  host.setAttribute("aria-label", `${example.title} chart`);
+  card.appendChild(host);
   return card;
 }
 
 async function mount_example(example, card) {
   const host = card.querySelector(".general-chart-host");
-  const legends = card.querySelector(".general-card-legends");
+  const grid = example.grid !== false;
   const chart = await create_chart(host, {
     autoSize: true,
     // Auto tries WebGPU first. Unsupported browsers and machines without an available adapter
@@ -185,7 +36,8 @@ async function mount_example(example, card) {
     backend: requested_backend,
     theme: active_theme,
     initialPane: { horizontal_domain: example.horizontal_domain },
-    grid: { vertLines: { visible: true }, horzLines: { visible: true } },
+    grid: { vertLines: { visible: grid }, horzLines: { visible: grid } },
+    generalLegend: { visible: true },
     // This page is a vertically scrolling dashboard. Wheel/pinch gestures belong to the page,
     // otherwise every chart card traps the user's scroll and makes the workspace feel frozen.
     handle_scroll: {
@@ -204,29 +56,20 @@ async function mount_example(example, card) {
   });
   const pane = chart.panes()[0];
   const pane_index = pane.pane_index();
-  for (const axis of example.axes) chart.add_axis({ ...axis, pane: pane_index });
+  for (const axis of example.axes ?? []) chart.add_axis({ ...axis, pane: pane_index });
 
   const series_handles = [];
-  for (const spec of example.series) {
-    const handle = chart.add_series(spec.kind, {
-      pane: pane_index,
-      x_axis_id: "x",
-      y_axis_id: "y",
-      title: spec.title,
-      color: spec.color,
-      point_radius: spec.point_radius,
-      data_labels: spec.data_labels,
-      group_id: spec.group_id,
-      stack_id: spec.stack_id,
-      stack_mode: spec.stack_mode,
-    });
-    handle.set_data(spec.data);
+  for (const { kind, data, ...options } of example.series ?? []) {
+    const handle = chart.add_series(kind, { x_axis_id: "x", y_axis_id: "y", ...options, pane: pane_index });
+    handle.set_data(data);
     series_handles.push(handle);
   }
-  const legend = create_general_legend(chart, legends, { pane: pane_index });
-  const tooltip = create_general_tooltip(chart, host, {
-    format_value: (value) => Number(value).toLocaleString(),
-  });
+  for (const { kind, data, ...options } of example.layout_series ?? []) {
+    series_handles.push(chart.add_layout_series(kind, { ...options, pane: pane_index }, data));
+  }
+  for (const reference of example.references ?? []) {
+    chart.add_general_reference({ ...reference, pane: pane_index });
+  }
   chart.render();
 
   return {
@@ -236,13 +79,10 @@ async function mount_example(example, card) {
     card,
     example,
     dispose() {
-      tooltip.detach();
-      legend.detach();
       chart.remove();
     },
   };
 }
-
 let errors = [];
 let states = [];
 let observer = null;
@@ -387,6 +227,18 @@ export function install_general_dashboard({ root, backend = "auto", theme = "dar
     };
   });
 
+  const all_button = root.querySelector('[data-general-filter="all"]');
+  for (const peer of root.querySelectorAll("[data-general-filter]")) {
+    if (peer !== all_button) peer.remove();
+  }
+  all_button.after(...catalog.categories.map(({ id, label }) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.generalFilter = id;
+    button.setAttribute("aria-pressed", "false");
+    button.textContent = label;
+    return button;
+  }));
   for (const button of root.querySelectorAll("[data-general-filter]")) {
     button.addEventListener("click", () => {
       const filter = button.dataset.generalFilter;
@@ -405,10 +257,10 @@ export function install_general_dashboard({ root, backend = "auto", theme = "dar
     ready: true,
     errors,
     summary: examples.map((example) => ({
+      id: example.id,
       title: example.title,
-      label: example.label,
       category: example.category,
-      series_kinds: example.series.map((series) => series.kind),
+      series_kinds: [...(example.series ?? []), ...(example.layout_series ?? [])].map((series) => series.kind),
     })),
     active_summary() {
       return states.flatMap((state) => state.entry === null ? [] : [{

@@ -3,7 +3,7 @@ use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim, TextAlign};
 
 use crate::general_axes::NumericAxisScale;
-use crate::general_series::{general_bar_radii, general_polar_fill_color};
+use crate::general_series::{GeneralColumnGeometry, general_bar_radii, general_polar_fill_color};
 use crate::{
     AxisDimension, ChartEngine, DEFAULT_LINE_COLOR, GeneralAxisDomain, GeneralPointSymbol,
     GeneralReferenceOptions, GeneralReferenceValue, GeneralScaleType, GeneralSeries,
@@ -21,6 +21,29 @@ const MAX_GENERAL_DATA_LABELS_PER_PANE: usize = 512;
 const MAX_GENERAL_DATA_LABEL_ATTEMPTS_PER_PANE: usize = 4_096;
 fn opacity_alpha(opacity: f64) -> u8 {
     (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// Label rows for a vertical bar: just past its value end, then just inside it when the bar is
+/// tall enough. A stacked segment that another segment continues has no free end, so it labels
+/// its middle instead of covering the next segment.
+fn column_label_rows(geometry: GeneralColumnGeometry, label_size: f64) -> (f64, f64) {
+    let half = label_size * 0.65 + 2.0;
+    if !geometry.exposed_end {
+        let center = (geometry.top + geometry.bottom) * 0.5;
+        return (center, center);
+    }
+    let (end, toward_base) = if geometry.end_at_min {
+        (geometry.top, 1.0)
+    } else {
+        (geometry.bottom, -1.0)
+    };
+    let outside = end - toward_base * half;
+    let inside = if geometry.bottom - geometry.top >= 2.0 * half {
+        end + toward_base * half
+    } else {
+        outside
+    };
+    (outside, inside)
 }
 
 fn general_fill_gradient(series: &GeneralSeries) -> Option<Gradient> {
@@ -269,6 +292,8 @@ impl ChartEngine {
             let Some(dataset) = self.general_geometry_dataset(series.dataset()) else {
                 continue;
             };
+            // Histogram rows are engine bins, not dataset rows.
+            let histogram = self.general_histogram_bins(series);
             let mut push_label = |row: usize,
                                   x: f64,
                                   above: f64,
@@ -282,24 +307,28 @@ impl ChartEngine {
                     return None;
                 }
                 label_attempts += 1;
-                let text = dataset
-                    .row_label(row)
-                    .map(str::to_owned)
-                    .or_else(|| {
-                        if !matches!(
-                            series.kind(),
-                            GeneralSeriesKind::Pie
-                                | GeneralSeriesKind::Radar
-                                | GeneralSeriesKind::PolarArea
-                                | GeneralSeriesKind::RadialBar
-                        ) {
-                            return None;
-                        }
-                        let category =
-                            usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
-                        dataset.categories()?.get(category).cloned()
-                    })
-                    .unwrap_or_else(|| dataset.y()[row].to_string());
+                let text = if let Some(bins) = histogram.as_deref() {
+                    bins.height(row)?.to_string()
+                } else {
+                    dataset
+                        .row_label(row)
+                        .map(str::to_owned)
+                        .or_else(|| {
+                            if !matches!(
+                                series.kind(),
+                                GeneralSeriesKind::Pie
+                                    | GeneralSeriesKind::Radar
+                                    | GeneralSeriesKind::PolarArea
+                                    | GeneralSeriesKind::RadialBar
+                            ) {
+                                return None;
+                            }
+                            let category =
+                                usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
+                            dataset.categories()?.get(category).cloned()
+                        })
+                        .unwrap_or_else(|| dataset.y()[row].to_string())
+                };
                 let width =
                     self.measure_text_run(&text, label_size, &layout.font_family, 400, false);
                 if !width.is_finite() || width <= 0.0 || width > width_limit {
@@ -1012,26 +1041,12 @@ impl ChartEngine {
                             dataset.row_color(geometry.row),
                             fill_gradient,
                         );
-                        let positive_above = (dataset.y()[geometry.row] >= 0.0)
-                            != self
-                                .general_axis(series.y_axis_id())
-                                .is_some_and(|axis| axis.reverse());
-                        let (above, below) = if positive_above {
-                            (
-                                geometry.top - label_size * 0.65 - 2.0,
-                                geometry.bottom + label_size * 0.65 + 2.0,
-                            )
-                        } else {
-                            (
-                                geometry.bottom + label_size * 0.65 + 2.0,
-                                geometry.top - label_size * 0.65 - 2.0,
-                            )
-                        };
+                        let (outside, inside) = column_label_rows(geometry, label_size);
                         push_label(
                             geometry.row,
                             (geometry.left + geometry.right) * 0.5,
-                            above,
-                            below,
+                            outside,
+                            inside,
                             geometry.right - geometry.left - 4.0,
                             None,
                         );
@@ -1045,6 +1060,51 @@ impl ChartEngine {
                                     w: width,
                                     h: height,
                                 },
+                                border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
+                                    .round()
+                                    .max(1.0) as i32,
+                                color: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
+                    });
+                }
+                GeneralSeriesKind::Histogram => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    self.visit_general_histogram_bins(series, |geometry| {
+                        let left = (geometry.left * hpr).round() as i32;
+                        let right = (geometry.right * hpr).round() as i32;
+                        let top = (geometry.top * vpr).round() as i32;
+                        let bottom = (geometry.bottom * vpr).round() as i32;
+                        let width = (right - left).max(1);
+                        let height = bottom - top;
+                        if height <= 0 {
+                            return;
+                        }
+                        let rect = IRect {
+                            x: left,
+                            y: top,
+                            w: width,
+                            h: height,
+                        };
+                        let radii = general_bar_radii(series, geometry, hpr, vpr, false);
+                        push_general_bar_fill(out, rect, radii, color, None, fill_gradient);
+                        let (outside, inside) = column_label_rows(geometry, label_size);
+                        push_label(
+                            geometry.row,
+                            (geometry.left + geometry.right) * 0.5,
+                            outside,
+                            inside,
+                            geometry.right - geometry.left - 4.0,
+                            None,
+                        );
+                        let (hovered, selected) =
+                            self.general_row_interaction(series.id(), geometry.row);
+                        if hovered || selected {
+                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                                rect,
                                 border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
                                     .round()
                                     .max(1.0) as i32,
@@ -1082,14 +1142,45 @@ impl ChartEngine {
                             dataset.row_color(geometry.row),
                             fill_gradient,
                         );
-                        push_label(
-                            geometry.row,
-                            (geometry.left + geometry.right) * 0.5,
-                            geometry.top - label_size * 0.65 - 2.0,
-                            geometry.bottom + label_size * 0.65 + 2.0,
-                            geometry.right - geometry.left - 4.0,
-                            None,
-                        );
+                        // A horizontal bar's label sits on its own row: past the value end when
+                        // there is room, otherwise just inside it. Stacked segments that another
+                        // segment continues label their middle.
+                        let center_y = (geometry.top + geometry.bottom) * 0.5;
+                        let bar_width = geometry.right - geometry.left;
+                        if geometry.exposed_end {
+                            let (end_x, side) = if geometry.end_at_min {
+                                (geometry.left, -1.0)
+                            } else {
+                                (geometry.right, 1.0)
+                            };
+                            let outside = push_label(
+                                geometry.row,
+                                end_x,
+                                center_y,
+                                center_y,
+                                plot.width - 4.0,
+                                Some(side),
+                            );
+                            if outside.is_none() {
+                                push_label(
+                                    geometry.row,
+                                    end_x,
+                                    center_y,
+                                    center_y,
+                                    bar_width - 12.0,
+                                    Some(-side),
+                                );
+                            }
+                        } else {
+                            push_label(
+                                geometry.row,
+                                (geometry.left + geometry.right) * 0.5,
+                                center_y,
+                                center_y,
+                                bar_width - 4.0,
+                                None,
+                            );
+                        }
                         let (hovered, selected) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {

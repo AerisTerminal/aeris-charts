@@ -370,6 +370,8 @@ pub enum ChartInputEvent {
     DeltaTooltipChanged,
     /// A committed or cancelled general brush gesture changed its semantic range.
     GeneralBrushChanged,
+    /// A click on the engine-drawn general legend toggled a series' visibility.
+    GeneralLegendChanged,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1833,7 +1835,7 @@ impl ChartEngine {
         }
     }
 
-    fn push_input_event(&mut self, event: ChartInputEvent) {
+    pub(crate) fn push_input_event(&mut self, event: ChartInputEvent) {
         if self.input.events.len() == MAX_PENDING_INPUT_EVENTS {
             self.input.events.pop_front();
         }
@@ -2290,6 +2292,10 @@ impl ChartEngine {
     }
 
     fn input_primary_click(&mut self, x: f64, y: f64, text_press_selected: Option<DrawingId>) {
+        if let Some(target) = self.general_legend_target_at(x, y) {
+            self.toggle_general_legend_target(target);
+            return;
+        }
         let line_text_hit = self.drawing_text_hit_at(x, y);
         let drawing_hit = line_text_hit.is_some() || self.select_drawing_at(x, y);
         if let Some(id) = line_text_hit {
@@ -2698,6 +2704,7 @@ impl ChartEngine {
         if self.hovered_series().is_some()
             || self.hovered_volume_profile_indicator().is_some()
             || self.general_layout_hovered_hit().is_some()
+            || self.general_legend_target_at(x, y).is_some()
         {
             return ChartCursor::Pointer;
         }

@@ -157,6 +157,13 @@ pub struct GeneralAxisOptions {
     pub band_padding_outer: f64,
     pub zero_line: bool,
     pub grid_visible: bool,
+    /// Draw the axis line along the plot edge. Ticks and labels are unaffected.
+    #[serde(default = "line_visible_default")]
+    pub line_visible: bool,
+}
+
+fn line_visible_default() -> bool {
+    true
 }
 
 impl GeneralAxisOptions {
@@ -181,9 +188,16 @@ impl GeneralAxisOptions {
             min_tick_gap: 4.0,
             domain_padding: 0.0,
             band_padding_inner: 0.1,
-            band_padding_outer: 0.1,
+            // Points sit half a step in from each edge, the same place a band centers its bar,
+            // so edge markers never land on the axis line.
+            band_padding_outer: if scale == GeneralScaleType::Point {
+                0.5
+            } else {
+                0.1
+            },
             zero_line: true,
             grid_visible: true,
+            line_visible: true,
         }
     }
 }
@@ -211,6 +225,7 @@ pub struct GeneralAxis {
     band_padding_outer: f64,
     zero_line: bool,
     grid_visible: bool,
+    line_visible: bool,
     /// Runtime viewport. Configured/auto domain remains canonical and this is reset independently,
     /// matching the financial distinction between data range and visible range. Category views use
     /// an index window so automatic-domain changes never retain stale category strings.
@@ -218,6 +233,9 @@ pub struct GeneralAxis {
     /// Negotiated strip width for vertical axes. Horizontal strip heights are derived from the
     /// shared font metrics because they do not depend on glyph advance.
     pub(crate) layout_thickness: f64,
+    /// Whether `layout_thickness` came from measured tick labels. Only a measured width floors
+    /// the next grow-only negotiation; the empty-axis placeholder never does.
+    pub(crate) layout_measured: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -375,6 +393,10 @@ impl GeneralAxis {
         self.grid_visible
     }
 
+    pub fn line_visible(&self) -> bool {
+        self.line_visible
+    }
+
     fn estimated_bytes(&self) -> usize {
         self.id.capacity()
             + self.title.as_ref().map_or(0, String::capacity)
@@ -465,8 +487,10 @@ impl GeneralAxisRegistry {
             band_padding_outer: options.band_padding_outer,
             zero_line: options.zero_line,
             grid_visible: options.grid_visible,
+            line_visible: options.line_visible,
             view_domain: None,
             layout_thickness: 0.0,
+            layout_measured: false,
         });
         Ok(handle)
     }
@@ -611,7 +635,6 @@ impl ChartEngine {
     {
         let metrics = self.axis_metrics();
         let month_names = &self.month_names;
-        let fallback = AxisMetrics::price_strip_width(AxisMetrics::DEFAULT_TEXT_WIDTH, 0.0);
         let effective_domains: Vec<_> = self
             .general_axes
             .iter()
@@ -640,20 +663,25 @@ impl ChartEngine {
                 axis.layout_thickness = widest_tick;
                 continue;
             }
-            let tick_strip = AxisMetrics::price_strip_width(
-                widest_tick.max(AxisMetrics::DEFAULT_TEXT_WIDTH),
-                0.0,
-            )
-            .max(fallback);
+            // The strip hugs the widest measured label. The financial price-scale text floor would
+            // leave an empty band left of short labels such as "0" or "40".
+            let text_width = if widest_tick > 0.0 {
+                widest_tick
+            } else {
+                AxisMetrics::DEFAULT_TEXT_WIDTH
+            };
+            let tick_strip = AxisMetrics::price_strip_width(text_width, 0.0);
             // A vertical general-axis title owns a dedicated rotated-text lane rather than
             // competing with tick labels for the same horizontal strip. This keeps long titles
             // from inflating the tick area and prevents the title from covering the center tick.
             let measured = tick_strip + vertical_axis_title_lane(axis, metrics);
-            axis.layout_thickness = if allow_shrink || axis.layout_thickness <= 0.0 {
-                measured
+            let floor = if axis.layout_measured && !allow_shrink {
+                axis.layout_thickness
             } else {
-                axis.layout_thickness.max(measured)
+                0.0
             };
+            axis.layout_thickness = floor.max(measured);
+            axis.layout_measured = widest_tick > 0.0;
         }
     }
 
@@ -702,7 +730,8 @@ impl ChartEngine {
         let margin = general_plot_margin(metrics);
         let or_margin = |thickness: f64| if thickness > 0.0 { thickness } else { margin };
         let top = or_margin(side_height(AxisPosition::Top));
-        let bottom = or_margin(side_height(AxisPosition::Bottom));
+        let bottom =
+            or_margin(side_height(AxisPosition::Bottom)) + self.general_legend_height(pane_index);
         Some(GeneralPlotRect {
             x: self.pane_left,
             y: pane.top + top,
@@ -1006,6 +1035,7 @@ impl ChartEngine {
         for axis in self.general_axes.iter().filter(|axis| {
             axis.pane_id == pane_id
                 && axis.visible
+                && axis.line_visible
                 && matches!(axis.dimension, AxisDimension::X | AxisDimension::Y)
         }) {
             match axis.position {
@@ -1258,13 +1288,15 @@ impl ChartEngine {
                     AxisPosition::Left => (strip_x + strip_w - line, strip_y, line, strip_h),
                     AxisPosition::Right => (strip_x, strip_y, line, strip_h),
                 };
-                out.bands.push(AxisBand {
-                    x: line_x,
-                    y: line_y,
-                    width: line_w,
-                    height: line_h,
-                    color: border_color,
-                });
+                if axis.line_visible {
+                    out.bands.push(AxisBand {
+                        x: line_x,
+                        y: line_y,
+                        width: line_w,
+                        height: line_h,
+                        color: border_color,
+                    });
+                }
 
                 let range = match axis.dimension {
                     AxisDimension::X => {
@@ -1752,7 +1784,9 @@ impl ChartEngine {
                         }
                     }
                 }
-                bounds.and_then(|(low, high)| expanded_temporal_domain(low, high))
+                bounds
+                    .and_then(|(low, high)| expanded_temporal_domain(low, high))
+                    .map(temporal_domain_with_margin)
             }
             (
                 AxisDimension::X | AxisDimension::Y | AxisDimension::Radius,
@@ -1763,6 +1797,9 @@ impl ChartEngine {
             ) => {
                 let mut bounds: Option<(f64, f64)> = None;
                 let mut include_zero = false;
+                // An X axis that only carries histograms spans exactly the outer bin edges.
+                let mut exact_histogram_x = axis.dimension == AxisDimension::X;
+                let mut histogram_count = 0;
                 for series in self.general_series_iter().filter(|series| {
                     series.visible()
                         && series.pane_id() == axis.pane_id
@@ -1772,6 +1809,25 @@ impl ChartEngine {
                             series.y_axis_id() == axis.id
                         }
                 }) {
+                    if series.kind() == GeneralSeriesKind::Histogram {
+                        histogram_count += 1;
+                        let Some(bins) = self.general_histogram_bins(series) else {
+                            continue;
+                        };
+                        if axis.dimension == AxisDimension::X {
+                            if let Some((low, high)) = bins.extent() {
+                                extend_numeric_bounds(&mut bounds, low);
+                                extend_numeric_bounds(&mut bounds, high);
+                            }
+                        } else {
+                            include_zero = true;
+                            if let Some(high) = bins.max_height() {
+                                extend_numeric_bounds(&mut bounds, high);
+                            }
+                        }
+                        continue;
+                    }
+                    exact_histogram_x = false;
                     let Some(dataset) = self.general_geometry_dataset(series.dataset()) else {
                         continue;
                     };
@@ -1797,8 +1853,15 @@ impl ChartEngine {
                     {
                         if let crate::GeneralReferenceValue::Numeric(value) = value {
                             extend_numeric_bounds(&mut bounds, *value);
+                            exact_histogram_x = false;
                         }
                     }
+                }
+                if exact_histogram_x && histogram_count > 0 {
+                    return bounds.and_then(|(low, high)| {
+                        padded_numeric_domain(axis.scale, [low, high], axis.domain_padding)
+                            .map(GeneralAxisDomain::Numeric)
+                    });
                 }
                 if axis.dimension == AxisDimension::Y {
                     if let Some((low, high)) =
@@ -1828,6 +1891,17 @@ impl ChartEngine {
                 {
                     extend_numeric_bounds(&mut bounds, 0.0);
                 }
+                // Bars, stacks, areas and histograms grow from the axis line, so only axes of
+                // point and path marks reserve an edge margin.
+                let cartesian_margin = axis.domain_padding == 0.0
+                    && !include_zero
+                    && matches!(axis.dimension, AxisDimension::X | AxisDimension::Y)
+                    && matches!(
+                        axis.scale,
+                        GeneralScaleType::Linear
+                            | GeneralScaleType::Logarithmic
+                            | GeneralScaleType::SymmetricLog
+                    );
                 bounds.and_then(|(low, high)| {
                     expanded_numeric_domain_for_scale(axis.scale, low, high)
                         .map(|domain| match axis.scale {
@@ -1841,7 +1915,15 @@ impl ChartEngine {
                             _ => domain,
                         })
                         .and_then(|domain| {
-                            padded_numeric_domain(axis.scale, domain, axis.domain_padding)
+                            if cartesian_margin {
+                                numeric_domain_with_margin(
+                                    axis.scale,
+                                    domain,
+                                    axis.dimension == AxisDimension::Y,
+                                )
+                            } else {
+                                padded_numeric_domain(axis.scale, domain, axis.domain_padding)
+                            }
                         })
                         .map(GeneralAxisDomain::Numeric)
                 })
@@ -2739,10 +2821,11 @@ where
 }
 
 fn vertical_axis_thickness(axis: &GeneralAxis) -> f64 {
-    axis.layout_thickness.max(AxisMetrics::price_strip_width(
-        AxisMetrics::DEFAULT_TEXT_WIDTH,
-        0.0,
-    ))
+    if axis.layout_thickness > 0.0 {
+        axis.layout_thickness
+    } else {
+        AxisMetrics::price_strip_width(AxisMetrics::DEFAULT_TEXT_WIDTH, 0.0)
+    }
 }
 
 fn vertical_axis_title_lane(axis: &GeneralAxis, metrics: AxisMetrics) -> f64 {
@@ -3555,6 +3638,46 @@ fn padded_numeric_domain(
     ascending_numeric_domain(lower, upper).or(Some(domain))
 }
 
+/// Share of the transformed span an automatic Cartesian domain reserves at each end, so edge
+/// points, markers and line caps stay off the axis lines instead of being painted over them.
+const AUTO_DOMAIN_MARGIN: f64 = 0.04;
+
+/// An automatic numeric domain with [`AUTO_DOMAIN_MARGIN`] at each end. With `zero_baseline`, an
+/// end at exactly zero stays on the axis line, the conventional baseline of a value axis.
+fn numeric_domain_with_margin(
+    scale_type: GeneralScaleType,
+    domain: [f64; 2],
+    zero_baseline: bool,
+) -> Option<[f64; 2]> {
+    let scale = NumericAxisScale::new(scale_type, domain, 0.0, 1.0)?;
+    let end = |value: f64, fraction: f64| {
+        if zero_baseline && value == 0.0 {
+            value
+        } else {
+            scale
+                .invert(fraction)
+                .filter(|value| value.is_finite())
+                .unwrap_or(value)
+        }
+    };
+    ascending_numeric_domain(
+        end(domain[0], -AUTO_DOMAIN_MARGIN),
+        end(domain[1], 1.0 + AUTO_DOMAIN_MARGIN),
+    )
+    .or(Some(domain))
+}
+
+fn temporal_domain_with_margin(domain: GeneralAxisDomain) -> GeneralAxisDomain {
+    let GeneralAxisDomain::Temporal([low, high]) = domain else {
+        return domain;
+    };
+    let pad = ((high - low) as f64 * AUTO_DOMAIN_MARGIN).round() as i64;
+    GeneralAxisDomain::Temporal([
+        (low - pad).max(-MAX_GENERAL_TEMPORAL_MILLISECONDS),
+        (high + pad).min(MAX_GENERAL_TEMPORAL_MILLISECONDS),
+    ])
+}
+
 fn ascending_numeric_domain(from: f64, to: f64) -> Option<[f64; 2]> {
     (from.is_finite() && to.is_finite() && from < to).then_some([from, to])
 }
@@ -3874,6 +3997,7 @@ impl ChartEngine {
         axis.band_padding_outer = options.band_padding_outer;
         axis.zero_line = options.zero_line;
         axis.grid_visible = options.grid_visible;
+        axis.line_visible = options.line_visible;
         self.invalidate_frame_all();
         Ok(())
     }
@@ -4200,6 +4324,35 @@ fn resource(message: impl Into<String>) -> ChartError {
 mod tests {
     use super::*;
 
+    #[test]
+    fn automatic_numeric_domains_keep_marks_off_the_axis_lines() {
+        let close = |actual: Option<[f64; 2]>, expected: [f64; 2]| {
+            let actual = actual.unwrap();
+            assert!(
+                (actual[0] - expected[0]).abs() < 1e-9 && (actual[1] - expected[1]).abs() < 1e-9,
+                "{actual:?} != {expected:?}"
+            );
+        };
+        let linear = GeneralScaleType::Linear;
+        close(
+            numeric_domain_with_margin(linear, [10.0, 20.0], true),
+            [9.6, 20.4],
+        );
+        close(
+            numeric_domain_with_margin(linear, [0.0, 100.0], false),
+            [-4.0, 104.0],
+        );
+        // A zero end on a value axis stays on the axis line.
+        close(
+            numeric_domain_with_margin(linear, [0.0, 100.0], true),
+            [0.0, 104.0],
+        );
+        // Logarithmic margins are equal in screen space, not in value.
+        close(
+            numeric_domain_with_margin(GeneralScaleType::Logarithmic, [1.0, 100.0], true),
+            [10f64.powf(-0.08), 10f64.powf(2.08)],
+        );
+    }
     fn category_axis(pane: usize, id: &str) -> GeneralAxisOptions {
         GeneralAxisOptions::new(id, pane, AxisDimension::X, GeneralScaleType::Band)
     }

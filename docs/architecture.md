@@ -131,11 +131,18 @@ cleared when its dataset or series disappears.
 The browser controller applies focus color and size to that marker.
 Canvas2D/WebGPU interior pixel fixtures cover the four layout fills, and a GPUI/Canvas2D
 structural fixture covers their shared frame marks and focused marker at DPR 1, 1.5 and 2.
-The GPUI general gallery runs 20 live general-chart examples across Cartesian, statistical,
-polar, and layout families through the shared frame and executor in a scrollable native window;
-pointer samples use the standard GPUI input adapter. Gallery and browser-dashboard cards carry only
-the chart (plus its legend in the browser) with grids enabled; browser cards mount as they approach
-the viewport and stay mounted until the dashboard deactivates or a filter hides them.
+The GPUI general gallery and the browser general dashboard render one shared catalog,
+`examples/web_demo/general_catalog.json`, written in the public browser API shape (axes, series
+options, object rows, layout inputs and references). The dashboard passes each entry straight to
+`create_chart`, `add_axis`, `add_series`, `add_layout_series` and `add_general_reference`; the
+gallery translates the same entry into engine calls with the browser defaults and rejects any field
+it does not translate, so both hosts show identical examples covering every series kind and its
+modes (interpolation, line styles, symbols, gradients, rounded bars, grouping and stack modes,
+log/symlog/temporal/reversed, hidden-line and three-axis layouts, engine-binned histograms,
+references, polar sweeps and layout families). Pointer
+samples use the standard GPUI input adapter. Cards carry only the chart, with the engine-drawn
+legend enabled; browser cards mount as they approach the viewport and stay mounted until the
+dashboard deactivates or a filter hides them.
 A funnel series uses
 the same ordered `MeshFill` stream as other general geometry: each stage's trapezoid tapers from
 its value to the next stage, with the final stage tapering to zero. A cached dataset maximum
@@ -144,7 +151,9 @@ the pointer's vertical position in constant work, then test the same interpolate
 Treemap series derive normalized leaf weights, preserve sibling order through a bounded squarified
 partition, and emit snapped rectangles in that ordered frame. A per-series cache keyed by the plot
 rectangle keeps frame construction and exact leaf hits on identical `f64` geometry and is cleared
-atomically when the hierarchy changes. Zero-weight leaves emit no mark.
+atomically when the hierarchy changes. Zero-weight leaves emit no mark. Nested groups inset their
+children below a label header, cells paint inside a 1 CSS px gap, and a leaf's signed
+`color_value` shades it between fixed neutral, up and down colors by magnitude.
 Sankey series assign DAG columns by longest path, preserve input order within each column, and
 scale node heights and ordered link ribbons from normalized finite link values. The per-series
 plot-keyed cache supplies the same node rectangles and eight-segment ribbon paths to frame and
@@ -362,7 +371,8 @@ bars, points, error bars, boxes, and heatmap cells use the row color when presen
 
 The released Phase 2 Cartesian bindings are category-band columns, horizontal bars, box plots, category/category
 plus numeric/numeric and temporal/numeric heatmaps, numeric XY scatter/bubble marks, numeric/temporal/category
-error bars, and `xy_line`, `xy_area`, `range_area`, and category-band `range_bar`. General
+error bars, `xy_line`, `xy_area`, `range_area`, category-band `range_bar`, and linear
+`histogram`. General
 series have monotonic chart-local identities, stable pane/axis/dataset ownership, bounded title/color
 state, and lazy registry allocation. Populated axes and datasets cannot be removed out from under a
 series, and a pane containing a general series cannot be removed until that series is detached. Visible
@@ -469,6 +479,15 @@ persisted interquartile fill and median colors plus the series stroke width whil
 default box style. Tooltip/accessibility snapshots expose
 quartiles separately, explicit-ID updates and bounded retention preserve aligned statistics, and V2 persistence
 round-trips the complete five-number summary without reinterpretation.
+`histogram` stores one-dimensional samples in a `Values` dataset (the Y column plus validity) and
+bins them in the engine (`general_histogram.rs`), so every host and executor paints identical
+bins. Binning is bounded to 1000 bins and validated atomically when options, replacements,
+explicit-ID updates, or compositions change; a per-series cache keyed by dataset generation and
+options holds the computed edges and heights and is attributed to engine memory. Bins lower
+through the column rectangle path and are addressed by bin index in hits, selection,
+reconciliation, tooltips, brushes, and accessibility. A histogram-only X axis autoscale spans
+the outer bin edges; Y autoscale includes zero and the tallest bin. V2 persistence stores the
+samples and binning options, never derived bins.
 `heatmap_grid` keeps one aligned dataset across all supported Cartesian coordinate variants. Category/category
 heatmaps add a second engine-owned category dictionary/index column for Y; the existing category X column remains
 the X registry and the ordinary numeric value/validity column remains cell intensity data. Continuous numeric and
@@ -543,7 +562,7 @@ data changes refresh this snapshot, while hidden series retain their slice label
 are descriptive; series visibility remains the legend's action.
 The browser package's `create_general_legend`, `create_general_tooltip`, and
 `create_general_brush_controls` present those snapshots as default DOM controls. Legend buttons
-are borderless with vertical color-bar markers and mutate stable series handles; the tooltip follows engine-arbitrated crosshair hits; brush buttons
+are borderless with rounded pill markers and mutate stable series handles; the tooltip follows engine-arbitrated crosshair hits; brush buttons
 call semantic engine operations. Hosts attach and detach these DOM components, and may supply
 localized labels, language attributes, and display formatting. The DOM tooltip uses the financial
 tooltip's `.aeris_charts-tooltip` structure on one surface tone (no tinted header band, unlike the
@@ -887,6 +906,22 @@ and flipped away from the pane edges. Because the tooltip is ordered-frame text 
 WebGPU, GPUI, and native executors paint it identically. `generalTooltip.visible` (default `true`,
 preserved by `reset_style_to_defaults`) turns off the tooltip only; the cursor follows crosshair
 visibility.
+
+`generalLegend.visible` (default `false`) adds an engine-drawn legend below the plots of a general
+pane: one rounded series-color pill and title per series, or per layout series in a layout pane.
+`general_legend.rs` measures entries with the host text metrics, centers them in up to three
+wrapped rows capped at 30% of the pane height with a "+N more" overflow entry, and caches the
+layout by scene and layout generation, pane width and font size. The general plot rectangle
+reserves the legend height before axes are measured, and the legend is emitted as its own ordered
+segment after the plot scissor, so every executor paints it identically. Hidden series stay listed
+at reduced opacity. The input controller resolves a primary click on an entry before chart hits,
+toggles that series' visibility, and reports `GeneralLegendChanged` so browser handles refresh;
+hovering an entry shows the pointer cursor. Series markers in this legend, the engine tooltip and
+the DOM legend/tooltip share one rounded 4 CSS px pill (`series_marker_prim`).
+
+General Y axes size their strip from the widest measured tick label plus the axis chrome, falling
+back to the financial default text width only before any label has been measured, so short labels
+do not leave an empty gutter between the axis and the pane edge.
 
 Secondary clicks use the engine-owned Chart Context query. It resolves chart-space coordinates,
 pane, time, logical index, hit series, and price on that series' exact scale (or the pane's canonical

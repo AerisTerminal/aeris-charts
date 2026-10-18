@@ -4,14 +4,15 @@ use aeris_charts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
     DEFAULT_GENERAL_FILL_OPACITY, FlowLink, FlowNode, FunnelStage, GeneralAreaBaseline,
     GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralBrushEndpoint,
-    GeneralBrushRange, GeneralBrushSnapshot, GeneralDatasetId, GeneralHitMode,
-    GeneralInterpolation, GeneralLayoutElement, GeneralLayoutInput, GeneralLayoutSeriesId,
-    GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GeneralLineStyle, GeneralPaneComposition,
-    GeneralPaneProposal, GeneralPaneReferenceComposition, GeneralPaneSeriesComposition,
-    GeneralPointSymbol, GeneralPolarOptions, GeneralReferenceId, GeneralReferenceOptions,
-    GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId, GeneralSeriesKind,
-    GeneralSeriesOptions, GeneralSeriesProposal, GeneralStackMode, GeneralTooltipSnapshot,
-    GeneralXyInput, HierarchyNode, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    GeneralBrushRange, GeneralBrushSnapshot, GeneralDatasetId, GeneralHistogramNormalization,
+    GeneralHistogramOptions, GeneralHitMode, GeneralInterpolation, GeneralLayoutElement,
+    GeneralLayoutInput, GeneralLayoutSeriesId, GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions,
+    GeneralLineStyle, GeneralPaneComposition, GeneralPaneProposal, GeneralPaneReferenceComposition,
+    GeneralPaneSeriesComposition, GeneralPointSymbol, GeneralPolarOptions, GeneralReferenceId,
+    GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId,
+    GeneralSeriesKind, GeneralSeriesOptions, GeneralSeriesProposal, GeneralStackMode,
+    GeneralTooltipSnapshot, GeneralXyInput, HierarchyNode, HorizontalDomain,
+    MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use js_sys::{Float64Array, Uint8Array, Uint32Array};
 use serde::Deserialize;
@@ -149,12 +150,14 @@ struct AxisInput {
     domain_padding: f64,
     #[serde(default = "default_band_padding")]
     band_padding_inner: f64,
-    #[serde(default = "default_band_padding")]
-    band_padding_outer: f64,
+    #[serde(default)]
+    band_padding_outer: Option<f64>,
     #[serde(default = "default_true")]
     zero_line: bool,
     #[serde(default = "default_true")]
     grid_visible: bool,
+    #[serde(default = "default_true")]
+    line_visible: bool,
 }
 
 fn axis_options_from_input(input: AxisInput) -> Result<GeneralAxisOptions, String> {
@@ -176,9 +179,12 @@ fn axis_options_from_input(input: AxisInput) -> Result<GeneralAxisOptions, Strin
     options.min_tick_gap = input.min_tick_gap;
     options.domain_padding = input.domain_padding;
     options.band_padding_inner = input.band_padding_inner;
-    options.band_padding_outer = input.band_padding_outer;
+    if let Some(padding) = input.band_padding_outer {
+        options.band_padding_outer = padding;
+    }
     options.zero_line = input.zero_line;
     options.grid_visible = input.grid_visible;
+    options.line_visible = input.line_visible;
     Ok(options)
 }
 
@@ -241,6 +247,17 @@ struct SeriesInput {
     stack_id: Option<String>,
     #[serde(default)]
     stack_mode: Option<String>,
+    #[serde(default)]
+    histogram: HistogramInput,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct HistogramInput {
+    bin_count: Option<usize>,
+    bin_width: Option<f64>,
+    normalization: Option<String>,
+    cumulative: bool,
 }
 
 #[derive(Deserialize)]
@@ -327,6 +344,8 @@ struct PackedColumnsInput {
     y_coordinate: Option<Vec<f64>>,
     value: Option<Vec<f64>>,
     value_valid: Option<Vec<u8>>,
+    values: Option<Vec<f64>>,
+    values_valid: Option<Vec<u8>>,
     labels: Option<Vec<Option<String>>>,
     colors: Option<Vec<Option<String>>>,
     symbols: Option<Vec<Option<String>>>,
@@ -403,6 +422,7 @@ fn proposal_series(input: SeriesProposalInput) -> Result<GeneralSeriesProposal, 
         "range_area" => GeneralSeriesKind::RangeArea,
         "range_bar" => GeneralSeriesKind::RangeBar,
         "column" => GeneralSeriesKind::Column,
+        "histogram" => GeneralSeriesKind::Histogram,
         "horizontal_bar" => GeneralSeriesKind::HorizontalBar,
         "scatter" => GeneralSeriesKind::Scatter,
         "bubble" => GeneralSeriesKind::Bubble,
@@ -434,6 +454,14 @@ fn proposal_series(input: SeriesProposalInput) -> Result<GeneralSeriesProposal, 
                 .ok_or_else(|| missing("category index"))?,
             y: columns.y.take().ok_or_else(|| missing("Y"))?,
             y_valid: columns.y_valid.take(),
+        },
+        GeneralSeriesKind::Histogram => GeneralXyInput::Values {
+            ids,
+            values: columns
+                .values
+                .take()
+                .ok_or_else(|| missing("histogram value"))?,
+            values_valid: columns.values_valid.take(),
         },
         GeneralSeriesKind::Bubble => GeneralXyInput::Bubble {
             ids,
@@ -705,6 +733,9 @@ fn series_options_from_input(
         GeneralSeriesKind::Column => {
             GeneralSeriesOptions::column(input.pane, dataset, input.x_axis_id, input.y_axis_id)
         }
+        GeneralSeriesKind::Histogram => {
+            GeneralSeriesOptions::histogram(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
         GeneralSeriesKind::HorizontalBar => GeneralSeriesOptions::horizontal_bar(
             input.pane,
             dataset,
@@ -798,7 +829,41 @@ fn series_options_from_input(
             ));
         }
     };
+    options.histogram = histogram_options(input.histogram)?;
     Ok(options)
+}
+
+fn histogram_options(input: HistogramInput) -> Result<GeneralHistogramOptions, ChartError> {
+    let normalization = match input.normalization.as_deref().unwrap_or("count") {
+        "count" => GeneralHistogramNormalization::Count,
+        "percent" => GeneralHistogramNormalization::Percent,
+        "density" => GeneralHistogramNormalization::Density,
+        _ => {
+            return Err(ChartError::new(
+                aeris_charts_engine::ErrorCode::InvalidOptions,
+                "general histogram normalization must be count, percent, or density",
+            ));
+        }
+    };
+    Ok(GeneralHistogramOptions {
+        bin_count: input.bin_count,
+        bin_width: input.bin_width,
+        normalization,
+        cumulative: input.cumulative,
+    })
+}
+
+fn histogram_options_value(options: GeneralHistogramOptions) -> Value {
+    json!({
+        "bin_count": options.bin_count,
+        "bin_width": options.bin_width,
+        "normalization": match options.normalization {
+            GeneralHistogramNormalization::Count => "count",
+            GeneralHistogramNormalization::Percent => "percent",
+            GeneralHistogramNormalization::Density => "density",
+        },
+        "cumulative": options.cumulative,
+    })
 }
 
 fn series_kind_name(kind: GeneralSeriesKind) -> &'static str {
@@ -809,6 +874,7 @@ fn series_kind_name(kind: GeneralSeriesKind) -> &'static str {
         GeneralSeriesKind::RangeBar => "range_bar",
         GeneralSeriesKind::ErrorBar => "error_bar",
         GeneralSeriesKind::Column => "column",
+        GeneralSeriesKind::Histogram => "histogram",
         GeneralSeriesKind::HorizontalBar => "horizontal_bar",
         GeneralSeriesKind::BoxPlot => "box_plot",
         GeneralSeriesKind::HeatmapGrid => "heatmap_grid",
@@ -1572,6 +1638,7 @@ impl ChartInner {
             "band_padding_outer": axis.band_padding_outer(),
             "zero_line": axis.zero_line(),
             "grid_visible": axis.grid_visible(),
+            "line_visible": axis.line_visible(),
         }).to_string()
     }
 
@@ -1760,6 +1827,7 @@ impl ChartInner {
                 GeneralStackMode::Percent => "percent",
                 GeneralStackMode::Positive => "positive",
             },
+            "histogram": histogram_options_value(series.histogram()),
         })
         .to_string()
     }
@@ -1799,23 +1867,7 @@ impl ChartInner {
                 json!({
                     "series": item.series.get(),
                     "pane": item.pane,
-                    "kind": match item.kind {
-                        GeneralSeriesKind::XyLine => "xy_line",
-                        GeneralSeriesKind::XyArea => "xy_area",
-                        GeneralSeriesKind::RangeArea => "range_area",
-                        GeneralSeriesKind::RangeBar => "range_bar",
-                        GeneralSeriesKind::ErrorBar => "error_bar",
-                        GeneralSeriesKind::Column => "column",
-                        GeneralSeriesKind::HorizontalBar => "horizontal_bar",
-                        GeneralSeriesKind::BoxPlot => "box_plot",
-                        GeneralSeriesKind::HeatmapGrid => "heatmap_grid",
-                        GeneralSeriesKind::Scatter => "scatter",
-                        GeneralSeriesKind::Bubble => "bubble",
-                        GeneralSeriesKind::Pie => "pie",
-                        GeneralSeriesKind::Radar => "radar",
-                        GeneralSeriesKind::PolarArea => "polar_area",
-                        GeneralSeriesKind::RadialBar => "radial_bar",
-                    },
+                    "kind": series_kind_name(item.kind),
                     "title": item.title,
                     "color": item.color,
                     "visible": item.visible,
@@ -1935,6 +1987,14 @@ impl ChartInner {
                     category_indices: Vec::new(),
                     y: Vec::new(),
                     y_valid: None,
+                },
+            ),
+            "histogram" => (
+                GeneralSeriesKind::Histogram,
+                GeneralXyInput::Values {
+                    ids: None,
+                    values: Vec::new(),
+                    values_valid: None,
                 },
             ),
             "horizontal_bar" => (
@@ -2121,6 +2181,41 @@ impl ChartInner {
             x: x.to_vec(),
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn set_general_values_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        values: &Float64Array,
+        values_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::Values {
+            ids,
+            values: values.to_vec(),
+            values_valid: values_valid.map(|values| values.to_vec()),
         };
         match self.engine.replace_general_xy_dataset_styled(
             dataset,
@@ -2764,6 +2859,43 @@ impl ChartInner {
             x: x.to_vec(),
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+            (max_rows > 0).then_some(max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn upsert_general_values_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        values: &Float64Array,
+        values_valid: Option<Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::Values {
+            ids,
+            values: values.to_vec(),
+            values_valid: values_valid.map(|values| values.to_vec()),
         };
         match self.engine.upsert_general_xy_dataset_styled(
             dataset,
@@ -3632,6 +3764,52 @@ mod tests {
         assert_eq!(parse_ids(r#"[1,"row"]"#).unwrap().unwrap().len(), 2);
         assert!(axis_domain(GeneralScaleType::Linear, Some(json!([0.0, 1.0]))).is_some());
         assert!(axis_domain(GeneralScaleType::Linear, Some(json!(["bad", 1.0]))).is_none());
+    }
+
+    #[test]
+    fn histogram_series_options_and_sample_proposals_parse_without_host_state() {
+        let input: SeriesInput = serde_json::from_str(
+            r#"{"pane":0,"x_axis_id":"x","y_axis_id":"y",
+                "histogram":{"bin_width":2.5,"normalization":"density","cumulative":true}}"#,
+        )
+        .unwrap();
+        let dataset = GeneralDatasetId::from_raw(1).unwrap();
+        let options =
+            series_options_from_input(GeneralSeriesKind::Histogram, dataset, input).unwrap();
+        assert_eq!(options.kind, GeneralSeriesKind::Histogram);
+        assert_eq!(
+            options.histogram,
+            GeneralHistogramOptions {
+                bin_count: None,
+                bin_width: Some(2.5),
+                normalization: GeneralHistogramNormalization::Density,
+                cumulative: true,
+            }
+        );
+        assert_eq!(
+            histogram_options_value(options.histogram)["normalization"],
+            "density"
+        );
+        assert!(
+            histogram_options(HistogramInput {
+                normalization: Some("frequency".into()),
+                ..Default::default()
+            })
+            .is_err()
+        );
+
+        let proposal: SeriesProposalInput = serde_json::from_str(
+            r#"{"kind":"histogram","x_axis_id":"x","y_axis_id":"y",
+                "columns":{"values":[1.0,2.0,0.0],"values_valid":[1,1,0]}}"#,
+        )
+        .unwrap();
+        let proposal = proposal_series(proposal).unwrap();
+        assert_eq!(proposal.kind, GeneralSeriesKind::Histogram);
+        assert!(matches!(
+            proposal.data,
+            GeneralXyInput::Values { ref values, values_valid: Some(ref valid), .. }
+                if values.len() == 3 && valid == &[1, 1, 0]
+        ));
     }
 
     #[test]

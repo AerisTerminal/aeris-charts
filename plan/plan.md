@@ -349,6 +349,24 @@ tinted header and a vertical color bar per row, in the engine frame and `create_
 It gives `create_general_legend` borderless compact buttons with vertical bar markers, and removes
 axis titles from the dashboard demo.
 
+A post-G7 general presentation batch, also without closing an R8 item, sizes the general Y-axis
+strip to its measured labels and title, replaces square legend dashes with one rounded pill marker
+shared by the engine legend, tooltip and DOM components, and adds an engine-drawn legend
+(`generalLegend.visible`, off by default) that both GPUI and the browser paint from the frame.
+`histogram` gains engine binning (automatic, bin count or bin width; count, percent, probability or
+density; optional cumulative). Automatic linear, log and symlog domains of point and path marks get
+a 4% margin so marks never sit on an axis line; point category axes default to half a step of outer
+padding; axes accept `line_visible`. Unstacked bars round only their value end, column and bar data
+labels stay on their own bar, and symlog axes tick clean signed decades. Treemaps inset nested
+groups under a header, keep a 1 px cell gap and shade leaves by a signed `color_value`. The GPUI
+gallery and browser dashboard render one shared 46-example catalog
+(`examples/web_demo/general_catalog.json`) covering every series kind and mode, including bull/bear
+grouped columns, three axes, hidden axis lines and three histogram modes. The general Y strip's
+grow-only negotiation ignores the empty-axis placeholder, so layout no longer depends on whether a
+chart was sized before or after its data. Its gate passed formatting, warning-denying workspace
+and wasm32 Clippy, workspace tests, GPUI crate tests with `gpui-backend`, the native performance
+gate, package install/lint/build/typecheck/pack/API checks and the Playwright suite. The catalog
+cards were reviewed in headless Chromium screenshots; calibrated GPUI window pixels remain G8 work.
 ## Known gaps
 
 Remaining source-confirmed gaps from the 2026-09-23 review and the 2026-10-18 post-G7 changes. R3–R7 closed the earlier Cartesian,

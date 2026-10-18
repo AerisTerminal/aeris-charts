@@ -4135,6 +4135,21 @@ impl AerisChart {
         )
     }
 
+    pub fn set_general_values_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        values: &Float64Array,
+        values_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner.borrow_mut().set_general_values_data_typed(
+            dataset,
+            metadata_json,
+            values,
+            values_valid,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn set_general_bubble_data_typed(
         &mut self,
@@ -4488,6 +4503,23 @@ impl AerisChart {
             x,
             y,
             y_valid,
+            max_rows,
+        )
+    }
+
+    pub fn upsert_general_values_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        values: &Float64Array,
+        values_valid: Option<js_sys::Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        self.inner.borrow_mut().upsert_general_values_data_typed(
+            dataset,
+            metadata_json,
+            values,
+            values_valid,
             max_rows,
         )
     }
@@ -5706,6 +5738,9 @@ impl AerisChart {
                 }
                 ChartInputEvent::GeneralBrushChanged => {
                     serde_json::json!({"kind":"general_brush_changed"})
+                }
+                ChartInputEvent::GeneralLegendChanged => {
+                    serde_json::json!({"kind":"general_legend_changed"})
                 }
                 ChartInputEvent::ContextMenu(menu) => {
                     let region = match menu.region {

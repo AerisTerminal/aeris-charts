@@ -467,6 +467,8 @@ pub struct ChartOptions {
     pub hovered_series_on_top: bool,
     #[serde(rename = "generalTooltip")]
     pub general_tooltip: GeneralTooltipOptions,
+    #[serde(rename = "generalLegend")]
+    pub general_legend: GeneralLegendOptions,
 }
 
 /// The engine-drawn hover tooltip of general (non-financial) panes. It is part of the ordered
@@ -483,6 +485,14 @@ impl Default for GeneralTooltipOptions {
     }
 }
 
+/// The engine-drawn legend of general (non-financial) panes: one entry per series, slice or
+/// layout series below the plot. Off by default, like an omitted Recharts `<Legend/>`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GeneralLegendOptions {
+    pub visible: bool,
+}
+
 impl Default for ChartOptions {
     fn default() -> Self {
         Self {
@@ -496,6 +506,7 @@ impl Default for ChartOptions {
             auto_size: false,
             hovered_series_on_top: true,
             general_tooltip: GeneralTooltipOptions::default(),
+            general_legend: GeneralLegendOptions::default(),
         }
     }
 }
@@ -720,6 +731,7 @@ mod tests {
         );
         assert!(o.hovered_series_on_top);
         assert!(o.general_tooltip.visible);
+        assert!(!o.general_legend.visible);
         assert!(!o.auto_size);
         // Axis border cosmetics use the canonical border everywhere.
         assert!(o.right_price_scale.visible);
@@ -816,6 +828,7 @@ mod tests {
             "autoSize": true,
             "hoveredSeriesOnTop": false,
             "generalTooltip": { "visible": false },
+            "generalLegend": { "visible": true },
             "hostExtension": { "keep": 42 }
         }));
 
@@ -847,6 +860,7 @@ mod tests {
         assert!(options.auto_size);
         assert!(!options.hovered_series_on_top);
         assert!(!options.general_tooltip.visible);
+        assert!(options.general_legend.visible);
 
         let raw = store.value();
         assert_eq!(raw["timeScale"]["barSpacing"], 17);

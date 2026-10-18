@@ -17,7 +17,10 @@ for a visible mark. `heatmap_grid` supports band X/Y string categories, continuo
 coordinates, and temporal epoch-millisecond X with numeric Y coordinates. Polar families are
 implemented. Funnel, treemap, Sankey and sunburst have a public layout-pane API, validated inputs,
 shared-frame geometry and exact hits; their full interaction, persistence, accessibility, transition
-and parity contracts remain G7 work.
+and parity contracts remain G7 work. Treemap leaves may carry a signed `color_value` (for example a
+daily percent change): when any leaf has one, cells shade from a neutral gray toward green for gains and
+red for losses by magnitude relative to the largest change. Nested groups are inset with a label header
+when they have room, and every cell keeps a 1 CSS px gap so the pane background separates it.
 
 React `GeneralPane` supports keyed arrays and direct axis, series, reference, label, legend,
 tooltip, and brush declarations. `MappedGeneralSeries` maps typed application rows before the
@@ -43,6 +46,14 @@ and a popover tooltip with the date or category header and one colored row per s
 describe the item under the pointer. `chart.apply_options({ generalTooltip: { visible: false } })` hides the
 tooltip; `crosshair.vertLine.visible` controls the cursor. The tooltip is part of the ordered frame, so it
 matches across Canvas2D, WebGPU, GPUI and native rendering.
+
+`chart.apply_options({ generalLegend: { visible: true } })` (or the same option in `create_chart`) adds an
+engine-drawn legend below the plot: a rounded color pill and title per series (per layout series in a layout pane),
+wrapped into at most three centered rows with a "+N more" entry when they do not fit. Clicking an entry toggles that
+series' visibility and notifies `subscribe_general_legend_change`; hidden series stay listed dimmed. Like the
+tooltip, it is part of the ordered frame and matches across every backend, including GPUI hosts, which enable it
+through the same engine option. It is off by default so hosts that render `create_general_legend` do not show two
+legends.
 
 General range selection uses `chart.set_general_brush(axis, from_coordinate, to_coordinate)`. The browser sends
 CSS-pixel endpoints once; Rust converts them immediately into a numeric, temporal, or category range and owns
@@ -170,6 +181,7 @@ interface general_axis_options {
   band_padding_outer?: number;
   zero_line?: boolean;
   grid_visible?: boolean;
+  line_visible?: boolean;
 }
 ```
 
@@ -185,6 +197,17 @@ Validation is structural and atomic:
   transformed span before runtime pan/zoom. It accepts `0..=1`, defaults to `0`, uses
   multiplicative spacing for logarithmic axes, and rejects nonnumeric axes instead of becoming a
   silent option. Runtime reset returns to the padded base domain.
+- With `domain_padding` left at `0`, automatic linear, log and symlog X/Y domains of point and
+  path marks gain a 4% margin of their transformed span at each end, so markers and line caps
+  never sit on an axis line. Axes of bars, stacks, areas and histograms (which grow from zero) keep
+  zero on the axis line; a zero end of a value axis also stays put.
+- Point category axes default `band_padding_outer` to `0.5` (half a step at each end) so the
+  first and last points sit inside the plot; band axes keep `0.1`.
+- Symlog axes tick zero and signed 1/2/5 decades outward from the linear threshold, thinning to
+  decades and then every n-th decade to honor `tick_count`. A thinned decade too close to zero to
+  keep its label clear is skipped.
+- `line_visible` (default `true`) draws the axis line along the plot edge; `false` hides the
+  line while ticks, labels and titles stay.
 - Automatic domains combine only visible series bound to that axis. Reference components declare
   explicitly whether they extend the domain.
 - On executable Cartesian axes, `ticks` replaces automatic tick selection with at most 512 typed
@@ -221,6 +244,7 @@ type general_series_kind =
   | "range_area"
   | "range_bar"
   | "column"
+  | "histogram"
   | "horizontal_bar"
   | "scatter"
   | "bubble"
@@ -233,6 +257,10 @@ type general_series_kind =
   | "radial_bar"
   | "polar_area";
 ```
+
+`"histogram"` is the one general name that a financial series kind also uses. `add_series("histogram",
+options)` creates the general distribution series when `options` carries `x_axis_id`; without axis
+bindings it keeps creating the financial time-series histogram.
 
 Grouped and stacked charts are options on compatible column, horizontal-bar, and area series, not
 separate engines or renderer-specific kinds. A stack ID joins series only when their pane, axes,
@@ -279,8 +307,11 @@ Both bar orientations accept `bar_gap` (0–64 CSS pixels of empty space per slo
 `bar_max_width` (1–512 CSS pixels). The engine centers the remaining bar within its group slot;
 stack members keep the same slot when configured alike. `range_bar` accepts the same thickness
 controls. Columns and horizontal bars also accept `bar_corner_radius` (0–64 CSS pixels). The
-engine rounds every corner of an unstacked bar and only the exposed value-end corners of a stack;
-interior stack joins stay square. The radius is clamped to half the rendered bar's smaller
+engine rounds only the value-end corners (the end away from the baseline), so bars stay square
+where they meet the axis; in a stack only the exposed end is rounded and interior joins stay square.
+`data_labels` on columns sit above (or below, for negative values) their own column, and on
+horizontal bars beside the bar end within that bar's own row, so labels never overlap a
+neighboring series. The radius is clamped to half the rendered bar's smaller
 dimension. All three bar kinds reuse ordered rectangle primitives, exact rectangle hits, bounded labels, snapshots,
 typed/object updates, and V2 persistence.
 
@@ -288,6 +319,43 @@ typed/object updates, and V2 persistence.
 Each complete row lowers to one category-width rectangle spanning its low/high values; missing or
 invalid bounds remain queryable but emit no geometry. Range bars use exact rectangle hits and the
 same persistence and update paths as range areas.
+
+`histogram` bins one-dimensional samples in the engine, so every host and backend paints the
+same bins. It requires a continuous pane with linear X and Y axes. Rows are `{ value, id? }`
+objects or `histogram_columns` (`values: Float64Array`, optional `values_valid`, optional `ids`);
+null or invalid samples stay queryable by ID but are not counted, and non-finite samples are
+rejected. The `histogram` option controls binning:
+
+```ts
+interface general_histogram_options {
+  bin_count?: number | null; // 1..1000 equal bins spanning exactly [min, max]
+  bin_width?: number | null; // finite width; edges align to multiples of it; overrides bin_count
+  normalization?: "count" | "percent" | "density"; // default "count"
+  cumulative?: boolean; // running totals; cumulative density is the empirical CDF
+}
+```
+
+Without either setting, the bin count follows Sturges' rule (`ceil(log2 n) + 1`) and the width
+is rounded up to a 1/2/5 multiple of a power of ten, with edges aligned to that width. Identical
+samples produce one unit-wide bin centered on the value. Each bin spans `[from, to)`; the last
+bin also contains its right edge. `percent` reports each count as a percentage of the counted
+samples, and `density` divides that share by the bin width so bar areas sum to one.
+A setting, replacement, or update that would need more than 1000 bins is rejected with
+`invalid_data` and leaves the previous state unchanged; `bin_count` outside 1..1000 or a
+non-positive `bin_width` is `invalid_options`, and other kinds reject non-default
+`histogram` options. Bins are cached per series and recomputed only when the dataset generation
+or options change.
+
+The X axis domain covers the bin edges (padded, not rounded to zero) and the Y domain includes
+zero and the tallest bin. Bars accept `color`, `fill_opacity`, `fill_gradient`, `bar_gap`,
+`bar_max_width`, `bar_corner_radius`, and `data_labels` like columns; grouping and stacking
+are rejected. Hits, selection, tooltips, brushes, and accessibility rows address bins: `row` is
+the bin index and `row_id` is `{ generated: "<bin index>" }`. Tooltip and accessibility
+snapshots label each bin as an interval such as `[10, 20)` (`]` for the last bin), report the
+bin height as `value`, and expose the edges as `x_low`/`x_high`. An X brush selects bins
+whose center lies in the range; a Y brush selects them by height. A shared tooltip anchored on a
+histogram reports only that bin, and other series never include histogram bins. Histogram series
+appear in the legend like columns and persist in V2 documents with their samples and options.
 
 Path interpolation accepts `step_before` (vertical then horizontal), `step_middle` (turn at the
 interval midpoint), and `step_after` (horizontal then vertical). The existing `step` name keeps its
@@ -502,7 +570,8 @@ All parallel arrays must have equal row counts. Validity arrays contain only `0`
 indices must be in range. The transaction is validated before the live dataset changes. Bubble extends
 numeric XY columns with `size: Float64Array` and optional `size_valid: Uint8Array`. Box plots use category
 indices plus five parallel `Float64Array` channels named `min`, `q1`, `median`, `q3`, and `max`, each
-with an optional validity mask. Category heatmaps use independent bounded X/Y category dictionaries and aligned
+with an optional validity mask. Histograms use one `values: Float64Array` sample column with an
+optional `values_valid` mask. Category heatmaps use independent bounded X/Y category dictionaries and aligned
 index columns plus one numeric `value` channel; both dictionaries merge and compact atomically during explicit-ID
 updates and bounded retention rather than introducing a second data store. Continuous and temporal heatmaps reuse
 the ordinary numeric/temporal X column, add one aligned numeric `y_coordinate` column, and keep `value` in the
@@ -513,7 +582,7 @@ retention, `data_at()`, hit-test/tooltip snapshots, and capacity telemetry. Gene
 allocated lazily when the first general series or dataset is created; a financial-only chart must
 retain zero general-dataset, domain, axis, and geometry capacity.
 
-The current column/horizontal-bar/box-plot/heatmap-grid/scatter/bubble/`xy_line`/`xy_area`/`range_area`/`error_bar` browser slices expose `update_data(rows, { max_rows })` and
+The current column/histogram/horizontal-bar/box-plot/heatmap-grid/scatter/bubble/`xy_line`/`xy_area`/`range_area`/`error_bar` browser slices expose `update_data(rows, { max_rows })` and
 `update_data_typed(columns, { max_rows })`. Every updated row needs an explicit string or numeric
 `id`; matching IDs replace in place, while new IDs append in input order. `max_rows` is an optional
 per-transaction retention limit: after the update, oldest rows are removed until the dataset fits.
@@ -593,6 +662,7 @@ Different Y axes are allowed within that region when their scale types accept th
 | Candlestick, financial bar, histogram, baseline, footprint, indicators | same region | incompatible | incompatible | incompatible | incompatible |
 | `xy_line`, `xy_area`, `range_area` | incompatible | same region | same region | same region with point/band axis | incompatible |
 | `column` | incompatible | same region | same region | same region | incompatible |
+| `histogram` (linear X and Y) | incompatible | same region | incompatible | incompatible | incompatible |
 | `horizontal_bar` (numeric X, category Y) | incompatible | same region | incompatible | incompatible | incompatible |
 | `scatter`, `bubble`, `error_bar` | incompatible | same region | same region | same region with point axis | incompatible |
 | `heatmap_grid`, `box_plot` | incompatible | same region when both axes agree | same region when axes agree | same region | incompatible |

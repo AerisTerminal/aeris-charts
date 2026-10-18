@@ -390,7 +390,7 @@ struct LiveViewRestore<'a> {
     time_scale: TimeScaleCore,
     panes: Vec<Pane>,
     layout: [f64; 7],
-    general_axis_thickness: Vec<f64>,
+    general_axis_thickness: Vec<(f64, bool)>,
 }
 
 impl<'a> LiveViewRestore<'a> {
@@ -411,7 +411,7 @@ impl<'a> LiveViewRestore<'a> {
             general_axis_thickness: engine
                 .general_axes
                 .iter()
-                .map(|axis| axis.layout_thickness)
+                .map(|axis| (axis.layout_thickness, axis.layout_measured))
                 .collect(),
             engine,
         }
@@ -433,12 +433,13 @@ impl Drop for LiveViewRestore<'_> {
             engine.left_builtin_axis_w,
             engine.right_builtin_axis_w,
         ] = self.layout;
-        for (axis, thickness) in engine
+        for (axis, &(thickness, measured)) in engine
             .general_axes
             .iter_mut()
             .zip(&self.general_axis_thickness)
         {
-            axis.layout_thickness = *thickness;
+            axis.layout_thickness = thickness;
+            axis.layout_measured = measured;
         }
         engine.invalidate_frame_all();
     }

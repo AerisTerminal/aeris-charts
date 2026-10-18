@@ -1,5 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
+import { readFileSync } from "node:fs";
+
+const general_catalog = JSON.parse(readFileSync(new URL("../general_catalog.json", import.meta.url), "utf8"));
 
 test("layout families render and return typed exact hits through the public chart API", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
@@ -1131,7 +1134,7 @@ test("general keyboard focus keeps series and explicit row identity across reord
   expect(result.focus_chrome_size).toBeGreaterThan(100);
 });
 
-test("general dashboard showcases every released Cartesian example", async ({ page, browserName }) => {
+test("general dashboard showcases every catalog example", async ({ page, browserName }) => {
   const page_errors = [];
   page.on("pageerror", (error) => page_errors.push(error.message));
   const backend_query = browserName === "chromium" ? "" : "&backend=canvas2d";
@@ -1150,12 +1153,13 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
     mode: document.getElementById("workspace")?.dataset.demoMode,
   }));
 
+  const total = general_catalog.examples.length;
   expect(page_errors).toEqual([]);
   expect(result.errors).toEqual([]);
-  expect(result.cards).toBe(14);
+  expect(result.cards).toBe(total);
   expect(result.mode).toBe("general");
   expect(result.active.length).toBeGreaterThan(0);
-  expect(result.active.length).toBeLessThan(14);
+  expect(result.active.length).toBeLessThan(total);
   if (browserName === "chromium") {
     expect(result.runtime).toContain("WebGPU");
     expect(result.active.every((entry) => entry.backend === "webgpu")).toBe(true);
@@ -1164,26 +1168,13 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
     expect(result.runtime).toContain("Canvas2D");
     expect(result.active.every((entry) => entry.backend === "canvas2d")).toBe(true);
   }
-  expect(result.summary).toHaveLength(14);
   expect(result.active.every((entry) => entry.pane_count === 1 && entry.pane_index === 0)).toBe(true);
-  expect(result.summary.map((entry) => entry.label)).toEqual([
-    "xy_line",
-    "xy_area",
-    "column",
-    "grouped columns",
-    "stacked columns",
-    "horizontal_bar",
-    "scatter",
-    "bubble",
-    "range_area",
-    "range_bar",
-    "error_bar",
-    "box_plot",
-    "heatmap_grid",
-    "stacked area",
-  ]);
+  expect(result.summary.map((entry) => entry.id)).toEqual(general_catalog.examples.map((example) => example.id));
+  // One catalog covers every general series and layout kind, so both hosts showcase all of them.
   expect(new Set(result.summary.flatMap((entry) => entry.series_kinds))).toEqual(new Set([
-    "xy_line", "xy_area", "column", "horizontal_bar", "scatter", "bubble", "range_area", "range_bar", "error_bar", "box_plot", "heatmap_grid",
+    "xy_line", "xy_area", "range_area", "range_bar", "error_bar", "column", "histogram", "horizontal_bar",
+    "box_plot", "heatmap_grid", "scatter", "bubble", "pie", "radar", "polar_area", "radial_bar",
+    "funnel", "treemap", "sankey", "sunburst",
   ]));
 
   const first_host = page.locator("#general_workspace .general-chart-host").first();
@@ -1194,9 +1185,10 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
     .toBeGreaterThan(scroll_before);
 
   await page.getByRole("button", { name: "Bars" }).click();
-  await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(5);
+  await expect(page.locator("#general_workspace .general-chart-card:not([hidden])"))
+    .toHaveCount(general_catalog.examples.filter((example) => example.category === "bar").length);
   await page.getByRole("button", { name: "All" }).click();
-  await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(14);
+  await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(total);
   const first_card = page.locator("#general_workspace .general-chart-card").first();
   const last = page.locator("#general_workspace .general-chart-card").last();
   await last.scrollIntoViewIfNeeded();
@@ -1221,11 +1213,54 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
   await expect(page.locator("#general_workspace")).toBeHidden();
 });
 
+async function mount_revenue_line(page, chart_options) {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.evaluate(async (chart_options) => {
+    const { create_chart, create_general_legend } = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "300px" });
+    const legend_host = document.createElement("div");
+    legend_host.id = "revenue_legend";
+    document.body.replaceChildren(host, legend_host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "category", scale: "point" } },
+      ...chart_options,
+    });
+    chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "point" });
+    chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear" });
+    const series = chart.add_series("xy_line", { pane: 0, x_axis_id: "x", y_axis_id: "y", title: "Revenue" });
+    series.set_data([{ x: "Q1", y: 12 }, { x: "Q2", y: 18 }, { x: "Q3", y: 15 }]);
+    if (chart_options.generalLegend === undefined) create_general_legend(chart, legend_host, { pane: 0 });
+    chart.render();
+    window.__revenue = { chart, series, host };
+  }, chart_options);
+}
+
+test("engine general legend toggles a series from a real pointer click", async ({ page }) => {
+  await mount_revenue_line(page, { generalLegend: { visible: true } });
+  const box = await page.evaluate(() => {
+    const rect = window.__revenue.host.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  });
+  await page.evaluate(() => {
+    window.__legend_changes = 0;
+    window.__revenue.chart.subscribe_general_legend_change(() => { window.__legend_changes += 1; });
+  });
+  // The single entry is centered in the legend lane at the bottom of the pane.
+  let toggled = false;
+  for (let offset = 4; offset <= 40 && !toggled; offset += 3) {
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height - offset);
+    toggled = await page.evaluate(() => window.__revenue.series.options().visible === false);
+  }
+  expect(toggled).toBe(true);
+  expect(await page.evaluate(() => window.__legend_changes)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.__revenue.chart.general_legend_snapshot(0).items[0].visible)).toBe(false);
+});
+
 test("default general legend toggles visibility with keyboard focus intact", async ({ page }) => {
-  await page.goto("/?theme=dark&demo=general&backend=canvas2d");
-  await page.waitForFunction(() => window.__generalDashboard?.ready === true);
-  const first = page.locator("#general_workspace .general-chart-card").first();
-  await expect(first).toHaveAttribute("data-mounted", "true");
+  await mount_revenue_line(page, {});
+  const first = page.locator("#revenue_legend");
   const button = first.getByRole("button", { name: "Hide Revenue" });
   await expect(button).toHaveAttribute("aria-pressed", "true");
   await button.focus();

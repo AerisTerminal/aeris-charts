@@ -1,12 +1,19 @@
-//! Interactive GPUI gallery for every general series family.
+//! Interactive GPUI gallery for the shared general-chart catalog.
 //! Run with: cargo run -p aeris_charts_render_gpui --features gpui-backend --example gpui_general_gallery
+//!
+//! The browser dashboard (`examples/web_demo/general_dashboard.js`) renders the same
+//! `general_catalog.json` through the public browser API. This example translates each entry
+//! into the equivalent engine calls, so both hosts paint every example from one engine frame.
+
+use std::collections::HashMap;
 
 use aeris_charts_core::options::ChartTheme;
 use aeris_charts_engine::{
-    AxisDimension, CategoryScaleType, ChartEngine, ChartFrame, ContinuousScaleType,
-    FinancialFrameRequest, FlowLink, FlowNode, FunnelStage, GeneralAxisOptions, GeneralLayoutInput,
-    GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GeneralScaleType, GeneralSeriesKind,
-    GeneralSeriesOptions, GeneralXyInput, HierarchyNode, HorizontalDomain,
+    CategoryScaleType, ChartEngine, ChartFrame, ContinuousScaleType, FinancialFrameRequest,
+    FlowLink, FlowNode, FunnelStage, GeneralAxisOptions, GeneralAxisTick, GeneralHistogramOptions,
+    GeneralLayoutInput, GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GeneralPolarOptions,
+    GeneralReferenceOptions, GeneralScaleType, GeneralSeriesKind, GeneralSeriesOptions,
+    GeneralXyInput, HierarchyNode, HorizontalDomain,
 };
 use aeris_charts_render::draw_list::Prim;
 use aeris_charts_render_gpui::{
@@ -15,188 +22,702 @@ use aeris_charts_render_gpui::{
     input::{GpuiChartInput, install_text_metrics},
 };
 use gpui::{
-    App, Bounds, Context, Entity, MouseButton, Render, Window, WindowBounds, WindowOptions, canvas,
-    div, prelude::*, px, rgb, size,
+    App, Bounds, Context, ElementId, Entity, MouseButton, Render, Window, WindowBounds,
+    WindowOptions, canvas, div, prelude::*, px, rgb, size,
 };
 use gpui_platform::application;
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
 
 const WIDTH: f32 = 1180.0;
 const HEIGHT: f32 = 820.0;
+const CATALOG: &str = include_str!("../../../examples/web_demo/general_catalog.json");
 
-fn hierarchy() -> GeneralLayoutInput {
-    let node = |id: &str, parent: Option<&str>, label: &str, value: Option<f64>| HierarchyNode {
-        id: id.into(),
-        parent: parent.map(str::to_owned),
-        label: label.into(),
-        value,
-    };
-    GeneralLayoutInput::Hierarchy(vec![
-        node("all", None, "Revenue", None),
-        node("product", Some("all"), "Product", None),
-        node("service", Some("all"), "Services", None),
-        node("other", Some("all"), "Other", None),
-        node("core", Some("product"), "Core", Some(44.0)),
-        node("mobile", Some("product"), "Mobile", Some(24.0)),
-        node("support", Some("service"), "Support", Some(18.0)),
-        node("advisory", Some("service"), "Advisory", Some(10.0)),
-        node("license", Some("other"), "Licensing", Some(8.0)),
-        node("partner", Some("other"), "Partners", Some(6.0)),
-    ])
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Catalog {
+    #[serde(rename = "categories")]
+    _categories: Vec<Value>,
+    examples: Vec<Example>,
 }
 
-fn input(kind: GeneralLayoutSeriesKind) -> GeneralLayoutInput {
-    match kind {
-        GeneralLayoutSeriesKind::Funnel => GeneralLayoutInput::Funnel(
-            [
-                ("visit", "Visitors", 120.0),
-                ("interest", "Interested", 89.0),
-                ("trial", "Trial", 63.0),
-                ("proposal", "Proposal", 42.0),
-                ("won", "Won", 27.0),
-            ]
-            .into_iter()
-            .map(|(id, label, value)| FunnelStage {
-                id: id.into(),
-                label: label.into(),
-                value,
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Example {
+    id: String,
+    #[serde(rename = "title")]
+    _title: String,
+    #[serde(rename = "category")]
+    _category: String,
+    horizontal_domain: DomainSpec,
+    #[serde(default = "default_true")]
+    grid: bool,
+    #[serde(default)]
+    axes: Vec<AxisSpec>,
+    #[serde(default)]
+    series: Vec<SeriesSpec>,
+    #[serde(default)]
+    layout_series: Vec<LayoutSpec>,
+    #[serde(default)]
+    references: Vec<Map<String, Value>>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum DomainSpec {
+    Continuous { scale: Option<String> },
+    Temporal,
+    Category { scale: Option<String> },
+    Polar,
+    Layout,
+}
+
+/// Browser `general_axis_options` without `pane`; omitted fields keep the engine defaults.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AxisSpec {
+    id: String,
+    dimension: String,
+    scale: String,
+    position: Option<String>,
+    domain: Option<Value>,
+    reverse: Option<bool>,
+    visible: Option<bool>,
+    title: Option<String>,
+    tick_count: Option<u16>,
+    ticks: Option<Vec<GeneralAxisTick>>,
+    min_tick_gap: Option<f64>,
+    domain_padding: Option<f64>,
+    band_padding_inner: Option<f64>,
+    band_padding_outer: Option<f64>,
+    zero_line: Option<bool>,
+    grid_visible: Option<bool>,
+    line_visible: Option<bool>,
+}
+
+/// Browser `general_series_options` without `pane`, plus the series kind and object rows.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeriesSpec {
+    kind: String,
+    data: Vec<Map<String, Value>>,
+    x_axis_id: Option<String>,
+    y_axis_id: Option<String>,
+    visible: Option<bool>,
+    title: Option<String>,
+    color: Option<String>,
+    point_radius: Option<f64>,
+    point_markers: Option<bool>,
+    point_symbol: Option<String>,
+    line_width: Option<f64>,
+    line_style: Option<String>,
+    interpolation: Option<String>,
+    connect_missing: Option<bool>,
+    fill_opacity: Option<f64>,
+    polar: Option<GeneralPolarOptions>,
+    fill_gradient: Option<[String; 2]>,
+    baseline_value: Option<f64>,
+    baseline_policy: Option<String>,
+    data_labels: Option<bool>,
+    bar_gap: Option<f64>,
+    bar_max_width: Option<f64>,
+    bar_corner_radius: Option<f64>,
+    heatmap_value_domain: Option<[f64; 2]>,
+    heatmap_low_color: Option<String>,
+    heatmap_high_color: Option<String>,
+    box_fill_color: Option<String>,
+    box_median_color: Option<String>,
+    group_id: Option<String>,
+    stack_id: Option<String>,
+    stack_mode: Option<String>,
+    histogram: Option<HistogramSpec>,
+}
+
+/// Browser `general_histogram_options`; omitted fields keep the engine defaults.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistogramSpec {
+    bin_count: Option<usize>,
+    bin_width: Option<f64>,
+    normalization: Option<String>,
+    cumulative: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LayoutSpec {
+    kind: String,
+    data: LayoutData,
+    title: Option<String>,
+    color: Option<String>,
+    data_labels: Option<bool>,
+    visible: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum LayoutData {
+    Funnel {
+        stages: Vec<FunnelStage>,
+    },
+    Hierarchy {
+        nodes: Vec<HierarchyNode>,
+    },
+    Flow {
+        nodes: Vec<FlowNode>,
+        links: Vec<FlowLink>,
+    },
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Maps a browser snake_case option value onto the engine enum of the same name.
+fn engine_enum<T: DeserializeOwned>(name: &str) -> T {
+    let pascal = name
+        .split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_ascii_uppercase().to_string() + chars.as_str()
             })
-            .collect(),
-        ),
-        GeneralLayoutSeriesKind::Treemap | GeneralLayoutSeriesKind::Sunburst => hierarchy(),
-        GeneralLayoutSeriesKind::Sankey => GeneralLayoutInput::Flow {
-            nodes: ["Visitors", "Organic", "Paid", "Trial", "Direct", "Won"]
-                .into_iter()
-                .map(|id| FlowNode {
-                    id: id.into(),
-                    label: id.into(),
-                })
-                .collect(),
-            links: [
-                ("Visitors", "Organic", 64.0),
-                ("Visitors", "Paid", 42.0),
-                ("Organic", "Trial", 39.0),
-                ("Paid", "Trial", 28.0),
-                ("Organic", "Direct", 25.0),
-                ("Paid", "Direct", 14.0),
-                ("Trial", "Won", 45.0),
-                ("Direct", "Won", 27.0),
-            ]
-            .into_iter()
-            .map(|(source, target, value)| FlowLink {
-                source: source.into(),
-                target: target.into(),
-                value,
-            })
-            .collect(),
+        })
+        .collect::<String>();
+    serde_json::from_value(Value::String(pascal))
+        .unwrap_or_else(|_| panic!("catalog value `{name}` has no engine equivalent"))
+}
+
+fn scale_type(name: &str) -> GeneralScaleType {
+    engine_enum(match name {
+        "log" => "logarithmic",
+        "symlog" => "symmetric_log",
+        other => other,
+    })
+}
+
+fn horizontal_domain(spec: &DomainSpec) -> HorizontalDomain {
+    match spec {
+        DomainSpec::Continuous { scale } => HorizontalDomain::Continuous {
+            scale: match scale.as_deref().unwrap_or("linear") {
+                "linear" => ContinuousScaleType::Linear,
+                "log" => ContinuousScaleType::Logarithmic,
+                "symlog" => ContinuousScaleType::SymmetricLog,
+                other => panic!("unknown continuous domain scale `{other}`"),
+            },
         },
+        DomainSpec::Temporal => HorizontalDomain::Temporal,
+        DomainSpec::Category { scale } => HorizontalDomain::Category {
+            scale: match scale.as_deref().unwrap_or("band") {
+                "band" => CategoryScaleType::Band,
+                "point" => CategoryScaleType::Point,
+                other => panic!("unknown category domain scale `{other}`"),
+            },
+        },
+        DomainSpec::Polar => HorizontalDomain::Polar,
+        DomainSpec::Layout => HorizontalDomain::Layout,
     }
 }
 
-fn general_input(kind: GeneralSeriesKind) -> GeneralXyInput {
+fn axis_options(spec: &AxisSpec) -> GeneralAxisOptions {
+    let scale = scale_type(&spec.scale);
+    let mut axis = GeneralAxisOptions::new(&spec.id, 0, engine_enum(&spec.dimension), scale);
+    axis.position = spec.position.as_deref().map(engine_enum);
+    if let Some(domain) = spec.domain.as_ref().filter(|domain| *domain != "auto") {
+        let values = domain
+            .as_array()
+            .expect("an axis domain is \"auto\" or an array");
+        axis.domain = match scale {
+            GeneralScaleType::Band
+            | GeneralScaleType::Point
+            | GeneralScaleType::AngularCategory => {
+                serde_json::from_value(serde_json::json!({ "Category": values }))
+            }
+            GeneralScaleType::Temporal => {
+                serde_json::from_value(serde_json::json!({ "Temporal": values }))
+            }
+            _ => serde_json::from_value(serde_json::json!({ "Numeric": values })),
+        }
+        .expect("the axis domain matches its scale");
+    }
+    axis.reverse = spec.reverse.unwrap_or(axis.reverse);
+    axis.visible = spec.visible.unwrap_or(axis.visible);
+    axis.title = spec.title.clone();
+    axis.tick_count = spec.tick_count;
+    axis.ticks = spec.ticks.clone();
+    axis.min_tick_gap = spec.min_tick_gap.unwrap_or(axis.min_tick_gap);
+    axis.domain_padding = spec.domain_padding.unwrap_or(axis.domain_padding);
+    axis.band_padding_inner = spec.band_padding_inner.unwrap_or(axis.band_padding_inner);
+    axis.band_padding_outer = spec.band_padding_outer.unwrap_or(axis.band_padding_outer);
+    axis.zero_line = spec.zero_line.unwrap_or(axis.zero_line);
+    axis.grid_visible = spec.grid_visible.unwrap_or(axis.grid_visible);
+    axis.line_visible = spec.line_visible.unwrap_or(axis.line_visible);
+    axis
+}
+
+const ROW_FIELDS: [&str; 18] = [
+    "x", "y", "low", "high", "size", "label", "color", "symbol", "x_low", "x_high", "y_low",
+    "y_high", "min", "q1", "median", "q3", "max", "value",
+];
+
+/// One numeric row channel; `null` or an absent field is a missing value.
+fn channel(rows: &[Map<String, Value>], field: &str) -> (Vec<f64>, Option<Vec<u8>>) {
+    let values = rows
+        .iter()
+        .map(|row| row.get(field).and_then(Value::as_f64))
+        .collect::<Vec<_>>();
+    let valid = values.iter().any(Option::is_none).then(|| {
+        values
+            .iter()
+            .map(|value| u8::from(value.is_some()))
+            .collect()
+    });
+    (
+        values
+            .into_iter()
+            .map(|value| value.unwrap_or(0.0))
+            .collect(),
+        valid,
+    )
+}
+
+/// Error bounds always carry a validity mask, as the browser row converter sends them.
+fn bound(rows: &[Map<String, Value>], field: &str) -> (Vec<f64>, Option<Vec<u8>>) {
+    let (values, valid) = channel(rows, field);
+    let valid = valid.unwrap_or_else(|| vec![1; values.len()]);
+    (values, Some(valid))
+}
+
+fn categories(rows: &[Map<String, Value>], field: &str) -> (Vec<String>, Vec<u32>) {
+    let mut categories = Vec::<String>::new();
+    let indices = rows
+        .iter()
+        .map(|row| {
+            let value = row
+                .get(field)
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("category rows need a string `{field}`"));
+            let index = categories
+                .iter()
+                .position(|category| category == value)
+                .unwrap_or_else(|| {
+                    categories.push(value.to_owned());
+                    categories.len() - 1
+                });
+            u32::try_from(index).expect("catalog categories fit in u32")
+        })
+        .collect();
+    (categories, indices)
+}
+
+/// Converts browser object rows into engine columns, choosing the X shape the same way as the
+/// browser package: by series kind first, then by the bound X axis scale.
+fn xy_input(
+    kind: GeneralSeriesKind,
+    x_scale: GeneralScaleType,
+    rows: &[Map<String, Value>],
+) -> GeneralXyInput {
     use GeneralSeriesKind as Kind;
-    let x = (0..8).map(f64::from).collect::<Vec<_>>();
-    let y = vec![22.0, 34.0, 27.0, 48.0, 41.0, 61.0, 54.0, 72.0];
-    let categories = ["North", "South", "East", "West", "Online", "Partner"]
-        .map(str::to_owned)
-        .to_vec();
-    match kind {
-        Kind::XyLine | Kind::XyArea | Kind::Scatter => GeneralXyInput::Numeric {
+    for row in rows {
+        if let Some(field) = row.keys().find(|key| !ROW_FIELDS.contains(&key.as_str())) {
+            panic!("the gallery does not translate row field `{field}`");
+        }
+    }
+    if kind == Kind::Histogram {
+        let (values, values_valid) = channel(rows, "value");
+        return GeneralXyInput::Values {
             ids: None,
-            x,
-            y,
-            y_valid: None,
-        },
-        Kind::Bubble => GeneralXyInput::Bubble {
-            ids: None,
-            x,
-            y,
-            y_valid: None,
-            size: vec![12.0, 22.0, 17.0, 31.0, 26.0, 39.0, 32.0, 45.0],
-            size_valid: None,
-        },
-        Kind::RangeArea => GeneralXyInput::RangeNumeric {
-            ids: None,
-            x,
-            low: y.iter().map(|value| value - 8.0).collect(),
-            low_valid: None,
-            high: y.iter().map(|value| value + 9.0).collect(),
-            high_valid: None,
-        },
-        Kind::RangeBar => GeneralXyInput::RangeCategory {
-            ids: None,
-            categories,
-            category_indices: (0..6).collect(),
-            low: vec![12.0, 22.0, 17.0, 31.0, 26.0, 39.0],
-            low_valid: None,
-            high: vec![35.0, 47.0, 41.0, 60.0, 55.0, 70.0],
-            high_valid: None,
-        },
-        Kind::ErrorBar => GeneralXyInput::ErrorNumeric {
-            ids: None,
-            x: x.clone(),
-            y: y.clone(),
-            y_valid: None,
-            x_low: x.iter().map(|value| value - 0.2).collect(),
-            x_low_valid: None,
-            x_high: x.iter().map(|value| value + 0.2).collect(),
-            x_high_valid: None,
-            y_low: y.iter().map(|value| value - 7.0).collect(),
-            y_low_valid: None,
-            y_high: y.iter().map(|value| value + 7.0).collect(),
-            y_high_valid: None,
-        },
+            values,
+            values_valid,
+        };
+    }
+    let category_kind = matches!(
+        kind,
         Kind::Column
-        | Kind::HorizontalBar
-        | Kind::Pie
-        | Kind::Radar
-        | Kind::RadialBar
-        | Kind::PolarArea => GeneralXyInput::Category {
-            ids: None,
-            categories,
-            category_indices: (0..6).collect(),
-            y: vec![35.0, 56.0, 42.0, 68.0, 51.0, 74.0],
-            y_valid: None,
-        },
-        Kind::BoxPlot => GeneralXyInput::BoxCategory {
-            ids: None,
-            categories,
-            category_indices: (0..6).collect(),
-            min: vec![12.0, 24.0, 17.0, 35.0, 29.0, 41.0],
-            min_valid: None,
-            q1: vec![19.0, 31.0, 25.0, 42.0, 36.0, 48.0],
-            q1_valid: None,
-            median: vec![26.0, 39.0, 32.0, 51.0, 43.0, 58.0],
-            median_valid: None,
-            q3: vec![33.0, 48.0, 39.0, 60.0, 50.0, 67.0],
-            q3_valid: None,
-            max: vec![41.0, 57.0, 46.0, 70.0, 59.0, 76.0],
-            max_valid: None,
-        },
-        Kind::HeatmapGrid => {
-            let mut x_indices = Vec::with_capacity(24);
-            let mut y_indices = Vec::with_capacity(24);
-            let mut values = Vec::with_capacity(24);
-            for row in 0..4 {
-                for column in 0..6 {
-                    x_indices.push(column);
-                    y_indices.push(row);
-                    values.push(((column * 7 + row * 13 + 11) % 28 + 4) as f64);
+            | Kind::HorizontalBar
+            | Kind::Pie
+            | Kind::Radar
+            | Kind::PolarArea
+            | Kind::RadialBar
+            | Kind::BoxPlot
+            | Kind::HeatmapGrid
+    );
+    let numeric_kind = matches!(kind, Kind::Scatter | Kind::Bubble);
+    let range = matches!(kind, Kind::RangeArea | Kind::RangeBar);
+    if !numeric_kind
+        && (category_kind
+            || matches!(
+                x_scale,
+                GeneralScaleType::Band
+                    | GeneralScaleType::Point
+                    | GeneralScaleType::AngularCategory
+            ))
+    {
+        let (categories, category_indices) = categories(rows, "x");
+        return match kind {
+            Kind::HeatmapGrid => {
+                let (y_categories, y_category_indices) = self::categories(rows, "y");
+                let (value, value_valid) = channel(rows, "value");
+                GeneralXyInput::HeatmapCategoryCategory {
+                    ids: None,
+                    x_categories: categories,
+                    x_category_indices: category_indices,
+                    y_categories,
+                    y_category_indices,
+                    value,
+                    value_valid,
                 }
             }
-            GeneralXyInput::HeatmapCategoryCategory {
+            Kind::BoxPlot => {
+                let (min, min_valid) = channel(rows, "min");
+                let (q1, q1_valid) = channel(rows, "q1");
+                let (median, median_valid) = channel(rows, "median");
+                let (q3, q3_valid) = channel(rows, "q3");
+                let (max, max_valid) = channel(rows, "max");
+                GeneralXyInput::BoxCategory {
+                    ids: None,
+                    categories,
+                    category_indices,
+                    min,
+                    min_valid,
+                    q1,
+                    q1_valid,
+                    median,
+                    median_valid,
+                    q3,
+                    q3_valid,
+                    max,
+                    max_valid,
+                }
+            }
+            Kind::ErrorBar => {
+                let (y, y_valid) = channel(rows, "y");
+                let (y_low, y_low_valid) = bound(rows, "y_low");
+                let (y_high, y_high_valid) = bound(rows, "y_high");
+                GeneralXyInput::ErrorCategory {
+                    ids: None,
+                    categories,
+                    category_indices,
+                    y,
+                    y_valid,
+                    y_low,
+                    y_low_valid,
+                    y_high,
+                    y_high_valid,
+                }
+            }
+            _ if range => {
+                let (low, low_valid) = channel(rows, "low");
+                let (high, high_valid) = channel(rows, "high");
+                GeneralXyInput::RangeCategory {
+                    ids: None,
+                    categories,
+                    category_indices,
+                    low,
+                    low_valid,
+                    high,
+                    high_valid,
+                }
+            }
+            _ => {
+                let (y, y_valid) = channel(rows, "y");
+                GeneralXyInput::Category {
+                    ids: None,
+                    categories,
+                    category_indices,
+                    y,
+                    y_valid,
+                }
+            }
+        };
+    }
+    let (x, _) = channel(rows, "x");
+    if !numeric_kind && x_scale == GeneralScaleType::Temporal {
+        // Catalog timestamps are whole epoch milliseconds, exactly representable in f64.
+        let x_epoch_ms = x.iter().map(|value| *value as i64).collect();
+        return if range {
+            let (low, low_valid) = channel(rows, "low");
+            let (high, high_valid) = channel(rows, "high");
+            GeneralXyInput::RangeTemporal {
                 ids: None,
-                x_categories: categories,
-                x_category_indices: x_indices,
-                y_categories: ["Mon", "Tue", "Wed", "Thu"].map(str::to_owned).to_vec(),
-                y_category_indices: y_indices,
-                value: values,
-                value_valid: None,
+                x_epoch_ms,
+                low,
+                low_valid,
+                high,
+                high_valid,
+            }
+        } else {
+            assert!(
+                kind != Kind::ErrorBar,
+                "temporal error bars are not in the catalog"
+            );
+            let (y, y_valid) = channel(rows, "y");
+            GeneralXyInput::Temporal {
+                ids: None,
+                x_epoch_ms,
+                y,
+                y_valid,
+            }
+        };
+    }
+    match kind {
+        Kind::Bubble => {
+            let (y, y_valid) = channel(rows, "y");
+            let (size, size_valid) = channel(rows, "size");
+            GeneralXyInput::Bubble {
+                ids: None,
+                x,
+                y,
+                y_valid,
+                size,
+                size_valid,
+            }
+        }
+        Kind::ErrorBar => {
+            let (y, y_valid) = channel(rows, "y");
+            let (x_low, x_low_valid) = bound(rows, "x_low");
+            let (x_high, x_high_valid) = bound(rows, "x_high");
+            let (y_low, y_low_valid) = bound(rows, "y_low");
+            let (y_high, y_high_valid) = bound(rows, "y_high");
+            GeneralXyInput::ErrorNumeric {
+                ids: None,
+                x,
+                y,
+                y_valid,
+                x_low,
+                x_low_valid,
+                x_high,
+                x_high_valid,
+                y_low,
+                y_low_valid,
+                y_high,
+                y_high_valid,
+            }
+        }
+        _ if range => {
+            let (low, low_valid) = channel(rows, "low");
+            let (high, high_valid) = channel(rows, "high");
+            GeneralXyInput::RangeNumeric {
+                ids: None,
+                x,
+                low,
+                low_valid,
+                high,
+                high_valid,
+            }
+        }
+        _ => {
+            let (y, y_valid) = channel(rows, "y");
+            GeneralXyInput::Numeric {
+                ids: None,
+                x,
+                y,
+                y_valid,
             }
         }
     }
 }
+
+/// Sparse per-row text such as labels, colors, and symbols; `None` when no row sets it.
+fn row_text(rows: &[Map<String, Value>], field: &str) -> Option<Vec<Option<String>>> {
+    let values = rows
+        .iter()
+        .map(|row| row.get(field).and_then(Value::as_str).map(str::to_owned))
+        .collect::<Vec<_>>();
+    values.iter().any(Option::is_some).then_some(values)
+}
+
+fn series_options(
+    kind: GeneralSeriesKind,
+    dataset: aeris_charts_engine::GeneralDatasetId,
+    spec: &SeriesSpec,
+) -> GeneralSeriesOptions {
+    use GeneralSeriesKind as Kind;
+    let x = spec.x_axis_id.as_deref().unwrap_or("x");
+    let y = spec.y_axis_id.as_deref().unwrap_or("y");
+    let mut options = match kind {
+        Kind::XyLine => GeneralSeriesOptions::xy_line(0, dataset, x, y),
+        Kind::XyArea => GeneralSeriesOptions::xy_area(0, dataset, x, y),
+        Kind::RangeArea => GeneralSeriesOptions::range_area(0, dataset, x, y),
+        Kind::RangeBar => GeneralSeriesOptions::range_bar(0, dataset, x, y),
+        Kind::ErrorBar => GeneralSeriesOptions::error_bar(0, dataset, x, y),
+        Kind::Column => GeneralSeriesOptions::column(0, dataset, x, y),
+        Kind::HorizontalBar => GeneralSeriesOptions::horizontal_bar(0, dataset, x, y),
+        Kind::BoxPlot => GeneralSeriesOptions::box_plot(0, dataset, x, y),
+        Kind::HeatmapGrid => GeneralSeriesOptions::heatmap_grid(0, dataset, x, y),
+        Kind::Scatter => GeneralSeriesOptions::scatter(0, dataset, x, y),
+        Kind::Bubble => GeneralSeriesOptions::bubble(0, dataset, x, y),
+        Kind::Pie => GeneralSeriesOptions::pie(0, dataset, x, y),
+        Kind::Radar => GeneralSeriesOptions::radar(0, dataset, x, y),
+        Kind::RadialBar => GeneralSeriesOptions::radial_bar(0, dataset, x, y),
+        Kind::PolarArea => GeneralSeriesOptions::polar_area(0, dataset, x, y),
+        Kind::Histogram => GeneralSeriesOptions::histogram(0, dataset, x, y),
+    };
+    // Browser defaults: options the host omits take these values in `add_series`.
+    options.visible = spec.visible.unwrap_or(true);
+    options.title = spec.title.clone().unwrap_or_default();
+    options.color = spec.color.clone();
+    options.point_radius = spec.point_radius.unwrap_or(3.0);
+    options.point_markers = spec.point_markers.unwrap_or(false);
+    options.point_symbol = engine_enum(spec.point_symbol.as_deref().unwrap_or("circle"));
+    options.line_width = spec.line_width.unwrap_or(2.0);
+    options.line_style = engine_enum(spec.line_style.as_deref().unwrap_or("solid"));
+    options.interpolation = engine_enum(spec.interpolation.as_deref().unwrap_or("linear"));
+    options.connect_missing = spec.connect_missing.unwrap_or(false);
+    options.fill_opacity = spec.fill_opacity.unwrap_or(
+        if matches!(kind, Kind::Pie | Kind::PolarArea | Kind::RadialBar) {
+            1.0
+        } else {
+            aeris_charts_engine::DEFAULT_GENERAL_FILL_OPACITY
+        },
+    );
+    options.polar = spec.polar.unwrap_or_default();
+    options.fill_gradient = spec.fill_gradient.clone();
+    options.baseline_value = spec.baseline_value;
+    options.baseline_policy = engine_enum(spec.baseline_policy.as_deref().unwrap_or("zero"));
+    options.data_labels = spec.data_labels.unwrap_or(false);
+    options.bar_gap = spec.bar_gap.unwrap_or(0.0);
+    options.bar_max_width = spec.bar_max_width;
+    options.bar_corner_radius = spec.bar_corner_radius.unwrap_or(0.0);
+    options.heatmap_value_domain = spec.heatmap_value_domain;
+    options.heatmap_low_color = spec.heatmap_low_color.clone();
+    options.heatmap_high_color = spec.heatmap_high_color.clone();
+    options.box_fill_color = spec.box_fill_color.clone();
+    options.box_median_color = spec.box_median_color.clone();
+    options.group_id = spec.group_id.clone();
+    options.stack_id = spec.stack_id.clone();
+    options.stack_mode = engine_enum(spec.stack_mode.as_deref().unwrap_or("normal"));
+    if let Some(histogram) = &spec.histogram {
+        options.histogram = GeneralHistogramOptions {
+            bin_count: histogram.bin_count,
+            bin_width: histogram.bin_width,
+            normalization: engine_enum(histogram.normalization.as_deref().unwrap_or("count")),
+            cumulative: histogram.cumulative.unwrap_or(false),
+        };
+    }
+    options
+}
+
+/// Tags raw reference coordinates with the scale family of the axis they bind to, the same
+/// normalization the browser package applies before the engine validates the reference.
+fn reference_options(
+    reference: &Map<String, Value>,
+    scales: &HashMap<&str, GeneralScaleType>,
+) -> GeneralReferenceOptions {
+    let mut reference = reference.clone();
+    let axis_of = |field: &str| -> &str {
+        let axis_field = match field {
+            "value" => "axis_id",
+            "x" | "x_from" | "x_to" => "x_axis_id",
+            _ => "y_axis_id",
+        };
+        reference
+            .get(axis_field)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("a reference needs `{axis_field}`"))
+    };
+    let mut tagged = Vec::new();
+    for field in ["value", "x", "y", "x_from", "x_to", "y_from", "y_to"] {
+        let Some(value) = reference.get(field) else {
+            continue;
+        };
+        let family = match scales[axis_of(field)] {
+            GeneralScaleType::Band
+            | GeneralScaleType::Point
+            | GeneralScaleType::AngularCategory => "category",
+            GeneralScaleType::Temporal => "temporal",
+            _ => "numeric",
+        };
+        tagged.push((field, serde_json::json!({ "type": family, "value": value })));
+    }
+    for (field, value) in tagged {
+        reference.insert(field.to_owned(), value);
+    }
+    reference.insert("pane".to_owned(), Value::from(0));
+    serde_json::from_value(Value::Object(reference)).expect("catalog references are valid")
+}
+
+fn build_engine(example: &Example) -> ChartEngine {
+    let mut engine = ChartEngine::new_with_initial_domain(
+        520.0,
+        310.0,
+        1.0,
+        horizontal_domain(&example.horizontal_domain),
+    )
+    .expect("a catalog pane can be the initial pane");
+    engine.set_theme(ChartTheme::Light);
+    engine
+        .apply_options(
+            &serde_json::json!({
+                "grid": {
+                    "vertLines": { "visible": example.grid },
+                    "horzLines": { "visible": example.grid },
+                },
+                "generalLegend": { "visible": true },
+            })
+            .to_string(),
+        )
+        .expect("gallery chart options");
+    let mut scales = HashMap::new();
+    for spec in &example.axes {
+        let axis = axis_options(spec);
+        scales.insert(spec.id.as_str(), axis.scale);
+        engine.add_general_axis(axis).expect("catalog axis");
+    }
+    for spec in &example.series {
+        let kind: GeneralSeriesKind = engine_enum(&spec.kind);
+        let x_axis = spec.x_axis_id.as_deref().unwrap_or("x");
+        let input = xy_input(kind, scales[x_axis], &spec.data);
+        let dataset = engine
+            .create_general_xy_dataset(input.clone())
+            .expect("catalog data");
+        let labels = row_text(&spec.data, "label");
+        let colors = row_text(&spec.data, "color");
+        let symbols = row_text(&spec.data, "symbol");
+        if labels.is_some() || colors.is_some() || symbols.is_some() {
+            engine
+                .replace_general_xy_dataset_styled(dataset, input, labels, colors, symbols)
+                .expect("catalog row styles");
+        }
+        engine
+            .add_general_series(series_options(kind, dataset, spec))
+            .unwrap_or_else(|error| panic!("{}: {error:?}", example.id));
+    }
+    for spec in &example.layout_series {
+        let input = match &spec.data {
+            LayoutData::Funnel { stages } => GeneralLayoutInput::Funnel(stages.clone()),
+            LayoutData::Hierarchy { nodes } => GeneralLayoutInput::Hierarchy(nodes.clone()),
+            LayoutData::Flow { nodes, links } => GeneralLayoutInput::Flow {
+                nodes: nodes.clone(),
+                links: links.clone(),
+            },
+        };
+        let dataset = engine
+            .create_general_layout_dataset(input)
+            .expect("catalog layout data");
+        let kind: GeneralLayoutSeriesKind = engine_enum(&spec.kind);
+        let mut options = GeneralLayoutSeriesOptions::new(0, dataset, kind);
+        options.title = spec.title.clone().unwrap_or_default();
+        if let Some(color) = &spec.color {
+            options.color = color.clone();
+        }
+        options.data_labels = spec.data_labels.unwrap_or(false);
+        options.visible = spec.visible.unwrap_or(true);
+        engine
+            .add_general_layout_series(options)
+            .expect("catalog layout series");
+    }
+    for reference in &example.references {
+        engine
+            .add_general_reference(reference_options(reference, &scales))
+            .expect("catalog reference");
+    }
+    engine
+}
+
 struct ChartCard {
-    title: &'static str,
+    id: ElementId,
     engine: ChartEngine,
     renderer: GpuiChartRenderer,
     frame: ChartFrame,
@@ -206,151 +727,10 @@ struct ChartCard {
 }
 
 impl ChartCard {
-    fn new_layout(kind: GeneralLayoutSeriesKind, title: &'static str, color: &str) -> Self {
-        let mut engine =
-            ChartEngine::new_with_initial_domain(520.0, 310.0, 1.0, HorizontalDomain::Layout)
-                .expect("a layout pane can be the initial pane");
-        engine.set_theme(ChartTheme::Light);
-        let dataset = engine
-            .create_general_layout_dataset(input(kind))
-            .expect("gallery data is valid");
-        let mut options = GeneralLayoutSeriesOptions::new(0, dataset, kind);
-        options.title = title.into();
-        options.color = color.into();
-        options.data_labels = true;
-        engine
-            .add_general_layout_series(options)
-            .expect("the gallery series binds");
+    fn new(example: &Example) -> Self {
         Self {
-            title,
-            engine,
-            renderer: GpuiChartRenderer::new(),
-            frame: ChartFrame::default(),
-            axis: Vec::new(),
-            input: GpuiChartInput::default(),
-            built_for: (0.0, 0.0, 0.0),
-        }
-    }
-
-    fn new_general(kind: GeneralSeriesKind, title: &'static str, color: &str, donut: bool) -> Self {
-        use GeneralSeriesKind as Kind;
-        let polar = matches!(
-            kind,
-            Kind::Pie | Kind::Radar | Kind::RadialBar | Kind::PolarArea
-        );
-        let category = matches!(
-            kind,
-            Kind::Column | Kind::RangeBar | Kind::BoxPlot | Kind::HeatmapGrid
-        );
-        let domain = if polar {
-            HorizontalDomain::Polar
-        } else if category {
-            HorizontalDomain::Category {
-                scale: CategoryScaleType::Band,
-            }
-        } else {
-            HorizontalDomain::Continuous {
-                scale: ContinuousScaleType::Linear,
-            }
-        };
-        let mut engine = ChartEngine::new_with_initial_domain(520.0, 310.0, 1.0, domain)
-            .expect("a general pane can be the initial pane");
-        engine.set_theme(ChartTheme::Light);
-        let (x_dimension, x_scale, y_dimension, y_scale) = if polar {
-            (
-                AxisDimension::Angle,
-                GeneralScaleType::AngularCategory,
-                AxisDimension::Radius,
-                GeneralScaleType::RadialLinear,
-            )
-        } else if kind == Kind::HorizontalBar {
-            (
-                AxisDimension::X,
-                GeneralScaleType::Linear,
-                AxisDimension::Y,
-                GeneralScaleType::Band,
-            )
-        } else if kind == Kind::HeatmapGrid {
-            (
-                AxisDimension::X,
-                GeneralScaleType::Band,
-                AxisDimension::Y,
-                GeneralScaleType::Band,
-            )
-        } else {
-            (
-                AxisDimension::X,
-                if category {
-                    GeneralScaleType::Band
-                } else {
-                    GeneralScaleType::Linear
-                },
-                AxisDimension::Y,
-                GeneralScaleType::Linear,
-            )
-        };
-        let mut x_axis = GeneralAxisOptions::new("x", 0, x_dimension, x_scale);
-        let mut y_axis = GeneralAxisOptions::new("y", 0, y_dimension, y_scale);
-        // Cartesian and radar charts read against a grid; sector families show proportions
-        // without one, and heatmap cells already tile the plot.
-        if polar && kind != Kind::Radar {
-            x_axis.visible = false;
-            y_axis.visible = false;
-        } else if kind != Kind::HeatmapGrid {
-            engine
-                .apply_options(
-                    r#"{"grid":{"vertLines":{"visible":true},"horzLines":{"visible":true}}}"#,
-                )
-                .expect("gallery grid options");
-        }
-        engine.add_general_axis(x_axis).expect("gallery X axis");
-        engine.add_general_axis(y_axis).expect("gallery Y axis");
-        let dataset = engine
-            .create_general_xy_dataset(general_input(kind))
-            .expect("gallery general data");
-        let mut options = match kind {
-            Kind::XyLine => GeneralSeriesOptions::xy_line(0, dataset, "x", "y"),
-            Kind::XyArea => GeneralSeriesOptions::xy_area(0, dataset, "x", "y"),
-            Kind::RangeArea => GeneralSeriesOptions::range_area(0, dataset, "x", "y"),
-            Kind::RangeBar => GeneralSeriesOptions::range_bar(0, dataset, "x", "y"),
-            Kind::ErrorBar => GeneralSeriesOptions::error_bar(0, dataset, "x", "y"),
-            Kind::Column => GeneralSeriesOptions::column(0, dataset, "x", "y"),
-            Kind::HorizontalBar => GeneralSeriesOptions::horizontal_bar(0, dataset, "x", "y"),
-            Kind::BoxPlot => GeneralSeriesOptions::box_plot(0, dataset, "x", "y"),
-            Kind::HeatmapGrid => GeneralSeriesOptions::heatmap_grid(0, dataset, "x", "y"),
-            Kind::Scatter => GeneralSeriesOptions::scatter(0, dataset, "x", "y"),
-            Kind::Bubble => GeneralSeriesOptions::bubble(0, dataset, "x", "y"),
-            Kind::Pie => GeneralSeriesOptions::pie(0, dataset, "x", "y"),
-            Kind::Radar => GeneralSeriesOptions::radar(0, dataset, "x", "y"),
-            Kind::RadialBar => GeneralSeriesOptions::radial_bar(0, dataset, "x", "y"),
-            Kind::PolarArea => GeneralSeriesOptions::polar_area(0, dataset, "x", "y"),
-        };
-        options.title = title.into();
-        options.color = if matches!(kind, Kind::Pie | Kind::PolarArea | Kind::RadialBar) {
-            None
-        } else {
-            Some(color.into())
-        };
-        options.point_markers = matches!(kind, Kind::XyLine | Kind::XyArea);
-        options.point_radius = if kind == Kind::Scatter { 6.0 } else { 4.0 };
-        options.fill_opacity = if matches!(kind, Kind::XyArea | Kind::RangeArea | Kind::Radar) {
-            0.42
-        } else {
-            options.fill_opacity
-        };
-        if donut {
-            options.polar.inner_radius = 0.48;
-        }
-        if kind == Kind::HeatmapGrid {
-            options.heatmap_low_color = Some("#e0f2fe".into());
-            options.heatmap_high_color = Some("#0369a1".into());
-        }
-        engine
-            .add_general_series(options)
-            .expect("gallery general series");
-        Self {
-            title,
-            engine,
+            id: ElementId::Name(example.id.clone().into()),
+            engine: build_engine(example),
             renderer: GpuiChartRenderer::new(),
             frame: ChartFrame::default(),
             axis: Vec::new(),
@@ -456,7 +836,7 @@ impl Render for ChartCard {
             .p_2()
             .child(
                 div()
-                    .id(self.title)
+                    .id(self.id.clone())
                     .flex_1()
                     .min_h_0()
                     .on_hover(move |hovered, _, app| {
@@ -511,37 +891,12 @@ struct Gallery {
 
 impl Gallery {
     fn new(cx: &mut App) -> Self {
-        use GeneralSeriesKind as Kind;
-        let mut cards = Vec::with_capacity(20);
-        let general = [
-            (Kind::XyLine, "Line", "#3b82f6", false),
-            (Kind::XyArea, "Area", "#0ea5e9", false),
-            (Kind::Column, "Columns", "#6366f1", false),
-            (Kind::HorizontalBar, "Horizontal bars", "#14b8a6", false),
-            (Kind::Scatter, "Scatter", "#f97316", false),
-            (Kind::Bubble, "Bubble", "#8b5cf6", false),
-            (Kind::RangeArea, "Range area", "#06b6d4", false),
-            (Kind::RangeBar, "Range bars", "#64748b", false),
-            (Kind::ErrorBar, "Error bars", "#ef4444", false),
-            (Kind::BoxPlot, "Box plot", "#a855f7", false),
-            (Kind::HeatmapGrid, "Heatmap", "#0284c7", false),
-            (Kind::Pie, "Pie", "#f59e0b", false),
-            (Kind::Pie, "Donut", "#f59e0b", true),
-            (Kind::Radar, "Radar", "#10b981", false),
-            (Kind::PolarArea, "Polar area", "#eab308", false),
-            (Kind::RadialBar, "Radial bars", "#e11d48", false),
-        ];
-        for (kind, title, color, donut) in general {
-            cards.push(cx.new(move |_| ChartCard::new_general(kind, title, color, donut)));
-        }
-        for (kind, title, color) in [
-            (GeneralLayoutSeriesKind::Funnel, "Funnel", "#3b82f6"),
-            (GeneralLayoutSeriesKind::Treemap, "Treemap", "#10b981"),
-            (GeneralLayoutSeriesKind::Sankey, "Sankey", "#8b5cf6"),
-            (GeneralLayoutSeriesKind::Sunburst, "Sunburst", "#f59e0b"),
-        ] {
-            cards.push(cx.new(move |_| ChartCard::new_layout(kind, title, color)));
-        }
+        let catalog: Catalog = serde_json::from_str(CATALOG).expect("the shared catalog parses");
+        let cards = catalog
+            .examples
+            .iter()
+            .map(|example| cx.new(|_| ChartCard::new(example)))
+            .collect();
         Self { cards }
     }
 }

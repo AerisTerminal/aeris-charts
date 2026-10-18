@@ -11,6 +11,10 @@ use aeris_charts_render::draw_list::{LineStyle, LineType};
 use aeris_charts_render::line::{LinePoint, expand_band_into, expand_line_into};
 
 use crate::general_axes::NumericAxisScale;
+use crate::general_histogram::{
+    GeneralHistogramBins, compute_histogram_bins, validate_histogram_options,
+    validate_histogram_samples,
+};
 use crate::{
     AxisDimension, ChartEngine, ChartError, ErrorCode, GeneralAxisDomain, GeneralDatasetId,
     GeneralRowIdentity, GeneralScaleType, GeneralXKind, GeneralXyInput, HorizontalDomain, PaneId,
@@ -32,6 +36,7 @@ pub const MAX_GENERAL_LEGEND_SLICES_PER_SNAPSHOT: usize = 512;
 pub const MIN_GENERAL_POINT_RADIUS: f64 = 1.0;
 pub const MAX_GENERAL_POINT_RADIUS: f64 = 64.0;
 pub const DEFAULT_GENERAL_FILL_OPACITY: f64 = 72.0 / 255.0;
+pub const MAX_GENERAL_HISTOGRAM_BINS: usize = 1_000;
 const SCATTER_GRID_BASE_CELL_CSS: f64 = 32.0;
 const MAX_SCATTER_GRID_CELLS: usize = 65_536;
 const MAX_POLAR_CONTEXT_CACHES: usize = 64;
@@ -142,6 +147,7 @@ pub enum GeneralSeriesKind {
     RangeBar,
     ErrorBar,
     Column,
+    Histogram,
     HorizontalBar,
     BoxPlot,
     HeatmapGrid,
@@ -174,6 +180,33 @@ impl Default for GeneralPolarOptions {
             pad_angle: 0.0,
         }
     }
+}
+
+/// Height measure of each histogram bin.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralHistogramNormalization {
+    /// Number of samples in the bin.
+    #[default]
+    Count,
+    /// Share of all valid samples, in percent.
+    Percent,
+    /// Share of all valid samples divided by the bin width, so the bar areas sum to one.
+    Density,
+}
+
+/// Engine-side binning policy of a histogram series.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct GeneralHistogramOptions {
+    /// Exact number of equal-width bins spanning the sample range. `None` uses Sturges' rule
+    /// with a nice 1/2/5 bin width aligned to multiples of that width.
+    pub bin_count: Option<usize>,
+    /// Bin width aligned to multiples of itself. Overrides `bin_count` when both are set.
+    pub bin_width: Option<f64>,
+    pub normalization: GeneralHistogramNormalization,
+    /// Accumulate bins from the left. Count and percent heights become running totals, and
+    /// density becomes the empirical cumulative distribution ending at one.
+    pub cumulative: bool,
 }
 
 #[derive(
@@ -309,6 +342,8 @@ pub struct GeneralSeriesOptions {
     pub group_id: Option<String>,
     pub stack_id: Option<String>,
     pub stack_mode: GeneralStackMode,
+    /// Binning policy; non-default values require a histogram series.
+    pub histogram: GeneralHistogramOptions,
 }
 
 impl GeneralSeriesOptions {
@@ -351,6 +386,7 @@ impl GeneralSeriesOptions {
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
+            histogram: GeneralHistogramOptions::default(),
         }
     }
 
@@ -393,6 +429,7 @@ impl GeneralSeriesOptions {
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
+            histogram: GeneralHistogramOptions::default(),
         }
     }
 
@@ -435,6 +472,7 @@ impl GeneralSeriesOptions {
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
+            histogram: GeneralHistogramOptions::default(),
         }
     }
 
@@ -488,6 +526,7 @@ impl GeneralSeriesOptions {
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
+            histogram: GeneralHistogramOptions::default(),
         }
     }
 
@@ -530,6 +569,7 @@ impl GeneralSeriesOptions {
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
+            histogram: GeneralHistogramOptions::default(),
         }
     }
 
@@ -572,6 +612,7 @@ impl GeneralSeriesOptions {
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
+            histogram: GeneralHistogramOptions::default(),
         }
     }
 
@@ -614,7 +655,21 @@ impl GeneralSeriesOptions {
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
+            histogram: GeneralHistogramOptions::default(),
         }
+    }
+
+    /// Histogram of one-dimensional samples (`GeneralXyInput::Values`) binned by the engine onto a
+    /// linear X axis, with bin heights on a linear Y axis.
+    pub fn histogram(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::column(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::Histogram;
+        options
     }
 
     pub fn heatmap_grid(
@@ -656,6 +711,7 @@ impl GeneralSeriesOptions {
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
+            histogram: GeneralHistogramOptions::default(),
         }
     }
 
@@ -698,6 +754,7 @@ impl GeneralSeriesOptions {
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
+            histogram: GeneralHistogramOptions::default(),
         }
     }
 
@@ -740,6 +797,7 @@ impl GeneralSeriesOptions {
             group_id: None,
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
+            histogram: GeneralHistogramOptions::default(),
         }
     }
 
@@ -825,6 +883,7 @@ pub struct GeneralSeries {
     group_id: Option<String>,
     stack_id: Option<String>,
     stack_mode: GeneralStackMode,
+    histogram: GeneralHistogramOptions,
     composition_key: Option<String>,
 }
 
@@ -1168,6 +1227,15 @@ struct AxisScanEntry {
     kind: GeneralSeriesKind,
     stacked: bool,
     value: (Option<(f64, f64)>, bool),
+}
+
+/// Bins of one histogram series, valid while its dataset generation and binning policy match.
+#[derive(Clone)]
+struct GeneralHistogramCacheEntry {
+    dataset: GeneralDatasetId,
+    generation: u64,
+    options: GeneralHistogramOptions,
+    bins: Arc<GeneralHistogramBins>,
 }
 
 /// A series binds one X and one Y axis; a small bound still covers scale-type changes.
@@ -1777,6 +1845,10 @@ impl GeneralSeries {
         self.stack_mode
     }
 
+    pub fn histogram(&self) -> GeneralHistogramOptions {
+        self.histogram
+    }
+
     pub(crate) fn estimated_bytes(&self) -> usize {
         self.x_axis_id.capacity()
             + self.y_axis_id.capacity()
@@ -1802,6 +1874,7 @@ pub(crate) struct GeneralSeriesRegistry {
     polar_contexts: RefCell<HashMap<GeneralSeriesId, GeneralPolarCategoryContext>>,
     pie_contexts: RefCell<HashMap<GeneralSeriesId, GeneralPieContext>>,
     axis_scans: RefCell<HashMap<GeneralSeriesId, Vec<AxisScanEntry>>>,
+    histogram_bins: RefCell<HashMap<GeneralSeriesId, GeneralHistogramCacheEntry>>,
     hovered: Option<GeneralInteractionTarget>,
     /// `hovered` is the anchor of an index-axis hover rather than an exact mark hit.
     hover_axis: bool,
@@ -1821,6 +1894,7 @@ impl GeneralSeriesRegistry {
             polar_contexts: RefCell::new(HashMap::new()),
             pie_contexts: RefCell::new(HashMap::new()),
             axis_scans: RefCell::new(HashMap::new()),
+            histogram_bins: RefCell::new(HashMap::new()),
             hovered: None,
             hover_axis: false,
             selected: None,
@@ -2031,6 +2105,7 @@ impl GeneralSeriesRegistry {
             group_id: options.group_id,
             stack_id: options.stack_id,
             stack_mode: options.stack_mode,
+            histogram: options.histogram,
             composition_key: None,
         });
         self.next_id = next_id;
@@ -2046,6 +2121,7 @@ impl GeneralSeriesRegistry {
         self.polar_contexts.get_mut().remove(&id);
         self.pie_contexts.get_mut().remove(&id);
         self.axis_scans.get_mut().remove(&id);
+        self.histogram_bins.get_mut().remove(&id);
         if self
             .hovered
             .as_ref()
@@ -2152,6 +2228,13 @@ impl GeneralSeriesRegistry {
                     .map(|entry| entry.slices.capacity() * std::mem::size_of::<GeneralPieSlice>())
                     .sum::<usize>()
         });
+        let histogram_bytes = self.histogram_bins.try_borrow().map_or(0, |cache| {
+            cache.capacity() * std::mem::size_of::<(GeneralSeriesId, GeneralHistogramCacheEntry)>()
+                + cache
+                    .values()
+                    .map(|entry| entry.bins.estimated_bytes())
+                    .sum::<usize>()
+        });
         let brush_bytes = self.brush.as_ref().map_or(0, |brush| {
             brush.axis_id.capacity()
                 + match &brush.range {
@@ -2171,6 +2254,7 @@ impl GeneralSeriesRegistry {
             + axis_scan_bytes
             + polar_bytes
             + pie_bytes
+            + histogram_bytes
             + self.references.capacity() * std::mem::size_of::<GeneralReference>()
             + self
                 .references
@@ -2300,6 +2384,7 @@ fn apply_composed_series_options(
     series.group_id = options.group_id;
     series.stack_id = options.stack_id;
     series.stack_mode = options.stack_mode;
+    series.histogram = options.histogram;
 }
 
 impl ChartEngine {
@@ -2316,6 +2401,7 @@ impl ChartEngine {
             registry.polar_contexts.borrow_mut().remove(&series.id);
             registry.pie_contexts.borrow_mut().remove(&series.id);
             registry.axis_scans.borrow_mut().remove(&series.id);
+            registry.histogram_bins.borrow_mut().remove(&series.id);
         }
     }
     /// Validate a complete proposed general pane without changing live state.
@@ -2522,14 +2608,16 @@ impl ChartEngine {
                 proposed.colors.clone(),
                 proposed.symbols.clone(),
             )?;
+            let validated_dataset = validated_data
+                .get(dataset)
+                .expect("newly validated composition data remains present");
             validate_dataset_for_series(
                 proposed.options.kind,
-                validated_data
-                    .get(dataset)
-                    .expect("newly validated composition data remains present"),
+                validated_dataset,
                 x_axis.scale,
                 y_axis.scale,
             )?;
+            validate_histogram_dataset(&proposed.options, validated_dataset)?;
         }
         validate_composed_layout(&composition.series)?;
 
@@ -2747,6 +2835,7 @@ impl ChartEngine {
                 series.composition_key = Some(proposed.key.clone());
                 registry.scatter_spatial.get_mut().remove(&id);
                 registry.axis_scans.get_mut().remove(&id);
+                registry.histogram_bins.get_mut().remove(&id);
                 (id, dataset)
             } else {
                 let (data, labels, colors, symbols) = (
@@ -2902,6 +2991,7 @@ impl ChartEngine {
         )?;
         validate_dataset_for_series(options.kind, dataset, x_axis.scale(), y_axis.scale())?;
         validate_presentation(&options)?;
+        validate_histogram_dataset(&options, dataset)?;
         self.validate_layout_compatibility(pane_id, &options, None)?;
         let id = if let Some(registry) = self.general_series.as_mut() {
             registry.insert(pane_id, options)?
@@ -3029,6 +3119,9 @@ impl ChartEngine {
             ));
         }
         validate_presentation(&options)?;
+        if let Some(dataset) = self.general_dataset(current.dataset) {
+            validate_histogram_dataset(&options, dataset)?;
+        }
         self.validate_layout_compatibility(target_pane_id, &options, Some(id))?;
 
         let registry = self
@@ -3072,6 +3165,7 @@ impl ChartEngine {
         series.group_id = options.group_id;
         series.stack_id = options.stack_id;
         series.stack_mode = options.stack_mode;
+        series.histogram = options.histogram;
         if geometry_binding_changed {
             registry.scatter_spatial.get_mut().remove(&id);
         }
@@ -3656,6 +3750,189 @@ impl ChartEngine {
         }
     }
 
+    /// Resolve the bins of a histogram series, rebinning only when its dataset generation or
+    /// binning policy changed since the cached result.
+    pub(crate) fn general_histogram_bins(
+        &self,
+        series: &GeneralSeries,
+    ) -> Option<Arc<GeneralHistogramBins>> {
+        if series.kind != GeneralSeriesKind::Histogram {
+            return None;
+        }
+        let registry = self.general_series.as_ref()?;
+        let dataset = self.general_dataset(series.dataset)?;
+        let current = |entry: &&GeneralHistogramCacheEntry| {
+            entry.dataset == series.dataset
+                && entry.generation == dataset.generation()
+                && entry.options == series.histogram
+        };
+        if let Some(entry) = registry
+            .histogram_bins
+            .borrow()
+            .get(&series.id)
+            .filter(current)
+        {
+            return Some(Arc::clone(&entry.bins));
+        }
+        let bins = Arc::new(compute_histogram_bins(
+            &series.histogram,
+            dataset.y(),
+            |row| dataset.y_is_valid(row),
+        ));
+        registry.histogram_bins.borrow_mut().insert(
+            series.id,
+            GeneralHistogramCacheEntry {
+                dataset: series.dataset,
+                generation: dataset.generation(),
+                options: series.histogram,
+                bins: Arc::clone(&bins),
+            },
+        );
+        Some(bins)
+    }
+
+    pub(crate) fn visit_general_histogram_bins<F>(&self, series: &GeneralSeries, mut visit: F)
+    where
+        F: FnMut(GeneralColumnGeometry),
+    {
+        if !series.visible || series.kind != GeneralSeriesKind::Histogram {
+            return;
+        }
+        let Some(bins) = self.general_histogram_bins(series) else {
+            return;
+        };
+        let Some(plot) = self
+            .pane_index_for_id(series.pane_id)
+            .and_then(|pane_index| self.general_plot_rect(pane_index))
+        else {
+            return;
+        };
+        let (Some(x_axis), Some(y_axis)) = (
+            self.general_axis(&series.x_axis_id),
+            self.general_axis(&series.y_axis_id),
+        ) else {
+            return;
+        };
+        let (
+            Some(GeneralAxisDomain::Numeric([x_from, x_to])),
+            Some(GeneralAxisDomain::Numeric([y_from, y_to])),
+        ) = (
+            self.effective_general_axis_domain(x_axis),
+            self.effective_general_axis_domain(y_axis),
+        )
+        else {
+            return;
+        };
+        let x_range = if x_axis.reverse() {
+            (plot.width, 0.0)
+        } else {
+            (0.0, plot.width)
+        };
+        let plot_bottom = plot.y + plot.height;
+        let y_range = if y_axis.range_reversed() {
+            (plot.y, plot_bottom)
+        } else {
+            (plot_bottom, plot.y)
+        };
+        let (Ok(x_scale), Ok(y_scale)) = (
+            LinearScale::new(x_from, x_to, x_range.0, x_range.1),
+            LinearScale::new(y_from, y_to, y_range.0, y_range.1),
+        ) else {
+            return;
+        };
+        let Some(base_y) = y_scale.coordinate_clamped(0.0) else {
+            return;
+        };
+        for (bin, &height) in bins.heights().iter().enumerate() {
+            let Some((from, to)) = bins.bounds(bin) else {
+                continue;
+            };
+            let (Some(from_x), Some(to_x), Some(value_y)) = (
+                x_scale.coordinate_clamped(from),
+                x_scale.coordinate_clamped(to),
+                y_scale.coordinate_clamped(height),
+            ) else {
+                continue;
+            };
+            let Some((left, right)) = bar_thickness_bounds(
+                from_x.min(to_x),
+                from_x.max(to_x),
+                series.bar_gap,
+                series.bar_max_width,
+            ) else {
+                continue;
+            };
+            let left = left.clamp(0.0, plot.width);
+            let right = right.clamp(0.0, plot.width);
+            let top = base_y.min(value_y).clamp(plot.y, plot_bottom);
+            let bottom = base_y.max(value_y).clamp(plot.y, plot_bottom);
+            if right <= left || bottom <= top {
+                continue;
+            }
+            visit(GeneralColumnGeometry {
+                row: bin,
+                left,
+                right,
+                top,
+                bottom,
+                end_at_min: value_y < base_y,
+                exposed_end: true,
+            });
+        }
+    }
+
+    fn validate_general_histogram_samples(
+        &self,
+        dataset_id: GeneralDatasetId,
+        values: &[f64],
+        valid: impl Fn(usize) -> bool,
+    ) -> Result<(), ChartError> {
+        let Some(registry) = self.general_series.as_ref() else {
+            return Ok(());
+        };
+        for series in registry.series.iter().filter(|series| {
+            series.dataset == dataset_id && series.kind == GeneralSeriesKind::Histogram
+        }) {
+            validate_histogram_samples(&series.histogram, values, &valid)?;
+        }
+        Ok(())
+    }
+
+    /// Reject replacement samples that would leave a bound histogram unbinnable.
+    pub(crate) fn validate_general_histogram_replacement(
+        &self,
+        dataset_id: GeneralDatasetId,
+        input: &GeneralXyInput,
+    ) -> Result<(), ChartError> {
+        let valid = input.y_valid_values();
+        self.validate_general_histogram_samples(dataset_id, input.y_values(), |row| {
+            valid.is_none_or(|flags| flags.get(row).is_some_and(|flag| *flag != 0))
+        })
+    }
+
+    /// Reject an upsert whose merged samples would leave a bound histogram unbinnable.
+    pub(crate) fn validate_general_histogram_upsert(
+        &self,
+        dataset_id: GeneralDatasetId,
+        input: &GeneralXyInput,
+        max_rows: Option<usize>,
+    ) -> Result<(), ChartError> {
+        let bound = self.general_series.as_ref().is_some_and(|registry| {
+            registry.series.iter().any(|series| {
+                series.dataset == dataset_id && series.kind == GeneralSeriesKind::Histogram
+            })
+        });
+        if !bound {
+            return Ok(());
+        }
+        let store = self.general_data.as_ref().ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
+        })?;
+        let preview = store.preview_upsert(dataset_id, input.clone(), max_rows)?;
+        self.validate_general_histogram_samples(dataset_id, preview.y(), |row| {
+            preview.y_is_valid(row)
+        })
+    }
     pub(crate) fn visit_general_horizontal_bars<F>(&self, series: &GeneralSeries, mut visit: F)
     where
         F: FnMut(GeneralColumnGeometry),
@@ -4862,6 +5139,7 @@ impl ChartEngine {
                 continue;
             };
             let x = match dataset.x_kind() {
+                GeneralXKind::Values => None,
                 GeneralXKind::Numeric => dataset
                     .numeric_x()
                     .and_then(|values| values.get(row))
@@ -5047,6 +5325,7 @@ impl ChartEngine {
                 continue;
             };
             let x = match dataset.x_kind() {
+                GeneralXKind::Values => None,
                 GeneralXKind::Numeric => dataset
                     .numeric_x()
                     .and_then(|values| values.get(row))
@@ -5808,6 +6087,7 @@ impl ChartEngine {
         let mut y_centers = Vec::with_capacity(dataset.len());
         for row in 0..dataset.len() {
             let x = match dataset.x_kind() {
+                GeneralXKind::Values => None,
                 GeneralXKind::Numeric => dataset
                     .numeric_x()
                     .and_then(|values| values.get(row))
@@ -7009,6 +7289,24 @@ impl ChartEngine {
             let Some(dataset) = self.general_dataset(series.dataset) else {
                 continue;
             };
+            if series.kind == GeneralSeriesKind::Histogram {
+                self.visit_general_histogram_bins(series, |geometry| {
+                    let distance = distance_to_bar(x_css, y_css, geometry, series, self, false);
+                    if distance <= max_distance
+                        && best
+                            .as_ref()
+                            .is_none_or(|current| distance < current.distance)
+                    {
+                        best = Some(GeneralSeriesHit {
+                            series: series.id,
+                            row: geometry.row,
+                            row_id: histogram_bin_identity(geometry.row),
+                            distance,
+                        });
+                    }
+                });
+                continue;
+            }
             let mut consider = |presentation_row: usize, distance: f64| {
                 if distance > max_distance {
                     return;
@@ -7449,6 +7747,7 @@ impl ChartEngine {
                         );
                     });
                 }
+                GeneralSeriesKind::Histogram => {}
                 GeneralSeriesKind::Column => self.visit_general_columns(series, |geometry| {
                     consider(
                         geometry.row,
@@ -7681,11 +7980,7 @@ impl ChartEngine {
         else {
             return false;
         };
-        let Some(row_id) = self
-            .general_dataset(series.dataset)
-            .and_then(|dataset| dataset.row_identity(row))
-            .cloned()
-        else {
+        let Some(row_id) = self.general_series_row_identity(series, row) else {
             return false;
         };
         let next = Some(GeneralInteractionTarget {
@@ -8123,11 +8418,20 @@ impl ChartEngine {
             let Some(dataset) = self.general_dataset(series.dataset) else {
                 continue;
             };
-            for row in 0..dataset.len() {
-                if !general_row_matches_brush(series, dataset, row, brush, &domain) {
+            let histogram = self.general_histogram_bins(series);
+            let rows = histogram.as_ref().map_or(dataset.len(), |bins| bins.len());
+            for row in 0..rows {
+                let matched = match histogram.as_ref() {
+                    Some(bins) => histogram_bin_matches_brush(bins, row, brush),
+                    None => general_row_matches_brush(series, dataset, row, brush, &domain),
+                };
+                if !matched {
                     continue;
                 }
-                let Some(row_id) = dataset.row_identity(row).cloned() else {
+                let Some(row_id) = (match histogram {
+                    Some(_) => Some(histogram_bin_identity(row)),
+                    None => dataset.row_identity(row).cloned(),
+                }) else {
                     continue;
                 };
                 items.push(GeneralSeriesHit {
@@ -8262,12 +8566,7 @@ impl ChartEngine {
         let Some(series) = self.general_series(series_id) else {
             return false;
         };
-        let dataset_id = series.dataset;
-        let Some(row_id) = self
-            .general_dataset(dataset_id)
-            .and_then(|dataset| dataset.row_identity(row))
-            .cloned()
-        else {
+        let Some(row_id) = self.general_series_row_identity(series, row) else {
             return false;
         };
         let next = Some(GeneralInteractionTarget {
@@ -8340,6 +8639,22 @@ impl ChartEngine {
             .filter(|series| series.dataset == dataset_id)
             .map(GeneralSeries::id)
             .collect();
+        // Histogram targets name engine bins rather than dataset rows; a bin survives a data
+        // change while its index still exists.
+        let histogram_bins: HashMap<GeneralSeriesId, usize> = registry
+            .series
+            .iter()
+            .filter(|series| {
+                series.dataset == dataset_id && series.kind == GeneralSeriesKind::Histogram
+            })
+            .map(|series| {
+                (
+                    series.id,
+                    self.general_histogram_bins(series)
+                        .map_or(0, |bins| bins.len()),
+                )
+            })
+            .collect();
         let previous_hovered = registry.hovered.clone();
         let previous_selected = registry.selected.clone();
         let previous_accessibility_focused = registry.accessibility_focused.clone();
@@ -8348,6 +8663,9 @@ impl ChartEngine {
         };
         let reconcile = |target: Option<GeneralInteractionTarget>| {
             let mut current = target?;
+            if let Some(&bins) = histogram_bins.get(&current.series) {
+                return (current.row < bins).then_some(current);
+            }
             if dataset_series.contains(&current.series) {
                 let shifted = current.row.checked_sub(removed_front);
                 current.row = shifted
@@ -8406,6 +8724,52 @@ impl ChartEngine {
         })
     }
 
+    /// Identity of an interaction row: a dataset row, or an engine bin for a histogram.
+    fn general_series_row_identity(
+        &self,
+        series: &GeneralSeries,
+        row: usize,
+    ) -> Option<GeneralRowIdentity> {
+        if series.kind == GeneralSeriesKind::Histogram {
+            return (row < self.general_histogram_bins(series)?.len())
+                .then(|| histogram_bin_identity(row));
+        }
+        self.general_dataset(series.dataset)?
+            .row_identity(row)
+            .cloned()
+    }
+
+    fn general_histogram_tooltip_snapshot(
+        &self,
+        series: &GeneralSeries,
+        bin: usize,
+    ) -> Option<GeneralTooltipSnapshot> {
+        let bins = self.general_histogram_bins(series)?;
+        let (from, to) = bins.bounds(bin)?;
+        let color = series
+            .color()
+            .and_then(Color::parse_css)
+            .unwrap_or(crate::DEFAULT_LINE_COLOR);
+        Some(GeneralTooltipSnapshot {
+            series: series.id,
+            row: bin,
+            row_id: histogram_bin_identity(bin),
+            x_label: bins.label(bin)?,
+            y_label: None,
+            label: None,
+            value: bins.height(bin),
+            low: None,
+            high: None,
+            x_low: Some(from),
+            x_high: Some(to),
+            q1: None,
+            q3: None,
+            size: None,
+            title: series.title.clone(),
+            color: Color::rgb(color.r(), color.g(), color.b()),
+        })
+    }
+
     #[doc(hidden)]
     pub fn general_tooltip_snapshot(
         &self,
@@ -8413,6 +8777,9 @@ impl ChartEngine {
         row: usize,
     ) -> Option<GeneralTooltipSnapshot> {
         let series = self.general_series(series_id)?;
+        if series.kind == GeneralSeriesKind::Histogram {
+            return self.general_histogram_tooltip_snapshot(series, row);
+        }
         let dataset = self.general_dataset(series.dataset)?;
         let row_id = dataset.row_identity(row)?.clone();
         let x_label = general_x_label(dataset, row)?;
@@ -8496,9 +8863,18 @@ impl ChartEngine {
         if !anchor_series.visible {
             return None;
         }
+        let pane = self.pane_index_for_id(anchor_series.pane_id)?;
+        // Histogram bins share no row datum with any other series.
+        if anchor_series.kind == GeneralSeriesKind::Histogram {
+            return Some(GeneralSharedTooltipSnapshot {
+                pane,
+                anchor_series: series_id,
+                anchor_row: row,
+                items: vec![self.general_histogram_tooltip_snapshot(anchor_series, row)?],
+            });
+        }
         let anchor_dataset = self.general_dataset(anchor_series.dataset)?;
         anchor_dataset.row_identity(row)?;
-        let pane = self.pane_index_for_id(anchor_series.pane_id)?;
         let mut items = Vec::new();
 
         for candidate in self
@@ -8604,6 +8980,41 @@ impl ChartEngine {
         limit: usize,
     ) -> Option<GeneralAccessibilitySnapshot> {
         let series = self.general_series(series_id)?;
+        if series.kind == GeneralSeriesKind::Histogram {
+            let bins = self.general_histogram_bins(series)?;
+            let total_rows = bins.len();
+            let offset = offset.min(total_rows);
+            let end = offset
+                .saturating_add(limit.min(MAX_GENERAL_ACCESSIBILITY_ITEMS))
+                .min(total_rows);
+            let items = (offset..end)
+                .map(|bin| {
+                    let (from, to) = bins.bounds(bin)?;
+                    Some(GeneralAccessibilityItem {
+                        row: bin,
+                        row_id: histogram_bin_identity(bin),
+                        x_label: bins.label(bin)?,
+                        y_label: None,
+                        label: None,
+                        value: bins.height(bin),
+                        low: None,
+                        high: None,
+                        x_low: Some(from),
+                        x_high: Some(to),
+                        q1: None,
+                        q3: None,
+                        size: None,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            return Some(GeneralAccessibilitySnapshot {
+                series: series_id,
+                title: series.title.clone(),
+                total_rows,
+                offset,
+                items,
+            });
+        }
         let dataset = self.general_dataset(series.dataset)?;
         let total_rows = dataset.len();
         let offset = offset.min(total_rows);
@@ -8713,9 +9124,8 @@ pub(crate) fn general_bar_radii(
     if radius <= 0.0 {
         return None;
     }
-    Some(if series.stack_id().is_none() {
-        [radius; 4]
-    } else if horizontal {
+    // Only the value end is rounded; the baseline end stays square against its axis or segment.
+    Some(if horizontal {
         if geometry.end_at_min {
             [radius, 0.0, 0.0, radius]
         } else {
@@ -8891,6 +9301,7 @@ fn general_stack_x_key(dataset: &crate::GeneralDataset, row: usize) -> Option<Ge
                 .cloned()
                 .map(GeneralStackXKey::Category)
         }
+        GeneralXKind::Values => None,
     }
 }
 
@@ -9516,7 +9927,29 @@ fn general_rows_share_horizontal_datum(
                     .and_then(|index| right.categories()?.get(*index as usize)),
             )
             .is_some_and(|(left, right)| left == right),
+        GeneralXKind::Values => false,
     }
+}
+
+fn histogram_bin_identity(bin: usize) -> GeneralRowIdentity {
+    GeneralRowIdentity::Generated(bin as u64)
+}
+
+/// A bin matches an X brush when its center lies in the range and a Y brush by its height.
+fn histogram_bin_matches_brush(
+    bins: &GeneralHistogramBins,
+    bin: usize,
+    brush: &GeneralBrushSelection,
+) -> bool {
+    let GeneralBrushRange::Numeric([from, to]) = brush.range else {
+        return false;
+    };
+    let value = match brush.dimension {
+        AxisDimension::X => bins.bounds(bin).map(|(left, right)| (left + right) * 0.5),
+        AxisDimension::Y => bins.height(bin),
+        AxisDimension::Angle | AxisDimension::Radius => None,
+    };
+    value.is_some_and(|value| value >= from && value <= to)
 }
 
 fn general_row_matches_brush(
@@ -9720,6 +10153,20 @@ fn validate_general_series_axis_compatibility(
                 ));
             }
         }
+        GeneralSeriesKind::Histogram => {
+            if pane_domain
+                != (HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                })
+                || dataset_kind != GeneralXKind::Values
+                || x_scale != GeneralScaleType::Linear
+                || y_scale != GeneralScaleType::Linear
+            {
+                return Err(invalid(
+                    "histogram requires a continuous-linear pane, sample values data, and linear X/Y axes",
+                ));
+            }
+        }
         GeneralSeriesKind::HorizontalBar => {
             if pane_domain
                 != (HorizontalDomain::Continuous {
@@ -9791,6 +10238,7 @@ fn validate_general_series_axis_compatibility(
                         )
                         && heatmap_y_numeric
                 }
+                GeneralXKind::Values => false,
             };
             if !compatible {
                 return Err(invalid(
@@ -9863,6 +10311,19 @@ fn validate_general_series_axis_compatibility(
     Ok(())
 }
 
+fn validate_histogram_dataset(
+    options: &GeneralSeriesOptions,
+    dataset: &crate::GeneralDataset,
+) -> Result<(), ChartError> {
+    if options.kind != GeneralSeriesKind::Histogram {
+        return Ok(());
+    }
+    validate_histogram_options(&options.histogram)?;
+    validate_histogram_samples(&options.histogram, dataset.y(), |row| {
+        dataset.y_is_valid(row)
+    })
+}
+
 fn validate_dataset_for_series(
     kind: GeneralSeriesKind,
     dataset: &crate::GeneralDataset,
@@ -9911,6 +10372,11 @@ fn validate_dataset_for_series(
         GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar => {
             if dataset.x_kind() != GeneralXKind::Category {
                 return Err(invalid("bar series require category/value data"));
+            }
+        }
+        GeneralSeriesKind::Histogram => {
+            if dataset.x_kind() != GeneralXKind::Values {
+                return Err(invalid("histogram requires sample values data"));
             }
         }
         GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
@@ -9975,6 +10441,9 @@ fn validate_dataset_for_series(
                         .x_high()
                         .ok_or_else(|| invalid("temporal error bars require an X-high channel"))?;
                 }
+                GeneralXKind::Values => {
+                    return Err(invalid("error bars require X coordinates"));
+                }
             }
             dataset
                 .low()
@@ -10018,6 +10487,9 @@ fn validate_dataset_for_series(
             }
         }
         GeneralSeriesKind::HeatmapGrid => match dataset.x_kind() {
+            GeneralXKind::Values => {
+                return Err(invalid("heatmap_grid requires X coordinates"));
+            }
             GeneralXKind::Category => {
                 let y_categories = dataset
                     .heatmap_y_categories()
@@ -10383,6 +10855,13 @@ fn validate_input_for_series(
                 ));
             }
         }
+        GeneralSeriesKind::Histogram => {
+            if input.x_kind() != GeneralXKind::Values {
+                return Err(invalid(
+                    "a dataset bound to a histogram must remain sample values data",
+                ));
+            }
+        }
         GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
             let expected_x = match x_axis.scale() {
                 GeneralScaleType::Linear
@@ -10651,17 +11130,23 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
     } else if options.polar != GeneralPolarOptions::default() {
         return Err(invalid("polar options require a sector series"));
     }
+    if options.kind == GeneralSeriesKind::Histogram {
+        validate_histogram_options(&options.histogram)?;
+    } else if options.histogram != GeneralHistogramOptions::default() {
+        return Err(invalid("histogram options require a histogram series"));
+    }
     if let Some(colors) = options.fill_gradient.as_ref() {
         if !matches!(
             options.kind,
             GeneralSeriesKind::XyArea
                 | GeneralSeriesKind::RangeArea
                 | GeneralSeriesKind::Column
+                | GeneralSeriesKind::Histogram
                 | GeneralSeriesKind::HorizontalBar
                 | GeneralSeriesKind::RangeBar
         ) {
             return Err(invalid(
-                "fill_gradient requires an area, column, horizontal_bar, or range_bar series",
+                "fill_gradient requires an area, column, histogram, horizontal_bar, or range_bar series",
             ));
         }
         for color in colors {
@@ -10736,22 +11221,27 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
     }
     if !matches!(
         options.kind,
-        GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar | GeneralSeriesKind::RangeBar
+        GeneralSeriesKind::Column
+            | GeneralSeriesKind::Histogram
+            | GeneralSeriesKind::HorizontalBar
+            | GeneralSeriesKind::RangeBar
     ) && (options.bar_gap != 0.0 || options.bar_max_width.is_some())
     {
         return Err(invalid(
-            "bar_gap and bar_max_width are supported only by column, horizontal_bar, and range_bar",
+            "bar_gap and bar_max_width are supported only by column, histogram, horizontal_bar, and range_bar",
         ));
     }
     if !options.bar_corner_radius.is_finite()
         || !(0.0..=64.0).contains(&options.bar_corner_radius)
         || (!matches!(
             options.kind,
-            GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar
+            GeneralSeriesKind::Column
+                | GeneralSeriesKind::Histogram
+                | GeneralSeriesKind::HorizontalBar
         ) && options.bar_corner_radius != 0.0)
     {
         return Err(invalid(
-            "bar_corner_radius requires a column or horizontal_bar series and a value in [0, 64] CSS px",
+            "bar_corner_radius requires a column, histogram, or horizontal_bar series and a value in [0, 64] CSS px",
         ));
     }
     if !options.fill_opacity.is_finite() || !(0.0..=1.0).contains(&options.fill_opacity) {

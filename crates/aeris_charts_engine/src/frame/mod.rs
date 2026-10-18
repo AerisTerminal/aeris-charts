@@ -156,6 +156,40 @@ impl DeviceBox {
     }
 }
 
+/// Width of the vertical pill that keys a general series color in tooltips and legends.
+pub(crate) const SERIES_MARKER_WIDTH: f64 = 4.0;
+
+/// A vertical series color pill of `height` CSS px whose left edge is `left`, centered on
+/// `center_y`. Fully rounded ends keep it from reading as a square-cut dash at any DPR.
+pub(crate) fn series_marker_prim(
+    left: f64,
+    center_y: f64,
+    height: f64,
+    color: Color,
+    hpr: f64,
+    vpr: f64,
+) -> Prim {
+    let device = DeviceBox::snap(
+        left,
+        center_y - height * 0.5,
+        SERIES_MARKER_WIDTH,
+        height,
+        hpr,
+        vpr,
+    );
+    let radius = device.w.min(device.h) * 0.5;
+    Prim::RoundRect {
+        x: device.x,
+        y: device.y,
+        w: device.w,
+        h: device.h,
+        radii: [radius; 4],
+        fill: color,
+        border_width: 0.0,
+        border_color: color,
+    }
+}
+
 /// Floating-layer chrome for tooltips, from the painted theme's popover tokens: an opaque
 /// `--surface-popover` fill inside a `--border-popover` hairline, `--text-default` and
 /// `--text-secondary` text, and a 1 px `--border-popover-highlight` inner edge that paints above
@@ -397,6 +431,10 @@ impl FrameInvalidation {
 
     pub(crate) const fn scene_generation(&self) -> u64 {
         self.scene
+    }
+
+    pub(crate) const fn layout_generation(&self) -> u64 {
+        self.layout
     }
 
     fn tick(&mut self) -> u64 {
@@ -2581,6 +2619,21 @@ impl ChartEngine {
                 let pane_right = (pane_x + pane_w).max(right);
                 let pane_x = pane_x.min(left);
                 out.scissor = [pane_x, pane_y, pane_right - pane_x, pane_h];
+            }
+            // The legend sits below the plot clip, so it follows the plot range.
+            let legend_start = out.main.len();
+            self.build_general_legend_frame(pi, hpr, vpr, &mut out.main);
+            if out.main.len() != legend_start {
+                retained.series_segments[pi].push(FrameSeriesSegment {
+                    series_id: None,
+                    start: legend_start,
+                    end: out.main.len(),
+                    revision: self
+                        .frame_invalidation
+                        .scene
+                        .max(self.frame_invalidation.coordinate),
+                    coordinate_revision: self.frame_invalidation.coordinate,
+                });
             }
             // Trailing creation previews (brush + pending) from retained, topmost among chart
             // content but still below chrome/trading (protected layers) and clipped to the pane.

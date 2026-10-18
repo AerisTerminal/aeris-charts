@@ -180,24 +180,75 @@ impl SymLogScale {
         self.untransform(from + unit * (to - from))
     }
 
+    /// Zero plus signed 1/2/5 decade ticks from the linear threshold outward, falling back to
+    /// decades only and then every n-th decade (kept from the outermost) to honor the density
+    /// hint. Decades-only ticks skip a decade closer to zero than half the decade spacing,
+    /// where the log compression would crowd its label into zero's. A domain inside the linear
+    /// threshold uses plain linear ticks.
     pub fn ticks(&self, target_count: usize) -> Vec<f64> {
         if target_count == 0 {
             return Vec::new();
         }
-        let Some(from) = self.transform(self.domain_from) else {
-            return Vec::new();
+        let budget = target_count.min(MAX_GENERAL_TICKS);
+        let low = self.domain_from.min(self.domain_to);
+        let high = self.domain_from.max(self.domain_to);
+        let magnitude = low.abs().max(high.abs());
+        let first_exp = self.constant.log10().floor() as i32;
+        let last_exp = magnitude.log10().floor() as i32;
+        let decades = || (first_exp..=last_exp).rev();
+        let spans_zero = low <= 0.0 && high >= 0.0;
+        let collect = |factors: &[f64], stride: usize| {
+            let min_from_zero = if spans_zero && factors.len() == 1 {
+                0.5 * stride as f64 * std::f64::consts::LN_10
+            } else {
+                0.0
+            };
+            let mut ticks = Vec::new();
+            if spans_zero {
+                ticks.push(0.0);
+            }
+            for (index, exp) in decades().enumerate() {
+                if !index.is_multiple_of(stride) {
+                    continue;
+                }
+                let power = 10.0_f64.powi(exp);
+                for factor in factors {
+                    let value = factor * power;
+                    if !value.is_finite()
+                        || value < self.constant
+                        || self.transform(value).is_none_or(|t| t < min_from_zero)
+                    {
+                        continue;
+                    }
+                    for signed in [value, -value] {
+                        if signed >= low && signed <= high {
+                            ticks.push(signed);
+                        }
+                    }
+                }
+            }
+            ticks.sort_by(f64::total_cmp);
+            ticks
         };
-        let Some(to) = self.transform(self.domain_to) else {
-            return Vec::new();
-        };
-        let Ok(linear) = LinearScale::new(from, to, 0.0, 1.0) else {
-            return Vec::new();
-        };
-        linear
-            .ticks(target_count)
-            .into_iter()
-            .filter_map(|tick| self.untransform(tick))
-            .collect()
+        let mut ticks = collect(&[1.0, 2.0, 5.0], 1);
+        if ticks.len() > budget {
+            ticks = collect(&[1.0], 1);
+        }
+        let mut stride = 2;
+        while ticks.len() > budget && stride <= decades().count() {
+            ticks = collect(&[1.0], stride);
+            stride += 1;
+        }
+        if ticks.len() < 2 {
+            return LinearScale::new(self.domain_from, self.domain_to, 0.0, 1.0)
+                .map(|linear| linear.ticks(target_count))
+                .unwrap_or_default();
+        }
+        ticks.truncate(MAX_GENERAL_TICKS);
+        if self.domain_from > self.domain_to {
+            ticks.reverse();
+        }
+        ticks
     }
 }
 
@@ -1526,6 +1577,30 @@ mod tests {
             );
         }
         assert!(scale.ticks(7).len() <= MAX_GENERAL_TICKS);
+        // Ticks are round signed decades around zero, never transformed-space fractions.
+        let wide = SymLogScale::new(-5_200.0, 7_300.0, 0.0, 300.0, 1.0).unwrap();
+        assert_eq!(
+            wide.ticks(10),
+            vec![-1_000.0, -100.0, -10.0, 0.0, 10.0, 100.0, 1_000.0]
+        );
+        assert_eq!(wide.ticks(5), vec![-1_000.0, -10.0, 0.0, 10.0, 1_000.0]);
+        // The thinned innermost decade would crowd zero's label, so it is skipped.
+        assert_eq!(
+            SymLogScale::new(-12_000.0, 12_000.0, 0.0, 300.0, 1.0)
+                .unwrap()
+                .ticks(5),
+            vec![-10_000.0, -100.0, 0.0, 100.0, 10_000.0]
+        );
+        assert_eq!(
+            SymLogScale::new(10.0, -10.0, 0.0, 1.0, 1.0)
+                .unwrap()
+                .ticks(12),
+            vec![10.0, 5.0, 2.0, 1.0, 0.0, -1.0, -2.0, -5.0, -10.0]
+        );
+        assert_eq!(
+            SymLogScale::new(-0.5, 0.5, 0.0, 1.0, 1.0).unwrap().ticks(5),
+            LinearScale::new(-0.5, 0.5, 0.0, 1.0).unwrap().ticks(5)
+        );
         assert_eq!(
             SymLogScale::new(-1.0, 1.0, 0.0, 1.0, 0.0),
             Err(ScaleError::InvalidConstant)

@@ -690,9 +690,13 @@ fn explicit_general_axes_reserve_layout_and_emit_shared_axis_frame() {
     let pane_state = &chart.panes[pane];
     assert!(plot.y >= pane_state.top);
     assert!(plot.y + plot.height < pane_state.top + pane_state.height);
-    assert!(
-        chart.left_axis_w >= 62.0,
-        "general Y labels reserve a side strip"
+    // The strip hugs the widest tick ("100" at 7 px per glyph) plus the rotated title lane.
+    assert_eq!(
+        chart.left_axis_w,
+        crate::axis_metrics::AxisMetrics::price_strip_width(21.0, 0.0)
+            + chart.axis_metrics().axis
+            + 8.0,
+        "general Y labels reserve a side strip sized to their measured width"
     );
 
     let frame = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
@@ -3352,11 +3356,12 @@ fn automatic_general_domain_tracks_transition_presentation() {
             .effective_general_axis_domain(chart.general_axis("y").unwrap())
             .unwrap()
     };
-    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([0.0, 4.0]));
+    // Line axes keep zero on the axis and reserve a 4% margin past the nice upper tick.
+    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([0.0, 4.16]));
     chart.set_general_animation_time_ms(1_100.0);
-    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([0.0, 6.0]));
+    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([0.0, 6.24]));
     chart.set_general_animation_time_ms(1_200.0);
-    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([0.0, 8.0]));
+    assert_eq!(domain(&chart), GeneralAxisDomain::Numeric([0.0, 8.32]));
 }
 
 #[test]
@@ -9751,12 +9756,13 @@ fn general_only_charts_use_recharts_chrome_domains_and_hover() {
 
     assert_eq!(
         chart.general_axis_effective_domain("y"),
-        Some(GeneralAxisDomain::Numeric([0.0, 50.0])),
-        "automatic numeric domains start at zero and end on a clean tick"
+        Some(GeneralAxisDomain::Numeric([0.0, 52.0])),
+        "automatic Y domains start at zero and keep a margin past the clean upper tick"
     );
     assert_eq!(
         chart.general_axis_effective_domain("x"),
-        Some(GeneralAxisDomain::Numeric([0.0, 3.0]))
+        Some(GeneralAxisDomain::Numeric([-0.12, 3.12])),
+        "edge points stay off the Y axis line"
     );
 
     assert_eq!(chart.time_axis_height(), 0.0);
@@ -10513,14 +10519,19 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
     options.data_labels = true;
     let series = chart.add_general_series(options).unwrap();
 
-    assert_eq!(
-        chart.general_axis_effective_domain("x"),
-        Some(GeneralAxisDomain::Numeric([-10.0, 20.0]))
-    );
-    assert_eq!(
-        chart.general_axis_effective_domain("y"),
-        Some(GeneralAxisDomain::Numeric([-5.0, 5.0]))
-    );
+    let close = |chart: &ChartEngine, id: &str, expected: [f64; 2]| {
+        let Some(GeneralAxisDomain::Numeric(domain)) = chart.general_axis_effective_domain(id)
+        else {
+            panic!("{id} has a numeric domain");
+        };
+        assert!(
+            (domain[0] - expected[0]).abs() < 1e-9 && (domain[1] - expected[1]).abs() < 1e-9,
+            "{id}: {domain:?}"
+        );
+    };
+    // Scatter extents plus the automatic 4% edge margin.
+    close(&chart, "x", [-11.2, 21.2]);
+    close(&chart, "y", [-5.4, 5.4]);
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
 
     let expected_color = Color::parse_css("#654321").unwrap();
@@ -10629,10 +10640,7 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
     assert_eq!(accessibility.items[3].value, None);
 
     chart.zoom_general_axis("x", 2.0, 5.0).unwrap();
-    assert_eq!(
-        chart.general_axis_effective_domain("x"),
-        Some(GeneralAxisDomain::Numeric([-2.5, 12.5]))
-    );
+    close(&chart, "x", [-3.1, 13.1]);
     geometry.clear();
     chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
         geometry.push(point)
@@ -10643,10 +10651,7 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
     );
 
     chart.pan_general_axis("x", 0.5).unwrap();
-    assert_eq!(
-        chart.general_axis_effective_domain("x"),
-        Some(GeneralAxisDomain::Numeric([5.0, 20.0]))
-    );
+    close(&chart, "x", [5.0, 21.2]);
     geometry.clear();
     chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
         geometry.push(point)
@@ -10656,10 +10661,7 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
         vec![2]
     );
     assert!(chart.reset_general_axis_view("x"));
-    assert_eq!(
-        chart.general_axis_effective_domain("x"),
-        Some(GeneralAxisDomain::Numeric([-10.0, 20.0]))
-    );
+    close(&chart, "x", [-11.2, 21.2]);
 
     let mut invalid_radius = GeneralSeriesOptions::scatter(pane, dataset, "x", "y");
     invalid_radius.point_radius = 0.5;
@@ -10704,10 +10706,7 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
         geometry.push(point)
     });
     assert_eq!(geometry.len(), 2);
-    assert_eq!(
-        chart.general_axis_effective_domain("x"),
-        Some(GeneralAxisDomain::Numeric([0.0, 200.0]))
-    );
+    close(&chart, "x", [-8.0, 208.0]);
     assert_eq!(
         chart.general_tooltip_snapshot(series, 0).unwrap().x_label,
         "100"
@@ -11547,6 +11546,263 @@ fn range_bar_uses_bound_numeric_axis_transform() {
     assert!(bars[0].right - bars[0].left <= 16.0 + 1e-9);
     assert!((bars[0].top - (plot.y + plot.height * 0.5)).abs() < 1e-9);
     assert!((bars[0].bottom - (plot.y + plot.height)).abs() < 1e-9);
+}
+
+fn histogram_chart(
+    values: Vec<f64>,
+    histogram: crate::GeneralHistogramOptions,
+) -> (
+    ChartEngine,
+    usize,
+    crate::GeneralDatasetId,
+    crate::GeneralSeriesId,
+) {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    for (id, dimension) in [("hist-x", AxisDimension::X), ("hist-y", AxisDimension::Y)] {
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                id,
+                pane,
+                dimension,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+    }
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Values {
+            ids: None,
+            values,
+            values_valid: None,
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::histogram(pane, dataset, "hist-x", "hist-y");
+    options.histogram = histogram;
+    let series = chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    (chart, pane, dataset, series)
+}
+
+#[test]
+fn histogram_bins_samples_into_contiguous_bars_with_bin_identity() {
+    let (mut chart, pane, _, series) = histogram_chart(
+        vec![1.0, 2.0, 2.5, 3.0, 7.0],
+        crate::GeneralHistogramOptions {
+            bin_count: Some(3),
+            ..Default::default()
+        },
+    );
+    let GeneralAxisDomain::Numeric([x_from, x_to]) =
+        chart.general_axis_effective_domain("hist-x").unwrap()
+    else {
+        panic!("histogram X axis must be numeric");
+    };
+    assert!(x_from <= 1.0 && x_from > 0.0 && (7.0..8.0).contains(&x_to));
+    let GeneralAxisDomain::Numeric([y_from, y_to]) =
+        chart.general_axis_effective_domain("hist-y").unwrap()
+    else {
+        panic!("histogram Y axis must be numeric");
+    };
+    assert!(y_from <= 0.0 && y_to >= 3.0);
+
+    let mut bars = Vec::new();
+    chart.visit_general_histogram_bins(chart.general_series(series).unwrap(), |bar| bars.push(bar));
+    assert_eq!(bars.len(), 3);
+    assert!((bars[0].right - bars[1].left).abs() < 1e-9);
+    assert!((bars[1].right - bars[2].left).abs() < 1e-9);
+    let height = |bar: &crate::general_series::GeneralColumnGeometry| bar.bottom - bar.top;
+    assert!((height(&bars[0]) - 3.0 * height(&bars[1])).abs() < 1e-6);
+    assert!((height(&bars[1]) - height(&bars[2])).abs() < 1e-9);
+    assert!(
+        chart.build_frame().panes[pane]
+            .main
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::Rect { .. }))
+    );
+
+    let hit = chart
+        .general_hit_test(
+            pane,
+            (bars[1].left + bars[1].right) * 0.5,
+            (bars[1].top + bars[1].bottom) * 0.5,
+            crate::GeneralHitMode::Exact,
+        )
+        .unwrap();
+    assert_eq!((hit.series, hit.row), (series, 1));
+    assert_eq!(hit.row_id, GeneralRowIdentity::Generated(1));
+
+    let first = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert_eq!(first.x_label, "[1, 3)");
+    assert_eq!(first.value, Some(3.0));
+    assert_eq!((first.x_low, first.x_high), (Some(1.0), Some(3.0)));
+    assert_eq!(
+        chart.general_tooltip_snapshot(series, 2).unwrap().x_label,
+        "[5, 7]"
+    );
+    assert!(chart.general_tooltip_snapshot(series, 3).is_none());
+    let shared = chart.general_shared_tooltip_snapshot(series, 0).unwrap();
+    assert_eq!(shared.items.len(), 1);
+
+    let accessibility = chart.general_accessibility_snapshot(series, 0, 10).unwrap();
+    assert_eq!(accessibility.total_rows, 3);
+    assert_eq!(
+        accessibility
+            .items
+            .iter()
+            .map(|item| item.value)
+            .collect::<Vec<_>>(),
+        vec![Some(3.0), Some(1.0), Some(1.0)]
+    );
+
+    let brush = chart
+        .set_general_brush_range("hist-x", crate::GeneralBrushRange::Numeric([0.0, 3.5]))
+        .unwrap();
+    assert_eq!(
+        brush.items.iter().map(|item| item.row).collect::<Vec<_>>(),
+        vec![0]
+    );
+}
+
+#[test]
+fn histogram_normalization_options_and_bin_bounds_are_validated() {
+    let (mut chart, pane, dataset, series) = histogram_chart(
+        vec![1.0, 2.0, 2.5, 3.0, 7.0],
+        crate::GeneralHistogramOptions {
+            bin_count: Some(3),
+            normalization: crate::GeneralHistogramNormalization::Density,
+            ..Default::default()
+        },
+    );
+    let density = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert!((density.value.unwrap() - 0.3).abs() < 1e-12);
+
+    let mut options = GeneralSeriesOptions::histogram(pane, dataset, "hist-x", "hist-y");
+    options.histogram = crate::GeneralHistogramOptions {
+        bin_count: Some(3),
+        normalization: crate::GeneralHistogramNormalization::Percent,
+        cumulative: true,
+        ..Default::default()
+    };
+    chart
+        .update_general_series_options(series, options.clone())
+        .unwrap();
+    let cumulative = (0..3)
+        .map(|bin| chart.general_tooltip_snapshot(series, bin).unwrap().value)
+        .collect::<Vec<_>>();
+    assert_eq!(cumulative, vec![Some(60.0), Some(80.0), Some(100.0)]);
+
+    options.histogram.bin_count = Some(0);
+    assert_eq!(
+        chart
+            .update_general_series_options(series, options.clone())
+            .unwrap_err()
+            .code(),
+        crate::ErrorCode::InvalidOptions
+    );
+    options.histogram = crate::GeneralHistogramOptions {
+        bin_width: Some(0.001),
+        ..Default::default()
+    };
+    assert_eq!(
+        chart
+            .update_general_series_options(series, options.clone())
+            .unwrap_err()
+            .code(),
+        crate::ErrorCode::InvalidData
+    );
+
+    options.histogram = crate::GeneralHistogramOptions {
+        bin_width: Some(0.5),
+        ..Default::default()
+    };
+    chart
+        .update_general_series_options(series, options)
+        .unwrap();
+    assert_eq!(
+        chart
+            .replace_general_xy_dataset(
+                dataset,
+                GeneralXyInput::Values {
+                    ids: None,
+                    values: vec![0.0, 1_000.0],
+                    values_valid: None,
+                },
+            )
+            .unwrap_err()
+            .code(),
+        crate::ErrorCode::InvalidData
+    );
+    assert_eq!(
+        chart
+            .upsert_general_xy_dataset(
+                dataset,
+                GeneralXyInput::Values {
+                    ids: Some(vec![GeneralRowId::Text("far".into())]),
+                    values: vec![1_000.0],
+                    values_valid: None,
+                },
+                None,
+            )
+            .unwrap_err()
+            .code(),
+        crate::ErrorCode::InvalidData
+    );
+    let unchanged = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert_eq!(unchanged.x_label, "[1, 1.5)");
+    assert_eq!(unchanged.value, Some(1.0));
+}
+
+#[test]
+fn histogram_options_are_rejected_on_other_series_kinds() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "column-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "column-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["A".into()],
+            category_indices: vec![0],
+            y: vec![1.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let mut column = GeneralSeriesOptions::column(pane, dataset, "column-x", "column-y");
+    column.histogram.cumulative = true;
+    assert_eq!(
+        chart.add_general_series(column.clone()).unwrap_err().code(),
+        crate::ErrorCode::InvalidOptions
+    );
+    column.histogram = crate::GeneralHistogramOptions::default();
+    chart.add_general_series(column).unwrap();
 }
 
 #[test]
@@ -12870,9 +13126,10 @@ fn temporal_error_bars_preserve_epoch_bounds_autoscale_geometry_and_atomic_updat
     assert_eq!(
         chart.general_axis_effective_domain("temporal-error-x"),
         Some(GeneralAxisDomain::Temporal([
-            1_699_999_970_000,
-            1_700_000_090_000,
-        ]))
+            1_699_999_965_200,
+            1_700_000_094_800,
+        ])),
+        "the error-bar extent plus a 4% margin at each end"
     );
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
     let mut geometry = Vec::new();
@@ -13031,19 +13288,36 @@ fn scatter_log_and_symlog_axes_validate_and_emit_transformed_ticks() {
             pane, dataset, "x-log", "y-symlog",
         ))
         .unwrap();
-    assert_eq!(
-        chart.general_axis_effective_domain("x-log"),
-        Some(GeneralAxisDomain::Numeric([1.0, 100.0]))
-    );
-    assert_eq!(
-        chart.general_axis_effective_domain("y-symlog"),
-        Some(GeneralAxisDomain::Numeric([-10.0, 10.0]))
-    );
+    // The automatic margin is applied in transformed space, so log and symlog ends stay valid.
+    let Some(GeneralAxisDomain::Numeric([log_low, log_high])) =
+        chart.general_axis_effective_domain("x-log")
+    else {
+        panic!("log axis has a numeric domain");
+    };
+    assert!((log_low - 10_f64.powf(-0.08)).abs() < 1e-9);
+    assert!((log_high - 10_f64.powf(2.08)).abs() < 1e-9);
+    let Some(GeneralAxisDomain::Numeric([symlog_low, symlog_high])) =
+        chart.general_axis_effective_domain("y-symlog")
+    else {
+        panic!("symlog axis has a numeric domain");
+    };
+    let symlog_end = 11_f64.powf(1.08) - 1.0;
+    assert!((symlog_low + symlog_end).abs() < 1e-9);
+    assert!((symlog_high - symlog_end).abs() < 1e-9);
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
     let axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
-    assert!(axis.labels.iter().any(|label| label.text == "1"));
-    assert!(axis.labels.iter().any(|label| label.text == "10"));
-    assert!(axis.labels.iter().any(|label| label.text == "0"));
+    let texts: Vec<_> = axis
+        .labels
+        .iter()
+        .map(|label| label.text.as_str())
+        .collect();
+    for expected in ["2", "10", "50", "0", "-10"] {
+        assert!(texts.contains(&expected), "{expected}: {texts:?}");
+    }
+    assert!(
+        texts.iter().all(|text| !text.contains('.')),
+        "symlog ticks are round decades: {texts:?}"
+    );
 
     let before = chart.general_dataset(dataset).unwrap().clone();
     let err = chart
@@ -22050,4 +22324,215 @@ fn position_stats_refresh_instrument_metadata_and_handle_future_zero_risk_and_vi
                 || text.starts_with("Stop:")
                 || text.contains("Qty:"))
     );
+}
+
+const BAR_FILL: &str = "#123456";
+
+fn single_bar_chart(
+    horizontal: bool,
+    values: Vec<f64>,
+    data_labels: bool,
+    line_visible: bool,
+) -> (ChartEngine, usize) {
+    let pane = 0;
+    let mut chart = ChartEngine::new_with_initial_domain(
+        640.0,
+        400.0,
+        1.0,
+        if horizontal {
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            }
+        } else {
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            }
+        },
+    )
+    .unwrap();
+    let (x_scale, y_scale) = if horizontal {
+        (GeneralScaleType::Linear, GeneralScaleType::Band)
+    } else {
+        (GeneralScaleType::Band, GeneralScaleType::Linear)
+    };
+    for (id, dimension, scale) in [
+        ("bar-x", AxisDimension::X, x_scale),
+        ("bar-y", AxisDimension::Y, y_scale),
+    ] {
+        let mut axis = GeneralAxisOptions::new(id, pane, dimension, scale);
+        axis.line_visible = line_visible;
+        chart.add_general_axis(axis).unwrap();
+    }
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: (0..values.len()).map(|index| format!("C{index}")).collect(),
+            category_indices: (0..values.len() as u32).collect(),
+            y: values,
+            y_valid: None,
+        })
+        .unwrap();
+    let mut options = if horizontal {
+        GeneralSeriesOptions::horizontal_bar(pane, dataset, "bar-x", "bar-y")
+    } else {
+        GeneralSeriesOptions::column(pane, dataset, "bar-x", "bar-y")
+    };
+    options.bar_corner_radius = 6.0;
+    options.data_labels = data_labels;
+    options.color = Some(BAR_FILL.into());
+    chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    (chart, pane)
+}
+
+fn bar_rects(frame: &ChartFrame, pane: usize) -> Vec<(f32, f32, f32, f32, [f32; 4])> {
+    let fill = aeris_charts_render::color::Color::parse_css(BAR_FILL).unwrap();
+    frame.panes[pane]
+        .main
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::RoundRect {
+                x,
+                y,
+                w,
+                h,
+                radii,
+                fill: color,
+                ..
+            } if *color == fill => Some((*x, *y, *w, *h, *radii)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn unstacked_bars_round_only_their_value_end() {
+    for horizontal in [false, true] {
+        let (mut chart, pane) = single_bar_chart(horizontal, vec![5.0, -3.0], false, true);
+        let radii: Vec<[f32; 4]> = bar_rects(&chart.build_frame(), pane)
+            .into_iter()
+            .map(|(.., radii)| radii)
+            .collect();
+        // Corner order is left-top, right-top, right-bottom, left-bottom.
+        let (positive, negative) = if horizontal {
+            ([0.0, 6.0, 6.0, 0.0], [6.0, 0.0, 0.0, 6.0])
+        } else {
+            ([6.0, 6.0, 0.0, 0.0], [0.0, 0.0, 6.0, 6.0])
+        };
+        assert_eq!(radii, vec![positive, negative], "horizontal: {horizontal}");
+    }
+}
+
+#[test]
+fn bar_data_labels_sit_past_the_value_end_of_their_own_bar() {
+    for horizontal in [false, true] {
+        let (mut chart, pane) = single_bar_chart(horizontal, vec![4.2, 3.0, 3.6], true, true);
+        let frame = chart.build_frame();
+        let bars = bar_rects(&frame, pane);
+        assert_eq!(bars.len(), 3);
+        for ((x, y, w, h, _), value) in bars.into_iter().zip(["4.2", "3", "3.6"]) {
+            let (label_x, label_y) = frame.panes[pane]
+                .main
+                .iter()
+                .find_map(|primitive| match primitive {
+                    Prim::Text { x, y, text, .. } if text == value => Some((*x, *y)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("label {value}"));
+            if horizontal {
+                assert!(
+                    label_y > y && label_y < y + h,
+                    "{value} stays on its bar row"
+                );
+                assert!(label_x >= x + w, "{value} sits past the bar end");
+            } else {
+                assert!(
+                    label_x > x && label_x < x + w,
+                    "{value} stays over its column"
+                );
+                assert!(label_y <= y, "{value} sits above the column");
+            }
+        }
+    }
+}
+
+#[test]
+fn general_axis_lines_can_be_hidden_without_losing_labels() {
+    let measure = |text: &str, _| text.len() as f64 * 7.0;
+    let axis_frame = |line_visible| {
+        single_bar_chart(false, vec![2.0, 3.0], false, line_visible)
+            .0
+            .build_axis_frame(80.0, measure, |_, _| 0.0)
+    };
+    let (visible, hidden) = (axis_frame(true), axis_frame(false));
+    assert_eq!(visible.bands.len(), 2);
+    assert!(hidden.bands.is_empty());
+    assert_eq!(
+        hidden
+            .labels
+            .iter()
+            .map(|label| &label.text)
+            .collect::<Vec<_>>(),
+        visible
+            .labels
+            .iter()
+            .map(|label| &label.text)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn empty_axis_placeholder_width_does_not_floor_later_label_widths() {
+    let measure = |text: &str, _| text.len() as f64 * 7.0;
+    let (mut fresh, _) = single_bar_chart(true, vec![6.0, -3.0, 4.0], false, true);
+    fresh.recompute_layout_with_measure(true, measure, |_, _| 0.0);
+
+    let mut chart = ChartEngine::new_with_initial_domain(
+        640.0,
+        400.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    for (id, dimension, scale) in [
+        ("bar-x", AxisDimension::X, GeneralScaleType::Linear),
+        ("bar-y", AxisDimension::Y, GeneralScaleType::Band),
+    ] {
+        chart
+            .add_general_axis(GeneralAxisOptions::new(id, 0, dimension, scale))
+            .unwrap();
+    }
+    // A layout before any data measures no labels and reserves the placeholder strip.
+    chart.recompute_layout_with_measure(false, measure, |_, _| 0.0);
+    let placeholder = chart.left_axis_w;
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["C0".into(), "C1".into(), "C2".into()],
+            category_indices: vec![0, 1, 2],
+            y: vec![6.0, -3.0, 4.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::horizontal_bar(0, dataset, "bar-x", "bar-y");
+    options.bar_corner_radius = 6.0;
+    options.color = Some(BAR_FILL.into());
+    chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(false, measure, |_, _| 0.0);
+    assert!(fresh.left_axis_w < placeholder);
+    assert_eq!(chart.left_axis_w, fresh.left_axis_w);
+
+    // Measured label widths still only grow until a shrinking layout.
+    let measured = chart.left_axis_w;
+    chart.recompute_layout_with_measure(false, |text, _| text.len() as f64 * 3.0, |_, _| 0.0);
+    assert_eq!(chart.left_axis_w, measured);
+}
+
+#[test]
+fn point_axes_default_to_half_a_step_of_outer_padding() {
+    let outer = |scale| GeneralAxisOptions::new("x", 0, AxisDimension::X, scale).band_padding_outer;
+    assert_eq!(outer(GeneralScaleType::Point), 0.5);
+    assert_eq!(outer(GeneralScaleType::Band), 0.1);
 }

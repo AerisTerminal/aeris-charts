@@ -236,6 +236,8 @@ struct SeriesV2 {
     stack_id: Option<String>,
     #[serde(default)]
     stack_mode: crate::GeneralStackMode,
+    #[serde(default)]
+    histogram: crate::GeneralHistogramOptions,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1135,6 +1137,7 @@ impl ChartEngine {
                     band_padding_outer: axis.band_padding_outer(),
                     zero_line: axis.zero_line(),
                     grid_visible: axis.grid_visible(),
+                    line_visible: axis.line_visible(),
                 })
             })
             .collect::<Result<Vec<_>, ChartError>>()?;
@@ -1221,6 +1224,11 @@ impl ChartEngine {
                     "range and bubble channels are mutually exclusive"
                 );
                 let input = match dataset.x_kind() {
+                    crate::GeneralXKind::Values => crate::GeneralXyInput::Values {
+                        ids,
+                        values: y,
+                        values_valid: y_valid,
+                    },
                     crate::GeneralXKind::Numeric if heatmap_y_numeric.is_some() => {
                         crate::GeneralXyInput::HeatmapNumericNumeric {
                             ids,
@@ -1479,6 +1487,7 @@ impl ChartEngine {
                     group_id: series.group_id().map(str::to_string),
                     stack_id: series.stack_id().map(str::to_string),
                     stack_mode: series.stack_mode(),
+                    histogram: series.histogram(),
                 })
             })
             .collect::<Result<Vec<_>, ChartError>>()?;
@@ -2656,6 +2665,7 @@ impl ChartEngine {
                 group_id: series.group_id,
                 stack_id: series.stack_id,
                 stack_mode: series.stack_mode,
+                histogram: series.histogram,
             })?;
         }
         let mut layout_datasets = HashMap::new();
@@ -4282,6 +4292,7 @@ mod tests {
                     "heatmap_high_color",
                     "box_fill_color",
                     "box_median_color",
+                    "histogram",
                 ] {
                     series.remove(newer);
                 }
@@ -4386,6 +4397,7 @@ mod tests {
                 "heatmap_high_color",
                 "box_fill_color",
                 "box_median_color",
+                "histogram",
             ] {
                 series.remove(field);
             }
@@ -4550,12 +4562,14 @@ mod tests {
                 parent: None,
                 label: "Root".into(),
                 value: None,
+                color_value: None,
             },
             crate::HierarchyNode {
                 id: "leaf".into(),
                 parent: Some("root".into()),
                 label: "Leaf".into(),
                 value: Some(3.0),
+                color_value: None,
             },
         ]);
         let dataset = source.create_general_layout_dataset(input.clone()).unwrap();
@@ -5006,6 +5020,72 @@ mod tests {
             .unwrap();
         assert_eq!(gap.low, None);
         assert_eq!(gap.high, None);
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_histogram_samples_and_binning_options() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        for (id, dimension) in [
+            ("hist-x", crate::AxisDimension::X),
+            ("hist-y", crate::AxisDimension::Y),
+        ] {
+            chart
+                .add_general_axis(crate::GeneralAxisOptions::new(
+                    id,
+                    pane,
+                    dimension,
+                    crate::GeneralScaleType::Linear,
+                ))
+                .unwrap();
+        }
+        let dataset = chart
+            .create_general_xy_dataset(crate::GeneralXyInput::Values {
+                ids: None,
+                values: vec![1.0, 2.0, 2.5, 7.0, 0.0],
+                values_valid: Some(vec![1, 1, 1, 1, 0]),
+            })
+            .unwrap();
+        let histogram = crate::GeneralHistogramOptions {
+            bin_count: None,
+            bin_width: Some(2.0),
+            normalization: crate::GeneralHistogramNormalization::Percent,
+            cumulative: true,
+        };
+        let mut options = crate::GeneralSeriesOptions::histogram(pane, dataset, "hist-x", "hist-y");
+        options.histogram = histogram;
+        chart.add_general_series(options).unwrap();
+
+        let document = chart.export_state_json().unwrap();
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(restored.export_state_json().unwrap(), document);
+        let series = restored.general_series_ids_in_pane(pane)[0];
+        let restored_series = restored.general_series(series).unwrap();
+        assert_eq!(restored_series.kind(), crate::GeneralSeriesKind::Histogram);
+        assert_eq!(restored_series.histogram(), histogram);
+        let bins = (0..4)
+            .map(|bin| {
+                let tooltip = restored.general_tooltip_snapshot(series, bin).unwrap();
+                (tooltip.x_label, tooltip.value)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bins,
+            vec![
+                ("[0, 2)".to_owned(), Some(25.0)),
+                ("[2, 4)".to_owned(), Some(75.0)),
+                ("[4, 6)".to_owned(), Some(75.0)),
+                ("[6, 8]".to_owned(), Some(100.0)),
+            ]
+        );
     }
 
     #[test]

@@ -33,7 +33,7 @@ import type {
   general_series_kind, general_series_options, general_shared_tooltip_snapshot, general_tooltip_snapshot, general_update_options, general_xy_row,
   layout_accessibility_snapshot, layout_hit, layout_input, layout_series_api, layout_series_kind, layout_series_options,
   box_plot_row, bubble_columns, bubble_row, category_box_columns, category_error_columns, category_heatmap_columns, category_range_columns, category_xy_columns, numeric_error_columns, numeric_heatmap_columns, numeric_range_columns, numeric_xy_columns,
-  error_bar_row, heatmap_grid_row, range_area_row, temporal_error_columns, temporal_heatmap_columns, temporal_range_columns, temporal_xy_columns,
+  error_bar_row, heatmap_grid_row, histogram_columns, histogram_row, range_area_row, temporal_error_columns, temporal_heatmap_columns, temporal_range_columns, temporal_xy_columns,
   ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, indicator_input_source, indicator_kind, indicator_output_style, indicator_schema, kinetic_scroll_options, pivot_kind, vwap_reset,
   last_value_data, localization_options, logical_range,
@@ -462,7 +462,11 @@ type packed_numeric_heatmap_columns = Omit<numeric_heatmap_columns, "ids"> & {
 type packed_temporal_heatmap_columns = Omit<temporal_heatmap_columns, "ids"> & {
   ids?: readonly (string | number | null)[];
 };
+type packed_histogram_columns = Omit<histogram_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
 type general_columns_input =
+  | packed_histogram_columns
   | packed_numeric_xy_columns
   | packed_bubble_columns
   | packed_numeric_range_columns
@@ -521,11 +525,31 @@ function general_value_metadata_json(
   return `{"ids":${ids},"labels":${labels},"colors":${colors},"symbols":${symbols}}`;
 }
 
+function pack_histogram_rows(data: readonly histogram_row[]): packed_histogram_columns {
+  const ids = data.some((row) => row.id !== undefined) ? data.map((row) => row.id ?? null) : undefined;
+  const values = new Float64Array(data.length);
+  let values_valid: Uint8Array | undefined;
+  for (let index = 0; index < data.length; index += 1) {
+    const value = data[index]!.value;
+    if (value === null) {
+      values_valid ??= new Uint8Array(data.length).fill(1);
+      values_valid[index] = 0;
+    } else if (typeof value === "number") {
+      values[index] = value;
+    } else {
+      throw new AerisChartsError("invalid_data", "histogram rows require a numeric or null value field");
+    }
+  }
+  return { ids, values, values_valid };
+}
+
 function pack_general_rows(
   kind: general_series_kind,
-  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[],
+  rows: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[],
   x_scale?: general_axis_options["scale"],
 ): general_columns_input {
+  if (kind === "histogram") return pack_histogram_rows(rows as readonly histogram_row[]);
+  const data = rows as readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[];
   const has_explicit = data.some((row) => row.id !== undefined);
   const ids = has_explicit ? data.map((row) => row.id ?? null) : undefined;
   const has_labels = data.some((row) => row.label !== undefined);
@@ -887,7 +911,7 @@ function pack_general_rows(
 
 function proposal_columns(
   kind: general_series_kind,
-  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[],
+  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[],
   x_scale: general_axis_options["scale"],
 ): Record<string, unknown> {
   const packed = pack_general_rows(kind, data, x_scale) as unknown as Record<string, unknown>;
@@ -1202,6 +1226,7 @@ class general_series_impl implements general_series_api {
       ...current,
       ...patch,
       polar: patch.polar === undefined ? current.polar : { ...current.polar, ...patch.polar },
+      histogram: patch.histogram === undefined ? current.histogram : { ...current.histogram, ...patch.histogram },
     };
     parse_general_result<null>(
       this.chart.wasm.update_general_series_options_result_json(this.id, JSON.stringify(options)),
@@ -1221,15 +1246,15 @@ class general_series_impl implements general_series_api {
     this.chart.repaint();
   }
 
-  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[]): void {
+  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[]): void {
     this.install_data(pack_general_rows(this.kind, data, this.x_scale()));
   }
 
-  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns): void {
+  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns): void {
     this.install_data(columns);
   }
 
-  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[], options: general_update_options = {}): void {
+  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[], options: general_update_options = {}): void {
     if (data.some((row) => row.id === undefined)) {
       throw new AerisChartsError("invalid_data", "general incremental updates require explicit row IDs");
     }
@@ -1237,7 +1262,7 @@ class general_series_impl implements general_series_api {
   }
 
   update_data_typed(
-    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns,
+    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns,
     options: general_update_options = {},
   ): void {
     this.upsert_data(columns, options);
@@ -1273,9 +1298,20 @@ class general_series_impl implements general_series_api {
     if (this.kind === "heatmap_grid" && !("value" in columns)) {
       throw new AerisChartsError("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
     }
+    if ((this.kind === "histogram") !== ("values" in columns)) {
+      throw new AerisChartsError("invalid_data", "only histogram series accept histogram sample columns");
+    }
     this.chart.prepare_general_transition_update();
     let result: string;
-    if ("value" in columns) {
+    if ("values" in columns) {
+      result = this.chart.wasm.upsert_general_values_data_typed(
+        this.dataset,
+        `{"ids":${general_ids_json(columns.ids, columns.values.length) || "null"}}`,
+        columns.values,
+        columns.values_valid,
+        max_rows ?? 0,
+      );
+    } else if ("value" in columns) {
       if ("x_category_indices" in columns) {
         result = this.chart.wasm.upsert_general_heatmap_category_data_typed(
           this.dataset,
@@ -1442,9 +1478,19 @@ class general_series_impl implements general_series_api {
     if (this.kind === "heatmap_grid" && !("value" in columns)) {
       throw new AerisChartsError("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
     }
+    if ((this.kind === "histogram") !== ("values" in columns)) {
+      throw new AerisChartsError("invalid_data", "only histogram series accept histogram sample columns");
+    }
     this.chart.prepare_general_transition_update();
     let result: string;
-    if ("value" in columns) {
+    if ("values" in columns) {
+      result = this.chart.wasm.set_general_values_data_typed(
+        this.dataset,
+        `{"ids":${general_ids_json(columns.ids, columns.values.length) || "null"}}`,
+        columns.values,
+        columns.values_valid,
+      );
+    } else if ("value" in columns) {
       if ("x_category_indices" in columns) {
         result = this.chart.wasm.set_general_heatmap_category_data_typed(
           this.dataset,
@@ -5070,8 +5116,12 @@ export class chart_impl implements chart_api {
     kind: series_kind | general_series_kind,
     options?: Partial<any_series_options> | general_series_options,
   ): series_api | general_series_api {
+    // "histogram" names both the financial time-series histogram and the general distribution
+    // series; only general series options carry axis bindings.
+    const general_histogram = kind === "histogram" && options !== undefined && "x_axis_id" in options;
     if (
-      kind === "xy_line"
+      general_histogram
+      || kind === "xy_line"
       || kind === "xy_area"
       || kind === "range_area"
       || kind === "range_bar"
@@ -7324,7 +7374,8 @@ export class chart_impl implements chart_api {
       | { kind: "crosshair_left" }
       | { kind: "context_menu"; x: number; y: number }
       | { kind: "delta_tooltip_changed" }
-      | { kind: "general_brush_changed" };
+      | { kind: "general_brush_changed" }
+      | { kind: "general_legend_changed" };
     const events = JSON.parse(this.wasm.take_input_events_json()) as controller_event[];
     for (const event of events) {
       switch (event.kind) {
@@ -7356,6 +7407,9 @@ export class chart_impl implements chart_api {
           break;
         case "general_brush_changed":
           this.notify_general_brush_change();
+          break;
+        case "general_legend_changed":
+          this.notify_general_legend_change();
           break;
       }
     }
@@ -7624,7 +7678,7 @@ export class chart_impl implements chart_api {
     series: readonly {
       kind: general_series_kind;
       options: Omit<general_series_options, "pane"> & { pane?: number };
-      data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[];
+      data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[];
     }[],
     references: readonly general_reference_options[],
   ): void {

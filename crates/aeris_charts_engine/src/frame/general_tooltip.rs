@@ -12,8 +12,7 @@ const PADDING_Y: f64 = 7.0;
 const HEADER_GAP: f64 = 4.0;
 const ROW_GAP: f64 = 2.0;
 const COLUMN_GAP: f64 = 12.0;
-/// Series markers are short vertical bars, matching the general legend swatches.
-const MARKER_WIDTH: f64 = 3.0;
+const MARKER_WIDTH: f64 = SERIES_MARKER_WIDTH;
 const MARKER_HEIGHT: f64 = 10.0;
 const MARKER_GAP: f64 = 6.0;
 const HEADER_WEIGHT: u16 = 590;
@@ -304,16 +303,14 @@ impl ChartEngine {
         for row in &content.rows {
             let center_y = row_top + line * 0.5;
             if let Some(color) = row.color {
-                let marker_top = ((center_y - MARKER_HEIGHT * 0.5) * vpr).round();
-                out.push(Prim::Rect {
-                    rect: IRect {
-                        x: (text_left * hpr).round() as i32,
-                        y: marker_top as i32,
-                        w: (MARKER_WIDTH * hpr).round().max(1.0) as i32,
-                        h: (MARKER_HEIGHT * vpr).round().max(1.0) as i32,
-                    },
+                out.push(series_marker_prim(
+                    text_left,
+                    center_y,
+                    MARKER_HEIGHT,
                     color,
-                });
+                    hpr,
+                    vpr,
+                ));
             }
             text(
                 out,
@@ -480,11 +477,11 @@ mod tests {
         }
         for color in [REVENUE, COST] {
             assert!(
-                tooltip
-                    .iter()
-                    .any(|prim| matches!(prim, Prim::Rect { rect, color: fill }
-                    if *fill == color && rect.w == 3 && rect.h == 10)),
-                "each row carries a vertical color bar"
+                tooltip.iter().any(
+                    |prim| matches!(prim, Prim::RoundRect { w, h, radii, fill, .. }
+                    if *fill == color && *w == 4.0 && *h == 10.0 && radii == &[2.0; 4])
+                ),
+                "each row carries a vertical rounded color pill"
             );
         }
         assert!(

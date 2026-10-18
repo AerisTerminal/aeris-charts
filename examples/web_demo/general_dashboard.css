@@ -64,9 +64,6 @@
 
 #general_workspace .general-chart-card {
   position: relative;
-  display: grid;
-  grid-template-rows: 300px auto;
-  gap: 8px;
   min-width: 0;
   overflow: hidden;
   contain: layout paint style;
@@ -81,21 +78,10 @@
 #general_workspace .general-chart-host {
   position: relative;
   width: 100%;
-  height: 300px;
+  height: 320px;
   min-width: 0;
   overflow: hidden;
   background: var(--surface);
-}
-
-#general_workspace .general-card-legends {
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  min-height: 20px;
-  color: var(--text-secondary);
-  font-size: 11px;
 }
 
 #general_workspace .general-error {
@@ -113,8 +99,7 @@
 @media (max-width: 900px) {
   #general_workspace { padding: 16px; }
   #general_workspace .general-chart-grid { grid-template-columns: 1fr; }
-  #general_workspace .general-chart-card { grid-template-rows: 280px auto; }
-  #general_workspace .general-chart-host { height: 280px; }
+  #general_workspace .general-chart-host { height: 300px; }
 }
 
 @media (max-width: 560px) {

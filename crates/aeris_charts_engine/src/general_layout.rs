@@ -138,6 +138,10 @@ pub struct HierarchyNode {
     pub label: String,
     /// Leaf weight. Internal nodes derive their weight from descendants.
     pub value: Option<f64>,
+    /// Signed leaf metric, such as a percent change, that colors a treemap cell: positive values
+    /// shade toward the up color and negative toward the down color by magnitude.
+    #[serde(default)]
+    pub color_value: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -643,12 +647,85 @@ fn treemap_cache(nodes: &[HierarchyNode], plot: GeneralPlotRect) -> TreemapCache
     layout_treemap_node(
         root,
         plot,
+        false,
         &children,
         &weights,
         &mut cache.shapes,
         &mut cache.bounds,
     );
     cache
+}
+
+/// Gap between a group's edge and its cells, so groups read as separate blocks.
+const TREEMAP_GROUP_GAP: f64 = 2.0;
+/// Header lane above a group's cells that carries the group label.
+const TREEMAP_GROUP_HEADER: f64 = 16.0;
+/// Gap painted around every cell; the pane background shows through it.
+const TREEMAP_CELL_GAP: f64 = 1.0;
+const TREEMAP_UP: Color = Color(0x0899_81FF);
+const TREEMAP_DOWN: Color = Color(0xF236_45FF);
+const TREEMAP_FLAT: Color = Color(0x4246_4FFF);
+
+fn treemap_group_has_header(rect: GeneralPlotRect) -> bool {
+    rect.height >= 3.0 * TREEMAP_GROUP_HEADER && rect.width >= 48.0
+}
+
+/// The area a nested group lays its children into: inset by the group gap, below its header.
+fn treemap_group_content(rect: GeneralPlotRect) -> GeneralPlotRect {
+    let top = if treemap_group_has_header(rect) {
+        TREEMAP_GROUP_HEADER
+    } else {
+        TREEMAP_GROUP_GAP
+    };
+    GeneralPlotRect {
+        x: rect.x + TREEMAP_GROUP_GAP,
+        y: rect.y + top,
+        width: (rect.width - 2.0 * TREEMAP_GROUP_GAP).max(0.0),
+        height: (rect.height - top - TREEMAP_GROUP_GAP).max(0.0),
+    }
+}
+
+/// Largest leaf `color_value` magnitude, or `None` when no leaf carries one.
+fn treemap_color_range(nodes: &[HierarchyNode]) -> Option<f64> {
+    nodes
+        .iter()
+        .filter_map(|node| node.color_value)
+        .map(f64::abs)
+        .reduce(f64::max)
+}
+
+/// A leaf's fill: signed `color_value` shades from the flat color toward up or down by
+/// magnitude; without values the cells vary the series color.
+fn treemap_cell_color(
+    base: Color,
+    nodes: &[HierarchyNode],
+    row: usize,
+    color_range: Option<f64>,
+) -> Color {
+    let (Some(range), Some(value)) = (
+        color_range,
+        nodes.get(row).and_then(|node| node.color_value),
+    ) else {
+        return treemap_color(base, row);
+    };
+    if value == 0.0 || range <= 0.0 {
+        return TREEMAP_FLAT;
+    }
+    let target = if value > 0.0 {
+        TREEMAP_UP
+    } else {
+        TREEMAP_DOWN
+    };
+    let amount = 0.3 + 0.7 * (value.abs() / range).clamp(0.0, 1.0);
+    let mix = |from: u8, to: u8| {
+        (f64::from(from) + (f64::from(to) - f64::from(from)) * amount).round() as u8
+    };
+    Color::rgba(
+        mix(TREEMAP_FLAT.r(), target.r()),
+        mix(TREEMAP_FLAT.g(), target.g()),
+        mix(TREEMAP_FLAT.b(), target.b()),
+        255,
+    )
 }
 
 #[cfg(test)]
@@ -706,6 +783,7 @@ fn hierarchy_layout_tree(nodes: &[HierarchyNode]) -> Option<(usize, Vec<Vec<usiz
 fn layout_treemap_node(
     node: usize,
     rect: GeneralPlotRect,
+    nested: bool,
     children: &[Vec<usize>],
     weights: &[f64],
     shapes: &mut Vec<TreemapShape>,
@@ -717,6 +795,14 @@ fn layout_treemap_node(
     bounds[node] = Some(rect);
     if children[node].is_empty() {
         shapes.push(TreemapShape { row: node, rect });
+        return;
+    }
+    let rect = if nested {
+        treemap_group_content(rect)
+    } else {
+        rect
+    };
+    if rect.width <= 0.0 || rect.height <= 0.0 {
         return;
     }
     let active: Vec<usize> = children[node]
@@ -773,6 +859,7 @@ fn layout_treemap_node(
                         width: strip,
                         height,
                     },
+                    true,
                     children,
                     weights,
                     shapes,
@@ -803,6 +890,7 @@ fn layout_treemap_node(
                         width,
                         height: strip,
                     },
+                    true,
                     children,
                     weights,
                     shapes,
@@ -1599,6 +1687,47 @@ impl ChartEngine {
         });
         true
     }
+    /// Labels of nested treemap groups, left-aligned in the header lane the layout reserved.
+    fn push_treemap_group_headers(
+        &self,
+        out: &mut Vec<Prim>,
+        nodes: &[HierarchyNode],
+        bounds: &[Option<GeneralPlotRect>],
+        hpr: f64,
+        vpr: f64,
+    ) {
+        let layout = &self.options.get().layout;
+        let size = layout.font_size.clamp(9.0, 12.0);
+        let color = self.primary_text_color();
+        for (node, rect) in nodes.iter().zip(bounds) {
+            let Some(rect) = rect else {
+                continue;
+            };
+            if node.parent.is_none()
+                || node.value.is_some()
+                || node.label.is_empty()
+                || !treemap_group_has_header(*rect)
+            {
+                continue;
+            }
+            let width = self.measure_text_run(&node.label, size, &layout.font_family, 600, false);
+            if !width.is_finite() || width + 8.0 > rect.width {
+                continue;
+            }
+            out.push(Prim::Text {
+                x: ((rect.x + TREEMAP_GROUP_GAP + 2.0) * hpr) as f32,
+                y: ((rect.y + TREEMAP_GROUP_HEADER * 0.5) * vpr) as f32,
+                text: node.label.clone(),
+                color,
+                size: (size * vpr) as f32,
+                family: layout.font_family.clone(),
+                align: TextAlign::Left,
+                weight: 600,
+                italic: false,
+            });
+        }
+    }
+
     pub(crate) fn build_general_layout_series_frame(
         &self,
         pane_index: usize,
@@ -1774,12 +1903,16 @@ impl ChartEngine {
                 (series.options.kind, store.entry(series.options.dataset))
                 && let GeneralLayoutInput::Hierarchy(nodes) = entry.display_input()
             {
-                series.with_treemap(nodes, plot, |shapes| {
-                    for shape in shapes {
-                        let x0 = (shape.rect.x * hpr).round() as i32;
-                        let y0 = (shape.rect.y * vpr).round() as i32;
-                        let x1 = ((shape.rect.x + shape.rect.width) * hpr).round() as i32;
-                        let y1 = ((shape.rect.y + shape.rect.height) * vpr).round() as i32;
+                let color_range = treemap_color_range(nodes);
+                let gap_x = (TREEMAP_CELL_GAP * hpr).round().max(1.0) as i32;
+                let gap_y = (TREEMAP_CELL_GAP * vpr).round().max(1.0) as i32;
+                series.with_treemap_cache(nodes, plot, |cache| {
+                    self.push_treemap_group_headers(out, nodes, &cache.bounds, hpr, vpr);
+                    for shape in &cache.shapes {
+                        let x0 = (shape.rect.x * hpr).round() as i32 + gap_x;
+                        let y0 = (shape.rect.y * vpr).round() as i32 + gap_y;
+                        let x1 = ((shape.rect.x + shape.rect.width) * hpr).round() as i32 - gap_x;
+                        let y1 = ((shape.rect.y + shape.rect.height) * vpr).round() as i32 - gap_y;
                         if x1 > x0 && y1 > y0 {
                             let rect = IRect {
                                 x: x0,
@@ -1787,13 +1920,9 @@ impl ChartEngine {
                                 w: x1 - x0,
                                 h: y1 - y0,
                             };
-                            let fill = treemap_color(series.color, shape.row);
+                            let fill =
+                                treemap_cell_color(series.color, nodes, shape.row, color_range);
                             out.push(Prim::Rect { rect, color: fill });
-                            out.push(Prim::RectFrame {
-                                rect,
-                                border: 1,
-                                color: Color::rgba(255, 255, 255, 96),
-                            });
                             if series.options.data_labels {
                                 self.push_general_layout_label(
                                     out,
@@ -2169,7 +2298,11 @@ impl ChartEngine {
             }
             (GeneralLayoutInput::Hierarchy(nodes), GeneralLayoutElement::Node) => (
                 nodes.get(hit.row)?.label.clone(),
-                treemap_color(series.color, hit.row),
+                if series.options.kind == GeneralLayoutSeriesKind::Treemap {
+                    treemap_cell_color(series.color, nodes, hit.row, treemap_color_range(nodes))
+                } else {
+                    treemap_color(series.color, hit.row)
+                },
             ),
             (GeneralLayoutInput::Flow { nodes, .. }, GeneralLayoutElement::Node) => (
                 nodes.get(hit.row)?.label.clone(),
@@ -2445,6 +2578,47 @@ impl ChartEngine {
             .map(|series| &series.options)
     }
 
+    /// Legend rows for a pane's layout series in insertion order: identity, title (the kind name
+    /// when untitled), resolved color, and visibility.
+    pub(crate) fn general_layout_legend_entries(
+        &self,
+        pane_id: PaneId,
+    ) -> Vec<(GeneralLayoutSeriesId, String, Color, bool)> {
+        let Some(store) = self.general_layout_data.as_ref() else {
+            return Vec::new();
+        };
+        store
+            .series
+            .iter()
+            .filter(|series| series.pane_id == pane_id)
+            .map(|series| {
+                let title = if series.options.title.is_empty() {
+                    format!("{:?}", series.options.kind)
+                } else {
+                    series.options.title.clone()
+                };
+                (series.id, title, series.color, series.options.visible)
+            })
+            .collect()
+    }
+
+    pub(crate) fn toggle_general_layout_series_visible(
+        &mut self,
+        id: GeneralLayoutSeriesId,
+    ) -> bool {
+        let Some(options) = self.general_layout_series_options(id).cloned() else {
+            return false;
+        };
+        self.update_general_layout_series_presentation(
+            id,
+            options.title,
+            options.color,
+            options.data_labels,
+            !options.visible,
+        )
+        .is_ok()
+    }
+
     pub fn general_layout_series_ids(&self) -> Vec<GeneralLayoutSeriesId> {
         self.general_layout_data
             .as_ref()
@@ -2510,6 +2684,9 @@ fn validate_hierarchy(nodes: &[HierarchyNode]) -> Result<(), ChartError> {
         }
         if let Some(value) = node.value {
             validate_value(value)?;
+        }
+        if node.color_value.is_some_and(|value| !value.is_finite()) {
+            return Err(invalid_data("hierarchy color_value must be finite"));
         }
     }
     if roots != 1 {
@@ -2667,6 +2844,7 @@ mod tests {
             parent: None,
             label: "Root".into(),
             value: None,
+            color_value: None,
         }];
         for (index, value) in values.iter().enumerate() {
             nodes.push(HierarchyNode {
@@ -2674,6 +2852,7 @@ mod tests {
                 parent: Some("root".into()),
                 label: format!("Leaf {index}"),
                 value: Some(*value),
+                color_value: None,
             });
         }
         nodes
@@ -2973,6 +3152,56 @@ mod tests {
     }
 
     #[test]
+    fn treemap_cells_shade_by_signed_change_and_keep_a_visible_gap() {
+        let mut chart = chart();
+        let mut nodes = hierarchy(&[3.0, 2.0, 1.0]);
+        for (node, change) in nodes.iter_mut().skip(1).zip([2.0, -1.0, 0.0]) {
+            node.color_value = Some(change);
+        }
+        let dataset = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Hierarchy(nodes))
+            .unwrap();
+        chart
+            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
+                0,
+                dataset,
+                GeneralLayoutSeriesKind::Treemap,
+            ))
+            .unwrap();
+        chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+        let cells: Vec<(IRect, Color)> = chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Rect { rect, color } => Some((*rect, *color)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(cells.len(), 3);
+        let colors: Vec<Color> = cells.iter().map(|(_, color)| *color).collect();
+        assert!(
+            colors.contains(&TREEMAP_UP),
+            "largest gain is full up color"
+        );
+        assert!(colors.contains(&TREEMAP_FLAT), "unchanged cell is flat");
+        let partial_loss = colors
+            .iter()
+            .find(|color| **color != TREEMAP_UP && **color != TREEMAP_FLAT)
+            .unwrap();
+        assert!(
+            partial_loss.r() > partial_loss.g(),
+            "losses shade toward down"
+        );
+        for (index, (a, _)) in cells.iter().enumerate() {
+            for (b, _) in cells.iter().skip(index + 1) {
+                let gap_x = (b.x - (a.x + a.w)).max(a.x - (b.x + b.w));
+                let gap_y = (b.y - (a.y + a.h)).max(a.y - (b.y + b.h));
+                assert!(gap_x >= 2 || gap_y >= 2, "cells {a:?} and {b:?} touch");
+            }
+        }
+    }
+
+    #[test]
     fn sunburst_rings_preserve_parent_order_and_exact_hits() {
         let mut chart = chart();
         let nodes = vec![
@@ -2981,30 +3210,35 @@ mod tests {
                 parent: None,
                 label: "Root".into(),
                 value: None,
+                color_value: None,
             },
             HierarchyNode {
                 id: "a".into(),
                 parent: Some("root".into()),
                 label: "A".into(),
                 value: None,
+                color_value: None,
             },
             HierarchyNode {
                 id: "b".into(),
                 parent: Some("root".into()),
                 label: "B".into(),
                 value: Some(2.0),
+                color_value: None,
             },
             HierarchyNode {
                 id: "a1".into(),
                 parent: Some("a".into()),
                 label: "A1".into(),
                 value: Some(3.0),
+                color_value: None,
             },
             HierarchyNode {
                 id: "a2".into(),
                 parent: Some("a".into()),
                 label: "A2".into(),
                 value: Some(1.0),
+                color_value: None,
             },
         ];
         let dataset = chart
@@ -3148,12 +3382,14 @@ mod tests {
             parent: None,
             label: "Root".into(),
             value: None,
+            color_value: None,
         };
         let leaf = HierarchyNode {
             id: "leaf".into(),
             parent: Some("root".into()),
             label: "Leaf".into(),
             value: Some(5.0),
+            color_value: None,
         };
         let good = GeneralLayoutInput::Hierarchy(vec![leaf.clone(), root.clone()]);
         let id = chart.create_general_layout_dataset(good.clone()).unwrap();
@@ -3194,12 +3430,14 @@ mod tests {
                 parent: Some("b".into()),
                 label: "A".into(),
                 value: None,
+                color_value: None,
             },
             HierarchyNode {
                 id: "b".into(),
                 parent: Some("a".into()),
                 label: "B".into(),
                 value: None,
+                color_value: None,
             },
         ]);
         assert_eq!(

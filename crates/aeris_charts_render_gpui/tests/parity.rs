@@ -1715,12 +1715,14 @@ fn layout_families_and_keyboard_focus_lower_without_drops_on_both_executors() {
             parent: None,
             label: "Root".into(),
             value: None,
+            color_value: None,
         },
         HierarchyNode {
             id: "leaf".into(),
             parent: Some("root".into()),
             label: "Leaf".into(),
             value: Some(3.0),
+            color_value: None,
         },
     ]);
     let cases = [
