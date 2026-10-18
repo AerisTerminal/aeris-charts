@@ -24,7 +24,7 @@ with its commit, and update the status table in the same commit. A phase or matr
 
 ## Status at a glance
 
-Updated 2026-10-13. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
+Updated 2026-10-18. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
 expansion completed on 2026-10-06; general-chart batches have resumed in dependency order.
 
 | Batch | Phase | Scope | Status | Done so far | Next |
@@ -44,8 +44,11 @@ Notes:
   and its exit criteria pass.
 - G1 is complete after the corrective general-first V2 restore regression, declaration snapshot
   correction, user-surface/lifecycle regressions, and full gates passed.
-  No full coverage-matrix row is yet Verified because each row includes later-phase behavior; the
-  versioned matrix records those rows as Partial or Open.
+  The scales/axes and responsive-layout matrix rows are Verified. Other rows remain Partial
+  because they include later-phase behavior.
+
+Six of eight delivery batches are complete. G7 is in progress and G8 is open. Batch completion
+does not imply full parity-matrix verification.
 
 ## How work is delivered
 
@@ -288,12 +291,13 @@ and further device-scale/platform window captures remain evidence work for parit
 ## Known gaps
 
 Remaining source-confirmed gaps from the 2026-09-23 review. R3–R6 closed the earlier Cartesian,
-component, authoring, and polar gaps; hierarchy/flow breadth remains open. Earlier test counts
-and timings are historical observations in Git history, not proof of current completion.
+component, authoring, and polar gaps; hierarchy/flow foundations are implemented, while the full
+family contracts and parity evidence remain open. Earlier test counts and timings are
+historical observations in Git history, not proof of current completion.
 
 | Gap | Evidence | Required correction | Phase |
 | --- | --- | --- | --- |
-| Chart breadth | Polar families are delivered; hierarchy/flow families are absent | Add funnel, treemap, Sankey and sunburst as required engine families | R7 |
+| Chart breadth | Funnel, treemap, Sankey and sunburst have bounded typed stores, ordered-frame geometry and exact hits, but their host behavior and full parity evidence are incomplete | Finish persistence, accessibility, interaction, transitions, cross-backend fixtures and batch gates | R7 |
 
 These are not an exhaustive defect audit. Coverage-matrix rows are required coverage to audit, not
 assertions that every listed feature is absent.
@@ -569,7 +573,7 @@ platform capabilities beyond the competitor's browser rendering model.
 | Box plots and heatmaps | Partial | Preserve existing extra families; complete color domains, legends, missing values and interaction | R3 |
 | Scales and axes | Verified (G2, 2026-10-10) | Numeric/log/symlog, temporal, category/point, reversed/multiple axes, explicit/auto domains, ticks, formatting, overflow and grid policy | R2 |
 | Pie/donut, radar, radial bar, polar area | Partial | Polar layout, start/end angles, inner/outer radii, padding, labels/leaders, angular/radial axes and interactions | R6 |
-| Funnel, treemap, Sankey, sunburst | Open | Purpose-built deterministic bounded layouts, data contracts, styling, labels, hits, accessibility and updates | R7 |
+| Funnel, treemap, Sankey, sunburst | Partial (layout/data/geometry/hits implemented; full family contracts pending) | Purpose-built deterministic bounded layouts, data contracts, styling, labels, hits, accessibility and updates | R7 |
 | Legend and tooltip | Partial | Default usable components, visibility controls, item/shared modes, placement, formatting, ordering, custom content and touch/keyboard behavior | R4 |
 | References, labels, titles and grids | Partial | Engine layout and domain contribution, overlap/overflow policy, background/foreground order, style and export consistency | R2, R4 |
 | Brush, selection and synchronization | Partial | Pointer/touch/keyboard controls, semantic range handles, domain-aware pan/zoom, linked charts and feedback-loop prevention | R4 |

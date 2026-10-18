@@ -14,8 +14,11 @@ axes with optional independent bounds on either axis, plus category band/point X
 `box_plot` uses category-band X with numeric Y and requires a complete ordered
 `min <= q1 <= median <= q3 <= max` row for visible geometry. All forms require their center/value channels
 for a visible mark. `heatmap_grid` supports band X/Y string categories, continuous numeric X with numeric Y
-coordinates, and temporal epoch-millisecond X with numeric Y coordinates. Later polar and
-hierarchy/flow series names remain proposals until their implementations and release evidence land.
+coordinates, and temporal epoch-millisecond X with numeric Y coordinates. Polar families are
+implemented. Funnel, treemap, Sankey and sunburst have a public layout-pane API, validated inputs,
+shared-frame geometry and exact hits; their full interaction, persistence, accessibility, transition
+and parity contracts remain G7 work.
+
 React `GeneralPane` supports keyed arrays and direct axis, series, reference, label, legend,
 tooltip, and brush declarations. `MappedGeneralSeries` maps typed application rows before the
 engine transaction; brush controls support controlled and uncontrolled ranges. See
@@ -70,7 +73,8 @@ type horizontal_domain_options =
   | { type: "continuous"; scale?: "linear" | "log" | "symlog" }
   | { type: "temporal" }
   | { type: "category"; scale?: "band" | "point" }
-  | { type: "polar" };
+  | { type: "polar" }
+  | { type: "layout" };
 
 interface general_pane_options {
   preserve_empty?: boolean;
