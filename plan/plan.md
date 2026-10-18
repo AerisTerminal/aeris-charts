@@ -323,7 +323,7 @@ A later post-G7 change makes general hover visible in every host without closing
 Cartesian panes with an index-axis series use Recharts' axis hover: the nearest X datum or
 category band anywhere in the plot, a crosshair-styled cursor line (horizontal for horizontal
 bars), active dots on line and area series, and an engine-drawn tooltip in the financial tooltip
-style with series color dots. Other panes keep exact item hover with the same tooltip, and layout
+style with series color markers (single-tone with bar markers since `d2ccc8d`). Other panes keep exact item hover with the same tooltip, and layout
 panes describe the hovered stage, node or link. Click selection still needs a mark under the
 pointer. The tooltip is ordered-frame content, so GPUI and the browser paint it identically;
 `generalTooltip.visible` (default `true`) hides it, and the DOM `create_general_tooltip` now uses
@@ -336,6 +336,18 @@ one whole device pixel at every DPR, drops grid and zero rules that would double
 snaps the GPUI element origin to device pixels so scrolled charts keep crisp rules. The GPUI gallery
 and browser dashboard drop card headers and enable grids, and the browser dashboard keeps charts
 mounted after they scroll out of view instead of re-creating them blank.
+
+A further post-G7 fix (`d2ccc8d`), also without closing an R8 item, removes browser blur from
+1px rules. The wasm shell sizes each canvas CSS box to exactly bitmap / devicePixelRatio and
+translates it by the fractional part of the container's composited device position, including
+Chromium's whole-device-pixel snapping of scroll-container content. The package re-checks that
+placement before each repaint and when an ancestor resizes. Pointer input stays container-relative,
+and WebKit keeps the canvases on the container box. Chromium pixel scans at DPR 1, 1.25, 1.5, 1.75
+and 2, Canvas2D and WebGPU, at rest, scrolled and after filtering, show every axis rule as one
+device pixel (two at DPR 2). The same change makes the general tooltip one surface tone with no
+tinted header and a vertical color bar per row, in the engine frame and `create_general_tooltip`.
+It gives `create_general_legend` borderless compact buttons with vertical bar markers, and removes
+axis titles from the dashboard demo.
 
 ## Known gaps
 
