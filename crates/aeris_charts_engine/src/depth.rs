@@ -2298,4 +2298,70 @@ mod tests {
         // A four-tick book autoscaled into the pane leaves rows tall enough for every size.
         assert_eq!(texts, vec!["12", "8", "10", "20"]);
     }
+
+    #[test]
+    fn depth_profile_merges_ticks_too_short_to_read_into_round_rows() {
+        let mut chart = crate::ChartEngine::new(600.0, 400.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0, 3.0],
+                &[100.0; 3],
+                &[150.0; 3],
+                &[50.0; 3],
+                &[100.0; 3],
+            )
+            .unwrap();
+        chart.time_scale.set_width(600.0);
+        chart.layout_panes(372.0);
+        chart.fit_content();
+        chart.set_visible_logical_range(-1.0, 3.0);
+        chart.autoscale_visible();
+        let stream = chart
+            .add_depth_stream("profile", DepthOptions::default())
+            .unwrap();
+        chart.set_depth_snapshot(stream, snapshot(1)).unwrap();
+        chart
+            .add_depth_profile(
+                stream,
+                DepthProfileOptions {
+                    max_width: 100.0,
+                    bid_rgba: Some([0, 200, 0, 255]),
+                    ask_rgba: Some([200, 0, 0, 255]),
+                    opacity: 1.0,
+                    ..DepthProfileOptions::default()
+                },
+            )
+            .unwrap();
+        let mut direct = Vec::new();
+        chart.build_depth_profile_frame(0, 600, 1.0, 1.0, &mut direct);
+        let bid = aeris_charts_render::color::Color::rgba(0, 200, 0, 255).0;
+        let ask = aeris_charts_render::color::Color::rgba(200, 0, 0, 255).0;
+        let mut rects = direct
+            .iter()
+            .filter_map(|primitive| match primitive {
+                aeris_charts_render::draw_list::Prim::Rect { rect, color } => {
+                    Some((rect.y, rect.w, color.0))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        rects.sort_by_key(|&(y, _, _)| y);
+        // A quarter tick is under a pixel here, so twenty-tick ($5) rows hold each side:
+        // asks 100.0 + 100.25 = 20 and bids 99.75 + 99.5 = 30, the largest.
+        let summary = rects
+            .iter()
+            .map(|&(_, w, color)| (w, color))
+            .collect::<Vec<_>>();
+        assert_eq!(summary, vec![(67, ask), (100, bid)]);
+        // Each merged row is tall enough to print its summed size.
+        let texts = direct
+            .iter()
+            .filter_map(|primitive| match primitive {
+                aeris_charts_render::draw_list::Prim::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(texts, vec!["20", "30"]);
+    }
 }

@@ -1015,8 +1015,9 @@ edge. Fixed absolute bucket alignment lets history eviction rebuild only affecte
 stable image keys preserve executor caches. The ordered frame emits the same `Prim::Image` contract
 to Canvas2D, WebGPU, native, and GPUI, followed by ordinary trade/series geometry and explicitly
 bound, capped microstructure markers. Depth profiles ("DOM on chart") read the live book at frame
-time and draw one right-anchored bar per level in pane chrome, above series and below price lines,
-scaled to the largest drawn level. Hosts own provider decoding, recovery, event detection,
+time and draw one right-anchored bar per row in pane chrome, above series and below price lines,
+scaled to the largest drawn row; ticks too short to print a size merge into 1-2-5 multiples with
+summed sizes so the book stays readable at any zoom. Hosts own provider decoding, recovery, event detection,
 tooltips/panels, and the Terminal's authoritative market book; this engine state is a bounded chart
 projection of those publications. The typed WASM boundary uses parallel numeric arrays, split
 high/low words for exact `u64` sequences, an optional aligned label vector, and decimal strings for

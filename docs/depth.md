@@ -46,8 +46,12 @@ per cell or bucket. Ordinary series paint after the underlay, so host trade seri
 liquidity image without a renderer-specific path.
 
 A depth profile ("DOM on chart") draws the current book as bars anchored at a pane's right edge:
-one bar per level within `levels_per_side` of the touch, spanning that level's tick on the right
-price scale, with its length proportional to the level's size against the largest drawn level. It
+one bar per row of whole ticks within `levels_per_side` levels of the touch, spanning those ticks on
+the right price scale, with its length proportional to the row's size against the largest drawn row.
+A row is one tick while a tick is tall enough to print a size; when the chart is zoomed out further,
+rows merge the smallest 1-2-5 multiple of ticks that restores that height and sum each side's sizes,
+so the book stays readable at any zoom and rows start on round prices. A merged row at the touch that
+holds both sides splits its height, asks above bids. It
 reads the canonical (or replay-projected) book at frame time, so it keeps no copy of the levels and
 every depth mutation reaches it through the same scene invalidation as the heatmap. Bars paint in
 pane chrome above series and below price lines; bid and ask colors default to the chart's bullish
