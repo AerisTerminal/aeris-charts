@@ -1702,6 +1702,16 @@ impl AerisChart {
         self.inner.borrow_mut().remove_depth_event_layer(id)
     }
 
+    pub fn add_depth_profile(&mut self, stream_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_depth_profile(stream_id, options_json)
+    }
+
+    pub fn remove_depth_profile(&mut self, id: u32) -> bool {
+        self.inner.borrow_mut().remove_depth_profile(id)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn set_depth_events_typed(
         &mut self,
@@ -1906,12 +1916,14 @@ impl AerisChart {
         pane_index: usize,
         reset: u8,
         anchor_timestamp_micros: f64,
+        style: u8,
     ) -> u32 {
         self.inner.borrow_mut().add_cvd_series(
             stream_id,
             pane_index,
             reset,
             anchor_timestamp_micros,
+            style,
         )
     }
 

@@ -944,7 +944,9 @@ Professional footprint / numbers-bar data has a chart-level tick-truth owner des
 footprints, CVD, delta histograms, big-trades indicators and auction markers hold dependent handles, not
 provider-event copies. The stream derives integer tick-grid levels, bid/ask/unknown/total volume, POC,
 final/session delta, delta percentage, running Max/Min Delta, and diagonal stacked imbalances. CVD
-supports session, continuous, and anchored resets, and every dependent carries the stream revision
+supports session, continuous, and anchored resets and draws as a line or as candles whose open is
+the value before the bar and whose high/low are its running intrabar delta extremes; changing the
+style converts the same series in place. Every dependent carries the stream revision
 through tip, correction, and retention updates. Stream telemetry attributes retained tape capacity
 and dependent rebuild work.
 Live tip events update only the active derived bar; a late-event or provider-correction batch is
@@ -1012,7 +1014,9 @@ Liquidity heatmaps retain immutable 32-column RGBA chunks plus one replaceable o
 edge. Fixed absolute bucket alignment lets history eviction rebuild only affected edge chunks while
 stable image keys preserve executor caches. The ordered frame emits the same `Prim::Image` contract
 to Canvas2D, WebGPU, native, and GPUI, followed by ordinary trade/series geometry and explicitly
-bound, capped microstructure markers. Hosts own provider decoding, recovery, event detection,
+bound, capped microstructure markers. Depth profiles ("DOM on chart") read the live book at frame
+time and draw one right-anchored bar per level in pane chrome, above series and below price lines,
+scaled to the largest drawn level. Hosts own provider decoding, recovery, event detection,
 tooltips/panels, and the Terminal's authoritative market book; this engine state is a bounded chart
 projection of those publications. The typed WASM boundary uses parallel numeric arrays, split
 high/low words for exact `u64` sequences, an optional aligned label vector, and decimal strings for

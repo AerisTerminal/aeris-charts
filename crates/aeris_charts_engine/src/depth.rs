@@ -21,6 +21,8 @@ pub const MAX_DEPTH_REPLAY_UPDATES: usize = 1_000_000;
 pub const MAX_DEPTH_HEATMAP_ROWS: usize = 4_096;
 pub const MAX_DEPTH_HEATMAPS: usize = 16;
 pub const MAX_DEPTH_EVENT_LAYERS: usize = 64;
+pub const MAX_DEPTH_PROFILES: usize = 16;
+pub const MAX_DEPTH_PROFILE_LEVELS_PER_SIDE: usize = 512;
 pub const DEPTH_HEATMAP_CHUNK_COLUMNS: usize = 32;
 const DEPTH_REPLAY_CHECKPOINT_INTERVAL: usize = 1_024;
 const MAX_DEPTH_REPLAY_CHECKPOINTS: usize = 64;
@@ -167,6 +169,42 @@ impl Default for DepthEventLayerOptions {
     }
 }
 
+/// Current-book bars anchored at a pane's right edge: one bar per price level, its length
+/// proportional to the resting size ("DOM on chart").
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct DepthProfileOptions {
+    pub pane_index: usize,
+    pub levels_per_side: usize,
+    /// Length (CSS px) of the largest drawn level; every other bar scales against it.
+    pub max_width: f64,
+    /// Bar colors; `None` follows the chart's bullish (bid) and bearish (ask) colors.
+    pub bid_rgba: Option<[u8; 4]>,
+    pub ask_rgba: Option<[u8; 4]>,
+    pub opacity: f32,
+    /// Prints each level's size inside its bar when the row is tall enough for the text.
+    pub show_sizes: bool,
+}
+
+impl Default for DepthProfileOptions {
+    fn default() -> Self {
+        Self {
+            pane_index: 0,
+            levels_per_side: 40,
+            max_width: 120.0,
+            bid_rgba: None,
+            ask_rgba: None,
+            opacity: 0.5,
+            show_sizes: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DepthProfile {
+    pub stream_id: u64,
+    pub options: DepthProfileOptions,
+}
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DepthEventLayer {
     pub stream_id: u64,
@@ -513,6 +551,8 @@ impl crate::ChartEngine {
             .retain(|_, heatmap| heatmap.stream_id != stream_id);
         self.depth_event_layers
             .retain(|_, layer| layer.stream_id != stream_id);
+        self.depth_profiles
+            .retain(|_, profile| profile.stream_id != stream_id);
         self.invalidate_frame_scene();
         true
     }
@@ -650,6 +690,40 @@ impl crate::ChartEngine {
         removed
     }
 
+    /// Draw the stream's current book as right-edge bars on a pane. The bars read the canonical
+    /// book at frame time, so they follow every snapshot, update and replay clock change.
+    pub fn add_depth_profile(
+        &mut self,
+        stream_id: u64,
+        options: DepthProfileOptions,
+    ) -> Result<u64, DepthError> {
+        if !self.depth_streams.contains_key(&stream_id)
+            || options.pane_index >= self.panes.len()
+            || options.levels_per_side == 0
+            || options.levels_per_side > MAX_DEPTH_PROFILE_LEVELS_PER_SIDE
+            || !options.max_width.is_finite()
+            || options.max_width <= 0.0
+            || !options.opacity.is_finite()
+            || !(0.0..=1.0).contains(&options.opacity)
+            || self.depth_profiles.len() >= MAX_DEPTH_PROFILES
+        {
+            return Err(DepthError::InvalidOptions);
+        }
+        let id = self.next_depth_profile_id;
+        self.next_depth_profile_id = self.next_depth_profile_id.saturating_add(1).max(1);
+        self.depth_profiles
+            .insert(id, DepthProfile { stream_id, options });
+        self.invalidate_frame_scene();
+        Ok(id)
+    }
+
+    pub fn remove_depth_profile(&mut self, id: u64) -> bool {
+        let removed = self.depth_profiles.remove(&id).is_some();
+        if removed {
+            self.invalidate_frame_scene();
+        }
+        removed
+    }
     fn refresh_depth_heatmaps(&mut self, stream_id: u64) -> Result<(), DepthError> {
         let ids = self
             .depth_heatmaps
@@ -2050,5 +2124,178 @@ mod tests {
             aeris_charts_render::draw_list::Prim::Circle { .. }
         )));
         assert!(chart.remove_depth_event_layer(event_layer));
+    }
+
+    fn profile_chart() -> (crate::ChartEngine, u64) {
+        let mut chart = crate::ChartEngine::new(600.0, 400.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0, 3.0],
+                &[100.0; 3],
+                &[101.0; 3],
+                &[99.0; 3],
+                &[100.0; 3],
+            )
+            .unwrap();
+        chart.time_scale.set_width(600.0);
+        chart.layout_panes(372.0);
+        chart.fit_content();
+        chart.set_visible_logical_range(-1.0, 3.0);
+        chart.autoscale_visible();
+        let stream = chart
+            .add_depth_stream("profile", DepthOptions::default())
+            .unwrap();
+        chart.set_depth_snapshot(stream, snapshot(1)).unwrap();
+        (chart, stream)
+    }
+
+    fn profile_rects(prims: &[aeris_charts_render::draw_list::Prim]) -> Vec<(i32, i32, i32, u32)> {
+        prims
+            .iter()
+            .filter_map(|primitive| match primitive {
+                aeris_charts_render::draw_list::Prim::Rect { rect, color } => {
+                    Some((rect.x, rect.w, rect.y, color.0))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn depth_profile_validates_options_and_follows_its_stream() {
+        let (mut chart, stream) = profile_chart();
+        let invalid = [
+            DepthProfileOptions {
+                pane_index: 1,
+                ..DepthProfileOptions::default()
+            },
+            DepthProfileOptions {
+                levels_per_side: 0,
+                ..DepthProfileOptions::default()
+            },
+            DepthProfileOptions {
+                levels_per_side: MAX_DEPTH_PROFILE_LEVELS_PER_SIDE + 1,
+                ..DepthProfileOptions::default()
+            },
+            DepthProfileOptions {
+                max_width: f64::NAN,
+                ..DepthProfileOptions::default()
+            },
+            DepthProfileOptions {
+                max_width: 0.0,
+                ..DepthProfileOptions::default()
+            },
+            DepthProfileOptions {
+                opacity: 1.5,
+                ..DepthProfileOptions::default()
+            },
+        ];
+        for options in invalid {
+            assert_eq!(
+                chart.add_depth_profile(stream, options),
+                Err(DepthError::InvalidOptions)
+            );
+        }
+        assert_eq!(
+            chart.add_depth_profile(stream + 1, DepthProfileOptions::default()),
+            Err(DepthError::InvalidOptions)
+        );
+        for _ in 0..MAX_DEPTH_PROFILES {
+            chart
+                .add_depth_profile(stream, DepthProfileOptions::default())
+                .unwrap();
+        }
+        assert_eq!(
+            chart.add_depth_profile(stream, DepthProfileOptions::default()),
+            Err(DepthError::InvalidOptions)
+        );
+        assert!(chart.remove_depth_stream(stream));
+        assert!(chart.depth_profiles.is_empty());
+    }
+
+    #[test]
+    fn depth_profile_draws_right_anchored_bars_scaled_to_the_largest_level() {
+        let (mut chart, stream) = profile_chart();
+        let profile = chart
+            .add_depth_profile(
+                stream,
+                DepthProfileOptions {
+                    max_width: 100.0,
+                    bid_rgba: Some([0, 200, 0, 255]),
+                    ask_rgba: Some([200, 0, 0, 255]),
+                    opacity: 1.0,
+                    show_sizes: false,
+                    ..DepthProfileOptions::default()
+                },
+            )
+            .unwrap();
+        let frame = chart.build_frame();
+        let right = chart.pane_w.round() as i32;
+        let bid = aeris_charts_render::color::Color::rgba(0, 200, 0, 255).0;
+        let ask = aeris_charts_render::color::Color::rgba(200, 0, 0, 255).0;
+        let mut rects = profile_rects(&frame.panes[0].main)
+            .into_iter()
+            .filter(|&(_, _, _, color)| color == bid || color == ask)
+            .collect::<Vec<_>>();
+        rects.sort_by_key(|&(_, _, y, _)| y);
+        // Asks 100.25 (12) and 100.0 (8) above bids 99.75 (10) and 99.5 (20, the largest).
+        let widths = rects.iter().map(|&(_, w, _, _)| w).collect::<Vec<_>>();
+        assert_eq!(widths, vec![60, 40, 50, 100]);
+        let colors = rects.iter().map(|&(_, _, _, c)| c).collect::<Vec<_>>();
+        assert_eq!(colors, vec![ask, ask, bid, bid]);
+        assert!(rects.iter().all(|&(x, w, _, _)| x + w == right));
+
+        chart
+            .update_depth(
+                stream,
+                DepthUpdate {
+                    timestamp_micros: 1_100_000,
+                    sequence: 2,
+                    previous_sequence: 1,
+                    side: DepthSide::Ask,
+                    level: level(100.0, 40.0, None),
+                },
+            )
+            .unwrap();
+        let frame = chart.build_frame();
+        let widths = profile_rects(&frame.panes[0].main)
+            .into_iter()
+            .filter(|&(_, _, _, color)| color == ask)
+            .map(|(_, w, _, _)| w)
+            .collect::<Vec<_>>();
+        assert!(
+            widths.contains(&100),
+            "the updated ask becomes the largest level"
+        );
+
+        assert!(chart.remove_depth_profile(profile));
+        let frame = chart.build_frame();
+        assert!(
+            profile_rects(&frame.panes[0].main)
+                .iter()
+                .all(|&(_, _, _, color)| color != bid && color != ask)
+        );
+    }
+
+    #[test]
+    fn depth_profile_prints_sizes_only_when_rows_fit_the_text() {
+        let (mut chart, stream) = profile_chart();
+        chart
+            .add_depth_profile(stream, DepthProfileOptions::default())
+            .unwrap();
+        let mut direct = Vec::new();
+        chart.build_depth_profile_frame(0, 600, 1.0, 1.0, &mut direct);
+        let texts = direct
+            .iter()
+            .filter_map(|primitive| match primitive {
+                aeris_charts_render::draw_list::Prim::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let rect_count = profile_rects(&direct).len();
+        assert_eq!(rect_count, 4);
+        // A four-tick book autoscaled into the pane leaves rows tall enough for every size.
+        assert_eq!(texts, vec!["12", "8", "10", "20"]);
     }
 }

@@ -852,6 +852,7 @@ mod tests {
             show_footprint: footprint,
             show_cumulative_delta: false,
             show_delta_histogram: false,
+            cumulative_delta_style: crate::CumulativeDeltaStyle::Line,
             big_trades: None,
         }
     }

@@ -1,5 +1,15 @@
 use super::*;
 
+/// A printed level size needs this many font sizes of row height.
+const PROFILE_TEXT_HEIGHT: f64 = 1.05;
+/// Gap (CSS px) between a printed level size and the pane's right edge.
+const PROFILE_TEXT_PAD: f64 = 3.0;
+
+fn profile_color(rgba: Option<[u8; 4]>, theme: Color, opacity: f32) -> Color {
+    let [r, g, b, a] = rgba.unwrap_or([theme.r(), theme.g(), theme.b(), theme.a()]);
+    Color::rgba(r, g, b, (f32::from(a) * opacity).round() as u8)
+}
+
 impl ChartEngine {
     pub(crate) fn build_depth_heatmap_frame(
         &self,
@@ -128,6 +138,93 @@ impl ChartEngine {
                     stroke_width: hpr.min(vpr).max(1.0) as f32,
                     stroke: Color::rgba(0xFF, 0xFF, 0xFF, 0xCC),
                 });
+            }
+        }
+    }
+
+    /// Current-book bars anchored at the pane's right edge, the largest drawn level spanning
+    /// `max_width`. Each level spans its tick on the right price scale, the same mapping the
+    /// heatmap uses.
+    pub(crate) fn build_depth_profile_frame(
+        &self,
+        pane_index: usize,
+        pane_w_px: i32,
+        hpr: f64,
+        vpr: f64,
+        output: &mut Vec<Prim>,
+    ) {
+        let Some(pane) = self.panes.get(pane_index) else {
+            return;
+        };
+        let scale = pane_scale(pane, PriceScaleTarget::Right);
+        let layout = &self.options.get().layout;
+        let (bullish, bearish) = self.themed_candle_colors();
+        let text_color = Color::parse_css(&layout.text_color).unwrap_or(Color::rgb(215, 219, 228));
+        let text_size = layout.font_size * vpr;
+        let text_pad = (PROFILE_TEXT_PAD * hpr).round();
+        for profile in self
+            .depth_profiles
+            .values()
+            .filter(|profile| profile.options.pane_index == pane_index)
+        {
+            let Some(book) = self.depth_streams.get(&profile.stream_id) else {
+                continue;
+            };
+            let options = profile.options;
+            let rows = book.ladder(options.levels_per_side, 0.0, None);
+            let largest = rows
+                .iter()
+                .flat_map(|row| [row.bid_size, row.ask_size])
+                .flatten()
+                .fold(0.0, f64::max);
+            if largest <= 0.0 {
+                continue;
+            }
+            let half_tick = book.options().tick_size / 2.0;
+            let bid = profile_color(options.bid_rgba, bullish, options.opacity);
+            let ask = profile_color(options.ask_rgba, bearish, options.opacity);
+            for row in &rows {
+                let upper = scale.price_to_coordinate(row.price + half_tick, 0.0) * vpr;
+                let lower = scale.price_to_coordinate(row.price - half_tick, 0.0) * vpr;
+                if !upper.is_finite() || !lower.is_finite() {
+                    continue;
+                }
+                let top = upper.min(lower).round();
+                let span = upper.max(lower).round() - top;
+                // Adjacent levels keep a one-pixel gap once rows are tall enough to show it.
+                let height = if span >= 3.0 {
+                    span - 1.0
+                } else {
+                    span.max(1.0)
+                };
+                for (size, color) in [(row.bid_size, bid), (row.ask_size, ask)] {
+                    let Some(size) = size else {
+                        continue;
+                    };
+                    let width = (size / largest * options.max_width * hpr).round().max(1.0);
+                    output.push(Prim::Rect {
+                        rect: IRect {
+                            x: pane_w_px - width as i32,
+                            y: top as i32,
+                            w: width as i32,
+                            h: height as i32,
+                        },
+                        color,
+                    });
+                    if options.show_sizes && height >= text_size * PROFILE_TEXT_HEIGHT {
+                        output.push(Prim::Text {
+                            x: (f64::from(pane_w_px) - text_pad) as f32,
+                            y: (top + height / 2.0) as f32,
+                            text: super::footprint_geometry::compact_volume(size),
+                            color: text_color,
+                            size: text_size as f32,
+                            family: layout.font_family.clone(),
+                            align: TextAlign::Right,
+                            weight: 400,
+                            italic: false,
+                        });
+                    }
+                }
             }
         }
     }

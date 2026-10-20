@@ -22,7 +22,7 @@ typed `DepthResyncRequest`, marks the stream stale, and rejects every later delt
 snapshot replaces the state. The engine never fills a missing sequence.
 
 Each side, batch, history bucket ring, total retained history cells, event list, replay tape,
-checkpoint set, heatmap count, and event layer has an explicit cap. History rolls at the configured
+checkpoint set, heatmap count, event layer, and depth profile has an explicit cap. History rolls at the configured
 microsecond interval and evicts the oldest buckets until both the bucket and cell ceilings hold.
 Memory telemetry includes current levels, history vectors, event labels, replay state, checkpoint
 snapshots, and retained heatmap pixels.
@@ -45,10 +45,19 @@ chunk changes when a bucket closes, and every live update replaces one one-pixel
 per cell or bucket. Ordinary series paint after the underlay, so host trade series overlay the
 liquidity image without a renderer-specific path.
 
+A depth profile ("DOM on chart") draws the current book as bars anchored at a pane's right edge:
+one bar per level within `levels_per_side` of the touch, spanning that level's tick on the right
+price scale, with its length proportional to the level's size against the largest drawn level. It
+reads the canonical (or replay-projected) book at frame time, so it keeps no copy of the levels and
+every depth mutation reaches it through the same scene invalidation as the heatmap. Bars paint in
+pane chrome above series and below price lines; bid and ask colors default to the chart's bullish
+and bearish colors, and a level's size prints inside its bar only when the row fits the text.
+Profiles are capped per chart and removed with their stream.
+
 Microstructure markers are host facts. Iceberg refill, pulled liquidity, size cluster, and sweep
 events carry time, price, size, optional side, and a label capped at 256 bytes. Charts validates,
 retains, replay-masks, LOD-collapses, and renders them through an explicitly pane-bound event layer;
-it does not detect them. DOM and time-and-sales list presentation remains host UI.
+it does not detect them. DOM ladder and time-and-sales list panels remain host UI.
 
 All executors consume the same `Prim::Image` and marker primitives. Canvas2D, WebGPU, native, and
 GPUI do not reconstruct book state, color scaling, LOD, or replay semantics.

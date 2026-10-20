@@ -2,9 +2,9 @@
 
 use super::*;
 use aeris_charts_engine::{
-    AggressorSide, CumulativeDeltaReset, FootprintBarAggregation, FootprintCellMode,
-    FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind, TimeAndSalesOptions,
-    TradeStudyOptions,
+    AggressorSide, CumulativeDeltaReset, CumulativeDeltaStyle, FootprintBarAggregation,
+    FootprintCellMode, FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind,
+    TimeAndSalesOptions, TradeStudyOptions,
 };
 
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -557,11 +557,17 @@ impl ChartInner {
         pane_index: usize,
         reset: u8,
         anchor: f64,
+        style: u8,
     ) -> u32 {
         let reset = match reset {
             0 => CumulativeDeltaReset::Session,
             1 => CumulativeDeltaReset::Continuous,
             2 => CumulativeDeltaReset::Anchored,
+            _ => return u32::MAX,
+        };
+        let style = match style {
+            0 => CumulativeDeltaStyle::Line,
+            1 => CumulativeDeltaStyle::Candles,
             _ => return u32::MAX,
         };
         let anchor_timestamp_micros = if anchor.is_nan() {
@@ -578,6 +584,7 @@ impl ChartInner {
                 TradeStudyOptions {
                     cumulative_delta_reset: reset,
                     anchor_timestamp_micros,
+                    style,
                 },
             )
             .unwrap_or(u32::MAX)

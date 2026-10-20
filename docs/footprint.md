@@ -115,7 +115,9 @@ diagonal flags, which remain the values returned by `footprint_bar`.
 `ChartEngine::add_trade_stream` creates one bounded stream keyed by a host instrument identity.
 The stream owns classification, canonical ordering, corrections, retention, and a monotonic revision;
 footprints, CVD, delta histograms, and big-trades indicators bind to that identity rather than
-retaining a second provider-event tape. CVD supports session, continuous, and anchored resets. Delta
+retaining a second provider-event tape. CVD supports session, continuous, and anchored resets, and
+draws as a line through each bar's close or as candles: open at the value before the bar, high and
+low at the running intrabar Max/Min Delta added to that open, close at the bar's end. Delta
 dependents read final delta, Max/Min Delta, delta percentage, and bid/ask/unknown volumes from the
 same bars.
 

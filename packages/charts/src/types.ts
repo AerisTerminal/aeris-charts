@@ -902,6 +902,19 @@ export interface depth_event_layer_options {
   max_markers: number;
 }
 
+/** Current-book bars anchored at a pane's right edge ("DOM on chart"). */
+export interface depth_profile_options {
+  pane_index: number;
+  levels_per_side: number;
+  /** Length (CSS px) of the largest drawn level. */
+  max_width: number;
+  /** `null` follows the chart's bullish (bid) and bearish (ask) colors. */
+  bid_rgba: readonly [number, number, number, number] | null;
+  ask_rgba: readonly [number, number, number, number] | null;
+  opacity: number;
+  show_sizes: boolean;
+}
+
 export interface time_and_sales_options {
   minimum_volume: number;
   /** Omit to include every classified aggressor side. */
@@ -3897,6 +3910,8 @@ export interface chart_api {
   set_depth_events_typed(stream_id: number, columns: depth_event_columns): void;
   add_depth_event_layer(stream_id: number, options?: Partial<depth_event_layer_options>): number;
   remove_depth_event_layer(id: number): boolean;
+  add_depth_profile(stream_id: number, options?: Partial<depth_profile_options>): number;
+  remove_depth_profile(id: number): boolean;
   time_and_sales(stream_id: number, options?: Partial<time_and_sales_options>): readonly time_and_sales_row[] | null;
   replay_clock_micros(): number | null;
   set_replay_clock_micros(clock_micros: number | null): replay_clock_stats;
@@ -3920,7 +3935,8 @@ export interface chart_api {
   bind_footprint_series_to_stream(series: footprint_series_api | number, stream_id: number): void;
   /** Present one canonical trade stream as ordinary candlesticks or OHLC bars. */
   bind_trade_bar_series_to_stream(series: series_api | number, stream_id: number): void;
-  add_cvd_series(stream_id: number, pane?: number, reset?: "session" | "continuous" | "anchored", anchor_timestamp_micros?: number): series_api;
+  /** CVD as a line through each bar's close, or as one candle per bar spanning its open, running intrabar extremes and close. */
+  add_cvd_series(stream_id: number, pane?: number, reset?: "session" | "continuous" | "anchored", anchor_timestamp_micros?: number, style?: "line" | "candles"): series_api;
   add_delta_series(stream_id: number, pane?: number): series_api;
   /** Draw a trade stream's large aggressive orders as volume bubbles over a price series. */
   add_big_trades(series: series_api | number, stream_id: number, options?: Partial<big_trades_options>): big_trades_api;

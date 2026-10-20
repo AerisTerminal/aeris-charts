@@ -1209,7 +1209,7 @@ fn push_bar_summary(
     }
 }
 
-fn compact_volume(value: f64) -> String {
+pub(super) fn compact_volume(value: f64) -> String {
     let absolute = value.abs();
     // Whole sizes below 100K print exactly: "1195" is no wider than "1.2K".
     if value.fract().abs() < 1e-9 && absolute < 100_000.0 {

@@ -23,7 +23,7 @@ import type {
   crosshair_action_request, crosshair_action_request_handler,
   any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state, chart_value_snapshot, comparison_legend_entry, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
-  depth_event_columns, depth_event_layer_options, depth_heatmap_options, depth_ladder_row, depth_options, depth_snapshot_columns, depth_study_snapshot, depth_update_columns,
+  depth_event_columns, depth_event_layer_options, depth_heatmap_options, depth_ladder_row, depth_options, depth_profile_options, depth_snapshot_columns, depth_study_snapshot, depth_update_columns,
   drawing_point, drawing_tool_change_handler, drawing_interval, drawing_property_schema, drawing_kind_options, drawing_template, builtin_drawing_icon,
   ema_ribbon_options, ema_ribbon_periods, kst_periods, fair_value_gap_options, order_block_options,
   structure_break_on, structure_zone_options, study_calendar_policy, previous_period,
@@ -4806,6 +4806,24 @@ export class chart_impl implements chart_api {
     return removed;
   }
 
+  add_depth_profile(
+    stream_id: number,
+    options: Partial<depth_profile_options> = {},
+  ): number {
+    const id = this.wasm.add_depth_profile(stream_id, JSON.stringify(options));
+    if (id === 0xffffffff) {
+      throw new AerisChartsError("invalid_options", "depth profile options were rejected by the engine");
+    }
+    this.repaint();
+    return id;
+  }
+
+  remove_depth_profile(id: number): boolean {
+    const removed = this.wasm.remove_depth_profile(id);
+    if (removed) this.repaint();
+    return removed;
+  }
+
   time_and_sales(
     stream_id: number,
     options: Partial<time_and_sales_options> = {},
@@ -5005,13 +5023,15 @@ export class chart_impl implements chart_api {
     pane = 1,
     reset: "session" | "continuous" | "anchored" = "session",
     anchor_timestamp_micros = Number.NaN,
+    style: "line" | "candles" = "line",
   ): series_api {
     const reset_code = reset === "session" ? 0 : reset === "continuous" ? 1 : 2;
-    const id = this.wasm.add_cvd_series(stream_id, pane, reset_code, anchor_timestamp_micros);
+    const style_code = style === "line" ? 0 : 1;
+    const id = this.wasm.add_cvd_series(stream_id, pane, reset_code, anchor_timestamp_micros, style_code);
     if (id === 0xffffffff) {
       throw new AerisChartsError("invalid_options", "CVD series options were rejected by the engine");
     }
-    const series = new series_impl(id, "line", this);
+    const series = new series_impl(id, style === "line" ? "line" : "candlestick", this);
     this.series_by_id.set(id, series);
     this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
     this.repaint();

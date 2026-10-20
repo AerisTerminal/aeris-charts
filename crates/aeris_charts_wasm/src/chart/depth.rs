@@ -3,8 +3,8 @@
 use super::*;
 use aeris_charts_engine::{
     DepthEventKind, DepthEventLayerOptions, DepthHeatmapOptions, DepthLevel,
-    DepthMicrostructureEvent, DepthOptions, DepthSide, DepthSnapshot, DepthUpdate,
-    MAX_DEPTH_BATCH_UPDATES,
+    DepthMicrostructureEvent, DepthOptions, DepthProfileOptions, DepthSide, DepthSnapshot,
+    DepthUpdate, MAX_DEPTH_BATCH_UPDATES,
 };
 
 const NO_ORDER_COUNT: u32 = u32::MAX;
@@ -96,6 +96,21 @@ impl ChartInner {
 
     pub(super) fn remove_depth_event_layer(&mut self, id: u32) -> bool {
         self.engine.remove_depth_event_layer(u64::from(id))
+    }
+
+    pub(super) fn add_depth_profile(&mut self, stream_id: u32, options_json: &str) -> u32 {
+        let Ok(options) = serde_json::from_str::<DepthProfileOptions>(options_json) else {
+            return u32::MAX;
+        };
+        self.engine
+            .add_depth_profile(u64::from(stream_id), options)
+            .ok()
+            .and_then(|id| u32::try_from(id).ok())
+            .unwrap_or(u32::MAX)
+    }
+
+    pub(super) fn remove_depth_profile(&mut self, id: u32) -> bool {
+        self.engine.remove_depth_profile(u64::from(id))
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -2097,6 +2097,13 @@ impl ChartEngine {
                             &mut cache.chrome.prims,
                         );
                     }
+                    self.build_depth_profile_frame(
+                        pi,
+                        pane_w_px as i32,
+                        hpr,
+                        vpr,
+                        &mut cache.chrome.prims,
+                    );
                     self.build_depth_event_frame(
                         pi,
                         from,

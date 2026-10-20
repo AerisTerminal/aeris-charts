@@ -92,10 +92,11 @@ pub use custom_studies::{
 pub use depth::{
     DepthBook, DepthBucket, DepthError, DepthEventCluster, DepthEventKind, DepthEventLayerOptions,
     DepthHeatmapOptions, DepthLadderRow, DepthLevel, DepthMicrostructureEvent, DepthOptions,
-    DepthReplayStats, DepthResyncRequest, DepthSide, DepthSnapshot, DepthStudySnapshot,
-    DepthUpdate, MAX_DEPTH_BATCH_UPDATES, MAX_DEPTH_EVENT_LABEL_BYTES, MAX_DEPTH_EVENT_LAYERS,
-    MAX_DEPTH_EVENT_MARKERS, MAX_DEPTH_HEATMAP_ROWS, MAX_DEPTH_HEATMAPS, MAX_DEPTH_HISTORY_BUCKETS,
-    MAX_DEPTH_HISTORY_CELLS, MAX_DEPTH_LEVELS_PER_SIDE, MAX_DEPTH_REPLAY_UPDATES,
+    DepthProfileOptions, DepthReplayStats, DepthResyncRequest, DepthSide, DepthSnapshot,
+    DepthStudySnapshot, DepthUpdate, MAX_DEPTH_BATCH_UPDATES, MAX_DEPTH_EVENT_LABEL_BYTES,
+    MAX_DEPTH_EVENT_LAYERS, MAX_DEPTH_EVENT_MARKERS, MAX_DEPTH_HEATMAP_ROWS, MAX_DEPTH_HEATMAPS,
+    MAX_DEPTH_HISTORY_BUCKETS, MAX_DEPTH_HISTORY_CELLS, MAX_DEPTH_LEVELS_PER_SIDE,
+    MAX_DEPTH_PROFILE_LEVELS_PER_SIDE, MAX_DEPTH_PROFILES, MAX_DEPTH_REPLAY_UPDATES,
     MAX_DEPTH_STREAM_KEY_BYTES, MAX_DEPTH_STREAMS,
 };
 pub use domains::{
@@ -143,14 +144,15 @@ pub use financial_legend::{
 };
 pub use footprint::{
     AggressorSide, BarSequence, BarSequenceMapping, BarSequencePoint, CumulativeDeltaReset,
-    FOOTPRINT_BAR_SPACING, FootprintAggregationOptions, FootprintAggregator, FootprintBar,
-    FootprintBarAggregation, FootprintCellMode, FootprintError, FootprintImbalanceOptions,
-    FootprintLevel, FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind,
-    FootprintVisualOptions, FootprintWorkStats, HistoryPrefixStats, MAX_TIME_AND_SALES_ROWS,
-    MAX_TRADE_STREAM_KEY_BYTES, MAX_TRADE_STREAMS, ORDER_FLOW_MAX_RETAINED_SESSIONS,
-    ORDER_FLOW_MAX_RETAINED_TRADES, ORDER_FLOW_MAX_STREAM_BYTES, OrderFlowPresentation,
-    OrderFlowPresentationOptions, ReplayClockStats, ReplaySeekStats, TimeAndSalesOptions,
-    TimeAndSalesRow, TradeStreamStats, TradeStudyKind, TradeStudyOptions, footprint_row_merge,
+    CumulativeDeltaStyle, FOOTPRINT_BAR_SPACING, FootprintAggregationOptions, FootprintAggregator,
+    FootprintBar, FootprintBarAggregation, FootprintCellMode, FootprintError,
+    FootprintImbalanceOptions, FootprintLevel, FootprintSeriesOptions, FootprintTrade,
+    FootprintUpdateKind, FootprintVisualOptions, FootprintWorkStats, HistoryPrefixStats,
+    MAX_TIME_AND_SALES_ROWS, MAX_TRADE_STREAM_KEY_BYTES, MAX_TRADE_STREAMS,
+    ORDER_FLOW_MAX_RETAINED_SESSIONS, ORDER_FLOW_MAX_RETAINED_TRADES, ORDER_FLOW_MAX_STREAM_BYTES,
+    OrderFlowPresentation, OrderFlowPresentationOptions, ReplayClockStats, ReplaySeekStats,
+    TimeAndSalesOptions, TimeAndSalesRow, TradeStreamStats, TradeStudyKind, TradeStudyOptions,
+    footprint_row_merge,
 };
 pub use frame::{
     AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,
@@ -1849,6 +1851,8 @@ pub struct ChartEngine {
     next_depth_heatmap_id: u64,
     depth_event_layers: HashMap<u64, depth::DepthEventLayer>,
     next_depth_event_layer_id: u64,
+    depth_profiles: HashMap<u64, depth::DepthProfile>,
+    next_depth_profile_id: u64,
     /// Sequence identity mapping waiting for the data-layer synchronization triggered by a
     /// non-time footprint rebuild. It is consumed before ordinary timestamp rebasing so drawing
     /// anchors follow the same full-resolution bars even when row keys are reused.
@@ -2154,6 +2158,8 @@ impl ChartEngine {
             next_depth_heatmap_id: 1,
             depth_event_layers: HashMap::new(),
             next_depth_event_layer_id: 1,
+            depth_profiles: HashMap::new(),
+            next_depth_profile_id: 1,
             pending_sequence_mapping: None,
             drawing_anchor_times: HashMap::new(),
             drawing_time_anchors: HashMap::new(),
