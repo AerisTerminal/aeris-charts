@@ -585,6 +585,7 @@ impl ChartInner {
                     cumulative_delta_reset: reset,
                     anchor_timestamp_micros,
                     style,
+                    ..TradeStudyOptions::default()
                 },
             )
             .unwrap_or(u32::MAX)

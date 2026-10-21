@@ -3911,6 +3911,7 @@ export interface chart_api {
   add_depth_event_layer(stream_id: number, options?: Partial<depth_event_layer_options>): number;
   remove_depth_event_layer(id: number): boolean;
   add_depth_profile(stream_id: number, options?: Partial<depth_profile_options>): number;
+  set_depth_profile_options(id: number, options: Partial<depth_profile_options>): boolean;
   remove_depth_profile(id: number): boolean;
   time_and_sales(stream_id: number, options?: Partial<time_and_sales_options>): readonly time_and_sales_row[] | null;
   replay_clock_micros(): number | null;

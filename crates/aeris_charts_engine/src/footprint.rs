@@ -52,6 +52,23 @@ pub struct TradeStudyOptions {
     pub cumulative_delta_reset: CumulativeDeltaReset,
     pub anchor_timestamp_micros: Option<i64>,
     pub style: CumulativeDeltaStyle,
+    /// CVD line color; `None` keeps the series' default line color.
+    pub line_color: Option<Color>,
+    /// Rising CVD candles and positive delta bars; `None` follows the order-flow buy color
+    /// for delta and the chart's up color for candles.
+    pub up_color: Option<Color>,
+    /// Falling CVD candles and negative delta bars; `None` follows the order-flow sell color
+    /// for delta and the chart's down color for candles.
+    pub down_color: Option<Color>,
+}
+
+impl TradeStudyOptions {
+    /// An anchored reset needs its anchor.
+    #[must_use]
+    pub const fn valid(&self) -> bool {
+        !matches!(self.cumulative_delta_reset, CumulativeDeltaReset::Anchored)
+            || self.anchor_timestamp_micros.is_some()
+    }
 }
 
 /// How a CVD series draws: one line through each bar's closing value, or one candle per bar
@@ -396,7 +413,10 @@ pub struct OrderFlowPresentationOptions {
     pub show_footprint: bool,
     pub show_cumulative_delta: bool,
     pub show_delta_histogram: bool,
-    pub cumulative_delta_style: CumulativeDeltaStyle,
+    /// Reset, style and colors of the CVD series while it is shown.
+    pub cumulative_delta: TradeStudyOptions,
+    /// Bar colors of the delta histogram while it is shown; its reset and style are unused.
+    pub delta_histogram: TradeStudyOptions,
     /// Big-trades bubbles over the primary price series.
     pub big_trades: Option<crate::BigTradesOptions>,
 }
@@ -2385,9 +2405,7 @@ impl ChartEngine {
     ) -> Result<SeriesId, FootprintError> {
         self.trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
-        if options.cumulative_delta_reset == CumulativeDeltaReset::Anchored
-            && options.anchor_timestamp_micros.is_none()
-        {
+        if !options.valid() {
             return Err(FootprintError::InvalidAggregation);
         }
         let id = self.add_series(options.style.series_kind());
@@ -2396,6 +2414,7 @@ impl ChartEngine {
         if let Some(series) = self.series_entry_mut(id) {
             series.title = "CVD".to_string();
         }
+        self.apply_cumulative_delta_colors(id, options);
         self.register_trade_dependent(stream_id, TradeStudyKind::CumulativeDelta, id, options);
         if let Err(error) = self.refresh_trade_dependents(stream_id) {
             self.remove_series(id);
@@ -2409,6 +2428,15 @@ impl ChartEngine {
         stream_id: u64,
         pane_index: usize,
     ) -> Result<SeriesId, FootprintError> {
+        self.add_delta_series_with(stream_id, pane_index, TradeStudyOptions::default())
+    }
+
+    fn add_delta_series_with(
+        &mut self,
+        stream_id: u64,
+        pane_index: usize,
+        options: TradeStudyOptions,
+    ) -> Result<SeriesId, FootprintError> {
         self.trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
         let id = self.add_series(SeriesKind::Histogram);
@@ -2417,12 +2445,7 @@ impl ChartEngine {
         if let Some(series) = self.series_entry_mut(id) {
             series.title = "Delta".to_string();
         }
-        self.register_trade_dependent(
-            stream_id,
-            TradeStudyKind::DeltaHistogram,
-            id,
-            TradeStudyOptions::default(),
-        );
+        self.register_trade_dependent(stream_id, TradeStudyKind::DeltaHistogram, id, options);
         if let Err(error) = self.refresh_trade_dependents(stream_id) {
             self.remove_series(id);
             return Err(error);
@@ -2479,14 +2502,14 @@ impl ChartEngine {
                 presentation.cumulative_delta_series = Some(self.add_order_flow_study(
                     stream,
                     TradeStudyKind::CumulativeDelta,
-                    options.cumulative_delta_style,
+                    options.cumulative_delta,
                 )?);
             }
             if options.show_delta_histogram {
                 presentation.delta_series = Some(self.add_order_flow_study(
                     stream,
                     TradeStudyKind::DeltaHistogram,
-                    options.cumulative_delta_style,
+                    options.delta_histogram,
                 )?);
             }
             if let Some(big_trades) = options.big_trades.take() {
@@ -2522,6 +2545,9 @@ impl ChartEngine {
         validate_visual_options(&options.visual)?;
         if options.big_trades.as_ref().is_some_and(|big| !big.valid()) {
             return Err(FootprintError::InvalidBigTradesOptions);
+        }
+        if !options.cumulative_delta.valid() {
+            return Err(FootprintError::InvalidAggregation);
         }
         let current = self
             .trade_stream(stream_id)
@@ -2577,12 +2603,17 @@ impl ChartEngine {
             (None, false) => {}
         }
 
-        for (kind, show) in [
+        for (kind, show, study) in [
             (
                 TradeStudyKind::CumulativeDelta,
                 options.show_cumulative_delta,
+                options.cumulative_delta,
             ),
-            (TradeStudyKind::DeltaHistogram, options.show_delta_histogram),
+            (
+                TradeStudyKind::DeltaHistogram,
+                options.show_delta_histogram,
+                options.delta_histogram,
+            ),
         ] {
             let slot = match kind {
                 TradeStudyKind::CumulativeDelta => &mut presentation.cumulative_delta_series,
@@ -2594,20 +2625,12 @@ impl ChartEngine {
                     self.remove_series(series);
                 }
                 (None, true) => {
-                    *slot = Some(self.add_order_flow_study(
-                        stream_id,
-                        kind,
-                        options.cumulative_delta_style,
-                    )?);
+                    *slot = Some(self.add_order_flow_study(stream_id, kind, study)?);
                 }
-                (Some(series), true) if kind == TradeStudyKind::CumulativeDelta => {
-                    self.set_cumulative_delta_style(
-                        stream_id,
-                        series,
-                        options.cumulative_delta_style,
-                    )?;
+                (Some(series), true) => {
+                    self.set_trade_study_options(stream_id, series, study)?;
                 }
-                _ => {}
+                (None, false) => {}
             }
         }
 
@@ -2633,22 +2656,15 @@ impl ChartEngine {
         &mut self,
         stream_id: u64,
         kind: TradeStudyKind,
-        cumulative_delta_style: CumulativeDeltaStyle,
+        options: TradeStudyOptions,
     ) -> Result<SeriesId, FootprintError> {
         let pane = self
             .add_pane(false)
             .ok_or(FootprintError::InvalidAggregation)?;
         self.panes[pane].stretch_factor = self.separate_pane_stretch();
         let id = match kind {
-            TradeStudyKind::CumulativeDelta => self.add_cvd_series(
-                stream_id,
-                pane,
-                TradeStudyOptions {
-                    style: cumulative_delta_style,
-                    ..TradeStudyOptions::default()
-                },
-            ),
-            TradeStudyKind::DeltaHistogram => self.add_delta_series(stream_id, pane),
+            TradeStudyKind::CumulativeDelta => self.add_cvd_series(stream_id, pane, options),
+            TradeStudyKind::DeltaHistogram => self.add_delta_series_with(stream_id, pane, options),
         }?;
         let chrome = self.indicator_chrome;
         if let Some(series) = self.series_entry_mut(id) {
@@ -3365,13 +3381,13 @@ impl ChartEngine {
         });
     }
 
-    /// Redraws an existing CVD series as a line or candles in place, keeping its pane, reset
-    /// mode and history.
-    fn set_cumulative_delta_style(
+    /// Brings an existing tape study to `options` in place, keeping its pane and history. A CVD
+    /// switching between line and candles is redrawn as the other series kind.
+    fn set_trade_study_options(
         &mut self,
         stream_id: u64,
         series: SeriesId,
-        style: CumulativeDeltaStyle,
+        options: TradeStudyOptions,
     ) -> Result<(), FootprintError> {
         let dependent = self
             .trade_dependents
@@ -3382,12 +3398,28 @@ impl ChartEngine {
                     .find(|dependent| dependent.series_id == series)
             })
             .ok_or(FootprintError::UnknownSeries(series))?;
-        if dependent.options.style == style {
+        if dependent.options == options {
             return Ok(());
         }
-        dependent.options.style = style;
-        self.convert_series_kind(series, style.series_kind());
+        let kind = dependent.kind;
+        let restyled = dependent.options.style != options.style;
+        dependent.options = options;
+        if kind == TradeStudyKind::CumulativeDelta {
+            if restyled {
+                self.convert_series_kind(series, options.style.series_kind());
+            }
+            self.apply_cumulative_delta_colors(series, options);
+        }
         self.refresh_trade_dependents(stream_id)
+    }
+
+    fn apply_cumulative_delta_colors(&mut self, series: SeriesId, options: TradeStudyOptions) {
+        if let Some(entry) = self.series_entry_mut(series) {
+            entry.line_color = options.line_color.map(|color| color.to_css());
+            entry.up_color = options.up_color.map(|color| color.to_css());
+            entry.down_color = options.down_color.map(|color| color.to_css());
+        }
+        self.invalidate_frame_series(series);
     }
 
     fn refresh_trade_dependents(&mut self, stream_id: u64) -> Result<(), FootprintError> {
@@ -3435,16 +3467,19 @@ impl ChartEngine {
                 }
                 TradeStudyKind::DeltaHistogram => {
                     let values = bars.iter().map(|bar| bar.delta).collect::<Vec<_>>();
+                    let up = dependent.options.up_color.unwrap_or(Color::rgb(
+                        ORDER_FLOW_BUY_RGB.0,
+                        ORDER_FLOW_BUY_RGB.1,
+                        ORDER_FLOW_BUY_RGB.2,
+                    ));
+                    let down = dependent.options.down_color.unwrap_or(Color::rgb(
+                        ORDER_FLOW_SELL_RGB.0,
+                        ORDER_FLOW_SELL_RGB.1,
+                        ORDER_FLOW_SELL_RGB.2,
+                    ));
                     let point_colors = values
                         .iter()
-                        .map(|value| {
-                            let rgb = if *value >= 0.0 {
-                                ORDER_FLOW_BUY_RGB
-                            } else {
-                                ORDER_FLOW_SELL_RGB
-                            };
-                            Color::rgb(rgb.0, rgb.1, rgb.2).0
-                        })
+                        .map(|value| if *value >= 0.0 { up.0 } else { down.0 })
                         .collect();
                     let open = vec![0.0; values.len()];
                     let high = values.iter().map(|value| value.max(0.0)).collect();
@@ -4547,7 +4582,8 @@ mod tests {
                         show_footprint: true,
                         show_cumulative_delta: true,
                         show_delta_histogram: true,
-                        cumulative_delta_style: CumulativeDeltaStyle::Line,
+                        cumulative_delta: TradeStudyOptions::default(),
+                        delta_histogram: TradeStudyOptions::default(),
                         big_trades: Some(crate::BigTradesOptions::default()),
                     },
                 )
@@ -5814,6 +5850,7 @@ mod tests {
                         cumulative_delta_reset: reset,
                         anchor_timestamp_micros: anchor,
                         style: CumulativeDeltaStyle::Line,
+                        ..TradeStudyOptions::default()
                     },
                 )
                 .unwrap()
@@ -5829,6 +5866,7 @@ mod tests {
                     cumulative_delta_reset: CumulativeDeltaReset::Anchored,
                     anchor_timestamp_micros: None,
                     style: CumulativeDeltaStyle::Line,
+                    ..TradeStudyOptions::default()
                 },
             ),
             Err(FootprintError::InvalidAggregation),
@@ -7353,7 +7391,8 @@ mod tests {
                     show_footprint: true,
                     show_cumulative_delta: true,
                     show_delta_histogram: true,
-                    cumulative_delta_style: CumulativeDeltaStyle::Line,
+                    cumulative_delta: TradeStudyOptions::default(),
+                    delta_histogram: TradeStudyOptions::default(),
                     big_trades: Some(crate::BigTradesOptions::default()),
                 },
             )
@@ -7466,7 +7505,8 @@ mod tests {
             show_footprint,
             show_cumulative_delta: true,
             show_delta_histogram: false,
-            cumulative_delta_style: CumulativeDeltaStyle::Line,
+            cumulative_delta: TradeStudyOptions::default(),
+            delta_histogram: TradeStudyOptions::default(),
             big_trades: None,
         }
     }
@@ -7512,6 +7552,7 @@ mod tests {
                         cumulative_delta_reset: reset,
                         anchor_timestamp_micros: anchor,
                         style: CumulativeDeltaStyle::Candles,
+                        ..TradeStudyOptions::default()
                     },
                 )
                 .unwrap()
@@ -7560,7 +7601,10 @@ mod tests {
                 },
                 ..FootprintAggregationOptions::default()
             },
-            cumulative_delta_style: style,
+            cumulative_delta: TradeStudyOptions {
+                style,
+                ..TradeStudyOptions::default()
+            },
             ..order_flow_options(false)
         };
         let mut presentation = chart
@@ -7607,6 +7651,118 @@ mod tests {
             .unwrap();
         assert_eq!(chart.series_entry(series).unwrap().kind, SeriesKind::Line);
         assert_eq!(ohlc(&chart, series)[0], vec![1.0, -3.0]);
+    }
+
+    #[test]
+    fn reconfiguring_tape_study_reset_and_colors_keeps_the_same_series() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let options = |cumulative_delta, delta_histogram| OrderFlowPresentationOptions {
+            aggregation: FootprintAggregationOptions {
+                tick_size: 1.0,
+                ticks_per_row: 1,
+                bars: FootprintBarAggregation::Time {
+                    interval_micros: 1_000_000,
+                    anchor_micros: 0,
+                },
+                ..FootprintAggregationOptions::default()
+            },
+            show_delta_histogram: true,
+            cumulative_delta,
+            delta_histogram,
+            ..order_flow_options(false)
+        };
+        let mut presentation = chart
+            .add_order_flow_presentation(
+                "CME:ES",
+                0,
+                options(TradeStudyOptions::default(), TradeStudyOptions::default()),
+            )
+            .unwrap();
+        chart
+            .update_order_flow_presentation(presentation, cvd_candle_tape(), false)
+            .unwrap();
+        let cvd = presentation.cumulative_delta_series().unwrap();
+        let delta = presentation.delta_series().unwrap();
+        let session = ohlc(&chart, cvd)[3].clone();
+
+        let (line, up, down) = (
+            Color::rgb(1, 2, 3),
+            Color::rgb(10, 200, 30),
+            Color::rgb(200, 10, 30),
+        );
+        chart
+            .reconfigure_order_flow_presentation(
+                &mut presentation,
+                options(
+                    TradeStudyOptions {
+                        cumulative_delta_reset: CumulativeDeltaReset::Continuous,
+                        line_color: Some(line),
+                        up_color: Some(up),
+                        down_color: Some(down),
+                        ..TradeStudyOptions::default()
+                    },
+                    TradeStudyOptions {
+                        up_color: Some(up),
+                        down_color: Some(down),
+                        ..TradeStudyOptions::default()
+                    },
+                ),
+            )
+            .unwrap();
+        assert_eq!(presentation.cumulative_delta_series(), Some(cvd));
+        assert_eq!(presentation.delta_series(), Some(delta));
+        let entry = chart.series_entry(cvd).unwrap();
+        assert_eq!(entry.line_color.as_deref(), Some(line.to_css().as_str()));
+        assert_eq!(entry.up_color.as_deref(), Some(up.to_css().as_str()));
+        assert_eq!(entry.down_color.as_deref(), Some(down.to_css().as_str()));
+        let continuous = ohlc(&chart, cvd)[3].clone();
+        let mut running = 0.0;
+        let expected = chart
+            .trade_stream(presentation.trade_stream())
+            .unwrap()
+            .bars()
+            .iter()
+            .map(|bar| {
+                running += bar.delta;
+                running
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(continuous, expected, "continuous CVD never resets");
+        assert_eq!(session.len(), continuous.len());
+
+        let deltas = ohlc(&chart, delta)[3].clone();
+        assert!(
+            deltas.iter().any(|value| *value >= 0.0) && deltas.iter().any(|value| *value < 0.0)
+        );
+        for (index, value) in deltas.iter().enumerate() {
+            assert_eq!(
+                chart.data.point_color(
+                    delta,
+                    aeris_charts_core::model::data_layer::PointColorChannel::Body,
+                    index,
+                ),
+                Some(if *value >= 0.0 { up.0 } else { down.0 })
+            );
+        }
+
+        assert_eq!(
+            chart.reconfigure_order_flow_presentation(
+                &mut presentation,
+                options(
+                    TradeStudyOptions {
+                        cumulative_delta_reset: CumulativeDeltaReset::Anchored,
+                        ..TradeStudyOptions::default()
+                    },
+                    TradeStudyOptions::default(),
+                ),
+            ),
+            Err(FootprintError::InvalidAggregation),
+            "an anchored reset without its anchor is rejected before any change"
+        );
+        assert_eq!(
+            chart.series_entry(cvd).unwrap().up_color.as_deref(),
+            Some(up.to_css().as_str())
+        );
     }
 
     #[test]
@@ -8257,7 +8413,8 @@ mod tests {
                     show_footprint: true,
                     show_cumulative_delta: false,
                     show_delta_histogram: false,
-                    cumulative_delta_style: CumulativeDeltaStyle::Line,
+                    cumulative_delta: TradeStudyOptions::default(),
+                    delta_histogram: TradeStudyOptions::default(),
                     big_trades: None,
                 },
             )

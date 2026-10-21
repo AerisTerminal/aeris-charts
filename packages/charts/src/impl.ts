@@ -4818,6 +4818,15 @@ export class chart_impl implements chart_api {
     return id;
   }
 
+  set_depth_profile_options(
+    id: number,
+    options: Partial<depth_profile_options>,
+  ): boolean {
+    const updated = this.wasm.set_depth_profile_options(id, JSON.stringify(options));
+    if (updated) this.repaint();
+    return updated;
+  }
+
   remove_depth_profile(id: number): boolean {
     const removed = this.wasm.remove_depth_profile(id);
     if (removed) this.repaint();

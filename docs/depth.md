@@ -56,7 +56,9 @@ reads the canonical (or replay-projected) book at frame time, so it keeps no cop
 every depth mutation reaches it through the same scene invalidation as the heatmap. Bars paint in
 pane chrome above series and below price lines; bid and ask colors default to the chart's bullish
 and bearish colors, and a level's size prints inside its bar only when the row fits the text.
-Profiles are capped per chart and removed with their stream.
+`set_depth_profile_options` restyles a profile in place (levels, width, colors, opacity, sizes)
+under the same validation as `add_depth_profile`. Profiles are capped per chart and removed with
+their stream.
 
 Microstructure markers are host facts. Iceberg refill, pulled liquidity, size cluster, and sweep
 events carry time, price, size, optional side, and a label capped at 256 bytes. Charts validates,

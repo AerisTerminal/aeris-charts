@@ -1314,7 +1314,8 @@ mod tests {
                     show_footprint: false,
                     show_cumulative_delta: false,
                     show_delta_histogram: false,
-                    cumulative_delta_style: crate::CumulativeDeltaStyle::Line,
+                    cumulative_delta: crate::TradeStudyOptions::default(),
+                    delta_histogram: crate::TradeStudyOptions::default(),
                     big_trades: Some(fixed(5.0)),
                 },
             )

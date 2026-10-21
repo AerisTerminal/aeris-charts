@@ -259,7 +259,8 @@ fn sustained_order_flow_tape(with_auction_markers: bool) -> LiveTapeTimings {
                 show_footprint: true,
                 show_cumulative_delta: true,
                 show_delta_histogram: true,
-                cumulative_delta_style: aeris_charts_engine::CumulativeDeltaStyle::Line,
+                cumulative_delta: TradeStudyOptions::default(),
+                delta_histogram: TradeStudyOptions::default(),
                 big_trades: None,
             },
         )
@@ -392,7 +393,8 @@ fn multi_session_order_flow_history() -> SessionHistoryResult {
                 show_footprint: true,
                 show_cumulative_delta: true,
                 show_delta_histogram: true,
-                cumulative_delta_style: aeris_charts_engine::CumulativeDeltaStyle::Line,
+                cumulative_delta: TradeStudyOptions::default(),
+                delta_histogram: TradeStudyOptions::default(),
                 big_trades: Some(BigTradesOptions::default()),
             },
         )

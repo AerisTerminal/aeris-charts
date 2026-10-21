@@ -1708,6 +1708,12 @@ impl AerisChart {
             .add_depth_profile(stream_id, options_json)
     }
 
+    pub fn set_depth_profile_options(&mut self, id: u32, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_depth_profile_options(id, options_json)
+    }
+
     pub fn remove_depth_profile(&mut self, id: u32) -> bool {
         self.inner.borrow_mut().remove_depth_profile(id)
     }

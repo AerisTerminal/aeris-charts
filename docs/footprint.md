@@ -119,7 +119,10 @@ retaining a second provider-event tape. CVD supports session, continuous, and an
 draws as a line through each bar's close or as candles: open at the value before the bar, high and
 low at the running intrabar Max/Min Delta added to that open, close at the bar's end. Delta
 dependents read final delta, Max/Min Delta, delta percentage, and bid/ask/unknown volumes from the
-same bars.
+same bars. `TradeStudyOptions` also carries the CVD line color and the up/down colors used by CVD
+candles and delta bars; an order-flow presentation takes one set for CVD and one for the delta
+histogram, and `reconfigure_order_flow_presentation` applies reset, style and color changes to the
+existing series without replaying the tape.
 
 Big trades (`ChartEngine::add_big_trades`, `big_trades.rs`) is a standalone indicator over any
 candlestick, bar, line, area, baseline, or footprint series. An exchange reports one aggressive order

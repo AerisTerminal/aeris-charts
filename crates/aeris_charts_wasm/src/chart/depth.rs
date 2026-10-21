@@ -109,6 +109,14 @@ impl ChartInner {
             .unwrap_or(u32::MAX)
     }
 
+    pub(super) fn set_depth_profile_options(&mut self, id: u32, options_json: &str) -> bool {
+        serde_json::from_str::<DepthProfileOptions>(options_json).is_ok_and(|options| {
+            self.engine
+                .set_depth_profile_options(u64::from(id), options)
+                .is_ok()
+        })
+    }
+
     pub(super) fn remove_depth_profile(&mut self, id: u32) -> bool {
         self.engine.remove_depth_profile(u64::from(id))
     }

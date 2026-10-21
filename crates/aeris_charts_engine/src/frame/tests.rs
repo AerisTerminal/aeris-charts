@@ -17662,7 +17662,8 @@ fn updown_volume_takes_its_direction_from_a_footprint_over_a_whitespace_primary(
                 show_footprint: true,
                 show_cumulative_delta: false,
                 show_delta_histogram: false,
-                cumulative_delta_style: crate::CumulativeDeltaStyle::Line,
+                cumulative_delta: crate::TradeStudyOptions::default(),
+                delta_histogram: crate::TradeStudyOptions::default(),
                 big_trades: None,
             },
         )

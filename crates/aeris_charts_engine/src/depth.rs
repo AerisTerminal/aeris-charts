@@ -698,13 +698,7 @@ impl crate::ChartEngine {
         options: DepthProfileOptions,
     ) -> Result<u64, DepthError> {
         if !self.depth_streams.contains_key(&stream_id)
-            || options.pane_index >= self.panes.len()
-            || options.levels_per_side == 0
-            || options.levels_per_side > MAX_DEPTH_PROFILE_LEVELS_PER_SIDE
-            || !options.max_width.is_finite()
-            || options.max_width <= 0.0
-            || !options.opacity.is_finite()
-            || !(0.0..=1.0).contains(&options.opacity)
+            || !self.valid_depth_profile_options(options)
             || self.depth_profiles.len() >= MAX_DEPTH_PROFILES
         {
             return Err(DepthError::InvalidOptions);
@@ -715,6 +709,36 @@ impl crate::ChartEngine {
             .insert(id, DepthProfile { stream_id, options });
         self.invalidate_frame_scene();
         Ok(id)
+    }
+
+    /// Restyle an existing depth profile in place; it keeps reading the same stream.
+    pub fn set_depth_profile_options(
+        &mut self,
+        id: u64,
+        options: DepthProfileOptions,
+    ) -> Result<(), DepthError> {
+        if !self.valid_depth_profile_options(options) {
+            return Err(DepthError::InvalidOptions);
+        }
+        let profile = self
+            .depth_profiles
+            .get_mut(&id)
+            .ok_or(DepthError::InvalidOptions)?;
+        if profile.options != options {
+            profile.options = options;
+            self.invalidate_frame_scene();
+        }
+        Ok(())
+    }
+
+    fn valid_depth_profile_options(&self, options: DepthProfileOptions) -> bool {
+        options.pane_index < self.panes.len()
+            && options.levels_per_side > 0
+            && options.levels_per_side <= MAX_DEPTH_PROFILE_LEVELS_PER_SIDE
+            && options.max_width.is_finite()
+            && options.max_width > 0.0
+            && options.opacity.is_finite()
+            && (0.0..=1.0).contains(&options.opacity)
     }
 
     pub fn remove_depth_profile(&mut self, id: u64) -> bool {
@@ -2191,12 +2215,35 @@ mod tests {
                 ..DepthProfileOptions::default()
             },
         ];
+        let restyled = chart
+            .add_depth_profile(stream, DepthProfileOptions::default())
+            .unwrap();
         for options in invalid {
             assert_eq!(
                 chart.add_depth_profile(stream, options),
                 Err(DepthError::InvalidOptions)
             );
+            assert_eq!(
+                chart.set_depth_profile_options(restyled, options),
+                Err(DepthError::InvalidOptions)
+            );
         }
+        let wider = DepthProfileOptions {
+            levels_per_side: 10,
+            max_width: 200.0,
+            opacity: 0.8,
+            show_sizes: false,
+            bid_rgba: Some([1, 2, 3, 255]),
+            ..DepthProfileOptions::default()
+        };
+        chart.set_depth_profile_options(restyled, wider).unwrap();
+        assert_eq!(chart.depth_profiles[&restyled].options, wider);
+        assert_eq!(chart.depth_profiles[&restyled].stream_id, stream);
+        assert_eq!(
+            chart.set_depth_profile_options(restyled + 99, wider),
+            Err(DepthError::InvalidOptions)
+        );
+        assert!(chart.remove_depth_profile(restyled));
         assert_eq!(
             chart.add_depth_profile(stream + 1, DepthProfileOptions::default()),
             Err(DepthError::InvalidOptions)
