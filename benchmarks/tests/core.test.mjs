@@ -188,4 +188,7 @@ test("scenario registry and JSON schema remain versioned and complete", async ()
   assert.deepEqual(schema.properties.build.properties.rust_opt_level.enum, ["3", "z"]);
   assert.ok(schema.$defs.summary.required.includes("p95"));
   assert.equal(schema.$defs.dataset.properties.seed.maximum, 0xffff_ffff);
+  assert.deepEqual(schema.$defs.dataset.properties.data_type.enum, [
+    "deterministic_ohlcv", "deterministic_general_cartesian", "deterministic_general_cartesian_and_ohlcv",
+  ]);
 });

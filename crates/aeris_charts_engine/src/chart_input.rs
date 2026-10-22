@@ -403,6 +403,9 @@ enum PressMode {
     TouchTracking,
     DeltaTooltip,
     GeneralBrush,
+    GeneralLegend {
+        target: crate::general_legend::GeneralLegendTarget,
+    },
     /// A press inside the label being edited; the typing session keeps it.
     TextEditor,
     /// A press with no gesture: inert chrome or an already-handled double-click.
@@ -424,6 +427,7 @@ impl PressMode {
             | Self::TouchTracking
             | Self::DeltaTooltip
             | Self::GeneralBrush
+            | Self::GeneralLegend { .. }
             | Self::Inert => InputTarget::Pane,
         }
     }
@@ -937,7 +941,12 @@ impl ChartEngine {
             .pointer_down(Self::mouse_sample(input, mode.target()));
         self.input.press = Some(press(
             mode,
-            (click_count >= 2 || repeated) && sequence_or_idle && mode != PressMode::GeneralBrush,
+            (click_count >= 2 || repeated)
+                && sequence_or_idle
+                && !matches!(
+                    mode,
+                    PressMode::GeneralBrush | PressMode::GeneralLegend { .. }
+                ),
         ));
         self.input.touch_longpress_deadline_ms = (input.device == InputDevice::Touch
             && matches!(mode, PressMode::Pane { .. })
@@ -1253,6 +1262,7 @@ impl ChartEngine {
                 | PressMode::TouchTracking
                 | PressMode::DeltaTooltip
                 | PressMode::GeneralBrush
+                | PressMode::GeneralLegend { .. }
                 | PressMode::TextEditor
                 | PressMode::Inert => {}
             }
@@ -1280,6 +1290,18 @@ impl ChartEngine {
             | PressMode::Inert
             | PressMode::TouchTracking => {}
             PressMode::DeltaTooltip => {}
+            PressMode::GeneralLegend { target } => {
+                if !moved
+                    && self.general_legend_target_at_for_touch(
+                        x,
+                        y,
+                        input.device == InputDevice::Touch,
+                    ) == Some(target)
+                {
+                    self.toggle_general_legend_target(target);
+                    self.push_input_event(ChartInputEvent::Click { x, y });
+                }
+            }
             PressMode::GeneralBrush => {
                 if moved {
                     self.update_input_general_brush(press.start, (x, y));
@@ -2106,6 +2128,11 @@ impl ChartEngine {
 
     fn begin_press(&mut self, region: ChartRegion, input: PointerInput) -> PressMode {
         let (x, y) = (input.x, input.y);
+        if let Some(target) =
+            self.general_legend_target_at_for_touch(x, y, input.device == InputDevice::Touch)
+        {
+            return PressMode::GeneralLegend { target };
+        }
         let options = self.input.options;
         match region {
             ChartRegion::Separator(index) if options.panes_resize => {
@@ -2641,7 +2668,9 @@ impl ChartEngine {
                 PressMode::PriceAxis { .. } => return ChartCursor::ResizeVertical,
                 PressMode::Separator { .. } => return ChartCursor::ResizeRow,
                 PressMode::Trading { dragging: true } => return ChartCursor::VerticalGrabbing,
-                PressMode::Trading { dragging: false } | PressMode::Alert => {
+                PressMode::Trading { dragging: false }
+                | PressMode::Alert
+                | PressMode::GeneralLegend { .. } => {
                     return ChartCursor::Pointer;
                 }
                 PressMode::TextEditor => return ChartCursor::Text,

@@ -284,7 +284,7 @@ pub struct GridOptions {
 pub struct CrosshairLineOptions {
     pub color: String,
     pub width: f64,
-    /// [`line_style`] value (Aeris default Solid).
+    /// [`line_style`] value (Aeris default Dashed).
     pub style: u8,
     pub visible: bool,
     #[serde(rename = "labelVisible")]
@@ -298,8 +298,8 @@ impl Default for CrosshairLineOptions {
         Self {
             color: crosshair_color(),
             width: 1.0,
-            // Solid out of the box: a deliberate divergence from the reference's LargeDashed.
-            style: line_style::SOLID,
+            // Dashed out of the box: a deliberate divergence from the reference's LargeDashed.
+            style: line_style::DASHED,
             visible: true,
             label_visible: true,
             label_background_color: crosshair_label_bg(),
@@ -485,12 +485,163 @@ impl Default for GeneralTooltipOptions {
     }
 }
 
+/// Pixel or percentage coordinate for custom general-legend placement.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GeneralLegendCoordinate {
+    Pixels(f64),
+    Percent(f64),
+}
+
+impl GeneralLegendCoordinate {
+    pub fn resolve(self, span: f64) -> f64 {
+        match self {
+            Self::Pixels(value) => value,
+            Self::Percent(value) => span * value / 100.0,
+        }
+    }
+}
+
+impl Serialize for GeneralLegendCoordinate {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Pixels(value) => serializer.serialize_f64(*value),
+            Self::Percent(value) => serializer.serialize_str(&format!("{value}%")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for GeneralLegendCoordinate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        let value = Value::deserialize(deserializer)?;
+        match value {
+            Value::Number(number) => number
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .map(Self::Pixels)
+                .ok_or_else(|| D::Error::custom("legend coordinate must be finite")),
+            Value::String(text) => text
+                .strip_suffix('%')
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite())
+                .map(Self::Percent)
+                .ok_or_else(|| D::Error::custom("legend coordinate must be a finite percentage")),
+            _ => Err(D::Error::custom(
+                "legend coordinate must be pixels or a percentage",
+            )),
+        }
+    }
+}
+
+/// Placement of the engine-drawn legend relative to its general pane's chart area.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum GeneralLegendPosition {
+    Top,
+    #[default]
+    Bottom,
+    Left,
+    Right,
+    InsideLeft,
+    InsideRight,
+    Center,
+    InsideTop,
+    InsideBottom,
+    InsideTopLeft,
+    InsideTopRight,
+    InsideBottomLeft,
+    InsideBottomRight,
+    Custom {
+        x: GeneralLegendCoordinate,
+        y: GeneralLegendCoordinate,
+    },
+}
+
+impl Serialize for GeneralLegendPosition {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct as _;
+        if let Self::Custom { x, y } = self {
+            let mut fields = serializer.serialize_struct("GeneralLegendPosition", 2)?;
+            fields.serialize_field("x", x)?;
+            fields.serialize_field("y", y)?;
+            return fields.end();
+        }
+        let name = match self {
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::InsideLeft => "insideLeft",
+            Self::InsideRight => "insideRight",
+            Self::Center => "center",
+            Self::InsideTop => "insideTop",
+            Self::InsideBottom => "insideBottom",
+            Self::InsideTopLeft => "insideTopLeft",
+            Self::InsideTopRight => "insideTopRight",
+            Self::InsideBottomLeft => "insideBottomLeft",
+            Self::InsideBottomRight => "insideBottomRight",
+            Self::Custom { .. } => unreachable!(),
+        };
+        serializer.serialize_str(name)
+    }
+}
+
+impl<'de> Deserialize<'de> for GeneralLegendPosition {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        match Value::deserialize(deserializer)? {
+            Value::String(name) => match name.as_str() {
+                "top" => Ok(Self::Top),
+                "bottom" => Ok(Self::Bottom),
+                "left" => Ok(Self::Left),
+                "right" => Ok(Self::Right),
+                "insideLeft" => Ok(Self::InsideLeft),
+                "insideRight" => Ok(Self::InsideRight),
+                "center" => Ok(Self::Center),
+                "insideTop" => Ok(Self::InsideTop),
+                "insideBottom" => Ok(Self::InsideBottom),
+                "insideTopLeft" => Ok(Self::InsideTopLeft),
+                "insideTopRight" => Ok(Self::InsideTopRight),
+                "insideBottomLeft" => Ok(Self::InsideBottomLeft),
+                "insideBottomRight" => Ok(Self::InsideBottomRight),
+                _ => Err(D::Error::custom("unknown general legend position")),
+            },
+            Value::Object(mut fields) => {
+                let x = fields
+                    .remove("x")
+                    .ok_or_else(|| D::Error::custom("missing legend x"))?;
+                let y = fields
+                    .remove("y")
+                    .ok_or_else(|| D::Error::custom("missing legend y"))?;
+                let x = serde_json::from_value(x).map_err(D::Error::custom)?;
+                let y = serde_json::from_value(y).map_err(D::Error::custom)?;
+                Ok(Self::Custom { x, y })
+            }
+            _ => Err(D::Error::custom(
+                "legend position must be a name or x/y object",
+            )),
+        }
+    }
+}
 /// The engine-drawn legend of general (non-financial) panes: one entry per series, slice or
-/// layout series below the plot. Off by default, like an omitted Recharts `<Legend/>`.
+/// layout series. Off by default, like an omitted Recharts `<Legend/>`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GeneralLegendOptions {
     pub visible: bool,
+    pub position: GeneralLegendPosition,
+    pub offset: f64,
 }
 
 impl Default for ChartOptions {
@@ -722,8 +873,8 @@ mod tests {
         assert!(!o.grid.horz_lines.visible);
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         assert!(!o.crosshair.do_not_snap_to_hidden_series_indices);
-        assert_eq!(o.crosshair.vert_line.style, line_style::SOLID);
-        assert_eq!(o.crosshair.horz_line.style, line_style::SOLID);
+        assert_eq!(o.crosshair.vert_line.style, line_style::DASHED);
+        assert_eq!(o.crosshair.horz_line.style, line_style::DASHED);
         assert_eq!(o.crosshair.vert_line.color, DEFAULT_CROSSHAIR_LINE_CSS);
         assert_eq!(
             o.crosshair.horz_line.label_background_color,
@@ -870,6 +1021,27 @@ mod tests {
         assert_eq!(raw["hostExtension"]["keep"], 42);
     }
 
+    #[test]
+    fn custom_general_legend_position_round_trips_and_rejects_nonfinite_coordinates() {
+        let position: GeneralLegendPosition =
+            serde_json::from_value(json!({ "x": 120, "y": "75%" })).unwrap();
+        assert_eq!(
+            position,
+            GeneralLegendPosition::Custom {
+                x: GeneralLegendCoordinate::Pixels(120.0),
+                y: GeneralLegendCoordinate::Percent(75.0),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(position).unwrap(),
+            json!({ "x": 120.0, "y": "75%" })
+        );
+        assert!(
+            serde_json::from_value::<GeneralLegendPosition>(json!({ "x": "NaN%", "y": 20 }))
+                .is_err()
+        );
+        assert!(serde_json::from_value::<GeneralLegendPosition>(json!({ "x": 20 })).is_err());
+    }
     #[test]
     fn watermark_patch_merges_camelcase_keys() {
         let mut store = ChartOptionsStore::new();

@@ -365,7 +365,9 @@ impl ChartEngine {
                     border_color: popover.border,
                 });
                 if items.len() == 2 && delta_width > 0.0 {
-                    // The delta band spans the box's own snapped rows so it meets both borders.
+                    // The delta band fills the rows between the box's own snapped borders. The border
+                    // grows with the pixel ratio, so a band spanning the outer rows would cover it
+                    // and spill past the visible edge at higher zoom.
                     let band = super::DeviceBox::snap(
                         positions[0].0 + positions[0].1,
                         top,
@@ -377,9 +379,9 @@ impl ChartEngine {
                     out.push(Prim::Rect {
                         rect: IRect {
                             x: band.x as i32,
-                            y: device.y as i32,
+                            y: (device.y + border) as i32,
                             w: band.w as i32,
-                            h: device.h as i32,
+                            h: (device.h - border * 2.0).max(0.0) as i32,
                         },
                         color: delta_bg,
                     });

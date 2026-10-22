@@ -698,6 +698,69 @@ export async function exerciseReactGeneralFirstPane(): Promise<Record<string, un
   }
 }
 
+/** The documented ResponsiveContainer migration uses the React adapter's autoSize path. */
+export async function exerciseReactResponsiveGeneralFirstPane(): Promise<Record<string, unknown>> {
+  const host = document.createElement("div");
+  host.style.cssText = "width:700px;height:350px";
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  let chart: chart_api | null = null;
+  let series: general_series_api | null = null;
+  root.render(
+    <StrictMode>
+      <AerisChart options={{ backend: "canvas2d", autoSize: true, accessibility: false,
+        initialPane: pane_options }} style={{ width: "100%", height: "100%" }}
+        onChartReady={(created) => { chart = created; }}>
+        <GeneralPane options={pane_options} useInitialPane
+          onSeriesReady={(_key, created) => { series = created; }}>
+          <GeneralAxis id="month" dimension="x" position="bottom" scale="band" />
+          <GeneralAxis id="sales" dimension="y" position="left" scale="linear" />
+          <GeneralSeries seriesKey="sales" kind="column"
+            options={{ x_axis_id: "month", y_axis_id: "sales" }}
+            data={[{ id: "jan", x: "Jan", y: 12 }, { id: "feb", x: "Feb", y: 18 }]} />
+        </GeneralPane>
+      </AerisChart>
+    </StrictMode>,
+  );
+  try {
+    await wait_until(() => chart !== null && series !== null
+      && safely(() => series?.dataAt(1)?.value === 18));
+    const live = chart as chart_api;
+    const series_id = (series as general_series_api).id;
+    const size = () => {
+      const image = live.take_screenshot();
+      return [Math.round(image.width / devicePixelRatio), Math.round(image.height / devicePixelRatio)];
+    };
+    await wait_until(() => size().join() === "700,350");
+    const initial = size();
+    host.style.width = "420px";
+    host.style.height = "210px";
+    await wait_until(() => size().join() === "420,210");
+    const resized = size();
+    host.style.display = "none";
+    await frames(2);
+    const hidden = { width: host.getBoundingClientRect().width, size: size() };
+    host.style.width = "480px";
+    host.style.height = "260px";
+    host.style.display = "block";
+    await wait_until(() => size().join() === "480,260");
+    const geometry = live.panes()[0].get_geometry();
+    let hit: ReturnType<chart_api["general_hit_test"]> = null;
+    for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2 && hit === null; y += 2) {
+      for (let x = 0; x < geometry.width; x += 2) {
+        hit = live.general_hit_test(0, x, y);
+        if (hit !== null) break;
+      }
+    }
+    return { initial, resized, hidden, revealed: size(), panes: live.panes().length,
+      active: live.auto_size_active(), same_series: live.general_series_order(0)[0]?.id === series_id,
+      hit: hit?.row_id ?? null };
+  } finally {
+    root.unmount();
+    host.remove();
+  }
+}
+
 /** Reject unsupported GeneralPane children through the public React declaration surface. */
 export async function exerciseReactUnsupportedChild(): Promise<Record<string, unknown>> {
   const host = document.createElement("div");

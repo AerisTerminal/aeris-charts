@@ -164,6 +164,77 @@ test("polar families retain flat fills and bounded Canvas2D/WebGPU edge residual
   });
 });
 
+test("box plots and heatmap cells retain flat fills across Canvas2D and WebGPU", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  for (const family of ["box_plot", "heatmap_grid"]) {
+    const capture = async (backend) => {
+      const actual = await page.evaluate(async ({ backend, family }) => {
+        window.__g8_distribution_parity?.remove();
+        document.getElementById("g8-distribution-host")?.remove();
+        const { create_chart } = await import("/dist/aeris_charts_financial.js");
+        const host = document.createElement("div");
+        host.id = "g8-distribution-host";
+        host.style.cssText = "position:fixed;left:0;top:0;width:400px;height:400px;background:#fff;z-index:9999";
+        document.body.appendChild(host);
+        const chart = await create_chart(host, {
+          backend, autoSize: false,
+          initialPane: { horizontal_domain: { type: "category", scale: "band" } },
+          __force_webgpu_fallback_adapter: true,
+          layout: { background: { type: "solid", color: "#ffffff" } },
+        });
+        chart.resize(400, 400, 1);
+        chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "band" });
+        chart.add_axis({ id: "y", pane: 0, dimension: "y",
+          scale: family === "box_plot" ? "linear" : "band" });
+        if (family === "box_plot") {
+          const boxes = chart.add_series("box_plot", {
+            pane: 0, x_axis_id: "x", y_axis_id: "y", color: "#315fc8",
+            box_fill_color: "#8b6df6", box_median_color: "#e4a11b",
+          });
+          boxes.set_data([
+            { id: "north", x: "North", min: 5, q1: 10, median: 15, q3: 20, max: 28 },
+            { id: "south", x: "South", min: 12, q1: 18, median: 24, q3: 30, max: 40 },
+          ]);
+        } else {
+          const heat = chart.add_series("heatmap_grid", {
+            pane: 0, x_axis_id: "x", y_axis_id: "y", heatmap_value_domain: [0, 100],
+            heatmap_low_color: "#2050d0", heatmap_high_color: "#d02020",
+          });
+          heat.set_data([
+            { id: "jan-north", x: "Jan", y: "North", value: 10 },
+            { id: "jan-south", x: "Jan", y: "South", value: 30 },
+            { id: "feb-north", x: "Feb", y: "North", value: 70 },
+            { id: "feb-south", x: "Feb", y: "South", value: 90 },
+          ]);
+        }
+        window.__g8_distribution_parity = chart;
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return chart.backend();
+      }, { backend, family });
+      return { actual, image: PNG.sync.read(await page.locator("#g8-distribution-host").screenshot()) };
+    };
+    const canvas = await capture("canvas2d");
+    const gpu = await capture("auto");
+    expect(canvas.actual).toBe("canvas2d");
+    expect(gpu.actual).toBe("webgpu");
+    const residual = rgba_diff(canvas.image.data, gpu.image.data, 1);
+    const flat = flat_interior_mismatches(canvas.image, gpu.image, 1);
+    console.log(`${family} Canvas2D/WebGPU: ${residual.different_pixels} edge pixels, `
+      + `max channel ${residual.maximum_channel_delta}, mean ${residual.mean_absolute_channel_delta}, `
+      + `${flat.ink_compared} flat ink pixels`);
+    expect(flat.ink_compared, `${family} has filled mark interiors`).toBeGreaterThan(1_000);
+    expect(flat.mismatches, `${family} flat fill colors differ`).toBe(0);
+    expect(residual.different_pixels, `${family} edge residual`).toBeLessThanOrEqual(10_000);
+    expect(residual.maximum_channel_delta, `${family} maximum channel residual`).toBeLessThanOrEqual(64);
+    expect(residual.mean_absolute_channel_delta, `${family} mean channel residual`).toBeLessThan(0.5);
+  }
+  await page.evaluate(() => {
+    window.__g8_distribution_parity?.remove();
+    document.getElementById("g8-distribution-host")?.remove();
+    delete window.__g8_distribution_parity;
+  });
+});
+
 test("scaled four-color image matches WebGPU, Canvas2D, and native", async ({ browser }, test_info) => {
   const context = await browser.newContext({ viewport: { width: 120, height: 120 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
@@ -346,7 +417,7 @@ test("transparent rounded tooltip keeps its outlined interior clear", async ({ b
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const png = PNG.sync.read(await page.locator("#round-rect-host").screenshot());
     const pixel = (x, y) => Array.from(png.data.subarray((y * png.width + x) * 4, (y * png.width + x) * 4 + 3));
-    // Dark `--border-popover` (#080808); nothing else on this chart is that dark.
+    // Dark `--border-popover` (#000000 over the #010101 popover); nothing else on this chart is that dark.
     const is_border = (x, y) => pixel(x, y).every((channel) => channel < 20);
     let top = null;
     for (let y = 0; y < 150 && top === null; y += 1) {
@@ -359,12 +430,12 @@ test("transparent rounded tooltip keeps its outlined interior clear", async ({ b
     }
     expect(top, `${geometry.backend} must paint the tooltip border`).not.toBe(null);
     // Rows 0-1 are the 1px border and rows 2-3 the transparent-filled highlight outline at DPR 2.
-    // The strip below them and above the text must be the plain #262626 popover surface: a
+    // The strip below them and above the text must be the plain #010101 popover surface: a
     // border or highlight that floods its interior would darken or lighten it.
     for (let dy = 5; dy < 10; dy += 1) {
       for (let dx = 8; dx < 48; dx += 1) {
         const [r, g, b] = pixel(top.x + dx, top.y + dy);
-        expect(Math.max(Math.abs(r - 38), Math.abs(g - 38), Math.abs(b - 38)), `${geometry.backend} outline leaked into tooltip at ${dx},${dy}`).toBeLessThanOrEqual(3);
+        expect(Math.max(Math.abs(r - 1), Math.abs(g - 1), Math.abs(b - 1)), `${geometry.backend} outline leaked into tooltip at ${dx},${dy}`).toBeLessThanOrEqual(3);
       }
     }
   }
@@ -1787,3 +1858,285 @@ for (const theme of ["light", "dark"]) {
     }
   });
 }
+test("outside legend paint reaches Canvas2D and WebGPU axis layers", async ({ page }) => {
+  const blue_counts = [];
+  for (const backend of ["canvas2d", "webgpu"]) {
+    await page.goto(`/?backend=${backend}`);
+    await wait_for_chart(page);
+    const actual = await page.evaluate(async (requested_backend) => {
+      const { create_chart } = await import("/dist/aeris_charts_financial.js");
+      const host = document.createElement("div");
+      host.id = "legend-parity-host";
+      host.style.cssText = "width:400px;height:300px";
+      document.body.replaceChildren(host);
+      const chart = await create_chart(host, {
+        backend: requested_backend,
+        autoSize: false,
+        initialPane: { horizontal_domain: { type: "category", scale: "point" } },
+        generalLegend: { visible: true, position: "left", offset: 6 },
+      });
+      chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "point" });
+      chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear" });
+      const line = chart.add_series("xy_line", {
+        pane: 0, x_axis_id: "x", y_axis_id: "y", title: "Revenue", color: "#2962ff",
+      });
+      line.set_data([{ x: "Q1", y: 12 }, { x: "Q2", y: 18 }, { x: "Q3", y: 15 }]);
+      chart.render();
+      window.__legend_parity_chart = chart;
+      return chart.backend();
+    }, backend);
+    expect(actual).toBe(backend);
+    await settle_page(page);
+    const png = PNG.sync.read(await page.locator("#legend-parity-host").screenshot({ animations: "disabled" }));
+    let blue = 0;
+    for (let y = 0; y < png.height; y += 1) {
+      for (let x = 0; x < Math.min(png.width, 100); x += 1) {
+        const i = (y * png.width + x) * 4;
+        if (png.data[i + 2] > 180 && png.data[i + 2] > png.data[i] + 50
+            && png.data[i + 2] > png.data[i + 1] + 30) blue += 1;
+      }
+    }
+    blue_counts.push(blue);
+  }
+  expect(blue_counts[0], "Canvas2D legend pill pixels").toBeGreaterThan(20);
+  expect(blue_counts[1], "WebGPU legend pill pixels").toBeGreaterThan(20);
+  expect(Math.abs(blue_counts[0] - blue_counts[1]), `pill pixels ${blue_counts}`).toBeLessThan(35);
+});
+test("custom coordinate legend survives Canvas2D and WebGPU image export", async ({ page }) => {
+  const pill_counts = [];
+  for (const backend of ["canvas2d", "webgpu"]) {
+    await page.goto(`/?backend=${backend}`);
+    await wait_for_chart(page);
+    const actual = await page.evaluate(async (requested_backend) => {
+      const { create_chart } = await import("/dist/aeris_charts_financial.js");
+      const host = document.createElement("div");
+      host.style.cssText = "width:400px;height:300px";
+      document.body.replaceChildren(host);
+      const chart = await create_chart(host, {
+        backend: requested_backend,
+        autoSize: false,
+        initialPane: { horizontal_domain: { type: "category", scale: "point" } },
+        generalLegend: { visible: true, position: { x: 200, y: 150 }, offset: 80 },
+      });
+      chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "point" });
+      chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear" });
+      const line = chart.add_series("xy_line", {
+        pane: 0, x_axis_id: "x", y_axis_id: "y", title: "Revenue", color: "#2962ff",
+      });
+      line.set_data([{ x: "Q1", y: 12 }, { x: "Q2", y: 18 }, { x: "Q3", y: 15 }]);
+      chart.render();
+      window.__legend_export_chart = chart;
+      return chart.backend();
+    }, backend);
+    expect(actual).toBe(backend);
+    await settle_page(page);
+    const data_url = await page.evaluate(() => window.__legend_export_chart.take_screenshot().toDataURL("image/png"));
+    const png = PNG.sync.read(Buffer.from(data_url.split(",")[1], "base64"));
+    let blue = 0;
+    for (let y = 185; y < 225; y += 1) {
+      for (let x = 210; x < 240; x += 1) {
+        const i = (y * png.width + x) * 4;
+        if (png.data[i + 2] > 180 && png.data[i + 2] > png.data[i] + 50
+            && png.data[i + 2] > png.data[i + 1] + 30) blue += 1;
+      }
+    }
+    pill_counts.push(blue);
+  }
+  expect(pill_counts[0], "Canvas2D exported legend pill").toBeGreaterThan(15);
+  expect(pill_counts[1], "WebGPU exported legend pill").toBeGreaterThan(15);
+  expect(Math.abs(pill_counts[0] - pill_counts[1]), `exported pill pixels ${pill_counts}`).toBeLessThan(35);
+});
+
+test("multiline axis labels paint in presented Canvas2D and WebGPU frames", async ({ page }) => {
+  const captures = [];
+  for (const backend of ["canvas2d", "webgpu"]) {
+    await page.goto(`/?backend=${backend}`);
+    await wait_for_chart(page);
+    const actual = await page.evaluate(async (requested) => {
+      const { create_chart } = await import("/dist/aeris_charts_financial.js");
+      const host = document.createElement("div");
+      host.id = "axis-parity-host";
+      host.style.cssText = "width:420px;height:300px;background:#fff";
+      document.body.replaceChildren(host);
+      const chart = await create_chart(host, {
+        backend: requested, autoSize: false, __force_webgpu_fallback_adapter: true,
+        layout: { background: { type: "solid", color: "#ffffff" }, textColor: "#111111" },
+        initialPane: { horizontal_domain: { type: "category", scale: "point" } },
+      });
+      chart.resize(420, 300, 1);
+      chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "point", tick_angle: -45,
+        ticks: ["Jan", "Feb", "Mar"].map((value) => ({
+          type: "category", value, label: `${value}\nRevenue`,
+        })) });
+      chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear",
+        ticks: [
+          { type: "numeric", value: 10, label: "Ten\nunits" },
+          { type: "numeric", value: 20, label: "Twenty\nunits" },
+        ] });
+      const line = chart.add_series("xy_line", {
+        pane: 0, x_axis_id: "x", y_axis_id: "y", color: "#2962ff",
+      });
+      line.set_data([
+        { id: "jan", x: "Jan", y: 12 },
+        { id: "feb", x: "Feb", y: 18 },
+        { id: "mar", x: "Mar", y: 16 },
+      ]);
+      chart.render();
+      window.__axis_parity_chart = chart;
+      return chart.backend();
+    }, backend);
+    expect(actual).toBe(backend);
+    await settle_page(page);
+    const png = PNG.sync.read(await page.locator("#axis-parity-host")
+      .screenshot({ animations: "disabled" }));
+    const scale = png.width / 420;
+    const dark = (x0, y0, x1, y1) => {
+      let count = 0;
+      for (let y = Math.floor(y0 * scale); y < Math.ceil(y1 * scale); y++) {
+        for (let x = Math.floor(x0 * scale); x < Math.ceil(x1 * scale); x++) {
+          const i = (y * png.width + x) * 4;
+          if (png.data[i + 3] > 128 && png.data[i] < 130
+              && png.data[i + 1] < 130 && png.data[i + 2] < 130) count++;
+        }
+      }
+      return count;
+    };
+    captures.push({ backend: actual, xInk: dark(65, 220, 405, 296),
+      yInk: dark(3, 20, 43, 220) });
+    await page.evaluate(() => window.__axis_parity_chart.remove());
+  }
+  expect(captures.map((capture) => capture.backend)).toEqual(["canvas2d", "webgpu"]);
+  for (const capture of captures) {
+    expect(capture.xInk, `${capture.backend} presented X tick ink`).toBeGreaterThan(800);
+    expect(capture.yInk, `${capture.backend} presented Y tick ink`).toBeGreaterThan(100);
+  }
+  expect(Math.abs(captures[0].xInk - captures[1].xInk)).toBeLessThan(35);
+  expect(Math.abs(captures[0].yInk - captures[1].yInk)).toBeLessThan(20);
+});
+test("fixed-clock general line motion reaches presented Canvas2D and WebGPU frames", async ({ page }) => {
+  const capture = async (backend) => {
+    await page.goto(`/?backend=${backend}`);
+    await wait_for_chart(page);
+    const actual = await page.evaluate(async (requested) => {
+      const { create_chart } = await import("/dist/aeris_charts_financial.js");
+      const host = document.createElement("div");
+      host.id = "moving-line-host";
+      host.style.cssText = "width:420px;height:260px;background:#fff";
+      document.body.replaceChildren(host);
+      const chart = await create_chart(host, {
+        backend: requested, autoSize: false, __force_webgpu_fallback_adapter: true,
+        layout: { background: { type: "solid", color: "#ffffff" } },
+        initialPane: { horizontal_domain: { type: "category", scale: "point" } },
+      });
+      chart.resize(420, 260, 1);
+      chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "point" });
+      chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear", domain: [0, 40] });
+      const line = chart.add_series("xy_line", {
+        pane: 0, x_axis_id: "x", y_axis_id: "y", color: "#2962ff", line_width: 4,
+      });
+      const rows = (y) => ["Jan", "Feb", "Mar", "Apr"].map((x) => ({ id: x, x, y }));
+      line.set_data(rows(10));
+      chart.render();
+      window.__moving_line = { chart, line, rows };
+      return chart.backend();
+    }, backend);
+    expect(actual).toBe(backend);
+    await settle_page(page);
+    const screenshot = async () => PNG.sync.read(await page.locator("#moving-line-host")
+      .screenshot({ animations: "disabled" }));
+    const before = await screenshot();
+    await page.evaluate(() => {
+      const { chart, line, rows } = window.__moving_line;
+      chart.set_general_transition_duration(400);
+      line.set_data(rows(30));
+      // Freeze host scheduling while the engine stays mid-transition for presented-frame samples.
+      chart.stop_animation();
+      window.__moving_line.start = performance.now();
+    });
+    const sample = async (elapsed) => {
+      await page.evaluate((ms) => {
+        const { chart, start } = window.__moving_line;
+        chart.wasm.set_animation_time(start + ms);
+        chart.wasm.render();
+      }, elapsed);
+      return screenshot();
+    };
+    const middle = await sample(160);
+    const after = await sample(450);
+    await page.evaluate(() => { window.__moving_line.chart.remove(); delete window.__moving_line; });
+    const blue = (png) => {
+      let count = 0;
+      let sumY = 0;
+      for (let y = 0; y < png.height; y++) {
+        for (let x = 0; x < png.width; x++) {
+          const i = (y * png.width + x) * 4;
+          if (png.data[i + 2] > 150 && png.data[i + 2] > png.data[i] + 50
+              && png.data[i + 2] > png.data[i + 1] + 30) {
+            count++;
+            sumY += y;
+          }
+        }
+      }
+      return { count, centerY: sumY / count };
+    };
+    return { backend: actual, before: blue(before), middle: blue(middle), after: blue(after) };
+  };
+  const canvas = await capture("canvas2d");
+  const gpu = await capture("webgpu");
+  for (const result of [canvas, gpu]) {
+    expect(result.before.count).toBeGreaterThan(300);
+    expect(result.middle.count).toBeGreaterThan(300);
+    expect(result.after.count).toBeGreaterThan(300);
+    expect(result.before.centerY).toBeGreaterThan(result.middle.centerY + 20);
+    expect(result.middle.centerY).toBeGreaterThan(result.after.centerY + 20);
+  }
+  expect(Math.abs(canvas.middle.centerY - gpu.middle.centerY)).toBeLessThan(2);
+  expect(Math.abs(canvas.middle.count - gpu.middle.count)).toBeLessThan(12);
+});
+test("optional reference regions match in presented Canvas2D and WebGPU frames", async ({ page }) => {
+  const captures = [];
+  for (const backend of ["canvas2d", "webgpu"]) {
+    await page.goto(`/?backend=${backend}`);
+    await wait_for_chart(page);
+    const actual = await page.evaluate(async (requested) => {
+      const { create_chart } = await import("/dist/aeris_charts_financial.js");
+      const host = document.createElement("div");
+      host.id = "reference-parity-host";
+      host.style.cssText = "width:420px;height:300px;background:#fff";
+      document.body.replaceChildren(host);
+      const chart = await create_chart(host, {
+        backend: requested, autoSize: false, __force_webgpu_fallback_adapter: true,
+        layout: { background: { type: "solid", color: "#ffffff" }, textColor: "#111111" },
+        initialPane: { horizontal_domain: { type: "category", scale: "point" } },
+      });
+      chart.resize(420, 300, 1);
+      chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "point" });
+      chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear", domain: [0, 24] });
+      const line = chart.add_series("xy_line", { pane: 0, x_axis_id: "x", y_axis_id: "y",
+        color: "#2962ff" });
+      line.set_data([{ x: "Jan", y: 12 }, { x: "Feb", y: 18 }, { x: "Mar", y: 14 }, { x: "Apr", y: 24 }]);
+      chart.add_general_reference({ kind: "region", pane: 0, x_axis_id: "x", y_axis_id: "y",
+        y_from: 5, y_to: 10, fill_color: "#3bb18a" });
+      chart.add_general_reference({ kind: "region", pane: 0, x_axis_id: "x", y_axis_id: "y",
+        x_from: "Feb", fill_color: "rgba(251,226,166,0.5)" });
+      chart.render();
+      window.__reference_parity_chart = chart;
+      return chart.backend();
+    }, backend);
+    expect(actual).toBe(backend);
+    await settle_page(page);
+    const presented = PNG.sync.read(await page.locator("#reference-parity-host")
+      .screenshot({ animations: "disabled" }));
+    const data_url = await page.evaluate(() => window.__reference_parity_chart.take_screenshot().toDataURL("image/png"));
+    const exported = PNG.sync.read(Buffer.from(data_url.split(",")[1], "base64"));
+    captures.push({ backend: actual, presented, exported });
+    await page.evaluate(() => window.__reference_parity_chart.remove());
+  }
+  expect(captures.map(({ backend }) => backend)).toEqual(["canvas2d", "webgpu"]);
+  expect([captures[0].presented.width, captures[0].presented.height])
+    .toEqual([captures[1].presented.width, captures[1].presented.height]);
+  const interior = flat_interior_mismatches(captures[0].presented, captures[1].presented, 1);
+  expect(interior.ink_compared).toBeGreaterThan(1000);
+  expect(interior.mismatches).toBe(0);
+  expect(rgba_diff(captures[0].exported.data, captures[1].exported.data, 0).different_pixels).toBe(0);
+});

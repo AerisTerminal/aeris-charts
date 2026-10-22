@@ -2194,6 +2194,149 @@ mod tests {
     }
 
     #[test]
+    fn mixed_cartesian_polar_layout_export_matches_live_native_frame() {
+        if test_face("sans-serif").is_none() {
+            return;
+        }
+        let mut chart = ChartEngine::new(360.0, 520.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0, 3.0],
+                &[10.0, 11.0, 12.0],
+                &[12.0, 13.0, 14.0],
+                &[9.0, 10.0, 11.0],
+                &[11.0, 12.0, 13.0],
+            )
+            .unwrap();
+        chart.fit_content();
+        let cartesian = chart
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Category {
+                    scale: CategoryScaleType::Band,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "month",
+                cartesian,
+                AxisDimension::X,
+                GeneralScaleType::Band,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "revenue",
+                cartesian,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let column_data = chart
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["Jan".into(), "Feb".into()],
+                category_indices: vec![0, 1],
+                y: vec![12.0, 18.0],
+                y_valid: None,
+            })
+            .unwrap();
+        chart
+            .add_general_series(GeneralSeriesOptions::column(
+                cartesian,
+                column_data,
+                "month",
+                "revenue",
+            ))
+            .unwrap();
+        let polar = chart
+            .add_pane_with_domain(true, HorizontalDomain::Polar)
+            .unwrap();
+        let mut angle = GeneralAxisOptions::new(
+            "angle",
+            polar,
+            AxisDimension::Angle,
+            GeneralScaleType::AngularCategory,
+        );
+        angle.visible = false;
+        chart.add_general_axis(angle).unwrap();
+        let mut radius = GeneralAxisOptions::new(
+            "radius",
+            polar,
+            AxisDimension::Radius,
+            GeneralScaleType::RadialLinear,
+        );
+        radius.visible = false;
+        chart.add_general_axis(radius).unwrap();
+        let pie_data = chart
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["North".into(), "South".into()],
+                category_indices: vec![0, 1],
+                y: vec![3.0, 2.0],
+                y_valid: None,
+            })
+            .unwrap();
+        chart
+            .add_general_series(GeneralSeriesOptions::pie(
+                polar, pie_data, "angle", "radius",
+            ))
+            .unwrap();
+        let layout = chart
+            .add_pane_with_domain(true, HorizontalDomain::Layout)
+            .unwrap();
+        let funnel_data = chart
+            .create_general_layout_dataset(aeris_charts_engine::GeneralLayoutInput::Funnel(vec![
+                aeris_charts_engine::FunnelStage {
+                    id: "visit".into(),
+                    label: "Visit".into(),
+                    value: 8.0,
+                },
+                aeris_charts_engine::FunnelStage {
+                    id: "trial".into(),
+                    label: "Trial".into(),
+                    value: 5.0,
+                },
+            ]))
+            .unwrap();
+        chart
+            .add_general_layout_series(aeris_charts_engine::GeneralLayoutSeriesOptions::new(
+                layout,
+                funnel_data,
+                aeris_charts_engine::GeneralLayoutSeriesKind::Funnel,
+            ))
+            .unwrap();
+
+        let live_before = render_live_host(&mut chart, 1.0).pixmap().data().to_vec();
+        let live_repeat = render_live_host(&mut chart, 1.0);
+        assert_eq!(live_before, live_repeat.pixmap().data());
+        for (index, pane) in chart.panes.iter().enumerate() {
+            let top = pane.top.max(0.0) as usize;
+            let bottom = (pane.top + pane.height).min(520.0) as usize;
+            let vivid_pixels = (top..bottom)
+                .flat_map(|y| (0..360).map(move |x| (y * 360 + x) * 4))
+                .filter(|&offset| {
+                    let rgb = &live_before[offset..offset + 3];
+                    let high = *rgb.iter().max().unwrap();
+                    let low = *rgb.iter().min().unwrap();
+                    high > 100 && high - low > 50
+                })
+                .count();
+            assert!(
+                vivid_pixels > 40,
+                "pane {index} has only {vivid_pixels} colored pixels"
+            );
+        }
+        let export = render_engine_rgba(&mut chart, ImageExportOptions::default()).unwrap();
+        assert_eq!((export.width, export.height), (360, 520));
+        assert_eq!(export.pixels, live_before);
+        let live_after = render_live_host(&mut chart, 1.0);
+        assert_eq!(live_after.pixmap().data(), live_before);
+    }
+
+    #[test]
     fn prepared_export_renders_off_thread_with_host_overlay_on_top() {
         fn assert_send<T: Send + 'static>(_: &T) {}
         let mut chart = ChartEngine::new(120.0, 80.0, 1.0);

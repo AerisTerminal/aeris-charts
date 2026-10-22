@@ -1680,7 +1680,7 @@ pub fn circle_segments(radius: f32) -> usize {
     }
     let radius = f64::from(radius);
     let angle = (1.0 - 0.1 / radius).clamp(-1.0, 1.0).acos();
-    (std::f64::consts::PI / angle).ceil().clamp(24.0, 256.0) as usize
+    (std::f64::consts::PI / angle).ceil().clamp(8.0, 256.0) as usize
 }
 
 /// Tessellates a filled disc (triangle fan) at `center` with `radius`, all in bitmap px.
@@ -2757,7 +2757,7 @@ mod tests {
     fn disc_is_a_fan_around_center() {
         let mut v = Vec::new();
         build_disc([10.0, 20.0], 4.0, BLUE, &mut v);
-        assert_eq!(v.len(), 24 * 3); // 24 fan triangles
+        assert_eq!(v.len(), 15 * 3); // radius 4 holds the 0.1 px chord bound with 15 triangles
         // every triangle's first vertex is the center
         for tri in v.chunks(3) {
             assert_eq!([tri[0].x, tri[0].y], [10.0, 20.0]);

@@ -13,8 +13,10 @@
     "sourceVerification": "git ls-remote refs/tags/v3.10.1^{} and git show FETCH_HEAD:LICENSE",
     "implementationCopied": false
   },
-  "aerisRevision": "G1 candidate based on fde2088e20713fe2f3eb04b4fb75f8194da3a8be",
+  "aerisRevision": "G1 reference baseline fde2088e20713fe2f3eb04b4fb75f8194da3a8be",
   "evidenceDate": "2026-10-10",
+  "statusAuditDate": "2026-10-19",
+  "statusAuditBaseRevision": "584edc2",
   "budgetPolicy": 7,
   "conditions": {
     "viewport": "960x600 CSS px",
@@ -33,10 +35,10 @@
       "referenceFixture": "/g1_recharts_reference.html?case=standalone-composed",
       "referenceApi": "LineChart, ComposedChart, ResponsiveContainer",
       "referenceEvidence": ["LineChart", "ComposedChart"],
-      "aerisFixture": "/g1_lifecycle.html and tests/general_charts.spec.mjs",
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned ComposedChart and Aeris one-pane area/column/line order, values, exact hits and export pair; /g1_lifecycle.html and tests/general_charts.spec.mjs",
       "aerisApi": "createChart initialPane, addPane, addAxis, addSeries",
       "supportedCombinations": "Financial default; general numeric, temporal, category panes; mixed financial/general panes",
-      "differences": "One retained engine and ordered frame instead of React/SVG chart instances; incompatible domains use separate panes."
+      "differences": "One retained engine and ordered frame instead of React/SVG chart instances; incompatible domains use separate panes. A Chromium/Firefox/WebKit pair confirms pinned area/bar/line DOM order over four rows and the same Aeris one-pane series, V2 order/values, visible export and exact hits for every layer. Broader overlay combinations and calibrated visual review remain open."
     },
     {
       "id": "paths-points",
@@ -45,12 +47,12 @@
       "owner": "aeris_charts_engine general datasets/geometry",
       "dependency": "R3",
       "referenceFixture": "/g1_recharts_reference.html?case=paths-points",
-      "referenceApi": "Line, Area, Scatter",
-      "referenceEvidence": ["Line", "Area", "Scatter"],
-      "aerisFixture": "/?demo=general and tests/general_charts.spec.mjs",
+      "referenceApi": "Line, Area, ErrorBar, Scatter, ZAxis",
+      "referenceEvidence": ["Line", "Area", "Line ErrorBar", "Area range", "Line step gaps", "Scatter", "Bubble ZAxis", "Scatter square"],
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned Line/Area/Scatter, ErrorBar, range-band, step-gap, ZAxis bubble and square-marker marks, matching Aeris two-pane value/hit, error-bar, range-area, step-gap, bubble-size and square-marker pairs; /?demo=general and tests/general_charts.spec.mjs",
       "aerisApi": "xy_line, xy_area, range_area, scatter, bubble",
       "supportedCombinations": "Implemented numeric, temporal and category combinations documented in general_charts_api.md",
-      "differences": "Portable frame primitives replace arbitrary SVG marks; remaining R3 styling combinations stay open."
+      "differences": "Portable frame primitives replace arbitrary SVG marks. A Chromium/Firefox/WebKit pair confirms the pinned two line paths, area fill/stroke and four scatter symbols; Aeris keeps the matching four values in ordered category and numeric panes with exact row hits for all three series and V2 datasets. A second Chromium/Firefox/WebKit pair confirms pinned step paths with two segments across a null versus one bridged path; Aeris step_middle and connect_missing change exported pixels while preserving the five-row validity mask in V2. A range-area pair confirms the pinned one-band/two-boundary structure and Aeris exported band pixels, four ordered low/high accessibility rows and V2 kind in all three browsers. An ErrorBar pair confirms four pinned capped Y whiskers and Aeris four absolute low/high intervals in exported pixels and accessibility rows. A ZAxis bubble pair confirms four pinned SVG symbols increase with source size and Aeris public exported bubble pixels increase in the same order while V2 retains size values. A square-Scatter pair confirms four pinned equal-sided symbols and Aeris exported shape change with V2 persistence. Broader interpolation, per-row marker, fill and calibrated visual/style comparisons remain open."
     },
     {
       "id": "bars-stacks",
@@ -60,11 +62,11 @@
       "dependency": "R3",
       "referenceFixture": "/g1_recharts_reference.html?case=bars-stacks",
       "referenceApi": "BarChart, Bar, stackId",
-      "referenceEvidence": ["Bar stackId"],
-      "aerisFixture": "/?demo=general and tests/general_charts.spec.mjs",
+      "referenceEvidence": ["Bar stackId", "Bar signed stackOffset", "Bar expanded stackOffset", "Bar positive stackOffset", "Bar cumulative stackOffset", "Bar silhouette stackOffset", "Bar wiggle stackOffset", "Bar mixed expanded stackOffset"],
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned positive, mixed-sign, expanded, positive-only, cumulative, silhouette, wiggle and mixed-sign expand/percent public-path comparisons; /?demo=general and tests/general_charts.spec.mjs",
       "aerisApi": "column, horizontal_bar, range_bar, group_id, stack_id",
-      "supportedCombinations": "Vertical/horizontal normal and percent stacks plus category range bars where documented",
-      "differences": "Sizing, corners, per-item styling and remaining offset policies are not yet complete."
+      "supportedCombinations": "Vertical/horizontal normal, cumulative, silhouette, wiggle, percent and positive stacks plus category range bars where documented",
+      "differences": "Shared bar sizing, corners, per-item styles and stack offsets shipped in G3. Chromium/Firefox/WebKit pairs confirm normal=sign, cumulative=none, silhouette=silhouette, wiggle=wiggle, positive=positive, and percent=expand for positive totals, using segment order, overlap, normalized shares or baseline displacement. On mixed signs, pinned expand clips the first two categories and omits their top segments; Aeris percent independently normalizes positive and negative totals and keeps all eight segments visible. This deliberate product difference needs maintainer review before full parity closure. Complete visual, interaction and cross-backend comparison remains open."
     },
     {
       "id": "box-heatmap",
@@ -75,10 +77,10 @@
       "referenceFixture": "/g1_recharts_reference.html?case=box-heatmap",
       "referenceApi": "Scatter/shape composition and Treemap color reference",
       "referenceEvidence": ["Scatter shape composition", "Treemap color reference"],
-      "aerisFixture": "/?demo=general and tests/general_charts.spec.mjs",
+      "aerisFixture": "tests/backend_parity.spec.mjs presented Canvas2D/WebGPU box-plot and heatmap-grid pixels; tests/g8_defaults.spec.mjs pinned Scatter/Treemap analogue marks and combined WebGPU-loss screenshot, update, hit and export fixture; GPUI parity.rs frame cases; /?demo=general and tests/general_charts.spec.mjs",
       "aerisApi": "box_plot, heatmap_grid",
       "supportedCombinations": "Category box plots; category/category, numeric/numeric and temporal/numeric heatmaps",
-      "differences": "Aeris supplies typed first-class families; complete color-domain and legend evidence remains open."
+      "differences": "The pinned Recharts 3.10.1 package exports no first-class BoxPlot or Heatmap component. Its Scatter shape composition and Treemap color fixture are analogues, not exact equivalents. A pinned Chromium/Firefox/WebKit fixture confirms four numeric Scatter points in source-value order and four blue Treemap leaf cells with positive areas. Aeris supplies typed first-class box_plot and heatmap_grid families with focused browser coverage for ordered statistics/cells, atomic updates, colors, V2 restore, accessibility and hits. A Chromium SwiftShader presented-frame comparison finds zero Canvas2D/WebGPU pixels beyond one channel of difference for both families, with equal flat-fill interiors; GPUI/Canvas2D structural frame parity is covered separately. A combined WebGPU-loss fixture keeps both family exports byte-identical through fallback, then verifies new data, exact hits, V2 rows and canvas disposal. Calibrated visual and legend review remains open."
     },
     {
       "id": "scales-axes",
@@ -88,39 +90,39 @@
       "dependency": "R2",
       "referenceFixture": "/g1_recharts_reference.html?case=scales-axes",
       "referenceApi": "XAxis, YAxis, CartesianGrid",
-      "referenceEvidence": ["XAxis YAxis CartesianGrid"],
-      "aerisFixture": "tests/general_charts.spec.mjs axis fixtures",
+      "referenceEvidence": ["XAxis YAxis CartesianGrid", "XAxis fixed height comparison", "XAxis automatic height", "XAxis rotated long ticks", "XAxis custom multiline tick", "default horizontal bars"],
+      "aerisFixture": "tests/general_charts.spec.mjs axis fixtures; tests/g8_defaults.spec.mjs public X-axis title/font sizing, rotated-label V2 pair and multiline-label X/Y strip/rotation/V2 pair; general_axes.rs rotated-tick layout/overflow and multiline bound tests; GPUI parity.rs rotated X and multiline X/Y axis frame; backend_parity.spec.mjs presented Canvas2D/WebGPU multiline X/Y pixels",
       "aerisApi": "addAxis, axis handle pan/zoom/reset/applyOptions",
       "supportedCombinations": "Linear, log, symlog, UTC-millisecond temporal, band and point",
-      "differences": "Engine-owned portable tick/layout contract; full constrained-layout evidence closes in R2."
+      "differences": "Aeris automatically grows horizontal strips for axis titles and chart font size; pinned Recharts height=auto grows for large ticks and a title. The pinned 3.10.1 XAxis angle=-60 fixture paints four rotated long labels in an automatic strip; Aeris tick_angle=-60 reserves measured space, moves the plotted line up 25–26 pixels, retains an exact row hit, reaches the shared rotated-text frame and survives byte-identical V2 restore across Chromium, Firefox and WebKit. A constrained-pane engine fixture retains the axis line/title while omitting a label that cannot fit. The pinned custom X tick paints two SVG lines per category; the Aeris public pair measures X strip and Y width growth, rotated multiline labels, exact row hits and image-identical V2 restore in Chromium, Firefox and WebKit. The engine measures and paints up to four lines per tick, normalizes CRLF for paint, and retains original labels in V2 state. The current public G2 recheck passed 34 Chromium/Firefox/WebKit cases with two expected non-Chromium CDP skips, including default horizontal-bar ordering, linear/category/explicit/reversed axes and responsive paths; focused engine chrome/domain tests pass. Calibrated pixel parity and complete constrained-layout evidence remain open."
     },
     {
       "id": "polar",
       "capability": "Pie/donut, radar, radial bar, polar area",
-      "status": "Open",
-      "owner": "future aeris_charts_engine polar layout",
+      "status": "Partial",
+      "owner": "aeris_charts_engine polar layout and interaction",
       "dependency": "R6",
       "referenceFixture": "/g1_recharts_reference.html?case=polar",
       "referenceApi": "PieChart, Pie, RadarChart, Radar, RadialBarChart",
       "referenceEvidence": ["PieChart Pie", "RadarChart Radar", "RadialBarChart RadialBar"],
-      "aerisFixture": "future G6 polar browser/native fixtures",
-      "aerisApi": "proposed polar handles only",
-      "supportedCombinations": "None shipped",
-      "differences": "Required portable polar geometry and executor parity are not implemented."
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned Recharts donut Cell colors/order and Aeris public slice/data/hit pair plus pinned radar/radial-bar DOM marks and matching Aeris four-value/hit fixture; tests/general_charts.spec.mjs other polar cases; engine frame fixtures; GPUI parity",
+      "aerisApi": "pie (nonzero inner_radius for donut), radar, polar_area, radial_bar",
+      "supportedCombinations": "Delivered in G6 or G7; exact matrix verification remains G8 work",
+      "differences": "Portable ordered-frame geometry is delivered. A Chromium/Firefox/WebKit pair confirms four pinned Recharts donut sectors, Cell colors and sector path lengths ranked by value; Aeris preserves the same four values and colors in V2, paints a screenshot and gives each slice an exact hit region in the same share order. The pinned radar paints one polygon and radial bars paint four category sectors in all three browsers; the matching Aeris four-value fixture keeps both series in separate polar panes, persists their values and exposes all four exact row hits. Direct visual geometry comparison, calibrated visual and manual assistive-technology parity remain open."
     },
     {
       "id": "hierarchy-flow",
       "capability": "Funnel, treemap, Sankey, sunburst",
-      "status": "Open",
-      "owner": "future aeris_charts_engine hierarchy/flow layouts",
+      "status": "Partial",
+      "owner": "aeris_charts_engine typed hierarchy/flow layouts",
       "dependency": "R7",
       "referenceFixture": "/g1_recharts_reference.html?case=hierarchy-flow",
       "referenceApi": "FunnelChart, Treemap, Sankey, SunburstChart",
       "referenceEvidence": ["FunnelChart Funnel", "Treemap", "Sankey", "SunburstChart"],
-      "aerisFixture": "future G7 typed layout fixtures",
-      "aerisApi": "proposed dedicated typed families",
-      "supportedCombinations": "None shipped",
-      "differences": "Aeris will use dedicated bounded typed layouts rather than fake XY rows."
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned four-family marks plus paired funnel, treemap, Sankey and sunburst geometry and Sankey accessibility metadata; tests/general_charts.spec.mjs layout and Sankey accessibility cases; examples/all_in_one/flow.mjs packed-consumer recipe; engine frame fixtures; GPUI parity",
+      "aerisApi": "funnel, treemap, sankey, sunburst layout series",
+      "supportedCombinations": "Delivered in G6 or G7; exact matrix verification remains G8 work",
+      "differences": "Aeris uses dedicated bounded typed layouts. The pinned reference paints four funnel stages, four treemap leaves, three Sankey nodes with two links, and four sunburst sectors in Chromium, Firefox and WebKit; matching Aeris family paths have separate public browser, engine and GPUI fixtures. A paired treemap fixture confirms pinned leaf areas and Aeris exact hit regions share the 12/14/18/24 value ordering and each normalized share stays within five percentage points of its input value in all three browsers. Pinned Sankey surface metadata and Aeris node/link keyboard descriptions have focused browser evidence. The pinned 18:11 SVG link-width ratio and Aeris public link hit-region ranking pass in Chromium, Firefox and WebKit. Pinned SVG sunburst sector areas and Aeris public hit regions both track 12/14/18/24 shares within five percentage points in those browsers. Pinned animation-free funnel trapezoids and Aeris public exact stage hits track their four adjacent-value area shares within five percentage points. Other direct geometry, manual and calibrated backend parity remain open."
     },
     {
       "id": "legend-tooltip",
@@ -130,11 +132,11 @@
       "dependency": "R4",
       "referenceFixture": "/g1_recharts_reference.html?case=legend-tooltip",
       "referenceApi": "Legend, Tooltip",
-      "referenceEvidence": ["Legend Tooltip"],
-      "aerisFixture": "tests/general_charts.spec.mjs snapshot fixtures",
+      "referenceEvidence": ["Legend Tooltip", "Legend position top offset", "Legend custom position"],
+      "aerisFixture": "tests/general_charts.spec.mjs real legend pointer fixtures; tests/backend_parity.spec.mjs Canvas2D/WebGPU export fixture; engine general_legend tests",
       "aerisApi": "general_legend_snapshot, general_shared_tooltip",
-      "supportedCombinations": "Engine snapshots for shipped Cartesian series",
-      "differences": "Default operable built-in component chrome remains R4 work."
+      "supportedCombinations": "Engine-drawn legend/tooltip and optional DOM controls for Cartesian, polar and layout families",
+      "differences": "Recharts custom x/y start at its margin-inset chart area (5px default); Aeris custom x starts at the chart edge and y at the target pane top, with the same lower-right anchor. Add the Recharts margin to migrated Aeris coordinates for visual alignment. Touch/manual visual and complete cross-family comparison remain open."
     },
     {
       "id": "references-labels",
@@ -144,11 +146,11 @@
       "dependency": "R2, R4",
       "referenceFixture": "/g1_recharts_reference.html?case=references-labels",
       "referenceApi": "ReferenceLine, ReferenceArea, Label, LabelList, CartesianGrid",
-      "referenceEvidence": ["ReferenceLine ReferenceArea LabelList CartesianGrid"],
-      "aerisFixture": "tests/general_charts.spec.mjs and native frame fixtures",
+      "referenceEvidence": ["ReferenceLine ReferenceArea LabelList CartesianGrid", "ReferenceArea optional bounds"],
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned reference area/line/labels order, optional plot-edge bounds and Aeris public shared-frame export pairs; tests/general_charts.spec.mjs reference lifecycle/restore and native frame fixtures",
       "aerisApi": "add_general_reference, axis titles/grid/zero line, data_labels",
       "supportedCombinations": "Shipped Cartesian axes and series as documented",
-      "differences": "Complete overlap, chrome, accessibility and export evidence remains open."
+      "differences": "Pinned ReferenceArea and Aeris region both map omitted endpoints to plot edges: X-only spans height, Y-only spans width, and one-sided bounds reach the opposite edge. Twelve paired Chromium/Firefox/WebKit cases confirm reference geometry and order, Aeris zoom/resize following, V2 reference persistence, distinct exported pixels and exact series hits. An engine frame fixture orders regions below series ink and the dot above it, and a one-sided supplied bound extends an automatic domain when requested; GPUI and Canvas2D retain all three bounded/optional regions at 1x, 1.5x and 2x DPR. A Chromium presented-frame fixture finds identical flat interiors across Canvas2D/WebGPU and byte-identical reference exports. Calibrated overlap, chrome and accessibility review remain open."
     },
     {
       "id": "brush-selection-sync",
@@ -159,10 +161,10 @@
       "referenceFixture": "/g1_recharts_reference.html?case=brush-selection-sync",
       "referenceApi": "Brush, syncId",
       "referenceEvidence": ["Brush", "syncId"],
-      "aerisFixture": "tests/general_charts.spec.mjs brush/selection fixtures",
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned Brush traveller drag and syncId paired Feb hover; tests/general_charts.spec.mjs Aeris engine-routed pointer, touch, keyboard control, semantic-range and linked-sync fixtures",
       "aerisApi": "set_general_brush, semantic selection, source/revision sync",
       "supportedCombinations": "Snapshot-level Cartesian brush and selection foundations",
-      "differences": "Accessible controls and general linked-chart no-echo flow remain R4 work."
+      "differences": "Engine brush, selection and no-echo sync shipped in G4. Pinned Chromium/Firefox/WebKit fixtures drag the Brush traveller until the selected slide narrows and hover Feb in one syncId chart until both tooltips show Feb; Aeris public fixtures separately verify chart-routed pointer and touch selection, accessible keyboard controls, semantic ranges and linked no-echo sync. Recharts uses an SVG traveller strip while Aeris exposes engine selection and DOM brush controls; full paired interaction and manual review remain open."
     },
     {
       "id": "responsive-layout",
@@ -172,11 +174,11 @@
       "dependency": "R1, R2",
       "referenceFixture": "/g1_recharts_reference.html?case=responsive-layout",
       "referenceApi": "ResponsiveContainer",
-      "referenceEvidence": ["ResponsiveContainer"],
-      "aerisFixture": "tests/general_charts.spec.mjs hidden/reveal fixture",
+      "referenceEvidence": ["ResponsiveContainer", "ResponsiveContainer aspect"],
+      "aerisFixture": "tests/general_charts.spec.mjs hidden/reveal, aspect/DPR/font and React general-first autoSize fixtures; tests/g8_defaults.spec.mjs pinned ResponsiveContainer resize/reveal and aspect plus Aeris general-only auto-size, zero-to-small-to-full, DPR-scaled and live DPR-change public-path fixtures",
       "aerisApi": "autoSize, resize",
-      "supportedCombinations": "Financial and shipped general charts",
-      "differences": "Small/aspect/DPR/font bounded-layout closure remains R2 work."
+      "supportedCombinations": "Financial, Cartesian, polar and layout charts",
+      "differences": "G2 resize and layout fixtures pass. Chromium/Firefox/WebKit public-path fixtures confirm pinned 700x350 to 420x210 resize, processed hidden state and 480x260 reveal, and pinned aspect=2 at 600x300 to 360x180. Aeris retains exact general-series hits, single-pane topology and aspect/DPR/font hit alignment; a zero-size host can grow through 96x64 to 360x220 with finite geometry and exact hits. At browser DPR 2, Chromium/WebKit retain device-pixel canvas dimensions and hits through resize; the headless Firefox project reports DPR 1 under Playwright's DPR 2 option and verifies dimensions/hits at its effective scale. A Chromium CDP fixture changes DPR from 1.5 to 2 and back on a live chart, sending an orientation signal to compensate for a missing CDP media-query event, and verifies canvas dimensions and hits. The current G2 public recheck passes 34 cases with two expected non-Chromium CDP skips across the axis and responsive rows. A single WebKit zero-size page error in an initial run did not recur in ten isolated or three ordered repeats; the final gate will recheck it. Manual viewport/theme and complete responsive-layout evidence remain open."
     },
     {
       "id": "react-authoring",
@@ -187,10 +189,10 @@
       "referenceFixture": "/g1_recharts_reference.html?case=react-authoring",
       "referenceApi": "Declarative chart/axis/series children",
       "referenceEvidence": ["declarative chart axis series children"],
-      "aerisFixture": "react_phase3_fixture.tsx and tests/general_charts.spec.mjs",
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned declarative axes/lines/legend/tooltip; react_phase3_fixture.tsx and tests/general_charts.spec.mjs including Strict Mode general-first ownership, retained references/default controls and autoSize resize/reveal",
       "aerisApi": "AerisChart, FinancialSeries, GeneralPane",
-      "supportedCombinations": "Current array-based GeneralPane and FinancialSeries",
-      "differences": "Composable child surface, controlled state and full concurrent lifecycle remain R5 work."
+      "supportedCombinations": "Keyed React declarations, mapped rows, controlled brush and mixed financial/general composition",
+      "differences": "G5 declarative lifecycle shipped. A pinned Chromium/Firefox/WebKit fixture confirms declared X/Y axes, two lines, two legend entries and a Jan tooltip; matching Aeris React fixtures retain first-pane ownership through Strict Mode/remount and keep references and default controls attached. The React adapter's explicit autoSize option follows 700x350 to 420x210 resize, retains the last usable size while hidden, then reveals at 480x260 with one pane, one retained series and exact hits across Chromium/Firefox/WebKit. Complete pinned authoring and manual comparison remain open."
     },
     {
       "id": "customization",
@@ -201,24 +203,24 @@
       "referenceFixture": "/g1_recharts_reference.html?case=customization",
       "referenceApi": "shape, content, formatter and style props",
       "referenceEvidence": ["Cell formatter style props"],
-      "aerisFixture": "tests/general_charts.spec.mjs style fixtures",
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned Cell color/rounded Bar and Aeris public row-color/corner exported-pixel pair; tests/general_charts.spec.mjs style fixtures",
       "aerisApi": "applyOptions and documented portable series options",
-      "supportedCombinations": "Current path width/dash/interpolation/markers/fill options",
-      "differences": "Arbitrary React/SVG execution is intentionally host-only; portable per-item/custom marks remain open."
+      "supportedCombinations": "Portable path, marker, fill, per-item, gradient, label and host component customization",
+      "differences": "Arbitrary React/SVG execution is host-only; portable customization uses frame primitives and styles. Paired Chromium/Firefox/WebKit fixtures confirm four pinned Cell fills and 6px positive Bar top corners against Aeris per-row colors, exported interior pixels and exposed corner cutouts. Negative bars round their exposed lower end in Aeris. Manual and cross-family parity audit remain open."
     },
     {
       "id": "animation",
       "capability": "Animation",
-      "status": "Open",
-      "owner": "future aeris_charts_engine transition clock",
+      "status": "Partial",
+      "owner": "aeris_charts_engine fixed-clock general transitions",
       "dependency": "R6",
       "referenceFixture": "/g1_recharts_reference.html?case=animation",
       "referenceApi": "isAnimationActive, animationDuration, animationEasing",
       "referenceEvidence": ["isAnimationActive animationDuration animationEasing"],
-      "aerisFixture": "future G6 fixed-clock fixtures",
-      "aerisApi": "proposed engine-owned transitions",
-      "supportedCombinations": "No general enter/update/exit contract shipped",
-      "differences": "Aeris requires deterministic transitions across all executors and reduced motion."
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned 400 ms line and reduced-motion update plus matching Aeris four-row fixed-clock and reduced-motion line pairs; tests/general_charts.spec.mjs transition and reduced-motion cases; tests/backend_parity.spec.mjs presented Canvas2D/WebGPU fixed-clock line motion; engine fixed-clock frame/hit fixtures",
+      "aerisApi": "set_general_transition_duration and engine-owned fixed-clock sampling",
+      "supportedCombinations": "Cartesian, polar and layout value/update transitions delivered; complete matrix verification remains G8 work",
+      "differences": "A pinned Chromium/Firefox/WebKit fixture changes four Recharts line values and observes distinct starting, intermediate and settled SVG paths during its 400 ms update. A matching Aeris public chart uses the same values and duration; fixed-clock Canvas2D captures show distinct start, intermediate and settled images, then idle scheduling and persisted target values in all three browsers. With reduced-motion media enabled, the pinned Recharts line still animates through an intermediate path, while Aeris immediately paints its updated line and remains idle. Aeris samples deterministic transitions in the engine. A Chromium presented-frame check freezes a public line update at start, 160 ms and settled time; Canvas2D and WebGPU move the blue line through the same vertical centers with a bounded painted-pixel difference at the middle sample. This accessibility-minded behavior difference is documented; exact easing, moving GPUI pixels and other family executor comparisons remain open."
     },
     {
       "id": "accessibility-localization",
@@ -228,11 +230,11 @@
       "dependency": "Every phase",
       "referenceFixture": "/g1_recharts_reference.html?case=accessibility-localization",
       "referenceApi": "accessibilityLayer and host formatters",
-      "referenceEvidence": ["accessibilityLayer host formatters"],
-      "aerisFixture": "tests/accessibility.spec.mjs and tests/general_charts.spec.mjs",
+      "referenceEvidence": ["accessibilityLayer host formatters", "Sankey title desc focus"],
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned French grouped Y ticks and Aeris portable explicit-label/hit pair; tests/accessibility.spec.mjs and tests/general_charts.spec.mjs including Sankey keyboard descriptions",
       "aerisApi": "accessibility controller, locale/time formatters",
-      "supportedCombinations": "Financial and shipped Cartesian series",
-      "differences": "Every later family/control still requires keyboard, assistive and contrast closure."
+      "supportedCombinations": "Financial, Cartesian, polar and layout series",
+      "differences": "Pinned Recharts host tickFormatter renders French grouped numeric Y ticks on a focusable application surface. Aeris keeps numeric tick coordinates and accepts preformatted explicit labels in the shared frame and V2 state; a Chromium/Firefox/WebKit pair confirms changed exported pixels and retained exact hits. Automatic tick placement with a JS formatter is not portable in Aeris; hosts update explicit ticks when their domain changes. Every family/control still needs manual assistive, contrast and localization closure."
     },
     {
       "id": "persistence-export-recovery",
@@ -243,10 +245,10 @@
       "referenceFixture": "/g1_recharts_reference.html?case=persistence-export-recovery",
       "referenceApi": "Host-owned React state and DOM/SVG export",
       "referenceEvidence": ["host-state", "DOM/SVG export"],
-      "aerisFixture": "tests/general_charts.spec.mjs V1/V2 and backend lifecycle fixtures",
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned host-state reorder/serialize reference, three-browser mixed V2 restore plus shared financial/general, combined financial/Cartesian, and combined polar/layout WebGPU device-loss export/hit fixtures; tests/general_charts.spec.mjs V1/V2 and backend lifecycle fixtures; tests/g8_defaults.spec.mjs 46-catalog-example export/disposal audit covering 20 kinds on Canvas2D and Chromium WebGPU; aeris_charts_native mixed_cartesian_polar_layout_export_matches_live_native_frame",
       "aerisApi": "export_state/import_state, take_screenshot, capture_export_frame",
-      "supportedCombinations": "Financial V1 and shipped general Cartesian V2",
-      "differences": "Aeris has portable engine persistence/frame export; complete chrome/fallback evidence remains open."
+      "supportedCombinations": "Financial V1/V3 and general Cartesian, polar and layout V2",
+      "differences": "The pinned Recharts reference has no chart-owned persistence: its React host reorders rows, serializes the updated array and repaints the SVG path in Chromium, Firefox and WebKit. Aeris has portable persistence and frame export. Mixed V2 restore preserves general datasets and pane order in all three browsers after hosts refeed financial OHLC rows; both chart hosts release their canvases on removal, while the current viewport is runtime state outside V2. Chromium WebGPU device-loss fixtures show byte-identical screenshots before/after fallback, then subsequent updates, state export, exact hits and cleared host canvases on removal for combined financial/Cartesian, polar/layout and box-plot/heatmap panes. A native four-family fixture verifies live/export pixel identity and an unchanged live frame. All 46 catalog examples covering 20 general, polar and layout kinds produce changed public image exports and release their canvases on Canvas2D in Chromium, Firefox and WebKit and on Chromium WebGPU; non-Chromium WebGPU is outside this configured browser path. A new V2 image-identity check passes all settled Canvas2D catalog frames but fails on Chromium WebGPU for gradient_area after four prior catalog charts despite matching V2 state and pane geometry; a minimal sequence regression is retained for root-cause work. Per-family update/loss and calibrated image equivalence remain open."
     },
     {
       "id": "packaging-migration",
@@ -257,10 +259,10 @@
       "referenceFixture": "/g1_recharts_reference.html?case=packaging-migration",
       "referenceApi": "recharts package root and documented components",
       "referenceEvidence": ["package-root-import", "migration-toggle"],
-      "aerisFixture": "packages/charts/scripts/pack_smoke.mjs",
+      "aerisFixture": "tests/g8_defaults.spec.mjs pinned root-import and standalone-to-composed toggle; packages/charts/scripts/pack_smoke.mjs; examples/all_in_one standalone, polar, flow, mixed, linked and React recipes",
       "aerisApi": "@aeristerminal/aeris-charts and /react",
-      "supportedCombinations": "Published imperative package and current optional React adapter",
-      "differences": "Complete migration recipes and packed composed/synchronized examples remain R5/R8 work."
+      "supportedCombinations": "Framework-neutral and React entries with six packed standalone Cartesian/polar/flow, mixed, linked and React recipes",
+      "differences": "The pinned package-root import and migration toggle repaint one standalone line into one composed line and four bars in Chromium, Firefox and WebKit. G5 migration and packed-consumer recipes shipped; G8 clean-install smoke passed for the current package build. Final-build repeat and manual migration comparison remain open."
     }
   ]
 }

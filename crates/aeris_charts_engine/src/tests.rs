@@ -6909,13 +6909,13 @@ fn crosshair_line_style_and_width_flow_from_options() {
     chart.fit_content();
     chart.crosshair = Some((200.0, 120.0));
 
-    // Default: Aeris's solid crosshair at the crisp 1px width.
+    // Default: Aeris's dashed crosshair at the crisp 1px width.
     let mut frame = ChartFrame::default();
     chart.build_frame_into(&mut frame);
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::VLine {
-            style: LineStyle::Solid,
+            style: LineStyle::Dashed,
             width: 1,
             ..
         }
@@ -6923,7 +6923,7 @@ fn crosshair_line_style_and_width_flow_from_options() {
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::HLine {
-            style: LineStyle::Solid,
+            style: LineStyle::Dashed,
             width: 1,
             ..
         }
@@ -10324,11 +10324,11 @@ fn theme_switch_uses_aeris_tokens_without_replacing_market_data() {
         dark.right_price_scale.border_color,
         aeris_charts_core::style::DARK_BORDER_CSS
     );
-    assert_eq!(dark.crosshair.vert_line.color, "#fafafa1a");
-    assert_eq!(dark.crosshair.horz_line.color, "#fafafa1a");
+    assert_eq!(dark.crosshair.vert_line.color, "#fafafa2f");
+    assert_eq!(dark.crosshair.horz_line.color, "#fafafa2f");
     assert_eq!(
         dark.crosshair.horz_line.label_background_color,
-        aeris_charts_core::style::DARK_POPOVER_SURFACE_CSS
+        aeris_charts_core::style::DARK_MUTED_CSS
     );
     assert_eq!(row_count(&chart, 0), 20);
 }

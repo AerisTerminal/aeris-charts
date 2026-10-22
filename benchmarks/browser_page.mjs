@@ -341,7 +341,7 @@ async function multi_series(points, seed, series_counts, pane_counts) {
   return { rows, backend: live[0]?.chart.backend() ?? null };
 }
 
-async function general_dashboard(points) {
+async function general_dashboard(points, financial_points = 0, seed = 0x02f6e2b1) {
   reset();
   const api = await load_package();
   const container = host();
@@ -361,40 +361,77 @@ async function general_dashboard(points) {
     size[index] = 4 + (index % 25);
   }
 
+  const financial_columns = financial_points > 0
+    ? generate_ohlcv(financial_points, seed)
+    : null;
+  const general_domain = { type: "continuous", scale: "linear" };
   const started = performance.now();
-  const chart = await api.create_chart(container, { autoSize: true });
-  const pane = chart.add_pane({
+  const chart = await api.create_chart(container, financial_columns === null
+    ? { autoSize: true, initialPane: { horizontal_domain: general_domain } }
+    : { autoSize: true });
+  const upload = { gpu_buffer_allocations: 0, gpu_write_calls: 0, gpu_uploaded_bytes: 0, gpu_uploaded_total_bytes: 0 };
+  const capture = () => {
+    const frame = chart.frame_stats();
+    upload.gpu_buffer_allocations += frame.gpu_buffer_allocations;
+    upload.gpu_write_calls += frame.gpu_write_calls;
+    upload.gpu_uploaded_bytes = Math.max(upload.gpu_uploaded_bytes, frame.gpu_uploaded_bytes);
+    upload.gpu_uploaded_total_bytes += frame.gpu_uploaded_bytes;
+    return frame;
+  };
+  capture();
+  let financial_series = null;
+  if (financial_columns !== null) {
+    financial_series = chart.add_series("candlestick");
+    capture();
+    financial_series.set_data_typed(financial_columns);
+    capture();
+  }
+  const pane = financial_columns === null ? chart.panes()[0] : chart.add_pane({
     preserve_empty: true,
-    horizontal_domain: { type: "continuous", scale: "linear" },
+    horizontal_domain: general_domain,
   });
+  if (financial_columns !== null) capture();
   chart.add_axis({ id: "bench-general-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
+  capture();
   chart.add_axis({ id: "bench-general-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+  capture();
   const common = { pane: pane.pane_index(), x_axis_id: "bench-general-x", y_axis_id: "bench-general-y" };
   const line = chart.add_series("xy_line", common);
+  capture();
   const area = chart.add_series("xy_area", common);
+  capture();
   const range = chart.add_series("range_area", common);
+  capture();
   const scatter = chart.add_series("scatter", common);
+  capture();
   const bubble = chart.add_series("bubble", common);
+  capture();
   line.set_data_typed({ x, y });
+  capture();
   area.set_data_typed({ x, y });
+  capture();
   range.set_data_typed({ x, low, high });
+  capture();
   scatter.set_data_typed({ x, y });
+  capture();
   bubble.set_data_typed({ x, y, size });
-  chart.render();
+  const stats = capture();
   await next_frame();
   const startup_ms = performance.now() - started;
-  const stats = chart.frame_stats();
   live.push({ chart, series: line, container, columns: null });
   return {
     startup_ms,
     frame_cpu_ms: stats.cpu_ms,
     wasm_linear_memory_bytes: stats.memory_bytes,
-    gpu_buffer_allocations: stats.gpu_buffer_allocations,
-    gpu_write_calls: stats.gpu_write_calls,
-    gpu_uploaded_bytes: stats.gpu_uploaded_bytes,
+    gpu_buffer_allocations: upload.gpu_buffer_allocations,
+    gpu_write_calls: upload.gpu_write_calls,
+    gpu_uploaded_bytes: upload.gpu_uploaded_bytes,
+    gpu_uploaded_total_bytes: upload.gpu_uploaded_total_bytes,
     backend: chart.backend(),
     rows_per_series,
-    series_count: 5,
+    series_count: 5 + (financial_series === null ? 0 : 1),
+    pane_count: chart.panes().length,
+    financial_points,
   };
 }
 

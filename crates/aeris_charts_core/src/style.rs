@@ -41,38 +41,44 @@ mod tests {
         assert_eq!(LIGHT_DANGER_CSS, "#f7525f");
         assert_eq!(LIGHT_ACCENT_CSS, "#f3f3f3");
         assert_eq!(LIGHT_ACTIVE_CSS, "#f3f3f3");
-        assert_eq!(DARK_ACCENT_CSS, "#282828");
-        assert_eq!(DARK_ACTIVE_CSS, "#393939");
-        assert_eq!(LIGHT_BORDER_CSS, "#e6e6e6");
-        assert_eq!(LIGHT_MUTED_BORDER_CSS, LIGHT_BORDER_CSS);
+        assert_eq!(DARK_ACCENT_CSS, "#131313");
+        assert_eq!(DARK_ACTIVE_CSS, "#252525");
+        // `--border` (#0a0a0a33) over white; the popover border resolves to the same token.
+        assert_eq!(LIGHT_BORDER_CSS, "#cecece");
+        assert_eq!(LIGHT_POPOVER_BORDER_CSS, LIGHT_BORDER_CSS);
+        // `--border-secondary` (#0a0a0a1a) over white.
+        assert_eq!(LIGHT_MUTED_BORDER_CSS, "#e6e6e6");
         assert_eq!(LIGHT_RING_CSS, "#e0e0e0");
-        assert_eq!(DARK_SURFACE_CSS, "#171717");
-        assert_eq!(DARK_FOREGROUND_CSS, "#fafafa");
-        assert_eq!(DARK_MUTED_CSS, "#242424");
+        assert_eq!(DARK_SURFACE_CSS, "#000000");
+        assert_eq!(DARK_FOREGROUND_CSS, "#ededed");
+        // `--surface-secondary` (#fafafa0a) composited over the dark surface.
+        assert_eq!(DARK_MUTED_CSS, "#0a0a0a");
         // `--surface-raised` (#fafafa14) composited over the dark surface.
-        assert_eq!(DARK_RAISED_CSS, "#292929");
-        assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#949494");
+        assert_eq!(DARK_RAISED_CSS, "#141414");
+        assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#898989");
         assert_eq!(DARK_PRIMARY_CSS, "#006edd");
         assert_eq!(DARK_PRIMARY_FOREGROUND_CSS, "#ffffff");
-        assert_eq!(DARK_PRIMARY_HOVER_CSS, "#055db5");
+        assert_eq!(DARK_PRIMARY_HOVER_CSS, "#0058b1");
         assert_eq!(DARK_DANGER_CSS, LIGHT_DANGER_CSS);
         // `--warning` is the same in both themes.
         assert_eq!(LIGHT_WARNING_CSS, "#ff6900");
         assert_eq!(DARK_WARNING_CSS, LIGHT_WARNING_CSS);
         assert_eq!(DEFAULT_WARNING_RGB, (0xff, 0x69, 0x00));
         assert_eq!(DARK_BORDER_CSS, "#2e2e2e");
+        assert_eq!(DARK_MUTED_BORDER_CSS, DARK_ACTIVE_CSS);
         // `--border-strong` in the light theme, alpha kept like the dark line.
         assert_eq!(LIGHT_CROSSHAIR_LINE_CSS, "#0a0a0a26");
         assert_eq!(LIGHT_CROSSHAIR_LINE_RGB, (0x0a, 0x0a, 0x0a));
         assert_eq!(LIGHT_CROSSHAIR_LINE_ALPHA, 0x26);
         assert_eq!(LIGHT_CROSSHAIR_CSS, LIGHT_CROSSHAIR_LINE_CSS);
         assert_eq!(LIGHT_CROSSHAIR_LABEL_CSS, DARK_MUTED_CSS);
-        // `--border` in the dark theme: the line keeps its alpha over series geometry.
-        assert_eq!(DARK_CROSSHAIR_LINE_CSS, "#fafafa1a");
+        // The dark `--border` (#2e2e2e) expressed as a translucent line that lands on exactly that
+        // tone over the dark surface while staying see-through over series geometry.
+        assert_eq!(DARK_CROSSHAIR_LINE_CSS, "#fafafa2f");
         assert_eq!(DARK_CROSSHAIR_LINE_RGB, (0xfa, 0xfa, 0xfa));
-        assert_eq!(DARK_CROSSHAIR_LINE_ALPHA, 0x1a);
+        assert_eq!(DARK_CROSSHAIR_LINE_ALPHA, 0x2f);
         assert_eq!(DARK_CROSSHAIR_CSS, DARK_CROSSHAIR_LINE_CSS);
-        assert_eq!(DARK_CROSSHAIR_LABEL_CSS, DARK_POPOVER_SURFACE_CSS);
+        assert_eq!(DARK_CROSSHAIR_LABEL_CSS, DARK_MUTED_CSS);
         assert_eq!(DEFAULT_CROSSHAIR_CSS, DARK_CROSSHAIR_LINE_CSS);
         assert_eq!(DEFAULT_CROSSHAIR_ALPHA, DARK_CROSSHAIR_LINE_ALPHA);
         assert_eq!(DARK_SEPARATOR_HOVER_CSS, DARK_ACCENT_CSS);
@@ -105,10 +111,10 @@ mod tests {
             LIGHT_POPOVER_MUTED_FOREGROUND_CSS,
             LIGHT_MUTED_FOREGROUND_CSS
         );
-        assert_eq!(DARK_POPOVER_SURFACE_CSS, "#262626");
-        assert_eq!(DARK_POPOVER_BORDER_CSS, "#080808");
+        assert_eq!(DARK_POPOVER_SURFACE_CSS, "#010101");
+        assert_eq!(DARK_POPOVER_BORDER_CSS, "#000000");
         assert_eq!(DARK_POPOVER_HIGHLIGHT_RGB, (0xff, 0xff, 0xff));
         assert_eq!(DARK_POPOVER_HIGHLIGHT_ALPHA, 0x1a);
-        assert_eq!(DARK_POPOVER_MUTED_FOREGROUND_CSS, "#9a9a9a");
+        assert_eq!(DARK_POPOVER_MUTED_FOREGROUND_CSS, "#8a8a8a");
     }
 }

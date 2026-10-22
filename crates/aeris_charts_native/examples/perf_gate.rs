@@ -810,15 +810,18 @@ fn main() {
     );
 
     // ---- Target F: first Phase 2 general-only density gate -----------------------------------
-    let mut general = ChartEngine::new(1600.0, 800.0, 1.0);
-    let pane = general
-        .add_pane_with_domain(
-            true,
-            HorizontalDomain::Continuous {
-                scale: ContinuousScaleType::Linear,
-            },
-        )
-        .expect("valid general pane");
+    let mut general = ChartEngine::new_with_initial_domain(
+        1600.0,
+        800.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .expect("valid general-only chart");
+    let pane = 0;
+    assert_eq!(general.panes.len(), 1, "Target F must be general-only");
+    assert!(general.pane_series_ids(0).is_empty());
     general
         .add_general_axis(GeneralAxisOptions::new(
             "general-x",
@@ -887,15 +890,18 @@ fn main() {
     // ---- Target G: mixed general-only dashboard ---------------------------------------------
     // Keep every current high-density geometry family in one coordinate region so this gate
     // catches accidental repeated walks, unbounded retained caches, and interaction regressions.
-    let mut mixed = ChartEngine::new(1600.0, 800.0, 1.0);
-    let mixed_pane = mixed
-        .add_pane_with_domain(
-            true,
-            HorizontalDomain::Continuous {
-                scale: ContinuousScaleType::Linear,
-            },
-        )
-        .expect("valid mixed-general pane");
+    let mut mixed = ChartEngine::new_with_initial_domain(
+        1600.0,
+        800.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .expect("valid mixed-general-only chart");
+    let mixed_pane = 0;
+    assert_eq!(mixed.panes.len(), 1, "Target G must be general-only");
+    assert!(mixed.pane_series_ids(0).is_empty());
     mixed
         .add_general_axis(GeneralAxisOptions::new(
             "mixed-x",
@@ -1103,15 +1109,18 @@ fn main() {
     );
 
     // ---- Target I: dense numeric error bars -------------------------------------------------
-    let mut errors = ChartEngine::new(1600.0, 800.0, 1.0);
-    let error_pane = errors
-        .add_pane_with_domain(
-            true,
-            HorizontalDomain::Continuous {
-                scale: ContinuousScaleType::Linear,
-            },
-        )
-        .expect("valid error-bar pane");
+    let mut errors = ChartEngine::new_with_initial_domain(
+        1600.0,
+        800.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .expect("valid general-only error-bar chart");
+    let error_pane = 0;
+    assert_eq!(errors.panes.len(), 1, "Target I must be general-only");
+    assert!(errors.pane_series_ids(0).is_empty());
     errors
         .add_general_axis(GeneralAxisOptions::new(
             "error-x",

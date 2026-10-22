@@ -247,6 +247,54 @@ test("layout series participate in keyboard accessibility and refresh after rest
   });
   expect(restored).toEqual({ stale: true, label: expect.stringContaining("Updated stages"), stableRestoredHandle: true });
 });
+test("Sankey exposes a focusable chart and bounded node/link descriptions", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const initial = await page.evaluate(async () => {
+    const api = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "400px", height: "300px" });
+    host.id = "sankey-a11y-host";
+    document.body.appendChild(host);
+    const chart = await api.create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "layout" } },
+    });
+    const series = chart.add_layout_series("sankey", { pane: 0, title: "Flow comparison" }, {
+      type: "flow",
+      nodes: [{ id: "a", label: "Source" }, { id: "b", label: "Destination" }],
+      links: [{ source: "a", target: "b", value: 3 }],
+    });
+    const accessibility = api.enable_accessibility(chart, { chart_title: "Flow comparison" });
+    accessibility.focus(0);
+    window.__sankey_a11y = { chart, host, series, accessibility };
+    const layer = host.querySelector(".aeris_charts-a11y-layer");
+    return {
+      role: layer?.getAttribute("role"),
+      tab_index: layer?.getAttribute("tabindex"),
+      label: layer?.getAttribute("aria-label"),
+      snapshot: series.accessibility_snapshot(0, 10),
+    };
+  });
+  expect(initial.role).toBe("application");
+  expect(initial.tab_index).toBe("0");
+  expect(initial.label).toContain("Flow comparison");
+  expect(initial.snapshot.total).toBe(3);
+  expect(initial.snapshot.items).toMatchObject([
+    { element: "node", id: "a", label: "Source", value: 3 },
+    { element: "node", id: "b", label: "Destination", value: 3 },
+    { element: "link", id: "a→b", label: "a to b", value: 3 },
+  ]);
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#sankey-a11y-host .aeris_charts-a11y-live-region")).toContainText("Source");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#sankey-a11y-host .aeris_charts-a11y-live-region")).toContainText("Destination");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#sankey-a11y-host .aeris_charts-a11y-live-region")).toContainText("a to b");
+  await page.evaluate(() => {
+    const { chart, host, accessibility } = window.__sankey_a11y;
+    accessibility.detach(); chart.remove(); host.remove(); delete window.__sankey_a11y;
+  });
+});
 test("layout legend toggles visibility and persists it through V2 restore", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const id = await page.evaluate(async () => {
@@ -1258,6 +1306,124 @@ test("engine general legend toggles a series from a real pointer click", async (
   expect(await page.evaluate(() => window.__revenue.chart.general_legend_snapshot(0).items[0].visible)).toBe(false);
 });
 
+test("engine top legend with offset receives real pointer input", async ({ page }) => {
+  await mount_revenue_line(page, { generalLegend: { visible: true, position: "top", offset: 5 } });
+  const box = await page.evaluate(() => {
+    const rect = window.__revenue.host.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width };
+  });
+  let toggled = false;
+  for (let offset = 10; offset <= 44 && !toggled; offset += 3) {
+    await page.mouse.click(box.x + box.width / 2, box.y + offset);
+    toggled = await page.evaluate(() => window.__revenue.series.options().visible === false);
+  }
+  expect(toggled).toBe(true);
+  expect(await page.evaluate(() => window.__revenue.chart.general_legend_snapshot(0).items[0].visible)).toBe(false);
+});
+test("inset top-left engine legend overlays the plot and accepts canvas input", async ({ page }) => {
+  await mount_revenue_line(page, { generalLegend: { visible: true, position: "insideTopLeft", offset: 8 } });
+  const box = await page.evaluate(() => {
+    const rect = window.__revenue.host.getBoundingClientRect();
+    return { x: rect.x, y: rect.y };
+  });
+  let toggled = false;
+  for (const y of [35, 42, 49, 56, 63]) {
+    for (const x of [25, 35, 45, 55, 65]) {
+      await page.mouse.click(box.x + x, box.y + y);
+      toggled = await page.evaluate(() => window.__revenue.series.options().visible === false);
+      if (toggled) break;
+    }
+    if (toggled) break;
+  }
+  expect(toggled).toBe(true);
+});
+test("outside side engine legends toggle through the public canvas input", async ({ page }) => {
+  for (const position of ["left", "right"]) {
+    await mount_revenue_line(page, { generalLegend: { visible: true, position, offset: 6 } });
+    const box = await page.evaluate(() => {
+      const rect = window.__revenue.host.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    });
+    let toggled = false;
+    for (const y of [140, 148, 156, 164]) {
+      for (const distance of [20, 30, 40, 50, 60, 70, 80]) {
+        const x = position === "left" ? distance : box.width - distance;
+        await page.mouse.click(box.x + x, box.y + y);
+        toggled = await page.evaluate(() => window.__revenue.series.options().visible === false);
+        if (toggled) break;
+      }
+      if (toggled) break;
+    }
+    expect(toggled, `${position} legend did not receive a pointer click`).toBe(true);
+  }
+});
+test("custom coordinate legend paints and toggles through canvas input", async ({ page }) => {
+  for (const [position, right] of [
+    [{ x: 200, y: 150 }, 200],
+    [{ x: "75%", y: "50%" }, 300],
+  ]) {
+    await mount_revenue_line(page, { generalLegend: { visible: true, position, offset: 80 } });
+    const box = await page.evaluate(() => {
+      const rect = window.__revenue.host.getBoundingClientRect();
+      return { x: rect.x, y: rect.y };
+    });
+    let toggled = false;
+    for (const y of [132, 138, 144]) {
+      for (const offset of [-10, 0, 10, 20]) {
+        await page.mouse.click(box.x + right + offset, box.y + y);
+        toggled = await page.evaluate(() => window.__revenue.series.options().visible === false);
+        if (toggled) break;
+      }
+      if (toggled) break;
+    }
+    expect(toggled, `${JSON.stringify(position)} legend did not receive a pointer click`).toBe(true);
+  }
+});
+test("custom legend crossing the Y axis claims its pointer click", async ({ page }) => {
+  await mount_revenue_line(page, { generalLegend: { visible: true, position: { x: 70, y: 150 } } });
+  const box = await page.evaluate(() => {
+    const rect = window.__revenue.host.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, plot_left: window.__revenue.chart.panes()[0].get_geometry().left };
+  });
+  expect(box.plot_left).toBeGreaterThan(20);
+  let toggled = false;
+  for (const x of [20, 23, 26]) {
+    for (const y of [132, 138, 144]) {
+      await page.mouse.click(box.x + x, box.y + y);
+      toggled = await page.evaluate(() => window.__revenue.series.options().visible === false);
+      if (toggled) break;
+    }
+    if (toggled) break;
+  }
+  expect(toggled, "axis-strip legend entry did not receive a pointer click").toBe(true);
+});
+test("custom legend crossing into the next pane still toggles its source series", async ({ page }) => {
+  await mount_revenue_line(page, { generalLegend: { visible: true, position: { x: 200, y: 150 } } });
+  const bounds = await page.evaluate(() => {
+    const { chart, host } = window.__revenue;
+    chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "category", scale: "point" } });
+    chart.render();
+    const first = chart.panes()[0].get_geometry();
+    const second = chart.panes()[1].get_geometry();
+    chart.apply_options({ generalLegend: {
+      visible: true, position: { x: 200, y: second.top - first.top + 20 },
+    } });
+    chart.render();
+    const rect = host.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, second_top: second.top, first_top: first.top };
+  });
+  expect(bounds.second_top).toBeGreaterThan(bounds.first_top);
+  let toggled = false;
+  for (const x of [165, 175, 185, 195]) {
+    for (const y of [bounds.second_top + 5, bounds.second_top + 10, bounds.second_top + 15]) {
+      await page.mouse.click(bounds.x + x, bounds.y + y);
+      toggled = await page.evaluate(() => window.__revenue.series.options().visible === false);
+      if (toggled) break;
+    }
+    if (toggled) break;
+  }
+  expect(toggled, "cross-pane legend did not receive a pointer click").toBe(true);
+});
 test("default general legend toggles visibility with keyboard focus intact", async ({ page }) => {
   await mount_revenue_line(page, {});
   const first = page.locator("#revenue_legend");
@@ -2408,6 +2574,22 @@ test("React general-only composition owns the first pane through Strict Mode and
     empty: { pane_count: 1, same_pane: true },
     remounted: { pane_count: 1, pane_index: 0, value: 12 },
   });
+});
+
+test("React general-only autoSize follows resize and hidden-container reveal", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactResponsiveGeneralFirstPane();
+  });
+  expect(result.initial).toEqual([700, 350]);
+  expect(result.resized).toEqual([420, 210]);
+  expect(result.hidden).toEqual({ width: 0, size: [420, 210] });
+  expect(result.revealed).toEqual([480, 260]);
+  expect(result.panes).toBe(1);
+  expect(result.active).toBe(true);
+  expect(result.same_series).toBe(true);
+  expect(["jan", "feb"]).toContain(result.hit);
 });
 
 test("React GeneralPane rejects unsupported child declarations without installing resources", async ({ page }) => {

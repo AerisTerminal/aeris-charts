@@ -27,7 +27,7 @@ const mapSale = (row: Sale) => ({
 });
 
 export function SalesChart({ sales }: { sales: readonly Sale[] }) {
-  return <AerisChart options={{ initialPane: { horizontal_domain: { type: "category", scale: "band" } } }}
+  return <AerisChart options={{ autoSize: true, initialPane: { horizontal_domain: { type: "category", scale: "band" } } }}
     style={{ width: "100%", height: 400 }}>
     <GeneralPane options={{ horizontal_domain: { type: "category", scale: "band" } }} useInitialPane>
       <GeneralAxis id="month" dimension="x" scale="band" position="bottom" />
@@ -70,6 +70,10 @@ so no empty financial pane consumes half the chart. The domain must match and th
 be empty when React claims it. Removing the declaration clears its axes, series, and references but
 keeps the preserved pane available for a later declaration. Omit `useInitialPane` for additional
 panes or for mixed financial/general charts.
+
+Set `autoSize: true` when the host can resize. Give the host a measurable height; a width-only
+percentage without a parent height cannot size a chart. While a host is hidden, Aeris retains the
+last usable canvas size and resumes sizing when it becomes visible.
 
 Row `id` values make focus and selection survive replacement and reorder. A row's `label` is the
 portable text for `GeneralDataLabels`; a React formatter cannot run inside native or WebGPU
@@ -140,23 +144,218 @@ are available through `create_general_legend`, `create_general_tooltip`, and
 
 | Recharts authoring concept | Aeris equivalent |
 | --- | --- |
-| `ResponsiveContainer` with `ComposedChart` | `AerisChart` with one or more `GeneralPane` declarations |
+| `ResponsiveContainer` with `ComposedChart` | `AerisChart` with `autoSize: true` and one or more `GeneralPane` declarations in a sized host |
 | `XAxis` / `YAxis` | `GeneralAxis` with explicit dimension, scale, and axis ID |
+| `XAxis angle={-60} height="auto"` | Horizontal `GeneralAxis` with `tick_angle: -60`; Aeris measures the needed strip up to its pane limit |
+| Custom `XAxis` tick with two SVG `tspan` lines | Explicit `ticks[].label` with newline-separated text; Aeris measures and paints up to four lines in the shared frame |
 | `dataKey` on a series | `MappedGeneralSeries` with a typed `mapRow`, or canonical `GeneralSeries` data |
 | `LabelList` | `GeneralDataLabels` plus portable row `label` values |
 | `ReferenceLine` / `ReferenceDot` / `ReferenceArea` | `GeneralReference` line / dot / region |
+| `Cell fill` on each `Bar` and a rounded positive top | Row `color` on each `column` and `bar_corner_radius` on the series; Aeris rounds the exposed end of negative bars too |
 | `Legend` / `Tooltip` / range selection UI | `GeneralLegend` / `GeneralTooltip` / `GeneralBrushControls` |
+| `Bar` series sharing a `stackId` with `stackOffset="sign"` | `column` or `horizontal_bar` series sharing `stack_id`, with `stack_mode: "normal"` to separate positive and negative totals at zero |
+| Positive `Bar` stacks with `stackOffset="expand"` | Shared `stack_id` and `stack_mode: "percent"`; segment shares sum to 1 in each category |
+| `Bar` stacks with `stackOffset="positive"` | Shared `stack_id` and `stack_mode: "positive"`; negative source rows remain queryable but have no painted segment |
+| `Bar` stacks with `stackOffset="none"` | Shared `stack_id` and `stack_mode: "cumulative"`; signed values accumulate in series order and can overlap earlier marks |
+| `Bar` stacks with `stackOffset="silhouette"` or `"wiggle"` | Shared `stack_id` and the matching `stack_mode`; both retain the ordered baseline transformation |
+
+For mixed-sign data, Recharts `stackOffset="expand"` divides by each category's signed total.
+In the pinned reference fixture this clips two base bars to the plot and omits their top
+segments. Aeris `stack_mode: "percent"` normalizes positive and negative totals separately,
+keeping every positive and negative segment visible. Review this intentional behavior change
+when migrating a mixed-sign expanded stack; positive-only totals use the same proportions.
+
+For an animated Recharts line, call `chart.set_general_transition_duration(400)` after creating
+the Aeris chart, then update the retained series handle. Aeris uses one fixed transition clock
+for shared frames and hits. It applies the update immediately when the browser requests reduced
+motion; the pinned Recharts 3.10.1 line fixture continues animating under that media setting.
+The transition duration persists in chart state, while an in-progress transition does not.
+
+A Recharts `<ReferenceArea x1="Feb" x2="Mar" />` spans the plot height when Y bounds are
+omitted. An Aeris `region` binds explicit X and Y axes and accepts any nonempty set
+of `x_from`, `x_to`, `y_from`, and `y_to`. Omitted endpoints use the corresponding
+plot edge, so an X-only band follows Y zoom and a Y-only band follows X zoom.
+`ReferenceLine y={16}` maps to a Y-axis `line` with `value: 16`.
+Both references enter Aeris frame exports; row `label` values or `data_labels: true` keep
+numeric labels portable across backends.
+
+For a Recharts `YAxis tickFormatter`, preformat bounded explicit Aeris ticks while keeping
+their numeric values. For example, `ticks: [0, 600, 1200].map(value => ({ type: "numeric",
+value, label: new Intl.NumberFormat("fr-FR").format(value) }))` carries French grouping into
+the shared frame and state without changing coordinates or hits. Update the explicit ticks when
+the visible domain changes; a JavaScript formatter is not called during native rendering.
 
 Aeris uses an explicit pane domain and typed axis values. Financial timestamps are UTC seconds;
 general temporal axes use epoch milliseconds. Missing rows, duplicate values, and stable row IDs
 follow the engine's per-family rules. Translate source records once at the application boundary,
 then update the retained series handle; do not run data accessors inside chart rendering.
 
+### Migrating Cartesian paths, points, boxes, and heatmaps
+
+Recharts `Line`, `Area`, and `Scatter` map to `xy_line`, `xy_area`, and `scatter` on
+explicit compatible X/Y axes. Translate each source record once into `{ id, x, y }`;
+`bubble` adds a nonnegative `size`. Recharts `ZAxis dataKey="size"` maps to that row
+field; pre-scale Recharts `range` values in host data when exact bubble areas matter.
+Recharts `Area` with `[low, high]` data maps to Aeris `range_area` rows
+`{ id, x, low, high }`, with `low <= high`. Recharts Y `ErrorBar`
+margins map to Aeris `error_bar` rows `{ id, x, y, y_low, y_high }` with
+absolute bounds. Stable IDs preserve focus,
+selection, and update identity when rows reorder.
+
+The pinned Recharts reference has no first-class `BoxPlot` or `Heatmap` component;
+its custom Scatter shape and Treemap color example are visual analogues. Use Aeris
+`box_plot` with category-band X, numeric Y, and ordered
+`{ id, x, min, q1, median, q3, max }` rows. Use `heatmap_grid` with
+`{ id, x, y, value, color? }` cells on compatible category or continuous axes.
+These are distinct data models: migrate source statistics or cells instead of
+copying a React SVG shape callback. Check the [row shapes](general_charts_api.md#object-data-shapes)
+and [pane compatibility matrix](general_charts_api.md#pane-compatibility-matrix)
+before composing them in one pane.
+
+### Migrating a pie or donut chart
+
+Recharts `<Pie dataKey="value" nameKey="name">` maps each source record to an Aeris polar
+row with `x` as the category and `y` as the numeric value. Use a polar first pane for a
+standalone chart. A donut is a `pie` series with a nonzero normalized `inner_radius`:
+
+```ts
+import { create_chart } from "@aeristerminal/aeris-charts";
+
+const container = document.querySelector("#chart");
+if (!(container instanceof HTMLElement)) throw new Error("missing #chart container");
+const chart = await create_chart(container, {
+  initialPane: { horizontal_domain: { type: "polar" } },
+});
+chart.add_axis({ id: "angle", pane: 0, dimension: "angle", scale: "angular_category", visible: false });
+chart.add_axis({ id: "radius", pane: 0, dimension: "radius", scale: "radial_linear", visible: false });
+const share = chart.add_series("pie", {
+  pane: 0, x_axis_id: "angle", y_axis_id: "radius",
+  polar: { inner_radius: 0.35, outer_radius: 0.9 },
+});
+share.set_data([
+  { id: "north", x: "North", y: 42, color: "#4c8bf5" },
+  { id: "south", x: "South", y: 28, color: "#28b7a4" },
+]);
+// Call chart.remove() when the owning view is disposed.
+```
+
+Recharts radii can be pixels or percentages; Aeris `inner_radius` and `outer_radius` are
+fractions of its measured polar plot radius. Preserve a stable row `id` for updates and
+translate `Cell` fill overrides to row `color`. The same row shape and axes work for
+`radar`, `polar_area`, and `radial_bar`, with each family's own series options and layout.
+The runnable [polar.mjs](../examples/all_in_one/polar.mjs) recipe also enables the portable
+engine legend and data labels.
+
+### Migrating hierarchy and flow charts
+
+Use an axis-free `{ type: "layout" }` first pane for a standalone funnel, treemap, Sankey,
+or sunburst. These families use `add_layout_series(kind, options, data)` and a typed
+input object rather than `add_series` and X/Y rows. For a Recharts Sankey, replace
+numeric link indexes with stable node IDs:
+
+```ts
+import { create_chart } from "@aeristerminal/aeris-charts";
+
+const container = document.querySelector("#chart");
+if (!(container instanceof HTMLElement)) throw new Error("missing #chart container");
+const chart = await create_chart(container, {
+  initialPane: { horizontal_domain: { type: "layout" } },
+});
+const flow = chart.add_layout_series("sankey", {
+  pane: 0, title: "Conversion flow", data_labels: true,
+}, {
+  type: "flow",
+  nodes: [
+    { id: "visit", label: "Visit" },
+    { id: "trial", label: "Trial" },
+    { id: "paid", label: "Paid" },
+  ],
+  links: [
+    { source: "visit", target: "trial", value: 18 },
+    { source: "trial", target: "paid", value: 11 },
+  ],
+});
+// Keep `flow` to call flow.set_data(nextFlow) without replacing the chart.
+```
+
+The runnable [flow.mjs](../examples/all_in_one/flow.mjs) recipe bundles this path from the
+installed package. `funnel` uses `{ type: "funnel", stages }`; `treemap` and `sunburst`
+use `{ type: "hierarchy", nodes }` with stable `id` and `parent` references. Built-in
+labels, exact hits, keyboard focus, and frame exports use the same engine geometry.
+Custom Recharts SVG node/link components remain host-only presentation and need a
+portable data/style mapping to appear in exported or native charts.
+
+### Migrating legend and tooltip content
+
+A Recharts `Legend` or `Tooltip` formatter runs in React's DOM. Use the package's DOM components
+when a formatter needs JavaScript, locale data, or application state:
+
+```tsx
+<GeneralLegend options={{
+  format_title: (title) => title === "Sales" ? "Net sales" : title,
+  format_action: (visible, title) => `${visible ? "Hide" : "Show"} ${title}`,
+}} />
+<GeneralTooltip options={{
+  mode: "shared",
+  format_value: (value) => new Intl.NumberFormat("en-US", {
+    style: "currency", currency: "USD",
+  }).format(value),
+}} />
+```
+
+These components read engine snapshots and keep visibility and hit semantics in the chart. Their
+DOM markup is outside `take_screenshot()`. For an exported or native chart, supply portable row
+`label` text for data labels and use the engine-drawn tooltip and legend. Enable the latter with
+`chart.apply_options({ generalLegend: { visible: true, position: "top" } })` and omit the DOM
+`GeneralLegend`; omit the DOM `GeneralTooltip` to keep the engine-drawn hover tooltip. Named legend
+positions, side gutters, and `{ x, y }` custom coordinates are described in
+[General chart API](general_charts_api.md). A React or DOM formatter cannot become an arbitrary
+GPUI, WebGPU, or Canvas2D drawing callback.
+
+| Recharts customization | Portable Aeris mapping |
+| --- | --- |
+| `stroke`, `strokeWidth`, `strokeDasharray` | Series `color`, `line_width`, and `line_style` (`solid`, `dotted`, `dashed`) |
+| `type="step"` on a line or area | Series `interpolation: "step_middle"`; Aeris `"step"` retains its legacy step-after shape |
+| `connectNulls` | Series `connect_missing: true`; missing rows remain in state and queries |
+| `dot` and scatter `shape` | `point_markers`, `point_radius`, and `point_symbol` (`circle`, `square`, `diamond`, `triangle`) |
+| `Cell` fill and symbol overrides | Row `color` and `symbol` data; the same values drive marks, hits, and snapshots |
+| SVG fill gradient | Series `fill_gradient` with two CSS colors; `fill_opacity` controls area alpha |
+| `LabelList` formatter | Translate the formatter result into each row's portable `label`, then enable `data_labels` |
+| Custom HTML tooltip or legend | `GeneralTooltip` and `GeneralLegend` DOM options; use engine snapshots for any other host markup |
+
+Portable choices are validated before engine mutation and persist with series/data state where
+applicable. If a custom mark requires arbitrary application code at draw time, keep that work in
+the browser host and document that it will not appear in GPUI or frame-image exports.
+
+## Accessibility, state, and export migration
+
+Map Recharts SVG `title`/`desc` to Aeris `accessibility.chart_title` and
+a `messages.description: () => "..."` function under `accessibility`, then use the
+chart's semantic focus controller.
+Set `lang` for localized announcements and keep stable
+row IDs so keyboard focus survives updates. Use a retained series handle's bounded
+`accessibility_snapshot(offset, limit)` when the host needs a data summary;
+`chart.accessibility().focus()` moves focus to the chart controller.
+
+Recharts source rows normally live in React or other host state. Aeris
+`chart.export_state()` captures portable chart state and general data in the
+revisioned schema; `chart.import_state(state)` restores it atomically into a
+compatible fresh chart. Financial OHLC rows and the current viewport are not
+serialized, so supply those separately when restoring a mixed chart. Reattach
+host callbacks and DOM controls after restore; they are application code.
+
+Use `chart.take_screenshot()` for a synchronous frame image, including
+engine-drawn labels and legend. DOM tooltips and custom host markup are outside
+that image. With `backend: "auto"`, WebGPU can fall back to Canvas2D while the
+same chart state and handles remain live; inspect `chart.backend_status()` for
+the active stage and reason. Call `chart.remove()` when the owning view is
+removed.
+
 ## Browser and server setup
 
 The package exports JavaScript, declarations, design CSS, and a sibling WASM asset. Bundlers
 should preserve the package's `import.meta.url` asset resolution or use the explicit `/wasm`
-export when configuring asset copying. The package smoke test bundles all four checked-in
+export when configuring asset copying. The package smoke test bundles all six checked-in
 consumer examples from an installed npm tarball. The React entry is safe to import during server
 rendering: it performs no DOM work until mount. It does not produce a static chart image on the
 server; the browser initializes the chart after hydration. Call `chart.remove()` for imperative

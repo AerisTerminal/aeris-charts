@@ -2627,7 +2627,7 @@ impl ChartEngine {
                 let pane_x = pane_x.min(left);
                 out.scissor = [pane_x, pane_y, pane_right - pane_x, pane_h];
             }
-            // The legend sits below the plot clip, so it follows the plot range.
+            // In-pane legends follow the plot range and paint outside its plot clip.
             let legend_start = out.main.len();
             self.build_general_legend_frame(pi, hpr, vpr, &mut out.main);
             if out.main.len() != legend_start {

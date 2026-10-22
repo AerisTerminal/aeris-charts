@@ -58,12 +58,12 @@ export default defineConfig({
       // smoke — confirming the library loads and renders on those engines.
       name: "firefox",
       use: { ...devices["Desktop Firefox"] },
-      testMatch: /(cross_browser|financial_compatibility|general_charts|g1_foundations|unified_interaction_accessibility|public_reference_interaction)\.spec\.mjs/,
+      testMatch: /(cross_browser|financial_compatibility|general_charts|g1_foundations|g8_defaults|unified_interaction_accessibility|public_reference_interaction)\.spec\.mjs/,
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
-      testMatch: /(cross_browser|financial_compatibility|general_charts|g1_foundations|unified_interaction_accessibility|public_reference_interaction)\.spec\.mjs/,
+      testMatch: /(cross_browser|financial_compatibility|general_charts|g1_foundations|g8_defaults|unified_interaction_accessibility|public_reference_interaction)\.spec\.mjs/,
     },
   ],
   webServer: {

@@ -49,7 +49,12 @@ Environment classification defaults to `local`; shared workflows set `shared-ci`
 
 `shared.mjs` uses a versioned xorshift32 generator. A generator version, unsigned seed, start time, interval, start price, volatility, point count, series count, and pane count identify the dataset. Generated rows always satisfy `high >= open/close`, `low <= open/close`, and `high >= low`. Core sizes are 1K, 10K, 100K, 500K, and 1M candlesticks. Dataset creation occurs before timed installs.
 
-Canonical scenario definitions live in `scenarios.json`; this is intentionally a small manifest rather than a benchmark DSL. Scenario IDs and versions make methodology changes explicit. A material change creates a new scenario version instead of silently rewriting history. Workloads cover startup, historical loading, current-candle and append streaming, pan/zoom/crosshair input, lifecycle retention, multi-chart, multi-series/multi-pane scaling, a five-series/100K-row Phase 2 general dashboard, retained current-candle updates across 1/2/4/8/16 series and one/four panes, and soak stability. Retained scenarios record semantic rebuild counts plus WebGPU allocation, write, and upload volume alongside frame CPU percentiles. Native evidence additionally measures every representative indicator on 10K/100K/1M histories, typed-equivalent batches of 1/10/100/1K/10K rows, 1/4/8/16 mixed indicators on one source, and one active source across 1/2/4/8/16 source/indicator-pane pairs.
+Canonical scenario definitions live in `scenarios.json`; this is intentionally a small manifest rather than a benchmark DSL. Scenario IDs and versions make methodology changes explicit. A material change creates a new scenario version instead of silently rewriting history. Workloads cover startup, historical loading, current-candle and append streaming, pan/zoom/crosshair input, lifecycle retention, multi-chart, multi-series/multi-pane scaling, a five-series/100K-row general-only dashboard and a six-series/two-pane mixed dashboard with 100K general plus 20K financial rows, retained current-candle updates across 1/2/4/8/16 series and one/four panes, and soak stability. Retained scenarios record semantic rebuild counts plus WebGPU allocation, write, and upload volume alongside frame CPU percentiles. Native evidence additionally measures every representative indicator on 10K/100K/1M histories, typed-equivalent batches of 1/10/100/1K/10K rows, 1/4/8/16 mixed indicators on one source, and one active source across 1/2/4/8/16 source/indicator-pane pairs.
+
+The native release `perf_gate` asserts the topology of its 100K-row general line, mixed-general,
+and numeric error-bar targets: one continuous-domain pane and no financial series. Its combined
+target separately uses a financial pane plus a general pane. The browser general dashboard
+runner likewise verifies pane, series, and financial-row counts against each scenario.
 
 ## Timing and statistics
 
@@ -189,8 +194,17 @@ measured release build (Rust 1.99.0, `wasm-pack` 0.15.0, `wasm-opt -Oz`) and kee
 | WASM raw | 5,395,704 | 5,780,000 |
 | WASM Brotli | 1,201,784 | 1,290,000 |
 
+The `general-dashboard-100k` v2 workload uses one general pane with five series and 20K aligned rows
+per series. `mixed-financial-general-120k` uses the same general data plus 20K candlesticks
+in a separate financial pane. The five general data installs and optional financial install run
+through the public package API; fixture generation precedes startup timing. `frame_cpu_ms` is the
+last general data-install repaint. `gpu_uploaded_bytes` is the largest single synchronous
+construction or data-install repaint, while `gpu_uploaded_total_bytes`, buffer allocations,
+and write calls accumulate across those repaints. These counters exclude subsequent scheduled
+unchanged frames. The topology and data-type metadata record each workload explicitly.
+
 Phase 2 adds release-blocking maxima for `general-dashboard-100k`: p50 startup through the first following rAF
-must stay at or below 2,000 ms, and first-frame WebGPU vertex uploads must stay at or below 96 MiB. These are
+must stay at or below 2,000 ms, and peak per-repaint WebGPU vertex uploads must stay at or below 96 MiB. These are
 guardrails for catastrophic host regressions, not cross-machine performance claims.
 
 These byte counts are reproducible filesystem/compression evidence, not an official wall-clock

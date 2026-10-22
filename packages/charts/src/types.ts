@@ -412,6 +412,8 @@ export interface general_axis_options {
   /** Explicit tick values. Optional labels are retained by the engine and shared by every backend. */
   ticks?: readonly general_axis_tick[];
   min_tick_gap?: number;
+  /** Clockwise degrees for horizontal tick labels, from -90 to 90. */
+  tick_angle?: number;
   /** Symmetric numeric-domain expansion as a fraction of transformed span (0 to 1). */
   domain_padding?: number;
   band_padding_inner?: number;
@@ -460,12 +462,14 @@ export type general_reference_options =
       pane: number;
       x_axis_id: string;
       y_axis_id: string;
-      x_from: general_reference_value;
-      x_to: general_reference_value;
-      y_from: general_reference_value;
-      y_to: general_reference_value;
+      /** Omit X bounds to span the plot width; either endpoint may be omitted for a plot-edge band. */
+      x_from?: general_reference_value;
+      x_to?: general_reference_value;
+      /** Omit Y bounds to span the plot height; either endpoint may be omitted for a plot-edge band. */
+      y_from?: general_reference_value;
+      y_to?: general_reference_value;
       fill_color?: string;
-      /** Include all region bounds in automatic axis domains. Default false. */
+      /** Include supplied region bounds in automatic axis domains. Default false. */
       extend_domain?: boolean;
     };
 
@@ -1822,12 +1826,14 @@ export interface chart_options {
    */
   generalTooltip: { visible: boolean };
   /**
-   * Engine-drawn legend below general plots (default hidden): a series-color pill and title per
+   * Engine-drawn legend of general panes (default hidden): a series-color pill and title per
    * series, one entry per pie, polar-area or radial-bar slice, and one per layout series. Clicking
    * a series or layout entry toggles its visibility and notifies `subscribe_general_legend_change`.
+   * Top/bottom reserve height, left/right reserve width, and inset positions overlay the plot.
+   * Offset is bounded in CSS pixels.
    * Painted by the engine, so GPUI and browser hosts show the same legend.
    */
-  generalLegend: { visible: boolean };
+  generalLegend: { visible: boolean; position: "top" | "bottom" | "left" | "right" | "insideLeft" | "insideRight" | "center" | "insideTop" | "insideBottom" | "insideTopLeft" | "insideTopRight" | "insideBottomLeft" | "insideBottomRight" | { x: number | `${number}%`; y: number | `${number}%` }; offset: number };
   /** Custom label formatters (reference `localization`). Package-level; carries JS callbacks. */
   localization: localization_options;
   /** Enable/disable panning gestures (reference `handleScroll`). Default `true`. Package-level. */

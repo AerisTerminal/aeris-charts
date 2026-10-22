@@ -20,8 +20,8 @@
 
 use aeris_charts_engine::{
     AxisDimension, CategoryScaleType, ChartEngine, ContinuousScaleType, FlowLink, FlowNode,
-    FunnelStage, GeneralAxisDomain, GeneralAxisOptions, GeneralLayoutElement, GeneralLayoutHit,
-    GeneralLayoutInput, GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions,
+    FunnelStage, GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralLayoutElement,
+    GeneralLayoutHit, GeneralLayoutInput, GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions,
     GeneralReferenceOptions, GeneralReferenceValue, GeneralRowId, GeneralScaleType,
     GeneralSeriesOptions, GeneralXyInput, HierarchyNode, HorizontalDomain, IndicatorInputSource,
     IndicatorKind, IndicatorOutputStyle, OrderId, OrderKind, OrderRole, OrderSide, OrderStatus,
@@ -1323,7 +1323,7 @@ fn rotated_text_reaches_canvas_and_gpui_with_the_same_transform() {
 #[test]
 fn general_axis_titles_and_grid_rules_reach_canvas_and_gpui_without_drops() {
     for dpr in [1.0, 1.5, 2.0] {
-        let mut engine = ChartEngine::new(560.0, 340.0, dpr);
+        let mut engine = ChartEngine::new(560.0, 600.0, dpr);
         let pane = engine
             .add_pane_with_domain(
                 true,
@@ -1336,11 +1336,20 @@ fn general_axis_titles_and_grid_rules_reach_canvas_and_gpui_without_drops() {
             GeneralAxisOptions::new("g2-x", pane, AxisDimension::X, GeneralScaleType::Linear);
         x.domain = GeneralAxisDomain::Numeric([-10.0, 10.0]);
         x.title = Some("Horizontal".into());
+        x.tick_angle = -60.0;
+        x.ticks = Some(vec![GeneralAxisTick::Numeric {
+            value: 0.0,
+            label: Some("Mid\npoint".into()),
+        }]);
         engine.add_general_axis(x).unwrap();
         let mut y =
             GeneralAxisOptions::new("g2-y", pane, AxisDimension::Y, GeneralScaleType::Linear);
         y.domain = GeneralAxisDomain::Numeric([-10.0, 10.0]);
         y.title = Some("Vertical".into());
+        y.ticks = Some(vec![GeneralAxisTick::Numeric {
+            value: 0.0,
+            label: Some("Zero\nunits".into()),
+        }]);
         engine.add_general_axis(y).unwrap();
         engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
 
@@ -1374,11 +1383,24 @@ fn general_axis_titles_and_grid_rules_reach_canvas_and_gpui_without_drops() {
             canvas_axis
                 .text_runs
                 .iter()
+                .any(|run| run.0.starts_with("Mid@"))
+        );
+        assert!(
+            canvas_axis
+                .text_runs
+                .iter()
+                .any(|run| run.0.starts_with("point@"))
+        );
+        assert!(canvas_axis.text_runs.iter().any(|run| run.0 == "Zero"));
+        assert!(canvas_axis.text_runs.iter().any(|run| run.0 == "units"));
+        assert!(
+            canvas_axis
+                .text_runs
+                .iter()
                 .any(|run| run.0.starts_with("Vertical@"))
         );
     }
 }
-
 /// A real multi-series, multi-pane engine frame — not a synthetic prim list.
 fn real_engine_frame(dpr: f64) -> ChartEngine {
     let mut engine = ChartEngine::new(900.0, 520.0, dpr);
@@ -1574,6 +1596,112 @@ fn category_column_engine_frame_has_identical_canvas_and_gpui_quads() {
             gpui_quads(&plan),
             canvas.rects,
             "DPR {dpr}: category-column quads diverged"
+        );
+    }
+}
+
+#[test]
+fn custom_general_legend_axis_layer_matches_canvas_and_gpui() {
+    for dpr in [1.0, 1.5, 2.0] {
+        let mut engine = ChartEngine::new_with_initial_domain(
+            480.0,
+            300.0,
+            dpr,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                0,
+                AxisDimension::X,
+                GeneralScaleType::Band,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                0,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["A".into(), "B".into()],
+                category_indices: vec![0, 1],
+                y: vec![2.0, 5.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let mut options = GeneralSeriesOptions::column(0, dataset, "x", "y");
+        options.title = "Revenue".into();
+        engine.add_general_series(options).unwrap();
+        engine
+            .apply_options(r#"{"generalLegend":{"visible":true,"position":{"x":120,"y":140}}}"#)
+            .unwrap();
+
+        let mut frame = aeris_charts_engine::ChartFrame::default();
+        let mut axis = Vec::new();
+        engine.prepare_financial_frame_with_measure(
+            aeris_charts_engine::FinancialFrameRequest {
+                width: 480.0,
+                height: 300.0,
+                dpr,
+                force_layout: true,
+                allow_axis_shrink: true,
+                force_frame: true,
+                force_axis: true,
+                layout_only: false,
+                fit_content: false,
+                frame: &mut frame,
+                axis_frame: None,
+                axis_primitives: Some(&mut axis),
+            },
+            |text, _| text.chars().count() as f64 * 7.0,
+            |text, _| text.chars().count() as f64 * 7.0,
+        );
+        assert!(
+            axis.iter()
+                .any(|prim| matches!(prim, Prim::Text { text, .. } if text == "Revenue"))
+        );
+        assert!(
+            !frame.panes[0]
+                .main
+                .iter()
+                .any(|prim| matches!(prim, Prim::Text { text, .. } if text == "Revenue"))
+        );
+
+        let canvas = canvas_rects(&axis, &[]);
+        let (gpui, metrics) = gpui_plan(&axis, &[]);
+        assert_eq!(
+            metrics.dropped_prims, 0,
+            "DPR {dpr}: an axis prim was dropped"
+        );
+        assert_eq!(
+            gpui_quads(&gpui),
+            canvas.rects,
+            "DPR {dpr}: legend quads diverged"
+        );
+        let gpui_text = gpui
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                SceneOp::Text(run) => Some((run.text.clone(), run.x, run.y)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let canvas_text = canvas
+            .text_runs
+            .iter()
+            .map(|(text, x, y, ..)| (text.clone(), *x, *y))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            gpui_text, canvas_text,
+            "DPR {dpr}: legend text anchors diverged"
         );
     }
 }
@@ -2301,11 +2429,37 @@ fn general_reference_components_reach_canvas_and_gpui_without_dropped_primitives
                 pane,
                 x_axis_id: "reference-x".into(),
                 y_axis_id: "reference-y".into(),
-                x_from: GeneralReferenceValue::Numeric(2.0),
-                x_to: GeneralReferenceValue::Numeric(8.0),
-                y_from: GeneralReferenceValue::Numeric(2.0),
-                y_to: GeneralReferenceValue::Numeric(8.0),
+                x_from: Some(GeneralReferenceValue::Numeric(2.0)),
+                x_to: Some(GeneralReferenceValue::Numeric(8.0)),
+                y_from: Some(GeneralReferenceValue::Numeric(2.0)),
+                y_to: Some(GeneralReferenceValue::Numeric(8.0)),
                 fill_color: Some("rgba(10,20,30,0.25)".into()),
+                extend_domain: false,
+            })
+            .unwrap();
+        engine
+            .add_general_reference(GeneralReferenceOptions::Region {
+                pane,
+                x_axis_id: "reference-x".into(),
+                y_axis_id: "reference-y".into(),
+                x_from: Some(GeneralReferenceValue::Numeric(3.0)),
+                x_to: None,
+                y_from: None,
+                y_to: None,
+                fill_color: Some("#af5c36".into()),
+                extend_domain: false,
+            })
+            .unwrap();
+        engine
+            .add_general_reference(GeneralReferenceOptions::Region {
+                pane,
+                x_axis_id: "reference-x".into(),
+                y_axis_id: "reference-y".into(),
+                x_from: None,
+                x_to: None,
+                y_from: Some(GeneralReferenceValue::Numeric(3.0)),
+                y_to: Some(GeneralReferenceValue::Numeric(7.0)),
+                fill_color: Some("#4378a1".into()),
                 extend_domain: false,
             })
             .unwrap();
@@ -2341,7 +2495,7 @@ fn general_reference_components_reach_canvas_and_gpui_without_dropped_primitives
                 .iter()
                 .filter(|primitive| matches!(primitive, Prim::Rect { .. }))
                 .count(),
-            1
+            3
         );
         assert_eq!(
             pane_frame
@@ -2366,14 +2520,14 @@ fn general_reference_components_reach_canvas_and_gpui_without_dropped_primitives
             "DPR {dpr}: no reference primitive may drop"
         );
         assert!(
-            canvas.rects.len() >= 2,
-            "DPR {dpr}: region and reference line reach Canvas2D"
+            canvas.rects.len() >= 4,
+            "DPR {dpr}: regions and reference line reach Canvas2D"
         );
         assert!(
             canvas.path_fills >= 1,
             "DPR {dpr}: reference dot reaches Canvas2D"
         );
-        assert!(metrics.quads >= 2, "DPR {dpr}: region and line reach GPUI");
+        assert!(metrics.quads >= 4, "DPR {dpr}: regions and line reach GPUI");
         assert!(metrics.paths >= 1, "DPR {dpr}: reference dot reaches GPUI");
     }
 }

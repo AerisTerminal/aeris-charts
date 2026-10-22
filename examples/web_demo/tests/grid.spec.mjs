@@ -95,15 +95,15 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
   expect(await theme_state()).toEqual({
     root: "dark",
     control: "dark",
-    surface: "#171717",
-    header: "rgb(23, 23, 23)",
-    chart: "#171717",
-    axis_text: "#fafafa",
+    surface: "#000000",
+    header: "rgb(0, 0, 0)",
+    chart: "#000000",
+    axis_text: "#ededed",
     axis_border: "#2e2e2e",
     grid: "#2e2e2e",
     border_control: "#2e2e2e",
     crosshair_control: "#fafafa",
-    crosshair_label_control: "#262626",
+    crosshair_label_control: "#0a0a0a",
     bullish: "#089981",
     bearish: "#f7525f",
   });
@@ -117,11 +117,11 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     header: "rgb(255, 255, 255)",
     chart: "#ffffff",
     axis_text: "#0a0a0a",
-    axis_border: "#e6e6e6",
-    grid: "#e6e6e6",
-    border_control: "#e6e6e6",
+    axis_border: "#cecece",
+    grid: "#cecece",
+    border_control: "#cecece",
     crosshair_control: "#0a0a0a",
-    crosshair_label_control: "#242424",
+    crosshair_label_control: "#0a0a0a",
     bullish: "#089981",
     bearish: "#f7525f",
   });
@@ -133,20 +133,23 @@ test("portable design tokens and disabled controls match the brand contract", as
 
   const brand_tokens = [
     "surface", "surface-secondary", "surface-subtle", "surface-raised", "surface-overlay", "surface-inverse", "surface-popover",
-    "border", "border-secondary", "border-subtle", "border-softer", "border-strong", "border-inverse", "border-popover", "border-popover-highlight",
+    "border", "border-secondary", "border-subtle", "border-softer", "border-strong", "border-inverse", "border-popover", "border-popover-highlight", "border-width",
     "text-default", "text-secondary", "text-muted", "text-positive", "text-negative", "text-danger",
     "text-warning", "text-interactive", "text-hover", "text-active", "hover-bg", "active-bg", "disabled-bg", "icon",
     "icon-active", "positive", "positive-subtle", "negative", "negative-subtle", "warning", "warning-subtle", "indigo",
     "indigo-subtle", "purple", "purple-subtle", "primary", "primary-hover", "primary-active", "primary-disabled",
     "primary-disabled-foreground", "primary-subtle", "primary-foreground", "danger", "danger-hover", "danger-disabled",
-    "danger-disabled-foreground", "danger-ring", "danger-foreground", "button-fill", "button-fill-hover", "button-fill-active",
-    "button-fill-foreground", "button-fill-subtle", "buy", "buy-hover", "buy-active", "buy-disabled",
-    "buy-disabled-foreground", "buy-foreground", "sell", "sell-hover", "sell-active", "sell-disabled",
-    "sell-disabled-foreground", "sell-foreground", "book-bid-fill", "book-bid-text", "book-ask-fill", "book-ask-text",
+    "danger-disabled-foreground", "danger-ring", "danger-foreground", "warning-hover", "warning-foreground", "button-fill",
+    "button-fill-hover", "button-fill-active", "button-fill-foreground", "button-fill-subtle",
     "ring-primary", "radius-default", "radius-medium", "radius-small", "radius-large", "radius-compact", "shadow-1",
     "shadow-2", "shadow-3", "shadow-dialog", "bullish", "bearish", "buy-bubble", "sell-bubble",
   ];
-  const retired = ["primary-ring", "ring", "radius-button", "border-width", "text-primary"];
+  const retired = [
+    "primary-ring", "ring", "radius-button", "text-primary", "buy", "buy-hover", "buy-active", "buy-disabled",
+    "buy-disabled-foreground", "buy-foreground", "sell", "sell-hover", "sell-active", "sell-disabled",
+    "sell-disabled-foreground", "sell-foreground", "buy-subtle", "sell-subtle", "book-bid-fill", "book-bid-text",
+    "book-ask-fill", "book-ask-text", "book-fill-text",
+  ];
   const tokens = () => page.evaluate((names) => {
     const style = getComputedStyle(document.documentElement);
     return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(`--${name}`).trim().toLowerCase()]));
@@ -155,24 +158,25 @@ test("portable design tokens and disabled controls match the brand contract", as
   const dark = await tokens();
   expect(Object.values(dark).every(Boolean)).toBe(true);
   expect(dark).toMatchObject({
-    surface: "#171717", border: "#fafafa1a", "text-default": "#fafafa", "text-secondary": "#fafafa8c",
-    "text-muted": "#fafafa40", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
+    surface: "#000000", "surface-secondary": "#fafafa0a", "surface-popover": "#010101", border: "#2e2e2e",
+    "border-width": "1px", "text-default": "#ededed", "text-secondary": "#fafafa8c", "text-muted": "#fafafa59",
+    "text-hover": "#ededed", "icon-active": "#ededed", "warning-hover": "#ff7b1f", "warning-foreground": "#ffffff", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
     "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
     "button-fill": "#fafafad9", "radius-compact": "6px", "radius-medium": "14px",
     "positive-subtle": "#193c37", "negative-subtle": "#532b2e", "danger-hover": "#f96a75",
-    "danger-disabled": "#6b3135", "danger-disabled-foreground": "#d0646c", buy: "#089981", sell: "#f7525f",
+    "danger-disabled": "#6b3135", "danger-disabled-foreground": "#d0646c",
   });
 
   await page.selectOption("#theme_select", "light");
   const light = await tokens();
   expect(Object.values(light).every(Boolean)).toBe(true);
   expect(light).toMatchObject({
-    surface: "#ffffff", border: "#0a0a0a1a", "text-default": "#0a0a0a", "text-secondary": "#0a0a0a94",
+    surface: "#ffffff", border: "#0a0a0a33", "text-default": "#0a0a0a", "text-secondary": "#0a0a0a94",
     "text-muted": "#0a0a0a40", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
     "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
     "button-fill": "#0a0a0af2", "radius-compact": "6px", "radius-medium": "14px",
-    "positive-subtle": "#dcf5f0", "negative-subtle": "#ffe2e2", "danger-hover": "#e5404d", buy: "#089981",
-    sell: "#f7525f",
+    "positive-subtle": "#dcf5f0", "negative-subtle": "#ffe2e2", "danger-hover": "#e5404d",
+    "border-width": "1px", "warning-hover": "#e05c00", "warning-foreground": "#ffffff",
   });
   const stale = await page.evaluate((names) => {
     const style = getComputedStyle(document.documentElement);
@@ -370,7 +374,7 @@ test("demo theme persists across reloads while runtime fixtures stay determinist
   await page.reload();
   await wait_grid(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  expect(await page.evaluate(() => window.__chart.options().layout.background.color)).toBe("#171717");
+  expect(await page.evaluate(() => window.__chart.options().layout.background.color)).toBe("#000000");
 
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
@@ -498,7 +502,7 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   await page.selectOption("#theme_select", "light");
   await wait_grid(page);
   const light_border = await border_hex();
-  expect(light_border.toLowerCase()).toBe("#e6e6e6");
+  expect(light_border.toLowerCase()).toBe("#cecece");
   expect(await divider_rgb()).toBe(to_rgb(light_border));
 
   // An explicit axis border change re-resolves the divider too.

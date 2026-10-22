@@ -293,7 +293,9 @@ impl ChartEngine {
                 .filter(|target| engine.price_scale_visible_for(pane_index, *target))
                 .filter_map(|target| engine.price_scale_axis_width(pane_index, target))
                 .sum::<f64>();
-            financial + engine.general_axis_side_width(pane_index, side)
+            financial
+                + engine.general_axis_side_width(pane_index, side)
+                + engine.general_legend_side_width(pane_index, side)
         };
         let mut axis_w = (0..self.panes.len())
             .map(|pane| side_total(self, pane, PriceScaleSide::Right))

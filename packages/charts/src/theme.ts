@@ -29,8 +29,7 @@ export interface chart_theme {
   /** Crosshair line color. Named themes keep the token's alpha so the line stays translucent. */
   crosshair_line: string;
   /**
-   * Crosshair label surface. The dark theme shares the tooltip popover surface; the light theme
-   * uses the dark-theme `muted`.
+   * Crosshair label surface. Both themes use the dark-theme `muted` (secondary surface).
    */
   crosshair_label: string;
   /** Candle, volume, and other up-market geometry. */
@@ -75,7 +74,7 @@ export const dark_theme: chart_theme = {
   muted_border: style_tokens.dark.muted_border,
   ring: style_tokens.dark.ring,
   crosshair_line: with_alpha(style_tokens.dark.crosshair_line, style_tokens.dark.crosshair_line_alpha),
-  crosshair_label: style_tokens.dark.popover_surface,
+  crosshair_label: style_tokens.dark.muted,
   bullish: style_tokens.dark.bullish,
   bearish: style_tokens.dark.bearish,
 };

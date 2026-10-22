@@ -1,3 +1,4 @@
+use aeris_charts_core::options::GeneralLegendPosition;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 
@@ -26,6 +27,8 @@ pub const MAX_GENERAL_AXES: usize = 128;
 pub const MAX_GENERAL_AXIS_ID_BYTES: usize = 128;
 pub const MAX_GENERAL_AXIS_TITLE_BYTES: usize = 4_096;
 pub const MAX_GENERAL_AXIS_TICKS: u16 = 512;
+const MAX_GENERAL_TICK_LABEL_LINES: usize = 4;
+const GENERAL_TICK_LINE_GAP: f64 = 2.0;
 pub const MAX_GENERAL_AXIS_TICK_BYTES: usize = 1_048_576;
 pub const MAX_GENERAL_AXIS_CATEGORIES: usize = 65_536;
 pub const MAX_GENERAL_AXIS_CATEGORY_BYTES: usize = 1_048_576;
@@ -149,6 +152,9 @@ pub struct GeneralAxisOptions {
     #[serde(default)]
     pub ticks: Option<Vec<GeneralAxisTick>>,
     pub min_tick_gap: f64,
+    /// Clockwise degrees for horizontal tick labels, bounded to a quarter turn.
+    #[serde(default)]
+    pub tick_angle: f64,
     /// Symmetric fractional expansion of a numeric base domain. A value of `0.1` adds ten
     /// percent of the transformed span at each end before any runtime pan or zoom is applied.
     #[serde(default)]
@@ -186,6 +192,7 @@ impl GeneralAxisOptions {
             tick_count: None,
             ticks: None,
             min_tick_gap: 4.0,
+            tick_angle: 0.0,
             domain_padding: 0.0,
             band_padding_inner: 0.1,
             // Points sit half a step in from each edge, the same place a band centers its bar,
@@ -220,6 +227,7 @@ pub struct GeneralAxis {
     tick_count: Option<u16>,
     ticks: Option<Vec<GeneralAxisTick>>,
     min_tick_gap: f64,
+    tick_angle: f64,
     domain_padding: f64,
     band_padding_inner: f64,
     band_padding_outer: f64,
@@ -373,6 +381,10 @@ impl GeneralAxis {
         self.min_tick_gap
     }
 
+    pub fn tick_angle(&self) -> f64 {
+        self.tick_angle
+    }
+
     pub fn domain_padding(&self) -> f64 {
         self.domain_padding
     }
@@ -482,6 +494,7 @@ impl GeneralAxisRegistry {
             tick_count: options.tick_count,
             ticks: options.ticks,
             min_tick_gap: options.min_tick_gap,
+            tick_angle: options.tick_angle,
             domain_padding: options.domain_padding,
             band_padding_inner: options.band_padding_inner,
             band_padding_outer: options.band_padding_outer,
@@ -644,8 +657,55 @@ impl ChartEngine {
             })
             .collect();
         for axis in self.general_axes.iter_mut() {
+            if axis.visible && axis.dimension == AxisDimension::X {
+                let tallest_tick = effective_domains
+                    .iter()
+                    .find(|(handle, _)| *handle == axis.handle)
+                    .map(|(_, domain)| {
+                        tick_labels_for_domain(axis, domain, month_names, self.time_zone)
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|label| {
+                        let (width, height, _) = tick_label_metrics(&label, measure, metrics);
+                        rotated_tick_extent(width, height, axis.tick_angle).1
+                    })
+                    .fold(0.0_f64, f64::max);
+                let title_lane = if axis.title.is_some() {
+                    metrics.axis + 4.0
+                } else {
+                    0.0
+                };
+                let measured = (1.0
+                    + AxisMetrics::TICK_LENGTH
+                    + 4.0
+                    + tallest_tick.max(metrics.axis)
+                    + 4.0
+                    + title_lane)
+                    .ceil();
+                let floor = if axis.layout_measured && !allow_shrink {
+                    axis.layout_thickness
+                } else {
+                    0.0
+                };
+                let budget = self
+                    .panes
+                    .iter()
+                    .find(|pane| pane.stable_id == Some(axis.pane_id))
+                    .map_or(0.0, |pane| (pane.height - 1.0).max(0.0) * 0.45);
+                let minimum =
+                    1.0 + AxisMetrics::TICK_LENGTH + 4.0 + metrics.axis + 4.0 + title_lane;
+                axis.layout_thickness = if budget >= minimum {
+                    floor.max(measured).min(budget)
+                } else {
+                    0.0
+                };
+                axis.layout_measured = tallest_tick > 0.0;
+                continue;
+            }
             if !axis.visible || !matches!(axis.dimension, AxisDimension::Y | AxisDimension::Angle) {
                 axis.layout_thickness = 0.0;
+                axis.layout_measured = false;
                 continue;
             }
             let widest_tick = effective_domains
@@ -656,7 +716,7 @@ impl ChartEngine {
                 })
                 .unwrap_or_default()
                 .into_iter()
-                .map(|label| measure(&label, false))
+                .map(|label| tick_label_metrics(&label, measure, metrics).0)
                 .fold(0.0_f64, f64::max);
             if axis.dimension == AxisDimension::Angle {
                 // Angle labels sit outside the outer ring; the polar plot reserves this width.
@@ -729,9 +789,20 @@ impl ChartEngine {
         // marks stay inside the pane instead of touching or crossing its edge.
         let margin = general_plot_margin(metrics);
         let or_margin = |thickness: f64| if thickness > 0.0 { thickness } else { margin };
-        let top = or_margin(side_height(AxisPosition::Top));
-        let bottom =
-            or_margin(side_height(AxisPosition::Bottom)) + self.general_legend_height(pane_index);
+        let legend_height = self.general_legend_height(pane_index);
+        let legend_position = self.options.get().general_legend.position;
+        let top = or_margin(side_height(AxisPosition::Top))
+            + if legend_position == GeneralLegendPosition::Top {
+                legend_height
+            } else {
+                0.0
+            };
+        let bottom = or_margin(side_height(AxisPosition::Bottom))
+            + if legend_position == GeneralLegendPosition::Bottom {
+                legend_height
+            } else {
+                0.0
+            };
         Some(GeneralPlotRect {
             x: self.pane_left,
             y: pane.top + top,
@@ -1326,6 +1397,8 @@ impl ChartEngine {
                 let ticks =
                     collision_filtered_ticks(axis, ticks, measure, metrics, range.0, range.1);
                 for tick in ticks {
+                    let (text_width, text_height, line_count) =
+                        tick_label_metrics(&tick.label, measure, metrics);
                     let (x, y) = match axis.dimension {
                         AxisDimension::X => (tick.coordinate, label_y),
                         AxisDimension::Y => (label_x, tick.coordinate),
@@ -1336,8 +1409,60 @@ impl ChartEngine {
                     } else {
                         align
                     };
-                    out.labels
-                        .push(plain_axis_label(tick.label, x, y, text_color, tick_align));
+                    if axis.tick_angle == 0.0 && line_count == 1 {
+                        out.labels
+                            .push(plain_axis_label(tick.label, x, y, text_color, tick_align));
+                        continue;
+                    }
+                    let center_y = if axis.dimension == AxisDimension::X {
+                        let title_lane = if axis.title.is_some() {
+                            metrics.axis + 4.0
+                        } else {
+                            0.0
+                        };
+                        let tick_lane =
+                            (strip_h - 1.0 - AxisMetrics::TICK_LENGTH - 4.0 - title_lane)
+                                .max(metrics.axis);
+                        if rotated_tick_extent(text_width, text_height, axis.tick_angle).1
+                            > tick_lane
+                        {
+                            continue;
+                        }
+                        if position == AxisPosition::Bottom {
+                            strip_y + 1.0 + AxisMetrics::TICK_LENGTH + 4.0 + tick_lane / 2.0
+                        } else {
+                            strip_y + title_lane + tick_lane / 2.0
+                        }
+                    } else {
+                        y
+                    };
+                    let (sin, cos) = axis.tick_angle.to_radians().sin_cos();
+                    for (index, line) in visible_tick_label_lines(&tick.label).enumerate() {
+                        let offset = (index as f64 - (line_count - 1) as f64 / 2.0)
+                            * (metrics.axis + GENERAL_TICK_LINE_GAP);
+                        let line_x = x - offset * sin;
+                        let line_y = center_y + offset * cos;
+                        if axis.tick_angle != 0.0 {
+                            out.rotated_labels.push(AxisRotatedLabel {
+                                text: line.to_owned(),
+                                x: line_x,
+                                y: line_y,
+                                color: text_color,
+                                align: AxisTextAlign::Center,
+                                font_scale: AXIS_FONT_SCALE,
+                                bold: false,
+                                angle: axis.tick_angle.to_radians(),
+                            });
+                        } else {
+                            out.labels.push(plain_axis_label(
+                                line.to_owned(),
+                                line_x,
+                                line_y,
+                                text_color,
+                                tick_align,
+                            ));
+                        }
+                    }
                 }
                 if let Some(title) = axis.title.as_ref() {
                     match position {
@@ -2792,13 +2917,13 @@ fn general_reference_values_for_axis<'a>(
             x_from,
             x_to,
             ..
-        } if x_axis_id == axis_id => [Some(x_from), Some(x_to)],
+        } if x_axis_id == axis_id => [x_from.as_ref(), x_to.as_ref()],
         crate::GeneralReferenceOptions::Region {
             y_axis_id,
             y_from,
             y_to,
             ..
-        } if y_axis_id == axis_id => [Some(y_from), Some(y_to)],
+        } if y_axis_id == axis_id => [y_from.as_ref(), y_to.as_ref()],
         _ => [None, None],
     }
 }
@@ -2838,8 +2963,41 @@ fn vertical_axis_title_lane(axis: &GeneralAxis, metrics: AxisMetrics) -> f64 {
 }
 
 fn horizontal_axis_thickness(axis: &GeneralAxis, metrics: AxisMetrics) -> f64 {
+    if axis.layout_thickness > 0.0 {
+        return axis.layout_thickness;
+    }
     let rows = if axis.title.is_some() { 2.0 } else { 1.0 };
     (1.0 + AxisMetrics::TICK_LENGTH + 4.0 + rows * (metrics.axis + 4.0)).ceil()
+}
+
+fn rotated_tick_extent(width: f64, height: f64, angle_degrees: f64) -> (f64, f64) {
+    let (sin, cos) = angle_degrees.to_radians().sin_cos();
+    (
+        width * cos.abs() + height * sin.abs(),
+        width * sin.abs() + height * cos.abs(),
+    )
+}
+
+fn visible_tick_label_lines(label: &str) -> impl Iterator<Item = &str> {
+    label
+        .split('\n')
+        .take(MAX_GENERAL_TICK_LABEL_LINES)
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+}
+
+fn tick_label_metrics<F>(label: &str, measure: &F, metrics: AxisMetrics) -> (f64, f64, usize)
+where
+    F: Fn(&str, bool) -> f64,
+{
+    let mut width = 0.0_f64;
+    let mut lines = 0usize;
+    for line in visible_tick_label_lines(label) {
+        width = width.max(measure(line, false));
+        lines += 1;
+    }
+    let height =
+        metrics.axis * lines as f64 + GENERAL_TICK_LINE_GAP * lines.saturating_sub(1) as f64;
+    (width, height, lines)
 }
 
 fn tick_labels_for_domain(
@@ -3783,13 +3941,22 @@ where
     let range_start = range_from.min(range_to);
     let range_end = range_from.max(range_to);
     ticks.retain_mut(|tick| {
+        let (measured, text_height, lines) = tick_label_metrics(&tick.label, measure, metrics);
         let (start, end) = if axis.dimension == AxisDimension::X {
-            let width = measure(&tick.label, false);
+            let width = if axis.tick_angle == 0.0 {
+                measured
+            } else {
+                rotated_tick_extent(measured, text_height, axis.tick_angle).0
+            };
             if !width.is_finite() || width <= 0.0 || width > range_end - range_start {
                 return false;
             }
             let half = width / 2.0;
-            if tick.coordinate - half < range_start {
+            if axis.tick_angle != 0.0 {
+                tick.coordinate = tick.coordinate.clamp(range_start + half, range_end - half);
+                tick.align = AxisTextAlign::Center;
+                (tick.coordinate - half, tick.coordinate + half)
+            } else if tick.coordinate - half < range_start {
                 tick.align = AxisTextAlign::Left;
                 (tick.coordinate, tick.coordinate + width)
             } else if tick.coordinate + half > range_end {
@@ -3800,7 +3967,15 @@ where
                 (tick.coordinate - half, tick.coordinate + half)
             }
         } else {
-            let extent = metrics.axis / 2.0;
+            let extent = text_height / 2.0;
+            if lines > 1 {
+                if text_height > range_end - range_start {
+                    return false;
+                }
+                tick.coordinate = tick
+                    .coordinate
+                    .clamp(range_start + extent, range_end - extent);
+            }
             (tick.coordinate - extent, tick.coordinate + extent)
         };
         let keep = start >= previous_end + axis.min_tick_gap;
@@ -3992,6 +4167,11 @@ impl ChartEngine {
         axis.tick_count = options.tick_count;
         axis.ticks = options.ticks;
         axis.min_tick_gap = options.min_tick_gap;
+        if axis.tick_angle != options.tick_angle {
+            axis.layout_thickness = 0.0;
+            axis.layout_measured = false;
+        }
+        axis.tick_angle = options.tick_angle;
         axis.domain_padding = options.domain_padding;
         axis.band_padding_inner = options.band_padding_inner;
         axis.band_padding_outer = options.band_padding_outer;
@@ -4044,6 +4224,16 @@ fn validate_options(options: &GeneralAxisOptions) -> Result<(), ChartError> {
     if !options.min_tick_gap.is_finite() || !(0.0..=10_000.0).contains(&options.min_tick_gap) {
         return Err(invalid(
             "general axis min_tick_gap must be finite and in 0..=10000",
+        ));
+    }
+    if !options.tick_angle.is_finite() || !(-90.0..=90.0).contains(&options.tick_angle) {
+        return Err(invalid(
+            "general axis tick_angle must be finite and in -90..=90 degrees",
+        ));
+    }
+    if options.tick_angle != 0.0 && options.dimension != AxisDimension::X {
+        return Err(invalid(
+            "general axis tick_angle requires a horizontal X axis",
         ));
     }
     if !options.domain_padding.is_finite() || !(0.0..=1.0).contains(&options.domain_padding) {
@@ -4357,6 +4547,219 @@ mod tests {
         GeneralAxisOptions::new(id, pane, AxisDimension::X, GeneralScaleType::Band)
     }
 
+    #[test]
+    fn horizontal_axis_reserves_more_height_for_title_and_larger_text() {
+        let mut chart = ChartEngine::new_with_initial_domain(
+            400.0,
+            300.0,
+            1.0,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Point,
+            },
+        )
+        .unwrap();
+        let x = GeneralAxisOptions::new("x", 0, AxisDimension::X, GeneralScaleType::Point);
+        chart.add_general_axis(x.clone()).unwrap();
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let plain = chart.general_plot_rect(0).unwrap();
+
+        let mut titled = x;
+        titled.title = Some("Quarter".into());
+        chart.update_general_axis_options(titled).unwrap();
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let with_title = chart.general_plot_rect(0).unwrap();
+        assert!(with_title.height < plain.height - 10.0);
+
+        chart
+            .apply_options(r#"{"layout":{"fontSize":22}}"#)
+            .unwrap();
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 12.0, |_, _| 0.0);
+        let large_text = chart.general_plot_rect(0).unwrap();
+        assert!(large_text.height < with_title.height - 10.0);
+    }
+
+    #[test]
+    fn rotated_horizontal_ticks_reserve_height_and_enter_the_shared_axis_frame() {
+        let mut chart = ChartEngine::new_with_initial_domain(
+            400.0,
+            300.0,
+            1.0,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Point,
+            },
+        )
+        .unwrap();
+        let mut x = GeneralAxisOptions::new("x", 0, AxisDimension::X, GeneralScaleType::Point);
+        x.domain = GeneralAxisDomain::Category(vec![
+            "January revenue".into(),
+            "February revenue".into(),
+            "March revenue".into(),
+        ]);
+        chart.add_general_axis(x.clone()).unwrap();
+        let measure = |text: &str, _: bool| text.len() as f64 * 7.0;
+        chart.recompute_layout_with_measure(true, measure, |_, _| 0.0);
+        let plain = chart.general_plot_rect(0).unwrap();
+
+        x.tick_angle = -60.0;
+        chart.update_general_axis_options(x.clone()).unwrap();
+        chart.recompute_layout_with_measure(true, measure, |_, _| 0.0);
+        let rotated = chart.general_plot_rect(0).unwrap();
+        assert!(rotated.height < plain.height - 35.0);
+        let mut frame = AxisFrame::default();
+        chart.append_general_axis_frame(&mut frame, &measure);
+        assert_eq!(frame.rotated_labels.len(), 3);
+        assert!(
+            frame
+                .rotated_labels
+                .iter()
+                .all(|label| (label.angle + std::f64::consts::PI / 3.0).abs() < 1e-9)
+        );
+        assert!(
+            frame
+                .labels
+                .iter()
+                .all(|label| !label.text.contains("revenue"))
+        );
+
+        x.tick_angle = f64::NAN;
+        assert_eq!(
+            validate_options(&x).unwrap_err().code(),
+            ErrorCode::InvalidOptions
+        );
+        x.tick_angle = 45.0;
+        x.dimension = AxisDimension::Y;
+        assert_eq!(
+            validate_options(&x).unwrap_err().code(),
+            ErrorCode::InvalidOptions
+        );
+    }
+
+    #[test]
+    fn rotated_ticks_keep_the_axis_line_when_a_small_pane_cannot_fit_text() {
+        let mut chart = ChartEngine::new_with_initial_domain(
+            320.0,
+            120.0,
+            1.0,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Point,
+            },
+        )
+        .unwrap();
+        let mut x = GeneralAxisOptions::new("x", 0, AxisDimension::X, GeneralScaleType::Point);
+        x.domain = GeneralAxisDomain::Category(vec!["A long January revenue label".into()]);
+        x.tick_angle = -90.0;
+        x.title = Some("Month".into());
+        chart.add_general_axis(x).unwrap();
+        let measure = |text: &str, _: bool| text.len() as f64 * 7.0;
+        chart.recompute_layout_with_measure(true, measure, |_, _| 0.0);
+        let mut frame = AxisFrame::default();
+        chart.append_general_axis_frame(&mut frame, &measure);
+        assert!(
+            frame
+                .bands
+                .iter()
+                .any(|band| band.width > 100.0 && band.height <= 2.0)
+        );
+        assert!(frame.labels.iter().any(|label| label.text == "Month"));
+        assert!(frame.rotated_labels.is_empty());
+        let plot = chart.general_plot_rect(0).unwrap();
+        assert!(plot.height > 50.0);
+    }
+
+    #[test]
+    fn multiline_ticks_use_bounded_shared_lines_for_measurement_and_frame() {
+        let mut chart = ChartEngine::new_with_initial_domain(
+            400.0,
+            300.0,
+            1.0,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Point,
+            },
+        )
+        .unwrap();
+        let mut x = GeneralAxisOptions::new("x", 0, AxisDimension::X, GeneralScaleType::Point);
+        x.domain = GeneralAxisDomain::Category(vec!["Jan".into(), "Feb".into()]);
+        x.ticks = Some(vec![
+            GeneralAxisTick::Category {
+                value: "Jan".into(),
+                label: Some("Jan\nRevenue".into()),
+            },
+            GeneralAxisTick::Category {
+                value: "Feb".into(),
+                label: Some("Feb\r\nRevenue".into()),
+            },
+        ]);
+        chart.add_general_axis(x.clone()).unwrap();
+        let measure = |text: &str, _: bool| text.len() as f64 * 7.0;
+        chart.recompute_layout_with_measure(true, measure, |_, _| 0.0);
+        let plain_plot = chart.general_plot_rect(0).unwrap();
+        let mut plain = AxisFrame::default();
+        chart.append_general_axis_frame(&mut plain, &measure);
+        assert_eq!(
+            plain
+                .labels
+                .iter()
+                .filter(|label| label.text == "Revenue")
+                .count(),
+            2
+        );
+        assert!(plain.labels.iter().any(|label| label.text == "Jan"));
+        assert!(plain.labels.iter().all(|label| !label.text.contains('\r')));
+
+        x.tick_angle = -45.0;
+        chart.update_general_axis_options(x.clone()).unwrap();
+        chart.recompute_layout_with_measure(true, measure, |_, _| 0.0);
+        let rotated_plot = chart.general_plot_rect(0).unwrap();
+        let mut rotated = AxisFrame::default();
+        chart.append_general_axis_frame(&mut rotated, &measure);
+        assert!(rotated_plot.height < plain_plot.height - 5.0);
+        assert_eq!(rotated.rotated_labels.len(), 4);
+        assert_eq!(
+            rotated
+                .rotated_labels
+                .iter()
+                .filter(|label| label.text == "Revenue")
+                .count(),
+            2
+        );
+        assert!(
+            rotated
+                .rotated_labels
+                .iter()
+                .all(|label| (label.angle + std::f64::consts::FRAC_PI_4).abs() < 1e-9)
+        );
+
+        let mut y = GeneralAxisOptions::new("y", 0, AxisDimension::Y, GeneralScaleType::Linear);
+        y.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        y.ticks = Some(vec![GeneralAxisTick::Numeric {
+            value: 0.0,
+            label: Some("Zero\nunits".into()),
+        }]);
+        chart.add_general_axis(y).unwrap();
+        chart.recompute_layout_with_measure(true, measure, |_, _| 0.0);
+        let mut both = AxisFrame::default();
+        chart.append_general_axis_frame(&mut both, &measure);
+        assert!(both.labels.iter().any(|label| label.text == "Zero"));
+        assert!(both.labels.iter().any(|label| label.text == "units"));
+        assert_eq!(
+            tick_label_metrics("1\n2\n3\n4\n5", &measure, chart.axis_metrics()).2,
+            4
+        );
+        x.ticks = Some(vec![GeneralAxisTick::Category {
+            value: "Jan".into(),
+            label: Some("1\n2\n3\n4\n5".into()),
+        }]);
+        chart.update_general_axis_options(x).unwrap();
+        chart.recompute_layout_with_measure(true, measure, |_, _| 0.0);
+        let mut capped = AxisFrame::default();
+        chart.append_general_axis_frame(&mut capped, &measure);
+        let lines = capped
+            .rotated_labels
+            .iter()
+            .map(|label| label.text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(lines, ["1", "2", "3", "4"]);
+    }
     #[test]
     fn compatibility_matrix_accepts_only_matching_axes() {
         let cases = [

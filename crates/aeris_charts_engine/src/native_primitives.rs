@@ -1742,11 +1742,12 @@ mod tests {
     }
 
     /// The comparison tooltip's bordered box lands on whole device pixels, and its colored delta
-    /// band spans exactly the box's rows, so all four borders stay one crisp device pixel.
+    /// band fills exactly the rows inside the box border, so the border stays crisp and the band
+    /// never spills past it as the border grows with the pixel ratio.
     #[test]
     fn delta_tooltip_box_and_band_land_on_whole_device_pixels() {
         use aeris_charts_render::draw_list::Prim;
-        for dpr in [1.0_f64, 1.25, 1.5, 1.75, 2.0, 2.5] {
+        for dpr in [1.0_f64, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
             let mut chart = delta_chart();
             chart.dpr = dpr;
             chart
@@ -1769,17 +1770,25 @@ mod tests {
                         h,
                         border_width,
                         ..
-                    } if *border_width > 0.0 => boxes.push((*x, *y, *w, *h)),
+                    } if *border_width > 0.0 => boxes.push((*x, *y, *w, *h, *border_width)),
                     Prim::Rect { rect, color } if color.a() == 51 => bands.push(*rect),
                     _ => {}
                 }
             }
-            let &(x, y, w, h) = boxes.first().expect("tooltip box");
+            let &(x, y, w, h, border) = boxes.first().expect("tooltip box");
             for edge in [x, y, x + w, y + h] {
                 assert_eq!(edge.fract(), 0.0, "box {x},{y} {w}x{h} at dpr {dpr}");
             }
             let band = bands.first().expect("delta band");
-            assert_eq!((band.y as f32, band.h as f32), (y, h), "dpr {dpr}");
+            assert_eq!(
+                (band.y as f32, band.h as f32),
+                (y + border, h - border * 2.0),
+                "dpr {dpr}"
+            );
+            assert!(
+                band.x as f32 >= x + border && (band.x + band.w) as f32 <= x + w - border,
+                "dpr {dpr}: band {band:?} inside box {x},{y} {w}x{h}"
+            );
         }
     }
 

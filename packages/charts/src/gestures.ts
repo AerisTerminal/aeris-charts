@@ -173,6 +173,9 @@ export function install_gestures(chart: chart_impl): () => void {
     sync_controller_pointer();
   };
   const on_lost_pointer_capture = (event: PointerEvent) => {
+    // Touch Events own touch release. Some browsers reuse the touch identifier as a
+    // PointerEvent ID and release implicit capture before touchend.
+    if (captures.get(event.pointerId) === InputDeviceCode.Touch) return;
     if (captures.has(event.pointerId)) on_cancel(event);
   };
   const on_leave = (event: PointerEvent) => {
@@ -197,7 +200,6 @@ export function install_gestures(chart: chart_impl): () => void {
     for (const touch of Array.from(event.changedTouches)) {
       if (captures.size >= 2) break;
       const position = local_xy(touch);
-      try { overlay.setPointerCapture(touch.identifier); } catch { /* Touch Events own capture */ }
       captures.set(touch.identifier, InputDeviceCode.Touch);
       wasm.controller_pointer_down(touch.identifier, position.x, position.y,
         event.timeStamp || performance.now(), 1, packed);

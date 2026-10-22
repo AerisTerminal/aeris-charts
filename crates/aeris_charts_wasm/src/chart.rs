@@ -76,9 +76,14 @@ use aeris_charts_render_wgpu::{
     TexQuadRenderer, TriRenderer, prims_to_group, render_frame,
 };
 
+// Loss can be raised from inside a borrowed chart method (`simulate_device_loss_for_test`) or a
+// wgpu callback. Listeners call back into chart wrappers, so dispatch only after the current wasm
+// call unwinds; a synchronous dispatch re-enters a mutably borrowed wasm-bindgen object.
 #[wasm_bindgen(inline_js = r#"
 export function notify_aeris_charts_backend_loss(generation) {
-    globalThis.dispatchEvent(new CustomEvent('aeris_charts-chart-backend-lost', { detail: generation }));
+    queueMicrotask(() => {
+        globalThis.dispatchEvent(new CustomEvent('aeris_charts-chart-backend-lost', { detail: generation }));
+    });
 }
 "#)]
 extern "C" {

@@ -1463,7 +1463,11 @@ test("Ctrl magnets the crosshair to the hovered bar's OHLC", async ({ page }) =>
   // price-snaps on Ctrl).
   await page.evaluate(() => window.__chart.set_drawing_tool("trend_line"));
   // The crosshair's horizontal line is the default crosshair color — find the pane row with
-  // the most of it (the line covers the pane width).
+  // the most of it. The row search needs a continuous line across the pane, so this magnet
+  // test pins the solid style; the default dashed style covers about half the row.
+  await page.evaluate(() => window.__chart.apply_options({
+    crosshair: { vertLine: { style: 0 }, horzLine: { style: 0 } },
+  }));
   const CROSS = [218, 218, 218]; // light --border-strong #0a0a0a26 over the white pane
   const crosshair_row = async () => {
     const png = await capture(page);

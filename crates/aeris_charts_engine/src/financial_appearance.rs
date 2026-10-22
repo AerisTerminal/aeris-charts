@@ -120,7 +120,7 @@ impl Default for FinancialAppearance {
             grid_style: 2,
             crosshair_color: AppearanceColor::Theme,
             crosshair_width: 1,
-            crosshair_style: 0,
+            crosshair_style: 2,
             up_color: AppearanceColor::Theme,
             down_color: AppearanceColor::Theme,
             wick_up_color: AppearanceColor::Theme,

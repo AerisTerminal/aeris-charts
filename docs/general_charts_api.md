@@ -2,9 +2,8 @@
 
 ## Status and purpose
 
-This document records the shipped general-chart API and clearly labeled future contracts from
-[`plan.md`](../plan/plan.md). The current package implements the Cartesian
-families: category columns and horizontal bars, category-band box plots, category/category plus
+This document records the shipped general-chart API and its stable domain contracts. The current
+package implements the Cartesian families: category columns and horizontal bars, category-band box plots, category/category plus
 numeric/numeric and temporal/numeric heatmap grids, numeric XY scatter/bubble marks, numeric/temporal/category error bars,
 and `xy_line`, `xy_area`, `range_area`, grouped/stacked bar, and stacked-area slices. Domain-aware panes, explicit axes, object and
 typed bulk replacement/update, bounded retention, row labels, snapshots, hit testing, accessibility,
@@ -16,9 +15,9 @@ axes with optional independent bounds on either axis, plus category band/point X
 for a visible mark. `heatmap_grid` supports band X/Y string categories, continuous numeric X with numeric Y
 coordinates, and temporal epoch-millisecond X with numeric Y coordinates. Polar families are
 implemented. Funnel, treemap, Sankey and sunburst have a public layout-pane API, validated inputs,
-shared-frame geometry and exact hits; their full interaction, persistence, accessibility, transition
-and parity contracts remain G7 work. Treemap leaves may carry a signed `color_value` (for example a
-daily percent change): when any leaf has one, cells shade from a neutral gray toward green for gains and
+shared-frame geometry and exact hits. Their interaction, persistence, accessibility and transition
+contracts shipped in G7; full competitor and manual parity evidence remains G8 work.
+Treemap leaves may carry a signed `color_value` (for example a daily percent change): when any leaf has one, cells shade from a neutral gray toward green for gains and
 red for losses by magnitude relative to the largest change. Nested groups are inset with a label header
 when they have room, and every cell keeps a 1 CSS px gap so the pane background separates it.
 
@@ -48,12 +47,19 @@ tooltip; `crosshair.vertLine.visible` controls the cursor. The tooltip is part o
 matches across Canvas2D, WebGPU, GPUI and native rendering.
 
 `chart.apply_options({ generalLegend: { visible: true } })` (or the same option in `create_chart`) adds an
-engine-drawn legend below the plot: a rounded color pill and title per series (per layout series in a layout pane),
-wrapped into at most three centered rows with a "+N more" entry when they do not fit. Clicking an entry toggles that
+engine-drawn legend below the plot by default: a rounded color pill and title per series (per layout series in a layout pane).
+Horizontal positions wrap into at most three rows with a "+N more" entry when they do not fit. Clicking an entry toggles that
 series' visibility and notifies `subscribe_general_legend_change`; hidden series stay listed dimmed. Like the
 tooltip, it is part of the ordered frame and matches across every backend, including GPUI hosts, which enable it
-through the same engine option. It is off by default so hosts that render `create_general_legend` do not show two
-legends.
+through the same engine option. Touch taps have an expanded 44 CSS-pixel control target;
+overlapping targets choose the nearest entry, and `+N more` is descriptive only.
+`generalLegend.position: "top"` places it above the plot;
+`"insideTop"`, `"insideBottom"`, `"insideTopLeft"`, `"insideTopRight"`, `"insideBottomLeft"`,
+`"insideBottomRight"`, `"insideLeft"`, `"insideRight"` and `"center"` overlay the plot.
+`"left"` and `"right"` reserve a side gutter beyond the axes and paint in the shared
+unscissored axis layer. Side entries stack vertically and fold excess entries into `+N more`.
+`generalLegend.position: { x, y }` anchors the legend's lower-right corner at custom coordinates. `x` is relative to the full chart width and `y` to the general pane's height from its top; each value is a CSS-pixel number or a percentage string such as `"75%"`. This placement reserves no plot space, paints in the unscissored axis layer and ignores `offset`. Recharts measures custom coordinates from its margin-inset chart area (5 CSS px by default); add that margin to an Aeris coordinate when migrating the same visual placement. `generalLegend.offset` adds a bounded CSS-pixel inset at the selected edge for named positions. The default position is `"bottom"`.
+It is off by default so hosts that render `create_general_legend` do not show two legends.
 
 General range selection uses `chart.set_general_brush(axis, from_coordinate, to_coordinate)`. The browser sends
 CSS-pixel endpoints once; Rust converts them immediately into a numeric, temporal, or category range and owns
@@ -79,8 +85,25 @@ handles, snake-case methods, and persistence V1 keep their current meaning. In p
 remain financial-time series. Aeris must never guess whether a row belongs to the financial or
 general data domain.
 
-The imperative API remains canonical. Phase 3 adds camel-case aliases plus a React adapter that call
+The imperative API remains canonical. Camel-case aliases and the React adapter call
 the same mutations rather than defining another chart model; snake-case methods remain supported.
+
+## Image export and backend recovery
+
+`chart.take_screenshot()` returns an `HTMLCanvasElement` at the chart's current device-pixel
+resolution. It composites panes and axes from the ordered frame; the optional
+`add_top_layer` and `include_crosshair` arguments default to `true`. Export an image
+with `chart.take_screenshot().toBlob(...)` or `toDataURL("image/png")`. DOM content
+supplied by a host outside the chart canvases, such as a custom HTML tooltip, is outside
+this image. The engine-drawn general tooltip and legend are frame content and are included.
+
+`backend: "auto"` tries WebGPU and falls back to Canvas2D when the adapter, device or
+surface is unavailable or is lost. `chart.backend()` reports the active executor;
+`chart.backend_status()` gives a structured `stage` and `reason` for diagnostics.
+The engine state and series handles survive backend fallback, so the host should keep
+the chart mounted. A later data update and export use the surviving chart. Use
+`backend: "canvas2d"` to request Canvas2D explicitly. Call `chart.remove()` on host
+disposal to detach listeners and release renderer resources.
 
 ## Domain vocabulary
 
@@ -121,6 +144,10 @@ never retains or creates a hidden financial series. Pane domains and `preserve_e
 datasets, series ordering, and visibility come from the document. Restore rejects targets with
 issued general or drawing handles, data, extra financial series, or a conflicting initial general
 domain, and leaves the target unchanged.
+
+Financial OHLC rows are supplied by the host after a mixed V2 restore; the document restores
+the financial pane and its default series, not those rows. V2 also does not serialize the
+current viewport. Reattach host callbacks and data before comparing the restored presentation.
 
 A pane's horizontal-domain type is immutable while the pane contains a series, axis, selection,
 or persisted general dataset. This avoids silently reinterpreting stored coordinates. An empty
@@ -176,6 +203,7 @@ interface general_axis_options {
   tick_count?: number;
   ticks?: readonly general_axis_tick[];
   min_tick_gap?: number;
+  tick_angle?: number;
   domain_padding?: number;
   band_padding_inner?: number;
   band_padding_outer?: number;
@@ -219,6 +247,15 @@ Validation is structural and atomic:
   Polar explicit ticks are rejected until polar tick execution is implemented.
 - Tick placement, collision removal, grid contribution, titles, and label anchors are engine-owned.
   A host may preformat an explicit tick label, but it cannot change tick coordinates.
+- Horizontal X axes accept `tick_angle` in clockwise degrees from `-90` to `90` (default `0`).
+  Rotated labels reserve measured strip height, share one frame transform across renderers, and
+  persist in V2 state. The strip uses at most 45% of the pane height; labels that cannot fit
+  are omitted while the axis line and title remain. Other axis dimensions reject nonzero angles.
+- Explicit tick labels can contain newlines. The engine measures and paints at most four
+  lines per label, including on rotated X axes, and reserves X strip height or Y strip width
+  for the visible lines. CRLF line endings are normalized for paint and measurement while
+  their input labels stay portable. Additional lines are omitted; tick coordinates and grid rules
+  are unchanged.
 - `grid_visible` projects that axis's tick coordinates into the clipped pane underlay when the
   matching chart-wide grid direction is visible. `zero_line` independently draws a solid rule when
   zero lies inside a numeric domain. Coincident rules are emitted once, with the zero rule taking
@@ -252,7 +289,6 @@ type general_series_kind =
   | "heatmap_grid"
   | "error_bar"
   | "pie"
-  | "donut"
   | "radar"
   | "radial_bar"
   | "polar_area";
@@ -367,7 +403,7 @@ points, and its tessellation is bounded by the shared per-interval curve limit.
 
 ```ts
 interface cartesian_series_options {
-  pane?: number;
+  pane: number;
   x_axis_id: string;
   y_axis_id: string;
   visible?: boolean;
@@ -405,23 +441,32 @@ interface cartesian_series_options {
   box_median_color?: string;
   group_id?: string;
   stack_id?: string;
-    stack_mode?: "normal" | "cumulative" | "silhouette" | "wiggle" | "percent" | "positive";
-  missing?: "gap" | "zero";
+  stack_mode?: "normal" | "cumulative" | "silhouette" | "wiggle" | "percent" | "positive";
 }
 
 interface polar_series_options {
-  pane?: number;
-  angle_axis_id: string;
-  radius_axis_id: string;
+  pane: number;
+  /** The angle-axis ID is supplied through the shared X-axis field. */
+  x_axis_id: string;
+  /** The radius-axis ID is supplied through the shared Y-axis field. */
+  y_axis_id: string;
   visible?: boolean;
   title?: string;
   color?: string;
-  stack_id?: string;
+  polar?: {
+    start_angle?: number;
+    end_angle?: number;
+    inner_radius?: number;
+    outer_radius?: number;
+    pad_angle?: number;
+  };
 }
 ```
 
-`missing: "zero"` is allowed only for series where zero is a meaningful baseline. Line, scatter,
-bubble, box-plot, error-bar, and range data always treat a missing value as absent geometry.
+These shapes summarize the common public `general_series_options` fields; kind-specific validation
+still applies. Use `null` for a missing row value. Line, scatter, bubble, box-plot, error-bar,
+and range data retain that row without drawing a mark; pass numeric zero explicitly when zero
+is the intended value.
 
 ## Object data shapes
 
@@ -493,8 +538,8 @@ interface box_plot_row {
 
 interface polar_value_row {
   id?: general_row_id;
-  category: string;
-  value: number | null;
+  x: string; // angular category
+  y: number | null; // radial value
   color?: string;
   label?: string;
 }
@@ -502,7 +547,7 @@ interface polar_value_row {
 
 Rows with required missing channels stay in the dataset and category/domain union but emit no mark.
 Range rows require `low <= high`. Box rows require `min <= q1 <= median <= q3 <= max`. Negative
-bubble sizes and negative pie/donut values are invalid. Zero-size bubbles and zero-value sectors are
+bubble sizes and negative pie values are invalid. Zero-size bubbles and zero-value sectors are
 retained for queries and accessibility but emit no visible area.
 
 If `id` is omitted, `set_data()` assigns an internal identity scoped to that installed batch.
@@ -642,8 +687,10 @@ same order drives painting, legend and hit-test traversal, React keyed array ord
 For a stack, it also determines which member starts at zero and which member occupies the exposed end.
 
 Reference components are intentionally separate from series data. A reference line binds one X or Y axis and one
-compatible numeric/temporal/category value; a dot binds explicit X and Y axes; a region binds two endpoints on
-each axis. Styling is bounded engine-owned state. `extend_domain: false` is the default semantic: the reference is
+compatible numeric/temporal/category value; a dot binds explicit X and Y axes; a region binds
+explicit X and Y axes with any nonempty set of four optional endpoints.
+Omitted endpoints use the corresponding plot edge through pan, zoom, and resize.
+Styling is bounded engine-owned state. `extend_domain: false` is the default semantic: the reference is
 drawn only where its value maps into the current domain. `extend_domain: true` contributes each declared reference
 coordinate to automatic domain resolution. Removing an axis used by a live reference is rejected until the
 reference is removed.
@@ -657,7 +704,7 @@ series/row ordering. Shared tooltips are derived snapshots and likewise add no r
 `same region` below means the series can contribute to one coordinate region and ordered frame.
 Different Y axes are allowed within that region when their scale types accept the series values.
 
-| Existing or proposed family | Financial time | Continuous X | Temporal X | Category X | Polar |
+| Family | Financial time | Continuous X | Temporal X | Category X | Polar |
 | --- | --- | --- | --- | --- | --- |
 | Candlestick, financial bar, histogram, baseline, footprint, indicators | same region | incompatible | incompatible | incompatible | incompatible |
 | `xy_line`, `xy_area`, `range_area` | incompatible | same region | same region | same region with point/band axis | incompatible |
@@ -666,7 +713,7 @@ Different Y axes are allowed within that region when their scale types accept th
 | `horizontal_bar` (numeric X, category Y) | incompatible | same region | incompatible | incompatible | incompatible |
 | `scatter`, `bubble`, `error_bar` | incompatible | same region | same region | same region with point axis | incompatible |
 | `heatmap_grid`, `box_plot` | incompatible | same region when both axes agree | same region when axes agree | same region | incompatible |
-| Pie, donut, radar, radial bar, polar area | incompatible | incompatible | incompatible | incompatible | same polar region |
+| Pie (including donut), radar, radial bar, polar area | incompatible | incompatible | incompatible | incompatible | same polar region |
 
 Additional rules:
 
@@ -727,4 +774,4 @@ WebGPU, and GPUI executor coverage.
 Both slices must use the same chart lifecycle, pane handles, theme, event subscriptions,
 screenshot path, and ordered frame as financial series. A financial-only chart must show no
 material change in output, steady-state work, retained memory, startup, or package size against the
-Phase 0 evidence.
+recorded financial baseline.

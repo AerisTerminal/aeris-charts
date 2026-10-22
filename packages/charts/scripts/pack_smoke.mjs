@@ -87,9 +87,9 @@ try {
   assert.equal(pkg.exports["./react"].import, "./dist/react.js");
   assert.equal(pkg.exports["./wasm"], "./dist/aeris_charts_wasm_bg.wasm");
 
-  // Compile the checked-in standalone, mixed, linked, and React recipes from the installed
+  // Compile the checked-in Cartesian, polar, flow, mixed, linked, and React recipes from the installed
   // tarball, so package exports and consumer resolution are exercised without repository paths.
-  const examples = ["standalone.mjs", "vanilla.mjs", "linked.mjs", "react.tsx"];
+  const examples = ["standalone.mjs", "polar.mjs", "flow.mjs", "vanilla.mjs", "linked.mjs", "react.tsx"];
   for (const name of examples) copyFileSync(join(examples_dir, name), join(scratch, name));
   await build({
     entryPoints: examples.map((name) => join(scratch, name)),
@@ -106,7 +106,7 @@ try {
     assert.ok(statSync(output).size > 10_000, `packed consumer bundle is incomplete: ${name}`);
   }
 
-  console.log(`pack smoke OK: ${tgz} (${files.length} files, wasm ${(wasm.size / 1024).toFixed(0)} kB; four consumer bundles)`);
+  console.log(`pack smoke OK: ${tgz} (${files.length} files, wasm ${(wasm.size / 1024).toFixed(0)} kB; ${examples.length} consumer bundles)`);
   rmSync(join(pkg_dir, tgz), { force: true });
 } finally {
   rmSync(scratch, { recursive: true, force: true });

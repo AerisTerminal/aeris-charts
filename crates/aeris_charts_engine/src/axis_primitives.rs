@@ -406,5 +406,8 @@ impl ChartEngine {
                 opacity: 1.0,
             });
         }
+        for pane_index in 0..self.panes.len() {
+            self.build_general_legend_axis(pane_index, dpr, output);
+        }
     }
 }

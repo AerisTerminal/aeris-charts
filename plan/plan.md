@@ -24,7 +24,7 @@ with its commit, and update the status table in the same commit. A phase or matr
 
 ## Status at a glance
 
-Updated 2026-10-18. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
+Updated 2026-10-20. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
 expansion completed on 2026-10-06; general-chart batches have resumed in dependency order.
 
 | Batch | Phase | Scope | Status | Done so far | Next |
@@ -36,7 +36,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G5 | R5 | React and framework-neutral authoring | **Complete** | Keyed declarations and mapped rows; atomic shared composition; controlled brush; first-pane ownership; lifecycle, SSR, packed-consumer and browser evidence | G6; manual assistive-technology review remains pending |
 | G6 | R6 | Polar families and transitions | **Complete** | `f64` polar geometry and axes; pie/donut, radar, polar-area and radial-bar paths; single-fill ordered polar mesh; bounded cached hits, slice legends, shared-frame leader labels, pointer and keyboard selection; WASM/TS bindings; opt-in fixed-clock value and numeric/temporal X updates, Cartesian and angular category-axis and matched-row category movement, identity-matched entry and exit rows, missing/valid Y, error-bound and bubble-size motion, pie row-order motion, fixed-spoke and changing-count radar morphs, compatible optional-channel changes, collapsed error-bound entry, persisted duration and browser scheduling; polar and Cartesian family fixed-clock frame/hit fixtures, GPUI/Canvas2D structural fill, bounded Canvas2D/WebGPU pixels, and measured 1.25× GPUI/native polar window parity; strict release performance, six package-size limits, and 735 portable browser tests passed | G7; manual assistive-technology and broader device-scale image evidence remain pending |
 | G7 | R7 | Hierarchy and flow families | **Complete** | Axis-free `layout` pane topology is available in engine, WASM, and TypeScript; lazy typed stage/tree/flow store validates IDs, values, cycles, depth and bounded retained capacity; funnel, treemap, Sankey and sunburst emit shared ordered-frame geometry with direct or cached exact hits; focused financial-isolation, persistence, atomic-store and geometry fixtures pass; V2 layout data/series round-trip and public restored-series handles, pointer hover/click/Escape and focused-key selection, bounded accessibility snapshots integrated with browser keyboard navigation and announcements, shared-frame visual focus, shared-dataset update fanout, built-in pointer tooltip and toggling legend, opt-in shared-frame labels, atomic live presentation patches, and fixed-clock compatible value transitions are implemented with focused engine/browser evidence; four-family Canvas2D/WebGPU interior pixels and GPUI/Canvas2D structural focus/mark parity pass | G8; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence remain for parity closure |
-| G8 | R8 | Parity closure and release readiness | **Open** | No R8 checklist item closed. Post-G7 GPUI general gallery (`fb6ea5e`) and Recharts presentation-default correction (`867029a`) landed | Full matrix verification against the pinned competitor, including a recheck of the G2 rows against the `867029a` defaults |
+| G8 | R8 | Parity closure and release readiness | **In progress** | Pinned Recharts 3.10.1 horizontal-bar default and positive/mixed-sign/expanded/positive-only/cumulative/silhouette/wiggle stack pairs pass in Chromium/Firefox/WebKit; a current G2 public browser recheck passes 34 cases with two expected non-Chromium CDP skips. Upstream scope recheck plus focused legend placement, touch, X-axis automatic sizing, responsive resize/reveal/aspect/zero-size/DPR, references/labels, Cell colors/rounded bars, French grouped ticks, polar and four-family hierarchy/flow geometry pairs, plus Sankey accessibility fixtures recorded below; the last full G8 defaults run passed 115 browser cases with 8 expected non-Chromium WebGPU/CDP skips, followed by 15 focused brush, path-family and composition passes. Shared and combined financial/Cartesian/polar/layout WebGPU loss fallback pass in Chromium; combined charts retain pre-update image identity. Mixed V2 restore and cleanup pass in three browsers; native four-family image export matches the live frame; full matrix and manual evidence remain open | Complete matrix evidence, documentation and export/recovery work; then full gate and phase closure |
 
 Notes:
 
@@ -47,7 +47,7 @@ Notes:
   The scales/axes and responsive-layout matrix rows are Verified. Other rows remain Partial
   because they include later-phase behavior.
 
-Seven of eight delivery batches are complete. G8 is open. Batch completion
+Seven of eight delivery batches are complete. G8 is in progress. Batch completion
 does not imply full parity-matrix verification.
 
 ## How work is delivered
@@ -367,6 +367,429 @@ chart was sized before or after its data. Its gate passed formatting, warning-de
 and wasm32 Clippy, workspace tests, GPUI crate tests with `gpui-backend`, the native performance
 gate, package install/lint/build/typecheck/pack/API checks and the Playwright suite. The catalog
 cards were reviewed in headless Chromium screenshots; calibrated GPUI window pixels remain G8 work.
+
+The first G8 pinned-default check adds a Recharts 3.10.1 horizontal-bar reference to the
+versioned fixture and a matching Aeris general-only chart through the public browser API.
+It checks zero-based bars, first-category-at-top order, visible pixels, exact hits and the
+single-pane height. All six paired cases pass in Chromium, Firefox and WebKit. Fifteen
+additional public browser cases for numeric and typed axes, multi-axis font/DPR/aspect
+changes, hidden-container reveal and resize-order pixel/hit stability pass on the same
+three engines. These focused checks recheck specific G2 defaults after `867029a`;
+they do not establish the complete scales/axes or responsive-layout matrix rows, nor
+manual screenshot parity.
+
+A pinned Recharts `XAxis angle={-60} height="auto"` case now verifies four
+rotated long labels and an enlarged strip in all three browsers. The paired
+Aeris `tick_angle: -60` case verifies measured plot displacement, V2 round trip
+and image-identical restore through the public API; engine and GPUI/Canvas2D
+frame tests cover rotated primitive ordering and a small pane that keeps its
+axis line/title when a long label cannot fit. A pinned custom Recharts X tick paints
+two SVG lines per category; the Aeris public pair verifies newline labels, automatic
+X strip growth, rotated multiline layout, Y strip width growth, exact row hits,
+and image-identical V2 restore in Chromium, Firefox and WebKit. The engine caps
+each tick at four measured and painted lines, and normalizes CRLF for paint while
+V2 retains the input labels. A Chromium
+presented-frame fixture counts multiline X/Y tick ink through Canvas2D and WebGPU
+with bounded ink-count differences. Calibrated pixels and complete
+constrained-layout evidence remain open.
+
+A second pinned pair checks the Recharts 3.10.1 positive stacked-bar example against a
+general-only Aeris column stack. It verifies category order, aligned segment widths,
+contiguous stack boundaries, relative segment heights and Aeris exported blue/teal pixels.
+Recharts SVG path coordinates are sampled after the segments become stable; Aeris uses
+engine hits for geometry and the public image export for color. All six paired browser
+cases pass in Chromium, Firefox and WebKit. Alternate offsets and the complete bars/stacks
+visual row remain open.
+
+The same pinned row now includes a Recharts `stackOffset="sign"` fixture with mixed signs
+and both-positive/both-negative categories. Aeris `normal` column stacks match its zero
+separation and segment adjacency through public hits and exported colors in Chromium,
+Firefox and WebKit (six paired cases pass). The explicit offset is part of the mapping;
+the complete visual/interaction row remains open.
+
+An explicit pinned Recharts `stackOffset="expand"` example and an Aeris `percent` column
+stack now compare four positive-total categories. Each pair verifies a common normalized
+height, contiguous segments, expected fractional shares, aligned category widths and
+exported Aeris colors. All six paired cases pass in Chromium, Firefox and WebKit.
+Mixed-sign expansion is compared below.
+
+The pinned `stackOffset="positive"` example and Aeris `stack_mode: "positive"` now
+share the same visible A/B/D segments while suppressing negatives. Aeris still exposes
+the negative source values through its data API. Recharts SVG geometry and Aeris public
+hits/exported pixels pass as a paired fixture in Chromium, Firefox and WebKit.
+The remaining offset comparisons are recorded below.
+
+The pinned `stackOffset="none"` mixed-sign fixture and Aeris `cumulative` bars
+have matching series-order overlap and visible blue/teal segments in all three
+browsers. Positive-only `silhouette` and `wiggle` pairs have matching per-category
+segment proportions and baseline displacement, normalized for the different
+chart axis scales; the silhouette stack centers at zero. Six cumulative cases
+and three combined silhouette/wiggle cases pass across Chromium, Firefox and
+WebKit.
+
+The pinned mixed-sign `stackOffset="expand"` fixture exposes a material
+reference failure: its automatic axis clips the A/B base bars and omits their
+top segments. Aeris `percent` keeps all eight segments visible by normalizing
+positive and negative totals independently. Both behaviors pass public-path
+fixtures in Chromium, Firefox and WebKit. Copying the clipped reference
+behavior is not good for Aeris because users would lose visible data; keep the
+independent-sign policy and document it as a deliberate migration difference.
+Maintainer review of that product difference and the complete bars/stacks
+visual and interaction row remain open.
+
+Pinned Recharts 3.10.1 `XAxis height="auto"` reserves more space than a fixed
+30 CSS-pixel strip for large ticks and an axis title. Aeris grows its horizontal
+strip for a title and increased chart font size; an engine layout regression and
+public exported-pixel checks pass in Chromium, Firefox and WebKit. Rotated and
+multiline labels are covered by the separate pinned and Aeris pair above; the full
+scales/responsive parity recheck is still open.
+
+Pinned Recharts `ResponsiveContainer` and an Aeris general-only auto-size chart now
+share a 700×350 to 420×210 resize followed by a processed hidden state and
+480×260 reveal. The Aeris chart retains one pane and exact general-series hits
+after reveal. The paired public browser fixtures pass in Chromium, Firefox and
+WebKit. Additional responsive evidence is recorded below.
+The pinned `ResponsiveContainer aspect={2}` also follows a width-only host from
+600×300 to 360×180 in Chromium, Firefox and WebKit. The Aeris public-path
+aspect resize/DPR/font alignment and hidden/reveal fixtures pass six focused
+cases on the same engines. A separate Aeris zero-size host grows through 96×64
+to 360×220 with finite small-plot geometry and exact hits on all three engines.
+An additional device-scale fixture verifies 260×160 to 320×220 CSS resize,
+device-pixel canvas dimensions and exact category hits at DPR 2 in Chromium
+and WebKit; headless Firefox reports effective DPR 1 and passes at that scale.
+A Chromium CDP fixture changes DPR on a live chart from the configured 1.5 to
+2 and back, sends the platform orientation signal because CDP does not deliver
+the resolution media-query change on this adapter, and verifies canvas dimensions
+and exact hits after both transitions.
+A current public G2 recheck of horizontal-bar defaults, linear/category/explicit
+and reversed axes, resize/reveal/aspect/zero-size and DPR paths passed 34 cases
+across Chromium, Firefox and WebKit, with two expected CDP-only skips.
+The engine general-only chrome/domain/hover and automatic numeric-domain
+regressions also pass. One earlier WebKit zero-size run reported a page error;
+the same case passed ten isolated repeats and three ordered layout-suite repeats,
+so its intermittent cause remains unconfirmed for the final gate.
+This is focused evidence; manual viewport screenshots and the complete
+responsive-layout policy still need phase closure.
+
+The migration guide's fluid-width React example now sets the required
+`autoSize: true`. A Strict Mode React fixture confirms that the general-first
+chart follows 700×350 to 420×210 resize, retains its last size when hidden,
+then reveals at 480×260 without changing its pane or series identity or losing
+exact hits. The real React adapter test passes in Chromium, Firefox and WebKit.
+The packed React recipe already used the correct option. Complete React
+authoring and responsive visual comparison remain open.
+
+The pinned Recharts reference fixture now checks that a February-to-March
+ReferenceArea spans the plot, sits behind the area series, and that the Y=16
+threshold line and four numeric labels remain visible. The paired Aeris
+general-only public-path fixture confirms distinct exported pixels when a
+region, line and data labels are applied, plus an exact series hit. The migration
+guide records that Aeris regions map omitted X/Y endpoints to plot edges.
+Twelve paired browser cases cover full-height, full-width and one-sided bands,
+zoom/resize, V2 persistence, exported pixels and exact hits. A Chromium
+Canvas2D/WebGPU presented-frame fixture confirms matching reference interiors
+and byte-identical exports. Engine frame order keeps regions below series
+and dots above; Canvas2D/GPUI structural parity retains all three region
+shapes across three DPR values. Calibrated overlap and accessibility review remain open.
+
+The pinned Recharts `type="step"` fixture paints two path segments around a null
+unless `connectNulls` bridges it. Its Aeris public pair uses `step_middle` and
+`connect_missing`, changes exported pixels, and keeps the missing row in V2
+validity state. Six paired cases pass across Chromium, Firefox and WebKit.
+The migration guide records the exact step and gap mapping.
+
+The pinned range `Area` fixture paints one band with two boundaries. Its
+Aeris `range_area` pair exports band pixels and retains four ordered low/high
+rows and V2 kind. Six paired cases pass in Chromium, Firefox and WebKit.
+
+The pinned Recharts `ErrorBar` fixture paints four capped Y whiskers;
+its Aeris public pair exports four absolute low/high intervals and accessible
+rows. Six paired cases pass in Chromium, Firefox and WebKit. The migration
+guide maps relative Recharts margins to absolute Aeris bounds.
+
+The pinned Recharts `ZAxis` bubble fixture and an Aeris public bubble chart
+increase symbol/pixel area in the same four-value size order. Aeris also retains
+the sizes and family in V2. Six paired cases pass in three browsers.
+
+A pinned square `Scatter` fixture paints four equal-sided symbols. The Aeris
+public pair changes exported pixels from round to square marks and preserves
+the symbol in V2. Six paired cases pass across three browsers.
+
+The pinned Recharts Cell fixture now uses deterministic, animation-disabled
+bars and verifies four per-row fills and 6px rounded positive tops. The Aeris
+public-path pair verifies the same four persisted row colors, exported interior
+pixels, top corner cutouts and filled lower corners. Six paired cases pass in
+Chromium, Firefox and WebKit. Aeris rounds the exposed lower end for negative
+bars; this portable rule and wider customization/tooltip formatting still need
+complete visual and manual comparison.
+
+The pinned Recharts animation reference can now update its four-row line after
+mount. Chromium, Firefox and WebKit observe distinct starting, intermediate and
+settled SVG paths across its 400 ms transition. A matching Aeris public chart
+uses the same values and duration; fixed-clock Canvas2D captures in all three
+browsers differ at start, intermediate and settled times, stop scheduling at
+rest and persist the target values. Under a browser reduced-motion request,
+the pinned Recharts line still paints an intermediate path, while a matching
+Aeris public line applies its updated values immediately and schedules no
+transition in all three browsers. This is a deliberate accessibility behavior
+difference. A Chromium presented-frame fixture freezes a public line update at
+start, 160 ms and rest; Canvas2D and WebGPU move the line through the same pixel
+centers with bounded painted counts. Exact easing, moving GPUI pixels and other
+family executor comparisons remain open.
+
+The pinned accessibility/localization fixture now uses numeric values large
+enough to show French digit grouping and disables line animation for stable
+geometry. Its focusable application surface exposes all five explicit Y ticks.
+Aeris receives the same host-formatted strings as portable explicit labels;
+the public-path fixture confirms changed export pixels, persisted labels and
+unchanged exact series hits. Six cases pass across Chromium, Firefox and
+WebKit. The migration guide explains that hosts update explicit ticks when
+their domain changes. Manual assistive-technology and contrast review remain
+open; these tests do not establish screen-reader parity.
+
+A pinned Recharts 3.10.1 Sankey fixture confirms the default focusable SVG surface,
+`application` role, and chart title/description in Chromium, Firefox and WebKit.
+The matching Aeris public-path fixture confirms a focusable `application` layer,
+bounded node/link values and keyboard announcements in the same engines. This
+covers the new Sankey metadata check, while manual assistive-technology and
+complete accessibility parity remain open.
+
+The pinned hierarchy/flow reference renders four funnel stages, four treemap
+leaves, three Sankey nodes with two links, and four sunburst sectors in all
+three browsers. This records the G8 reference mark inventory against the
+existing Aeris public family, engine-frame and GPUI fixtures. A paired Sankey
+fixture confirms the pinned 18:11 SVG link-width ratio and that Aeris public
+link hit regions rank 18 above 11 in Chromium, Firefox and WebKit. A paired
+sunburst fixture confirms all four sector area shares track 12/14/18/24
+within five percentage points in the same browsers. A pinned animation-free
+funnel fixture and Aeris exact stage hits each track the four trapezoid
+area shares within five percentage points. Other direct
+geometry and manual visual comparison remain open.
+
+A pinned declarative Recharts fixture now confirms its X/Y axes, two lines, two
+legend entries and Jan tooltip in Chromium, Firefox and WebKit. Matching Aeris
+React first-pane ownership through Strict Mode/remount, references and default
+controls pass in all three browsers. Complete visual and authoring comparison
+remains open.
+
+A pinned Recharts `Brush` traveller drag narrows its selected slide in Chromium,
+Firefox and WebKit. Aeris' existing public brush fixtures cover chart-routed
+pointer/touch selection, accessible keyboard controls, semantic ranges and
+linked no-echo sync. A pinned `syncId` hover now shows Feb in both Recharts
+tooltips in Chromium, Firefox and WebKit; Aeris' public point-crosshair fixture
+routes the same category identity across unequal category lists without echo. A full
+paired interaction review remains open because Recharts' SVG traveller strip and
+Aeris' engine selection/DOM controls have
+different presentation paths.
+
+The pinned line/area/scatter reference paints two line paths, one area fill and
+stroke, and four scatter symbols. A paired Aeris chart keeps the same four rows
+in one category line/area pane and one numeric scatter pane, with all four exact
+row hits for each series and matching V2 values. The six cases pass across
+Chromium, Firefox and WebKit. Range/interpolation/marker variants and calibrated
+visual comparison remain open.
+
+The pinned Recharts 3.10.1 package exports no first-class box-plot or heatmap
+component. Its G1 Scatter shape and Treemap color examples are analogues.
+A pinned three-browser fixture verifies four numeric Scatter points in source-value
+order and four blue Treemap leaves with positive area; those marks are not claimed
+as geometric equivalents of the Aeris families.
+Aeris' typed box-plot and heatmap public fixtures already verify ordered data,
+colors, atomic mutation, V2 restore, accessibility and exact hits. Their
+presented Canvas2D/WebGPU frames have matching flat interiors; a Chromium
+SwiftShader comparison found zero pixels beyond one channel of difference
+for both families. GPUI/Canvas2D structural frame fixtures also pass.
+Calibrated visual and legend review remains open.
+
+The pinned `ComposedChart` paints area, four bars and line in that order over
+the same rows. A paired Aeris first-pane chart retains area/column/line order,
+matching V2 values, a visible export and exact hits for all three layers.
+Six cases pass across Chromium, Firefox and WebKit; broader overlay and visual
+comparisons remain open.
+
+A Chromium public-path fixture now forces shared WebGPU device loss while financial and
+general charts are live. Both report Canvas2D fallback; the financial series retains its
+row count, accepts a tip replacement and exports a nonempty image, while the general pane
+and series retain their identities, accept a later data update, export the new row and keep
+visible pixels and exact hits. This is focused device-loss evidence, not the complete export/recovery
+matrix across families and executors.
+
+A second Chromium public-path fixture forces the same loss on one two-pane chart containing
+financial candles and general scatter points. The chart falls back to Canvas2D without changing
+pane indices or row counts; both series accept updates, its exported image changes, the general
+marks appear in the general pane, its hit resolves the new row, and V2 state contains that row.
+The exported screenshot is byte-identical immediately before and after loss, before either
+dataset changes; removal clears the fallback host's canvases. The focused combined loss test passes. Family-wide export and recovery
+evidence remains open.
+
+A third Chromium public-path fixture puts a polar pie and layout funnel in one
+WebGPU chart, forces device loss, then replaces both datasets. Canvas2D fallback
+retains both panes, exact hits for the new slice and stage, V2 exported rows and
+a changed screenshot. Its pre-update exported screenshot is also byte-identical
+across WebGPU loss. This broadens shared-frame recovery evidence to polar and
+layout families; removal clears its fallback host canvases. Native export and
+complete family coverage were checked separately below.
+
+A fourth Chromium fixture combines first-class box plots and heatmap cells in
+one WebGPU chart. Its screenshot remains byte-identical after device loss and
+Canvas2D fallback; both series then accept new rows with exact hits, exported
+V2 data and a changed screenshot, and removal clears the host canvases.
+
+The pinned Recharts host-state reference now has a three-browser interaction
+fixture: reversing its source rows changes the SVG line path, and its explicit
+serialization button returns the reordered values. This establishes that
+the comparison's persistence belongs to its React host.
+
+A three-browser public-path fixture exports one chart with financial candles,
+Cartesian columns, a polar pie and a layout funnel, then restores its V2 state
+into a fresh chart. After the host supplies the same financial OHLC rows, state,
+pane and series order, general-family exact hits, row counts and post-restore
+updates pass in Chromium, Firefox and WebKit; both source and restored hosts
+have no chart canvases after removal. V2 does not serialize the current
+viewport, so this fixture verifies visible exports rather than byte-identical
+screenshots; every restored pane has colored marks. A native executor test also renders a mixed financial/Cartesian/polar/layout
+chart, confirms image export matches the settled live native frame byte for
+byte, and confirms export leaves the live frame unchanged. A public catalog audit now
+installs all 46 examples covering 20 general, polar and layout kinds, then
+compares each image export with its own empty frame and checks canvas disposal.
+All 46 pass on Canvas2D in Chromium, Firefox and WebKit and on WebGPU in
+Chromium, with no page errors; the two non-Chromium WebGPU cases skip by
+design. This establishes catalog-wide export and ordinary disposal, while
+per-family update/loss and calibrated image equivalence remain open.
+The 46-example V2 image-restore assertion now compares byte-identical exports
+after a real size cycle normalizes the Canvas backing surface on source and
+restored charts. It passes Canvas2D in Chromium, Firefox and WebKit and WebGPU
+in Chromium (four passes, two intended adapter skips). Without that surface
+cycle, a semi-transparent gradient after four prior WebGPU charts produced
+visually equivalent images with differing raster values despite identical V2
+state and pane geometry; the fresh-surface assertion retains exact pixel
+comparison without weakening the check.
+
+The current package build passed `npm run test:pack`: it packed the publish artifact,
+installed it into an empty consumer directory, imported the package entry, checked its
+JavaScript, declarations, WASM, CSS and license, and bundled the standalone Cartesian,
+standalone polar, standalone flow, mixed, linked and React consumer recipes from that installed tarball
+(25 files; 4,855 KiB WASM on the focused 2026-10-20 run).
+The final G8 gate will repeat this check against the final batch build.
+
+The authoring guide now gives a concrete Recharts legend/tooltip formatter migration and
+explains which labels and components enter a portable frame export versus stay in the host DOM.
+This advances documentation and customization guidance; the broader documentation checklist
+remains open until every matrix row has a reviewed migration path and its references resolve.
+The guide also now maps Recharts pie/donut data and `Cell` colors to the actual polar
+first-pane API and provides a packed-consumer donut recipe. Its earlier polar option and
+row examples used `angle_axis_id`/`radius_axis_id`, `category`/`value`, and a nonexistent
+`missing` option; these now match the published `x_axis_id`/`y_axis_id` and `x`/`y`
+contract, with a donut correctly represented as a `pie` with `inner_radius > 0`.
+The pinned Recharts migration fixture also confirms in Chromium, Firefox and
+WebKit that its root import and host toggle replace a standalone line with one
+composed line and four bars. The packed-consumer smoke and public pie/donut plus
+slice-legend browser fixtures pass six cases across Chromium, Firefox and WebKit.
+The guide also maps pinned line/area/scatter source rows to Aeris XY rows and distinguishes
+Recharts custom box/heatmap analogues from Aeris typed `box_plot` and
+`heatmap_grid` rows. Accessibility title/description, atomic V2 restore,
+image export and automatic backend fallback now have a migration path. The guide still
+needs a row-by-row review before G8 closes.
+
+The pinned Recharts 3.10.1 donut has four `Cell` colors in source order and
+sector path lengths ranked by value. A paired
+Aeris first-pane donut with the same four values and colors retains them in V2,
+exports a visible frame, and exposes all four exact slice hits with hit area
+ordering matching their values. The six paired browser cases pass in Chromium,
+Firefox and WebKit. Radar/radial-bar paired geometry and calibrated visual
+review remain open. A separate pinned radar/radial-bar fixture confirms one
+polygon and four radial-bar sectors in all three browsers. Aeris already has
+four-row public hit fixtures for those families. A matching two-pane public
+fixture now also persists the pinned four values and exposes all four row hits
+for both families in Chromium, Firefox and WebKit; direct paired geometry and
+manual visual review remain open.
+A pinned/Aeris treemap pair now ranks four leaf rectangle areas and exact hit
+regions in the same 12/14/18/24 value order across Chromium, Firefox and
+WebKit. Each normalized area share is within five percentage points of its
+input share. Calibrated dimensions and other layout families remain open.
+
+The new axis-free Sankey recipe maps Recharts numeric node indexes to stable Aeris node IDs
+and bundles through the installed tarball. The six-consumer pack smoke passes; public
+layout-family hit/restore and Sankey accessibility fixtures pass nine cases across
+Chromium, Firefox and WebKit. Complete hierarchy/flow visual and manual parity remains open.
+
+The G8 browser benchmark now distinguishes a general-only 100K-row workload (five series in
+one pane) from a 120K-row mixed workload (the same general series plus 20K candles in a
+separate financial pane). The prior general scenario silently included the default empty
+financial pane. Its version was advanced and a mixed scenario was added. Upload counters
+now capture every synchronous public API construction/data-install repaint; the policy v7
+upload metric is the largest single repaint, with cumulative upload volume reported separately.
+The final unchanged repaint had previously made that metric read zero. Dataset metadata now
+records the actual series, pane, row count and data type.
+
+Local Windows/Chromium/WebGPU release diagnostics on 2026-10-19, after one warm-up and five
+measured runs, passed both scenarios. After the shared `circle_segments` minimum fell from
+24 to 8 while retaining the 0.1-device-pixel chord-error bound, p50 general-only startup
+was 204.13 ms, last data-install frame CPU 40.32 ms, peak repaint upload 46,682,112 bytes,
+and cumulative upload 84,627,368 bytes. The mixed workload measured 319.52 ms, 40.60 ms,
+46,759,696 bytes and 85,376,056 bytes respectively. The same machine's before-change
+observations were 242.50/64.40 ms and 76,634,112 peak bytes for general-only, and
+394.96/64.62 ms and 76,711,696 peak bytes for mixed. These ignored local raw results are
+engineering diagnostics, not controlled-runner claims. In particular the roughly 40 ms
+dense data-install frames do not establish a 16 ms frame target; p95 input/frame, steady-state
+allocation, retained CPU/GPU memory, cold startup and repeated-disposal budgets remain open.
+Focused shared-render tessellation, WebGPU/Canvas2D circle and general-point parity, GPUI
+scatter route, and benchmark harness tests passed. The final G8 batch must rerun all gates.
+
+The native release performance harness now constructs Targets F (100K XY line), G (five-series
+general dashboard), and I (100K numeric error bars) with one continuous-domain pane. Before the
+correction, a new topology assertion failed at F because the general pane had been appended
+beside an empty financial pane. The corrected F/G/I fixtures assert one pane and no financial
+series; the separate H fixture still measures a financial and general pane together. The
+2026-10-20 release run passed all targets. F measured 1.54 ms frame and 1.49 ms nearest hit;
+G measured 1.32 ms frame, 1.95 ms hit, and 5.53 MiB retained; I measured 9.77 ms frame,
+2.58 ms hit, and 6.88 MiB retained. These are local diagnostics; the final G8 batch gate
+will repeat the run with the completed changes.
+
+The current package's financial-only `historical-candlestick-100k` browser scenario
+passed locally on 2026-10-20 with one candlestick series, one pane and WebGPU.
+After one warm-up and five measured installs, p50 public `set_data_typed` time was
+5.76 ms, p50 frame CPU was 1.59 ms and reserved WASM linear memory was
+17,629,184 bytes. Its raw result is ignored local diagnostic output under
+`benchmarks/results/v0.13.2/local/`. The general-only and combined scenario
+measurements above use the same public benchmark harness, but a controlled
+final-build run remains required for a release performance claim.
+
+The engine-drawn general legend now accepts top/bottom lanes plus `center`, `insideTop`,
+`insideBottom`, and four inset corners, with a bounded nonnegative CSS-pixel `offset`.
+Top/bottom reserve plot height; inset entries overlay the measured plot. The same ordered
+frame and engine click target use those coordinates, with no browser host routing. A top
+regression failed against the prior bottom-only engine and then passed; a large-offset
+regression confirms entries stay visible. The focused engine suite passes eight cases,
+including all seven inset positions; warning-denying core/engine Clippy and package
+typecheck pass. Real top and inset top-left pointer tests pass in Chromium, Firefox and
+WebKit.
+
+Outside left/right legends now reserve a bounded side gutter after the financial and
+general axes, stack measured entries vertically, elide long Unicode titles, and fold
+overflow into `+N more`. They paint in the shared unscissored axis layer; the engine
+input controller promotes their presses ahead of axis scaling. Inside left/right use
+the same vertical layout over the plot without reserving width. The native host-path
+regression checks gutter width, axis-layer paint, pane-frame exclusion and pointer
+toggle for both outside sides; a separate test checks inside-side width and bounded
+Unicode/overflow behavior. Real outside-side clicks pass in Chromium, Firefox and
+WebKit. A focused Chromium Canvas2D/WebGPU screenshot fixture verifies side-gutter
+legend pill pixels from each executor. Custom `{x,y}` placement anchors the lower-right
+corner using the full chart width and the target pane's height. It ignores
+`offset`, reserves no plot space, and paints after axes in the unscissored layer.
+Engine coordinate/hit and serde regressions, pinned Recharts placement,
+Chromium/Firefox/WebKit in-plot, axis-strip and cross-pane clicks, and
+Canvas2D/WebGPU image-export pixels pass. A real engine-frame custom legend in the
+unscissored axis layer now has identical Canvas2D and GPUI quad streams and text anchors
+at 1×, 1.5× and 2× DPR; calibrated GPUI window pixels and broader export parity remain open.
+The engine input controller now gives touch presses a 44 CSS-pixel legend target while mouse
+hits retain their precision. Overlapping touch bounds select the nearest painted entry, and
+the `+N more` summary stays inert. A direct engine touch regression failed before this change.
+The browser adapter also stops treating Pointer Events capture release as a Touch Events cancel;
+Firefox and WebKit had cancelled a tap before `touchend` when both event IDs matched.
+Fourteen focused legend tests, warning-denying engine Clippy, and real touchscreen taps through
+the public browser host in Chromium, Firefox and WebKit pass. Wider touch/keyboard parity remains open.
+
 ## Known gaps
 
 Remaining source-confirmed gaps from the 2026-09-23 review and the 2026-10-18 post-G7 changes. R3–R7 closed the earlier Cartesian,
@@ -376,7 +799,8 @@ Earlier test counts and timings are historical observations in Git history, not 
 | Gap | Evidence | Required correction | Phase |
 | --- | --- | --- | --- |
 | Parity evidence | Automated layout-family contracts and cross-backend fixtures pass; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence are still due | Collect phase-closure evidence and record any differences against the pinned competitor | R8 |
-| G2 evidence after default changes | `867029a` changed automatic domains, vertical category order, general-only gutters and plot clipping after the G2 rows were verified | Recheck the scales/axes and responsive-layout rows against the new defaults with current fixtures and screenshots | R8 |
+| G2 evidence after default changes | `867029a` changed automatic domains, vertical category order, general-only gutters and plot clipping after the G2 rows were verified; 34 current public browser cases and focused engine regressions pass, with two expected CDP-only skips | Complete calibrated viewport/theme screenshots and investigate any recurrence of the one WebKit zero-size page error in the final gate | R8 |
+| Pinned legend placement | Recharts 3.10.0 added legend `position`/`offset`; Aeris has shared top/bottom lanes, outside side gutters, inside side and center/corner insets with bounded offsets and engine hit coordinates; custom-coordinate placement now has chart-width/pane-height pixel or percent coordinates, lower-right anchoring, engine hits, Chromium/Firefox/WebKit canvas input, Canvas2D/WebGPU image-export pixels and GPUI/Canvas2D axis-layer stream parity at 1×, 1.5× and 2× DPR; calibrated GPUI window pixels remain open | Complete the legend/tooltip parity row and calibrated GPUI image evidence | R8 |
 
 These are not an exhaustive defect audit. Coverage-matrix rows are required coverage to audit, not
 assertions that every listed feature is absent.
@@ -621,14 +1045,14 @@ required for competitive closure.
 
 ### R8 — Parity closure and release readiness
 
-**Batch:** G8. **Depends on:** R0–R7. **Status:** open.
+**Batch:** G8. **Depends on:** R0–R7. **Status:** in progress.
 
 - [ ] Run the complete matrix against the pinned competitor.
 - [ ] Demonstrate financial-only, general-only and combined workloads.
 - [ ] Finish documentation and customization/migration examples.
 - [ ] Export, backend fallback and device-recovery evidence.
-- [ ] Clean-install evidence.
-- [ ] Recheck upstream scope; record and assess new upstream features explicitly.
+- [x] Clean-install evidence.
+- [x] Recheck upstream scope; record and assess new upstream features explicitly.
 - [ ] G8 full gate green; release evidence committed and pushed.
 
 **Exit:** every required matrix row is verified or has a maintainer-approved, clearly documented
@@ -661,7 +1085,7 @@ platform capabilities beyond the competitor's browser rendering model.
 | Customization | Partial | Per-item styles, symbols, gradients, dash patterns, label/tooltip formatting, bounded custom marks and explicit host-only content boundaries | R3–R5 |
 | Animation | Partial for general transitions | Enter/update/exit and interruption with stable identities, bounded retained state, shared timing semantics and reduced motion | R6 |
 | Accessibility/localization | Partial | Keyboard operation of every family/control, meaningful bounded snapshots, focus retention, announcements, contrast, locale and text measurement | Every phase |
-| Persistence, export and recovery | Partial | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
+| Persistence, export and recovery | Partial (mixed V2 restore in three browsers; native mixed frame export; Chromium WebGPU loss fixtures) | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
 | Packaging and migration | Partial | Packed-consumer examples, framework-neutral and React guides, discoverable API, reproducible competitor comparisons | R0, R5, R8 |
 
 ## Scope and parity rules
@@ -710,6 +1134,25 @@ documentation site is not the permanent test baseline.
   [Sunburst API](https://recharts.github.io/en-US/api/SunburstChart/) establish distinct flow/hierarchy contracts.
 - [Accessibility guidance](https://github.com/recharts/recharts/wiki/Recharts-and-accessibility)
   informs keyboard and screen-reader comparisons.
+
+### R8 upstream scope recheck (2026-10-19)
+
+The [official Recharts release list](https://github.com/recharts/recharts/releases) still marks
+3.10.1 as the latest stable release; 3.11.0-canary.6 is a prerelease. Keep the executable parity
+baseline pinned to 3.10.1 so release claims have a reproducible comparison.
+
+The 3.10.0 features already inside the pinned baseline need explicit G8 checks: legend
+position/offset in the legend and tooltip row, automatic X-axis height in scales and responsive
+layout, and Sankey accessibility metadata in the hierarchy/flow and accessibility rows. Their
+presence in the pinned release notes is scope evidence, not proof that Aeris supports them.
+The canary adds an experimental chart theme system with automatic color-scheme selection,
+per-family active styles and hierarchy colors. Aeris has its own portable style/theme model;
+compare visual and accessibility outcomes, but do not substitute the canary API for the pinned
+baseline. The canary's Bar-local data prop maps conceptually to Aeris series-local data; angled
+polar labels and text paths are additional presentation capabilities outside this stable baseline.
+Reassess them when 3.11 becomes stable. The 3.11 canary release notes also contain correctness
+fixes for stacks, brushes, axes, transitions, polar labels and synchronization; use them as
+regression ideas, not evidence that current Aeris behavior is wrong.
 
 ## Architecture rules
 
@@ -879,7 +1322,7 @@ Run performance thresholds in strict mode as CI does; never relax tests or budge
 regressions.
 
 Use `benchmarks/benchmark.mjs` and `benchmarks/budgets.json` for versioned release evidence. Current
-policy v7 includes a 2,000 ms general-dashboard startup ceiling and 100,663,296-byte first-frame
+policy v7 includes a 2,000 ms general-dashboard startup ceiling and 100,663,296-byte peak per-repaint
 upload ceiling, alongside package-size limits. These limits are existing guards, not a declaration
 that their ceilings are competitive targets. Preserve them until measured evidence supports an
 explicit revision. Add family-specific budgets before closure, including p95 input/frame latency,

@@ -1031,10 +1031,10 @@ type general_reference_wire_options =
       Extract<general_reference_options, { kind: "region" }>,
       "x_from" | "x_to" | "y_from" | "y_to"
     > & {
-      x_from: general_reference_wire_value;
-      x_to: general_reference_wire_value;
-      y_from: general_reference_wire_value;
-      y_to: general_reference_wire_value;
+      x_from?: general_reference_wire_value;
+      x_to?: general_reference_wire_value;
+      y_from?: general_reference_wire_value;
+      y_to?: general_reference_wire_value;
     });
 
 function general_reference_wire_value(
@@ -1094,14 +1094,19 @@ function encode_general_reference_options(
         x: general_reference_wire_value(chart, options.x_axis_id, options.x, axes),
         y: general_reference_wire_value(chart, options.y_axis_id, options.y, axes),
       };
-    case "region":
+    case "region": {
+      const { x_from, x_to, y_from, y_to, ...region } = options;
+      if (x_from === undefined && x_to === undefined && y_from === undefined && y_to === undefined) {
+        throw new AerisChartsError("invalid_options", "general reference region requires at least one bound");
+      }
       return {
-        ...options,
-        x_from: general_reference_wire_value(chart, options.x_axis_id, options.x_from, axes),
-        x_to: general_reference_wire_value(chart, options.x_axis_id, options.x_to, axes),
-        y_from: general_reference_wire_value(chart, options.y_axis_id, options.y_from, axes),
-        y_to: general_reference_wire_value(chart, options.y_axis_id, options.y_to, axes),
+        ...region,
+        ...(x_from === undefined ? {} : { x_from: general_reference_wire_value(chart, options.x_axis_id, x_from, axes) }),
+        ...(x_to === undefined ? {} : { x_to: general_reference_wire_value(chart, options.x_axis_id, x_to, axes) }),
+        ...(y_from === undefined ? {} : { y_from: general_reference_wire_value(chart, options.y_axis_id, y_from, axes) }),
+        ...(y_to === undefined ? {} : { y_to: general_reference_wire_value(chart, options.y_axis_id, y_to, axes) }),
       };
+    }
   }
 }
 
@@ -1121,14 +1126,16 @@ function decode_general_reference_options(
         x: decode_general_reference_value(options.x),
         y: decode_general_reference_value(options.y),
       };
-    case "region":
+    case "region": {
+      const { x_from, x_to, y_from, y_to, ...region } = options;
       return {
-        ...options,
-        x_from: decode_general_reference_value(options.x_from),
-        x_to: decode_general_reference_value(options.x_to),
-        y_from: decode_general_reference_value(options.y_from),
-        y_to: decode_general_reference_value(options.y_to),
+        ...region,
+        ...(x_from === undefined ? {} : { x_from: decode_general_reference_value(x_from) }),
+        ...(x_to === undefined ? {} : { x_to: decode_general_reference_value(x_to) }),
+        ...(y_from === undefined ? {} : { y_from: decode_general_reference_value(y_from) }),
+        ...(y_to === undefined ? {} : { y_to: decode_general_reference_value(y_to) }),
       };
+    }
   }
 }
 

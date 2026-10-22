@@ -40,7 +40,15 @@ function samples(name, values, unit, direction, visibility, methodology, availab
 }
 
 function scenario_dataset(scenario) {
-  const dataset = dataset_metadata(scenario.points ?? 0, seed, { series_count: scenario.series_counts?.at(-1) ?? 1, pane_count: scenario.pane_counts?.at(-1) ?? 1 });
+  const mixed = scenario.kind === "general_dashboard" && (scenario.financial_points ?? 0) > 0;
+  const dataset = dataset_metadata((scenario.points ?? 0) + (mixed ? scenario.financial_points : 0), seed, {
+    series_count: scenario.kind === "general_dashboard" ? (mixed ? 6 : 5) : scenario.series_counts?.at(-1) ?? 1,
+    pane_count: scenario.kind === "general_dashboard" ? (mixed ? 2 : 1) : scenario.pane_counts?.at(-1) ?? 1,
+  });
+  if (scenario.kind === "general_dashboard") {
+    dataset.data_type = mixed ? "deterministic_general_cartesian_and_ohlcv" : "deterministic_general_cartesian";
+    dataset.configuration = { general_points: scenario.points, financial_points: scenario.financial_points ?? 0 };
+  }
   dataset.configuration.scenario = Object.fromEntries(Object.entries(scenario).filter(([key]) => !["id", "description", "profiles", "visibility", "warmup_runs", "measured_runs", "points", "version", "kind"].includes(key)));
   return dataset;
 }
@@ -187,26 +195,34 @@ async function run_page_scenario(page, scenario) {
   }
   if (scenario.kind === "general_dashboard") {
     const rows = [];
+    const mixed = (scenario.financial_points ?? 0) > 0;
+
     for (let run = 0; run < scenario.warmup_runs + scenario.measured_runs; run += 1) {
       if (run > 0) {
         await page.reload();
         await page.waitForFunction(() => globalThis.__Aeris_bench_ready === true);
       }
       const result = await page.evaluate(
-        (input) => globalThis.__Aeris_bench.general_dashboard(input.points),
+        (input) => globalThis.__Aeris_bench.general_dashboard(input.points, input.financial_points ?? 0, input.seed),
         { ...scenario, seed },
       );
+      if (result.pane_count !== (mixed ? 2 : 1) ||
+          result.series_count !== (mixed ? 6 : 5) ||
+          result.financial_points !== (scenario.financial_points ?? 0)) {
+        throw new Error("general workload topology does not match its scenario");
+      }
       if (run >= scenario.warmup_runs) rows.push(result);
     }
     return {
       backend: rows.at(-1).backend,
       metrics: {
-        ...samples("startup_ms", rows.map((row) => row.startup_ms), "ms", "lower_is_better", "public_candidate", "Five-series Phase 2 general dashboard creation, 100k aligned rows, and first following rAF."),
-        ...samples("frame_cpu_ms", rows.map((row) => row.frame_cpu_ms), "ms", "lower_is_better", "public_candidate", "Engine/frame CPU cost reported for the first completed representative general-dashboard frame."),
-        ...samples("wasm_linear_memory_bytes", rows.map((row) => row.wasm_linear_memory_bytes), "bytes", "lower_is_better", "public_candidate", "WASM linear memory after the representative Phase 2 general dashboard reaches its first frame."),
-        ...samples("gpu_buffer_allocations", rows.map((row) => row.gpu_buffer_allocations), "count", "lower_is_better", "internal", "WebGPU vertex-buffer allocations on the representative general-dashboard first frame."),
-        ...samples("gpu_write_calls", rows.map((row) => row.gpu_write_calls), "count", "lower_is_better", "internal", "WebGPU queue buffer writes on the representative general-dashboard first frame."),
-        ...samples("gpu_uploaded_bytes", rows.map((row) => row.gpu_uploaded_bytes), "bytes", "lower_is_better", "internal", "WebGPU vertex bytes uploaded on the representative general-dashboard first frame."),
+        ...samples("startup_ms", rows.map((row) => row.startup_ms), "ms", "lower_is_better", "public_candidate", "Creation of five general series plus configured financial history through the first following rAF."),
+        ...samples("frame_cpu_ms", rows.map((row) => row.frame_cpu_ms), "ms", "lower_is_better", "public_candidate", "Engine/frame CPU cost of the last data-install repaint in the configured general workload."),
+        ...samples("wasm_linear_memory_bytes", rows.map((row) => row.wasm_linear_memory_bytes), "bytes", "lower_is_better", "public_candidate", "Global WASM linear memory after the configured general workload reaches its first frame."),
+        ...samples("gpu_buffer_allocations", rows.map((row) => row.gpu_buffer_allocations), "count", "lower_is_better", "internal", "WebGPU vertex-buffer allocations summed over every synchronous construction and data-install repaint."),
+        ...samples("gpu_write_calls", rows.map((row) => row.gpu_write_calls), "count", "lower_is_better", "internal", "WebGPU queue buffer writes summed over every synchronous construction and data-install repaint."),
+        ...samples("gpu_uploaded_bytes", rows.map((row) => row.gpu_uploaded_bytes), "bytes", "lower_is_better", "internal", "Peak WebGPU vertex bytes uploaded by one construction or data-install repaint."),
+        ...samples("gpu_uploaded_total_bytes", rows.map((row) => row.gpu_uploaded_total_bytes), "bytes", "lower_is_better", "internal", "Total WebGPU vertex bytes uploaded over synchronous construction and data-install repaints."),
       },
     };
   }

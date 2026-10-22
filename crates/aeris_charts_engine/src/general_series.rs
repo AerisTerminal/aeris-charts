@@ -1585,10 +1585,14 @@ pub enum GeneralReferenceOptions {
         pane: usize,
         x_axis_id: String,
         y_axis_id: String,
-        x_from: GeneralReferenceValue,
-        x_to: GeneralReferenceValue,
-        y_from: GeneralReferenceValue,
-        y_to: GeneralReferenceValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x_from: Option<GeneralReferenceValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x_to: Option<GeneralReferenceValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y_from: Option<GeneralReferenceValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y_to: Option<GeneralReferenceValue>,
         #[serde(default)]
         fill_color: Option<String>,
         #[serde(default)]
@@ -1694,10 +1698,10 @@ impl GeneralReference {
                 } => {
                     x_axis_id.capacity()
                         + y_axis_id.capacity()
-                        + value_bytes(x_from)
-                        + value_bytes(x_to)
-                        + value_bytes(y_from)
-                        + value_bytes(y_to)
+                        + x_from.as_ref().map_or(0, value_bytes)
+                        + x_to.as_ref().map_or(0, value_bytes)
+                        + y_from.as_ref().map_or(0, value_bytes)
+                        + y_to.as_ref().map_or(0, value_bytes)
                         + fill_color.as_ref().map_or(0, String::capacity)
                 }
             }
@@ -10722,10 +10726,15 @@ fn validate_general_reference_options(
         } => {
             let x_axis = validate_axis(x_axis_id, AxisDimension::X)?;
             let y_axis = validate_axis(y_axis_id, AxisDimension::Y)?;
-            for value in [x_from, x_to] {
+            if x_from.is_none() && x_to.is_none() && y_from.is_none() && y_to.is_none() {
+                return Err(invalid(
+                    "general reference region requires at least one bound",
+                ));
+            }
+            for value in [x_from.as_ref(), x_to.as_ref()].into_iter().flatten() {
                 validate_general_reference_value(value, x_axis)?;
             }
-            for value in [y_from, y_to] {
+            for value in [y_from.as_ref(), y_to.as_ref()].into_iter().flatten() {
                 validate_general_reference_value(value, y_axis)?;
             }
             validate_color(fill_color)?;

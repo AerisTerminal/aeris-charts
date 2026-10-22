@@ -745,9 +745,14 @@ mod tests {
         };
         let mut vertices = Vec::new();
         geom_prim_to_tris(&prim, &[], &mut vertices);
-        assert_eq!(vertices.len(), 24 * 3 + 24 * 6);
+        // The disc fan follows the fill radius; the annulus follows its outer edge.
+        let fill = aeris_charts_render::line::circle_segments(3.0) * 3;
+        assert_eq!(
+            vertices.len(),
+            fill + aeris_charts_render::line::circle_segments(3.5) * 6
+        );
         assert!(
-            vertices[24 * 3..]
+            vertices[fill..]
                 .iter()
                 .all(|vertex| vertex.color == [1.0, 1.0, 1.0, 1.0])
         );

@@ -161,9 +161,9 @@ fn main() {
         output.push_str(&format!("pub const {name}_ALPHA: u8 = 0x{alpha:02x};\n"));
     }
     // Crosshair labels are generated aliases so every backend and host stays attached to the
-    // surface tokens: dark labels share the popover surface with tooltips, and light labels use
-    // the dark secondary surface so they stay legible over the white chart.
-    for (prefix, surface) in [("LIGHT", "DARK_MUTED"), ("DARK", "DARK_POPOVER_SURFACE")] {
+    // surface tokens: both themes use the dark secondary surface, which also keeps light labels
+    // legible over the white chart.
+    for (prefix, surface) in [("LIGHT", "DARK_MUTED"), ("DARK", "DARK_MUTED")] {
         output.push_str(&format!(
             "pub const {prefix}_CROSSHAIR_LABEL_CSS: &str = {surface}_CSS;\n"
         ));

@@ -147,6 +147,8 @@ struct AxisInput {
     #[serde(default = "default_tick_gap")]
     min_tick_gap: f64,
     #[serde(default)]
+    tick_angle: f64,
+    #[serde(default)]
     domain_padding: f64,
     #[serde(default = "default_band_padding")]
     band_padding_inner: f64,
@@ -177,6 +179,7 @@ fn axis_options_from_input(input: AxisInput) -> Result<GeneralAxisOptions, Strin
     options.tick_count = input.tick_count;
     options.ticks = input.ticks;
     options.min_tick_gap = input.min_tick_gap;
+    options.tick_angle = input.tick_angle;
     options.domain_padding = input.domain_padding;
     options.band_padding_inner = input.band_padding_inner;
     if let Some(padding) = input.band_padding_outer {
@@ -1633,6 +1636,7 @@ impl ChartInner {
             "tick_count": axis.tick_count(),
             "ticks": ticks,
             "min_tick_gap": axis.min_tick_gap(),
+            "tick_angle": axis.tick_angle(),
             "domain_padding": axis.domain_padding(),
             "band_padding_inner": axis.band_padding_inner(),
             "band_padding_outer": axis.band_padding_outer(),

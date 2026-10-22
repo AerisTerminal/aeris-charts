@@ -6380,6 +6380,142 @@ fn general_pane_proposal_validates_references_against_proposed_axes_without_muta
 }
 
 #[test]
+fn reference_regions_use_plot_edges_through_axis_zoom_and_mixed_layout() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        420.0,
+        280.0,
+        1.0,
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+    )
+    .unwrap();
+    let pane = 0;
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        let mut axis = GeneralAxisOptions::new(id, pane, dimension, GeneralScaleType::Linear);
+        axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(axis).unwrap();
+    }
+    let options: GeneralReferenceOptions = serde_json::from_str(
+        r##"{"kind":"region","pane":0,"x_axis_id":"x","y_axis_id":"y",
+             "x_from":{"type":"numeric","value":2.0},
+             "x_to":{"type":"numeric","value":8.0},
+             "fill_color":"#2468ac"}"##,
+    )
+    .unwrap();
+    let reference = chart.add_general_reference(options).unwrap();
+    let color = Color::parse_css("#2468ac").unwrap();
+    let check = |chart: &mut ChartEngine, pane: usize| {
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let frame = chart.build_frame();
+        let plot = chart.general_plot_rect(pane).unwrap();
+        let rect = frame.panes[pane]
+            .main
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::Rect { rect, color: fill } if *fill == color => Some(*rect),
+                _ => None,
+            })
+            .expect("full-height reference region");
+        assert_eq!(rect.y, plot.y.round() as i32);
+        assert_eq!(rect.h, (plot.y + plot.height).round() as i32 - rect.y);
+        assert!(rect.w > 0);
+    };
+    check(&mut chart, pane);
+    chart.zoom_general_axis("y", 2.0, 5.0).unwrap();
+    check(&mut chart, pane);
+    let invalid: GeneralReferenceOptions = serde_json::from_str(
+        r##"{"kind":"region","pane":0,"x_axis_id":"x","y_axis_id":"y",
+             "fill_color":"#2468ac"}"##,
+    )
+    .unwrap();
+    assert!(
+        chart
+            .update_general_reference_options(reference, invalid)
+            .is_err()
+    );
+    assert_eq!(chart.general_reference_ids(Some(pane)), vec![reference]);
+
+    let y_only: GeneralReferenceOptions = serde_json::from_str(
+        r##"{"kind":"region","pane":0,"x_axis_id":"x","y_axis_id":"y",
+             "y_from":{"type":"numeric","value":3.0},
+             "y_to":{"type":"numeric","value":7.0},
+             "fill_color":"#7b438f"}"##,
+    )
+    .unwrap();
+    chart.add_general_reference(y_only).unwrap();
+    let frame = chart.build_frame();
+    let plot = chart.general_plot_rect(pane).unwrap();
+    let rect = frame.panes[pane]
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::Rect { rect, color } if *color == Color::parse_css("#7b438f").unwrap() => {
+                Some(*rect)
+            }
+            _ => None,
+        })
+        .expect("full-width reference region");
+    assert_eq!(rect.x, plot.x.round() as i32);
+    assert_eq!(rect.w, plot.width.round() as i32);
+
+    for (bound, value, color) in [("x_to", 4.0, "#af5c36"), ("y_to", 4.0, "#4378a1")] {
+        let mut options = serde_json::json!({
+            "kind": "region", "pane": pane, "x_axis_id": "x", "y_axis_id": "y",
+            "fill_color": color,
+        });
+        options[bound] = serde_json::json!({"type": "numeric", "value": value});
+        chart
+            .add_general_reference(serde_json::from_value(options).unwrap())
+            .unwrap();
+        let frame = chart.build_frame();
+        let plot = chart.general_plot_rect(pane).unwrap();
+        let rect = frame.panes[pane]
+            .main
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::Rect { rect, color: fill } if *fill == Color::parse_css(color).unwrap() => {
+                    Some(*rect)
+                }
+                _ => None,
+            })
+            .expect("one-sided reference region");
+        if bound == "x_to" {
+            assert_eq!(rect.x, plot.x.round() as i32);
+            assert_eq!(rect.h, (plot.y + plot.height).round() as i32 - rect.y);
+        } else {
+            assert_eq!(rect.y, plot.y.round() as i32);
+            assert_eq!(rect.w, plot.width.round() as i32);
+        }
+    }
+
+    let mut mixed = ChartEngine::new(420.0, 280.0, 1.0);
+    let mixed_pane = mixed
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+        let mut axis = GeneralAxisOptions::new(id, mixed_pane, dimension, GeneralScaleType::Linear);
+        axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        mixed.add_general_axis(axis).unwrap();
+    }
+    let mixed_options: GeneralReferenceOptions = serde_json::from_value(serde_json::json!({
+        "kind": "region", "pane": mixed_pane, "x_axis_id": "x", "y_axis_id": "y",
+        "x_from": {"type": "numeric", "value": 2.0},
+        "x_to": {"type": "numeric", "value": 8.0},
+        "fill_color": "#2468ac"
+    }))
+    .unwrap();
+    mixed.add_general_reference(mixed_options).unwrap();
+    check(&mut mixed, mixed_pane);
+    mixed.zoom_general_axis("y", 2.0, 5.0).unwrap();
+    check(&mut mixed, mixed_pane);
+}
+#[test]
 fn general_references_render_all_kinds_and_extend_domains_only_when_requested() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     let pane = chart
@@ -6471,10 +6607,10 @@ fn general_references_render_all_kinds_and_extend_domains_only_when_requested() 
             pane,
             x_axis_id: "ref-x".into(),
             y_axis_id: "ref-y".into(),
-            x_from: crate::GeneralReferenceValue::Numeric(0.2),
-            x_to: crate::GeneralReferenceValue::Numeric(0.8),
-            y_from: crate::GeneralReferenceValue::Numeric(0.2),
-            y_to: crate::GeneralReferenceValue::Numeric(0.8),
+            x_from: Some(crate::GeneralReferenceValue::Numeric(0.2)),
+            x_to: Some(crate::GeneralReferenceValue::Numeric(0.8)),
+            y_from: Some(crate::GeneralReferenceValue::Numeric(0.2)),
+            y_to: Some(crate::GeneralReferenceValue::Numeric(0.8)),
             fill_color: Some("rgba(10,20,30,0.25)".into()),
             extend_domain: false,
         })
@@ -6500,6 +6636,25 @@ fn general_references_render_all_kinds_and_extend_domains_only_when_requested() 
         main.iter()
             .any(|primitive| matches!(primitive, Prim::VLine { .. }))
     );
+    let region_position = main
+        .iter()
+        .position(|primitive| {
+            matches!(primitive, Prim::Rect { color, .. }
+                if *color == Color::parse_css("rgba(10,20,30,0.25)").unwrap())
+        })
+        .unwrap();
+    let series_position = main
+        .iter()
+        .position(|primitive| matches!(primitive, Prim::Polyline { .. }))
+        .unwrap();
+    let dot_position = main
+        .iter()
+        .position(|primitive| {
+            matches!(primitive, Prim::Circle { fill, .. }
+                if *fill == Color::parse_css("#778899").unwrap())
+        })
+        .unwrap();
+    assert!(region_position < series_position && series_position < dot_position);
 
     let before = chart.general_reference_options(ignored).unwrap();
     let invalid = crate::GeneralReferenceOptions::Line {
@@ -6536,6 +6691,27 @@ fn general_references_render_all_kinds_and_extend_domains_only_when_requested() 
         panic!("reference X axis must remain numeric");
     };
     assert!(updated_domain[1] >= 50.0);
+
+    let one_sided = chart
+        .add_general_reference(crate::GeneralReferenceOptions::Region {
+            pane,
+            x_axis_id: "ref-x".into(),
+            y_axis_id: "ref-y".into(),
+            x_from: None,
+            x_to: Some(crate::GeneralReferenceValue::Numeric(75.0)),
+            y_from: None,
+            y_to: None,
+            fill_color: Some("#af5c36".into()),
+            extend_domain: true,
+        })
+        .unwrap();
+    let GeneralAxisDomain::Numeric(one_sided_domain) =
+        chart.general_axis_effective_domain("ref-x").unwrap()
+    else {
+        panic!("one-sided region X axis must remain numeric");
+    };
+    assert!(one_sided_domain[1] >= 75.0);
+    assert!(chart.remove_general_reference(one_sided));
 
     assert!(chart.remove_general_reference(ignored));
     assert_eq!(

@@ -1476,13 +1476,40 @@ impl ChartEngine {
             else {
                 continue;
             };
-            let (Some(x0), Some(x1), Some(y0), Some(y1)) = (
-                self.general_reference_coordinate(x_axis_id, x_from, plot),
-                self.general_reference_coordinate(x_axis_id, x_to, plot),
-                self.general_reference_coordinate(y_axis_id, y_from, plot),
-                self.general_reference_coordinate(y_axis_id, y_to, plot),
-            ) else {
+            let x0 = match x_from {
+                Some(value) => self.general_reference_coordinate(x_axis_id, value, plot),
+                None => Some(0.0),
+            };
+            let x1 = match x_to {
+                Some(value) => self.general_reference_coordinate(x_axis_id, value, plot),
+                None => Some(plot.width),
+            };
+            let (Some(x0), Some(x1)) = (x0, x1) else {
                 continue;
+            };
+            let (y0, y1) = match (y_from, y_to) {
+                (Some(from), Some(to)) => {
+                    let (Some(y0), Some(y1)) = (
+                        self.general_reference_coordinate(y_axis_id, from, plot),
+                        self.general_reference_coordinate(y_axis_id, to, plot),
+                    ) else {
+                        continue;
+                    };
+                    (y0, y1)
+                }
+                (Some(from), None) => {
+                    let Some(y0) = self.general_reference_coordinate(y_axis_id, from, plot) else {
+                        continue;
+                    };
+                    (y0, plot.y + plot.height)
+                }
+                (None, Some(to)) => {
+                    let Some(y1) = self.general_reference_coordinate(y_axis_id, to, plot) else {
+                        continue;
+                    };
+                    (plot.y, y1)
+                }
+                (None, None) => (plot.y, plot.y + plot.height),
             };
             let left = (x0.min(x1) * hpr).round() as i32;
             let right = (x0.max(x1) * hpr).round() as i32;

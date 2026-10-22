@@ -148,7 +148,7 @@
       "properties": {
         "generator_version": { "type": "integer", "minimum": 1 },
         "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
-        "data_type": { "const": "deterministic_ohlcv" },
+        "data_type": { "enum": ["deterministic_ohlcv", "deterministic_general_cartesian", "deterministic_general_cartesian_and_ohlcv"] },
         "points": { "type": "integer", "minimum": 0 },
         "series_count": { "type": "integer", "minimum": 0 },
         "pane_count": { "type": "integer", "minimum": 0 },
