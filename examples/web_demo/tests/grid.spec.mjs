@@ -99,11 +99,11 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     header: "rgb(0, 0, 0)",
     chart: "#000000",
     axis_text: "#ededed",
-    axis_border: "#2e2e2e",
-    grid: "#2e2e2e",
-    border_control: "#2e2e2e",
+    axis_border: "#2c2c2c",
+    grid: "#2c2c2c",
+    border_control: "#2c2c2c",
     crosshair_control: "#fafafa",
-    crosshair_label_control: "#0a0a0a",
+    crosshair_label_control: "#171717",
     bullish: "#089981",
     bearish: "#f7525f",
   });
@@ -121,7 +121,7 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     grid: "#cecece",
     border_control: "#cecece",
     crosshair_control: "#0a0a0a",
-    crosshair_label_control: "#0a0a0a",
+    crosshair_label_control: "#171717",
     bullish: "#089981",
     bearish: "#f7525f",
   });
@@ -158,7 +158,8 @@ test("portable design tokens and disabled controls match the brand contract", as
   const dark = await tokens();
   expect(Object.values(dark).every(Boolean)).toBe(true);
   expect(dark).toMatchObject({
-    surface: "#000000", "surface-secondary": "#fafafa0a", "surface-popover": "#010101", border: "#2e2e2e",
+    surface: "#000000", "surface-secondary": "#171717", "surface-popover": "#010101", border: "#2c2c2c",
+    "border-secondary": "#404040", "hover-bg": "#fafafa1f",
     "border-width": "1px", "text-default": "#ededed", "text-secondary": "#fafafa8c", "text-muted": "#fafafa59",
     "text-hover": "#ededed", "icon-active": "#ededed", "warning-hover": "#ff7b1f", "warning-foreground": "#ffffff", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
     "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",

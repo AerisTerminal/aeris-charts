@@ -119,7 +119,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     muted_text: "#717171",
     border: "#cecece",
     crosshair: "#0a0a0a26",
-    crosshair_label: "#0a0a0a",
+    crosshair_label: "#171717",
     bullish: "#089981",
     bearish: "#f7525f",
   });
@@ -145,7 +145,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     primary: "#006edd",
     primary_foreground: "#ffffff",
     primary_hover: "#0058b1",
-    border: "#2e2e2e",
+    border: "#2c2c2c",
     bullish: "#089981",
     bearish: "#f7525f",
   });
@@ -153,9 +153,9 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     background: "#000000",
     text: "#ededed",
     muted_text: "#898989",
-    border: "#2e2e2e",
-    crosshair: "#fafafa2f",
-    crosshair_label: "#0a0a0a",
+    border: "#2c2c2c",
+    crosshair: "#fafafa2d",
+    crosshair_label: "#171717",
     bullish: "#089981",
     bearish: "#f7525f",
   });

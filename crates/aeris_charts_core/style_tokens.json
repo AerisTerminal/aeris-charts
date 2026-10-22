@@ -44,13 +44,13 @@
     "primary_hover": "#0058b1",
     "danger": "#f7525f",
     "warning": "#ff6900",
-    "muted": "#0a0a0a",
+    "muted": "#171717",
     "raised": "#141414",
     "muted_foreground": "#898989",
-    "accent": "#131313",
+    "accent": "#1e1e1e",
     "active": "#252525",
-    "border": "#2e2e2e",
-    "muted_border": "#252525",
+    "border": "#2c2c2c",
+    "muted_border": "#404040",
     "ring": "#303030",
     "bullish": "#089981",
     "bearish": "#f7525f",
@@ -62,7 +62,7 @@
     "popover_highlight_alpha": 26,
     "popover_muted_foreground": "#8a8a8a",
     "crosshair_line": "#fafafa",
-    "crosshair_line_alpha": 47
+    "crosshair_line_alpha": 45
   },
   "market": {
     "up": "#089981",

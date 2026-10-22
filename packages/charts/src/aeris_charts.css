@@ -131,7 +131,7 @@
 
   /* Surfaces */
   --surface: #000000;
-  --surface-secondary: #fafafa0a;
+  --surface-secondary: #171717;
   --surface-subtle: #fafafa0a;
   --surface-raised: #fafafa14;
   --surface-overlay: color-mix(in srgb, #000000 60%, transparent);
@@ -139,8 +139,8 @@
   --surface-popover: #010101;
 
   /* Borders */
-  --border: #2E2E2E;
-  --border-secondary: #fafafa26;
+  --border: #2c2c2c;
+  --border-secondary: #404040;
   --border-subtle: #fafafa12;
   --border-softer: #fafafa0d;
   --border-strong: #fafafa33;
@@ -162,7 +162,7 @@
   --text-active: #ededed;
 
   /* Interaction states */
-  --hover-bg: #fafafa13;
+  --hover-bg: #fafafa1f;
   --active-bg: #fafafa26;
   --disabled-bg: #fafafa0d;
 
