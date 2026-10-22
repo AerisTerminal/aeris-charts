@@ -39,16 +39,17 @@ mod tests {
         assert_eq!(LIGHT_PRIMARY_FOREGROUND_CSS, "#ffffff");
         assert_eq!(LIGHT_PRIMARY_HOVER_CSS, "#338be4");
         assert_eq!(LIGHT_DANGER_CSS, "#f7525f");
-        assert_eq!(LIGHT_ACCENT_CSS, "#f3f3f3");
-        assert_eq!(LIGHT_ACTIVE_CSS, "#f3f3f3");
+        // `--hover-bg` (#0a0a0a14) and `--active-bg` (#0a0a0a1f) over white.
+        assert_eq!(LIGHT_ACCENT_CSS, "#ececec");
+        assert_eq!(LIGHT_ACTIVE_CSS, "#e1e1e1");
         // `--hover-bg` (#fafafa1f) over the dark surface.
         assert_eq!(DARK_ACCENT_CSS, "#1e1e1e");
         assert_eq!(DARK_ACTIVE_CSS, "#252525");
         // `--border` (#0a0a0a33) over white; the popover border resolves to the same token.
         assert_eq!(LIGHT_BORDER_CSS, "#cecece");
         assert_eq!(LIGHT_POPOVER_BORDER_CSS, LIGHT_BORDER_CSS);
-        // `--border-secondary` (#0a0a0a1a) over white.
-        assert_eq!(LIGHT_MUTED_BORDER_CSS, "#e6e6e6");
+        // `--border-secondary` (#0a0a0a33) over white, the same tone as `--border`.
+        assert_eq!(LIGHT_MUTED_BORDER_CSS, LIGHT_BORDER_CSS);
         assert_eq!(LIGHT_RING_CSS, "#e0e0e0");
         assert_eq!(DARK_SURFACE_CSS, "#000000");
         assert_eq!(DARK_FOREGROUND_CSS, "#ededed");
