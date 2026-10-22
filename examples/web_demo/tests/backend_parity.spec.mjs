@@ -2067,9 +2067,14 @@ test("fixed-clock general line motion reaches presented Canvas2D and WebGPU fram
     const blue = (png) => {
       let count = 0;
       let sumY = 0;
+      // #2962ff over white leaves blue at 255 and lowers red by 214 per unit coverage, while the
+      // gray axes and labels keep blue equal to red, so this sums stroke area independently of how a
+      // rasterizer distributes antialiased edge rows across the threshold above.
+      let ink = 0;
       for (let y = 0; y < png.height; y++) {
         for (let x = 0; x < png.width; x++) {
           const i = (y * png.width + x) * 4;
+          ink += Math.max(0, png.data[i + 2] - png.data[i]) / 214;
           if (png.data[i + 2] > 150 && png.data[i + 2] > png.data[i] + 50
               && png.data[i + 2] > png.data[i + 1] + 30) {
             count++;
@@ -2077,7 +2082,7 @@ test("fixed-clock general line motion reaches presented Canvas2D and WebGPU fram
           }
         }
       }
-      return { count, centerY: sumY / count };
+      return { count, ink, centerY: sumY / count };
     };
     return { backend: actual, before: blue(before), middle: blue(middle), after: blue(after) };
   };
@@ -2091,7 +2096,7 @@ test("fixed-clock general line motion reaches presented Canvas2D and WebGPU fram
     expect(result.middle.centerY).toBeGreaterThan(result.after.centerY + 20);
   }
   expect(Math.abs(canvas.middle.centerY - gpu.middle.centerY)).toBeLessThan(2);
-  expect(Math.abs(canvas.middle.count - gpu.middle.count)).toBeLessThan(12);
+  expect(Math.abs(canvas.middle.ink - gpu.middle.ink)).toBeLessThan(canvas.middle.ink * 0.02);
 });
 test("optional reference regions match in presented Canvas2D and WebGPU frames", async ({ page }) => {
   const captures = [];

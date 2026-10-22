@@ -666,8 +666,8 @@ fn is_scroll_container(element: &web_sys::Element, window: &web_sys::Window) -> 
 
 /// Where the compositor actually places `element` (its padding box when `padding`), in device
 /// pixels. Layout positions are fractional at 125%/150% scaling, but a scrolled layer is snapped:
-/// Chromium rounds a scroll container's content origin to a whole device pixel and scrolls it by
-/// whole device pixels, so the element keeps its fractional offset relative to that rounded origin,
+/// Chromium rounds a scroll container's content position to a whole device pixel and scrolls it by
+/// whole device pixels, so the element keeps its fractional offset relative to that rounded position,
 /// not the one `getBoundingClientRect` reports. Measured in Chromium at 1.25, 1.5 and 1.75 with the
 /// scroll container both at rest and scrolled.
 fn composited_device_origin(
@@ -692,7 +692,7 @@ fn composited_device_origin(
     let mut parent = element.parent_element();
     while let Some(scroller) = parent {
         let tag = scroller.tag_name();
-        // The root scroller's origin is the viewport origin, already whole device pixels.
+        // The root scroller starts at the viewport's top-left corner, already whole device pixels.
         if tag.eq_ignore_ascii_case("html") || tag.eq_ignore_ascii_case("body") {
             break;
         }

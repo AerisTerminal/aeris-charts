@@ -333,7 +333,7 @@ cursor only; general panes still paint no horizontal crosshair rule or axis tags
 
 A follow-up post-G7 presentation fix, also without closing an R8 item, makes general axis lines
 one whole device pixel at every DPR, drops grid and zero rules that would double an axis line, and
-snaps the GPUI element origin to device pixels so scrolled charts keep crisp rules. The GPUI gallery
+snaps the GPUI element's top-left corner to device pixels so scrolled charts keep crisp rules. The GPUI gallery
 and browser dashboard drop card headers and enable grids, and the browser dashboard keeps charts
 mounted after they scroll out of view instead of re-creating them blank.
 

@@ -81,7 +81,7 @@ struct Transform {
 }
 
 impl Transform {
-    /// The element origin is snapped to the device-pixel grid. A scrolled or fractionally laid
+    /// The element's top-left corner is snapped to the device-pixel grid. A scrolled or fractionally laid
     /// out element otherwise shifts every integer-aligned device rect by a sub-pixel phase, and
     /// GPUI antialiases a one-pixel rule across two lighter pixels.
     fn new(viewport: AerisViewport, scale_factor: f32) -> Self {
@@ -503,10 +503,10 @@ impl GpuiChartRenderer {
         }
         let started = std::time::Instant::now();
         self.shaped_text.reset_counters();
-        let background_bounds = Bounds {
-            origin: Transform::new(viewport, scale_factor).point(0.0, 0.0),
-            size: size(px(viewport.width), px(viewport.height)),
-        };
+        let background_bounds = Bounds::new(
+            Transform::new(viewport, scale_factor).point(0.0, 0.0),
+            size(px(viewport.width), px(viewport.height)),
+        );
         window.paint_quad(fill(background_bounds, to_background(prepared.background)));
         // Move the plan out so the borrow checker allows both caches alongside it; the allocation
         // returns to `self` before the method ends, so nothing is reallocated.
