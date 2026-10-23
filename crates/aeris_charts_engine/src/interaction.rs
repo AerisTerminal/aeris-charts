@@ -619,14 +619,28 @@ pub const KEYBOARD_KINETIC_MAX_SPEED_PER_STEP: f64 = 0.020;
 /// reference pane-widget.ts `pinchEvent`: the incremental scale multiplier per pinch step.
 pub const PINCH_ZOOM_INTENSITY: f64 = 5.0;
 
-/// reference chart-widget.ts `_onMousewheel`: `scrollChart(deltaX * -80)` — "80 is a made up
-/// coefficient, and minus is for the 'natural' scroll".
-pub const WHEEL_SCROLL_PX_PER_DELTA: f64 = -80.0;
+/// Wheel pan moves the chart one CSS pixel per normalized wheel pixel (minus is the "natural"
+/// direction), so a trackpad swipe tracks the fingers and a 100 px notch pans 100 px. The public
+/// reference damps this to 80 px, which makes horizontal wheel pan lag the gesture.
+pub const WHEEL_SCROLL_PX_PER_DELTA: f64 = -100.0;
 
-/// Convert a host-normalized wheel delta to the independently measured reference zoom increment. The input
-/// saturates at one normalized wheel step so unusually large OS/browser deltas stay bounded.
+/// Bar-spacing ratio applied by one normalized 100 px wheel notch.
+pub const WHEEL_ZOOM_FACTOR_PER_NOTCH: f64 = 1.15;
+
+/// Notches one wheel sample may apply. Browsers and OS wheel stacks coalesce a fast spin into one
+/// large delta, so a one-notch cap silently drops most of a quick spin; this bound keeps fast spins
+/// fast while a pathological delta still cannot jump the zoom arbitrarily.
+pub const WHEEL_ZOOM_MAX_NOTCHES: f64 = 5.0;
+
+/// Convert a host-normalized wheel delta to the time scale's zoom increment (tenths of the current
+/// bar spacing). The ratio is exponential in the delta, so a notch in followed by a notch out
+/// restores the spacing exactly and small trackpad deltas sum to the same zoom as one notch.
 pub fn wheel_zoom_scale(delta_y: f64) -> f64 {
-    delta_y.signum() * delta_y.abs().min(1.0)
+    if !delta_y.is_finite() {
+        return 0.0;
+    }
+    let notches = delta_y.clamp(-WHEEL_ZOOM_MAX_NOTCHES, WHEEL_ZOOM_MAX_NOTCHES);
+    10.0 * (WHEEL_ZOOM_FACTOR_PER_NOTCH.powf(notches) - 1.0)
 }
 
 /// reference pane-widget.ts `pinchEvent`: the scale ratio delta since the previous step, times
@@ -888,8 +902,8 @@ impl ChartEngine {
 
     /// industry-standard wheel zoom on a price axis (the reference has no price-axis wheel;
     /// the time axis wheel is `_onMousewheel` → `zoomTime`). `scale` is the same normalized
-    /// increment the time-axis wheel consumes (`wheel_zoom_scale`), converted to a per-notch
-    /// range factor: 10% per full notch, anchored at the cursor's price.
+    /// increment the time-axis wheel consumes (`wheel_zoom_scale`); the price range shrinks by the
+    /// ratio bar spacing would grow, anchored at the cursor's price.
     pub fn price_axis_wheel_zoom(
         &mut self,
         pane: usize,
@@ -897,7 +911,7 @@ impl ChartEngine {
         y: f64,
         scale: f64,
     ) {
-        let factor = (1.0 - scale * 0.1).clamp(0.05, 20.0);
+        let factor = (1.0 / (1.0 + scale * 0.1).max(0.05)).clamp(0.05, 20.0);
         if let Some(price_scale) = self.price_scale_for_mut(pane, target) {
             price_scale.zoom(y, factor);
             self.invalidate_frame_scene();
@@ -1706,12 +1720,25 @@ mod tests {
     }
 
     #[test]
-    fn wheel_pinch_and_scroll_use_reference_coefficients() {
-        assert_eq!(wheel_zoom_scale(0.42), 0.42);
-        assert_eq!(wheel_zoom_scale(-3.7), -1.0);
+    fn wheel_zoom_is_exponential_bounded_and_pan_tracks_the_gesture() {
+        let ratio = |delta: f64| 1.0 + wheel_zoom_scale(delta) / 10.0;
+        assert!((ratio(1.0) - 1.15).abs() < 1e-12);
+        assert!((ratio(1.0) * ratio(-1.0) - 1.0).abs() < 1e-12);
+        assert!((ratio(0.25).powi(4) - ratio(1.0)).abs() < 1e-12);
+        // A coalesced fast spin keeps every notch up to the bound.
+        assert!((ratio(3.0) - 1.15f64.powi(3)).abs() < 1e-12);
+        assert_eq!(
+            wheel_zoom_scale(40.0),
+            wheel_zoom_scale(WHEEL_ZOOM_MAX_NOTCHES)
+        );
+        assert_eq!(
+            wheel_zoom_scale(-40.0),
+            wheel_zoom_scale(-WHEEL_ZOOM_MAX_NOTCHES)
+        );
         assert_eq!(wheel_zoom_scale(0.0), 0.0);
+        assert_eq!(wheel_zoom_scale(f64::NAN), 0.0);
         assert_eq!(pinch_zoom_scale(0.1), 0.5);
-        assert_eq!(WHEEL_SCROLL_PX_PER_DELTA, -80.0);
+        assert_eq!(WHEEL_SCROLL_PX_PER_DELTA, -100.0);
         assert_eq!(PINCH_ZOOM_INTENSITY, 5.0);
     }
 

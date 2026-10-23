@@ -824,8 +824,8 @@ mod tests {
 
     #[test]
     fn ordinary_zoom_pins_the_right_edge_by_default_like_tradingview() {
-        // Measured on TradingView: one wheel notch scales bar spacing by exactly 1.1 / 0.9 while
-        // the right offset in bars (the gap after the latest bar) stays constant.
+        // A unit zoom increment scales bar spacing by exactly 1.1 / 0.9 while the right offset in
+        // bars (the gap after the latest bar) stays constant.
         let mut s = scale(400.0, 6.0, 7.0, 500, 300);
         assert!(s.options().right_bar_stays_on_scroll);
         let cursor = 250.0;
