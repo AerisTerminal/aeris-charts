@@ -530,6 +530,16 @@
         </select>
       </label>
       <label title="Stroke width in CSS px — templates new drawings and applies live to the selected one">w <input type="range" id="drawing_width" min="1" max="8" step="1" value="1"><span id="drawing_width_val">1</span></label>
+      <label title="Rectangle middle line through the vertical center — templates new rectangles and applies live to the selected one"><input type="checkbox" id="drawing_middle_line"> mid line</label>
+      <label title="Rectangle middle-line color (follows the border color until changed)">mid <input type="color" id="drawing_middle_line_color" value="#168ef7"></label>
+      <label title="Rectangle middle-line style">mid style
+        <select id="drawing_middle_line_style">
+          <option value="solid">solid</option>
+          <option value="dotted">dotted</option>
+          <option value="dashed" selected>dashed</option>
+        </select>
+      </label>
+      <label title="Rectangle middle-line width in CSS px">mid w <input type="number" id="drawing_middle_line_width" min="1" max="8" step="1" value="1"></label>
       <label title="Standalone Text tool content; trend-line labels are edited in place">text tool <input type="text" id="drawing_text" size="8"></label>
       <label title="Label text color — templates new drawings and applies live to the selected one">text <input type="color" id="drawing_text_color" value="#f0f0f0"></label>
       <label title="Label font size in CSS px — templates new drawings and applies live to the selected one">size <input type="number" id="drawing_text_size" min="8" max="72" step="1" value="14"></label>
@@ -1297,6 +1307,10 @@ let drawing_text_color_explicit = false;
 // until then.
 let drawing_width_explicit = false;
 let drawing_style_explicit = false;
+// Rectangle middle-line options template only after the user touches them; its color keeps
+// following the border color until the color input itself changes.
+let drawing_middle_line_explicit = false;
+let drawing_middle_line_color_explicit = false;
 function drawing_options_from_inputs(kind = null) {
   const options = {
     position_account_size: Number(document.getElementById("position_account_size").value),
@@ -1316,6 +1330,14 @@ function drawing_options_from_inputs(kind = null) {
   }
   if (drawing_style_explicit) {
     options.style = document.getElementById("drawing_style").value;
+  }
+  if (drawing_middle_line_explicit) {
+    options.middle_line_visible = document.getElementById("drawing_middle_line").checked;
+    options.middle_line_style = document.getElementById("drawing_middle_line_style").value;
+    options.middle_line_width = Number(document.getElementById("drawing_middle_line_width").value);
+  }
+  if (drawing_middle_line_color_explicit) {
+    options.middle_line_color = document.getElementById("drawing_middle_line_color").value;
   }
   if (kind === "text") options.text = document.getElementById("drawing_text").value;
   return options;
@@ -1404,10 +1426,22 @@ function sync_drawing_inputs_from_selection() {
   document.getElementById("drawing_italic").checked = o.text_italic;
   set("drawing_text_h_align", o.text_h_align);
   set("drawing_text_v_align", o.text_v_align);
+  if (selected.kind() === "rectangle") {
+    document.getElementById("drawing_middle_line").checked = o.middle_line_visible;
+    set("drawing_middle_line_style", o.middle_line_style);
+    set("drawing_middle_line_width", String(o.middle_line_width));
+    drawing_middle_line_color_explicit = o.middle_line_color !== "";
+    set("drawing_middle_line_color", css_to_hex(o.middle_line_color) ?? css_to_hex(o.color));
+  }
 }
 document.getElementById("chart_container").addEventListener("pointerup", () => setTimeout(sync_drawing_inputs_from_selection, 0));
-for (const id of ["position_account_size", "position_risk_percent", "drawing_color", "drawing_style", "drawing_width", "drawing_text_color", "drawing_text_size", "drawing_weight", "drawing_italic", "drawing_text_h_align", "drawing_text_v_align"]) {
+for (const id of ["position_account_size", "position_risk_percent", "drawing_color", "drawing_style", "drawing_width", "drawing_middle_line", "drawing_middle_line_color", "drawing_middle_line_style", "drawing_middle_line_width", "drawing_text_color", "drawing_text_size", "drawing_weight", "drawing_italic", "drawing_text_h_align", "drawing_text_v_align"]) {
   document.getElementById(id).addEventListener("change", () => {
+    if (id.startsWith("drawing_middle_line")) drawing_middle_line_explicit = true;
+    if (id === "drawing_middle_line_color") drawing_middle_line_color_explicit = true;
+    if (id === "drawing_color" && !drawing_middle_line_color_explicit) {
+      document.getElementById("drawing_middle_line_color").value = document.getElementById("drawing_color").value;
+    }
     if (id === "drawing_text_color") drawing_text_color_explicit = true;
     if (id === "drawing_width") drawing_width_explicit = true;
     if (id === "drawing_style") drawing_style_explicit = true;

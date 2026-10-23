@@ -71,12 +71,12 @@ impl TradeStudyOptions {
     }
 }
 
-/// How a CVD series draws: one line through each bar's closing value, or one candle per bar
-/// spanning its opening value, running intrabar extremes and close.
+/// How a CVD series draws: one candle per bar spanning its opening value, running intrabar
+/// extremes and close (the default), or one line through each bar's closing value.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CumulativeDeltaStyle {
-    #[default]
     Line,
+    #[default]
     Candles,
 }
 
@@ -7585,6 +7585,25 @@ mod tests {
                 vec![0.0, -4.0],
                 vec![0.0, -4.0]
             ]
+        );
+    }
+
+    #[test]
+    fn cvd_draws_as_candles_by_default() {
+        assert_eq!(
+            TradeStudyOptions::default().style,
+            CumulativeDeltaStyle::Candles
+        );
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let stream = chart
+            .add_trade_stream("CME:ES", FootprintAggregationOptions::default())
+            .unwrap();
+        let cvd = chart
+            .add_cvd_series(stream, 1, TradeStudyOptions::default())
+            .unwrap();
+        assert_eq!(
+            chart.series_entry(cvd).unwrap().kind,
+            SeriesKind::Candlestick
         );
     }
 

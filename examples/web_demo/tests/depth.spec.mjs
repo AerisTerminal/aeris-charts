@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { PNG } from "pngjs";
 
 async function open_chart(page, backend = "canvas2d") {
   await page.goto(`/?runtimeTest=presentedFrame&backend=${backend}&forceFallbackAdapter=1`);
@@ -180,4 +181,83 @@ test("time and sales is bounded, classified, filtered, and newest first", async 
     expect.objectContaining({ volume: 5, aggressor: "buy", trade_id: "3" }),
     expect.objectContaining({ volume: 3, aggressor: "buy", trade_id: "2" }),
   ]);
+});
+
+function count_anchor_border(png) {
+  // Semantic primary #006edd, the selection anchor border.
+  let n = 0;
+  for (let o = 0; o < png.data.length; o += 4) {
+    if (Math.abs(png.data[o]) <= 30 && Math.abs(png.data[o + 1] - 110) <= 30 && Math.abs(png.data[o + 2] - 221) <= 30) n += 1;
+  }
+  return n;
+}
+
+async function chart_capture(page) {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const data_url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
+  return PNG.sync.read(Buffer.from(data_url.split(",")[1], "base64"));
+}
+
+test("depth profile and heatmap are hovered, selected and deselected like other indicators", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+  const spot = await page.evaluate(() => {
+    const chart = window.__chart;
+    const last = window.__data.at(-1);
+    const center = Math.round(last.close * 4) / 4;
+    const stream = chart.add_depth_stream("BROWSER:DEPTH:SELECT", { tick_size: 0.25 });
+    chart.set_depth_snapshot_typed(stream, {
+      timestamp_micros: last.time * 1_000_000,
+      sequence_high: 0,
+      sequence_low: 1,
+      bids: { prices: new Float64Array([center, center - 0.25]), sizes: new Float64Array([10, 100]), order_counts: new Uint32Array([1, 1]) },
+      asks: { prices: new Float64Array([center + 0.25, center + 0.5]), sizes: new Float64Array([10, 12]), order_counts: new Uint32Array([1, 1]) },
+    });
+    const profile = chart.add_depth_profile(stream, { max_width: 120, show_sizes: false });
+    const heatmap = chart.add_depth_heatmap(stream, { price_min: center - 2, price_max: center + 2, maximum_size: 100 });
+    window.__depth_select = { stream, profile, heatmap };
+    const bounds = document.getElementById("chart_container").getBoundingClientRect();
+    return {
+      profile,
+      heatmap,
+      x: bounds.left + chart.wasm.pane_left() + chart.time_scale().width() - 60,
+      y: bounds.top + window.__main.price_to_coordinate(center - 0.25),
+    };
+  });
+  const cursor = () => page.evaluate(() => {
+    const canvases = document.querySelectorAll("#chart_container canvas");
+    return canvases[canvases.length - 1].style.cursor;
+  });
+  const selected = () => page.evaluate(() => ({
+    profile: window.__chart.selected_depth_profile(),
+    heatmap: window.__chart.selected_depth_heatmap(),
+  }));
+
+  const before = count_anchor_border(await chart_capture(page));
+  await page.mouse.move(spot.x, spot.y);
+  await expect.poll(cursor).toBe("pointer");
+  await page.mouse.click(spot.x, spot.y);
+  expect(await selected()).toEqual({ profile: spot.profile, heatmap: null });
+  // At this zoom the four levels merge into one ask row and one bid row: two bar-tip discs.
+  expect(count_anchor_border(await chart_capture(page)), "selection anchors paint").toBeGreaterThan(before + 8);
+
+  await page.keyboard.press("Escape");
+  expect(await selected()).toEqual({ profile: null, heatmap: null });
+  expect(count_anchor_border(await chart_capture(page))).toBeLessThanOrEqual(before);
+
+  // The heatmap shares the exclusive selection: selecting it drops the profile, Escape clears it.
+  await page.waitForTimeout(550);
+  await page.mouse.click(spot.x, spot.y);
+  expect(await page.evaluate((id) => window.__chart.select_depth_heatmap(id), spot.heatmap)).toBe(true);
+  expect(await selected()).toEqual({ profile: null, heatmap: spot.heatmap });
+  await page.keyboard.press("Escape");
+  expect(await selected()).toEqual({ profile: null, heatmap: null });
+
+  // Removing the selected layer clears its selection.
+  await page.waitForTimeout(550);
+  await page.mouse.click(spot.x, spot.y);
+  expect((await selected()).profile).toBe(spot.profile);
+  const removed = await page.evaluate(() => window.__chart.remove_depth_profile(window.__depth_select.profile));
+  expect(removed).toBe(true);
+  expect(await selected()).toEqual({ profile: null, heatmap: null });
 });

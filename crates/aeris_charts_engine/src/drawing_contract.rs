@@ -327,6 +327,10 @@ pub enum DrawingKindOptions {
         fill_color: Option<String>,
         preview_fill_color: Option<String>,
         border_visible: bool,
+        middle_line_visible: bool,
+        middle_line_color: Option<String>,
+        middle_line_width: f64,
+        middle_line_style: String,
         show_labels: bool,
         axis_bands_visible: bool,
         label_color: Option<String>,
@@ -679,6 +683,12 @@ pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
     }
     if kind == DrawingKind::Rectangle {
         s.add(Style, "border_visible", "Border", Boolean);
+        s.add(Style, "middle_line_visible", "Middle line", Boolean);
+        s.add(Style, "middle_line_color", "Middle line color", Color);
+        s.add(Style, "middle_line_width", "Middle line width", Number)
+            .bounded(1.0, crate::drawings::MAX_DRAWING_WIDTH);
+        s.add(Style, "middle_line_style", "Middle line style", Enum)
+            .choices(LINE_STYLES);
     }
     if has_area_fill(kind) {
         s.add(Style, "fill_enabled", "Background", Boolean);

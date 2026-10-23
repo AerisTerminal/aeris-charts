@@ -2115,7 +2115,8 @@ impl ChartEngine {
                 stroke: fill,
             });
         };
-        let profile_points = self.volume_profile_selection_anchor_points(pane_index);
+        let mut profile_points = self.volume_profile_selection_anchor_points(pane_index);
+        profile_points.extend(self.depth_selection_anchor_points(pane_index));
         if !profile_points.is_empty() {
             let fill = anchor_fill();
             for (x, y) in profile_points {

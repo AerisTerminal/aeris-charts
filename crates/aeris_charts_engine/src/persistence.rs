@@ -409,6 +409,14 @@ struct DrawingStyleV1 {
     stats_position: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stats_always_visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    middle_line_visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    middle_line_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    middle_line_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    middle_line_style: Option<String>,
 }
 
 fn pane_wire_id(id: u32) -> String {
@@ -1083,6 +1091,18 @@ impl ChartEngine {
                         stats_always_visible: (drawing.stats_always_visible
                             != (drawing.kind == DrawingKind::InfoLine))
                             .then_some(drawing.stats_always_visible),
+                        middle_line_visible: (drawing.kind == DrawingKind::Rectangle
+                            && drawing.middle_line_visible)
+                            .then_some(true),
+                        middle_line_color: (drawing.kind == DrawingKind::Rectangle)
+                            .then(|| drawing.middle_line_color.clone())
+                            .flatten(),
+                        middle_line_width: (drawing.kind == DrawingKind::Rectangle
+                            && drawing.middle_line_width != drawing.kind.spec().default_width)
+                            .then_some(drawing.middle_line_width),
+                        middle_line_style: (drawing.kind == DrawingKind::Rectangle
+                            && drawing.middle_line_style != LineStyle::Dashed)
+                            .then(|| line_style_name(drawing.middle_line_style).to_string()),
                     },
                 })
             })
@@ -2126,6 +2146,21 @@ impl ChartEngine {
             }
             if let Some(value) = style.middle_point_visible {
                 drawing.middle_point_visible = value;
+            }
+            if let Some(value) = style.middle_line_visible {
+                drawing.middle_line_visible = value;
+            }
+            if let Some(color) = style.middle_line_color {
+                validate_color(&color, "middle_line_color")?;
+                drawing.middle_line_color = (!color.is_empty()).then_some(color);
+            }
+            if let Some(width) = style.middle_line_width {
+                validate_positive_number(width, "middle line width")?;
+                drawing.middle_line_width = width.min(crate::drawings::MAX_DRAWING_WIDTH);
+            }
+            if let Some(value) = style.middle_line_style {
+                drawing.middle_line_style = parse_line_style(&value)
+                    .ok_or_else(|| invalid(format!("unknown line style {value:?}")))?;
             }
             if let Some(value) = style.price_labels_visible {
                 drawing.price_labels_visible = value;

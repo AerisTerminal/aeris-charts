@@ -1047,15 +1047,6 @@ impl Probe {
             });
         match installed {
             Ok(series_id) => {
-                if let Some(series) = self
-                    .engine
-                    .series
-                    .iter_mut()
-                    .find(|series| series.id == series_id && !series.removed)
-                {
-                    series.line_color = Some("#26a69a".into());
-                    series.line_width = Some(2.0);
-                }
                 self.cvd = Some(CvdDemoState {
                     stream_id,
                     series_id,

@@ -324,6 +324,10 @@ pub enum ChartHover {
     Series(SeriesId),
     /// An engine volume-profile indicator (a series primitive, not an output series).
     VolumeProfile(NativePrimitiveId),
+    /// A painted bar of an engine depth profile.
+    DepthProfile(u64),
+    /// A painted cell of an engine depth heatmap.
+    DepthHeatmap(u64),
     /// A general-series item; read it through [`ChartEngine::general_hovered_hit`].
     General,
     /// An axis-free layout item; read it through [`ChartEngine::general_layout_hovered_hit`].
@@ -629,6 +633,7 @@ impl ChartEngine {
         self.input.hover = ChartHover::None;
         self.set_hovered_series(None);
         self.set_hovered_volume_profile(None);
+        self.set_hovered_depth(None);
         self.set_hovered_text(None);
         self.set_hovered_drawing(None);
         self.clear_general_hover();
@@ -1639,6 +1644,7 @@ impl ChartEngine {
                 cancelled |= self.selected_drawing().is_some();
                 self.set_selected_drawing(None);
                 cancelled |= self.clear_volume_profile_selection();
+                cancelled |= self.clear_depth_selection();
                 cancelled |= self.clear_brushable_ranges();
                 if self.general_selected_hit().is_some() {
                     self.clear_general_selection();
@@ -1806,6 +1812,7 @@ impl ChartEngine {
                 self.set_selected_drawing(None);
                 self.set_selected_series(None);
                 self.clear_volume_profile_selection();
+                self.clear_depth_selection();
                 true
             }
             ChartFocusTarget::GeneralDatum { .. } => false,
@@ -1828,6 +1835,7 @@ impl ChartEngine {
                 self.set_selected_series(None);
                 self.clear_general_selection();
                 self.clear_volume_profile_selection();
+                self.clear_depth_selection();
                 true
             }
             ChartFocusTarget::LayoutDatum { .. } => false,
@@ -2328,6 +2336,14 @@ impl ChartEngine {
         if let Some(id) = line_text_hit {
             self.set_selected_drawing(Some(id));
         }
+        // Depth-profile bars paint in pane chrome above volume profiles and series.
+        if let Some(id) = (!drawing_hit)
+            .then(|| self.depth_profile_at(x, y))
+            .flatten()
+        {
+            self.select_depth_layer(crate::depth::DepthLayer::Profile(id));
+            return;
+        }
         if let Some(id) = (!drawing_hit)
             .then(|| self.volume_profile_indicator_at(x, y))
             .flatten()
@@ -2336,6 +2352,7 @@ impl ChartEngine {
             return;
         }
         self.clear_volume_profile_selection();
+        self.clear_depth_selection();
         // Hover may follow the index axis, but a click selects only the mark under the pointer.
         let general_hit = (!drawing_hit)
             .then(|| self.pane_at_y(y))
@@ -2364,6 +2381,15 @@ impl ChartEngine {
             .flatten();
         self.set_selected_series(series);
         if !drawing_hit {
+            // The heatmap is a dense pane background, so it is selected only when the click
+            // hits nothing painted above it.
+            if !general_hit
+                && !layout_hit
+                && series.is_none()
+                && let Some(id) = self.depth_heatmap_at(x, y)
+            {
+                self.select_depth_layer(crate::depth::DepthLayer::Heatmap(id));
+            }
             return;
         }
         let Some(drawing) = self.selected_drawing().and_then(|id| self.drawing(id)) else {
@@ -2504,6 +2530,7 @@ impl ChartEngine {
         primitive: Option<HostPrimitiveHit>,
     ) -> ChartHover {
         self.set_hovered_volume_profile(None);
+        self.set_hovered_depth(None);
         self.clear_general_layout_hover();
         let Some(pane) = self.pane_at_y(y) else {
             self.set_hovered_series(None);
@@ -2524,6 +2551,12 @@ impl ChartEngine {
             self.clear_general_hover();
             self.set_hovered_series(None);
             return ChartHover::Drawing { id, cursor };
+        }
+        if let Some(id) = self.depth_profile_at(x, y) {
+            self.clear_general_hover();
+            self.set_hovered_series(None);
+            self.set_hovered_depth(Some(crate::depth::DepthLayer::Profile(id)));
+            return ChartHover::DepthProfile(id);
         }
         // Profile bars paint over their source series, so they win against series below them.
         if let Some(id) = self.volume_profile_indicator_at(x, y) {
@@ -2588,6 +2621,11 @@ impl ChartEngine {
             return ChartHover::HostPrimitive(hit);
         }
         self.set_hovered_series(None);
+        // The heatmap paints beneath everything else, so it is the last hover owner.
+        if let Some(id) = self.depth_heatmap_at(x, y) {
+            self.set_hovered_depth(Some(crate::depth::DepthLayer::Heatmap(id)));
+            return ChartHover::DepthHeatmap(id);
+        }
         ChartHover::None
     }
 
@@ -2730,8 +2768,14 @@ impl ChartEngine {
         if self.general_brush_input_active_at(y) {
             return ChartCursor::Crosshair;
         }
+        // A heatmap fills the plot behind the price, so hovering it keeps the precise pane
+        // cursor; only discrete depth-profile bars promote to the pointer.
         if self.hovered_series().is_some()
             || self.hovered_volume_profile_indicator().is_some()
+            || matches!(
+                self.hovered_depth(),
+                Some(crate::depth::DepthLayer::Profile(_))
+            )
             || self.general_layout_hovered_hit().is_some()
             || self.general_legend_target_at(x, y).is_some()
         {
@@ -3187,6 +3231,177 @@ mod tests {
             }
         ));
         assert_eq!(chart.volume_profile_indicator_at(x, y), None);
+    }
+
+    fn depth_chart() -> (ChartEngine, u64) {
+        let mut chart = chart();
+        let stream = chart
+            .add_depth_stream(
+                "input",
+                crate::DepthOptions {
+                    history_bucket_micros: 60_000_000,
+                    ..crate::DepthOptions::default()
+                },
+            )
+            .unwrap();
+        let level = |price, size| crate::DepthLevel {
+            price,
+            size,
+            order_count: None,
+        };
+        // Bar 28 (time 2680) has open 100 / close 101; its bucket spans 2640..2700.
+        chart
+            .set_depth_snapshot(
+                stream,
+                crate::DepthSnapshot {
+                    timestamp_micros: 2_680_000_000,
+                    sequence: 1,
+                    bids: vec![level(99.75, 40.0), level(99.5, 80.0)],
+                    asks: vec![level(100.25, 50.0), level(100.5, 60.0), level(110.0, 60.0)],
+                },
+            )
+            .unwrap();
+        chart.build_frame();
+        (chart, stream)
+    }
+
+    /// A point inside the widest painted bar of a depth profile, clear of the pane's right edge.
+    fn depth_profile_point(chart: &ChartEngine, id: u64) -> (f64, f64) {
+        let (hpr, vpr) = chart.frame_pixel_ratios();
+        let pane_w_px = (chart.pane_w * hpr).round().max(1.0) as i32;
+        let mut widest: Option<(i32, i32, i32, i32)> = None;
+        chart.for_each_depth_profile_bar(&chart.depth_profiles[&id], pane_w_px, hpr, vpr, |bar| {
+            let rect = (bar.rect.x, bar.rect.y, bar.rect.w, bar.rect.h);
+            if widest.is_none_or(|current| rect.2 > current.2) {
+                widest = Some(rect);
+            }
+        });
+        let (x, y, w, h) = widest.expect("the profile paints bars");
+        (
+            (f64::from(x) + f64::from(w) * 0.25) / hpr,
+            (f64::from(y) + f64::from(h) / 2.0) / vpr,
+        )
+    }
+
+    #[test]
+    fn depth_profile_hovers_selects_and_clears_like_other_indicators() {
+        let (mut chart, stream) = depth_chart();
+        let id = chart
+            .add_depth_profile(stream, crate::DepthProfileOptions::default())
+            .unwrap();
+        chart.build_frame();
+        let (x, y) = depth_profile_point(&chart, id);
+        assert_eq!(chart.depth_profile_at(x, y), Some(id));
+
+        chart.input_pointer_move(at(x, y), false);
+        assert_eq!(chart.input_hover(), ChartHover::DepthProfile(id));
+        assert_eq!(chart.input_cursor(), ChartCursor::Pointer);
+        assert_eq!(overlay_anchor_discs(&mut chart), 0);
+
+        click(&mut chart, x, y);
+        assert_eq!(chart.selected_depth_profile(), Some(id));
+        assert_eq!(chart.selected_series(), None);
+        assert!(
+            overlay_anchor_discs(&mut chart) >= 2,
+            "a selected depth profile paints selection anchors"
+        );
+
+        // Selecting a series moves the selection off the profile.
+        let (sx, sy) = series_point(&chart);
+        click(&mut chart, sx, sy);
+        assert_eq!(chart.selected_series(), Some(0));
+        assert_eq!(chart.selected_depth_profile(), None);
+
+        click(&mut chart, x, y);
+        assert_eq!(chart.selected_depth_profile(), Some(id));
+        assert_eq!(chart.selected_series(), None);
+        assert!(chart.input_key_down(ChartKey::Escape, InputModifiers::default(), false, 0.0));
+        assert_eq!(chart.selected_depth_profile(), None);
+        assert_eq!(overlay_anchor_discs(&mut chart), 0);
+
+        // Selecting the profile programmatically follows the same exclusive selection.
+        chart.set_selected_series(Some(0));
+        assert!(chart.set_selected_depth_profile(Some(id)));
+        assert_eq!(chart.selected_series(), None);
+        assert!(!chart.set_selected_depth_profile(Some(id + 99)));
+
+        assert!(chart.remove_depth_profile(id));
+        assert_eq!(chart.selected_depth_profile(), None);
+        assert_eq!(overlay_anchor_discs(&mut chart), 0);
+        chart.input_pointer_move(at(x, y), false);
+        assert_ne!(chart.input_hover(), ChartHover::DepthProfile(id));
+    }
+
+    #[test]
+    fn depth_heatmap_is_selected_only_where_nothing_else_is_hit() {
+        let (mut chart, stream) = depth_chart();
+        let id = chart
+            .add_depth_heatmap(
+                stream,
+                crate::DepthHeatmapOptions {
+                    price_min: 99.0,
+                    price_max: 111.0,
+                    maximum_size: 100.0,
+                    ..crate::DepthHeatmapOptions::default()
+                },
+            )
+            .unwrap();
+        chart.build_frame();
+        let price_y =
+            |chart: &ChartEngine, price| chart.series_price_to_coordinate(0, price).unwrap();
+        let candle = (
+            chart.time_scale.index_to_coordinate(28),
+            price_y(&chart, 100.5),
+        );
+        assert_eq!(chart.hit_test_series(candle.0, candle.1), Some(0));
+        assert_eq!(chart.depth_heatmap_at(candle.0, candle.1), Some(id));
+        // The resting ask at 110 sits above every candle (highs reach 109), so only the heatmap
+        // is painted there.
+        let left = chart.depth_time_coordinate(2_640_000_000).unwrap() + 0.5;
+        let cell = (left, price_y(&chart, 110.0));
+        assert_eq!(chart.hit_test_series(cell.0, cell.1), None);
+        assert_eq!(chart.depth_heatmap_at(cell.0, cell.1), Some(id));
+        // 110.5 holds no resting size, so its cell is transparent and not part of the heatmap.
+        let empty = (left, price_y(&chart, 110.5));
+        assert_eq!(chart.hit_test_series(empty.0, empty.1), None);
+        assert_eq!(chart.depth_heatmap_at(empty.0, empty.1), None);
+
+        chart.input_pointer_move(at(cell.0, cell.1), false);
+        assert_eq!(chart.input_hover(), ChartHover::DepthHeatmap(id));
+        assert_eq!(
+            chart.input_cursor(),
+            ChartCursor::Crosshair,
+            "the dense heatmap keeps the precise pane cursor"
+        );
+
+        click(&mut chart, candle.0, candle.1);
+        assert_eq!(chart.selected_series(), Some(0), "the candle above wins");
+        assert_eq!(chart.selected_depth_heatmap(), None);
+
+        click(&mut chart, cell.0, cell.1);
+        assert_eq!(chart.selected_depth_heatmap(), Some(id));
+        assert_eq!(chart.selected_series(), None);
+        assert_eq!(
+            overlay_anchor_discs(&mut chart),
+            4,
+            "a selected heatmap paints anchors at its painted extent"
+        );
+
+        click(&mut chart, empty.0, empty.1);
+        assert_eq!(chart.selected_depth_heatmap(), None);
+
+        click(&mut chart, cell.0, cell.1);
+        assert_eq!(chart.selected_depth_heatmap(), Some(id));
+        assert!(chart.input_key_down(ChartKey::Escape, InputModifiers::default(), false, 0.0));
+        assert_eq!(chart.selected_depth_heatmap(), None);
+        assert_eq!(overlay_anchor_discs(&mut chart), 0);
+
+        click(&mut chart, candle.0, candle.1);
+        click(&mut chart, cell.0, cell.1);
+        assert_eq!(chart.selected_depth_heatmap(), Some(id));
+        assert!(chart.remove_depth_stream(stream));
+        assert_eq!(chart.selected_depth_heatmap(), None);
+        assert_eq!(overlay_anchor_discs(&mut chart), 0);
     }
 
     #[test]

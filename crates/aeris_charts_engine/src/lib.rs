@@ -2021,6 +2021,10 @@ pub struct ChartEngine {
     /// hover and selection live beside the series selection and exclude it.
     hovered_volume_profile: Option<NativePrimitiveId>,
     selected_volume_profile: Option<NativePrimitiveId>,
+    /// Depth profiles and heatmaps are chart-level layers; their hover and selection exclude the
+    /// series and volume-profile selection the same way.
+    hovered_depth: Option<depth::DepthLayer>,
+    selected_depth: Option<depth::DepthLayer>,
     /// Series-primitive autoscale contributions for the current frame build (Phase C-b).
     /// Hosts clear and re-record them per frame, before any layout/autoscale pass runs;
     /// `autoscale_for_frame` unions them into the owning scales.
@@ -2253,6 +2257,8 @@ impl ChartEngine {
             selection: None,
             hovered_volume_profile: None,
             selected_volume_profile: None,
+            hovered_depth: None,
+            selected_depth: None,
             primitive_autoscale: Vec::new(),
             drawings: Vec::new(),
             drawing_runtime: RefCell::new(DrawingRuntime::default()),
@@ -3648,6 +3654,16 @@ impl ChartEngine {
                 drawing.pane_index -= 1;
             }
         }
+        self.remap_depth_panes(|pane| {
+            if pane == index {
+                PANELESS
+            } else if !replacing_last && pane != PANELESS && pane > index {
+                pane - 1
+            } else {
+                pane
+            }
+        });
+        self.prune_depth_interaction();
         self.remove_trading_pane(index);
         self.remove_alert_pane(index);
         self.drawing_runtime
@@ -3682,6 +3698,15 @@ impl ChartEngine {
                 drawing.pane_index = first;
             }
         }
+        self.remap_depth_panes(|pane| {
+            if pane == first {
+                second
+            } else if pane == second {
+                first
+            } else {
+                pane
+            }
+        });
         self.swap_trading_panes(first, second);
         self.swap_alert_panes(first, second);
         self.drawing_runtime
@@ -3733,6 +3758,19 @@ impl ChartEngine {
                 pane
             };
         }
+        self.remap_depth_panes(|pane| {
+            if pane == PANELESS {
+                pane
+            } else if pane == from {
+                to
+            } else if from < to && pane > from && pane <= to {
+                pane - 1
+            } else if to < from && pane >= to && pane < from {
+                pane + 1
+            } else {
+                pane
+            }
+        });
         self.move_trading_pane(from, to);
         self.move_alert_pane(from, to);
         self.drawing_runtime

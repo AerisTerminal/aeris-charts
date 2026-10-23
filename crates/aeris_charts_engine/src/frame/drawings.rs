@@ -408,7 +408,8 @@ impl ChartEngine {
 
     /// The stretch of a line's stroke `a→b` (bitmap px) that its middle-aligned label covers,
     /// so the stroke opens around the text. Lines without line text or with the label above or
-    /// below the stroke stay whole.
+    /// below the stroke stay whole. A rectangle's middle-aligned label sits on its middle line,
+    /// which opens the same way.
     fn line_text_cutout(
         &self,
         drawing: &Drawing,
@@ -418,7 +419,7 @@ impl ChartEngine {
         a: (f64, f64),
         b: (f64, f64),
     ) -> Option<(f64, f64)> {
-        if !drawing.kind.has_line_text()
+        if !(drawing.kind.has_line_text() || drawing.kind == DrawingKind::Rectangle)
             || drawing.text_v_align != crate::drawings::DrawingTextVAlign::Middle
         {
             return None;
@@ -2225,6 +2226,33 @@ impl ChartEngine {
                         },
                         color: fill,
                     });
+                }
+                if drawing.middle_line_visible {
+                    let line_color = drawing
+                        .middle_line_color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(color);
+                    let line_width = (drawing.middle_line_width * vpr).round().max(1.0) as i32;
+                    let y = top + (height - 1) / 2;
+                    let (a, b) = (
+                        (f64::from(left), f64::from(y)),
+                        (f64::from(left + width), f64::from(y)),
+                    );
+                    let cutout = self.line_text_cutout(drawing, px, pane_w_px, vpr, a, b);
+                    for ((x0, _), (x1, _)) in cut_segment(a, b, cutout) {
+                        let (x0, x1) = (x0.round() as i32, x1.round() as i32);
+                        if x0 != x1 {
+                            out.push(Prim::HLine {
+                                y,
+                                x0: x0.min(x1),
+                                x1: x0.max(x1),
+                                width: line_width,
+                                style: drawing.middle_line_style,
+                                color: line_color,
+                            });
+                        }
+                    }
                 }
                 if !drawing.border_visible {
                     return;

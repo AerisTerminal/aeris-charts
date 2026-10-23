@@ -2525,7 +2525,7 @@ export interface drawing_property_schema { revision: number; kind: drawing_kind;
 export interface builtin_drawing_icon { name: string; svg: string }
 export interface drawing_template { name: string; kind: drawing_kind; options: Partial<drawing_options> }
 export type drawing_kind_options =
-  | { kind: "rectangle"; fill_color?: string; preview_fill_color?: string; border_visible: boolean; show_labels: boolean; axis_bands_visible: boolean; label_color?: string; label_text_color?: string; snap_time_to_data: boolean }
+  | { kind: "rectangle"; fill_color?: string; preview_fill_color?: string; border_visible: boolean; middle_line_visible: boolean; middle_line_color?: string; middle_line_width: number; middle_line_style: line_style; show_labels: boolean; axis_bands_visible: boolean; label_color?: string; label_text_color?: string; snap_time_to_data: boolean }
   | { kind: "text"; box_color?: string; box_border_color?: string; box_border_width: number }
   | { kind: "anchored_text"; screen_x: number; screen_y: number; box_color?: string; box_border_color?: string; box_border_width: number }
   | { kind: "icon_stamp"; icon_name?: string; icon_size: number }
@@ -2602,6 +2602,14 @@ export interface drawing_options {
   preview_fill_color: string;
   /** Rectangle outline visibility (default false). */
   border_visible: boolean;
+  /** Rectangle horizontal line through its vertical center, edge to edge (default false). Rectangle only. */
+  middle_line_visible: boolean;
+  /** Rectangle middle-line color (`""` = the border `color`). Rectangle only. */
+  middle_line_color: string;
+  /** Rectangle middle-line width in CSS px (default 1, the rectangle border width). Rectangle only. */
+  middle_line_width: number;
+  /** Rectangle middle-line style (default `"dashed"`). A middle-aligned label opens a gap in it. Rectangle only. */
+  middle_line_style: line_style;
   /** Rectangle endpoint labels on the price and time axes. */
   show_labels: boolean;
   /** Official 15 CSS px rectangle shading in the price/time axis panes. */
@@ -2700,6 +2708,10 @@ export interface persisted_drawing_style_v1 {
   fill_color?: string;
   preview_fill_color?: string;
   border_visible?: boolean;
+  middle_line_visible?: boolean;
+  middle_line_color?: string;
+  middle_line_width?: number;
+  middle_line_style?: line_style;
   show_labels?: boolean;
   axis_bands_visible?: boolean;
   label_color?: string;
@@ -3919,6 +3931,14 @@ export interface chart_api {
   add_depth_profile(stream_id: number, options?: Partial<depth_profile_options>): number;
   set_depth_profile_options(id: number, options: Partial<depth_profile_options>): boolean;
   remove_depth_profile(id: number): boolean;
+  /** Selected depth profile id, or `null`. Clicking a profile bar selects it; Escape, selecting another object, or removing it clears it. */
+  selected_depth_profile(): number | null;
+  /** Select a depth profile, or clear a selected one with `null`. Returns `false` for an unknown id. */
+  select_depth_profile(id: number | null): boolean;
+  /** Selected depth heatmap id, or `null`. A click selects a heatmap only on a painted cell where nothing above it is hit. */
+  selected_depth_heatmap(): number | null;
+  /** Select a depth heatmap, or clear a selected one with `null`. Returns `false` for an unknown id. */
+  select_depth_heatmap(id: number | null): boolean;
   time_and_sales(stream_id: number, options?: Partial<time_and_sales_options>): readonly time_and_sales_row[] | null;
   replay_clock_micros(): number | null;
   set_replay_clock_micros(clock_micros: number | null): replay_clock_stats;
@@ -3942,7 +3962,7 @@ export interface chart_api {
   bind_footprint_series_to_stream(series: footprint_series_api | number, stream_id: number): void;
   /** Present one canonical trade stream as ordinary candlesticks or OHLC bars. */
   bind_trade_bar_series_to_stream(series: series_api | number, stream_id: number): void;
-  /** CVD as a line through each bar's close, or as one candle per bar spanning its open, running intrabar extremes and close. */
+  /** CVD as one candle per bar spanning its open, running intrabar extremes and close (default `"candles"`), or as a line through each bar's close. */
   add_cvd_series(stream_id: number, pane?: number, reset?: "session" | "continuous" | "anchored", anchor_timestamp_micros?: number, style?: "line" | "candles"): series_api;
   add_delta_series(stream_id: number, pane?: number): series_api;
   /** Draw a trade stream's large aggressive orders as volume bubbles over a price series. */

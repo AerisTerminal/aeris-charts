@@ -1126,6 +1126,14 @@ pub struct Drawing {
     /// Whether a rectangle paints its outline. The generic drawing defaults to `true`; the
     /// official rectangle-drawing plugin disables it and paints only the fill.
     pub border_visible: bool,
+    /// Rectangle horizontal line through the vertical center, edge to edge. Off by default.
+    pub middle_line_visible: bool,
+    /// Rectangle middle-line CSS color; `None` follows the border `color`.
+    pub middle_line_color: Option<String>,
+    /// Rectangle middle-line stroke width in CSS px (default: the rectangle border width).
+    pub middle_line_width: f64,
+    /// Rectangle middle-line stroke style (default dashed).
+    pub middle_line_style: LineStyle,
     /// Rectangle endpoint labels on the price and time axes.
     pub show_labels: bool,
     /// Whether the rectangle paints the official 15 CSS px bands into both axis panes.
@@ -1443,6 +1451,10 @@ impl Drawing {
             fill_color: None,
             preview_fill_color: None,
             border_visible: kind != DrawingKind::Rectangle,
+            middle_line_visible: false,
+            middle_line_color: None,
+            middle_line_width: kind.spec().default_width,
+            middle_line_style: LineStyle::Dashed,
             show_labels: false,
             axis_bands_visible: false,
             label_color: None,
@@ -1541,6 +1553,10 @@ impl Drawing {
                 fill_color: self.fill_color.clone(),
                 preview_fill_color: self.preview_fill_color.clone(),
                 border_visible: self.border_visible,
+                middle_line_visible: self.middle_line_visible,
+                middle_line_color: self.middle_line_color.clone(),
+                middle_line_width: self.middle_line_width,
+                middle_line_style: style_name(self.middle_line_style).to_string(),
                 show_labels: self.show_labels,
                 axis_bands_visible: self.axis_bands_visible,
                 label_color: self.label_color.clone(),
@@ -2025,6 +2041,14 @@ pub(crate) struct DrawingPatch {
     preview_fill_color: Option<String>,
     #[serde(alias = "borderVisible")]
     border_visible: Option<bool>,
+    #[serde(alias = "middleLineVisible")]
+    middle_line_visible: Option<bool>,
+    #[serde(alias = "middleLineColor")]
+    middle_line_color: Option<String>,
+    #[serde(alias = "middleLineWidth")]
+    middle_line_width: Option<f64>,
+    #[serde(alias = "middleLineStyle")]
+    middle_line_style: Option<serde_json::Value>,
     #[serde(alias = "showLabels")]
     show_labels: Option<bool>,
     #[serde(alias = "axisBandsVisible")]
@@ -2448,6 +2472,25 @@ impl Drawing {
         if let Some(visible) = patch.border_visible {
             self.border_visible = visible;
         }
+        if let Some(visible) = patch.middle_line_visible {
+            self.middle_line_visible = visible;
+        }
+        if let Some(css) = patch.middle_line_color {
+            update_css_slot(&mut self.middle_line_color, css);
+        }
+        if let Some(width) = patch.middle_line_width
+            && width.is_finite()
+            && width > 0.0
+        {
+            self.middle_line_width = width.min(MAX_DRAWING_WIDTH);
+        }
+        if let Some(style) = patch
+            .middle_line_style
+            .as_ref()
+            .and_then(parse_drawing_style)
+        {
+            self.middle_line_style = style;
+        }
         if let Some(visible) = patch.show_labels {
             self.show_labels = visible;
         }
@@ -2588,6 +2631,13 @@ impl Drawing {
         options["price_labels_visible"] = serde_json::json!(self.price_labels_visible);
         options["stats_position"] = serde_json::json!(self.stats_position.name());
         options["stats_always_visible"] = serde_json::json!(self.stats_always_visible);
+        if self.kind == DrawingKind::Rectangle {
+            options["middle_line_visible"] = serde_json::json!(self.middle_line_visible);
+            options["middle_line_color"] =
+                serde_json::json!(self.middle_line_color.as_deref().unwrap_or(""));
+            options["middle_line_width"] = serde_json::json!(self.middle_line_width);
+            options["middle_line_style"] = serde_json::json!(style_name(self.middle_line_style));
+        }
         if self.kind == DrawingKind::RegressionTrend {
             options["regression_source_id"] = serde_json::json!(self.regression_source_id);
             options["regression_deviations"] = serde_json::json!(self.regression_deviations);
@@ -5234,6 +5284,7 @@ impl ChartEngine {
         self.selected_drawings = self.selected_drawing.into_iter().collect();
         if self.selected_drawing.is_some() {
             self.clear_volume_profile_selection();
+            self.clear_depth_selection();
         }
     }
 
@@ -5953,7 +6004,9 @@ impl ChartEngine {
                 }
                 let near_v_edge = (x - left).abs() <= tolerance || (x - right).abs() <= tolerance;
                 let near_h_edge = (y - top).abs() <= tolerance || (y - bottom).abs() <= tolerance;
-                near_v_edge || near_h_edge
+                let near_middle_line =
+                    drawing.middle_line_visible && (y - (top + bottom) / 2.0).abs() <= tolerance;
+                near_v_edge || near_h_edge || near_middle_line
             }
             DrawingBodyGeometry::Position(position) => {
                 x >= position.left - tolerance

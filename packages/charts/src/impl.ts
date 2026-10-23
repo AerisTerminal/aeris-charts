@@ -4840,6 +4840,30 @@ export class chart_impl implements chart_api {
     return removed;
   }
 
+  selected_depth_profile(): number | null {
+    const id = this.wasm.selected_depth_profile();
+    return id === 0 ? null : id;
+  }
+
+  select_depth_profile(id: number | null): boolean {
+    const before = this.wasm.selected_depth_profile();
+    if (!this.wasm.set_selected_depth_profile(id ?? 0)) return false;
+    if (this.wasm.selected_depth_profile() !== before) this.repaint();
+    return true;
+  }
+
+  selected_depth_heatmap(): number | null {
+    const id = this.wasm.selected_depth_heatmap();
+    return id === 0 ? null : id;
+  }
+
+  select_depth_heatmap(id: number | null): boolean {
+    const before = this.wasm.selected_depth_heatmap();
+    if (!this.wasm.set_selected_depth_heatmap(id ?? 0)) return false;
+    if (this.wasm.selected_depth_heatmap() !== before) this.repaint();
+    return true;
+  }
+
   time_and_sales(
     stream_id: number,
     options: Partial<time_and_sales_options> = {},
@@ -5039,7 +5063,7 @@ export class chart_impl implements chart_api {
     pane = 1,
     reset: "session" | "continuous" | "anchored" = "session",
     anchor_timestamp_micros = Number.NaN,
-    style: "line" | "candles" = "line",
+    style: "line" | "candles" = "candles",
   ): series_api {
     const reset_code = reset === "session" ? 0 : reset === "continuous" ? 1 : 2;
     const style_code = style === "line" ? 0 : 1;

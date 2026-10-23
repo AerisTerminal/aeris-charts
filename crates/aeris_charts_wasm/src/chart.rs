@@ -1723,6 +1723,42 @@ impl AerisChart {
         self.inner.borrow_mut().remove_depth_profile(id)
     }
 
+    /// The selected depth profile id, or 0 when none is selected.
+    pub fn selected_depth_profile(&self) -> u32 {
+        self.inner
+            .borrow()
+            .engine
+            .selected_depth_profile()
+            .and_then(|id| u32::try_from(id).ok())
+            .unwrap_or(0)
+    }
+
+    /// Select a depth profile (0 clears a selected one). Returns `false` for an unknown id.
+    pub fn set_selected_depth_profile(&mut self, id: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_selected_depth_profile((id != 0).then_some(u64::from(id)))
+    }
+
+    /// The selected depth heatmap id, or 0 when none is selected.
+    pub fn selected_depth_heatmap(&self) -> u32 {
+        self.inner
+            .borrow()
+            .engine
+            .selected_depth_heatmap()
+            .and_then(|id| u32::try_from(id).ok())
+            .unwrap_or(0)
+    }
+
+    /// Select a depth heatmap (0 clears a selected one). Returns `false` for an unknown id.
+    pub fn set_selected_depth_heatmap(&mut self, id: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_selected_depth_heatmap((id != 0).then_some(u64::from(id)))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn set_depth_events_typed(
         &mut self,

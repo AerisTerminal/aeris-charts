@@ -2360,6 +2360,60 @@ test("rectangle: middle pans unselected, drags selected, 8 anchors from the firs
   await page.keyboard.press("Escape");
 });
 
+test("rectangle middle line paints through the real frame path and opens around middle-aligned text", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, l1, p_lo, p_hi }) => {
+    window.__chart.add_drawing("rectangle", [
+      { logical: l0, price: p_lo },
+      { logical: l1, price: p_hi },
+    ], { color: "#7b1fa2", fill_enabled: false, middle_line_visible: true, middle_line_style: "solid", middle_line_width: 2 });
+  }, s);
+  await settle_frames(page);
+  const options = await page.evaluate(() => window.__chart.drawings()[0].options());
+  expect(options.middle_line_visible).toBe(true);
+  expect(options.middle_line_color).toBe("");
+  expect(options.middle_line_style).toBe("solid");
+  expect(options.middle_line_width).toBe(2);
+  const box = await page.evaluate(({ l0, l1, p_lo, p_hi }) => {
+    const ts = window.__chart.time_scale();
+    return {
+      left: ts.logical_to_coordinate(l0),
+      right: ts.logical_to_coordinate(l1),
+      y: (window.__main.price_to_coordinate(p_lo) + window.__main.price_to_coordinate(p_hi)) / 2,
+    };
+  }, s);
+  // Purple pixels in a band of device rows around the middle, across `[from, to)` CSS px.
+  const purple_on_middle = (png, from, to) => {
+    let n = 0;
+    const y_mid = Math.round(box.y * PR);
+    for (let y = y_mid - 3; y <= y_mid + 3; y += 1) {
+      for (let x = Math.round(from * PR); x < Math.round(to * PR); x += 1) {
+        const o = (y * png.width + x) * 4;
+        if (Math.abs(png.data[o] - PURPLE[0]) <= 30 && Math.abs(png.data[o + 1] - PURPLE[1]) <= 30
+          && Math.abs(png.data[o + 2] - PURPLE[2]) <= 30) n += 1;
+      }
+    }
+    return n;
+  };
+  const center = (box.left + box.right) / 2;
+  const width = box.right - box.left;
+  let png = await capture(page);
+  expect(purple_on_middle(png, center - 8, center + 8), "the middle line crosses the center").toBeGreaterThan(10);
+  expect(purple_on_middle(png, box.left + 2, box.left + width / 4), "the line starts at the left edge").toBeGreaterThan(10);
+
+  await page.evaluate(() => window.__chart.drawings()[0].apply_options({ text: "MID", text_color: "#ffffff", text_v_align: "middle" }));
+  await settle_frames(page);
+  png = await capture(page);
+  expect(purple_on_middle(png, center - 8, center + 8), "no line under the middle-aligned label").toBe(0);
+  expect(purple_on_middle(png, box.left + 2, box.left + width / 4), "the line still paints left of the label").toBeGreaterThan(10);
+  expect(purple_on_middle(png, box.right - width / 4, box.right - 2), "and right of it").toBeGreaterThan(10);
+
+  await page.evaluate(() => window.__chart.drawings()[0].apply_options({ text_v_align: "top" }));
+  await settle_frames(page);
+  png = await capture(page);
+  expect(purple_on_middle(png, center - 8, center + 8), "a top label leaves the line whole").toBeGreaterThan(10);
+});
 test("a vertical line body-drag with Ctrl snaps to the bar center (the public reference magnet)", async ({ page }) => {
   await goto_fixture(page);
   const s = await anchor_spots(page);

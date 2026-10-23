@@ -72,7 +72,61 @@ fn profile_color(rgba: Option<[u8; 4]>, theme: Color, opacity: f32) -> Color {
     Color::rgba(r, g, b, (f32::from(a) * opacity).round() as u8)
 }
 
+/// One painted depth-profile bar in device px.
+#[derive(Clone, Copy)]
+pub(crate) struct DepthProfileBar {
+    pub rect: IRect,
+    pub size: f64,
+    pub ask: bool,
+}
+
 impl ChartEngine {
+    /// Visit each image of one heatmap with its device-px rect `[left, top, width, height]` and
+    /// painted cell bounds. Frame construction and hit testing share it, so hits match pixels.
+    pub(crate) fn for_each_depth_heatmap_image(
+        &self,
+        heatmap: &crate::depth::DepthHeatmap,
+        hpr: f64,
+        vpr: f64,
+        mut visit: impl FnMut(&RasterImage, [f64; 4], Option<crate::depth::PaintedCells>),
+    ) {
+        let Some(pane) = self.panes.get(heatmap.options.pane_index) else {
+            return;
+        };
+        let scale = pane_scale(pane, PriceScaleTarget::Right);
+        let y_min = scale.price_to_coordinate(heatmap.options.price_min, 0.0) * vpr;
+        let y_max = scale.price_to_coordinate(heatmap.options.price_max, 0.0) * vpr;
+        let top = y_min.min(y_max);
+        let height = (y_max - y_min).abs();
+        if !top.is_finite() || !height.is_finite() || height <= 0.0 {
+            return;
+        }
+        let interval = self
+            .depth_streams
+            .get(&heatmap.stream_id)
+            .map(|book| book.options().history_bucket_micros)
+            .unwrap_or(1);
+        let horizontal = |start_micros: i64, end_micros: i64| {
+            let x0 = self.depth_time_coordinate(start_micros)?;
+            let x1 = self.depth_time_coordinate(end_micros)?;
+            Some((x0.min(x1) * hpr, ((x1 - x0).abs() * hpr).max(1.0)))
+        };
+        for chunk in &heatmap.chunks {
+            let end_micros = chunk.start_micros.saturating_add(
+                interval.saturating_mul(crate::depth::DEPTH_HEATMAP_CHUNK_COLUMNS as i64),
+            );
+            if let Some((left, width)) = horizontal(chunk.start_micros, end_micros) {
+                visit(&chunk.image, [left, top, width, height], chunk.painted);
+            }
+        }
+        if let Some(column) = &heatmap.active
+            && let Some((left, width)) =
+                horizontal(column.start_micros, column.start_micros + interval)
+        {
+            visit(&column.image, [left, top, width, height], column.painted);
+        }
+    }
+
     pub(crate) fn build_depth_heatmap_frame(
         &self,
         pane_index: usize,
@@ -80,60 +134,18 @@ impl ChartEngine {
         vpr: f64,
         output: &mut Vec<Prim>,
     ) {
-        let Some(pane) = self.panes.get(pane_index) else {
+        if self.depth_heatmaps.is_empty() {
             return;
-        };
-        let scale = pane_scale(pane, PriceScaleTarget::Right);
-        for heatmap in self
-            .depth_heatmaps
-            .values()
-            .filter(|heatmap| heatmap.options.pane_index == pane_index)
-        {
-            let y_min = scale.price_to_coordinate(heatmap.options.price_min, 0.0) * vpr;
-            let y_max = scale.price_to_coordinate(heatmap.options.price_max, 0.0) * vpr;
-            let top = y_min.min(y_max) as f32;
-            let height = (y_max - y_min).abs() as f32;
-            if !top.is_finite() || !height.is_finite() || height <= 0.0 {
-                continue;
-            }
-            let interval = self
-                .depth_streams
-                .get(&heatmap.stream_id)
-                .map(|book| book.options().history_bucket_micros)
-                .unwrap_or(1);
-            for chunk in &heatmap.chunks {
-                let Some(x0) = self.depth_time_coordinate(chunk.start_micros) else {
-                    continue;
-                };
-                let end_micros = chunk.start_micros.saturating_add(
-                    interval.saturating_mul(crate::depth::DEPTH_HEATMAP_CHUNK_COLUMNS as i64),
-                );
-                let Some(x1) = self.depth_time_coordinate(end_micros) else {
-                    continue;
-                };
-                let left = (x0.min(x1) * hpr) as f32;
-                let width = ((x1 - x0).abs() * hpr).max(1.0) as f32;
+        }
+        for id in self.depth_heatmap_ids(pane_index) {
+            let heatmap = &self.depth_heatmaps[&id];
+            self.for_each_depth_heatmap_image(heatmap, hpr, vpr, |image, rect, _| {
                 output.push(Prim::Image {
-                    image: chunk.image.clone(),
-                    rect: [left, top, width, height],
+                    image: image.clone(),
+                    rect: rect.map(|value| value as f32),
                     opacity: heatmap.options.opacity,
                 });
-            }
-            if let Some(column) = &heatmap.active {
-                let Some(x0) = self.depth_time_coordinate(column.start_micros) else {
-                    continue;
-                };
-                let Some(x1) = self.depth_time_coordinate(column.start_micros + interval) else {
-                    continue;
-                };
-                let left = (x0.min(x1) * hpr) as f32;
-                let width = ((x1 - x0).abs() * hpr).max(1.0) as f32;
-                output.push(Prim::Image {
-                    image: column.image.clone(),
-                    rect: [left, top, width, height],
-                    opacity: heatmap.options.opacity,
-                });
-            }
+            });
         }
     }
 
@@ -207,6 +219,92 @@ impl ChartEngine {
     /// Current-book bars anchored at the pane's right edge, the largest drawn row spanning
     /// `max_width`. Each row spans its whole ticks on the right price scale, the same mapping
     /// the heatmap uses; ticks too short to read merge into taller rows with summed sizes.
+    /// Visit each painted bar of one depth profile in device px, top row first. Frame
+    /// construction, hit testing, and selection anchors share it, so hits match pixels.
+    pub(crate) fn for_each_depth_profile_bar(
+        &self,
+        profile: &crate::depth::DepthProfile,
+        pane_w_px: i32,
+        hpr: f64,
+        vpr: f64,
+        mut visit: impl FnMut(DepthProfileBar),
+    ) {
+        let Some(pane) = self.panes.get(profile.options.pane_index) else {
+            return;
+        };
+        let Some(book) = self.depth_streams.get(&profile.stream_id) else {
+            return;
+        };
+        let scale = pane_scale(pane, PriceScaleTarget::Right);
+        let font_size = self.options.get().layout.font_size;
+        let options = profile.options;
+        let levels = book.ladder(options.levels_per_side, 0.0, None);
+        let Some(reference) = levels.first().map(|level| level.price) else {
+            return;
+        };
+        let tick_size = book.options().tick_size;
+        let tick_height = (scale.price_to_coordinate(reference + tick_size, 0.0)
+            - scale.price_to_coordinate(reference, 0.0))
+        .abs();
+        let ticks = profile_ticks_per_row(
+            tick_height,
+            font_size * PROFILE_TEXT_HEIGHT + PROFILE_ROW_PAD,
+        );
+        let rows = merged_profile_rows(&levels, tick_size, ticks);
+        let largest = rows
+            .iter()
+            .flat_map(|row| [row.bid, row.ask])
+            .flatten()
+            .fold(0.0, f64::max);
+        if largest <= 0.0 {
+            return;
+        }
+        let half_tick = tick_size / 2.0;
+        for row in &rows {
+            let low = row.first_tick as f64 * tick_size - half_tick;
+            let high = (row.first_tick + ticks) as f64 * tick_size - half_tick;
+            let upper = scale.price_to_coordinate(high, 0.0) * vpr;
+            let lower = scale.price_to_coordinate(low, 0.0) * vpr;
+            if !upper.is_finite() || !lower.is_finite() {
+                continue;
+            }
+            let top = upper.min(lower).round();
+            let span = upper.max(lower).round() - top;
+            // A merged row at the touch can hold both sides: asks take its upper half.
+            let halves = if row.bid.is_some() && row.ask.is_some() {
+                let upper_half = (span / 2.0).round();
+                [
+                    (row.ask, true, top, upper_half),
+                    (row.bid, false, top + upper_half, span - upper_half),
+                ]
+            } else {
+                [(row.ask, true, top, span), (row.bid, false, top, span)]
+            };
+            for (size, ask, top, span) in halves {
+                let Some(size) = size else {
+                    continue;
+                };
+                // Adjacent rows keep a one-pixel gap once rows are tall enough to show it.
+                let height = if span >= 3.0 {
+                    span - 1.0
+                } else {
+                    span.max(1.0)
+                };
+                let width = (size / largest * options.max_width * hpr).round().max(1.0);
+                visit(DepthProfileBar {
+                    rect: IRect {
+                        x: pane_w_px - width as i32,
+                        y: top as i32,
+                        w: width as i32,
+                        h: height as i32,
+                    },
+                    size,
+                    ask,
+                });
+            }
+        }
+    }
+
     pub(crate) fn build_depth_profile_frame(
         &self,
         pane_index: usize,
@@ -215,103 +313,39 @@ impl ChartEngine {
         vpr: f64,
         output: &mut Vec<Prim>,
     ) {
-        let Some(pane) = self.panes.get(pane_index) else {
+        if self.depth_profiles.is_empty() {
             return;
-        };
-        let scale = pane_scale(pane, PriceScaleTarget::Right);
+        }
         let layout = &self.options.get().layout;
         let (bullish, bearish) = self.themed_candle_colors();
         let text_color = Color::parse_css(&layout.text_color).unwrap_or(Color::rgb(215, 219, 228));
         let text_size = layout.font_size * vpr;
         let text_pad = (PROFILE_TEXT_PAD * hpr).round();
-        for profile in self
-            .depth_profiles
-            .values()
-            .filter(|profile| profile.options.pane_index == pane_index)
-        {
-            let Some(book) = self.depth_streams.get(&profile.stream_id) else {
-                continue;
-            };
+        for id in self.depth_profile_ids(pane_index) {
+            let profile = &self.depth_profiles[&id];
             let options = profile.options;
-            let levels = book.ladder(options.levels_per_side, 0.0, None);
-            let Some(reference) = levels.first().map(|level| level.price) else {
-                continue;
-            };
-            let tick_size = book.options().tick_size;
-            let tick_height = (scale.price_to_coordinate(reference + tick_size, 0.0)
-                - scale.price_to_coordinate(reference, 0.0))
-            .abs();
-            let ticks = profile_ticks_per_row(
-                tick_height,
-                layout.font_size * PROFILE_TEXT_HEIGHT + PROFILE_ROW_PAD,
-            );
-            let rows = merged_profile_rows(&levels, tick_size, ticks);
-            let largest = rows
-                .iter()
-                .flat_map(|row| [row.bid, row.ask])
-                .flatten()
-                .fold(0.0, f64::max);
-            if largest <= 0.0 {
-                continue;
-            }
-            let half_tick = tick_size / 2.0;
             let bid = profile_color(options.bid_rgba, bullish, options.opacity);
             let ask = profile_color(options.ask_rgba, bearish, options.opacity);
-            for row in &rows {
-                let low = row.first_tick as f64 * tick_size - half_tick;
-                let high = (row.first_tick + ticks) as f64 * tick_size - half_tick;
-                let upper = scale.price_to_coordinate(high, 0.0) * vpr;
-                let lower = scale.price_to_coordinate(low, 0.0) * vpr;
-                if !upper.is_finite() || !lower.is_finite() {
-                    continue;
-                }
-                let top = upper.min(lower).round();
-                let span = upper.max(lower).round() - top;
-                // A merged row at the touch can hold both sides: asks take its upper half.
-                let halves = if row.bid.is_some() && row.ask.is_some() {
-                    let upper_half = (span / 2.0).round();
-                    [
-                        (row.ask, ask, top, upper_half),
-                        (row.bid, bid, top + upper_half, span - upper_half),
-                    ]
-                } else {
-                    [(row.ask, ask, top, span), (row.bid, bid, top, span)]
-                };
-                for (size, color, top, span) in halves {
-                    let Some(size) = size else {
-                        continue;
-                    };
-                    // Adjacent rows keep a one-pixel gap once rows are tall enough to show it.
-                    let height = if span >= 3.0 {
-                        span - 1.0
-                    } else {
-                        span.max(1.0)
-                    };
-                    let width = (size / largest * options.max_width * hpr).round().max(1.0);
-                    output.push(Prim::Rect {
-                        rect: IRect {
-                            x: pane_w_px - width as i32,
-                            y: top as i32,
-                            w: width as i32,
-                            h: height as i32,
-                        },
-                        color,
+            self.for_each_depth_profile_bar(profile, pane_w_px, hpr, vpr, |bar| {
+                output.push(Prim::Rect {
+                    rect: bar.rect,
+                    color: if bar.ask { ask } else { bid },
+                });
+                let (top, height) = (f64::from(bar.rect.y), f64::from(bar.rect.h));
+                if options.show_sizes && height >= text_size * PROFILE_TEXT_HEIGHT {
+                    output.push(Prim::Text {
+                        x: (f64::from(pane_w_px) - text_pad) as f32,
+                        y: (top + height / 2.0) as f32,
+                        text: super::footprint_geometry::compact_volume(bar.size),
+                        color: text_color,
+                        size: text_size as f32,
+                        family: layout.font_family.clone(),
+                        align: TextAlign::Right,
+                        weight: 400,
+                        italic: false,
                     });
-                    if options.show_sizes && height >= text_size * PROFILE_TEXT_HEIGHT {
-                        output.push(Prim::Text {
-                            x: (f64::from(pane_w_px) - text_pad) as f32,
-                            y: (top + height / 2.0) as f32,
-                            text: super::footprint_geometry::compact_volume(size),
-                            color: text_color,
-                            size: text_size as f32,
-                            family: layout.font_family.clone(),
-                            align: TextAlign::Right,
-                            weight: 400,
-                            italic: false,
-                        });
-                    }
                 }
-            }
+            });
         }
     }
 

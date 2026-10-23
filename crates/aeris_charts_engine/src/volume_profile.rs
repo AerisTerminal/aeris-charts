@@ -328,6 +328,7 @@ impl ChartEngine {
             self.set_selected_series(None);
             self.set_selected_drawing(None);
             self.clear_general_selection();
+            self.clear_depth_selection();
         }
         if self.selected_volume_profile != id {
             self.selected_volume_profile = id;

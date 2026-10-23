@@ -1339,6 +1339,253 @@ fn rectangle_body_hits_the_frame_band_not_the_middle() {
     assert!(chart.hit_test_drawing(right + 12.0, bottom).is_none());
 }
 
+fn add_middle_line_rectangle(chart: &mut ChartEngine) -> DrawingId {
+    chart
+        .add_drawing(
+            DrawingKind::Rectangle,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 6.0,
+                    price: 12.0,
+                },
+            ],
+            None,
+        )
+        .unwrap()
+}
+
+/// `(y, x0, x1, width, style, color)` of every horizontal line prim in the main pane inside
+/// the rectangle's horizontal span (the series price line runs elsewhere).
+fn main_hlines(chart: &mut ChartEngine) -> Vec<(i32, i32, i32, i32, LineStyle, Color)> {
+    let (left, right) = (
+        x_at(chart, 2.0).floor() - 1.0,
+        x_at(chart, 6.0).ceil() + 2.0,
+    );
+    let frame = chart.build_frame();
+    frame.panes[0]
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::HLine {
+                y,
+                x0,
+                x1,
+                width,
+                style,
+                color,
+            } if f64::from(*x0) >= left && f64::from(*x1) <= right => {
+                Some((*y, *x0, *x1, *width, *style, *color))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn main_rect_frame(chart: &mut ChartEngine) -> aeris_charts_render::draw_list::IRect {
+    let frame = chart.build_frame();
+    frame.panes[0]
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::RectFrame { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("solid rectangle border")
+}
+
+#[test]
+fn rectangle_middle_line_is_off_by_default_and_follows_the_border_when_enabled() {
+    let mut chart = settled_chart();
+    let id = add_middle_line_rectangle(&mut chart);
+    let drawing = chart.drawing(id).unwrap();
+    assert!(!drawing.middle_line_visible);
+    assert_eq!(drawing.middle_line_color, None);
+    assert_eq!(drawing.middle_line_width, drawing.width);
+    assert_eq!(drawing.middle_line_style, LineStyle::Dashed);
+    let options = drawing.options_json();
+    assert_eq!(options["middle_line_visible"], false);
+    assert_eq!(options["middle_line_color"], "");
+    assert_eq!(options["middle_line_width"], 1.0);
+    assert_eq!(options["middle_line_style"], "dashed");
+    assert!(
+        main_hlines(&mut chart).is_empty(),
+        "no middle line by default"
+    );
+
+    let drawing_color = Color::parse_css(DRAWING_DEFAULT_COLOR).unwrap();
+    assert!(
+        chart.drawing_apply_options(id, r#"{"middle_line_visible":true,"border_visible":true}"#)
+    );
+    let rect = main_rect_frame(&mut chart);
+    assert_eq!(
+        main_hlines(&mut chart),
+        [(
+            rect.y + (rect.h - 1) / 2,
+            rect.x,
+            rect.x + rect.w,
+            1,
+            LineStyle::Dashed,
+            drawing_color
+        )],
+        "a dashed border-colored line through the vertical center, edge to edge"
+    );
+
+    // The middle line follows the border color until it gets its own.
+    assert!(chart.drawing_apply_options(id, r##"{"color":"#00ff00"}"##));
+    assert_eq!(main_hlines(&mut chart)[0].5, Color::rgb(0, 0xff, 0));
+    assert!(chart.drawing_apply_options(
+        id,
+        r##"{"middle_line_color":"#ff0000","middle_line_width":3,"middle_line_style":"dotted"}"##
+    ));
+    let lines = main_hlines(&mut chart);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        (lines[0].3, lines[0].4, lines[0].5),
+        (3, LineStyle::Dotted, Color::rgb(0xff, 0, 0))
+    );
+    // Unlike the border, the middle line paints without the border.
+    assert!(chart.drawing_apply_options(id, r#"{"border_visible":false,"middle_line_color":""}"#));
+    let lines = main_hlines(&mut chart);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].5, Color::rgb(0, 0xff, 0));
+
+    let kind_options: serde_json::Value =
+        serde_json::from_str(&chart.drawing_kind_options_json(id).unwrap()).unwrap();
+    assert_eq!(kind_options["kind"], "rectangle");
+    assert_eq!(kind_options["middle_line_visible"], true);
+    assert_eq!(kind_options["middle_line_width"], 3.0);
+    assert_eq!(kind_options["middle_line_style"], "dotted");
+    let schema = crate::drawing_property_schema(DrawingKind::Rectangle);
+    for name in [
+        "middle_line_visible",
+        "middle_line_color",
+        "middle_line_width",
+        "middle_line_style",
+    ] {
+        assert!(
+            schema
+                .properties
+                .iter()
+                .any(|property| property.name == name),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn rectangle_middle_line_opens_around_middle_aligned_text_only() {
+    let mut chart = settled_chart();
+    let id = add_middle_line_rectangle(&mut chart);
+    assert!(chart.drawing_apply_options(
+        id,
+        r#"{"middle_line_visible":true,"border_visible":true,"text":"Mid","text_size":12}"#
+    ));
+    let rect = main_rect_frame(&mut chart);
+    let frame = chart.build_frame();
+    let (text_x, text_y, size) = frame.panes[0]
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::Text {
+                x, y, text, size, ..
+            } if text == "Mid" => Some((f64::from(*x), f64::from(*y), f64::from(*size))),
+            _ => None,
+        })
+        .expect("rectangle label");
+    let lines = main_hlines(&mut chart);
+    assert_eq!(
+        lines.len(),
+        2,
+        "the centered label splits the middle line: {lines:?}"
+    );
+    let middle_y = rect.y + (rect.h - 1) / 2;
+    assert!((text_y - f64::from(middle_y)).abs() <= 1.0);
+    // Headless fallback measure: 0.6 em per glyph, centered on the anchor.
+    let half_width = 3.0 * size * 0.6 / 2.0;
+    let (left, right) = (lines[0], lines[1]);
+    assert_eq!((left.0, right.0), (middle_y, middle_y));
+    assert_eq!(left.1, rect.x);
+    assert_eq!(right.2, rect.x + rect.w);
+    assert!(
+        f64::from(left.2) <= text_x - half_width,
+        "{left:?} {text_x}"
+    );
+    assert!(
+        f64::from(right.1) >= text_x + half_width,
+        "{right:?} {text_x}"
+    );
+
+    for align in ["top", "bottom"] {
+        assert!(chart.drawing_apply_options(id, &format!(r#"{{"text_v_align":"{align}"}}"#)));
+        let lines = main_hlines(&mut chart);
+        assert_eq!(lines.len(), 1, "{align} text leaves the middle line whole");
+        assert_eq!((lines[0].1, lines[0].2), (rect.x, rect.x + rect.w));
+    }
+}
+
+#[test]
+fn rectangle_middle_line_survives_persistence_and_legacy_saves_load_without_it() {
+    let mut chart = settled_chart();
+    let id = add_middle_line_rectangle(&mut chart);
+    let saved = chart.export_state_json().unwrap();
+    assert!(
+        !saved.contains("middle_line"),
+        "defaults are not serialized"
+    );
+
+    assert!(chart.drawing_apply_options(
+        id,
+        r##"{"middle_line_visible":true,"middle_line_color":"#123456","middle_line_width":2,"middle_line_style":"solid"}"##
+    ));
+    let saved = chart.export_state_json().unwrap();
+    let mut restored = settled_chart();
+    restored.import_state_json(&saved).unwrap();
+    let drawing = restored.drawing(id).unwrap();
+    assert!(drawing.middle_line_visible);
+    assert_eq!(drawing.middle_line_color.as_deref(), Some("#123456"));
+    assert_eq!(drawing.middle_line_width, 2.0);
+    assert_eq!(drawing.middle_line_style, LineStyle::Solid);
+
+    let mut legacy: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    let style = legacy["drawings"][0]["style"].as_object_mut().unwrap();
+    for key in [
+        "middle_line_visible",
+        "middle_line_color",
+        "middle_line_width",
+        "middle_line_style",
+    ] {
+        assert!(style.remove(key).is_some(), "{key}");
+    }
+    let mut restored = settled_chart();
+    restored.import_state_json(&legacy.to_string()).unwrap();
+    let drawing = restored.drawing(id).unwrap();
+    assert!(!drawing.middle_line_visible);
+    assert_eq!(drawing.middle_line_color, None);
+    assert_eq!(drawing.middle_line_width, 1.0);
+    assert_eq!(drawing.middle_line_style, LineStyle::Dashed);
+}
+
+#[test]
+fn a_visible_rectangle_middle_line_is_a_hit_band() {
+    let mut chart = settled_chart();
+    let id = add_middle_line_rectangle(&mut chart);
+    let (left, right) = (x_at(&chart, 2.0), x_at(&chart, 6.0));
+    let (bottom, top) = (y_at(&chart, 10.0), y_at(&chart, 12.0));
+    let (mid_x, mid_y) = ((left + right) / 2.0, (top + bottom) / 2.0);
+    assert!(chart.hit_test_drawing(mid_x, mid_y).is_none());
+    assert!(chart.drawing_apply_options(id, r#"{"middle_line_visible":true}"#));
+    assert_eq!(
+        chart.hit_test_drawing(mid_x, mid_y).map(|hit| hit.id),
+        Some(id)
+    );
+    assert!(chart.hit_test_drawing(mid_x, mid_y + 12.0).is_none());
+}
+
 #[test]
 fn rectangle_shows_eight_anchors_with_directional_cursors() {
     let mut chart = settled_chart();

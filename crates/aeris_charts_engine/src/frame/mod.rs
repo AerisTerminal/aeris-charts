@@ -1289,6 +1289,16 @@ fn append_retained_layer(layer: &RetainedLayer, prims: &mut Vec<Prim>, points: &
 }
 
 impl ChartEngine {
+    /// Horizontal and vertical device-pixel ratios of the pane bitmap the frame is built for.
+    /// Engine hit tests that must match painted device pixels use the same ratios.
+    pub(crate) fn frame_pixel_ratios(&self) -> (f64, f64) {
+        let nominal_dpr = self.dpr.max(0.01);
+        (
+            (self.pane_w * nominal_dpr).round().max(1.0) / self.pane_w.max(1.0),
+            (self.pane_h * nominal_dpr).round().max(1.0) / self.pane_h.max(1.0),
+        )
+    }
+
     pub(crate) fn invalidate_frame_all(&mut self) {
         self.frame_invalidation.all();
     }
@@ -1627,8 +1637,7 @@ impl ChartEngine {
         // slightly from devicePixelRatio when a fractional-DPR pane dimension rounds. Using DPR
         // directly shifts bars and grid lines relative to the independently rounded pane bitmap.
         let nominal_dpr = self.dpr.max(0.01);
-        let hpr = (self.pane_w * nominal_dpr).round().max(1.0) / self.pane_w.max(1.0);
-        let vpr = (self.pane_h * nominal_dpr).round().max(1.0) / self.pane_h.max(1.0);
+        let (hpr, vpr) = self.frame_pixel_ratios();
         let pane_count = self.panes.len().max(1);
         let pane_w_px = (self.pane_w * hpr).round().max(1.0) as u32;
         let pane_left_px = (self.pane_left * nominal_dpr).round().max(0.0) as u32;

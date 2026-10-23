@@ -116,8 +116,9 @@ diagonal flags, which remain the values returned by `footprint_bar`.
 The stream owns classification, canonical ordering, corrections, retention, and a monotonic revision;
 footprints, CVD, delta histograms, and big-trades indicators bind to that identity rather than
 retaining a second provider-event tape. CVD supports session, continuous, and anchored resets, and
-draws as a line through each bar's close or as candles: open at the value before the bar, high and
-low at the running intrabar Max/Min Delta added to that open, close at the bar's end. Delta
+draws as candles by default: open at the value before the bar, high and low at the running
+intrabar Max/Min Delta added to that open, close at the bar's end. The line style instead draws one
+line through each bar's close. Delta
 dependents read final delta, Max/Min Delta, delta percentage, and bid/ask/unknown volumes from the
 same bars. `TradeStudyOptions` also carries the CVD line color and the up/down colors used by CVD
 candles and delta bars; an order-flow presentation takes one set for CVD and one for the delta
