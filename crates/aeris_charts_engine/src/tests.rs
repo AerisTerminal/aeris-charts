@@ -10324,8 +10324,8 @@ fn theme_switch_uses_aeris_tokens_without_replacing_market_data() {
         dark.right_price_scale.border_color,
         aeris_charts_core::style::DARK_BORDER_CSS
     );
-    assert_eq!(dark.crosshair.vert_line.color, "#fafafa2d");
-    assert_eq!(dark.crosshair.horz_line.color, "#fafafa2d");
+    assert_eq!(dark.crosshair.vert_line.color, "#fafafa1a");
+    assert_eq!(dark.crosshair.horz_line.color, "#fafafa1a");
     assert_eq!(
         dark.crosshair.horz_line.label_background_color,
         aeris_charts_core::style::DARK_MUTED_CSS

@@ -272,8 +272,8 @@ system UI font stack. Chart font remains an explicit layout option so a host web
 financial labels until the host sets it.
 Chart defaults use the same semantic roles directly: foreground for axes and value text. Crosshair
 labels sit on the dark secondary surface in both themes. Crosshair lines are dashed by default and keep each theme's `crosshair_line` alpha: translucent
-`#fafafa2d` in the dark theme (the dark `--border` tone, `#2c2c2c`, over the black surface) and
-`--border-strong` (`#0a0a0a26`) in the light theme.
+`#fafafa1a` in the dark theme (the dark `--border`, which lands on `#2e2e2e` over the dark surface) and
+`#0a0a0a26` in the light theme.
 
 ## Repository layout
 

@@ -203,9 +203,8 @@ Each cluster takes 90% of its bar slot at every zoom. In the numbers-bar modes (
    keeping the cells' row gap so it reads as a dashed staircase rather than a candle. Only rows
    inside the pane draw;
 2. the `bid × ask` numbers on a per-row tile behind the numbers only, so the histogram stays on
-   the chart surface. The tile is `--surface-raised` in the light theme, where the secondary
-   surface is too close to white to read as a tile, and the opaque `--surface-secondary` in the
-   dark theme. Bids are right-aligned and asks left-aligned against the center divider. A single
+   the chart surface. The tile is the raised tone `#f0f0f0` in the light theme, where the secondary
+   surface is too close to white to read as a tile, and `--surface-secondary` in the dark theme. Bids are right-aligned and asks left-aligned against the center divider. A single
    imbalance tints its half cell; a stacked run fills it opaquely. Both print in the strong weight
    in the higher-contrast glyph color;
 3. a per-row total-volume histogram on the right (26% of the cell area) in the dominant side's

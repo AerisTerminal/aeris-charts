@@ -287,7 +287,7 @@ pub struct FootprintVisualOptions {
     pub negative_delta_color: Color,
     /// `None` follows the chart layout foreground and retokenizes on theme changes.
     pub text_color: Option<Color>,
-    /// Tile behind the printed numbers. `None` follows the theme (`--surface-raised` in light,
+    /// Tile behind the printed numbers. `None` follows the theme (the raised tile tone in light,
     /// `--surface-secondary` in dark) and retokenizes on theme changes.
     pub cell_color: Option<Color>,
     /// Point-of-control outline. Defaults to the warning token, which both themes share.

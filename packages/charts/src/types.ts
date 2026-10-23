@@ -2146,7 +2146,7 @@ export interface footprint_series_options {
   negative_delta_color: string;
   /** `null` follows the live chart layout foreground. */
   text_color: string | null;
-  /** Tile behind the printed numbers. `null` follows the theme: `--surface-raised` in light, `--surface-secondary` in dark. */
+  /** Tile behind the printed numbers. `null` follows the theme: the raised tile tone in light, `--surface-secondary` in dark. */
   cell_color: string | null;
   /** Point-of-control outline. Defaults to the warning token `#ff6900` in both themes. */
   poc_color: string;

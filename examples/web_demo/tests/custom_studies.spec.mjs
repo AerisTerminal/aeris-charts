@@ -719,9 +719,9 @@ test("structure zones and auction marks share Canvas2D and WebGPU geometry", asy
   expect(interior_max, "all fill and alpha-blend interiors stay within two channel units").toBeLessThanOrEqual(2);
   // Windows SwiftShader, 1100x720 DPR 1: 8,574 strict pixels: 8,146 are 1-2 unit
   // rect/zone/overlap rounding; 428 are localized contour/glyph coverage, max 87 on
-  // triangle/label edges over the former #171717 dark surface. An AA coverage difference
-  // scales with foreground-to-surface contrast, so the pure-black surface raises that same
-  // edge to 96 (87 x 250/227); the count is unchanged. About 150 of those sit on the unsnapped 2 px swing-level
+  // triangle/label edges over the #171717 dark surface. An AA coverage difference scales
+  // with foreground-to-surface contrast, so a pure-black surface would raise that same edge
+  // to 96 (87 x 250/227); the count is unchanged. About 150 of those sit on the unsnapped 2 px swing-level
   // stroke, whose edge row lands at ~15% coverage in this pane height (footprint
   // clusters reserve their summary rows), where Canvas2D and WebGPU AA differ most.
   // The 2,600/40 baseline from primitives.spec.mjs covers a different scene without

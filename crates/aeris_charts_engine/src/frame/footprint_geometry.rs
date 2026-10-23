@@ -251,8 +251,8 @@ impl ChartEngine {
             aeris_charts_core::style::DEFAULT_SURFACE_RGB.1,
             aeris_charts_core::style::DEFAULT_SURFACE_RGB.2,
         ));
-        // Light cells use `--surface-raised`: the secondary surface is too close to white to read
-        // as a tile. Dark cells use the opaque `--surface-secondary`, already distinct from the chart.
+        // Light cells use the raised tile tone: the secondary surface is too close to white to read
+        // as a tile. Dark cells use `--surface-secondary`, already distinct from the chart.
         let cell_fill = visual.cell_color.unwrap_or_else(|| {
             let (r, g, b) = if surface.luminance() > 160.0 {
                 aeris_charts_core::style::LIGHT_RAISED_RGB

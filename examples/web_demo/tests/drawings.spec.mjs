@@ -1468,7 +1468,7 @@ test("Ctrl magnets the crosshair to the hovered bar's OHLC", async ({ page }) =>
   await page.evaluate(() => window.__chart.apply_options({
     crosshair: { vertLine: { style: 0 }, horzLine: { style: 0 } },
   }));
-  const CROSS = [218, 218, 218]; // light --border-strong #0a0a0a26 over the white pane
+  const CROSS = [218, 218, 218]; // light crosshair #0a0a0a26 over the white pane
   const crosshair_row = async () => {
     const png = await capture(page);
     const pane_bottom = Math.round((fixture.css_height - fixture.time_axis_height) * PR);

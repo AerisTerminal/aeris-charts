@@ -119,17 +119,17 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     muted_text: "#717171",
     border: "#cecece",
     crosshair: "#0a0a0a26",
-    crosshair_label: "#171717",
+    crosshair_label: "#242424",
     bullish: "#089981",
     bearish: "#f7525f",
   });
 
   const dark = await read("dark");
   expect(dark.css).toEqual({
-    surface: "#000000",
-    text_default: "#ededed",
+    surface: "#171717",
+    text_default: "#fafafa",
     text_secondary: "#fafafa8c",
-    text_muted: "#fafafa59",
+    text_muted: "#fafafa40",
     primary: "#006edd",
     primary_hover_matches: true,
     primary_disabled_matches: true,
@@ -139,23 +139,23 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     button_fill: "#fafafad9",
   });
   expect(dark.palette).toMatchObject({
-    background: "#000000",
-    foreground: "#ededed",
-    muted_foreground: "#898989",
+    background: "#171717",
+    foreground: "#fafafa",
+    muted_foreground: "#949494",
     primary: "#006edd",
     primary_foreground: "#ffffff",
-    primary_hover: "#0058b1",
-    border: "#2c2c2c",
+    primary_hover: "#055db5",
+    border: "#2e2e2e",
     bullish: "#089981",
     bearish: "#f7525f",
   });
   expect(dark.chart).toEqual({
-    background: "#000000",
-    text: "#ededed",
-    muted_text: "#898989",
-    border: "#2c2c2c",
-    crosshair: "#fafafa2d",
-    crosshair_label: "#171717",
+    background: "#171717",
+    text: "#fafafa",
+    muted_text: "#949494",
+    border: "#2e2e2e",
+    crosshair: "#fafafa1a",
+    crosshair_label: "#242424",
     bullish: "#089981",
     bearish: "#f7525f",
   });

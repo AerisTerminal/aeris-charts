@@ -39,47 +39,50 @@ mod tests {
         assert_eq!(LIGHT_PRIMARY_FOREGROUND_CSS, "#ffffff");
         assert_eq!(LIGHT_PRIMARY_HOVER_CSS, "#338be4");
         assert_eq!(LIGHT_DANGER_CSS, "#f7525f");
-        // `--hover-bg` (#0a0a0a14) and `--active-bg` (#0a0a0a1f) over white.
-        assert_eq!(LIGHT_ACCENT_CSS, "#ececec");
-        assert_eq!(LIGHT_ACTIVE_CSS, "#e1e1e1");
-        // `--hover-bg` (#fafafa1f) over the dark surface.
-        assert_eq!(DARK_ACCENT_CSS, "#1e1e1e");
-        assert_eq!(DARK_ACTIVE_CSS, "#252525");
+        // `--hover-bg` and `--active-bg` (both #0a0a0a0d) over white.
+        assert_eq!(LIGHT_ACCENT_CSS, "#f3f3f3");
+        assert_eq!(LIGHT_ACTIVE_CSS, LIGHT_ACCENT_CSS);
+        // `--hover-bg` (#fafafa13) and `--active-bg` (#fafafa26) over the dark surface.
+        assert_eq!(DARK_ACCENT_CSS, "#282828");
+        assert_eq!(DARK_ACTIVE_CSS, "#393939");
         // `--border` (#0a0a0a33) over white; the popover border resolves to the same token.
         assert_eq!(LIGHT_BORDER_CSS, "#cecece");
         assert_eq!(LIGHT_POPOVER_BORDER_CSS, LIGHT_BORDER_CSS);
-        // `--border-secondary` (#0a0a0a33) over white, the same tone as `--border`.
-        assert_eq!(LIGHT_MUTED_BORDER_CSS, LIGHT_BORDER_CSS);
+        // `--border-secondary` (#0a0a0a1a) over white.
+        assert_eq!(LIGHT_MUTED_BORDER_CSS, "#e6e6e6");
         assert_eq!(LIGHT_RING_CSS, "#e0e0e0");
-        assert_eq!(DARK_SURFACE_CSS, "#000000");
-        assert_eq!(DARK_FOREGROUND_CSS, "#ededed");
-        // `--surface-secondary` is opaque in the dark theme.
-        assert_eq!(DARK_MUTED_CSS, "#171717");
-        // `--surface-raised` (#fafafa14) composited over the dark surface.
-        assert_eq!(DARK_RAISED_CSS, "#141414");
-        assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#898989");
+        assert_eq!(DARK_SURFACE_CSS, "#171717");
+        assert_eq!(DARK_FOREGROUND_CSS, "#fafafa");
+        // `--surface-secondary` (#fafafa0f) over the dark surface.
+        assert_eq!(DARK_MUTED_CSS, "#242424");
+        // The raised tile tone (#fafafa14) over the dark surface.
+        assert_eq!(DARK_RAISED_CSS, "#292929");
+        // `--text-secondary` (#fafafa8c) over the dark surface.
+        assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#949494");
         assert_eq!(DARK_PRIMARY_CSS, "#006edd");
         assert_eq!(DARK_PRIMARY_FOREGROUND_CSS, "#ffffff");
-        assert_eq!(DARK_PRIMARY_HOVER_CSS, "#0058b1");
+        // `--primary-hover` (primary at 80%) over the dark surface.
+        assert_eq!(DARK_PRIMARY_HOVER_CSS, "#055db5");
         assert_eq!(DARK_DANGER_CSS, LIGHT_DANGER_CSS);
         // `--warning` is the same in both themes.
         assert_eq!(LIGHT_WARNING_CSS, "#ff6900");
         assert_eq!(DARK_WARNING_CSS, LIGHT_WARNING_CSS);
         assert_eq!(DEFAULT_WARNING_RGB, (0xff, 0x69, 0x00));
-        assert_eq!(DARK_BORDER_CSS, "#2c2c2c");
-        // `--border-secondary` is opaque in the dark theme.
-        assert_eq!(DARK_MUTED_BORDER_CSS, "#404040");
-        // `--border-strong` in the light theme, alpha kept like the dark line.
+        // `--border` (#fafafa1a) over the dark surface.
+        assert_eq!(DARK_BORDER_CSS, "#2e2e2e");
+        // `--border-secondary` (#fafafa26) over the dark surface.
+        assert_eq!(DARK_MUTED_BORDER_CSS, "#393939");
+        // The light crosshair keeps its translucent line, alpha kept like the dark line.
         assert_eq!(LIGHT_CROSSHAIR_LINE_CSS, "#0a0a0a26");
         assert_eq!(LIGHT_CROSSHAIR_LINE_RGB, (0x0a, 0x0a, 0x0a));
         assert_eq!(LIGHT_CROSSHAIR_LINE_ALPHA, 0x26);
         assert_eq!(LIGHT_CROSSHAIR_CSS, LIGHT_CROSSHAIR_LINE_CSS);
         assert_eq!(LIGHT_CROSSHAIR_LABEL_CSS, DARK_MUTED_CSS);
-        // The dark `--border` (#2c2c2c) expressed as a translucent line that lands on exactly that
-        // tone over the dark surface while staying see-through over series geometry.
-        assert_eq!(DARK_CROSSHAIR_LINE_CSS, "#fafafa2d");
+        // The translucent dark `--border` itself, so the line lands on that tone (#2e2e2e) over the
+        // dark surface while staying see-through over series geometry.
+        assert_eq!(DARK_CROSSHAIR_LINE_CSS, "#fafafa1a");
         assert_eq!(DARK_CROSSHAIR_LINE_RGB, (0xfa, 0xfa, 0xfa));
-        assert_eq!(DARK_CROSSHAIR_LINE_ALPHA, 0x2d);
+        assert_eq!(DARK_CROSSHAIR_LINE_ALPHA, 0x1a);
         assert_eq!(DARK_CROSSHAIR_CSS, DARK_CROSSHAIR_LINE_CSS);
         assert_eq!(DARK_CROSSHAIR_LABEL_CSS, DARK_MUTED_CSS);
         assert_eq!(DEFAULT_CROSSHAIR_CSS, DARK_CROSSHAIR_LINE_CSS);
@@ -114,10 +117,10 @@ mod tests {
             LIGHT_POPOVER_MUTED_FOREGROUND_CSS,
             LIGHT_MUTED_FOREGROUND_CSS
         );
-        assert_eq!(DARK_POPOVER_SURFACE_CSS, "#010101");
-        assert_eq!(DARK_POPOVER_BORDER_CSS, "#000000");
+        assert_eq!(DARK_POPOVER_SURFACE_CSS, "#262626");
+        assert_eq!(DARK_POPOVER_BORDER_CSS, "#080808");
         assert_eq!(DARK_POPOVER_HIGHLIGHT_RGB, (0xff, 0xff, 0xff));
         assert_eq!(DARK_POPOVER_HIGHLIGHT_ALPHA, 0x1a);
-        assert_eq!(DARK_POPOVER_MUTED_FOREGROUND_CSS, "#8a8a8a");
+        assert_eq!(DARK_POPOVER_MUTED_FOREGROUND_CSS, "#9a9a9a");
     }
 }
