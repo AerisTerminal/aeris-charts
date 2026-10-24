@@ -255,7 +255,7 @@ const BRUSH: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Finite,
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.25,
-    default_width: 1.0,
+    default_width: 4.0,
     default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
@@ -454,7 +454,7 @@ const HIGHLIGHTER: DrawingToolSpec = DrawingToolSpec {
     kind: DrawingKind::Highlighter,
     wire_id: 35,
     name: "highlighter",
-    default_width: 12.0,
+    default_width: 22.0,
     ..BRUSH
 };
 

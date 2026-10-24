@@ -3855,6 +3855,35 @@ impl ChartEngine {
         }
     }
 
+    /// The source series, annotations, and mitigated-zone visibility of the study whose first
+    /// output is `anchor`. Frame construction and hit testing share this lookup.
+    pub(crate) fn study_annotations_for_anchor(
+        &self,
+        anchor: SeriesId,
+    ) -> Option<(SeriesId, &StudyAnnotations, bool)> {
+        let binding = self.indicators.iter().find(|binding| {
+            binding.outputs.first() == Some(&anchor)
+                && (binding.annotations.is_some() || binding.structure.is_some())
+        })?;
+        let annotations = binding.annotations.as_ref().or_else(|| {
+            binding
+                .structure
+                .as_ref()
+                .map(|structure| structure.annotations())
+        })?;
+        let show_mitigated = matches!(
+            binding.kind,
+            IndicatorKind::FairValueGaps {
+                show_mitigated: true,
+                ..
+            } | IndicatorKind::OrderBlocks {
+                show_mitigated: true,
+                ..
+            }
+        );
+        Some((binding.source, annotations, show_mitigated))
+    }
+
     /// The band-fill companion for an output series: when `id` is a band UPPER
     /// (output slot 0), the LOWER series (slot 2) the fill closes toward, else `None`. The
     /// frame builder paints the fill between them under the band strokes (the public reference's

@@ -816,6 +816,12 @@ shows the pointer cursor and reports `volume_profile:{id}` as the hover object; 
 profile (clearing series, drawing, and general selection) and paints selection anchors on its
 first and last rows, point of control, and value-area bounds. Escape deselects it and Delete
 removes it, exactly like an indicator series.
+Indicator outputs select through the shared series hit test, which also tests what a study paints
+beyond its output lines. Zones, BOS/CHoCH strokes, and swing glyphs of structure and annotated
+studies replay `build_study_annotations_frame` at the frame's pixel ratios, so their hits and
+selection anchors use the painted geometry. Band fills (between a band's upper and lower outputs)
+and threshold bands hit as the lowest-priority `Fill` class: any stroke, range, or point under the
+pointer wins, and a click inside the fill alone selects the whole indicator group.
 Depth profiles are chart-level depth layers selected through the same controller. Their hit test
 replays the frame's own device-pixel bars (`for_each_depth_profile_bar`), so a hit lands exactly on
 painted pixels. Profile bars paint in pane chrome, so they are tested after drawings and before
@@ -1582,7 +1588,11 @@ drags, and body moves, so drawings step bar by bar horizontally and tick by tick
 moves apply one whole-bar delta to every anchor and land each price on a tick (freehand strokes
 keep their exact shape), the magnet's chosen bar and OHLC price win over the slot, and
 Shift-straightening runs after the snap so its exact angle or square holds. Keyboard nudges step
-one bar (ten with Shift) horizontally and pixels vertically, but at least one tick. Every catalog tool defaults to a 1 px line except the 12 px highlighter. The shared resolved geometry gives them one
+one bar (ten with Shift) horizontally and pixels vertically, but at least one tick. Every catalog tool defaults to a 1 px line except the 4 px brush and the 22 px highlighter.
+Placement tools are one-shot and disarm after a commit; freehand tools (brush, highlighter) stay
+armed so strokes follow one another until Escape or a secondary click disarms them. A secondary
+click with an armed tool only disarms it and queues no context menu, and the browser package
+reports every engine-side disarm to its drawing-tool listeners. The shared resolved geometry gives them one
 oriented `Measure` body (start → end) that both hit testing (the measured area is the drag surface)
 and frame lowering consume. Lowering emits a translucent device-snapped `Rect` area, crisp `HLine`
 price-level or `VLine` time-boundary rules, crisp arrow shafts through the area center with an

@@ -3586,6 +3586,229 @@ fn all_engine_indicator_kinds() -> Vec<IndicatorKind> {
     ]
 }
 
+/// A settled chart with swinging bars (strong legs leave fair-value gaps and structure breaks)
+/// and a hidden volume series for volume-based studies.
+fn selectable_indicator_chart(kind: &IndicatorKind) -> (ChartEngine, Vec<SeriesId>) {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let volume = chart.add_series(SeriesKind::Histogram);
+    let count = 120;
+    let times = (0..count)
+        .map(|index| index as f64 * 3_600.0)
+        .collect::<Vec<_>>();
+    let close = (0..count)
+        .map(|index| 100.0 + (index as f64 * 0.35).sin() * 15.0 + index as f64 * 0.1)
+        .collect::<Vec<_>>();
+    let open = std::iter::once(close[0])
+        .chain(close.iter().copied())
+        .take(count)
+        .collect::<Vec<_>>();
+    let high = open
+        .iter()
+        .zip(&close)
+        .map(|(open, close)| open.max(*close) + 0.5)
+        .collect::<Vec<_>>();
+    let low = open
+        .iter()
+        .zip(&close)
+        .map(|(open, close)| open.min(*close) - 0.5)
+        .collect::<Vec<_>>();
+    let volumes = (0..count)
+        .map(|index| 10.0 + (index % 7) as f64)
+        .collect::<Vec<_>>();
+    chart
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .unwrap();
+    chart
+        .set_series_data(volume, &times, &volumes, &volumes, &volumes, &volumes)
+        .unwrap();
+    chart.set_series_visible(volume, false);
+    let outputs = add_test_indicator(&mut chart, kind, Some(volume));
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.build_frame();
+    (chart, outputs)
+}
+
+/// Pointer positions on geometry each output actually paints: the middle visible value of
+/// line/histogram outputs and the center of each annotation zone, stroke, and glyph.
+fn painted_indicator_points(chart: &ChartEngine, outputs: &[SeriesId]) -> Vec<(f64, f64)> {
+    use aeris_charts_render::draw_list::Prim;
+    let (from, to) = chart.visible_range_for_frame().unwrap();
+    let mut points = Vec::new();
+    for &id in outputs {
+        let Some(series) = chart.series_entry(id) else {
+            continue;
+        };
+        if !series.visible {
+            continue;
+        }
+        let pane = &chart.panes[series.pane_index];
+        let inside = |(x, y): (f64, f64)| {
+            x > 2.0
+                && x < chart.pane_w - 2.0
+                && y > pane.top + 2.0
+                && y < pane.top + pane.height - 2.0
+        };
+        if let Some((prims, hpr, vpr)) = chart.study_annotation_shapes(id) {
+            for prim in &prims {
+                let point = match prim {
+                    Prim::Rect { rect, .. } => (
+                        (f64::from(rect.x) + f64::from(rect.w) / 2.0) / hpr,
+                        (f64::from(rect.y) + f64::from(rect.h) / 2.0) / vpr,
+                    ),
+                    Prim::HLine { y, x0, x1, .. } => {
+                        (f64::from(x0 + x1) / 2.0 / hpr, f64::from(*y) / vpr)
+                    }
+                    Prim::Triangle { a, b, c, .. } => (
+                        f64::from(a[0] + b[0] + c[0]) / 3.0 / hpr,
+                        f64::from(a[1] + b[1] + c[1]) / 3.0 / vpr,
+                    ),
+                    _ => continue,
+                };
+                if inside(point) {
+                    points.push(point);
+                }
+            }
+        }
+        let plot = chart.data.plot(id);
+        let rows = plot
+            .visible_rows(from, to)
+            .filter(|&row| !plot.is_whitespace_row(row))
+            .collect::<Vec<_>>();
+        let Some(&row) = rows.get(rows.len() / 2) else {
+            continue;
+        };
+        let value = plot.value_at(
+            row,
+            aeris_charts_core::model::plot_list::PlotValueIndex::Close,
+        );
+        let point = (
+            chart
+                .logical_to_coordinate(plot.index_at(row).unwrap() as f64)
+                .unwrap(),
+            chart
+                .series_price_to_coordinate(id, value)
+                .unwrap_or(f64::NAN),
+        );
+        if point.1.is_finite() && inside(point) {
+            points.push(point);
+        }
+    }
+    points
+}
+
+#[test]
+fn every_indicator_is_selectable_on_its_painted_geometry() {
+    let mut kinds = all_engine_indicator_kinds();
+    kinds.extend([
+        IndicatorKind::SwingPoints { left: 2, right: 2 },
+        IndicatorKind::MarketStructure {
+            left: 2,
+            right: 2,
+            break_on: StructureBreakOn::Wick,
+        },
+        IndicatorKind::FairValueGaps {
+            min_size: 0.0,
+            mitigation: StructureMitigation::Touch,
+            mitigation_price: StructureMitigationPrice::Wick,
+            max_active: 8,
+            show_mitigated: true,
+        },
+        IndicatorKind::OrderBlocks {
+            left: 2,
+            right: 2,
+            break_on: StructureBreakOn::Wick,
+            zone: OrderBlockZone::Wick,
+            mitigation: StructureMitigation::Touch,
+            mitigation_price: StructureMitigationPrice::Wick,
+            max_active: 8,
+            show_mitigated: true,
+        },
+    ]);
+    for kind in kinds {
+        let (mut chart, outputs) = selectable_indicator_chart(&kind);
+        let points = painted_indicator_points(&chart, &outputs);
+        assert!(
+            !points.is_empty(),
+            "{kind:?} paints no geometry in the fixture"
+        );
+        for (x, y) in points {
+            let hit = chart.hit_test_series(x, y);
+            assert!(
+                hit.is_some_and(|id| outputs.contains(&id)),
+                "{kind:?} is not selectable at ({x:.1}, {y:.1}): hit {hit:?}"
+            );
+            chart.set_selected_series(hit);
+            let pane = chart.series_entry(hit.unwrap()).unwrap().pane_index;
+            assert!(
+                !chart.selection_anchor_identities().is_empty()
+                    || !chart.study_selection_anchor_points(pane).is_empty(),
+                "{kind:?} shows no selection anchors"
+            );
+        }
+    }
+}
+
+#[test]
+fn band_and_threshold_fills_select_their_indicator_below_any_stroke() {
+    let (chart, outputs) = selectable_indicator_chart(&IndicatorKind::Bollinger {
+        period: 5,
+        deviation: 2.0,
+    });
+    let (from, to) = chart.visible_range_for_frame().unwrap();
+    let upper = chart.data.plot(outputs[0]);
+    let lower = chart.data.plot(outputs[2]);
+    let row = upper.visible_rows(from, to).nth(60).unwrap();
+    let x = chart
+        .logical_to_coordinate(upper.index_at(row).unwrap() as f64)
+        .unwrap();
+    let close = aeris_charts_core::model::plot_list::PlotValueIndex::Close;
+    let upper_y = chart
+        .series_price_to_coordinate(outputs[0], upper.value_at(row, close))
+        .unwrap();
+    let lower_y = chart
+        .series_price_to_coordinate(outputs[0], lower.value_at(row, close))
+        .unwrap();
+    // Between the band strokes, clear of both: the fill selects the band unless a candle is there.
+    let inside_y = upper_y + (lower_y - upper_y) * 0.1;
+    let hit = chart.hit_test_series(x, inside_y);
+    assert!(
+        hit.is_some_and(|id| outputs.contains(&id) || id == 0),
+        "{hit:?}"
+    );
+    let fill_only = (0..=40)
+        .map(|step| upper_y + (lower_y - upper_y) * f64::from(step) / 40.0)
+        .find(|&y| {
+            chart.hit_test_one_series(0, x, y).is_none()
+                && (y - upper_y).abs() > 6.0
+                && (y - lower_y).abs() > 6.0
+        })
+        .expect("a fill point clear of the candle");
+    assert!(
+        chart
+            .hit_test_series(x, fill_only)
+            .is_some_and(|id| outputs.contains(&id))
+    );
+
+    let (chart, outputs) = selectable_indicator_chart(&IndicatorKind::Rsi { period: 5 });
+    let rsi = outputs[0];
+    let pane = &chart.panes[chart.series_entry(rsi).unwrap().pane_index];
+    let band_top = chart.series_price_to_coordinate(rsi, 70.0).unwrap();
+    let band_bottom = chart.series_price_to_coordinate(rsi, 30.0).unwrap();
+    let away = (0..chart.pane_w as i32)
+        .map(f64::from)
+        .flat_map(|x| [(x, band_top + 2.0), (x, band_bottom - 2.0)])
+        .find(|&(x, y)| {
+            chart
+                .hit_test_one_series(rsi, x, y)
+                .is_some_and(|hit| hit.kind == crate::hit_test::SeriesHitKind::Fill)
+        })
+        .expect("a threshold band point away from the RSI line");
+    assert!(away.1 > pane.top && away.1 < pane.top + pane.height);
+    assert_eq!(chart.hit_test_series(away.0, away.1), Some(rsi));
+    assert_eq!(chart.hit_test_series(away.0, band_top - 20.0), None);
+}
+
 #[test]
 fn every_indicator_engine_path_matches_full_recomputation() {
     let kinds = all_engine_indicator_kinds();

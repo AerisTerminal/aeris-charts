@@ -3997,6 +3997,8 @@ export class chart_impl implements chart_api {
   /** Host-side serialization cache for the engine-owned armed drawing template. */
   private tool_options_json = "{}";
   private tool_listener: ((tool: drawing_kind | null) => void) | null = null;
+  /** The armed tool last reported to listeners; the engine may disarm on its own. */
+  private reported_tool: drawing_kind | null = null;
   private readonly tool_change_subs = new Set<drawing_tool_change_handler>();
   private readonly drawing_created_subs = new Set<drawing_created_handler>();
   /** Borderless caret surface shared by two explicitly separate product edit modes. */
@@ -6851,10 +6853,19 @@ export class chart_impl implements chart_api {
         throw new AerisChartsError("invalid_options", "drawing tool options are malformed");
       }
     }
-    if (changed) {
-      this.tool_listener?.(tool);
-      for (const handler of this.tool_change_subs) handler(tool);
-    }
+    if (changed) this.notify_drawing_tool(tool);
+  }
+
+  private notify_drawing_tool(tool: drawing_kind | null): void {
+    this.reported_tool = tool;
+    this.tool_listener?.(tool);
+    for (const handler of this.tool_change_subs) handler(tool);
+  }
+
+  /** Report an engine-side disarm (one-shot commit, Escape, secondary click) to listeners. */
+  private sync_drawing_tool(): void {
+    const tool = this.active_drawing_tool();
+    if (tool !== this.reported_tool) this.notify_drawing_tool(tool);
   }
 
   active_drawing_tool(): drawing_kind | null {
@@ -6915,9 +6926,7 @@ export class chart_impl implements chart_api {
     if (info === undefined) return false;
     const created = new drawing_impl(this, info.id, info.kind, info.pane_index);
     for (const handler of this.drawing_created_subs) handler(created);
-    // One-shot disarming happened inside the engine controller; mirror that public state change.
-    this.tool_listener?.(null);
-    for (const handler of this.tool_change_subs) handler(null);
+    this.sync_drawing_tool();
     if (this.wasm.drawing_requests_text_edit(created_id)) {
       this.open_inline_editor(created, controller_owned);
     }
@@ -6975,12 +6984,8 @@ export class chart_impl implements chart_api {
 
   /** Escape: disarm the tool (cancelling any pending creation) and deselect any drawing. */
   cancel_drawing_interaction(): void {
-    const changed = this.active_drawing_tool() !== null;
     this.wasm.cancel_drawing_tool();
-    if (changed) {
-      this.tool_listener?.(null);
-      for (const handler of this.tool_change_subs) handler(null);
-    }
+    this.sync_drawing_tool();
     this.wasm.set_selected_drawing(undefined);
   }
 
@@ -7461,6 +7466,7 @@ export class chart_impl implements chart_api {
           break;
       }
     }
+    this.sync_drawing_tool();
     if (complete_press) {
       this.trading_handle.dispatch_pending_intents();
       this.dispatch_alert_create_requests();

@@ -4413,9 +4413,9 @@ export interface chart_api {
    * pane clicks place the tool's anchors through the engine's creation flow. Multi-click paths
    * finish on double-click or Enter; freehand tools capture a press-drag. The mouse previews the
    * pending anchor, Backspace removes the latest path vertex, and Escape cancels. `options`
-   * templates the drawing created this way. One-shot:
-   * the tool disarms after each commit (listen with {@link chart_api.set_drawing_tool_listener}
-   * to sync a toolbar).
+   * templates the drawing created this way. Most tools are one-shot and disarm after each commit;
+   * freehand tools (brush, highlighter) stay armed for further strokes. A secondary click or Escape
+   * disarms any tool (listen with {@link chart_api.set_drawing_tool_listener} to sync a toolbar).
    */
   set_drawing_tool(
     tool: drawing_kind | null,
@@ -4424,7 +4424,7 @@ export interface chart_api {
   ): void;
   /** The armed interactive tool, or `null`. */
   active_drawing_tool(): drawing_kind | null;
-  /** Register a listener for armed-tool changes (including the auto-disarm after a commit). */
+  /** Register a listener for armed-tool changes, including engine-side disarms. */
   set_drawing_tool_listener(listener: ((tool: drawing_kind | null) => void) | null): void;
   /** Additive drawing-tool state subscription used by toolbar/controller features. */
   subscribe_drawing_tool_change(handler: drawing_tool_change_handler): void;

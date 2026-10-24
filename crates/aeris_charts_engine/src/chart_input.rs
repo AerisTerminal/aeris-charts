@@ -1445,10 +1445,16 @@ impl ChartEngine {
         }
     }
 
-    /// Secondary click. Cancels any gesture and queues a [`ChartInputEvent::ContextMenu`].
+    /// Secondary click. Cancels any gesture and queues a [`ChartInputEvent::ContextMenu`]. While
+    /// a drawing tool is armed the click only disarms it, so no menu opens.
     pub fn input_context_menu(&mut self, x: f64, y: f64) {
         self.commit_drawing_text_edit();
         self.input_cancel();
+        if self.active_drawing_tool().is_some() {
+            self.cancel_drawing_tool();
+            self.refresh_input_cursor();
+            return;
+        }
         let region = self.region_at(x, y);
         let context = matches!(region, ChartRegion::Pane)
             .then(|| self.chart_context_at(x, y))
@@ -3746,6 +3752,39 @@ mod tests {
             })
         ));
         chart.input_cancel();
+    }
+
+    #[test]
+    fn freehand_tools_stay_armed_until_a_secondary_click() {
+        for kind in [DrawingKind::Brush, DrawingKind::Highlighter] {
+            let mut chart = chart();
+            assert!(chart.set_drawing_tool(Some(kind), None, None));
+            drag(&mut chart, (120.0, 120.0), (220.0, 180.0));
+            drag(&mut chart, (260.0, 140.0), (360.0, 200.0));
+            let events = chart.take_input_events();
+            let created = events
+                .iter()
+                .filter(|event| matches!(event, ChartInputEvent::DrawingCreated(_)))
+                .count();
+            assert_eq!(created, 2, "{kind:?} draws stroke after stroke: {events:?}");
+            assert_eq!(chart.active_drawing_tool(), Some(kind));
+            assert_eq!(chart.input_cursor(), ChartCursor::Crosshair);
+
+            chart.input_context_menu(300.0, 200.0);
+            assert_eq!(chart.active_drawing_tool(), None);
+            assert!(
+                !chart
+                    .take_input_events()
+                    .iter()
+                    .any(|event| matches!(event, ChartInputEvent::ContextMenu(_))),
+                "the disarming secondary click opens no menu"
+            );
+            chart.input_context_menu(300.0, 200.0);
+            assert!(matches!(
+                chart.take_input_events()[..],
+                [ChartInputEvent::ContextMenu(_)]
+            ));
+        }
     }
 
     #[test]

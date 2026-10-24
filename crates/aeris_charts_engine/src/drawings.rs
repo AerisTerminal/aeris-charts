@@ -6894,7 +6894,11 @@ impl ChartEngine {
                 ..DrawingCreationUpdate::default()
             };
         }
-        self.drawing_controller.armed = None;
+        // Freehand tools stay armed so strokes can follow one another; a secondary click or
+        // Escape disarms them. Every other placement is one-shot.
+        if !kind.spec().placement.is_freehand() {
+            self.drawing_controller.armed = None;
+        }
         DrawingCreationUpdate {
             consumed: true,
             changed: true,

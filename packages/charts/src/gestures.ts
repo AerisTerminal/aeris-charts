@@ -288,7 +288,8 @@ export function install_gestures(chart: chart_impl): () => void {
   };
   const on_contextmenu = (event: MouseEvent) => {
     const position = local_xy(event);
-    const handled = chart.has_chart_context_subscribers();
+    // A secondary click while a drawing tool is armed only disarms it.
+    const handled = chart.has_chart_context_subscribers() || chart.active_drawing_tool() !== null;
     wasm.controller_context_menu(position.x, position.y);
     sync_controller_pointer();
     if (handled) event.preventDefault();

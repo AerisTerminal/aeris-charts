@@ -406,7 +406,7 @@ impl ChartEngine {
     /// Rows are source-series rows, not LOD rows: sparse time mappings remain exact. The caller
     /// owns confirmation-time gating and invalidation; this painter only projects visible geometry.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn build_study_annotations_frame(
+    pub(crate) fn build_study_annotations_frame(
         &self,
         anchor: SeriesId,
         source: SeriesId,
@@ -2172,6 +2172,7 @@ impl ChartEngine {
         };
         let mut profile_points = self.volume_profile_selection_anchor_points(pane_index);
         profile_points.extend(self.depth_selection_anchor_points(pane_index));
+        profile_points.extend(self.study_selection_anchor_points(pane_index));
         if !profile_points.is_empty() {
             let fill = anchor_fill();
             for (x, y) in profile_points {

@@ -654,12 +654,12 @@ fn drawings_move_bar_by_bar_horizontally_and_land_prices_on_the_scale_tick() {
 }
 
 #[test]
-fn every_tool_defaults_to_a_one_pixel_line_except_the_highlighter() {
+fn every_tool_defaults_to_a_one_pixel_line_except_freehand_strokes() {
     for spec in crate::drawings::tools::DRAWING_TOOL_SPECS {
-        let expected = if spec.kind == DrawingKind::Highlighter {
-            12.0
-        } else {
-            1.0
+        let expected = match spec.kind {
+            DrawingKind::Brush => 4.0,
+            DrawingKind::Highlighter => 22.0,
+            _ => 1.0,
         };
         assert_eq!(spec.default_width, expected, "{}", spec.name);
     }
@@ -2358,6 +2358,22 @@ fn drawing_tool_controller_routes_placement_classes_without_host_kind_branches()
     let final_point = brush_drawing.points.last().unwrap();
     assert!((final_point.logical - 8.0).abs() < 1e-6);
     assert!((final_point.price - 11.5).abs() < 1e-6);
+    assert_eq!(
+        chart.active_drawing_tool(),
+        Some(DrawingKind::Brush),
+        "freehand tools stay armed between strokes"
+    );
+    assert!(!chart.drawing_tool_capture_active());
+    let second_stroke =
+        chart.drawing_tool_pointer_down(first.0, first.1, DrawingModifiers::default());
+    assert!(second_stroke.pointer_capture);
+    chart.drawing_tool_pointer_move(second.0, second.1, DrawingModifiers::default(), true);
+    let second_brush = chart
+        .drawing_tool_pointer_up(release.0, release.1, DrawingModifiers::default())
+        .created
+        .expect("the still-armed brush commits a second stroke");
+    assert_ne!(second_brush, brush);
+    assert!(chart.cancel_drawing_tool());
     assert_eq!(chart.active_drawing_tool(), None);
 
     // Variable sequences use the same activation route and an explicit generic finish action.
@@ -5006,7 +5022,7 @@ fn polyline_and_highlighter_use_distinct_shared_frame_styles() {
             DrawingKind::Highlighter,
             35,
             "highlighter",
-            12.0,
+            22.0,
             LineType::Curved,
         ),
     ] {

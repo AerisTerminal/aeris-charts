@@ -1606,6 +1606,36 @@ test("brush: a click without a drag discards the stroke", async ({ page }) => {
   expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBeNull();
 });
 
+test("brush and highlighter stay armed between strokes until a right click", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  for (const kind of ["brush", "highlighter"]) {
+    await page.evaluate((tool) => {
+      window.__tool_reports = [];
+      window.__chart.set_drawing_tool_listener((armed) => window.__tool_reports.push(armed));
+      window.__chart.set_drawing_tool(tool);
+    }, kind);
+    const before = (await drawings(page)).length;
+    for (const price of [s.p_lo, s.p_hi]) {
+      const p = await spot(page, s.l0, price);
+      await page.mouse.move(p.x, p.y);
+      await page.mouse.down();
+      await page.mouse.move(p.x + 60, p.y - 15, { steps: 6 });
+      await page.mouse.up();
+      await settle_frames(page);
+    }
+    const strokes = (await drawings(page)).slice(before);
+    expect(strokes.map((drawing) => drawing.kind)).toEqual([kind, kind]);
+    expect(await page.evaluate(() => window.__chart.drawings().at(-1).options().width))
+      .toBe(kind === "brush" ? 4 : 22);
+    expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBe(kind);
+    const p = await spot(page, s.l0, s.p_lo);
+    await page.mouse.click(p.x, p.y, { button: "right" });
+    expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBeNull();
+    expect(await page.evaluate(() => window.__tool_reports)).toEqual([kind, null]);
+  }
+});
+
 test("changing style mid-edit never wipes the typed text; font size control applies", async ({ page }) => {
   // The full demo (toolbar visible) — the regression: typing in the editor, then changing a
   // style input, used to write the toolbar's EMPTY label field into the drawing, wiping the

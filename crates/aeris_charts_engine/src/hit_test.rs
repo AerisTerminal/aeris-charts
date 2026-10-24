@@ -23,7 +23,7 @@
 
 use aeris_charts_core::model::data_layer::SeriesId;
 use aeris_charts_core::model::plot_list::PlotValueIndex;
-use aeris_charts_render::draw_list::LineType;
+use aeris_charts_render::draw_list::{LineType, Prim};
 
 use crate::feature_series::FeatureSeriesKind;
 use crate::frame::{pane_scale, series_scale_target};
@@ -38,6 +38,8 @@ const HIT_TEST_TOLERANCE: f64 = 3.0;
 /// reference `HitTestPriority` (model/internal-hit-test.ts): the class a series hit belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeriesHitKind {
+    /// Fill-style hit (band or threshold background). Any stroke, range, or point hit beats it.
+    Fill,
     /// Range-style hit (bar/candle/histogram interval).
     Range,
     /// Stroke-style hit (line segment).
@@ -60,11 +62,13 @@ impl SeriesHit {
     /// distance wins and equal-distance non-point ties lose (preserving the caller's
     /// topmost-first walk order).
     pub fn is_better_than(&self, current: &SeriesHit) -> bool {
-        if self.kind == SeriesHitKind::Point && current.kind != SeriesHitKind::Point {
-            return true;
-        }
-        if current.kind == SeriesHitKind::Point && self.kind != SeriesHitKind::Point {
-            return false;
+        let rank = |kind: SeriesHitKind| match kind {
+            SeriesHitKind::Fill => 0,
+            SeriesHitKind::Range | SeriesHitKind::Line => 1,
+            SeriesHitKind::Point => 2,
+        };
+        if rank(self.kind) != rank(current.kind) {
+            return rank(self.kind) > rank(current.kind);
         }
         self.distance < current.distance
     }
@@ -281,7 +285,234 @@ pub(crate) fn hit_test_line_series(
         .then_some((line_min_distance, SeriesHitKind::Line))
 }
 
+/// A study-annotation shape's distance to the cursor, in CSS px. Zones are ranges, BOS/CHoCH
+/// strokes are lines, swing glyphs are points; anything else (labels, borders) adds nothing.
+fn annotation_prim_hit(
+    prim: &Prim,
+    x: f64,
+    y: f64,
+    hpr: f64,
+    vpr: f64,
+) -> Option<(f64, SeriesHitKind)> {
+    let box_distance = |left: f64, top: f64, right: f64, bottom: f64| {
+        let dx = (left - x).max(x - right).max(0.0);
+        let dy = (top - y).max(y - bottom).max(0.0);
+        let distance = dx.hypot(dy);
+        (distance <= HIT_TEST_TOLERANCE).then_some(distance)
+    };
+    match prim {
+        Prim::Rect { rect, .. } => box_distance(
+            f64::from(rect.x) / hpr,
+            f64::from(rect.y) / vpr,
+            f64::from(rect.x + rect.w) / hpr,
+            f64::from(rect.y + rect.h) / vpr,
+        )
+        .map(|distance| (distance, SeriesHitKind::Range)),
+        Prim::HLine {
+            y: line_y,
+            x0,
+            x1,
+            width,
+            ..
+        } => {
+            let line_y = f64::from(*line_y) / vpr;
+            let distance = distance_to_segment(
+                x,
+                y,
+                f64::from(*x0) / hpr,
+                line_y,
+                f64::from(*x1) / hpr,
+                line_y,
+            );
+            (distance <= f64::from(*width) / vpr / 2.0 + HIT_TEST_TOLERANCE)
+                .then_some((distance, SeriesHitKind::Line))
+        }
+        Prim::Triangle { a, b, c, .. } => {
+            let xs = [a[0], b[0], c[0]].map(|value| f64::from(value) / hpr);
+            let ys = [a[1], b[1], c[1]].map(|value| f64::from(value) / vpr);
+            box_distance(
+                xs[0].min(xs[1]).min(xs[2]),
+                ys[0].min(ys[1]).min(ys[2]),
+                xs[0].max(xs[1]).max(xs[2]),
+                ys[0].max(ys[1]).max(ys[2]),
+            )
+            .map(|distance| (distance, SeriesHitKind::Point))
+        }
+        Prim::RoundRect {
+            x: left,
+            y: top,
+            w,
+            h,
+            ..
+        } => box_distance(
+            f64::from(*left) / hpr,
+            f64::from(*top) / vpr,
+            f64::from(left + w) / hpr,
+            f64::from(top + h) / vpr,
+        )
+        .map(|distance| (distance, SeriesHitKind::Point)),
+        _ => None,
+    }
+}
+
+/// The y of polyline `points` at `x`, interpolated linearly between its neighbours.
+fn polyline_y_at(points: &[(f64, f64)], x: f64) -> Option<f64> {
+    let index = points.partition_point(|point| point.0 < x);
+    if index == 0 || index >= points.len() {
+        return points
+            .iter()
+            .find(|point| (point.0 - x).abs() < f64::EPSILON)
+            .map(|point| point.1);
+    }
+    let (first, second) = (points[index - 1], points[index]);
+    let span = second.0 - first.0;
+    if span <= 0.0 {
+        return Some(second.1);
+    }
+    Some(first.1 + (second.1 - first.1) * (x - first.0) / span)
+}
+
+fn better_hit(
+    current: Option<(f64, SeriesHitKind)>,
+    candidate: Option<(f64, SeriesHitKind)>,
+) -> Option<(f64, SeriesHitKind)> {
+    match (current, candidate) {
+        (Some(current), Some(candidate)) => {
+            let as_hit = |(distance, kind)| SeriesHit {
+                series: 0,
+                distance,
+                kind,
+            };
+            Some(if as_hit(candidate).is_better_than(&as_hit(current)) {
+                candidate
+            } else {
+                current
+            })
+        }
+        (current, candidate) => current.or(candidate),
+    }
+}
+
 impl ChartEngine {
+    /// The painted annotation shapes (zones, structure strokes, swing glyphs) of a study whose
+    /// first output is `anchor`, in device px at the frame's pixel ratios. Hit testing and
+    /// selection anchors use this exact paint geometry.
+    pub(crate) fn study_annotation_shapes(
+        &self,
+        anchor: SeriesId,
+    ) -> Option<(Vec<Prim>, f64, f64)> {
+        let (source, annotations, show_mitigated) = self.study_annotations_for_anchor(anchor)?;
+        let (from, to) = self.visible_range_for_frame()?;
+        let (hpr, vpr) = self.frame_pixel_ratios();
+        let mut prims = Vec::new();
+        self.build_study_annotations_frame(
+            anchor,
+            source,
+            annotations,
+            show_mitigated,
+            from,
+            to,
+            (self.pane_w * hpr).round().max(1.0) as i32,
+            hpr,
+            vpr,
+            &mut prims,
+        );
+        Some((prims, hpr, vpr))
+    }
+
+    fn study_annotation_hit(
+        &self,
+        anchor: SeriesId,
+        x: f64,
+        y: f64,
+    ) -> Option<(f64, SeriesHitKind)> {
+        let (prims, hpr, vpr) = self.study_annotation_shapes(anchor)?;
+        prims
+            .iter()
+            .map(|prim| annotation_prim_hit(prim, x, y, hpr, vpr))
+            .fold(None, better_hit)
+    }
+
+    /// Selection anchors (chart CSS px) for selected annotation studies on `pane_index`: zone
+    /// edge midpoints, structure stroke ends, and swing glyph tips.
+    pub(crate) fn study_selection_anchor_points(&self, pane_index: usize) -> Vec<(f64, f64)> {
+        let mut points = Vec::new();
+        for anchor in self.selected_series_members() {
+            if self
+                .series_entry(anchor)
+                .is_none_or(|series| series.pane_index != pane_index)
+            {
+                continue;
+            }
+            let Some((prims, hpr, vpr)) = self.study_annotation_shapes(anchor) else {
+                continue;
+            };
+            for prim in &prims {
+                match prim {
+                    Prim::Rect { rect, .. } => {
+                        let y = (f64::from(rect.y) + f64::from(rect.h) / 2.0) / vpr;
+                        points.push((f64::from(rect.x) / hpr, y));
+                        points.push((f64::from(rect.x + rect.w) / hpr, y));
+                    }
+                    Prim::HLine { y, x0, x1, .. } => {
+                        let y = f64::from(*y) / vpr;
+                        points.push((f64::from(*x0) / hpr, y));
+                        points.push((f64::from(*x1) / hpr, y));
+                    }
+                    Prim::Triangle { a, .. } => {
+                        points.push((f64::from(a[0]) / hpr, f64::from(a[1]) / vpr));
+                    }
+                    _ => {}
+                }
+                if points.len() >= MAX_SELECTION_ANCHORS {
+                    return points;
+                }
+            }
+        }
+        points
+    }
+
+    /// Visible stroke points of a line-like series in CSS px, selected exactly as painted.
+    #[allow(clippy::too_many_arguments)]
+    fn visible_line_points(
+        &self,
+        id: SeriesId,
+        scale: &aeris_charts_core::scale::price_scale_core::PriceScaleCore,
+        base_value: f64,
+        from: i64,
+        to: i64,
+        bar_spacing: f64,
+        hpr: f64,
+    ) -> Vec<(f64, f64)> {
+        let plot = self.data.plot(id);
+        let close = plot.column(PlotValueIndex::Close);
+        let mut work = crate::frame::conflation::DensityWork::default();
+        let visible = crate::frame::conflation::visible_line_rows_with_work(
+            plot,
+            from,
+            to,
+            bar_spacing,
+            hpr,
+            |index| self.time_scale.index_to_coordinate(index) * hpr,
+            &mut work,
+        );
+        self.record_lod_work(
+            work.selected_level,
+            work.summary_nodes,
+            work.raw_rows,
+            work.candidates,
+        );
+        visible
+            .into_iter()
+            .map(|row| {
+                (
+                    self.time_scale
+                        .index_to_coordinate(plot.index_at(row).expect("hit-test row index")),
+                    scale.price_to_coordinate(close[row], base_value),
+                )
+            })
+            .collect()
+    }
     /// The stacked pane containing chart-top-relative media y `y_css`, or `None` when it
     /// falls between panes, on the time-axis strip, or off the chart. Hit testing is
     /// restricted to the pane under the cursor (reference hit-tests only the hovered pane widget).
@@ -308,11 +539,25 @@ impl ChartEngine {
         if !series.visible || series.pane_index >= self.panes.len() {
             return None;
         }
-        let (from, to) = self.visible_range_for_frame()?;
-        let base_value = self.series_base_value(id, from)?;
+        let as_hit = |hit: Option<(f64, SeriesHitKind)>| {
+            hit.map(|(distance, kind)| SeriesHit {
+                series: id,
+                distance,
+                kind,
+            })
+        };
+        // A structure study's anchor output is whitespace by contract; its zones and strokes
+        // still hit through the source series' scale.
+        let annotation = self.study_annotation_hit(id, x_css, y_css);
+        let Some((from, to)) = self.visible_range_for_frame() else {
+            return as_hit(annotation);
+        };
+        let Some(base_value) = self.series_base_value(id, from) else {
+            return as_hit(annotation);
+        };
         let scale = pane_scale(&self.panes[series.pane_index], series_scale_target(series));
         if scale.is_empty() {
-            return None;
+            return as_hit(annotation);
         }
         let plot = self.data.plot(id);
         let bar_spacing = self.time_scale.bar_spacing();
@@ -398,34 +643,8 @@ impl ChartEngine {
                     .map(|distance| (distance, SeriesHitKind::Range))
             }
             SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline => {
-                let close = plot.column(PlotValueIndex::Close);
-                let mut work = crate::frame::conflation::DensityWork::default();
-                let visible = crate::frame::conflation::visible_line_rows_with_work(
-                    plot,
-                    from,
-                    to,
-                    bar_spacing,
-                    hpr,
-                    |index| self.time_scale.index_to_coordinate(index) * hpr,
-                    &mut work,
-                );
-                self.record_lod_work(
-                    work.selected_level,
-                    work.summary_nodes,
-                    work.raw_rows,
-                    work.candidates,
-                );
-                let points = visible
-                    .into_iter()
-                    .map(|row| {
-                        (
-                            self.time_scale.index_to_coordinate(
-                                plot.index_at(row).expect("hit-test row index"),
-                            ),
-                            scale.price_to_coordinate(close[row], base_value),
-                        )
-                    })
-                    .collect::<Vec<_>>();
+                let points =
+                    self.visible_line_points(id, scale, base_value, from, to, bar_spacing, hpr);
                 // reference line-hit-test-pane-view-base.ts: width 1 when the stroke is hidden;
                 // point markers join with their resolved radius (default lineWidth/2 + 2).
                 let line_width = if series.line_visible {
@@ -479,11 +698,56 @@ impl ChartEngine {
             // it (the reference's renderer-level `hitTest` is out of scope of the host contract).
             SeriesKind::Custom => None,
         };
-        result.map(|(distance, kind)| SeriesHit {
-            series: id,
-            distance,
-            kind,
-        })
+        let fill = self.series_fill_hit(
+            series,
+            scale,
+            base_value,
+            from,
+            to,
+            x_css,
+            y_css,
+            bar_spacing,
+            hpr,
+        );
+        as_hit(better_hit(better_hit(result, annotation), fill))
+    }
+
+    /// Inside a series' threshold band or between a band study's upper and lower outputs.
+    #[allow(clippy::too_many_arguments)]
+    fn series_fill_hit(
+        &self,
+        series: &crate::SeriesEntry,
+        scale: &aeris_charts_core::scale::price_scale_core::PriceScaleCore,
+        base_value: f64,
+        from: i64,
+        to: i64,
+        x: f64,
+        y: f64,
+        bar_spacing: f64,
+        hpr: f64,
+    ) -> Option<(f64, SeriesHitKind)> {
+        if !matches!(series.kind, SeriesKind::Line | SeriesKind::Area)
+            || !(0.0..=self.pane_w).contains(&x)
+        {
+            return None;
+        }
+        let between = |a: f64, b: f64| y >= a.min(b) && y <= a.max(b);
+        if let Some(region) = series.threshold_region
+            && between(
+                scale.price_to_coordinate(region.upper, base_value),
+                scale.price_to_coordinate(region.lower, base_value),
+            )
+        {
+            return Some((0.0, SeriesHitKind::Fill));
+        }
+        let lower = self.band_fill_companion(series.id)?;
+        let upper_points =
+            self.visible_line_points(series.id, scale, base_value, from, to, bar_spacing, hpr);
+        let lower_points =
+            self.visible_line_points(lower, scale, base_value, from, to, bar_spacing, hpr);
+        let upper = polyline_y_at(&upper_points, x)?;
+        let lower = polyline_y_at(&lower_points, x)?;
+        between(upper, lower).then_some((0.0, SeriesHitKind::Fill))
     }
 
     /// The series under pane-relative media px `(x_css, y_css)` (reference
