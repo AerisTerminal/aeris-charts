@@ -1560,6 +1560,11 @@ test("brush: freehand drag draws a smooth stroke that survives commit unchanged"
   expect(point_count).toBeGreaterThanOrEqual(2);
   expect(point_count).toBeLessThanOrEqual(steps + 1);
   expect(await page.evaluate(() => window.__chart.selected_drawing()?.id ?? null)).toBe(list[0].id);
+  // Freehand tools stay armed after a stroke; a right click disarms without a context menu.
+  expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBe("brush");
+  const empty = await spot(page, s.l0, s.p_hi);
+  await page.mouse.click(empty.x, empty.y, { button: "right" });
+  await settle_frames(page);
   expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBeNull();
 
   // The selection shows anchor handles at the TWO ENDS only — not one per path point. A
