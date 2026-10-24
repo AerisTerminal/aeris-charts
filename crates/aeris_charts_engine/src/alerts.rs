@@ -665,8 +665,10 @@ mod tests {
             chart.build_axis_primitives_into(&axis, &mut prims);
             let Some(Prim::Image {
                 image,
+                source,
                 rect,
                 opacity,
+                sampling,
             }) = prims.last()
             else {
                 panic!("shared SVG image must paint above the chip")
@@ -674,6 +676,11 @@ mod tests {
             assert_eq!(image.pixels, expected.pixels);
             assert!(rect.iter().all(|v| v.fract() == 0.0));
             assert_eq!(*opacity, 1.0);
+            assert_eq!(*source, image.full_source());
+            assert_eq!(
+                *sampling,
+                aeris_charts_render::draw_list::ImageSampling::Linear
+            );
             let next = chart.build_axis_frame(
                 100.0,
                 |text, _| text.len() as f64 * 7.0,

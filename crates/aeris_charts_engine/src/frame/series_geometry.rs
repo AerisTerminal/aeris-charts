@@ -321,6 +321,14 @@ fn histogram_updown_colors(series: &crate::SeriesEntry) -> Option<(Color, Color)
     })
 }
 
+/// Delta columns fill half the bar spacing, leaving an equal gap between neighbors.
+const DELTA_COLUMN_WIDTH_RATIO: f64 = 0.5;
+
+/// A delta column's direction is the sign of its own value; NaN carries none.
+fn delta_direction(value: f64) -> Option<bool> {
+    (!value.is_nan()).then_some(value >= 0.0)
+}
+
 fn histogram_solid_color(stroke: Color) -> Color {
     if stroke != LINE { stroke } else { HISTOGRAM }
 }
@@ -1025,18 +1033,45 @@ impl ChartEngine {
             .search(index, MismatchDirection::None)
             .filter(|&row| !plot.is_whitespace_row(row))?;
         let (primary, footprint) = self.volume_direction_sources();
+        let delta = self.delta_histogram_colors(series);
         Some(histogram_column_color(
             self.data
                 .point_colors(id)
                 .and_then(|colors| colors.color(PointColorChannel::Body, row)),
-            histogram_updown_colors(series),
+            delta.or_else(|| histogram_updown_colors(series)),
             || {
+                if delta.is_some() {
+                    return delta_direction(plot.value_at(row, PlotValueIndex::Close));
+                }
                 primary
                     .and_then(|id| bar_direction(self.data.plot(id), index))
                     .or_else(|| footprint.and_then(|id| bar_direction(self.data.plot(id), index)))
             },
             histogram_solid_color(series_stroke_color(series)),
         ))
+    }
+
+    /// A delta histogram's positive and negative column colors: the pinned up/down colors, else
+    /// the painted theme's bullish/bearish tokens. `None` for every other histogram.
+    pub(crate) fn delta_histogram_colors(
+        &self,
+        series: &crate::SeriesEntry,
+    ) -> Option<(Color, Color)> {
+        series.delta_histogram.then(|| {
+            let (up, down) = self.themed_candle_colors();
+            (
+                verbatim_color(&series.up_color, up),
+                verbatim_color(&series.down_color, down),
+            )
+        })
+    }
+
+    /// The delta zero line: the theme's muted foreground at half strength, so it reads above the
+    /// border-colored grid line that usually also sits at zero.
+    pub(crate) fn delta_zero_line_color(&self) -> Color {
+        let muted = Color::parse_css(&self.options.get().layout.muted_text_color)
+            .unwrap_or(Color::rgb(0x94, 0x94, 0x94));
+        Color::rgba(muted.r(), muted.g(), muted.b(), muted.a() / 2)
     }
 
     #[allow(clippy::too_many_arguments)] // mirrors the reference renderer-data signature
@@ -1047,6 +1082,7 @@ impl ChartEngine {
         to: i64,
         hpr: f64,
         vpr: f64,
+        pane_w_px: i32,
         out: &mut Vec<Prim>,
         scale: &aeris_charts_core::scale::price_scale_core::PriceScaleCore,
     ) {
@@ -1060,7 +1096,10 @@ impl ChartEngine {
         let main = primary.map(|id| self.data.plot(id));
         let presented = footprint.map(|id| self.data.plot(id));
         let point_colors = self.data.point_colors(rs.id);
-        let updown = self.series_entry(rs.id).and_then(histogram_updown_colors);
+        let delta = self
+            .series_entry(rs.id)
+            .and_then(|series| self.delta_histogram_colors(series));
+        let updown = delta.or_else(|| self.series_entry(rs.id).and_then(histogram_updown_colors));
         let mut work = conflation::DensityWork::default();
         let visible = visible_histogram_rows_with_work(
             plot,
@@ -1085,6 +1124,9 @@ impl ChartEngine {
                     point_colors.and_then(|colors| colors.color(PointColorChannel::Body, r)),
                     updown,
                     || {
+                        if delta.is_some() {
+                            return delta_direction(c[r]);
+                        }
                         let index = plot.index_at(r).expect("histogram row index");
                         main.and_then(|m| bar_direction(m, index))
                             .or_else(|| presented.and_then(|m| bar_direction(m, index)))
@@ -1099,6 +1141,18 @@ impl ChartEngine {
                 }
             })
             .collect::<Vec<_>>();
+        if delta.is_some() && !items.is_empty() {
+            let (y, h) = histogram_base_band(base, vpr);
+            out.push(Prim::Rect {
+                rect: IRect {
+                    x: 0,
+                    y,
+                    w: pane_w_px,
+                    h,
+                },
+                color: self.delta_zero_line_color(),
+            });
+        }
         build_histogram(
             &items,
             &HistogramParams {
@@ -1106,6 +1160,7 @@ impl ChartEngine {
                 horizontal_pixel_ratio: hpr,
                 vertical_pixel_ratio: vpr,
                 histogram_base: base,
+                column_width_ratio: delta.map(|_| DELTA_COLUMN_WIDTH_RATIO),
             },
             out,
         );

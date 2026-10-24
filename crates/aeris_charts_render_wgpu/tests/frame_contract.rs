@@ -11,7 +11,9 @@ use aeris_charts_engine::{
 };
 use aeris_charts_render::canvas2d::{Canvas2d, Viewport, execute};
 use aeris_charts_render::color::Color;
-use aeris_charts_render::draw_list::{Gradient, LineStyle, LineType, Prim, RasterImage};
+use aeris_charts_render::draw_list::{
+    Gradient, ImageSampling, LineStyle, LineType, Prim, RasterImage,
+};
 use aeris_charts_render::line::{LinePoint, dash_split, expand_line, stroke_aa};
 use std::sync::Arc;
 
@@ -885,7 +887,6 @@ fn assert_runs_tile_buffers(group: &DrawGroup) {
     for (pipeline, len) in [
         (RunPipeline::Tri, group.tris.len()),
         (RunPipeline::Quad, group.quads.len()),
-        (RunPipeline::ImageQuad, group.image_quads.len()),
     ] {
         let mut next = 0u32;
         for run in group.runs.iter().filter(|r| r.pipeline == pipeline) {
@@ -898,6 +899,18 @@ fn assert_runs_tile_buffers(group: &DrawGroup) {
             "{pipeline:?} runs must cover the buffer"
         );
     }
+    // Both image samplers index the one image buffer.
+    let mut next = 0u32;
+    for run in group.runs.iter().filter(|run| {
+        matches!(
+            run.pipeline,
+            RunPipeline::ImageQuad | RunPipeline::NearestImageQuad
+        )
+    }) {
+        assert_eq!(run.first, next, "image runs must be contiguous");
+        next += run.count;
+    }
+    assert_eq!(next as usize, group.image_quads.len());
     let mut next = 0u32;
     for run in group.runs.iter().filter(|run| {
         matches!(
@@ -1086,16 +1099,25 @@ fn rotated_text_quad_carries_the_canonical_anchor_and_rotation() {
 
 #[test]
 fn group_builder_keeps_images_on_their_dedicated_atlas_pipeline() {
-    let prims = [Prim::Image {
+    let image = |sampling| Prim::Image {
         image: RasterImage {
             key: 7,
             width: 1,
             height: 1,
             pixels: Arc::<[u8]>::from([255, 255, 255, 255]),
         },
+        source: [0.0, 0.0, 1.0, 1.0],
         rect: [4.0, 5.0, 20.0, 10.0],
         opacity: 0.5,
-    }];
+        sampling,
+    };
+    // Each image keeps its own sampler in prim order; consecutive images of one sampler batch.
+    let prims = [
+        image(ImageSampling::Linear),
+        image(ImageSampling::Nearest),
+        image(ImageSampling::Nearest),
+        image(ImageSampling::Linear),
+    ];
     let mut group = DrawGroup::default();
     prims_to_group(&prims, &[], &mut group, &mut |_| None, &mut |_| {
         Some(TexQuadInstance {
@@ -1105,9 +1127,103 @@ fn group_builder_keeps_images_on_their_dedicated_atlas_pipeline() {
         })
     });
     assert!(group.tex_quads.is_empty());
-    assert_eq!(group.image_quads.len(), 1);
-    assert_eq!(group.runs[0].pipeline, RunPipeline::ImageQuad);
+    assert_eq!(group.image_quads.len(), 4);
+    assert_eq!(
+        group.runs,
+        [
+            DrawRun {
+                pipeline: RunPipeline::ImageQuad,
+                first: 0,
+                count: 1
+            },
+            DrawRun {
+                pipeline: RunPipeline::NearestImageQuad,
+                first: 1,
+                count: 2
+            },
+            DrawRun {
+                pipeline: RunPipeline::ImageQuad,
+                first: 3,
+                count: 1
+            },
+        ]
+    );
     assert_runs_tile_buffers(&group);
+}
+
+#[test]
+fn engine_depth_heatmap_reaches_webgpu_on_the_nearest_image_pipeline() {
+    use aeris_charts_engine::{DepthHeatmapOptions, DepthLevel, DepthOptions, DepthSnapshot};
+    let mut chart = ChartEngine::new(400.0, 300.0, 1.0);
+    let times = [60.0, 120.0, 180.0];
+    chart
+        .set_series_data(0, &times, &[100.0; 3], &[101.0; 3], &[99.0; 3], &[100.0; 3])
+        .unwrap();
+    chart.time_scale.set_width(400.0);
+    chart.fit_content();
+    let stream = chart
+        .add_depth_stream(
+            "contract-depth",
+            DepthOptions {
+                history_bucket_micros: 60_000_000,
+                ..DepthOptions::default()
+            },
+        )
+        .unwrap();
+    for (sequence, time) in [(1, 60), (2, 120), (3, 180)] {
+        chart
+            .set_depth_snapshot(
+                stream,
+                DepthSnapshot {
+                    timestamp_micros: time * 1_000_000,
+                    sequence,
+                    bids: vec![DepthLevel {
+                        price: 99.0,
+                        size: 500.0,
+                        order_count: None,
+                    }],
+                    asks: vec![DepthLevel {
+                        price: 101.0,
+                        size: 500.0,
+                        order_count: None,
+                    }],
+                },
+            )
+            .unwrap();
+    }
+    chart
+        .add_depth_heatmap(
+            stream,
+            DepthHeatmapOptions {
+                price_min: 99.0,
+                price_max: 101.0,
+                ..DepthHeatmapOptions::default()
+            },
+        )
+        .unwrap();
+    let frame = chart.build_frame();
+    let images: Vec<_> = frame.panes[0]
+        .under
+        .iter()
+        .filter(|prim| matches!(prim, Prim::Image { .. }))
+        .cloned()
+        .collect();
+    assert!(!images.is_empty(), "the heatmap must emit images");
+    let mut group = DrawGroup::default();
+    prims_to_group(&images, &[], &mut group, &mut |_| None, &mut |_| {
+        Some(TexQuadInstance {
+            rect: [0.0; 4],
+            uv: [0.0, 0.0, 1.0, 1.0],
+            color: [1.0; 4],
+        })
+    });
+    assert!(!group.runs.is_empty());
+    assert!(
+        group
+            .runs
+            .iter()
+            .all(|run| run.pipeline == RunPipeline::NearestImageQuad)
+    );
 }
 
 #[test]

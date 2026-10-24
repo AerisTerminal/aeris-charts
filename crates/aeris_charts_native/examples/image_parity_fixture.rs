@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use aeris_charts_render::color::Color;
-use aeris_charts_render::draw_list::{Prim, RasterImage};
+use aeris_charts_render::draw_list::{ImageSampling, Prim, RasterImage};
 
 fn main() {
     let output = std::env::args().nth(1).expect("expected output PNG path");
@@ -20,9 +20,11 @@ fn main() {
         64,
         Color::rgb(255, 255, 255),
         &[Prim::Image {
+            source: image.full_source(),
             image,
             rect: [22.0, 22.0, 20.0, 20.0],
             opacity: 0.72,
+            sampling: ImageSampling::Linear,
         }],
         &[],
     )

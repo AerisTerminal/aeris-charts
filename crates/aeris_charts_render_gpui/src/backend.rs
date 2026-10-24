@@ -32,6 +32,7 @@ use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
 use aeris_charts_render::color::Color;
+use aeris_charts_render::draw_list::ImageSampling;
 
 use crate::metrics::GpuiFrameMetrics;
 use crate::quad_batch::{QUAD_BATCH_THRESHOLD, QuadBatcher, plain_quad_run};
@@ -374,23 +375,37 @@ impl ShapedTextCache {
     }
 }
 
+/// A chart may show all 32 registered stamp images alongside depth and alert images.
+const IMAGE_CACHE_ENTRIES: usize = 64;
+/// Uploaded bytes retained across frames; magnified nearest images count at full size.
+const IMAGE_CACHE_BYTES: usize = 64 << 20;
+/// Longest uploaded image edge, within every GPUI atlas backend's texture limit.
+const MAX_UPLOAD_EDGE: u32 = 4_096;
+
+type ImageCacheKey = (u64, u8, u32, u32);
+
 /// Bounded cache converting the shared straight-alpha RGBA8 payload into GPUI's retained image
-/// resource once per immutable image/opacity pair.
+/// resource once per immutable image, opacity, and upload magnification.
 #[derive(Default)]
 pub(crate) struct RasterImageCache {
-    entries: HashMap<(u64, u8), (Arc<RenderImage>, u64)>,
+    entries: HashMap<ImageCacheKey, (Arc<RenderImage>, u64, usize)>,
+    bytes: usize,
     tick: u64,
+    /// Evicted uploads whose atlas tiles are released before the next frame paints.
+    evicted: Vec<Arc<RenderImage>>,
 }
 
 impl RasterImageCache {
+    /// `upscale` repeats every texel that many times per axis; see [`nearest_upscale`].
     fn resolve(
         &mut self,
         source: &aeris_charts_render::draw_list::RasterImage,
         opacity: f32,
+        (scale_x, scale_y): (u32, u32),
     ) -> Option<Arc<RenderImage>> {
         let opacity = aeris_charts_render::draw_list::quantize_image_opacity(opacity);
         let alpha = (opacity * 255.0).round() as u8;
-        if alpha == 0 {
+        if alpha == 0 || scale_x == 0 || scale_y == 0 {
             return None;
         }
         let expected_len = usize::try_from(source.width)
@@ -401,63 +416,97 @@ impl RasterImageCache {
             return None;
         }
         self.tick = self.tick.wrapping_add(1);
-        let key = (source.key, alpha);
-        if let Some((image, stamp)) = self.entries.get_mut(&key) {
+        let key = (source.key, alpha, scale_x, scale_y);
+        if let Some((image, stamp, _)) = self.entries.get_mut(&key) {
             *stamp = self.tick;
             return Some(Arc::clone(image));
         }
-        let padded_width = source.width.checked_add(2)?;
-        let padded_height = source.height.checked_add(2)?;
+        // One replicated edge texel around the image keeps GPUI's bilinear sampler from
+        // fading the visible edge into transparent atlas padding.
+        let texel = |x: u32, y: u32| {
+            let x = x.saturating_sub(1).min(source.width - 1) as usize;
+            let y = y.saturating_sub(1).min(source.height - 1) as usize;
+            let src = (y * source.width as usize + x) * 4;
+            [
+                source.pixels[src + 2],
+                source.pixels[src + 1],
+                source.pixels[src],
+                (f32::from(source.pixels[src + 3]) * opacity).round() as u8,
+            ]
+        };
+        let padded_width = source.width.checked_add(2)?.checked_mul(scale_x)?;
+        let padded_height = source.height.checked_add(2)?.checked_mul(scale_y)?;
         let row_bytes = (padded_width as usize).checked_mul(4)?;
-        let mut pixels = vec![0; row_bytes.checked_mul(padded_height as usize)?];
-        for y in 0..source.height as usize {
-            for x in 0..source.width as usize {
-                let src = (y * source.width as usize + x) * 4;
-                let dst = ((y + 1) * padded_width as usize + x + 1) * 4;
-                pixels[dst] = source.pixels[src + 2];
-                pixels[dst + 1] = source.pixels[src + 1];
-                pixels[dst + 2] = source.pixels[src];
-                pixels[dst + 3] = (f32::from(source.pixels[src + 3]) * opacity).round() as u8;
+        let bytes = row_bytes.checked_mul(padded_height as usize)?;
+        let mut pixels = Vec::with_capacity(bytes);
+        for y in 0..source.height + 2 {
+            let row = pixels.len();
+            for x in 0..source.width + 2 {
+                let bgra = texel(x, y);
+                for _ in 0..scale_x {
+                    pixels.extend_from_slice(&bgra);
+                }
             }
-            let row = (y + 1) * row_bytes;
-            pixels.copy_within(row + 4..row + 8, row);
-            let last = row + source.width as usize * 4;
-            pixels.copy_within(last..last + 4, last + 4);
+            for _ in 1..scale_y {
+                pixels.extend_from_within(row..row + row_bytes);
+            }
         }
-        pixels.copy_within(row_bytes..row_bytes * 2, 0);
-        let last_row = source.height as usize * row_bytes;
-        pixels.copy_within(last_row..last_row + row_bytes, last_row + row_bytes);
         let buffer = RgbaImage::from_raw(padded_width, padded_height, pixels)?;
         let image = Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(buffer), 1)));
-        // A chart may show all 32 registered stamp images alongside depth and alert images.
-        if self.entries.len() == 64
-            && let Some(oldest) = self
+        while !self.entries.is_empty()
+            && (self.entries.len() >= IMAGE_CACHE_ENTRIES || self.bytes + bytes > IMAGE_CACHE_BYTES)
+        {
+            let Some(oldest) = self
                 .entries
                 .iter()
-                .min_by_key(|(_, (_, stamp))| *stamp)
+                .min_by_key(|(_, (_, stamp, _))| *stamp)
                 .map(|(key, _)| *key)
-        {
-            self.entries.remove(&oldest);
+            else {
+                break;
+            };
+            if let Some((image, _, size)) = self.entries.remove(&oldest) {
+                self.bytes -= size;
+                self.evicted.push(image);
+            }
         }
-        self.entries.insert(key, (Arc::clone(&image), self.tick));
+        self.bytes += bytes;
+        self.entries
+            .insert(key, (Arc::clone(&image), self.tick, bytes));
         Some(image)
+    }
+
+    fn take_evicted(&mut self) -> Vec<Arc<RenderImage>> {
+        std::mem::take(&mut self.evicted)
     }
 }
 
-/// Position the padded GPUI sprite so the visible destination maps only to its inner pixels.
-fn padded_image_bounds(bounds: Bounds<Pixels>, width: u32, height: u32) -> Bounds<Pixels> {
-    let pixel_width = f32::from(bounds.size.width) / width as f32;
-    let pixel_height = f32::from(bounds.size.height) / height as f32;
-    Bounds {
-        origin: point(
-            bounds.origin.x - px(pixel_width),
-            bounds.origin.y - px(pixel_height),
-        ),
-        size: size(
-            bounds.size.width + px(pixel_width * 2.0),
-            bounds.size.height + px(pixel_height * 2.0),
-        ),
-    }
+/// Upload magnification for one axis of a nearest-sampled image. GPUI samples every sprite
+/// bilinearly, so the image is uploaded with each texel repeated by the smallest power of two
+/// at least as large as its on-screen magnification: blending is then confined to under one
+/// device pixel at each texel edge, the hard cell edges other executors draw with a nearest
+/// sampler. Powers of two keep the upload stable while zooming within a factor of two.
+fn nearest_upscale(device_px_per_texel: f32, texels: u32) -> u32 {
+    let wanted = if device_px_per_texel.is_finite() && device_px_per_texel > 1.0 {
+        (device_px_per_texel.ceil() as u32).next_power_of_two()
+    } else {
+        1
+    };
+    let limit = (MAX_UPLOAD_EDGE / texels.saturating_add(2)).max(1);
+    wanted.min(1 << (31 - limit.leading_zeros()))
+}
+
+/// Device-px placement of the padded GPUI sprite that maps `source` texels exactly onto the
+/// visible `rect`; the caller clips the sprite to `rect`.
+fn image_sprite_rect(rect: DeviceRect, source: [f32; 4], width: u32, height: u32) -> DeviceRect {
+    let [x, y, w, h] = source;
+    let texel_width = rect.w / w;
+    let texel_height = rect.h / h;
+    DeviceRect::new(
+        rect.x - (x + 1.0) * texel_width,
+        rect.y - (y + 1.0) * texel_height,
+        (width as f32 + 2.0) * texel_width,
+        (height as f32 + 2.0) * texel_height,
+    )
 }
 
 impl GpuiChartRenderer {
@@ -590,6 +639,11 @@ fn paint_plan(
     cx: &mut App,
     metrics: &mut GpuiFrameMetrics,
 ) {
+    // The previous frame has been presented, so its evicted uploads can leave the atlas.
+    for image in images.take_evicted() {
+        // Removal only fails for an image the atlas never received; nothing is retained then.
+        let _ = window.drop_image(image);
+    }
     let transform = Transform::new(viewport, scale_factor);
     paint_range(
         plan,
@@ -709,12 +763,26 @@ fn paint_range(
             }
             SceneOp::Image {
                 image,
+                source,
                 rect,
                 opacity,
+                sampling,
             } => {
-                if let Some(data) = images.resolve(image, *opacity) {
+                let upscale = match sampling {
+                    ImageSampling::Linear => (1, 1),
+                    ImageSampling::Nearest => (
+                        nearest_upscale(rect.w / source[2], image.width),
+                        nearest_upscale(rect.h / source[3], image.height),
+                    ),
+                };
+                if let Some(data) = images.resolve(image, *opacity, upscale) {
                     let bounds = transform.bounds(*rect);
-                    let image_bounds = padded_image_bounds(bounds, image.width, image.height);
+                    let image_bounds = transform.bounds(image_sprite_rect(
+                        *rect,
+                        *source,
+                        image.width,
+                        image.height,
+                    ));
                     match window.paint_image(
                         bounds,
                         image_bounds,
@@ -1159,7 +1227,7 @@ mod tests {
             pixels: Arc::from([255, 0, 0, 255, 0, 0, 255, 128]),
         };
         let image = RasterImageCache::default()
-            .resolve(&source, 1.0)
+            .resolve(&source, 1.0, (1, 1))
             .expect("valid image");
         let expected_row = [
             0, 0, 255, 255, 0, 0, 255, 255, 255, 0, 0, 128, 255, 0, 0, 128,
@@ -1184,30 +1252,84 @@ mod tests {
         };
         let mut cache = RasterImageCache::default();
         for opacity in [-0.1, 0.0, 0.001] {
-            assert!(cache.resolve(&source, opacity).is_none());
+            assert!(cache.resolve(&source, opacity, (1, 1)).is_none());
             assert!(cache.entries.is_empty());
         }
-        let first = cache.resolve(&source, 0.72).unwrap();
-        let same_byte = cache.resolve(&source, 184.0 / 255.0).unwrap();
+        let first = cache.resolve(&source, 0.72, (1, 1)).unwrap();
+        let same_byte = cache.resolve(&source, 184.0 / 255.0, (1, 1)).unwrap();
         assert!(Arc::ptr_eq(&first, &same_byte));
         assert_eq!(cache.entries.len(), 1);
-        assert!(cache.entries.contains_key(&(source.key, 184)));
+        assert!(cache.entries.contains_key(&(source.key, 184, 1, 1)));
         assert_eq!(first.as_bytes(0).unwrap()[3], 184);
-        assert!(cache.resolve(&source, 1.0 / 255.0).is_some());
+        assert!(cache.resolve(&source, 1.0 / 255.0, (1, 1)).is_some());
         assert_eq!(cache.entries.len(), 2);
     }
 
     #[test]
-    fn padded_image_maps_its_inner_texels_to_the_visible_rect() {
-        let visible = Bounds {
-            origin: point(px(40.0), px(40.0)),
-            size: size(px(20.0), px(20.0)),
+    fn nearest_upload_repeats_each_texel_by_its_magnification() {
+        let source = aeris_charts_render::draw_list::RasterImage {
+            key: 3,
+            width: 2,
+            height: 1,
+            pixels: Arc::from([255, 0, 0, 255, 0, 0, 255, 255]),
         };
-        let bounds = padded_image_bounds(visible, 2, 2);
-        assert_eq!(f32::from(bounds.origin.x), 30.0);
-        assert_eq!(f32::from(bounds.origin.y), 30.0);
-        assert_eq!(f32::from(bounds.size.width), 40.0);
-        assert_eq!(f32::from(bounds.size.height), 40.0);
+        let mut cache = RasterImageCache::default();
+        let image = cache.resolve(&source, 1.0, (4, 2)).unwrap();
+        let bytes = image.as_bytes(0).unwrap();
+        // (2 + 2) * 4 texels wide, (1 + 2) * 2 rows; BGRA red then blue, edges replicated.
+        let red = [0, 0, 255, 255];
+        let blue = [255, 0, 0, 255];
+        let row: Vec<u8> = [red; 8].into_iter().chain([blue; 8]).flatten().collect();
+        assert_eq!(bytes.len(), row.len() * 6);
+        assert!(bytes.chunks_exact(row.len()).all(|line| line == row));
+        assert_eq!(cache.bytes, bytes.len());
+        assert!(!Arc::ptr_eq(
+            &image,
+            &cache.resolve(&source, 1.0, (1, 1)).unwrap()
+        ));
+    }
+
+    #[test]
+    fn image_cache_evicts_to_its_byte_budget_and_releases_evicted_uploads() {
+        let source = |key| aeris_charts_render::draw_list::RasterImage {
+            key,
+            width: 1,
+            height: 1,
+            pixels: Arc::from([255; 4]),
+        };
+        let mut cache = RasterImageCache::default();
+        // Each padded 3 x 3 upload magnified 341x is 1023 x 1023 x 4 bytes (just under 4 MiB),
+        // so the 64 MiB budget holds 16.
+        for key in 0..17 {
+            cache.resolve(&source(key), 1.0, (341, 341)).unwrap();
+        }
+        assert_eq!(cache.entries.len(), 16);
+        assert!(cache.bytes <= IMAGE_CACHE_BYTES);
+        assert!(!cache.entries.keys().any(|key| key.0 == 0));
+        assert_eq!(cache.take_evicted().len(), 1);
+        assert!(cache.take_evicted().is_empty());
+    }
+
+    #[test]
+    fn nearest_upscale_covers_the_magnification_in_powers_of_two_within_the_upload_limit() {
+        assert_eq!(nearest_upscale(0.5, 32), 1);
+        assert_eq!(nearest_upscale(1.0, 32), 1);
+        assert_eq!(nearest_upscale(1.2, 32), 2);
+        assert_eq!(nearest_upscale(9.0, 32), 16);
+        assert_eq!(nearest_upscale(f32::NAN, 32), 1);
+        // 4096 / (1000 + 2) = 4 texels per source texel at most.
+        assert_eq!(nearest_upscale(30.0, 1_000), 4);
+        assert_eq!(nearest_upscale(30.0, 5_000), 1);
+    }
+
+    #[test]
+    fn sprite_maps_its_source_texels_onto_the_visible_rect() {
+        let visible = DeviceRect::new(40.0, 40.0, 20.0, 20.0);
+        let full = image_sprite_rect(visible, [0.0, 0.0, 2.0, 2.0], 2, 2);
+        assert_eq!(full, DeviceRect::new(30.0, 30.0, 40.0, 40.0));
+        // Texels 1..3 of a 4-wide image: 10 px each, sprite starts two texels left.
+        let partial = image_sprite_rect(visible, [1.0, 0.0, 2.0, 1.0], 4, 1);
+        assert_eq!(partial, DeviceRect::new(20.0, 20.0, 60.0, 60.0));
     }
 
     fn run(family: &str) -> TextRun {

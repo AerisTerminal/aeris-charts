@@ -5,7 +5,8 @@
 //! form and multiplies by the instance tint (white for text), reproducing the browser's blend
 //! exactly. Nearest sampling: labels are drawn 1:1 at integer bitmap positions, matching
 //! Canvas2D `fillText` crispness. Raster images use the same instance layout with a dedicated
-//! linear-sampling fragment entry point; their atlas bytes are premultiplied on insertion.
+//! fragment entry point bound to either a linear or a nearest sampler, as each image prim
+//! requests; their atlas bytes are premultiplied on insertion.
 //! Rotated labels reconstruct bilinearly in their own shader from premultiplied texel loads.
 
 #[repr(C)]
@@ -165,6 +166,8 @@ pub struct TexQuadRenderer {
     globals_buf: wgpu::Buffer,
     globals_bg: wgpu::BindGroup,
     atlas_bg: wgpu::BindGroup,
+    /// Raster images only: the same atlas behind a nearest sampler.
+    nearest_atlas_bg: Option<wgpu::BindGroup>,
 }
 
 impl TexQuadRenderer {
@@ -180,7 +183,7 @@ impl TexQuadRenderer {
             atlas_view,
             sample_count,
             SHADER,
-            Some(wgpu::FilterMode::Nearest),
+            &[wgpu::FilterMode::Nearest],
             "fs_main",
         )
     }
@@ -197,12 +200,13 @@ impl TexQuadRenderer {
             atlas_view,
             sample_count,
             ROTATED_SHADER,
-            None,
+            &[],
             "fs_main",
         )
     }
 
-    /// Raster images use the frame contract's bilinear filter. Ordinary text stays nearest.
+    /// Raster images sample with the filter each image prim requests: bilinear through
+    /// [`Self::draw`], nearest through [`Self::draw_nearest`]. Ordinary text stays nearest.
     pub fn new_image(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
@@ -215,20 +219,23 @@ impl TexQuadRenderer {
             atlas_view,
             sample_count,
             SHADER,
-            Some(wgpu::FilterMode::Linear),
+            &[wgpu::FilterMode::Linear, wgpu::FilterMode::Nearest],
             "fs_image",
         )
     }
 
+    /// `filters` lists the atlas samplers: none for a shader that only loads texels, the
+    /// primary filter first, and an optional second filter bound as `nearest_atlas_bg`.
     fn new_with_shader(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         atlas_view: &wgpu::TextureView,
         sample_count: u32,
         shader_source: &'static str,
-        filter: Option<wgpu::FilterMode>,
+        filters: &[wgpu::FilterMode],
         fragment_entry: &'static str,
     ) -> Self {
+        let filter = filters.first().copied();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tex_quad_shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
@@ -305,6 +312,25 @@ impl TexQuadRenderer {
             binding: 0,
             resource: wgpu::BindingResource::TextureView(atlas_view),
         };
+        let nearest_atlas_bg = filters.get(1).map(|&filter| {
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("atlas_nearest_sampler"),
+                mag_filter: filter,
+                min_filter: filter,
+                ..Default::default()
+            });
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("tex_quad_atlas_nearest_bg"),
+                layout: &atlas_bgl,
+                entries: &[
+                    texture_binding.clone(),
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            })
+        });
         let atlas_bg = match &sampler {
             Some(sampler) => device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("tex_quad_atlas_bg"),
@@ -384,6 +410,7 @@ impl TexQuadRenderer {
             globals_buf,
             globals_bg,
             atlas_bg,
+            nearest_atlas_bg,
         }
     }
 
@@ -402,9 +429,33 @@ impl TexQuadRenderer {
         first: u32,
         count: u32,
     ) {
+        self.draw_with(pass, &self.atlas_bg, instances, first, count);
+    }
+
+    /// Draw raster images with nearest-texel sampling. Only image renderers own the nearest
+    /// binding; other renderers keep their own filter.
+    pub(crate) fn draw_nearest<'p>(
+        &'p self,
+        pass: &mut wgpu::RenderPass<'p>,
+        instances: &'p wgpu::Buffer,
+        first: u32,
+        count: u32,
+    ) {
+        let atlas_bg = self.nearest_atlas_bg.as_ref().unwrap_or(&self.atlas_bg);
+        self.draw_with(pass, atlas_bg, instances, first, count);
+    }
+
+    fn draw_with<'p>(
+        &'p self,
+        pass: &mut wgpu::RenderPass<'p>,
+        atlas_bg: &'p wgpu::BindGroup,
+        instances: &'p wgpu::Buffer,
+        first: u32,
+        count: u32,
+    ) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.globals_bg, &[]);
-        pass.set_bind_group(1, &self.atlas_bg, &[]);
+        pass.set_bind_group(1, atlas_bg, &[]);
         pass.set_vertex_buffer(0, instances.slice(..));
         pass.draw(0..6, first..first + count);
     }

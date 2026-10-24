@@ -610,6 +610,7 @@ impl ChartEngine {
             let height = f64::from(image.height) * scale;
             out.push(Prim::Image {
                 image: image.clone(),
+                source: image.full_source(),
                 rect: [
                     ((self.pane_w - width) * 0.5 * hpr) as f32,
                     ((pane.top + (pane.height - height) * 0.5) * vpr) as f32,
@@ -617,6 +618,7 @@ impl ChartEngine {
                     (height * vpr) as f32,
                 ],
                 opacity: options.alpha as f32,
+                sampling: aeris_charts_render::draw_list::ImageSampling::Linear,
             });
         }
     }

@@ -321,9 +321,6 @@ impl ChartInner {
             ChartHover::DepthProfile(id) => {
                 (None, Some(format!("depth_profile:{id}")), None, None, None)
             }
-            ChartHover::DepthHeatmap(id) => {
-                (None, Some(format!("depth_heatmap:{id}")), None, None, None)
-            }
             ChartHover::General => (None, None, None, self.engine.general_hovered_hit(), None),
             ChartHover::Layout => (
                 None,

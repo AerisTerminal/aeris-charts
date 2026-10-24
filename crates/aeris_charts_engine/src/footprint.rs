@@ -2414,7 +2414,7 @@ impl ChartEngine {
         if let Some(series) = self.series_entry_mut(id) {
             series.title = "CVD".to_string();
         }
-        self.apply_cumulative_delta_colors(id, options);
+        self.apply_trade_study_colors(id, options);
         self.register_trade_dependent(stream_id, TradeStudyKind::CumulativeDelta, id, options);
         if let Err(error) = self.refresh_trade_dependents(stream_id) {
             self.remove_series(id);
@@ -2444,7 +2444,9 @@ impl ChartEngine {
         self.set_series_pane(id, pane_index, stretch);
         if let Some(series) = self.series_entry_mut(id) {
             series.title = "Delta".to_string();
+            series.delta_histogram = true;
         }
+        self.apply_trade_study_colors(id, options);
         self.register_trade_dependent(stream_id, TradeStudyKind::DeltaHistogram, id, options);
         if let Err(error) = self.refresh_trade_dependents(stream_id) {
             self.remove_series(id);
@@ -3404,16 +3406,15 @@ impl ChartEngine {
         let kind = dependent.kind;
         let restyled = dependent.options.style != options.style;
         dependent.options = options;
-        if kind == TradeStudyKind::CumulativeDelta {
-            if restyled {
-                self.convert_series_kind(series, options.style.series_kind());
-            }
-            self.apply_cumulative_delta_colors(series, options);
+        if kind == TradeStudyKind::CumulativeDelta && restyled {
+            self.convert_series_kind(series, options.style.series_kind());
         }
+        self.apply_trade_study_colors(series, options);
         self.refresh_trade_dependents(stream_id)
     }
 
-    fn apply_cumulative_delta_colors(&mut self, series: SeriesId, options: TradeStudyOptions) {
+    /// Pins the study's explicit colors; an unset color follows the painted theme at frame time.
+    fn apply_trade_study_colors(&mut self, series: SeriesId, options: TradeStudyOptions) {
         if let Some(entry) = self.series_entry_mut(series) {
             entry.line_color = options.line_color.map(|color| color.to_css());
             entry.up_color = options.up_color.map(|color| color.to_css());
@@ -3459,37 +3460,25 @@ impl ChartEngine {
                     .map(|bar| bar.start_timestamp_micros.div_euclid(MICROS_PER_SECOND))
                     .collect::<Vec<_>>()
             };
-            let (columns, point_colors) = match dependent.kind {
+            let columns = match dependent.kind {
                 TradeStudyKind::CumulativeDelta => {
                     let [open, high, low, close] =
                         cumulative_delta_columns(bars, dependent.options);
-                    ((times, open, high, low, close), None)
+                    (times, open, high, low, close)
                 }
+                // Column colors come from each value's sign at frame time, so a theme switch
+                // retokenizes them without touching the data.
                 TradeStudyKind::DeltaHistogram => {
                     let values = bars.iter().map(|bar| bar.delta).collect::<Vec<_>>();
-                    let up = dependent.options.up_color.unwrap_or(Color::rgb(
-                        ORDER_FLOW_BUY_RGB.0,
-                        ORDER_FLOW_BUY_RGB.1,
-                        ORDER_FLOW_BUY_RGB.2,
-                    ));
-                    let down = dependent.options.down_color.unwrap_or(Color::rgb(
-                        ORDER_FLOW_SELL_RGB.0,
-                        ORDER_FLOW_SELL_RGB.1,
-                        ORDER_FLOW_SELL_RGB.2,
-                    ));
-                    let point_colors = values
-                        .iter()
-                        .map(|value| if *value >= 0.0 { up.0 } else { down.0 })
-                        .collect();
                     let open = vec![0.0; values.len()];
                     let high = values.iter().map(|value| value.max(0.0)).collect();
                     let low = values.iter().map(|value| value.min(0.0)).collect();
-                    ((times, open, high, low, values), Some(point_colors))
+                    (times, open, high, low, values)
                 }
             };
-            updates.push((dependent.series_id, columns, point_colors));
+            updates.push((dependent.series_id, columns));
         }
-        for (series_id, (times, open, high, low, close), point_colors) in updates {
+        for (series_id, (times, open, high, low, close)) in updates {
             let from = incremental_from.unwrap_or(0).min(times.len());
             let incremental_accepted = if incremental_from.is_some() {
                 self.update_series_bars_sanitized(
@@ -3510,13 +3499,6 @@ impl ChartEngine {
             };
             if !installed {
                 return Err(FootprintError::UnknownSeries(series_id));
-            }
-            if let Some(point_colors) = point_colors {
-                // Delta is an engine-owned source series, so install its sign palette through the
-                // same internal data owner immediately after the data mutation that resets colors.
-                let _ = self
-                    .data
-                    .set_point_colors(series_id, [Some(point_colors), None, None]);
             }
         }
         if let Some(dependents) = self.trade_dependents.get_mut(&stream_id) {
@@ -4632,16 +4614,8 @@ mod tests {
         let rows = live.data_layer().series_data(delta).unwrap().0.len();
         for row in 0..rows {
             assert_eq!(
-                live.data.point_color(
-                    delta,
-                    aeris_charts_core::model::data_layer::PointColorChannel::Body,
-                    row,
-                ),
-                reinstalled.data.point_color(
-                    full_flow.delta_series().unwrap(),
-                    aeris_charts_core::model::data_layer::PointColorChannel::Body,
-                    row,
-                )
+                delta_color(&live, delta, row),
+                delta_color(&reinstalled, full_flow.delta_series().unwrap(), row)
             );
         }
         assert_eq!(
@@ -5769,21 +5743,13 @@ mod tests {
         let delta_values = chart.data_layer().series_data(delta).unwrap().1[3];
         assert_eq!(cvd_values.last().copied(), Some(1.0));
         assert_eq!(delta_values.last().copied(), Some(1.0));
+        let layout = &chart.options.get().layout;
+        let bullish = Color::parse_css(&layout.bullish_color).unwrap();
+        let bearish = Color::parse_css(&layout.bearish_color).unwrap();
         assert_eq!(
-            chart.data.point_color(
-                delta,
-                aeris_charts_core::model::data_layer::PointColorChannel::Body,
-                0,
-            ),
-            Some(
-                Color::rgb(
-                    ORDER_FLOW_BUY_RGB.0,
-                    ORDER_FLOW_BUY_RGB.1,
-                    ORDER_FLOW_BUY_RGB.2
-                )
-                .0
-            ),
-            "positive delta uses the order-flow buy color"
+            delta_color(&chart, delta, 0),
+            bullish,
+            "positive delta uses the theme's bullish token"
         );
         let before = chart.trade_stream_stats(stream).unwrap();
         let mut correction = trade(2_000_000, 100.0, 8.0, AggressorSide::Sell);
@@ -5807,20 +5773,9 @@ mod tests {
             Some(-4.0)
         );
         assert_eq!(
-            chart.data.point_color(
-                delta,
-                aeris_charts_core::model::data_layer::PointColorChannel::Body,
-                0,
-            ),
-            Some(
-                Color::rgb(
-                    ORDER_FLOW_SELL_RGB.0,
-                    ORDER_FLOW_SELL_RGB.1,
-                    ORDER_FLOW_SELL_RGB.2
-                )
-                .0
-            ),
-            "corrected negative delta uses the order-flow sell color"
+            delta_color(&chart, delta, 0),
+            bearish,
+            "corrected negative delta uses the theme's bearish token"
         );
     }
 
@@ -7521,6 +7476,11 @@ mod tests {
         ]
     }
 
+    /// The color the chart resolves for a delta column, as its last-value label and legend see it.
+    fn delta_color(chart: &ChartEngine, id: SeriesId, row: usize) -> Color {
+        chart.series_bar_color(chart.series_entry(id).unwrap(), row, None)
+    }
+
     fn ohlc(chart: &ChartEngine, id: SeriesId) -> [Vec<f64>; 4] {
         let columns = chart.data_layer().series_data(id).unwrap().1;
         std::array::from_fn(|index| columns[index].to_vec())
@@ -7755,12 +7715,16 @@ mod tests {
         );
         for (index, value) in deltas.iter().enumerate() {
             assert_eq!(
-                chart.data.point_color(
-                    delta,
-                    aeris_charts_core::model::data_layer::PointColorChannel::Body,
-                    index,
-                ),
-                Some(if *value >= 0.0 { up.0 } else { down.0 })
+                delta_color(&chart, delta, index),
+                if *value >= 0.0 { up } else { down }
+            );
+        }
+        chart.set_theme(crate::ChartTheme::Light);
+        for (index, value) in deltas.iter().enumerate() {
+            assert_eq!(
+                delta_color(&chart, delta, index),
+                if *value >= 0.0 { up } else { down },
+                "explicit delta colors stay pinned across a theme switch"
             );
         }
 
@@ -7782,6 +7746,131 @@ mod tests {
             chart.series_entry(cvd).unwrap().up_color.as_deref(),
             Some(up.to_css().as_str())
         );
+    }
+
+    #[test]
+    fn delta_histogram_draws_theme_signed_thin_columns_over_a_centered_zero_line() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let presentation = chart
+            .add_order_flow_presentation(
+                "CME:ES",
+                0,
+                OrderFlowPresentationOptions {
+                    aggregation: FootprintAggregationOptions {
+                        tick_size: 1.0,
+                        ticks_per_row: 1,
+                        bars: FootprintBarAggregation::Time {
+                            interval_micros: 1_000_000,
+                            anchor_micros: 0,
+                        },
+                        ..FootprintAggregationOptions::default()
+                    },
+                    show_cumulative_delta: false,
+                    show_delta_histogram: true,
+                    ..order_flow_options(false)
+                },
+            )
+            .unwrap();
+        let tape = (0..12_i64)
+            .map(|bar| {
+                let side = if bar % 3 == 0 {
+                    AggressorSide::Sell
+                } else {
+                    AggressorSide::Buy
+                };
+                let volume = if side == AggressorSide::Sell {
+                    9.0 + bar as f64 * 3.0
+                } else {
+                    1.0 + bar as f64
+                };
+                trade((bar + 1) * 1_000_000 + 100_000, 100.0, volume, side)
+            })
+            .collect();
+        chart
+            .update_order_flow_presentation(presentation, tape, false)
+            .unwrap();
+        let delta = presentation.delta_series().unwrap();
+        let pane = chart.series_entry(delta).unwrap().pane_index;
+        let values = ohlc(&chart, delta)[3].clone();
+        assert_eq!(values.len(), 12);
+        assert!(values.iter().any(|value| *value > 0.0) && values.iter().any(|value| *value < 0.0));
+        chart.time_scale.set_width(600.0);
+        chart.fit_content();
+        chart.set_bar_spacing(11.0);
+
+        let check = |chart: &mut ChartEngine, up: Color, down: Color| {
+            let frame = chart.build_frame();
+            let prims = &frame.panes[pane].main;
+            let zero = chart.delta_zero_line_color();
+            let zero_line = prims
+                .iter()
+                .position(|prim| matches!(prim, Prim::Rect { rect, color } if *color == zero && rect.w >= 500))
+                .expect("a full-width zero line");
+            let Prim::Rect { rect: line, .. } = prims[zero_line] else {
+                unreachable!()
+            };
+            let columns = prims
+                .iter()
+                .enumerate()
+                .filter_map(|(index, prim)| match prim {
+                    Prim::Rect { rect, color } if *color == up || *color == down => {
+                        Some((index, *rect, *color))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(columns.len(), values.len(), "{prims:?}");
+            assert!(
+                columns.iter().all(|(index, ..)| *index > zero_line),
+                "the zero line paints beneath the columns"
+            );
+            let spacing = chart.time_scale.bar_spacing();
+            for ((_, rect, color), value) in columns.iter().zip(&values) {
+                assert_eq!(*color, if *value >= 0.0 { up } else { down });
+                assert_eq!(rect.w % 2, 1, "odd widths center on the bar pixel");
+                assert!(
+                    f64::from(rect.w) <= spacing * 0.5 + 1.0,
+                    "{rect:?} at {spacing}"
+                );
+            }
+            for pair in columns.windows(2) {
+                assert!(pair[1].1.x - (pair[0].1.x + pair[0].1.w) >= 2, "{pair:?}");
+            }
+            let scale = chart.panes[pane].scale(PriceScaleTarget::Right).unwrap();
+            let range = scale.price_range().copied().unwrap();
+            assert!(
+                (range.min_value() + range.max_value()).abs() < 1e-9 * range.max_value().abs(),
+                "the delta scale is symmetric around zero: {range:?}"
+            );
+            let (top, height) = aeris_charts_render::histogram::histogram_base_band(
+                scale.price_to_coordinate(0.0, 0.0),
+                1.0,
+            );
+            assert_eq!((line.y, line.h), (top, height), "the line sits at value 0");
+        };
+
+        chart.set_theme(crate::ChartTheme::Dark);
+        let dark = |css| Color::parse_css(css).unwrap();
+        check(
+            &mut chart,
+            dark(aeris_charts_core::style::DARK_MARKET_UP_CSS),
+            dark(aeris_charts_core::style::DARK_MARKET_DOWN_CSS),
+        );
+        chart.set_theme(crate::ChartTheme::Light);
+        check(
+            &mut chart,
+            dark(aeris_charts_core::style::LIGHT_MARKET_UP_CSS),
+            dark(aeris_charts_core::style::LIGHT_MARKET_DOWN_CSS),
+        );
+        chart
+            .apply_options(r##"{"layout":{"bullishColor":"#123456","bearishColor":"#654321"}}"##)
+            .unwrap();
+        check(
+            &mut chart,
+            Color::rgb(0x12, 0x34, 0x56),
+            Color::rgb(0x65, 0x43, 0x21),
+        );
+        assert_eq!(delta_color(&chart, delta, 0), Color::rgb(0x65, 0x43, 0x21));
     }
 
     #[test]

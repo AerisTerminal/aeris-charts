@@ -4,7 +4,7 @@
 
 use aeris_charts_render::canvas2d::Canvas2d;
 use aeris_charts_render::color::Color;
-use aeris_charts_render::draw_list::{RasterImage, TextAlign};
+use aeris_charts_render::draw_list::{ImageSampling, RasterImage, TextAlign};
 use wasm_bindgen::{Clamped, JsCast, JsValue};
 use web_sys::{CanvasRenderingContext2d, ImageData, OffscreenCanvas};
 
@@ -201,36 +201,55 @@ impl Canvas2d for WasmCanvas2d<'_> {
         self.ctx.restore();
     }
 
-    fn draw_raster_image(&mut self, image: &RasterImage, rect: [f32; 4], opacity: f32) {
+    fn draw_raster_image(
+        &mut self,
+        image: &RasterImage,
+        source: [f32; 4],
+        rect: [f32; 4],
+        opacity: f32,
+        sampling: ImageSampling,
+    ) {
         let Some(store) = self.image_store.as_deref_mut() else {
             return;
         };
         let Some(canvas) = store.resolve(image) else {
             return;
         };
+        let [sx, sy, sw, sh] = source;
         let [x, y, w, h] = rect;
         self.ctx.save();
         self.ctx.set_global_alpha(f64::from(opacity));
-        self.ctx.set_image_smoothing_enabled(true);
-        // web-sys does not currently expose CanvasImageSmoothing.imageSmoothingQuality.
-        match js_sys::Reflect::set(
-            self.ctx.as_ref(),
-            &JsValue::from_str("imageSmoothingQuality"),
-            &JsValue::from_str("low"),
-        ) {
-            Ok(true) => {}
-            Ok(false) => web_sys::console::warn_1(&JsValue::from_str(
-                "Canvas2D could not set low-quality image smoothing",
-            )),
-            Err(error) => web_sys::console::warn_1(&error),
+        match sampling {
+            ImageSampling::Linear => {
+                self.ctx.set_image_smoothing_enabled(true);
+                // web-sys does not currently expose CanvasImageSmoothing.imageSmoothingQuality.
+                match js_sys::Reflect::set(
+                    self.ctx.as_ref(),
+                    &JsValue::from_str("imageSmoothingQuality"),
+                    &JsValue::from_str("low"),
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => web_sys::console::warn_1(&JsValue::from_str(
+                        "Canvas2D could not set low-quality image smoothing",
+                    )),
+                    Err(error) => web_sys::console::warn_1(&error),
+                }
+            }
+            ImageSampling::Nearest => self.ctx.set_image_smoothing_enabled(false),
         }
-        let result = self.ctx.draw_image_with_offscreen_canvas_and_dw_and_dh(
-            canvas,
-            f64::from(x),
-            f64::from(y),
-            f64::from(w),
-            f64::from(h),
-        );
+        let result = self
+            .ctx
+            .draw_image_with_offscreen_canvas_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                canvas,
+                f64::from(sx),
+                f64::from(sy),
+                f64::from(sw),
+                f64::from(sh),
+                f64::from(x),
+                f64::from(y),
+                f64::from(w),
+                f64::from(h),
+            );
         self.ctx.restore();
         if result.is_ok() {
             self.ops += 1;

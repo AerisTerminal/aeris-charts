@@ -2667,6 +2667,7 @@ mod tests {
                     image,
                     rect,
                     opacity,
+                    ..
                 } => Some((image, rect, opacity)),
                 _ => None,
             })

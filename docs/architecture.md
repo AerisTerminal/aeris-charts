@@ -816,19 +816,16 @@ shows the pointer cursor and reports `volume_profile:{id}` as the hover object; 
 profile (clearing series, drawing, and general selection) and paints selection anchors on its
 first and last rows, point of control, and value-area bounds. Escape deselects it and Delete
 removes it, exactly like an indicator series.
-Depth profiles and depth heatmaps are chart-level depth layers selected through the same
-controller. Their hit tests replay the frame's own device-pixel geometry
-(`for_each_depth_profile_bar`, `for_each_depth_heatmap_image`), so a hit lands exactly on painted
-pixels. Profile bars paint in pane chrome, so they are tested after drawings and before volume
-profiles and series; hovering one shows the pointer and reports `depth_profile:{id}`. A heatmap
-paints beneath everything, so it is the last hover and click owner and only its non-transparent
-cells hit; hovering one reports `depth_heatmap:{id}` but keeps the pane cursor because it fills the
-plot behind the price. Selecting either clears series, drawing, general, and volume-profile
-selection (and those selections clear it); Escape and removal of the layer or its stream clear it.
-The selected layer paints the shared accent selection discs at a profile's outer and touch bar
-tips or at the corners of a heatmap's visible painted extent. Hosts read and set the selection
-through `selected_depth_profile`/`selected_depth_heatmap` and their setters; Delete does not remove
-depth layers because their lifecycle is host-owned.
+Depth profiles are chart-level depth layers selected through the same controller. Their hit test
+replays the frame's own device-pixel bars (`for_each_depth_profile_bar`), so a hit lands exactly on
+painted pixels. Profile bars paint in pane chrome, so they are tested after drawings and before
+volume profiles and series; hovering one shows the pointer and reports `depth_profile:{id}`.
+Selecting a profile clears series, drawing, general, and volume-profile selection (and those
+selections clear it); Escape and removal of the profile or its stream clear it. The selected
+profile paints the shared accent selection discs at its outer and touch bar tips. Hosts read and
+set the selection through `selected_depth_profile`/`select_depth_profile`; Delete does not remove
+depth profiles because their lifecycle is host-owned. Depth heatmaps are never hovered or
+selected: pointer input over them reaches whatever lies beneath and keeps the pane cursor.
 Keyboard focus targets exposed by the browser accessibility layer (price axis, time axis, pane
 separator, drawing) route through `input_target_key_down` with a `ChartFocusTarget`. The engine
 owns their bindings: price-axis Home/ArrowUp/ArrowDown, time-axis Home/ArrowLeft/ArrowRight,
@@ -998,7 +995,11 @@ final/session delta, delta percentage, running Max/Min Delta, and diagonal stack
 supports session, continuous, and anchored resets and draws as candles (the default) whose open is
 the value before the bar and whose high/low are its running intrabar delta extremes, or as a line
 through each bar's close; changing the
-style converts the same series in place. Every dependent carries the stream revision
+style converts the same series in place. The delta histogram is a Histogram series marked as a delta
+presentation: each column takes its own sign's color (the study's pinned up/down color, else the
+painted theme's bullish/bearish token, resolved at frame time so theme switches retokenize it), columns
+are equal odd-width bars half the bar spacing wide (`HistogramParams::column_width_ratio`) over a
+full-width muted zero line painted beneath them, and its autoscale is symmetric around zero. Every dependent carries the stream revision
 through tip, correction, and retention updates. Stream telemetry attributes retained tape capacity
 and dependent rebuild work.
 Live tip events update only the active derived bar; a late-event or provider-correction batch is
@@ -1064,14 +1065,23 @@ the canonical depth or classified trade stream, never additional mutable books o
 
 Liquidity heatmaps retain immutable 32-column RGBA chunks plus one replaceable one-column live
 edge. Fixed absolute bucket alignment lets history eviction rebuild only affected edge chunks while
-stable image keys preserve executor caches. The ordered frame emits the same `Prim::Image` contract
-to Canvas2D, WebGPU, native, and GPUI, followed by ordinary trade/series geometry and explicitly
-bound, capped microstructure markers. Depth profiles ("DOM on chart") read the live book at frame
+stable image keys preserve executor caches. Each texel is one price tick by one history bucket, and
+the frame places it on the chart's own bar slots (`depth_time_slots` in `frame/depth_geometry.rs`):
+bar `i` owns the time span from its open to the next bar's open, and a gap wider than 1.5x the
+median bar interval (a session break or whitespace) ends the slot after one nominal interval, so
+buckets inside the gap are clipped rather than smeared across it. A bucket's horizontal position is
+its time interpolated within its bar's slot, so buckets shorter than a bar subdivide it in time and
+the live column reaches the latest bar. Contiguous bars of equal slot duration form one piece; each
+piece emits one nearest-sampled `Prim::Image` over the chunk's texel sub-rectangle covering exactly
+that piece's buckets, vertically spanning half a tick beyond the outer rows
+(`DepthHeatmap::price_span`), so cells stay hard-edged at every zoom. The ordered frame emits the
+same image contract to Canvas2D, WebGPU, native, and GPUI, followed by ordinary trade/series geometry
+and explicitly bound, capped microstructure markers, which use the same slot mapping. Depth profiles ("DOM on chart") read the live book at frame
 time and draw one right-anchored bar per row in pane chrome, above series and below price lines,
 scaled to the largest drawn row; ticks too short to print a size merge into 1-2-5 multiples with
-summed sizes so the book stays readable at any zoom. While a pane carries a depth profile or
-heatmap, the price axis omits every last-value title chip on that pane at frame time (series
-title settings are untouched). Depth layers follow their pane through pane swaps and moves, and
+summed sizes so the book stays readable at any zoom. While a pane carries a depth profile, the
+price axis omits every last-value title chip on that pane at frame time (series title settings
+are untouched; a heatmap alone keeps them). Depth layers follow their pane through pane swaps and moves, and
 become pane-less (drawn and hit nowhere) when their pane is removed. Hosts own provider decoding, recovery, event detection,
 tooltips/panels, and the Terminal's authoritative market book; this engine state is a bounded chart
 projection of those publications. The typed WASM boundary uses parallel numeric arrays, split
@@ -1170,7 +1180,7 @@ The trading contract is explicitly multi-account and host-authoritative: every r
 
 Price alerts use the same host-authoritative boundary. The engine retains at most 4,096 typed alert-line indicators and paints them through the canonical pane/axis frame; it does not evaluate conditions, persist alerts, enforce account limits, run background timers, or deliver notifications. An alert line's price tag always shows its formatted price, exactly like every other axis tag; an optional host label remains metadata and never replaces that price. What names the line visually is a badge chip attached to the tag's pane-facing edge, carrying a bell drawn from prims rather than a font glyph, rounded on its outer edge and square against the tag so the pair reads as one control. Active alert chrome derives from the theme-aware muted-text token rather than the primary blue accent; triggered and expired states retain warning and darker-neutral colors. The crosshair price label exposes one engine-rendered multipurpose action chip on its primary price scale: an attached button, rounded on its outer edge and square against the tag with no radius on the tag side, carrying the original circular-plus SVG from `packages/charts/src/assets/icons/add.svg`. Its alpha masks for integer sizes 1 through 96 are generated by the pinned browser rasterizer (`node examples/web_demo/build_crosshair_icon.mjs`, with `--check` for verification) and embedded in `aeris_charts_render` as a bounded run-length asset. Each engine retains only the current size as immutable RGBA pixels; an axis frame shares those pixels and the shared converter emits an integer-aligned image primitive for every backend, including workers. Font/DPR changes select the matching mask; device recovery reuses the retained image. No runtime SVG parser or renderer-specific icon shape is involved. The chip stays visible whenever the crosshair is; hovering it lifts the fill a step with no blue fill. Activating that exact hit zone emits a bounded chart-level action request carrying pane, scale, and price; the browser package forwards it to host subscribers so the host can offer alert, limit-order, horizontal-line, or other context-appropriate actions. The request does not choose an action or carry alert defaults. Alert metadata represents the regular-price `crossing`, directional crossing, greater/less operators and the `only_once`/`every_time` frequencies, plus interval-dependent per-bar, bar-close, and per-minute frequencies. These values are display/configuration metadata only until the host returns an authoritative line snapshot or update. Alert lines and pending action requests are runtime-only and never enter chart persistence.
 
-Official primitives with chart semantics are likewise retained by the engine. Series primitives follow the source across panes and own their bounded data, hit state, autoscale contribution, and pane/axis views; pane-only primitives retain a stable `PaneId`. Delta Tooltip is a non-candlestick interaction: the engine rejects attachment to candlestick series and removes an attached Delta Tooltip if a convertible built-in series later becomes candlesticks, while the ordinary Tooltip remains available for candle inspection. The ordinary Tooltip snapshot is a structured bar inspector rather than a one-value DOM guess: Rust resolves the exact hovered source row and returns its retained Open/High/Low/Close for candlestick, bar, area, line, baseline, histogram, and other ordinary presentations. Scalar host rows already normalize the same value through all four canonical columns, so scalar area/line data has coherent OHLC while an area/line presentation over retained OHLC can inspect the complete bar even though it paints Close. Optional volume is explicitly host-associated through a timestamp-aligned `volume_series`; the engine never guesses which independent histogram means volume. Tooltip chrome reads the chart's resolved surface, foreground, muted text, border, and font at the browser boundary so light/dark theme changes cannot drift from the chart. Brushable Area composes an ordinary Area series with Delta Tooltip and transient `SeriesEntry.area_brush` presentation state. While that helper is attached, primary mouse/pen pane-drag belongs to the comparison gesture instead of starting a competing canvas pan; price/time-axis drags and manual scale unlocks remain the ordinary Area behavior, and the helper never globally changes `handle_scroll`, `handle_scale`, or chart crosshair options. One-finger touch can still pan normally, while the Delta Tooltip's existing two-point touch interaction remains available. Delta Tooltip owns its own comparison guides, and clearing/detaching the interaction simply drops the transient brush state so the untouched Area renderer is restored. Setting or clearing brush state invalidates only that series' retained geometry; it does not advance the series-store revision, so a drag step never rebuilds layout, autoscale, grid, axes, drawings, overlays, or other series. A browser may decode an image or evaluate a user-supplied color/format callback at the platform boundary, but it sends the bounded result back to Rust. The engine stores image watermarks as RGBA8 `RasterImage` values and emits one shared `Image` primitive; Canvas2D, WebGPU, GPUI, and native executors only upload/cache and paint that prepared image. The image contract snaps each destination edge to a device pixel, quantizes opacity to the nearest 8-bit alpha value in every executor, skips images whose quantized opacity is zero, and requests bilinear sampling; ordinary text keeps its separate nearest/rotated sampling rules. Canvas2D requests low-quality smoothing because the HTML standard leaves the exact smoothing algorithm to the browser. WebGPU clamps its image-atlas sampling to the image slot and uploads premultiplied colors. GPUI pads its cached image with repeated edge pixels to prevent its fixed sprite sampler from reading neighboring tiles. GPUI keys that cache by quantized alpha byte; the scaled-image pixel gate allows at most one channel value of sampling or alpha rounding difference.
+Official primitives with chart semantics are likewise retained by the engine. Series primitives follow the source across panes and own their bounded data, hit state, autoscale contribution, and pane/axis views; pane-only primitives retain a stable `PaneId`. Delta Tooltip is a non-candlestick interaction: the engine rejects attachment to candlestick series and removes an attached Delta Tooltip if a convertible built-in series later becomes candlesticks, while the ordinary Tooltip remains available for candle inspection. The ordinary Tooltip snapshot is a structured bar inspector rather than a one-value DOM guess: Rust resolves the exact hovered source row and returns its retained Open/High/Low/Close for candlestick, bar, area, line, baseline, histogram, and other ordinary presentations. Scalar host rows already normalize the same value through all four canonical columns, so scalar area/line data has coherent OHLC while an area/line presentation over retained OHLC can inspect the complete bar even though it paints Close. Optional volume is explicitly host-associated through a timestamp-aligned `volume_series`; the engine never guesses which independent histogram means volume. Tooltip chrome reads the chart's resolved surface, foreground, muted text, border, and font at the browser boundary so light/dark theme changes cannot drift from the chart. Brushable Area composes an ordinary Area series with Delta Tooltip and transient `SeriesEntry.area_brush` presentation state. While that helper is attached, primary mouse/pen pane-drag belongs to the comparison gesture instead of starting a competing canvas pan; price/time-axis drags and manual scale unlocks remain the ordinary Area behavior, and the helper never globally changes `handle_scroll`, `handle_scale`, or chart crosshair options. One-finger touch can still pan normally, while the Delta Tooltip's existing two-point touch interaction remains available. Delta Tooltip owns its own comparison guides, and clearing/detaching the interaction simply drops the transient brush state so the untouched Area renderer is restored. Setting or clearing brush state invalidates only that series' retained geometry; it does not advance the series-store revision, so a drag step never rebuilds layout, autoscale, grid, axes, drawings, overlays, or other series. A browser may decode an image or evaluate a user-supplied color/format callback at the platform boundary, but it sends the bounded result back to Rust. The engine stores image watermarks as RGBA8 `RasterImage` values and emits one shared `Image` primitive; Canvas2D, WebGPU, GPUI, and native executors only upload/cache and paint that prepared image. The image contract snaps each destination edge to a device pixel, quantizes opacity to the nearest 8-bit alpha value in every executor, skips images whose quantized opacity is zero, and requests the primitive's sampling (bilinear by default, nearest for hard-edged cells such as depth heatmaps); ordinary text keeps its separate nearest/rotated sampling rules. Canvas2D requests low-quality smoothing for bilinear images and disables smoothing for nearest ones because the HTML standard leaves the exact smoothing algorithm to the browser. WebGPU clamps its image-atlas sampling to the image slot and uploads premultiplied colors. GPUI pads its cached image with repeated edge pixels to prevent its fixed sprite sampler from reading neighboring tiles. GPUI keys that cache by quantized alpha byte and nearest replication factor; the scaled-image pixel gate allows at most one channel value of sampling or alpha rounding difference.
 
 An indicator binding keeps its public definition, compact private runtime, and ordinary canonical output series separate. Sparse runtime checkpoints are tied to source row positions and to the source and optional volume-series generations. A tail mutation advances only bindings that depend on that source and installs only changed output rows; a historical mutation resumes from the nearest valid checkpoint and replaces the affected output suffix, while truncation or complete replacement performs a clean rebuild. The five-output EMA ribbon is one binding with one independently checkpointed recursive EMA state per configured period. Its atomic period update retains all output identities and presentation, rebuilds the five value columns once, and propagates the resulting changes through dependent indicators. Removed source/output series drop the binding and its runtime state together. VWAP bands use the same sparse checkpoint boundary for weighted basis, population deviation, and percentage bands, with an engine-owned session/weekly/monthly reset key.
 
@@ -1294,8 +1304,18 @@ the shared `line::dash_split` routine; GPUI and WebGPU do not invent separate ph
 walk is capped at `MAX_DASH_STEPS`: a pattern too fine for the path strokes solid, and a
 non-finite path length strokes nothing, so host-supplied widths and coordinates cannot stall a
 frame.
-`Prim::Image` carries immutable straight-alpha RGBA8 pixels. Its destination edges snap with the
-shared device-pixel rule and scaled pixels use bilinear sampling. `quantize_image_opacity` in
+`Prim::Image` carries immutable straight-alpha RGBA8 pixels, a texel-space `source` rectangle
+mapped onto the destination `rect`, and an `ImageSampling` mode. Its destination edges snap with
+the shared device-pixel rule; scaled pixels use bilinear sampling unless the primitive asks for
+`Nearest`. Every executor skips a primitive whose source is empty or leaves the image
+(`RasterImage::contains_source`), so only the requested texels paint. Canvas2D passes the source to
+`drawImage`, WebGPU maps it to sub-UVs inside the atlas slot and draws nearest images on a separate
+nearest-sampler pipeline over the same quad buffer, and native maps it through a nearest or bilinear
+pattern shader. GPUI's sprite sampler is linear only, so nearest images upload with each texel
+replicated by the smallest power of two at or above the device magnification (capped at a
+4096-pixel upload edge), which keeps cell edges hard. The GPUI raster cache is bounded to 64 entries
+and 64 MiB; evicted images are released from the GPUI sprite atlas at the start of the next paint.
+`quantize_image_opacity` in
 `draw_list.rs` clamps and rounds opacity to 8-bit alpha before every executor paints; zero-byte
 opacity skips drawing, atlas upload, and GPUI sprite/cache creation. GPUI converts cached RGBA bytes
 to its BGRA image-upload order once and keys by the opacity byte, while WebGPU and native/Canvas2D

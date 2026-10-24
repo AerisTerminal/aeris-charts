@@ -14,7 +14,7 @@
 //! scale factor at the boundary — see [`crate::AerisViewport`].
 
 use aeris_charts_render::color::Color;
-use aeris_charts_render::draw_list::RasterImage;
+use aeris_charts_render::draw_list::{ImageSampling, RasterImage};
 
 /// An axis-aligned rectangle in device px.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -143,11 +143,14 @@ pub enum SceneOp {
     },
     /// A shaped-and-painted text run → see [`crate::text`].
     Text(TextRun),
-    /// Shared-frame raster image → `gpui::Window::paint_image`.
+    /// Shared-frame raster image → `gpui::Window::paint_image`. `source` is the texel
+    /// rectangle drawn into `rect`.
     Image {
         image: RasterImage,
+        source: [f32; 4],
         rect: DeviceRect,
         opacity: f32,
+        sampling: ImageSampling,
     },
 }
 

@@ -14,8 +14,8 @@
 
 use crate::color::Color;
 use crate::draw_list::{
-    IRect, LineStyle, LineType, Prim, RasterImage, TextAlign, positive_finite_extent,
-    text_font_spec,
+    IRect, ImageSampling, LineStyle, LineType, Prim, RasterImage, TextAlign,
+    positive_finite_extent, text_font_spec,
 };
 use crate::line::{LinePoint, expand_band, expand_line};
 
@@ -86,9 +86,18 @@ pub trait Canvas2d {
         angle: f32,
     );
 
-    /// Draw immutable straight-alpha RGBA8 pixels into a bitmap-space rectangle. Default no-op
-    /// keeps command recorders lightweight; shipping browser/native targets implement it.
-    fn draw_raster_image(&mut self, _image: &RasterImage, _rect: [f32; 4], _opacity: f32) {}
+    /// Draw the `source` texel rectangle of immutable straight-alpha RGBA8 pixels into a
+    /// bitmap-space rectangle with the requested sampling. Default no-op keeps command
+    /// recorders lightweight; shipping browser/native targets implement it.
+    fn draw_raster_image(
+        &mut self,
+        _image: &RasterImage,
+        _source: [f32; 4],
+        _rect: [f32; 4],
+        _opacity: f32,
+        _sampling: ImageSampling,
+    ) {
+    }
 }
 
 /// The viewport (bitmap px). Carried for target context; every prim now owns its own extent
@@ -540,16 +549,19 @@ pub fn execute(
             }
             Prim::Image {
                 image,
+                source,
                 rect,
                 opacity,
+                sampling,
             } => {
                 let opacity = crate::draw_list::quantize_image_opacity(*opacity);
                 if image.width > 0
                     && image.height > 0
                     && opacity > 0.0
+                    && image.contains_source(*source)
                     && let Some(rect) = crate::draw_list::snap_image_rect(*rect)
                 {
-                    target.draw_raster_image(image, rect, opacity);
+                    target.draw_raster_image(image, *source, rect, opacity, *sampling);
                 }
             }
         }
@@ -707,8 +719,16 @@ mod tests {
                 align.canvas_keyword()
             ));
         }
-        fn draw_raster_image(&mut self, _image: &RasterImage, rect: [f32; 4], opacity: f32) {
-            self.ops.push(format!("image {rect:?} {opacity}"));
+        fn draw_raster_image(
+            &mut self,
+            _image: &RasterImage,
+            source: [f32; 4],
+            rect: [f32; 4],
+            opacity: f32,
+            sampling: ImageSampling,
+        ) {
+            self.ops
+                .push(format!("image {source:?} {rect:?} {opacity} {sampling:?}"));
         }
     }
 
@@ -759,20 +779,54 @@ mod tests {
         };
         let prim = |opacity| Prim::Image {
             image: image.clone(),
+            source: image.full_source(),
             rect: [0.0, 0.0, 2.0, 2.0],
             opacity,
+            sampling: ImageSampling::Linear,
         };
         for opacity in [-0.2, 0.0, 0.001] {
             assert!(run(&[prim(opacity)], &[]).is_empty(), "{opacity}");
         }
         assert_eq!(
             run(&[prim(1.0 / 255.0)], &[]),
-            ["image [0.0, 0.0, 2.0, 2.0] 0.003921569"]
+            ["image [0.0, 0.0, 1.0, 1.0] [0.0, 0.0, 2.0, 2.0] 0.003921569 Linear"]
         );
         assert_eq!(
             run(&[prim(0.72)], &[]),
-            [format!("image [0.0, 0.0, 2.0, 2.0] {}", 184.0_f32 / 255.0)]
+            [format!(
+                "image [0.0, 0.0, 1.0, 1.0] [0.0, 0.0, 2.0, 2.0] {} Linear",
+                184.0_f32 / 255.0
+            )]
         );
+    }
+
+    #[test]
+    fn images_forward_source_and_sampling_and_skip_sources_outside_the_image() {
+        let image = RasterImage {
+            key: 2,
+            width: 4,
+            height: 2,
+            pixels: std::sync::Arc::from([255; 32]),
+        };
+        let prim = |source| Prim::Image {
+            image: image.clone(),
+            source,
+            rect: [1.0, 2.0, 30.0, 20.0],
+            opacity: 1.0,
+            sampling: ImageSampling::Nearest,
+        };
+        assert_eq!(
+            run(&[prim([1.5, 0.0, 2.0, 2.0])], &[]),
+            ["image [1.5, 0.0, 2.0, 2.0] [1.0, 2.0, 30.0, 20.0] 1 Nearest"]
+        );
+        for source in [
+            [3.0, 0.0, 2.0, 2.0],
+            [-0.5, 0.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, f32::NAN, 1.0, 1.0],
+        ] {
+            assert!(run(&[prim(source)], &[]).is_empty(), "{source:?}");
+        }
     }
 
     #[test]

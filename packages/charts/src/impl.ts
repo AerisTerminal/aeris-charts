@@ -4852,18 +4852,6 @@ export class chart_impl implements chart_api {
     return true;
   }
 
-  selected_depth_heatmap(): number | null {
-    const id = this.wasm.selected_depth_heatmap();
-    return id === 0 ? null : id;
-  }
-
-  select_depth_heatmap(id: number | null): boolean {
-    const before = this.wasm.selected_depth_heatmap();
-    if (!this.wasm.set_selected_depth_heatmap(id ?? 0)) return false;
-    if (this.wasm.selected_depth_heatmap() !== before) this.repaint();
-    return true;
-  }
-
   time_and_sales(
     stream_id: number,
     options: Partial<time_and_sales_options> = {},

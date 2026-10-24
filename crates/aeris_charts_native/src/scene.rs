@@ -3,7 +3,7 @@
 
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{
-    Gradient, IRect, LineStyle, LineType, Prim, RasterImage, TextAlign,
+    Gradient, IRect, ImageSampling, LineStyle, LineType, Prim, RasterImage, TextAlign,
 };
 use std::sync::Arc;
 
@@ -145,8 +145,10 @@ pub fn demo_scene() -> Scene {
                 255, 0, 0, 255, 0, 0, 255, 255, 0, 180, 100, 255, 255, 210, 0, 255,
             ]),
         },
+        source: [0.0, 0.0, 2.0, 2.0],
         rect: [371.0, 19.0, 32.0, 32.0],
         opacity: 0.8,
+        sampling: ImageSampling::Linear,
     });
     prims.push(Prim::Triangle {
         a: [335.0, 80.0],

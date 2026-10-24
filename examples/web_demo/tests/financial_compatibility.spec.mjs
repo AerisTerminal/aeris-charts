@@ -19,6 +19,32 @@ test("CVD and delta start at the same small height as oscillator panes", async (
   expect(factors[0]).toBeGreaterThan(0.3);
 });
 
+test("delta histogram scales symmetrically around zero", async ({ page }) => {
+  await open_chart(page);
+  await page.evaluate(() => {
+    const chart = window.__chart;
+    const bars = window.__data.slice(-40);
+    const stream = chart.add_trade_stream("delta-symmetry", { tick_size: 0.25 });
+    const trades = bars.map((bar, index) => ({
+      timestamp_micros: bar.time * 1_000_000,
+      price: Math.round(bar.close * 4) / 4,
+      volume: index % 4 === 0 ? 30 : 5,
+      aggressor: index % 4 === 0 ? "sell" : "buy",
+      trade_id: index + 1,
+    }));
+    chart.set_trade_stream_trades(stream, trades);
+    window.__delta_series = chart.add_delta_series(stream, 1);
+    const n = window.__data.length;
+    chart.time_scale().set_visible_logical_range({ from: n - 40, to: n });
+  });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const range = await page.evaluate(() => window.__delta_series.price_scale().get_visible_range());
+  expect(range).not.toBeNull();
+  expect(range.from).toBeLessThan(-29);
+  expect(range.to).toBeGreaterThan(29);
+  expect(Math.abs(range.from + range.to)).toBeLessThan(1e-6 * (range.to - range.from));
+});
+
 test("financial product composes through one public chart and ordered frame", async ({ page }) => {
   await open_chart(page);
 

@@ -24,6 +24,10 @@ pub struct HistogramParams {
     pub vertical_pixel_ratio: f64,
     /// Base line in media px (price scale coordinate of `base`).
     pub histogram_base: f64,
+    /// Column width as a fraction of the bar spacing. `None` keeps the reference volume layout
+    /// (full spacing minus a one-pixel gap); `Some` draws equal odd-width columns centered on
+    /// each bar's device pixel, at least one device pixel wide, leaving the rest as gap.
+    pub column_width_ratio: Option<f64>,
 }
 
 struct ColumnCoords {
@@ -36,6 +40,9 @@ struct ColumnCoords {
 
 fn precalculate_columns(items: &[HistogramItem], params: &HistogramParams) -> Vec<ColumnCoords> {
     let pixel_ratio = params.horizontal_pixel_ratio;
+    if let Some(ratio) = params.column_width_ratio {
+        return ratio_columns(items, params.bar_spacing * pixel_ratio * ratio, pixel_ratio);
+    }
     let spacing =
         if (params.bar_spacing * pixel_ratio).ceil() as i32 <= SHOW_SPACING_MINIMAL_BAR_WIDTH {
             0
@@ -111,6 +118,38 @@ fn precalculate_columns(items: &[HistogramItem], params: &HistogramParams) -> Ve
     columns
 }
 
+/// Equal columns need no gap alignment or width equalization: an odd width centers exactly on
+/// the rounded bar pixel, so every gap is identical wherever the bar spacing allows one.
+fn ratio_columns(items: &[HistogramItem], width_px: f64, pixel_ratio: f64) -> Vec<ColumnCoords> {
+    let mut width = (width_px.round() as i32).max(1);
+    if width % 2 == 0 {
+        width -= 1;
+    }
+    let half_width = (width - 1) / 2;
+    items
+        .iter()
+        .map(|item| {
+            let x = (item.x * pixel_ratio).round() as i32;
+            ColumnCoords {
+                left: x - half_width,
+                right: x + half_width,
+                rounded_center: x,
+                center: item.x * pixel_ratio,
+                time: item.time,
+            }
+        })
+        .collect()
+}
+
+/// The device-pixel row band `(top, height)` the columns share as their base. A base line drawn
+/// over this band sits exactly under every column's base edge.
+#[must_use]
+pub fn histogram_base_band(histogram_base: f64, vertical_pixel_ratio: f64) -> (i32, i32) {
+    let tick_width = 1i32.max(vertical_pixel_ratio.floor() as i32);
+    let histogram_base = (histogram_base * vertical_pixel_ratio).round() as i32;
+    (histogram_base - tick_width / 2, tick_width)
+}
+
 pub fn build_histogram(items: &[HistogramItem], params: &HistogramParams, out: &mut Vec<Prim>) {
     if items.is_empty() {
         return;
@@ -119,9 +158,7 @@ pub fn build_histogram(items: &[HistogramItem], params: &HistogramParams, out: &
     let vpr = params.vertical_pixel_ratio;
     let columns = precalculate_columns(items, params);
 
-    let tick_width = 1i32.max(vpr.floor() as i32);
-    let histogram_base = (params.histogram_base * vpr).round() as i32;
-    let top_histogram_base = histogram_base - tick_width / 2;
+    let (top_histogram_base, tick_width) = histogram_base_band(params.histogram_base, vpr);
     let bottom_histogram_base = top_histogram_base + tick_width;
 
     for (item, column) in items.iter().zip(&columns) {
@@ -166,6 +203,7 @@ mod tests {
             horizontal_pixel_ratio: dpr,
             vertical_pixel_ratio: dpr,
             histogram_base: base,
+            column_width_ratio: None,
         }
     }
 
@@ -230,5 +268,53 @@ mod tests {
         for w in rs.windows(2) {
             assert_eq!(w[1].x - (w[0].x + w[0].w), 0, "{:?}", w);
         }
+    }
+
+    #[test]
+    fn ratio_columns_are_equal_odd_and_centered_with_a_gap() {
+        for (spacing, dpr) in [(6.3, 1.0), (8.0, 1.0), (7.0, 2.0), (6.3, 1.5), (13.7, 1.25)] {
+            let items: Vec<HistogramItem> = (0..20)
+                .map(|i| item(50.0 + i as f64 * spacing, 30.0, i as i64))
+                .collect();
+            let mut out = Vec::new();
+            let params = HistogramParams {
+                column_width_ratio: Some(0.5),
+                ..params(spacing, dpr, 90.0)
+            };
+            build_histogram(&items, &params, &mut out);
+            let rs = rects(&out);
+            let width = rs[0].w;
+            assert!(width >= 1 && width % 2 == 1, "{spacing}@{dpr}: {width}");
+            assert!(f64::from(width) < spacing * dpr, "{spacing}@{dpr}: {width}");
+            for (rect, item) in rs.iter().zip(&items) {
+                assert_eq!(rect.w, width);
+                let center = (item.x * dpr).round() as i32;
+                assert_eq!(rect.x + rect.w / 2, center, "centered on the bar pixel");
+            }
+            for w in rs.windows(2) {
+                assert!(w[1].x - (w[0].x + w[0].w) >= 1, "{spacing}@{dpr}: {:?}", w);
+            }
+        }
+    }
+
+    #[test]
+    fn ratio_columns_keep_one_device_pixel_when_dense() {
+        let mut out = Vec::new();
+        let params = HistogramParams {
+            column_width_ratio: Some(0.5),
+            ..params(0.5, 1.0, 90.0)
+        };
+        build_histogram(&[item(10.0, 30.0, 0)], &params, &mut out);
+        assert_eq!(rects(&out)[0].w, 1);
+    }
+
+    #[test]
+    fn base_band_matches_the_column_base_edge() {
+        let mut out = Vec::new();
+        build_histogram(&[item(100.0, 30.0, 0)], &params(6.0, 2.0, 45.3), &mut out);
+        let column = rects(&out)[0];
+        let (top, height) = histogram_base_band(45.3, 2.0);
+        assert_eq!(height, 2);
+        assert_eq!(column.y + column.h, top + height);
     }
 }

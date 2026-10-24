@@ -2254,9 +2254,9 @@ impl ChartEngine {
         let countdown_row_height = metrics.countdown_row_height();
         let mut groups: Vec<(usize, PriceScaleTarget, Vec<LastValueLabel>)> = Vec::new();
         for (pi, pane) in self.panes.iter().enumerate() {
-            // A pane showing the book (depth profile or heatmap) drops every name chip so the
-            // right-edge depth stays readable; the series' own title setting is untouched.
-            let titles_visible = !self.pane_has_depth_layer(pi);
+            // A pane showing a depth profile drops every name chip so the right-edge book stays
+            // readable; the series' own title setting is untouched.
+            let titles_visible = !self.pane_has_depth_profile(pi);
             for series in &self.series {
                 if !series.visible || series.pane_index != pi {
                     continue;

@@ -211,18 +211,10 @@ pub(crate) struct DepthEventLayer {
     pub options: DepthEventLayerOptions,
 }
 
-/// One selectable depth layer: a depth profile or a depth heatmap, by id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DepthLayer {
-    Profile(u64),
-    Heatmap(u64),
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct DepthHeatmapColumn {
     pub start_micros: i64,
     pub image: RasterImage,
-    pub painted: Option<PaintedCells>,
 }
 
 #[derive(Clone, Debug)]
@@ -230,38 +222,6 @@ pub(crate) struct DepthHeatmapChunk {
     pub start_micros: i64,
     pub bucket_starts: Vec<i64>,
     pub image: RasterImage,
-    pub painted: Option<PaintedCells>,
-}
-
-/// Inclusive image-cell bounds (top-down rows) of a heatmap image's non-transparent cells.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PaintedCells {
-    pub first_column: u32,
-    pub last_column: u32,
-    pub first_row: u32,
-    pub last_row: u32,
-}
-
-fn painted_cells(pixels: &[u8], width: usize) -> Option<PaintedCells> {
-    let mut bounds: Option<PaintedCells> = None;
-    for (row, cells) in pixels.chunks_exact(width.max(1) * 4).enumerate() {
-        for (column, pixel) in cells.as_chunks::<4>().0.iter().enumerate() {
-            if pixel[3] == 0 {
-                continue;
-            }
-            let (row, column) = (row as u32, column as u32);
-            let cell = bounds.get_or_insert(PaintedCells {
-                first_column: column,
-                last_column: column,
-                first_row: row,
-                last_row: row,
-            });
-            cell.first_column = cell.first_column.min(column);
-            cell.last_column = cell.last_column.max(column);
-            cell.last_row = row;
-        }
-    }
-    bounds
 }
 
 #[derive(Clone, Debug)]
@@ -344,7 +304,6 @@ impl DepthHeatmap {
         let key = self.image_key();
         Ok(DepthHeatmapColumn {
             start_micros: bucket.start_micros,
-            painted: painted_cells(&pixels, 1),
             image: RasterImage {
                 key,
                 width: 1,
@@ -391,7 +350,6 @@ impl DepthHeatmap {
         Ok(DepthHeatmapChunk {
             start_micros: chunk_start_micros,
             bucket_starts: buckets.iter().map(|bucket| bucket.start_micros).collect(),
-            painted: painted_cells(&pixels, DEPTH_HEATMAP_CHUNK_COLUMNS),
             image: RasterImage {
                 key,
                 width: DEPTH_HEATMAP_CHUNK_COLUMNS as u32,
@@ -399,6 +357,17 @@ impl DepthHeatmap {
                 pixels: Arc::from(pixels),
             },
         })
+    }
+
+    /// Prices of the image's bottom and top edges. Each row spans half a tick either side of
+    /// its tick price, the same rows depth profiles draw.
+    pub(crate) fn price_span(&self, tick_size: f64) -> Option<(f64, f64)> {
+        let first = price_tick(tick_size, self.options.price_min).ok()?;
+        let last = price_tick(tick_size, self.options.price_max).ok()?;
+        Some((
+            (first as f64 - 0.5) * tick_size,
+            (last as f64 + 0.5) * tick_size,
+        ))
     }
 
     fn row_count(&self, book: &DepthBook) -> Result<usize, DepthError> {
@@ -596,7 +565,7 @@ impl crate::ChartEngine {
         self.depth_profiles
             .retain(|_, profile| profile.stream_id != stream_id);
         self.prune_depth_interaction();
-        self.invalidate_depth_layers();
+        self.invalidate_depth_profiles();
         true
     }
 
@@ -692,15 +661,14 @@ impl crate::ChartEngine {
         self.depth_heatmaps
             .insert(id, DepthHeatmap::new(id, stream_id, options));
         self.refresh_depth_heatmap(id)?;
-        self.invalidate_depth_layers();
+        self.invalidate_frame_scene();
         Ok(id)
     }
 
     pub fn remove_depth_heatmap(&mut self, id: u64) -> bool {
         let removed = self.depth_heatmaps.remove(&id).is_some();
         if removed {
-            self.prune_depth_interaction();
-            self.invalidate_depth_layers();
+            self.invalidate_frame_scene();
         }
         removed
     }
@@ -751,7 +719,7 @@ impl crate::ChartEngine {
         self.next_depth_profile_id = self.next_depth_profile_id.saturating_add(1).max(1);
         self.depth_profiles
             .insert(id, DepthProfile { stream_id, options });
-        self.invalidate_depth_layers();
+        self.invalidate_depth_profiles();
         Ok(id)
     }
 
@@ -770,7 +738,7 @@ impl crate::ChartEngine {
             .ok_or(DepthError::InvalidOptions)?;
         if profile.options != options {
             profile.options = options;
-            self.invalidate_depth_layers();
+            self.invalidate_depth_profiles();
         }
         Ok(())
     }
@@ -789,29 +757,25 @@ impl crate::ChartEngine {
         let removed = self.depth_profiles.remove(&id).is_some();
         if removed {
             self.prune_depth_interaction();
-            self.invalidate_depth_layers();
+            self.invalidate_depth_profiles();
         }
         removed
     }
 
-    /// A depth profile or heatmap was added, removed, restyled, or moved between panes. Besides
-    /// the scene, the price axis rebuilds its layout because a pane carrying depth drops its
-    /// last-value title chips.
-    fn invalidate_depth_layers(&mut self) {
+    /// A depth profile was added, removed, restyled, or moved between panes. Besides the scene,
+    /// the price axis rebuilds its layout because a pane carrying a profile drops its last-value
+    /// title chips.
+    fn invalidate_depth_profiles(&mut self) {
         self.invalidate_frame_scene();
         self.invalidate_frame_layout_and_axis();
     }
 
-    /// Whether a depth profile or depth heatmap draws on pane `pane_index`. Such a pane hides
-    /// every last-value title chip so the right-edge book is not covered by name labels.
-    pub(crate) fn pane_has_depth_layer(&self, pane_index: usize) -> bool {
+    /// Whether a depth profile draws on pane `pane_index`. Such a pane hides every last-value
+    /// title chip so the right-edge book is not covered by name labels.
+    pub(crate) fn pane_has_depth_profile(&self, pane_index: usize) -> bool {
         self.depth_profiles
             .values()
             .any(|profile| profile.options.pane_index == pane_index)
-            || self
-                .depth_heatmaps
-                .values()
-                .any(|heatmap| heatmap.options.pane_index == pane_index)
     }
 
     /// Re-home depth layers after a pane removal, swap, or move so they stay with their pane.
@@ -827,54 +791,43 @@ impl crate::ChartEngine {
         }
     }
 
-    /// Whether a depth layer still exists on a live pane (a removed pane leaves its layers
+    /// Whether a depth profile still exists on a live pane (a removed pane leaves its profiles
     /// pane-less until the host re-homes or removes them).
-    fn depth_layer_exists(&self, layer: DepthLayer) -> bool {
-        let pane = match layer {
-            DepthLayer::Profile(id) => self.depth_profiles.get(&id).map(|p| p.options.pane_index),
-            DepthLayer::Heatmap(id) => self.depth_heatmaps.get(&id).map(|h| h.options.pane_index),
-        };
-        pane.is_some_and(|pane| pane < self.panes.len())
+    fn depth_profile_exists(&self, id: u64) -> bool {
+        self.depth_profiles
+            .get(&id)
+            .is_some_and(|profile| profile.options.pane_index < self.panes.len())
     }
 
-    /// Drop selection and hover that point at a removed or pane-less depth layer.
+    /// Drop selection and hover that point at a removed or pane-less depth profile.
     pub(crate) fn prune_depth_interaction(&mut self) {
         if self
-            .selected_depth
-            .is_some_and(|layer| !self.depth_layer_exists(layer))
+            .selected_depth_profile
+            .is_some_and(|id| !self.depth_profile_exists(id))
         {
             self.clear_depth_selection();
         }
         if self
-            .hovered_depth
-            .is_some_and(|layer| !self.depth_layer_exists(layer))
+            .hovered_depth_profile
+            .is_some_and(|id| !self.depth_profile_exists(id))
         {
-            self.hovered_depth = None;
+            self.hovered_depth_profile = None;
         }
     }
 
-    /// The selected depth profile. Selecting a depth layer clears series, drawing,
-    /// general-series, and volume-profile selection; any of those selections clears it.
+    /// The selected depth profile. Selecting a depth profile clears series, drawing,
+    /// general-series, and volume-profile selection; any of those selections clears it. Depth
+    /// heatmaps are never selectable.
     pub fn selected_depth_profile(&self) -> Option<u64> {
-        match self.selected_depth {
-            Some(layer @ DepthLayer::Profile(id)) if self.depth_layer_exists(layer) => Some(id),
-            _ => None,
-        }
-    }
-
-    /// The selected depth heatmap; see [`Self::selected_depth_profile`].
-    pub fn selected_depth_heatmap(&self) -> Option<u64> {
-        match self.selected_depth {
-            Some(layer @ DepthLayer::Heatmap(id)) if self.depth_layer_exists(layer) => Some(id),
-            _ => None,
-        }
+        self.selected_depth_profile
+            .filter(|&id| self.depth_profile_exists(id))
     }
 
     /// Select a depth profile, or with `None` clear a selected one. Returns `false` for an
     /// unknown id.
     pub fn set_selected_depth_profile(&mut self, id: Option<u64>) -> bool {
         match id {
-            Some(id) => self.select_depth_layer(DepthLayer::Profile(id)),
+            Some(id) => self.select_depth_profile(id),
             None => {
                 if self.selected_depth_profile().is_some() {
                     self.clear_depth_selection();
@@ -884,51 +837,37 @@ impl crate::ChartEngine {
         }
     }
 
-    /// Select a depth heatmap, or with `None` clear a selected one. Returns `false` for an
-    /// unknown id.
-    pub fn set_selected_depth_heatmap(&mut self, id: Option<u64>) -> bool {
-        match id {
-            Some(id) => self.select_depth_layer(DepthLayer::Heatmap(id)),
-            None => {
-                if self.selected_depth_heatmap().is_some() {
-                    self.clear_depth_selection();
-                }
-                true
-            }
-        }
-    }
-
-    pub(crate) fn select_depth_layer(&mut self, layer: DepthLayer) -> bool {
-        if !self.depth_layer_exists(layer) {
+    pub(crate) fn select_depth_profile(&mut self, id: u64) -> bool {
+        if !self.depth_profile_exists(id) {
             return false;
         }
         self.set_selected_series(None);
         self.set_selected_drawing(None);
         self.clear_general_selection();
         self.clear_volume_profile_selection();
-        if self.selected_depth != Some(layer) {
-            self.selected_depth = Some(layer);
+        if self.selected_depth_profile != Some(id) {
+            self.selected_depth_profile = Some(id);
             self.invalidate_frame_overlay();
         }
         true
     }
 
-    /// Returns whether a depth layer was selected.
+    /// Returns whether a depth profile was selected.
     pub(crate) fn clear_depth_selection(&mut self) -> bool {
-        let selected = self.selected_depth.take().is_some();
+        let selected = self.selected_depth_profile.take().is_some();
         if selected {
             self.invalidate_frame_overlay();
         }
         selected
     }
 
-    pub(crate) fn hovered_depth(&self) -> Option<DepthLayer> {
-        self.hovered_depth
-            .filter(|&layer| self.depth_layer_exists(layer))
+    pub(crate) fn hovered_depth_profile(&self) -> Option<u64> {
+        self.hovered_depth_profile
+            .filter(|&id| self.depth_profile_exists(id))
     }
 
-    pub(crate) fn set_hovered_depth(&mut self, layer: Option<DepthLayer>) {
-        self.hovered_depth = layer;
+    pub(crate) fn set_hovered_depth_profile(&mut self, id: Option<u64>) {
+        self.hovered_depth_profile = id;
     }
 
     /// Ids of the depth profiles drawn on a pane, in paint order (lowest first).
@@ -980,137 +919,45 @@ impl crate::ChartEngine {
         })
     }
 
-    /// The topmost depth heatmap with a visible cell at `(x, y)` (chart CSS px). Transparent
-    /// cells (no resting size) are not part of the heatmap, so clicks there fall through.
-    pub fn depth_heatmap_at(&self, x: f64, y: f64) -> Option<u64> {
-        if !x.is_finite() || !y.is_finite() || x < 0.0 || x > self.pane_w {
-            return None;
-        }
-        let pane = self.pane_at_y(y)?;
-        let (hpr, vpr) = self.frame_pixel_ratios();
-        let (px, py) = (x * hpr, y * vpr);
-        self.depth_heatmap_ids(pane).into_iter().rev().find(|id| {
-            let heatmap = &self.depth_heatmaps[id];
-            if heatmap.options.opacity <= 0.0 {
-                return false;
-            }
-            let mut hit = false;
-            self.for_each_depth_heatmap_image(
-                heatmap,
-                hpr,
-                vpr,
-                |image, [left, top, width, height], _| {
-                    if hit || px < left || px >= left + width || py < top || py >= top + height {
-                        return;
-                    }
-                    let column = (((px - left) / width * f64::from(image.width)) as u32)
-                        .min(image.width.saturating_sub(1));
-                    let row = (((py - top) / height * f64::from(image.height)) as u32)
-                        .min(image.height.saturating_sub(1));
-                    let alpha = (row as usize * image.width as usize + column as usize) * 4 + 3;
-                    hit = image.pixels.get(alpha).is_some_and(|&alpha| alpha != 0);
-                },
-            );
-            hit
-        })
-    }
-
-    /// Selection anchors (chart CSS px) for the selected depth layer on `pane_index`: a profile's
-    /// bar tips at its outer rows and at the touch, or the corners of a heatmap's visible
-    /// painted extent.
+    /// Selection anchors (chart CSS px) for the selected depth profile on `pane_index`: its bar
+    /// tips at the outer rows and at the touch.
     pub(crate) fn depth_selection_anchor_points(&self, pane_index: usize) -> Vec<(f64, f64)> {
-        // Keeps a heatmap's corner discs fully inside the pane when its extent is clipped.
-        const HEATMAP_ANCHOR_INSET: f64 = 6.0;
-        let Some(pane) = self.panes.get(pane_index) else {
+        let Some(profile) = self
+            .selected_depth_profile()
+            .and_then(|id| self.depth_profiles.get(&id))
+            .filter(|profile| profile.options.pane_index == pane_index)
+        else {
             return Vec::new();
         };
         let (hpr, vpr) = self.frame_pixel_ratios();
-        match self.selected_depth {
-            Some(DepthLayer::Profile(id)) => {
-                let Some(profile) = self
-                    .depth_profiles
-                    .get(&id)
-                    .filter(|profile| profile.options.pane_index == pane_index)
-                else {
-                    return Vec::new();
-                };
-                let pane_w_px = (self.pane_w * hpr).round().max(1.0) as i32;
-                let mut first = None;
-                let mut last = None;
-                let mut best_ask = None;
-                let mut best_bid = None;
-                self.for_each_depth_profile_bar(profile, pane_w_px, hpr, vpr, |bar| {
-                    let tip = (
-                        f64::from(bar.rect.x) / hpr,
-                        (f64::from(bar.rect.y) + f64::from(bar.rect.h) / 2.0) / vpr,
-                    );
-                    first.get_or_insert(tip);
-                    last = Some(tip);
-                    // Rows run from the highest price down: the last ask and first bid touch.
-                    if bar.ask {
-                        best_ask = Some(tip);
-                    } else {
-                        best_bid.get_or_insert(tip);
-                    }
-                });
-                let mut points = Vec::with_capacity(4);
-                for point in [first, best_ask, best_bid, last].into_iter().flatten() {
-                    if !points.contains(&point) {
-                        points.push(point);
-                    }
-                }
-                points
+        let pane_w_px = (self.pane_w * hpr).round().max(1.0) as i32;
+        let mut first = None;
+        let mut last = None;
+        let mut best_ask = None;
+        let mut best_bid = None;
+        self.for_each_depth_profile_bar(profile, pane_w_px, hpr, vpr, |bar| {
+            let tip = (
+                f64::from(bar.rect.x) / hpr,
+                (f64::from(bar.rect.y) + f64::from(bar.rect.h) / 2.0) / vpr,
+            );
+            first.get_or_insert(tip);
+            last = Some(tip);
+            // Rows run from the highest price down: the last ask and first bid touch.
+            if bar.ask {
+                best_ask = Some(tip);
+            } else {
+                best_bid.get_or_insert(tip);
             }
-            Some(DepthLayer::Heatmap(id)) => {
-                let Some(heatmap) = self
-                    .depth_heatmaps
-                    .get(&id)
-                    .filter(|heatmap| heatmap.options.pane_index == pane_index)
-                else {
-                    return Vec::new();
-                };
-                let mut extent: Option<[f64; 4]> = None;
-                self.for_each_depth_heatmap_image(
-                    heatmap,
-                    hpr,
-                    vpr,
-                    |image, [left, top, width, height], painted| {
-                        let Some(cells) = painted else {
-                            return;
-                        };
-                        let column_width = width / f64::from(image.width.max(1));
-                        let row_height = height / f64::from(image.height.max(1));
-                        let cell = [
-                            (left + f64::from(cells.first_column) * column_width) / hpr,
-                            (top + f64::from(cells.first_row) * row_height) / vpr,
-                            (left + f64::from(cells.last_column + 1) * column_width) / hpr,
-                            (top + f64::from(cells.last_row + 1) * row_height) / vpr,
-                        ];
-                        extent = Some(extent.map_or(cell, |current| {
-                            [
-                                current[0].min(cell[0]),
-                                current[1].min(cell[1]),
-                                current[2].max(cell[2]),
-                                current[3].max(cell[3]),
-                            ]
-                        }));
-                    },
-                );
-                let Some([left, top, right, bottom]) = extent else {
-                    return Vec::new();
-                };
-                let left = left.max(HEATMAP_ANCHOR_INSET);
-                let right = right.min(self.pane_w - HEATMAP_ANCHOR_INSET);
-                let top = top.max(pane.top + HEATMAP_ANCHOR_INSET);
-                let bottom = bottom.min(pane.top + pane.height - HEATMAP_ANCHOR_INSET);
-                if left > right || top > bottom {
-                    return Vec::new();
-                }
-                vec![(left, top), (right, top), (left, bottom), (right, bottom)]
+        });
+        let mut points = Vec::with_capacity(4);
+        for point in [first, best_ask, best_bid, last].into_iter().flatten() {
+            if !points.contains(&point) {
+                points.push(point);
             }
-            None => Vec::new(),
         }
+        points
     }
+
     fn refresh_depth_heatmaps(&mut self, stream_id: u64) -> Result<(), DepthError> {
         let ids = self
             .depth_heatmaps
@@ -2513,6 +2360,205 @@ mod tests {
         assert!(chart.remove_depth_event_layer(event_layer));
     }
 
+    /// A chart with one-minute bars at `bar_times` (seconds) and a heatmap fed one snapshot per
+    /// `snapshot_times` entry, every visible bar in view at one CSS px per device px.
+    fn heatmap_chart(
+        bar_times: &[f64],
+        snapshot_times: &[i64],
+        bucket_micros: i64,
+    ) -> crate::ChartEngine {
+        let mut chart = crate::ChartEngine::new(600.0, 400.0, 1.0);
+        let count = bar_times.len();
+        chart
+            .set_series_data(
+                0,
+                bar_times,
+                &vec![100.0; count],
+                &vec![101.0; count],
+                &vec![99.0; count],
+                &vec![100.0; count],
+            )
+            .unwrap();
+        chart.time_scale.set_width(600.0);
+        chart.layout_panes(372.0);
+        chart.set_visible_logical_range(-1.0, count as f64);
+        chart.autoscale_visible();
+        let stream = chart
+            .add_depth_stream(
+                "slots",
+                DepthOptions {
+                    history_bucket_micros: bucket_micros,
+                    ..DepthOptions::default()
+                },
+            )
+            .unwrap();
+        for (index, &time) in snapshot_times.iter().enumerate() {
+            chart
+                .set_depth_snapshot(
+                    stream,
+                    DepthSnapshot {
+                        timestamp_micros: time * 1_000_000,
+                        sequence: index as u64 + 1,
+                        bids: vec![level(99.75, 500.0, None)],
+                        asks: vec![level(100.25, 500.0, None)],
+                    },
+                )
+                .unwrap();
+        }
+        chart
+            .add_depth_heatmap(
+                stream,
+                DepthHeatmapOptions {
+                    price_min: 99.0,
+                    price_max: 101.0,
+                    ..DepthHeatmapOptions::default()
+                },
+            )
+            .unwrap();
+        chart
+    }
+
+    /// `(source, rect, sampling)` of every heatmap image, in paint order.
+    fn heatmap_images(
+        chart: &mut crate::ChartEngine,
+    ) -> Vec<(
+        [f32; 4],
+        [f32; 4],
+        aeris_charts_render::draw_list::ImageSampling,
+    )> {
+        chart.build_frame().panes[0]
+            .under
+            .iter()
+            .filter_map(|prim| match prim {
+                aeris_charts_render::draw_list::Prim::Image {
+                    source,
+                    rect,
+                    sampling,
+                    ..
+                } => Some((*source, *rect, *sampling)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn bar_edges(chart: &crate::ChartEngine, index: i64) -> (f32, f32) {
+        let center = chart.time_scale.index_to_coordinate(index);
+        let half = chart.time_scale.bar_spacing() / 2.0;
+        ((center - half) as f32, (center + half) as f32)
+    }
+
+    fn assert_close(actual: f32, expected: f32, what: &str) {
+        assert!(
+            (actual - expected).abs() < 1e-3,
+            "{what}: {actual} != {expected}"
+        );
+    }
+
+    #[test]
+    fn heatmap_columns_fill_their_bar_slots_from_the_first_to_the_latest_bar() {
+        // Ten one-minute bars from 600 s; book snapshots start two minutes before the first
+        // bar and end one minute after the last bar's slot.
+        let bars: Vec<f64> = (0..10).map(|i| 600.0 + 60.0 * f64::from(i)).collect();
+        let snapshots: Vec<i64> = (0..13).map(|i| 480 + 60 * i).collect();
+        let mut chart = heatmap_chart(&bars, &snapshots, 60_000_000);
+        let images = heatmap_images(&mut chart);
+        // The chunk's completed buckets (480..1200) draw only where bars exist; the live 1200
+        // bucket lies past the last bar's slot and is clipped, not squeezed onto it.
+        assert_eq!(images.len(), 1, "{images:?}");
+        let (source, rect, sampling) = images[0];
+        assert_eq!(
+            sampling,
+            aeris_charts_render::draw_list::ImageSampling::Nearest
+        );
+        // Chunk columns start at 0 s, so bar 0 (600 s) is column 10 and bar 9 is column 19.
+        assert_eq!(source[0], 10.0);
+        assert_eq!(source[2], 10.0);
+        let (first_left, _) = bar_edges(&chart, 0);
+        let (_, last_right) = bar_edges(&chart, 9);
+        assert_close(rect[0], first_left, "first bar's left edge");
+        assert_close(rect[0] + rect[2], last_right, "latest bar's right edge");
+        // Rows span half a tick beyond the first and last tick prices.
+        let top = chart.series_price_to_coordinate(0, 101.125).unwrap() as f32;
+        let bottom = chart.series_price_to_coordinate(0, 98.875).unwrap() as f32;
+        assert_close(rect[1], top, "top row edge");
+        assert_close(rect[1] + rect[3], bottom, "bottom row edge");
+    }
+
+    #[test]
+    fn live_heatmap_column_covers_the_latest_bar_slot() {
+        let bars: Vec<f64> = (0..5).map(|i| 600.0 + 60.0 * f64::from(i)).collect();
+        let snapshots: Vec<i64> = (0..5).map(|i| 600 + 60 * i).collect();
+        let mut chart = heatmap_chart(&bars, &snapshots, 60_000_000);
+        let images = heatmap_images(&mut chart);
+        assert_eq!(images.len(), 2, "{images:?}");
+        let (live_source, live_rect, _) = images[1];
+        assert_eq!(live_source, [0.0, 0.0, 1.0, 9.0]);
+        let (left, right) = bar_edges(&chart, 4);
+        assert_close(live_rect[0], left, "live column left edge");
+        assert_close(live_rect[0] + live_rect[2], right, "live column right edge");
+        let (_, history_rect, _) = images[0];
+        assert_close(
+            history_rect[0] + history_rect[2],
+            left,
+            "history meets the live column",
+        );
+    }
+
+    #[test]
+    fn heatmap_session_gaps_split_columns_at_the_bar_boundary() {
+        // Two sessions of five bars with an 11-minute break; the book keeps updating through it.
+        let bars: Vec<f64> = (0..5)
+            .map(|i| 600.0 + 60.0 * f64::from(i))
+            .chain((0..5).map(|i| 1_500.0 + 60.0 * f64::from(i)))
+            .collect();
+        // The last snapshot (1800 s) opens a live bucket past bar 9's slot, which is clipped.
+        let snapshots: Vec<i64> = (0..21).map(|i| 600 + 60 * i).collect();
+        let mut chart = heatmap_chart(&bars, &snapshots, 60_000_000);
+        let images = heatmap_images(&mut chart);
+        assert_eq!(images.len(), 2, "{images:?}");
+        // First session: columns 10..15. Break buckets 900..1500 have no bar and are skipped.
+        assert_eq!((images[0].0[0], images[0].0[2]), (10.0, 5.0));
+        assert_close(images[0].1[0], bar_edges(&chart, 0).0, "session one start");
+        assert_close(
+            images[0].1[0] + images[0].1[2],
+            bar_edges(&chart, 4).1,
+            "session one end",
+        );
+        // The second session resumes at column 25 directly beside bar 4 on screen.
+        assert_eq!((images[1].0[0], images[1].0[2]), (25.0, 5.0));
+        assert_close(images[1].1[0], bar_edges(&chart, 5).0, "session two start");
+        assert_close(
+            images[1].1[0] + images[1].1[2],
+            bar_edges(&chart, 9).1,
+            "session two end",
+        );
+    }
+
+    #[test]
+    fn heatmap_buckets_shorter_than_bars_subdivide_their_bar_in_time() {
+        // Three one-minute bars, fifteen-second buckets: four columns per bar.
+        let bars = [600.0, 660.0, 720.0];
+        let snapshots: Vec<i64> = (0..12).map(|i| 600 + 15 * i).collect();
+        let mut chart = heatmap_chart(&bars, &snapshots, 15_000_000);
+        let images = heatmap_images(&mut chart);
+        assert_eq!(images.len(), 2, "{images:?}");
+        let spacing = chart.time_scale.bar_spacing() as f32;
+        let (history_source, history_rect, _) = images[0];
+        // Chunk span 480 s from 480 s: 600 s is column 8; eleven completed buckets.
+        assert_eq!((history_source[0], history_source[2]), (8.0, 11.0));
+        assert_close(history_rect[2], spacing * 11.0 / 4.0, "eleven quarter bars");
+        let (_, live_rect, _) = images[1];
+        assert_close(
+            live_rect[2],
+            spacing / 4.0,
+            "the live bucket is a quarter bar",
+        );
+        assert_close(
+            live_rect[0] + live_rect[2],
+            bar_edges(&chart, 2).1,
+            "the live bucket ends the latest bar",
+        );
+    }
     fn profile_chart() -> (crate::ChartEngine, u64) {
         let mut chart = crate::ChartEngine::new(600.0, 400.0, 1.0);
         chart
@@ -2625,7 +2671,7 @@ mod tests {
     }
 
     #[test]
-    fn depth_layers_hide_title_chips_only_on_their_pane_until_removed() {
+    fn depth_profiles_hide_title_chips_only_on_their_pane_until_removed() {
         let (mut chart, stream) = profile_chart();
         chart.series_entry_mut(0).unwrap().title = "MAIN".to_string();
         let other = chart.add_series(crate::SeriesKind::Line);
@@ -2684,11 +2730,28 @@ mod tests {
                 },
             )
             .unwrap();
+        assert_eq!(
+            titles(&mut chart),
+            ["MAIN", "OSC"],
+            "a heatmap alone keeps the pane's name chips"
+        );
+        let beside = chart
+            .add_depth_profile(
+                stream,
+                DepthProfileOptions {
+                    pane_index: 1,
+                    ..DepthProfileOptions::default()
+                },
+            )
+            .unwrap();
         assert_eq!(titles(&mut chart), ["MAIN"]);
-        // The heatmap travels with its pane, so the chip stays hidden beside it.
+        // The profile travels with its pane, so the chip stays hidden beside it.
         assert!(chart.swap_panes(0, 1));
+        assert_eq!(chart.depth_profiles[&beside].options.pane_index, 0);
         assert_eq!(chart.depth_heatmaps[&heatmap].options.pane_index, 0);
         assert_eq!(titles(&mut chart), ["MAIN"]);
+        assert!(chart.remove_depth_profile(beside));
+        assert_eq!(titles(&mut chart), ["MAIN", "OSC"]);
         assert!(chart.remove_depth_heatmap(heatmap));
         assert_eq!(titles(&mut chart), ["MAIN", "OSC"]);
 

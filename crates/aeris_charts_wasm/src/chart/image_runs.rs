@@ -17,11 +17,13 @@ fn premultiplied_pixels(pixels: &[u8]) -> Cow<'_, [u8]> {
 
 // Validate before looking up or uploading an atlas slot. This is also the image-run admission
 // rule exercised by tests without a GPU device.
-fn image_run(prim: &Prim) -> Option<(&RasterImage, [f32; 4], f32)> {
+fn image_run(prim: &Prim) -> Option<(&RasterImage, [f32; 4], [f32; 4], f32)> {
     let Prim::Image {
         image,
+        source,
         rect,
         opacity,
+        ..
     } = prim
     else {
         return None;
@@ -36,10 +38,24 @@ fn image_run(prim: &Prim) -> Option<(&RasterImage, [f32; 4], f32)> {
         || image.width > ATLAS_SIZE
         || image.height > ATLAS_SIZE
         || image.pixels.len() != (image.width * image.height * 4) as usize
+        || !image.contains_source(*source)
     {
         return None;
     }
-    Some((image, rect, opacity))
+    Some((image, *source, rect, opacity))
+}
+
+/// The atlas coordinates of `source` inside an image slot spanning `uv`.
+fn source_uv(uv: [f32; 4], image: &RasterImage, [x, y, w, h]: [f32; 4]) -> [f32; 4] {
+    let [u0, v0, u1, v1] = uv;
+    let du = (u1 - u0) / image.width as f32;
+    let dv = (v1 - v0) / image.height as f32;
+    [
+        u0 + x * du,
+        v0 + y * dv,
+        u0 + (x + w) * du,
+        v0 + (y + h) * dv,
+    ]
 }
 
 pub(super) fn resolve(
@@ -47,7 +63,7 @@ pub(super) fn resolve(
     queue: &wgpu::Queue,
     prim: &Prim,
 ) -> Option<TexQuadInstance> {
-    let (image, rect, opacity) = image_run(prim)?;
+    let (image, source, rect, opacity) = image_run(prim)?;
     let key = image.key.to_string();
     let slot = match atlas.get(&key) {
         Some(slot) => slot,
@@ -60,7 +76,7 @@ pub(super) fn resolve(
     };
     Some(TexQuadInstance {
         rect,
-        uv: slot.uv(),
+        uv: source_uv(slot.uv(), image, source),
         color: [1.0, 1.0, 1.0, opacity],
     })
 }
@@ -86,13 +102,35 @@ mod tests {
         };
         let prim = |opacity| Prim::Image {
             image: image.clone(),
+            source: image.full_source(),
             rect: [0.0, 0.0, 2.0, 2.0],
             opacity,
+            sampling: aeris_charts_render::draw_list::ImageSampling::Linear,
         };
         for opacity in [-0.5, 0.0, 0.001] {
             assert!(image_run(&prim(opacity)).is_none(), "{opacity}");
         }
-        assert_eq!(image_run(&prim(1.0 / 255.0)).unwrap().2, 1.0 / 255.0);
-        assert_eq!(image_run(&prim(0.72)).unwrap().2, 184.0 / 255.0);
+        assert_eq!(image_run(&prim(1.0 / 255.0)).unwrap().3, 1.0 / 255.0);
+        assert_eq!(image_run(&prim(0.72)).unwrap().3, 184.0 / 255.0);
+    }
+
+    #[test]
+    fn partial_sources_map_to_their_texels_inside_the_atlas_slot() {
+        let image = RasterImage {
+            key: 2,
+            width: 32,
+            height: 8,
+            pixels: Arc::from(vec![255; 32 * 8 * 4]),
+        };
+        let uv = source_uv([0.25, 0.5, 0.75, 0.625], &image, [8.0, 2.0, 4.0, 4.0]);
+        assert_eq!(uv, [0.375, 0.53125, 0.4375, 0.59375]);
+        let outside = Prim::Image {
+            image: image.clone(),
+            source: [30.0, 0.0, 4.0, 8.0],
+            rect: [0.0, 0.0, 2.0, 2.0],
+            opacity: 1.0,
+            sampling: aeris_charts_render::draw_list::ImageSampling::Nearest,
+        };
+        assert!(image_run(&outside).is_none());
     }
 }

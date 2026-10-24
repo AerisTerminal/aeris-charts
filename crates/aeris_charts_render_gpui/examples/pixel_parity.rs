@@ -403,7 +403,11 @@ impl Harness {
             "crosshair-icon gate: PASS (max channel delta {})",
             icon.max_delta
         );
-        for name in ["colored_image", "depth_heatmap_colors"] {
+        for name in [
+            "colored_image",
+            "nearest_image_cells",
+            "depth_heatmap_colors",
+        ] {
             let row = self
                 .results
                 .iter()

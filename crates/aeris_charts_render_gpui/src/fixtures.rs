@@ -19,7 +19,7 @@ use aeris_charts_core::scale::general_scale::{
 use aeris_charts_engine::{ChartEngine, PriceScaleTarget, SeriesKind};
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{
-    Gradient, IRect, LineStyle, LineType, Prim, RasterImage, TextAlign,
+    Gradient, IRect, ImageSampling, LineStyle, LineType, Prim, RasterImage, TextAlign,
 };
 use std::sync::Arc;
 
@@ -675,9 +675,11 @@ pub fn colored_image(dpr: f32) -> Fixture {
         name: "colored_image",
         attribution: "image RGBA-to-BGRA channel conversion",
         prims: vec![Prim::Image {
+            source: image.full_source(),
             image,
             rect: [40.0 * dpr, 40.0 * dpr, 2.0, 2.0],
             opacity: 1.0,
+            sampling: ImageSampling::Linear,
         }],
         points: Vec::new(),
         width,
@@ -701,8 +703,39 @@ pub fn scaled_colored_image(dpr: f32) -> Fixture {
                     255, 0, 0, 255, 0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 255, 255,
                 ]),
             },
+            source: [0.0, 0.0, 2.0, 2.0],
             rect: [40.25 * dpr, 40.75 * dpr, 20.0 * dpr, 20.0 * dpr],
             opacity: 0.72,
+            sampling: ImageSampling::Linear,
+        }],
+        points: Vec::new(),
+        width,
+        height,
+        background: BG,
+    }
+}
+
+/// Magnified nearest-sampled sub-image: hard texel edges and no texel outside the source.
+pub fn nearest_image_cells(dpr: f32) -> Fixture {
+    let (width, height) = dims(dpr);
+    let cell = (10.0 * dpr).round();
+    Fixture {
+        name: "nearest_image_cells",
+        attribution: "nearest sub-image sampling of heatmap cells",
+        prims: vec![Prim::Image {
+            image: RasterImage {
+                key: 0x6e65_6172,
+                width: 4,
+                height: 2,
+                pixels: Arc::from([
+                    255, 0, 0, 255, 0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 0, 255, 0, 255, 255,
+                    255, 255, 0, 255, 255, 40, 40, 40, 255, 255, 128, 0, 255,
+                ]),
+            },
+            source: [1.0, 0.0, 2.0, 2.0],
+            rect: [40.0 * cell, 4.0 * cell, 2.0 * cell, 2.0 * cell],
+            opacity: 1.0,
+            sampling: ImageSampling::Nearest,
         }],
         points: Vec::new(),
         width,
@@ -779,8 +812,10 @@ pub fn depth_heatmap_colors(dpr: f32) -> Fixture {
                 image.width as f32,
                 image.height as f32,
             ],
+            source: image.full_source(),
             image,
             opacity: 1.0,
+            sampling: ImageSampling::Nearest,
         }],
         points: Vec::new(),
         width,
@@ -808,6 +843,7 @@ pub fn all(dpr: f32) -> Vec<Fixture> {
         crosshair_action(dpr),
         colored_image(dpr),
         scaled_colored_image(dpr),
+        nearest_image_cells(dpr),
         depth_heatmap_colors(dpr),
     ]
 }

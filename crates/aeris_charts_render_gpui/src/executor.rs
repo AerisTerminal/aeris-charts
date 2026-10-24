@@ -468,8 +468,10 @@ fn lower_prim(
         }
         Prim::Image {
             image,
+            source,
             rect,
             opacity,
+            sampling,
         } => {
             let opacity = aeris_charts_render::draw_list::quantize_image_opacity(*opacity);
             if opacity == 0.0 {
@@ -483,13 +485,16 @@ fn lower_prim(
                 || image.width == 0
                 || image.height == 0
                 || image.pixels.len() != (image.width * image.height * 4) as usize
+                || !image.contains_source(*source)
             {
                 return;
             }
             plan.ops.push(SceneOp::Image {
                 image: image.clone(),
+                source: *source,
                 rect,
                 opacity,
+                sampling: *sampling,
             });
             metrics.image_runs += 1;
             metrics.ops += 1;
@@ -574,7 +579,9 @@ pub fn dashes(style: LineStyle, width: f32) -> bool {
 mod tests {
     use super::*;
     use aeris_charts_render::color::Color;
-    use aeris_charts_render::draw_list::{Gradient, IRect, LineType, RasterImage, TextAlign};
+    use aeris_charts_render::draw_list::{
+        Gradient, IRect, ImageSampling, LineType, RasterImage, TextAlign,
+    };
     use std::sync::Arc;
 
     const C: Color = Color::rgb(0x10, 0x20, 0x30);
@@ -1343,27 +1350,54 @@ mod tests {
             &[Prim::Image {
                 image: RasterImage {
                     key: 9,
-                    width: 1,
+                    width: 4,
                     height: 1,
-                    pixels: Arc::<[u8]>::from([1, 2, 3, 255]),
+                    pixels: Arc::<[u8]>::from([255; 16]),
                 },
+                source: [1.0, 0.0, 2.5, 1.0],
                 rect: [10.0, 20.0, 30.0, 40.0],
                 opacity: 0.25,
+                sampling: ImageSampling::Nearest,
             }],
             &[],
         );
         assert_eq!(metrics.image_runs, 1);
         let SceneOp::Image {
             image,
+            source,
             rect,
             opacity,
+            sampling,
         } = &plan.ops[0]
         else {
             panic!("expected image");
         };
         assert_eq!(image.key, 9);
+        assert_eq!(*source, [1.0, 0.0, 2.5, 1.0]);
         assert_eq!(*rect, DeviceRect::new(10.0, 20.0, 30.0, 40.0));
         assert_eq!(*opacity, 64.0 / 255.0);
+        assert_eq!(*sampling, ImageSampling::Nearest);
+    }
+
+    #[test]
+    fn image_source_outside_the_image_never_enters_the_gpui_scene() {
+        let (plan, metrics) = run(
+            &[Prim::Image {
+                image: RasterImage {
+                    key: 11,
+                    width: 2,
+                    height: 1,
+                    pixels: Arc::<[u8]>::from([255; 8]),
+                },
+                source: [1.5, 0.0, 1.0, 1.0],
+                rect: [10.0, 20.0, 30.0, 40.0],
+                opacity: 1.0,
+                sampling: ImageSampling::Nearest,
+            }],
+            &[],
+        );
+        assert!(plan.ops.is_empty());
+        assert_eq!(metrics.image_runs, 0);
     }
 
     #[test]
@@ -1378,8 +1412,10 @@ mod tests {
             let (plan, metrics) = run(
                 &[Prim::Image {
                     image: image.clone(),
+                    source: image.full_source(),
                     rect: [10.0, 20.0, 30.0, 40.0],
                     opacity,
+                    sampling: ImageSampling::Linear,
                 }],
                 &[],
             );
@@ -1388,9 +1424,11 @@ mod tests {
         }
         let (plan, metrics) = run(
             &[Prim::Image {
+                source: image.full_source(),
                 image,
                 rect: [10.0, 20.0, 30.0, 40.0],
                 opacity: 1.0 / 255.0,
+                sampling: ImageSampling::Linear,
             }],
             &[],
         );

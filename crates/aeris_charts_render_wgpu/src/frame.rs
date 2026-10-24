@@ -12,7 +12,7 @@
 //! ([`DrawRun`]) — one draw call per maximal run of the same pipeline, so a candle block of
 //! thousands of quads still costs a single instanced draw.
 
-use aeris_charts_render::draw_list::Prim;
+use aeris_charts_render::draw_list::{ImageSampling, Prim};
 
 use crate::gpu_timer::{FrameTimestamps, GpuTimer};
 use crate::quad_executor::prim_to_instances;
@@ -34,8 +34,10 @@ pub enum RunPipeline {
     TexQuad,
     /// Rotated label-atlas quads using location 2 as the canonical pivot/cosine/sine transform.
     RotatedTexQuad,
-    /// Raster-image atlas.
+    /// Raster-image atlas, bilinear.
     ImageQuad,
+    /// Raster-image atlas, nearest texel; indexes the same buffer as [`Self::ImageQuad`].
+    NearestImageQuad,
 }
 
 /// One draw call: `count` elements starting at `first` in the pipeline's group buffer.
@@ -171,11 +173,15 @@ pub fn prims_to_group(
                     push_run(&mut group.runs, RunPipeline::RotatedTexQuad, first, 1);
                 }
             }
-            Prim::Image { .. } => {
+            Prim::Image { sampling, .. } => {
                 if let Some(instance) = resolve_image(prim) {
                     let first = group.image_quads.len() as u32;
                     group.image_quads.push(instance);
-                    push_run(&mut group.runs, RunPipeline::ImageQuad, first, 1);
+                    let pipeline = match sampling {
+                        ImageSampling::Linear => RunPipeline::ImageQuad,
+                        ImageSampling::Nearest => RunPipeline::NearestImageQuad,
+                    };
+                    push_run(&mut group.runs, pipeline, first, 1);
                 }
             }
             _ => {
@@ -469,6 +475,12 @@ pub fn render_frame(
                     RunPipeline::ImageQuad => {
                         if let Some(b) = &bufs.image.buffer {
                             image.draw(&mut pass, b, run.first, run.count);
+                            draw_calls += 1;
+                        }
+                    }
+                    RunPipeline::NearestImageQuad => {
+                        if let Some(b) = &bufs.image.buffer {
+                            image.draw_nearest(&mut pass, b, run.first, run.count);
                             draw_calls += 1;
                         }
                     }

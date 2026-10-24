@@ -3935,10 +3935,6 @@ export interface chart_api {
   selected_depth_profile(): number | null;
   /** Select a depth profile, or clear a selected one with `null`. Returns `false` for an unknown id. */
   select_depth_profile(id: number | null): boolean;
-  /** Selected depth heatmap id, or `null`. A click selects a heatmap only on a painted cell where nothing above it is hit. */
-  selected_depth_heatmap(): number | null;
-  /** Select a depth heatmap, or clear a selected one with `null`. Returns `false` for an unknown id. */
-  select_depth_heatmap(id: number | null): boolean;
   time_and_sales(stream_id: number, options?: Partial<time_and_sales_options>): readonly time_and_sales_row[] | null;
   replay_clock_micros(): number | null;
   set_replay_clock_micros(clock_micros: number | null): replay_clock_stats;

@@ -164,6 +164,82 @@ test("depth heatmap and host markers render through the WebGPU shared frame", as
   expect(screenshot.byteLength).toBeGreaterThan(10_000);
 });
 
+for (const backend of ["canvas2d", "webgpu"]) {
+  test(`depth heatmap paints hard-edged cells on every bar slot through the latest bar (${backend})`, async ({ page }) => {
+    await open_chart(page, backend);
+    await page.evaluate(() => {
+      const chart = window.__chart;
+      const n = window.__data.length;
+      chart.apply_options({ grid: { vertLines: { visible: false }, horzLines: { visible: false } } });
+      chart.time_scale().set_visible_logical_range({ from: n - 30, to: n + 2 });
+    });
+    const before = await chart_capture(page);
+    const probe = await page.evaluate(() => {
+      const chart = window.__chart;
+      const data = window.__data;
+      const interval = data.at(-1).time - data.at(-2).time;
+      // A power-of-two tick about 24 CSS px tall keeps prices exact and cells large enough to probe.
+      const span = Math.abs(window.__main.coordinate_to_price(30) - window.__main.coordinate_to_price(54));
+      const tick = 2 ** Math.round(Math.log2(span));
+      const price = Math.round(window.__main.coordinate_to_price(40) / tick) * tick;
+      const bars = data.slice(-12);
+      const sizes = bars.map((_, i) => (i % 2 === 0 ? 100 : 30));
+      const stream = chart.add_depth_stream("BROWSER:DEPTH:CELLS", {
+        tick_size: tick,
+        history_bucket_micros: interval * 1_000_000,
+      });
+      chart.set_depth_snapshot_typed(stream, {
+        timestamp_micros: bars[0].time * 1_000_000,
+        sequence_high: 0,
+        sequence_low: 1,
+        bids: { prices: new Float64Array([price - 20 * tick]), sizes: new Float64Array([1]), order_counts: new Uint32Array([1]) },
+        asks: { prices: new Float64Array([price]), sizes: new Float64Array([sizes[0]]), order_counts: new Uint32Array([1]) },
+      });
+      const count = bars.length - 1;
+      chart.update_depth_typed(stream, {
+        timestamps_micros: new Float64Array(bars.slice(1).map((bar) => bar.time * 1_000_000)),
+        sequences: { high: new Uint32Array(count), low: new Uint32Array(Array.from({ length: count }, (_, i) => i + 2)) },
+        previous_sequences: { high: new Uint32Array(count), low: new Uint32Array(Array.from({ length: count }, (_, i) => i + 1)) },
+        sides: new Uint8Array(count).fill(1),
+        prices: new Float64Array(count).fill(price),
+        sizes: new Float64Array(sizes.slice(1)),
+      });
+      chart.add_depth_heatmap(stream, { price_min: price - 2 * tick, price_max: price + 2 * tick, maximum_size: 100 });
+      const left = chart.wasm.pane_left();
+      const x = (time) => left + chart.time_scale().time_to_coordinate(time);
+      return {
+        dpr: window.devicePixelRatio,
+        y: window.__main.price_to_coordinate(price),
+        row: Math.abs(window.__main.price_to_coordinate(price + tick) - window.__main.price_to_coordinate(price)),
+        spacing: x(bars[1].time) - x(bars[0].time),
+        bars: bars.map((bar) => x(bar.time)),
+        before_first: x(data.at(-14).time),
+        clear_of_candles: bars.every((bar) => price - tick > bar.high),
+      };
+    });
+    expect(probe.clear_of_candles, "the probed row is clear of the candles").toBe(true);
+    expect(probe.spacing).toBeGreaterThan(12);
+    expect(probe.row).toBeGreaterThan(12);
+    const after = await chart_capture(page);
+    const at = (png, x, y) => {
+      const o = (Math.round(y * probe.dpr) * png.width + Math.round(x * probe.dpr)) * 4;
+      return Array.from(png.data.slice(o, o + 4));
+    };
+    const half = probe.spacing / 2 - 2;
+    const half_row = probe.row / 2 - 2;
+    const centers = probe.bars.map((x) => at(after, x, probe.y));
+    probe.bars.forEach((x, i) => {
+      expect(centers[i], `bar ${i} slot is painted`).not.toEqual(at(before, x, probe.y));
+      for (const [dx, dy] of [[-half, 0], [half, 0], [0, -half_row], [0, half_row]]) {
+        expect(at(after, x + dx, probe.y + dy), `bar ${i} cell interior is flat`).toEqual(centers[i]);
+      }
+      if (i > 0) expect(centers[i], `bar ${i} differs from its neighbour`).not.toEqual(centers[i - 1]);
+    });
+    expect(at(after, probe.before_first, probe.y), "nothing paints before the first bucket").toEqual(
+      at(before, probe.before_first, probe.y),
+    );
+  });
+}
 test("time and sales is bounded, classified, filtered, and newest first", async ({ page }) => {
   await open_chart(page);
   const result = await page.evaluate(() => {
@@ -198,7 +274,7 @@ async function chart_capture(page) {
   return PNG.sync.read(Buffer.from(data_url.split(",")[1], "base64"));
 }
 
-test("depth profile and heatmap are hovered, selected and deselected like other indicators", async ({ page }) => {
+test("depth profile is hovered, selected and deselected like other indicators; the heatmap is not selectable", async ({ page }) => {
   await page.goto("/?backend=canvas2d");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
   const spot = await page.evaluate(() => {
@@ -228,36 +304,65 @@ test("depth profile and heatmap are hovered, selected and deselected like other 
     const canvases = document.querySelectorAll("#chart_container canvas");
     return canvases[canvases.length - 1].style.cursor;
   });
-  const selected = () => page.evaluate(() => ({
-    profile: window.__chart.selected_depth_profile(),
-    heatmap: window.__chart.selected_depth_heatmap(),
-  }));
+  const selected = () => page.evaluate(() => window.__chart.selected_depth_profile());
+  expect(await page.evaluate(() => "select_depth_heatmap" in window.__chart || "selected_depth_heatmap" in window.__chart)).toBe(false);
 
   const before = count_anchor_border(await chart_capture(page));
   await page.mouse.move(spot.x, spot.y);
   await expect.poll(cursor).toBe("pointer");
   await page.mouse.click(spot.x, spot.y);
-  expect(await selected()).toEqual({ profile: spot.profile, heatmap: null });
+  expect(await selected()).toBe(spot.profile);
   // At this zoom the four levels merge into one ask row and one bid row: two bar-tip discs.
   expect(count_anchor_border(await chart_capture(page)), "selection anchors paint").toBeGreaterThan(before + 8);
 
+  // Delete leaves a depth profile in place: its lifecycle is host-owned.
+  await page.keyboard.press("Delete");
+  expect(await selected()).toBe(spot.profile);
+
   await page.keyboard.press("Escape");
-  expect(await selected()).toEqual({ profile: null, heatmap: null });
+  expect(await selected()).toBe(null);
   expect(count_anchor_border(await chart_capture(page))).toBeLessThanOrEqual(before);
 
-  // The heatmap shares the exclusive selection: selecting it drops the profile, Escape clears it.
+  // Removing the selected profile clears its selection; the Delete above did not remove it.
   await page.waitForTimeout(550);
   await page.mouse.click(spot.x, spot.y);
-  expect(await page.evaluate((id) => window.__chart.select_depth_heatmap(id), spot.heatmap)).toBe(true);
-  expect(await selected()).toEqual({ profile: null, heatmap: spot.heatmap });
-  await page.keyboard.press("Escape");
-  expect(await selected()).toEqual({ profile: null, heatmap: null });
-
-  // Removing the selected layer clears its selection.
-  await page.waitForTimeout(550);
-  await page.mouse.click(spot.x, spot.y);
-  expect((await selected()).profile).toBe(spot.profile);
+  expect(await selected()).toBe(spot.profile);
   const removed = await page.evaluate(() => window.__chart.remove_depth_profile(window.__depth_select.profile));
   expect(removed).toBe(true);
-  expect(await selected()).toEqual({ profile: null, heatmap: null });
+  expect(await selected()).toBe(null);
+
+  // A painted heatmap cell above the candles is not an interactive object: hovering keeps the
+  // pane cursor and clicking selects nothing.
+  const cell = await page.evaluate(() => {
+    const chart = window.__chart;
+    const data = window.__data;
+    const bar = data.at(-30);
+    const interval = data.at(-29).time - bar.time;
+    const price = Math.round(window.__main.coordinate_to_price(30) * 4) / 4;
+    const stream = chart.add_depth_stream("BROWSER:DEPTH:HEAT", { tick_size: 0.25, history_bucket_micros: interval * 1_000_000 });
+    chart.set_depth_snapshot_typed(stream, {
+      timestamp_micros: bar.time * 1_000_000,
+      sequence_high: 0,
+      sequence_low: 1,
+      bids: { prices: new Float64Array([price - 0.5]), sizes: new Float64Array([100]), order_counts: new Uint32Array([1]) },
+      asks: { prices: new Float64Array([price]), sizes: new Float64Array([100]), order_counts: new Uint32Array([1]) },
+    });
+    chart.add_depth_heatmap(stream, { price_min: price - 1, price_max: price + 1, maximum_size: 100 });
+    const x0 = chart.time_scale().time_to_coordinate(bar.time);
+    const x1 = chart.time_scale().time_to_coordinate(data.at(-29).time);
+    const bounds = document.getElementById("chart_container").getBoundingClientRect();
+    return {
+      x: bounds.left + chart.wasm.pane_left() + (x0 + x1) / 2,
+      y: bounds.top + window.__main.price_to_coordinate(price),
+      above_candle: price - 0.25 > bar.high,
+    };
+  });
+  expect(cell.above_candle, "the probed cell is clear of the candle").toBe(true);
+  const quiet = count_anchor_border(await chart_capture(page));
+  await page.mouse.move(cell.x, cell.y);
+  await page.mouse.move(cell.x + 1, cell.y);
+  await expect.poll(cursor).not.toBe("pointer");
+  await page.mouse.click(cell.x, cell.y);
+  expect(await selected()).toBe(null);
+  expect(count_anchor_border(await chart_capture(page)), "nothing paints selection anchors").toBeLessThanOrEqual(quiet);
 });

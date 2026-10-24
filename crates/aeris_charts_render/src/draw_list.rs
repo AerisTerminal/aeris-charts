@@ -143,6 +143,40 @@ impl PartialEq for RasterImage {
     }
 }
 
+/// See [`RasterImage::contains_source`].
+pub const SOURCE_EDGE_SLACK: f32 = 1.0 / 1024.0;
+
+impl RasterImage {
+    /// The whole image as a [`Prim::Image`] source rectangle.
+    pub fn full_source(&self) -> [f32; 4] {
+        [0.0, 0.0, self.width as f32, self.height as f32]
+    }
+
+    /// A source rectangle is drawable when it is finite, non-empty, and inside the image.
+    /// Its far edges may overshoot by [`SOURCE_EDGE_SLACK`] texels, the rounding of
+    /// fractional texel positions computed in `f64` and stored as `f32`.
+    pub fn contains_source(&self, [x, y, width, height]: [f32; 4]) -> bool {
+        [x, y, width, height].iter().all(|value| value.is_finite())
+            && width > 0.0
+            && height > 0.0
+            && x >= 0.0
+            && y >= 0.0
+            && x + width <= self.width as f32 + SOURCE_EDGE_SLACK
+            && y + height <= self.height as f32 + SOURCE_EDGE_SLACK
+    }
+}
+
+/// How an executor reconstructs image texels between destination pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageSampling {
+    /// Bilinear filtering over premultiplied texels, for icons and photographic content.
+    #[default]
+    Linear,
+    /// Each destination pixel shows the one texel under its center, so data cells such as
+    /// depth-heatmap buckets keep hard rectangular edges at any magnification.
+    Nearest,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prim {
     /// Integer bitmap-space filled rect (Canvas2D `fillRect` semantics).
@@ -290,15 +324,22 @@ pub enum Prim {
         italic: bool,
         angle: f32,
     },
-    /// Straight-alpha RGBA8 image scaled into `rect` in bitmap pixels. Executors snap each
-    /// destination edge to a device pixel with [`snap_image_rect`] and sample with bilinear
-    /// filtering. Every executor first applies [`quantize_image_opacity`], skips images with
-    /// zero quantized opacity, then multiplies source alpha before source-over blending.
-    /// Resource decoding belongs to the host boundary; placement remains in the shared frame.
+    /// The `source` texel rectangle (x, y, w, h in image pixels, possibly fractional) of a
+    /// straight-alpha RGBA8 image scaled into `rect` in bitmap pixels. Executors snap each
+    /// destination edge to a device pixel with [`snap_image_rect`], map the source onto the
+    /// snapped rectangle, and sample with `sampling`; a source outside the image
+    /// ([`RasterImage::contains_source`]) draws nothing. Under `Linear`, texels just outside a
+    /// partial source may blend into its edge pixels, so frame builders that draw sub-images
+    /// side by side use `Nearest`. Every executor first applies [`quantize_image_opacity`],
+    /// skips images with zero quantized opacity, then multiplies source alpha before
+    /// source-over blending. Resource decoding belongs to the host boundary; placement remains
+    /// in the shared frame.
     Image {
         image: RasterImage,
+        source: [f32; 4],
         rect: [f32; 4],
         opacity: f32,
+        sampling: ImageSampling,
     },
 }
 

@@ -80,53 +80,163 @@ pub(crate) struct DepthProfileBar {
     pub ask: bool,
 }
 
-impl ChartEngine {
-    /// Visit each image of one heatmap with its device-px rect `[left, top, width, height]` and
-    /// painted cell bounds. Frame construction and hit testing share it, so hits match pixels.
-    pub(crate) fn for_each_depth_heatmap_image(
-        &self,
-        heatmap: &crate::depth::DepthHeatmap,
-        hpr: f64,
-        vpr: f64,
-        mut visit: impl FnMut(&RasterImage, [f64; 4], Option<crate::depth::PaintedCells>),
-    ) {
-        let Some(pane) = self.panes.get(heatmap.options.pane_index) else {
-            return;
+/// The bar time axis as consecutive time slots, the horizontal frame of every depth layer.
+/// Bar `i` owns `[open_i, open_i + duration_i)` and spans its whole bar width, half a bar
+/// spacing either side of its center, so a time maps proportionally into its bar. A bar lasts
+/// until the next bar opens unless that gap exceeds 1.5 typical bar intervals (a session
+/// break, weekend, or missing data); it then lasts one typical interval and the rest of the
+/// gap has no horizontal position. Times before the first bar or after the last bar's slot
+/// have none either.
+#[derive(Clone, Copy)]
+pub(crate) struct DepthTimeSlots<'a> {
+    times: &'a [i64],
+    nominal_micros: i64,
+}
+
+impl DepthTimeSlots<'_> {
+    fn open_micros(&self, index: usize) -> i64 {
+        self.times[index].saturating_mul(1_000_000)
+    }
+
+    fn duration_micros(&self, index: usize) -> i64 {
+        let Some(&next) = self.times.get(index + 1) else {
+            return self.nominal_micros;
         };
-        let scale = pane_scale(pane, PriceScaleTarget::Right);
-        let y_min = scale.price_to_coordinate(heatmap.options.price_min, 0.0) * vpr;
-        let y_max = scale.price_to_coordinate(heatmap.options.price_max, 0.0) * vpr;
-        let top = y_min.min(y_max);
-        let height = (y_max - y_min).abs();
-        if !top.is_finite() || !height.is_finite() || height <= 0.0 {
-            return;
-        }
-        let interval = self
-            .depth_streams
-            .get(&heatmap.stream_id)
-            .map(|book| book.options().history_bucket_micros)
-            .unwrap_or(1);
-        let horizontal = |start_micros: i64, end_micros: i64| {
-            let x0 = self.depth_time_coordinate(start_micros)?;
-            let x1 = self.depth_time_coordinate(end_micros)?;
-            Some((x0.min(x1) * hpr, ((x1 - x0).abs() * hpr).max(1.0)))
-        };
-        for chunk in &heatmap.chunks {
-            let end_micros = chunk.start_micros.saturating_add(
-                interval.saturating_mul(crate::depth::DEPTH_HEATMAP_CHUNK_COLUMNS as i64),
-            );
-            if let Some((left, width)) = horizontal(chunk.start_micros, end_micros) {
-                visit(&chunk.image, [left, top, width, height], chunk.painted);
-            }
-        }
-        if let Some(column) = &heatmap.active
-            && let Some((left, width)) =
-                horizontal(column.start_micros, column.start_micros + interval)
-        {
-            visit(&column.image, [left, top, width, height], column.painted);
+        let gap = next
+            .saturating_sub(self.times[index])
+            .saturating_mul(1_000_000);
+        if gap > 0 && gap.saturating_mul(2) <= self.nominal_micros.saturating_mul(3) {
+            gap
+        } else {
+            self.nominal_micros
         }
     }
 
+    /// The last bar opening at or before `micros`.
+    fn bar_at_or_before(&self, micros: i64) -> Option<usize> {
+        self.times
+            .partition_point(|&time| time.saturating_mul(1_000_000) <= micros)
+            .checked_sub(1)
+    }
+}
+
+/// One linear piece of a depth time span on the bar axis: `[start, end)` microseconds drawn
+/// from `left` to `right` CSS px.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DepthTimePiece {
+    pub start_micros: i64,
+    pub end_micros: i64,
+    pub left: f64,
+    pub right: f64,
+}
+
+impl ChartEngine {
+    /// `fallback_micros` is the typical bar interval while fewer than two bars exist.
+    pub(crate) fn depth_time_slots(&self, fallback_micros: i64) -> Option<DepthTimeSlots<'_>> {
+        let times = self.data_layer().merged_times();
+        if times.is_empty() {
+            return None;
+        }
+        let nominal_micros = super::axis::median_bar_interval(times)
+            .map(|seconds| (seconds * 1_000_000.0).round() as i64)
+            .filter(|&micros| micros > 0)
+            .unwrap_or(fallback_micros.max(1));
+        Some(DepthTimeSlots {
+            times,
+            nominal_micros,
+        })
+    }
+
+    fn depth_slot_x(&self, slots: &DepthTimeSlots<'_>, index: usize, micros: i64) -> f64 {
+        let spacing = self.time_scale.bar_spacing();
+        let left = self.time_scale.index_to_coordinate(index as i64) - spacing / 2.0;
+        let elapsed = micros.saturating_sub(slots.open_micros(index)) as f64;
+        left + elapsed / slots.duration_micros(index) as f64 * spacing
+    }
+
+    /// The x (CSS px) of a depth timestamp inside its bar slot.
+    pub(crate) fn depth_slot_coordinate(
+        &self,
+        slots: &DepthTimeSlots<'_>,
+        micros: i64,
+    ) -> Option<f64> {
+        let index = slots.bar_at_or_before(micros)?;
+        let end = slots
+            .open_micros(index)
+            .saturating_add(slots.duration_micros(index));
+        (micros < end).then(|| self.depth_slot_x(slots, index, micros))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn depth_time_coordinate(&self, timestamp_micros: i64) -> Option<f64> {
+        self.depth_slot_coordinate(&self.depth_time_slots(1_000_000)?, timestamp_micros)
+    }
+
+    /// Visit the maximal linear pieces of `[start, end)` inside visible bar slots, left to
+    /// right. Consecutive bars of equal duration share a piece; a session gap or a change of
+    /// bar duration starts the next. Work is bounded by the visible bars the span covers.
+    pub(crate) fn for_each_depth_time_piece(
+        &self,
+        slots: &DepthTimeSlots<'_>,
+        start_micros: i64,
+        end_micros: i64,
+        mut visit: impl FnMut(DepthTimePiece),
+    ) {
+        let Some(range) = self.time_scale.visible_logical_range() else {
+            return;
+        };
+        let last = slots.times.len() as i64 - 1;
+        let first_visible = (range.left().floor() as i64 - 1).clamp(0, last) as usize;
+        let last_visible = (range.right().ceil() as i64 + 1).clamp(0, last) as usize;
+        let mut index = slots
+            .bar_at_or_before(start_micros)
+            .unwrap_or(0)
+            .max(first_visible);
+        let mut current: Option<(DepthTimePiece, i64)> = None;
+        while index <= last_visible {
+            let open = slots.open_micros(index);
+            if open >= end_micros {
+                break;
+            }
+            let duration = slots.duration_micros(index);
+            let from = start_micros.max(open);
+            let to = end_micros.min(open.saturating_add(duration));
+            if from < to {
+                let right = self.depth_slot_x(slots, index, to);
+                match &mut current {
+                    Some((piece, piece_duration))
+                        if piece.end_micros == from && *piece_duration == duration =>
+                    {
+                        piece.end_micros = to;
+                        piece.right = right;
+                    }
+                    _ => {
+                        if let Some((piece, _)) = current.take() {
+                            visit(piece);
+                        }
+                        let piece = DepthTimePiece {
+                            start_micros: from,
+                            end_micros: to,
+                            left: self.depth_slot_x(slots, index, from),
+                            right,
+                        };
+                        current = Some((piece, duration));
+                    }
+                }
+            }
+            index += 1;
+        }
+        if let Some((piece, _)) = current {
+            visit(piece);
+        }
+    }
+
+    /// Each bucket column occupies exactly its own time slot on the bar axis: a bucket as
+    /// long as a bar fills that bar, shorter buckets subdivide their bar in time, and longer
+    /// ones span several bars. Columns before the first bar, after the last bar's slot, or in
+    /// a session gap are clipped, never squeezed. Each cached chunk is drawn as one
+    /// nearest-sampled sub-image per linear piece of its occupied columns, so cells stay hard
+    /// edged and the image cache is untouched.
     pub(crate) fn build_depth_heatmap_frame(
         &self,
         pane_index: usize,
@@ -137,15 +247,62 @@ impl ChartEngine {
         if self.depth_heatmaps.is_empty() {
             return;
         }
+        let Some(pane) = self.panes.get(pane_index) else {
+            return;
+        };
+        let scale = pane_scale(pane, PriceScaleTarget::Right);
         for id in self.depth_heatmap_ids(pane_index) {
             let heatmap = &self.depth_heatmaps[&id];
-            self.for_each_depth_heatmap_image(heatmap, hpr, vpr, |image, rect, _| {
-                output.push(Prim::Image {
-                    image: image.clone(),
-                    rect: rect.map(|value| value as f32),
-                    opacity: heatmap.options.opacity,
+            let Some(book) = self.depth_streams.get(&heatmap.stream_id) else {
+                continue;
+            };
+            let interval = book.options().history_bucket_micros.max(1);
+            let Some((low, high)) = heatmap.price_span(book.options().tick_size) else {
+                continue;
+            };
+            let y_low = scale.price_to_coordinate(low, 0.0) * vpr;
+            let y_high = scale.price_to_coordinate(high, 0.0) * vpr;
+            let top = y_low.min(y_high) as f32;
+            let height = (y_low - y_high).abs() as f32;
+            if !top.is_finite() || !height.is_finite() || height <= 0.0 {
+                continue;
+            }
+            let Some(slots) = self.depth_time_slots(interval) else {
+                continue;
+            };
+            let mut push = |image: &RasterImage, first_column_micros: i64, start, end| {
+                self.for_each_depth_time_piece(&slots, start, end, |piece| {
+                    let column = |micros: i64| {
+                        (micros.saturating_sub(first_column_micros) as f64 / interval as f64) as f32
+                    };
+                    let x = column(piece.start_micros);
+                    let width = column(piece.end_micros).min(image.width as f32) - x;
+                    let left = piece.left * hpr;
+                    output.push(Prim::Image {
+                        image: image.clone(),
+                        source: [x, 0.0, width, image.height as f32],
+                        rect: [left as f32, top, (piece.right * hpr - left) as f32, height],
+                        opacity: heatmap.options.opacity,
+                        sampling: ImageSampling::Nearest,
+                    });
                 });
-            });
+            };
+            for chunk in &heatmap.chunks {
+                if let (Some(&first), Some(&last)) =
+                    (chunk.bucket_starts.first(), chunk.bucket_starts.last())
+                {
+                    push(
+                        &chunk.image,
+                        chunk.start_micros,
+                        first,
+                        last.saturating_add(interval),
+                    );
+                }
+            }
+            if let Some(column) = &heatmap.active {
+                let start = column.start_micros;
+                push(&column.image, start, start, start.saturating_add(interval));
+            }
         }
     }
 
@@ -176,6 +333,9 @@ impl ChartEngine {
             let Some(book) = self.depth_streams.get(&layer.stream_id) else {
                 continue;
             };
+            let Some(slots) = self.depth_time_slots(book.options().history_bucket_micros) else {
+                continue;
+            };
             let from_micros = (from_seconds * 1_000_000.0).round() as i64;
             let mut to_micros = (to_seconds * 1_000_000.0).round() as i64;
             to_micros = to_micros.saturating_add(999_999);
@@ -185,7 +345,7 @@ impl ChartEngine {
             for event in
                 book.microstructure_events_lod(from_micros, to_micros, layer.options.max_markers)
             {
-                let Some(x) = self.depth_time_coordinate(event.timestamp_micros) else {
+                let Some(x) = self.depth_slot_coordinate(&slots, event.timestamp_micros) else {
                     continue;
                 };
                 let y = scale.price_to_coordinate(event.price, 0.0);
@@ -347,33 +507,5 @@ impl ChartEngine {
                 }
             });
         }
-    }
-
-    pub(crate) fn depth_time_coordinate(&self, timestamp_micros: i64) -> Option<f64> {
-        let times = self.data_layer().merged_times();
-        if times.is_empty() {
-            return None;
-        }
-        let seconds = timestamp_micros as f64 / 1_000_000.0;
-        let position = times.partition_point(|&time| time as f64 <= seconds);
-        if position == 0 {
-            return Some(self.time_scale.index_to_coordinate(0));
-        }
-        if position >= times.len() {
-            return Some(
-                self.time_scale
-                    .index_to_coordinate(times.len().saturating_sub(1) as i64),
-            );
-        }
-        let left = times[position - 1] as f64;
-        let right = times[position] as f64;
-        let fraction = if right > left {
-            ((seconds - left) / (right - left)).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let x0 = self.time_scale.index_to_coordinate((position - 1) as i64);
-        let x1 = self.time_scale.index_to_coordinate(position as i64);
-        Some(x0 + fraction * (x1 - x0))
     }
 }

@@ -7,7 +7,7 @@
 //! anchored chart text.
 
 use aeris_charts_render::color::Color;
-use aeris_charts_render::draw_list::{IRect, Prim, TextAlign};
+use aeris_charts_render::draw_list::{IRect, ImageSampling, Prim, TextAlign};
 
 use crate::{
     AxisFrame, AxisLabel, AxisTextAlign, AxisTextMidpoint, ChartEngine, axis_metrics::AxisMetrics,
@@ -397,6 +397,7 @@ impl ChartEngine {
         if let Some(icon) = &axis_frame.crosshair_action_icon {
             output.push(Prim::Image {
                 image: icon.image.clone(),
+                source: icon.image.full_source(),
                 rect: [
                     (icon.x * dpr).round() as f32,
                     (icon.y * dpr).round() as f32,
@@ -404,6 +405,7 @@ impl ChartEngine {
                     (icon.side * dpr).round().max(1.0) as f32,
                 ],
                 opacity: 1.0,
+                sampling: ImageSampling::Linear,
             });
         }
         for pane_index in 0..self.panes.len() {

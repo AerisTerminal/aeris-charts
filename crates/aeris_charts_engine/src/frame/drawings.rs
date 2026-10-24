@@ -12,7 +12,7 @@
 //! (`text_box_cutout`), so every kind opens the same gap around its text.
 
 use aeris_charts_render::color::Color;
-use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
+use aeris_charts_render::draw_list::{IRect, ImageSampling, LineStyle, LineType, Prim, TextAlign};
 use std::fmt::Write;
 
 use super::{POSITION_ENTRY, PRIMARY};
@@ -1767,8 +1767,10 @@ impl ChartEngine {
                 if let Some(image) = image {
                     out.push(Prim::Image {
                         image: image.clone(),
+                        source: image.full_source(),
                         rect,
                         opacity: 1.0,
+                        sampling: ImageSampling::Linear,
                     });
                 } else if let Some(icon) = name.and_then(builtin_icon) {
                     // A solid icon rasterizes at its whole-device-px size on a pixel-aligned
@@ -1785,8 +1787,10 @@ impl ChartEngine {
                             image.width as f32,
                             image.height as f32,
                         ],
+                        source: image.full_source(),
                         image,
                         opacity: 1.0,
+                        sampling: ImageSampling::Linear,
                     });
                 } else {
                     out.push(Prim::Rect {

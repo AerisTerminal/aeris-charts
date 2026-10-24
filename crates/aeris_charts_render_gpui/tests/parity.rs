@@ -45,7 +45,15 @@ struct RectRecorder {
     path_fills: usize,
     path_strokes: usize,
     text_runs: Vec<(String, f32, f32, String, Color, TextAlign)>,
-    images: Vec<([f32; 4], f32, u32, u32)>,
+    #[allow(clippy::type_complexity)]
+    images: Vec<(
+        [f32; 4],
+        [f32; 4],
+        f32,
+        aeris_charts_render::draw_list::ImageSampling,
+        u32,
+        u32,
+    )>,
     gradient_extents: Vec<(f32, f32, Color, Color)>,
 }
 
@@ -105,10 +113,13 @@ impl Canvas2d for RectRecorder {
     fn draw_raster_image(
         &mut self,
         image: &aeris_charts_render::draw_list::RasterImage,
+        source: [f32; 4],
         rect: [f32; 4],
         opacity: f32,
+        sampling: aeris_charts_render::draw_list::ImageSampling,
     ) {
-        self.images.push((rect, opacity, image.width, image.height));
+        self.images
+            .push((source, rect, opacity, sampling, image.width, image.height));
     }
 }
 
@@ -1138,32 +1149,41 @@ fn area_fill_gradient_extent_matches_the_canvas2d_ramp() {
 
 #[test]
 fn image_and_background_fixture_preserve_rects_pixels_and_gradient_extent() {
-    let image = fixtures::colored_image(1.0);
-    let canvas = canvas_rects(&image.prims, &image.points);
-    let (plan, _) = gpui_plan(&image.prims, &image.points);
-    assert_eq!(canvas.images.len(), 1);
-    let image_ops: Vec<_> = plan
-        .ops
-        .iter()
-        .filter_map(|op| match op {
-            SceneOp::Image {
-                image,
-                rect,
-                opacity,
-            } => Some((image, rect, opacity)),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(image_ops.len(), 1);
-    let (gpui_image, rect, opacity) = image_ops[0];
-    let (canvas_rect, canvas_opacity, width, height) = canvas.images[0];
-    assert_eq!([rect.x, rect.y, rect.w, rect.h], canvas_rect);
-    assert_eq!(*opacity, canvas_opacity);
-    assert_eq!((gpui_image.width, gpui_image.height), (width, height));
-    let Prim::Image { image: source, .. } = &image.prims[0] else {
-        panic!("colored image fixture starts with the image");
-    };
-    assert_eq!(gpui_image.pixels, source.pixels);
+    for image in [
+        fixtures::colored_image(1.0),
+        fixtures::nearest_image_cells(1.5),
+    ] {
+        let canvas = canvas_rects(&image.prims, &image.points);
+        let (plan, _) = gpui_plan(&image.prims, &image.points);
+        assert_eq!(canvas.images.len(), 1);
+        let image_ops: Vec<_> = plan
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                SceneOp::Image {
+                    image,
+                    source,
+                    rect,
+                    opacity,
+                    sampling,
+                } => Some((image, source, rect, opacity, sampling)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(image_ops.len(), 1);
+        let (gpui_image, source, rect, opacity, sampling) = image_ops[0];
+        let (canvas_source, canvas_rect, canvas_opacity, canvas_sampling, width, height) =
+            canvas.images[0];
+        assert_eq!(*source, canvas_source, "{}", image.name);
+        assert_eq!([rect.x, rect.y, rect.w, rect.h], canvas_rect);
+        assert_eq!(*opacity, canvas_opacity);
+        assert_eq!(*sampling, canvas_sampling);
+        assert_eq!((gpui_image.width, gpui_image.height), (width, height));
+        let Prim::Image { image: pixels, .. } = &image.prims[0] else {
+            panic!("image fixture starts with the image");
+        };
+        assert_eq!(gpui_image.pixels, pixels.pixels);
+    }
 
     let gradients = fixtures::gradients(1.0);
     let background = &gradients.prims[..1];

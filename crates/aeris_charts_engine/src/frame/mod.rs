@@ -30,9 +30,11 @@ use aeris_charts_render::bars::{BarItem, BarsParams, build_bars};
 use aeris_charts_render::candles::{CandleItem, CandlesParams, build_candles};
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{
-    Gradient, IRect, LineStyle, LineType, Prim, RasterImage, TextAlign,
+    Gradient, IRect, ImageSampling, LineStyle, LineType, Prim, RasterImage, TextAlign,
 };
-use aeris_charts_render::histogram::{HistogramItem, HistogramParams, build_histogram};
+use aeris_charts_render::histogram::{
+    HistogramItem, HistogramParams, build_histogram, histogram_base_band,
+};
 use aeris_charts_render::line::{LinePoint, dash_split, expand_line};
 
 const THRESHOLD_REGION_LINE_COLOR: Color = Color::rgb(0x78, 0x7B, 0x86);
@@ -1050,6 +1052,13 @@ impl ChartEngine {
             SeriesKind::Line => verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR),
             SeriesKind::Area => series_stroke_color(series),
             SeriesKind::Histogram => {
+                if let Some((up, down)) = self.delta_histogram_colors(series) {
+                    return if plot.value_at(row, PlotValueIndex::Close) < 0.0 {
+                        down
+                    } else {
+                        up
+                    };
+                }
                 let color = verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR);
                 if color != LINE { color } else { HISTOGRAM }
             }
@@ -1910,6 +1919,7 @@ impl ChartEngine {
                                 to,
                                 hpr,
                                 vpr,
+                                pane_w_px as i32,
                                 &mut series_layer.layer.prims,
                                 scale,
                             ),
@@ -2881,6 +2891,10 @@ impl ChartEngine {
             };
             if !minimum.is_finite() || !maximum.is_finite() {
                 continue;
+            }
+            if s.delta_histogram {
+                let extent = minimum.abs().max(maximum.abs());
+                (minimum, maximum) = (-extent, extent);
             }
             let mut footprint_layout = None;
             if s.kind == SeriesKind::Footprint {

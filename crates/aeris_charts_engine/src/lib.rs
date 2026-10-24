@@ -985,6 +985,10 @@ pub struct SeriesEntry {
     /// Optional fixed-value channel painted behind this line/area series.
     pub threshold_region: Option<SeriesThresholdRegion>,
     pub histogram_updown: bool,
+    /// Order-flow delta presentation of a histogram: each column takes its own sign's color
+    /// (`up_color`/`down_color`, else the theme's bullish/bearish tokens), columns are half the
+    /// bar spacing wide over a zero baseline, and the scale is symmetric around zero.
+    pub(crate) delta_histogram: bool,
     pub price_scale_target: PriceScaleTarget,
     pub pane_index: usize,
     pub line_type: LineType,
@@ -1159,6 +1163,7 @@ impl SeriesEntry {
             area_brush: None,
             threshold_region: None,
             histogram_updown: false,
+            delta_histogram: false,
             price_scale_target: PriceScaleTarget::Right,
             pane_index: 0,
             line_type: LineType::Simple,
@@ -2021,10 +2026,10 @@ pub struct ChartEngine {
     /// hover and selection live beside the series selection and exclude it.
     hovered_volume_profile: Option<NativePrimitiveId>,
     selected_volume_profile: Option<NativePrimitiveId>,
-    /// Depth profiles and heatmaps are chart-level layers; their hover and selection exclude the
-    /// series and volume-profile selection the same way.
-    hovered_depth: Option<depth::DepthLayer>,
-    selected_depth: Option<depth::DepthLayer>,
+    /// Depth profiles are chart-level layers; their hover and selection exclude the series and
+    /// volume-profile selection the same way. Depth heatmaps are never hovered or selected.
+    hovered_depth_profile: Option<u64>,
+    selected_depth_profile: Option<u64>,
     /// Series-primitive autoscale contributions for the current frame build (Phase C-b).
     /// Hosts clear and re-record them per frame, before any layout/autoscale pass runs;
     /// `autoscale_for_frame` unions them into the owning scales.
@@ -2257,8 +2262,8 @@ impl ChartEngine {
             selection: None,
             hovered_volume_profile: None,
             selected_volume_profile: None,
-            hovered_depth: None,
-            selected_depth: None,
+            hovered_depth_profile: None,
+            selected_depth_profile: None,
             primitive_autoscale: Vec::new(),
             drawings: Vec::new(),
             drawing_runtime: RefCell::new(DrawingRuntime::default()),

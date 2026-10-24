@@ -14,7 +14,7 @@ use ab_glyph::{Font, FontArc, FontVec, PxScale, ScaleFont};
 use aeris_charts_engine::{ChartEngine, ExportFrameRequest};
 use aeris_charts_render::canvas2d::{Canvas2d, Viewport, execute};
 use aeris_charts_render::color::Color;
-use aeris_charts_render::draw_list::{Prim, RasterImage, TextAlign};
+use aeris_charts_render::draw_list::{ImageSampling, Prim, RasterImage, TextAlign};
 use std::sync::{LazyLock, Mutex};
 use tiny_skia::{
     Color as SkColor, FillRule, FilterQuality, GradientStop, IntSize, LineCap, LineJoin,
@@ -730,38 +730,60 @@ impl Canvas2d for TinySkiaCanvas {
         );
     }
 
-    fn draw_raster_image(&mut self, image: &RasterImage, rect: [f32; 4], opacity: f32) {
+    fn draw_raster_image(
+        &mut self,
+        image: &RasterImage,
+        source: [f32; 4],
+        rect: [f32; 4],
+        opacity: f32,
+        sampling: ImageSampling,
+    ) {
         let Some(size) = IntSize::from_wh(image.width, image.height) else {
             return;
         };
         let mut pixels = image.pixels.to_vec();
         aeris_charts_render::draw_list::premultiply_rgba8(&mut pixels);
-        let Some(source) = Pixmap::from_vec(pixels, size) else {
+        let Some(pixmap) = Pixmap::from_vec(pixels, size) else {
+            return;
+        };
+        let [sx, sy, sw, sh] = source;
+        let Some(source_rect) = Rect::from_xywh(sx, sy, sw, sh) else {
             return;
         };
         let [x, y, w, h] = rect;
-        let paint = PixmapPaint {
-            opacity: opacity.clamp(0.0, 1.0),
-            quality: FilterQuality::Bilinear,
-            ..PixmapPaint::default()
+        let quality = match sampling {
+            ImageSampling::Linear => FilterQuality::Bilinear,
+            ImageSampling::Nearest => FilterQuality::Nearest,
+        };
+        // `Pixmap::draw_pixmap` is this fill over the whole image; filling only the source
+        // rectangle draws a sub-image with identical sampling.
+        let paint = Paint {
+            shader: tiny_skia::Pattern::new(
+                pixmap.as_ref(),
+                SpreadMode::Pad,
+                quality,
+                opacity.clamp(0.0, 1.0),
+                Transform::identity(),
+            ),
+            anti_alias: false,
+            ..Paint::default()
         };
         let mask = if self.clip.is_some() {
             self.clip_mask.as_ref()
         } else {
             None
         };
-        self.pixmap.draw_pixmap(
-            0,
-            0,
-            source.as_ref(),
+        let (scale_x, scale_y) = (w / sw, h / sh);
+        self.pixmap.fill_rect(
+            source_rect,
             &paint,
             Transform::from_row(
-                w / image.width as f32,
+                scale_x,
                 0.0,
                 0.0,
-                h / image.height as f32,
-                x,
-                y,
+                scale_y,
+                x - sx * scale_x,
+                y - sy * scale_y,
             ),
             mask,
         );
@@ -1490,15 +1512,66 @@ mod tests {
             10,
             Color::rgb(255, 255, 255),
             &[Prim::Image {
+                source: image.full_source(),
                 image,
                 rect: [2.0, 2.0, 6.0, 6.0],
                 opacity: 0.5,
+                sampling: ImageSampling::Linear,
             }],
             &[],
         );
         let center = canvas.pixel_rgba(5, 5);
         assert!(center[0] >= 250 && (120..=135).contains(&center[1]));
         assert_eq!(canvas.pixel_rgba(0, 0), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn nearest_sub_image_keeps_hard_texel_edges_and_skips_texels_outside_its_source() {
+        // Red, green, blue columns; the source starts halfway through red.
+        let image = RasterImage {
+            key: 2,
+            width: 3,
+            height: 1,
+            pixels: Arc::<[u8]>::from([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255]),
+        };
+        let prim = |sampling| Prim::Image {
+            image: image.clone(),
+            source: [0.5, 0.0, 2.0, 1.0],
+            rect: [0.0, 0.0, 20.0, 4.0],
+            opacity: 1.0,
+            sampling,
+        };
+        let canvas = render_prims(
+            24,
+            4,
+            Color::rgb(255, 255, 255),
+            &[prim(ImageSampling::Nearest)],
+            &[],
+        );
+        let row: Vec<_> = (0..24).map(|x| canvas.pixel_rgba(x, 2)).collect();
+        // Half a red texel then a whole green texel then half a blue texel, 10 px per texel.
+        assert!(row[..5].iter().all(|px| *px == [255, 0, 0, 255]), "{row:?}");
+        assert!(
+            row[5..15].iter().all(|px| *px == [0, 255, 0, 255]),
+            "{row:?}"
+        );
+        assert!(
+            row[15..20].iter().all(|px| *px == [0, 0, 255, 255]),
+            "{row:?}"
+        );
+        assert!(
+            row[20..].iter().all(|px| *px == [255, 255, 255, 255]),
+            "{row:?}"
+        );
+        let linear = render_prims(
+            24,
+            4,
+            Color::rgb(255, 255, 255),
+            &[prim(ImageSampling::Linear)],
+            &[],
+        );
+        let blended = linear.pixel_rgba(5, 2);
+        assert!(blended[0] > 0 && blended[1] > 0, "{blended:?}");
     }
 
     #[test]
