@@ -365,6 +365,116 @@ function primitive_features(chart, series, bars) {
   ];
 }
 
+const ORDER_FLOW_TICK = 0.25;
+const ORDER_FLOW_BARS = 160;
+const DEPTH_LEVELS = 40;
+
+/**
+ * Seeded synthetic order book and tape for the order-flow previews. Streams are created on first
+ * use and released when the last layer that needs them is turned off.
+ */
+function order_flow_features(chart, bars) {
+  const recent = bars.slice(-ORDER_FLOW_BARS);
+  const step_micros = recent.length > 1 ? (recent[1].time - recent[0].time) * 1_000_000 : 60_000_000;
+  const snap = (price) => Math.round(price / ORDER_FLOW_TICK) * ORDER_FLOW_TICK;
+  const shared = (create, release) => {
+    let id = null;
+    let users = 0;
+    return {
+      acquire() { if (users++ === 0) id = create(); return id; },
+      release() { if (--users === 0) { release(id); id = null; } },
+    };
+  };
+  const depth = shared(() => {
+    const stream = chart.add_depth_stream("DEMO:BOOK", {
+      tick_size: ORDER_FLOW_TICK,
+      history_bucket_micros: step_micros,
+      max_history_buckets: 256,
+      max_history_cells: 32_000,
+    });
+    const rand = demo_rand(0xb00c);
+    // Resting walls persist across snapshots so the heatmap shows horizontal liquidity bands.
+    const walls = Array.from({ length: 6 }, () => ({ offset: Math.round((rand() - .5) * 60) * ORDER_FLOW_TICK, size: 80 + rand() * 120 }));
+    let sequence = 1;
+    for (const bar of recent) {
+      const mid = snap(bar.close);
+      const side = (bid) => {
+        const prices = new Float64Array(DEPTH_LEVELS);
+        const sizes = new Float64Array(DEPTH_LEVELS);
+        for (let level = 0; level < DEPTH_LEVELS; level += 1) {
+          const price = bid ? mid - level * ORDER_FLOW_TICK : mid + (level + 1) * ORDER_FLOW_TICK;
+          const wall = walls.find((item) => Math.abs(snap(recent[0].close + item.offset) - price) < ORDER_FLOW_TICK / 2);
+          prices[level] = price;
+          sizes[level] = 4 + rand() * 30 + level * .6 + (wall?.size ?? 0);
+        }
+        return { prices, sizes };
+      };
+      chart.set_depth_snapshot_typed(stream, {
+        timestamp_micros: bar.time * 1_000_000,
+        sequence_high: 0,
+        sequence_low: sequence++,
+        bids: side(true),
+        asks: side(false),
+      });
+    }
+    return stream;
+  }, (stream) => chart.remove_depth_stream(stream));
+  // Trade streams have no removal API, so the tape is built once and kept for the session.
+  let tape_stream = null;
+  const tape = () => tape_stream ??= (() => {
+    const stream = chart.add_trade_stream("DEMO:TAPE", { tick_size: ORDER_FLOW_TICK });
+    const rand = demo_rand(0x7a9e);
+    const trades = [];
+    let trade_id = 1;
+    for (const bar of recent) {
+      const base = bar.time * 1_000_000;
+      const range = Math.max(bar.high - bar.low, ORDER_FLOW_TICK);
+      const buy_share = Math.max(.15, Math.min(.85, .5 + (bar.close - bar.open) / range * .35 + (rand() - .5) * .2));
+      for (let index = 0; index < 30; index += 1) {
+        trades.push({
+          timestamp_micros: base + index * 1000,
+          price: snap(bar.low + rand() * range),
+          volume: 1 + rand() * 20,
+          aggressor: rand() < buy_share ? "buy" : "sell",
+          trade_id: trade_id++,
+        });
+      }
+    }
+    chart.set_trade_stream_trades(stream, trades);
+    return stream;
+  })();
+  const price_low = snap(Math.min(...recent.map((bar) => bar.low))) - DEPTH_LEVELS * ORDER_FLOW_TICK / 2;
+  const price_high = snap(Math.max(...recent.map((bar) => bar.high))) + DEPTH_LEVELS * ORDER_FLOW_TICK / 2;
+  const sub_pane = (create) => {
+    const handle = create(chart.panes().length);
+    return () => chart.remove_series(handle);
+  };
+  return [
+    {
+      id: "depth-heatmap", label: "Depth heatmap", detail: "Resting liquidity history", icon: "chart",
+      activate: () => {
+        const layer = chart.add_depth_heatmap(depth.acquire(), { price_min: price_low, price_max: price_high, maximum_size: 160 });
+        return () => { chart.remove_depth_heatmap(layer); depth.release(); };
+      },
+    },
+    {
+      id: "depth-profile", label: "Order book profile", detail: "Live bid / ask ladder", icon: "chart",
+      activate: () => {
+        const layer = chart.add_depth_profile(depth.acquire(), {});
+        return () => { chart.remove_depth_profile(layer); depth.release(); };
+      },
+    },
+    {
+      id: "delta-histogram", label: "Delta histogram", detail: "Buy − sell volume per bar", icon: "chart",
+      activate: () => sub_pane((pane) => chart.add_delta_series(tape(), pane)),
+    },
+    {
+      id: "cvd", label: "Cumulative delta", detail: "Session CVD candles", icon: "chart",
+      activate: () => sub_pane((pane) => chart.add_cvd_series(tape(), pane, "session")),
+    },
+  ];
+}
+
 function install_demo_bracket_host(chart) {
   const trading = chart.trading();
   const place_demo_bracket = (intent) => {
@@ -576,7 +686,8 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
   const series_items = series_features(data, series).map((feature) => ({ ...feature, kind: "series" }));
   const primitive_items = primitive_features(chart, series, data).map((feature) => ({ ...feature, kind: "primitive" }));
   const trading_items = trading_features(chart, data).map((feature) => ({ ...feature, kind: "trading" }));
-  const features = [...primitive_items, ...trading_items];
+  const order_flow_items = order_flow_features(chart, data).map((feature) => ({ ...feature, kind: "orderflow" }));
+  const features = [...primitive_items, ...order_flow_items, ...trading_items];
   const cleanups = new Map();
   let active_series = null;
   let base_series_choice = document.querySelector('input[name="series"]:checked')?.value ?? "candlestick";

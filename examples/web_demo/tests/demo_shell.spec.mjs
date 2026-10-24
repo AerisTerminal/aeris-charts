@@ -291,7 +291,7 @@ test("demo shell is responsive, icon-led, and has no horizontal control ribbon",
 test("canonical series stay in Series while feature lab contains only composable scenarios", async ({ page }) => {
   await open_demo(page);
   await expect(page.locator("#series_grid .feature-card")).toHaveCount(11);
-  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(11);
+  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(15);
   expect(await page.locator('input[name="series"]').evaluateAll((radios) => radios.map((radio) => radio.value))).toEqual([
     "candlestick", "hollow_candlestick", "bar", "line", "line_markers", "area", "histogram", "baseline",
   ]);
@@ -488,10 +488,32 @@ test("every feature-lab card activates through its real public API wiring", asyn
     if (feature.disabled) continue;
     await page.evaluate((id) => window.__demo_catalogs.lab.activate(id), feature.id);
     expect(await page.evaluate((id) => window.__demo_catalogs.lab.active_ids().includes(id), feature.id)).toBe(true);
-    if (feature.kind === "primitive") await page.evaluate((id) => window.__demo_catalogs.lab.activate(id), feature.id);
+    if (feature.kind !== "trading") await page.evaluate((id) => window.__demo_catalogs.lab.activate(id), feature.id);
   }
   await page.evaluate(() => window.__demo_catalogs.lab.clear());
   expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("order-flow cards add and remove depth layers and sub-panes", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await open_demo(page);
+  const panes = () => page.evaluate(() => window.__chart.panes().length);
+  const base_panes = await panes();
+  await page.locator('[data-feature-filter="orderflow"]').click();
+  await expect(page.locator("#feature_grid .feature-card:not([hidden])")).toHaveCount(4);
+  for (const id of ["depth-heatmap", "depth-profile", "delta-histogram", "cvd"]) {
+    await page.locator(`[data-feature-id="${id}"]`).click();
+    await expect(page.locator(`[data-feature-id="${id}"]`)).toHaveAttribute("aria-pressed", "true");
+  }
+  expect(await panes()).toBe(base_panes + 2);
+  expect(await page.evaluate(() => window.__chart.depth_stream_id("DEMO:BOOK"))).not.toBeNull();
+  await page.locator("#feature_clear").click();
+  expect(await panes()).toBe(base_panes);
+  expect(await page.evaluate(() => window.__chart.depth_stream_id("DEMO:BOOK"))).toBeNull();
+  await page.locator('[data-feature-id="depth-heatmap"]').click();
+  expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toEqual(["depth-heatmap"]);
   expect(errors).toEqual([]);
 });
 
