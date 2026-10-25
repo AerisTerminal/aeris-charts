@@ -211,7 +211,7 @@ function use_footprint_view(chart, footprint) {
 // Presentation choices survive leaving and reopening the footprint preview.
 const footprint_style = { cell_mode: "bid_ask", show_bar_summary: true };
 
-function series_features(bars, primary_series) {
+function series_features(bars, primary_series, live_source) {
   const sampled = bars.filter((_, index) => index % 5 === 0);
   const closes = sampled.map((bar) => bar.close);
   const shade_data = background_shade_data(bars);
@@ -221,12 +221,13 @@ function series_features(bars, primary_series) {
       id: "footprint", label: "Footprint", detail: "Bid × Ask · POC · stacked delta", icon: "chart",
       preserve_time_spacing: true,
       create: (chart) => {
+        const live = live_source();
         const footprint = chart.add_series("footprint", {
           // Footprint replaces the main price series, so it must keep the main scale. Drawings,
           // price indicators, alerts, and trading lines are already bound to this scale.
           price_scale_id: primary_series.price_scale_id(),
-          tick_size: FOOTPRINT_TICK,
-          interval_seconds: FOOTPRINT_INTERVAL,
+          tick_size: live?.tick_size ?? FOOTPRINT_TICK,
+          interval_seconds: live?.interval_seconds ?? FOOTPRINT_INTERVAL,
           imbalance_ratio: 3,
           imbalance_minimum_volume: 20,
           stacked_imbalance_levels: 3,
@@ -236,7 +237,9 @@ function series_features(bars, primary_series) {
           countdown_visible: true,
           title: "ORDER FLOW",
         });
-        footprint.set_trades(footprint_trades(bars));
+        // Live data prints into the shared tape, so the footprint follows it tick by tick.
+        if (live === null) footprint.set_trades(footprint_trades(bars));
+        else chart.bind_footprint_series_to_stream(footprint, live.trade_stream);
         return footprint;
       },
       compose: (chart, footprint) => use_footprint_view(chart, footprint),
@@ -373,7 +376,7 @@ const DEPTH_LEVELS = 40;
  * Seeded synthetic order book and tape for the order-flow previews. Streams are created on first
  * use and released when the last layer that needs them is turned off.
  */
-function order_flow_features(chart, bars) {
+function order_flow_features(chart, bars, live_source) {
   const recent = bars.slice(-ORDER_FLOW_BARS);
   const step_micros = recent.length > 1 ? (recent[1].time - recent[0].time) * 1_000_000 : 60_000_000;
   const snap = (price) => Math.round(price / ORDER_FLOW_TICK) * ORDER_FLOW_TICK;
@@ -421,7 +424,7 @@ function order_flow_features(chart, bars) {
   }, (stream) => chart.remove_depth_stream(stream));
   // Trade streams have no removal API, so the tape is built once and kept for the session.
   let tape_stream = null;
-  const tape = () => tape_stream ??= (() => {
+  const static_tape = () => tape_stream ??= (() => {
     const stream = chart.add_trade_stream("DEMO:TAPE", { tick_size: ORDER_FLOW_TICK });
     const rand = demo_rand(0x7a9e);
     const trades = [];
@@ -445,6 +448,13 @@ function order_flow_features(chart, bars) {
   })();
   const price_low = snap(Math.min(...recent.map((bar) => bar.low))) - DEPTH_LEVELS * ORDER_FLOW_TICK / 2;
   const price_high = snap(Math.max(...recent.map((bar) => bar.high))) + DEPTH_LEVELS * ORDER_FLOW_TICK / 2;
+  // Live data owns its own book and tape; the seeded ones describe the deterministic bars only.
+  const tape = () => live_source()?.trade_stream ?? static_tape();
+  const book = () => {
+    const live = live_source();
+    if (live !== null) return { stream: live.depth_stream, range: live.price_range(), maximum_size: 120, release() {} };
+    return { stream: depth.acquire(), range: [price_low, price_high], maximum_size: 160, release: () => depth.release() };
+  };
   const sub_pane = (create) => {
     const handle = create(chart.panes().length);
     return () => chart.remove_series(handle);
@@ -453,15 +463,21 @@ function order_flow_features(chart, bars) {
     {
       id: "depth-heatmap", label: "Depth heatmap", detail: "Resting liquidity history", icon: "chart",
       activate: () => {
-        const layer = chart.add_depth_heatmap(depth.acquire(), { price_min: price_low, price_max: price_high, maximum_size: 160 });
-        return () => { chart.remove_depth_heatmap(layer); depth.release(); };
+        const source = book();
+        const layer = chart.add_depth_heatmap(source.stream, {
+          price_min: source.range[0],
+          price_max: source.range[1],
+          maximum_size: source.maximum_size,
+        });
+        return () => { chart.remove_depth_heatmap(layer); source.release(); };
       },
     },
     {
       id: "depth-profile", label: "Order book profile", detail: "Live bid / ask ladder", icon: "chart",
       activate: () => {
-        const layer = chart.add_depth_profile(depth.acquire(), {});
-        return () => { chart.remove_depth_profile(layer); depth.release(); };
+        const source = book();
+        const layer = chart.add_depth_profile(source.stream, {});
+        return () => { chart.remove_depth_profile(layer); source.release(); };
       },
     },
     {
@@ -676,17 +692,17 @@ function trading_features(chart, bars) {
   }];
 }
 
-export function install_demo_catalogs({ chart, series, data, on_series_change }) {
+export function install_demo_catalogs({ chart, series, data, on_series_change, live_source = () => null }) {
   install_demo_bracket_host(chart);
   const grid = document.getElementById("feature_grid");
   const series_grid = document.getElementById("series_grid");
   const search = document.getElementById("feature_search");
   const empty = document.getElementById("feature_empty");
   const active_count = document.getElementById("feature_active_count");
-  const series_items = series_features(data, series).map((feature) => ({ ...feature, kind: "series" }));
+  const series_items = series_features(data, series, live_source).map((feature) => ({ ...feature, kind: "series" }));
   const primitive_items = primitive_features(chart, series, data).map((feature) => ({ ...feature, kind: "primitive" }));
   const trading_items = trading_features(chart, data).map((feature) => ({ ...feature, kind: "trading" }));
-  const order_flow_items = order_flow_features(chart, data).map((feature) => ({ ...feature, kind: "orderflow" }));
+  const order_flow_items = order_flow_features(chart, data, live_source).map((feature) => ({ ...feature, kind: "orderflow" }));
   const features = [...primitive_items, ...order_flow_items, ...trading_items];
   const cleanups = new Map();
   let active_series = null;
@@ -786,18 +802,21 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
       console.error(`Series catalog could not activate ${feature.id}`, error);
     }
   };
+  const deactivate_feature = (id) => {
+    cleanups.get(id)();
+    cleanups.delete(id);
+    feature_card(id).setAttribute("aria-pressed", "false");
+  };
+  const activate_feature = (feature) => {
+    const cleanup = feature.activate();
+    cleanups.set(feature.id, typeof cleanup === "function" ? cleanup : () => {});
+    feature_card(feature.id).setAttribute("aria-pressed", "true");
+  };
   const toggle_feature = (feature) => {
     try {
       if (!feature_available(feature)) return;
-      if (cleanups.has(feature.id)) {
-        cleanups.get(feature.id)();
-        cleanups.delete(feature.id);
-        feature_card(feature.id).setAttribute("aria-pressed", "false");
-      } else {
-        const cleanup = feature.activate();
-        cleanups.set(feature.id, typeof cleanup === "function" ? cleanup : () => {});
-        feature_card(feature.id).setAttribute("aria-pressed", "true");
-      }
+      if (cleanups.has(feature.id)) deactivate_feature(feature.id);
+      else activate_feature(feature);
       chart.time_scale().fit_content();
       chart.render();
       update_status();
@@ -870,6 +889,28 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
         clear_series();
         queueMicrotask(refresh_feature_availability);
       },
+    },
+    /**
+     * Detach every layer that reads the market's tape or book before the host replaces them, and
+     * return the call that rebuilds those layers on whatever sources are current then.
+     */
+    suspend_market_layers() {
+      const lab = order_flow_items.filter((feature) => cleanups.has(feature.id));
+      for (const feature of lab) deactivate_feature(feature.id);
+      const footprint = active_series?.id === "footprint" ? series_items.find((item) => item.id === "footprint") : null;
+      if (footprint !== null) clear_series();
+      return () => {
+        for (const feature of lab) {
+          try {
+            activate_feature(feature);
+          } catch (error) {
+            console.error(`Feature lab could not rebuild ${feature.id}`, error);
+          }
+        }
+        if (footprint !== null) toggle_series(footprint);
+        chart.render();
+        update_status();
+      };
     },
     lab: {
       activate(id) {

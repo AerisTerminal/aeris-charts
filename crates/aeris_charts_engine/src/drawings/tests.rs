@@ -7260,7 +7260,7 @@ fn painted_handles(frame: &crate::ChartFrame) -> Vec<(f64, f64, bool)> {
                 border_width,
                 border_color,
                 ..
-            } if w == 12.0 && h == 12.0 && border_width == 1.0 && border_color == primary() => {
+            } if w == 12.0 && h == 12.0 && border_width == 2.0 && border_color == primary() => {
                 assert_eq!(
                     (x.fract(), y.fract()),
                     (0.0, 0.0),

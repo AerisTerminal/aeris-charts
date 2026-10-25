@@ -16371,7 +16371,7 @@ fn position_square_controls_have_one_rounded_fill_and_inside_border() {
                     } if *border_width > 0.0 && *border_color == super::PRIMARY => {
                         assert_eq!(*actual_fill, fill);
                         assert_eq!(*border_color, super::PRIMARY);
-                        assert_eq!(*border_width, (1.5_f64 * dpr).floor().max(1.0) as f32);
+                        assert_eq!(*border_width, (2.0_f64 * dpr).round().max(1.0) as f32);
                         assert_eq!(*w, *h);
                         assert_eq!(x.fract(), 0.0);
                         assert_eq!(y.fract(), 0.0);
@@ -20781,7 +20781,10 @@ fn selection_border_positions(chart: &mut ChartEngine) -> Vec<(f32, f32)> {
                 radius,
                 fill,
                 ..
-            } if *fill == PRIMARY && (*radius - 4.0 * chart.dpr as f32).abs() < 1e-4 => {
+            } if *fill == PRIMARY
+                && (*radius - (3.0 * chart.dpr + (2.0 * chart.dpr).round()) as f32).abs()
+                    < 1e-4 =>
+            {
                 Some((*cx, *cy))
             }
             _ => None,
@@ -20812,12 +20815,12 @@ fn selection_anchors_paint_theme_derived_discs_on_the_selected_series() {
     assert!(frame_discs(&mut chart).is_empty());
     chart.set_selected_series(Some(0));
     let discs = frame_discs(&mut chart);
-    // One compact border disc (blue, radius 3 + 1 at dpr 1) + one fill disc (radius 3) per bar.
+    // One border disc (blue, radius 3 + a 2 px ring at dpr 1) + one fill disc (radius 3) per bar.
     let borders: Vec<_> = discs.iter().copied().filter(|d| d.2 == BLUE).collect();
     let fills: Vec<_> = discs.iter().copied().filter(|d| d.2 != BLUE).collect();
     assert_eq!(borders.len(), 5);
     assert_eq!(fills.len(), 5);
-    assert!(borders.iter().all(|d| (d.1 - 4.0).abs() < 1e-4));
+    assert!(borders.iter().all(|d| (d.1 - 5.0).abs() < 1e-4));
     assert!(fills.iter().all(|d| (d.1 - 3.0).abs() < 1e-4));
     // Aeris defaults dark: black fills, each paired with a border disc at the same x.
     assert!(fills.iter().all(|d| d.2 == Color::rgb(0, 0, 0)));

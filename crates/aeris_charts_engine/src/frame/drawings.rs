@@ -28,13 +28,15 @@ use aeris_charts_core::model::plot_list::PlotValueIndex;
 
 /// Drawing handles (`push_handle`): a theme-derived fill inside a primary-token border, round or
 /// square. The fill radius plus border makes a 12 px handle, larger than the series selection
-/// anchors (series_geometry.rs) since these are drag targets. The border floors to whole device
-/// pixels so it stays a light ring: 1 px at 1x, 3 px at 2x.
-const ANCHOR_RADIUS: f64 = 4.5;
-const ANCHOR_BORDER_WIDTH: f64 = 1.5;
+/// anchors (series_geometry.rs) since these are drag targets. The 2 px ring rounds to whole device
+/// pixels so it reads as a solid outline at every density: 2 px at 1x, 3 px at 1.5x, 4 px at 2x.
+const ANCHOR_RADIUS: f64 = 4.0;
+const ANCHOR_BORDER_WIDTH: f64 = 2.0;
 /// Square handles keep slightly rounded corners.
 const ANCHOR_SQUARE_RADIUS: f64 = 2.0;
 const ANCHOR_BORDER: Color = PRIMARY;
+/// Opacity of a volume profile's box and spine over the chart text color.
+const PROFILE_FRAME_ALPHA: u8 = 80;
 const POSITION_ENTRY_WIDTH_CSS: f64 = 0.5;
 const POSITION_ZONE_ALPHA: u8 = 70;
 /// Progress must read as the emphasized portion of either semantic side on its own. Keep this
@@ -2592,11 +2594,15 @@ impl ChartEngine {
                 if let Some(profile) = profile {
                     self.for_each_profile_drawing_row(drawing, profile, &geometry, |row| {
                         let y = snap_y(row.top);
-                        let mut h = (snap_y(row.bottom) - y).max(1);
-                        // Separate rows by one device pixel once they are tall enough to read.
-                        if h >= 3 {
-                            h -= 1;
-                        }
+                        let pitch = (row.bottom - row.top) * vpr;
+                        // Every row keeps one thickness and a one-device-pixel gap whenever the
+                        // pitch allows it; rounding each row's own edges alternated thick and thin
+                        // rows that merged into solid slabs.
+                        let h = if pitch >= 2.0 {
+                            (pitch.floor() as i32 - 1).max(1)
+                        } else {
+                            (snap_y(row.bottom) - y).max(1)
+                        };
                         let right = snap_x(row.volume_right);
                         if right > spine {
                             out.push(Prim::Rect {
@@ -2632,12 +2638,12 @@ impl ChartEngine {
                     });
                 }
                 let crisp = (drawing.width * vpr).round().max(1.0) as i32;
-                let edge = Color::rgba(
-                    colors.line.r(),
-                    colors.line.g(),
-                    colors.line.b(),
-                    colors.line.a().min(140),
-                );
+                // The box and spine are neutral chrome derived from the chart text color, so the
+                // profile reads as a container rather than a colored rectangle drawing; the
+                // drawing color stays on the value-area levels.
+                let ink =
+                    Color::parse_css(&self.options.get().layout.text_color).unwrap_or(colors.line);
+                let edge = Color::rgba(ink.r(), ink.g(), ink.b(), PROFILE_FRAME_ALPHA);
                 let right = snap_x(geometry.right);
                 // Levels start at the spine so they never cross the delta histogram.
                 let level_right = if drawing.extend_right {
@@ -2664,9 +2670,9 @@ impl ChartEngine {
                     x: spine,
                     y0: top,
                     y1: bottom,
-                    width: crisp,
+                    width: hairline,
                     style: LineStyle::Solid,
-                    color: colors.line,
+                    color: edge,
                 });
                 if boxed {
                     out.push(Prim::VLine {
@@ -5031,7 +5037,7 @@ fn push_handle(center: (f64, f64), square: bool, vpr: f64, fill: Color, out: &mu
         h: side as f32,
         radii: [radius as f32; 4],
         fill,
-        border_width: (ANCHOR_BORDER_WIDTH * vpr).floor().max(1.0) as f32,
+        border_width: (ANCHOR_BORDER_WIDTH * vpr).round().max(1.0) as f32,
         border_color: ANCHOR_BORDER,
     });
 }

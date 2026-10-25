@@ -2664,7 +2664,7 @@ export interface drawing_options {
   profile_rows?: number;
   /** Value-area share of total volume, above 0 to 100 (default 70). */
   profile_value_area_percent?: number;
-  /** Histogram width as a percentage of the drawn range (default 40). */
+  /** Histogram width as a percentage of the drawn range (default 30). */
   profile_width_percent?: number;
   /**
    * Fixed range box only: its top and bottom follow the traded high and low (default true).

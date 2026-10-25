@@ -25,14 +25,14 @@ use crate::{
 
 pub(crate) const DEFAULT_PROFILE_DRAWING_ROWS: usize = 100;
 pub(crate) const DEFAULT_PROFILE_DRAWING_VALUE_AREA: f64 = 70.0;
-pub(crate) const DEFAULT_PROFILE_DRAWING_WIDTH: f64 = 40.0;
+pub(crate) const DEFAULT_PROFILE_DRAWING_WIDTH: f64 = 30.0;
 /// Fallback row grid when neither the instrument nor the bound scale defines a tick.
 const FALLBACK_PROFILE_TICK: f64 = 0.01;
 
-pub(crate) const PROFILE_VALUE_AREA_COLOR: Color = Color::rgba(255, 152, 0, 210);
-pub(crate) const PROFILE_VOLUME_COLOR: Color = Color::rgba(255, 213, 79, 170);
-pub(crate) const PROFILE_POSITIVE_COLOR: Color = Color::rgba(76, 175, 80, 190);
-pub(crate) const PROFILE_NEGATIVE_COLOR: Color = Color::rgba(171, 71, 188, 190);
+pub(crate) const PROFILE_VALUE_AREA_COLOR: Color = Color::rgba(255, 152, 0, 235);
+pub(crate) const PROFILE_VOLUME_COLOR: Color = Color::rgba(255, 213, 79, 220);
+pub(crate) const PROFILE_POSITIVE_COLOR: Color = Color::rgba(76, 175, 80, 220);
+pub(crate) const PROFILE_NEGATIVE_COLOR: Color = Color::rgba(171, 71, 188, 220);
 pub(crate) const PROFILE_POC_COLOR: Color = Color::rgb(255, 82, 82);
 
 /// Everything a profile drawing's calculation depends on. Equal keys produce equal snapshots,

@@ -53,6 +53,16 @@
   #comparison_controls button { padding: 0 10px; font-size: 12px; font-weight: 600; }
   #comparison_controls button:hover:not(:disabled) { background: var(--hover-bg); }
   #comparison_clear:disabled { color: var(--text-muted); }
+  #live_controls { display: flex; gap: 6px; align-items: center; }
+  #live_controls[hidden] { display: none; }
+  #live_controls button, #live_controls select { height: 40px; color: var(--text-default); background: var(--surface-secondary); border: 1px solid var(--border-secondary); border-radius: var(--radius-compact); font-size: 12px; }
+  #live_controls button:hover, #live_controls select:hover { background: var(--hover-bg); }
+  #live_toggle { display: inline-flex; gap: 6px; align-items: center; padding: 0 10px; font-weight: 600; }
+  #live_toggle .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+  #live_toggle[aria-pressed="true"] { color: var(--demo-bullish-text); border-color: color-mix(in srgb, var(--bullish) 45%, transparent); }
+  #live_toggle[aria-pressed="true"] .live-dot { background: var(--bullish); animation: live-pulse 1.6s ease-in-out infinite; }
+  @keyframes live-pulse { 50% { opacity: .3; } }
+  #live_speed { padding: 0 6px; font-variant-numeric: tabular-nums; }
   #quick_actions { display: flex; gap: 2px; align-items: center; }
   .icon-button, #quick_actions button, #tool_rail button { display: inline-grid; place-items: center; border: 1px solid transparent; background: transparent; color: var(--icon); }
   .icon-button, #quick_actions button { flex-shrink: 0; width: 40px; height: 40px; padding: 0; border-radius: var(--radius-default); }
@@ -76,6 +86,7 @@
   [data-demo-mode="general"] .market-summary,
   [data-demo-mode="general"] #comparison_controls,
   [data-demo-mode="general"] #quick_actions,
+  [data-demo-mode="general"] #live_controls,
   [data-demo-mode="general"] #status,
   [data-demo-mode="general"] #inspector_toggle { display: none; }
   #tool_rail { z-index: 12; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px; background: var(--surface); border-right: 1px solid var(--border); }
@@ -182,15 +193,18 @@
     html:not([data-demo-mode="general"]) .mobile-heading { display: block; margin: 0 auto 0 0; font-size: 16px; font-weight: 650; }
     #comparison_controls select { max-width: 120px; }
     #comparison_controls select, #comparison_controls button { height: 44px; }
+    #live_controls button, #live_controls select { height: 44px; }
   }
   @media (max-width: 600px) {
     #app_bar { flex-wrap: wrap; }
     #comparison_controls { order: 2; flex-basis: 100%; padding-top: 6px; border-top: 1px solid var(--border); }
     #comparison_controls select { max-width: none; flex: 1; }
     #comparison_clear { margin-left: auto; }
+    #live_controls { order: 3; padding-top: 6px; }
   }
   @media (prefers-reduced-motion: reduce) {
     #inspector, #theme_toggle [data-theme-icon] { transition: none; }
+    #live_toggle .live-dot { animation: none !important; }
   }
 </style>
 </head>
@@ -208,9 +222,9 @@
         <button id="demo_mode_general" type="button" aria-pressed="false">General</button>
       </nav>
       <div class="market-summary" role="group" aria-label="Demo instrument">
-        <span class="market-symbol">NCL · 1H</span>
+        <span class="market-symbol" id="market_symbol">NCL · 1H</span>
         <span class="market-price" id="market_price">—</span>
-        <span class="market-meta">Synthetic market · 1,000 bars</span>
+        <span class="market-meta" id="market_meta">Synthetic market · 1,000 bars</span>
       </div>
       <div id="comparison_controls" role="group" aria-label="Comparison series controls">
         <select id="comparison_symbol" aria-label="Comparison symbol">
@@ -219,6 +233,14 @@
         </select>
         <button id="comparison_add" type="button" title="Add the selected symbol on its own price scale">Compare</button>
         <button id="comparison_clear" type="button" title="Remove comparison symbols from the active chart" disabled>Clear <span id="comparison_count">0</span></button>
+      </div>
+      <div id="live_controls" role="group" aria-label="Live market feed">
+        <button id="live_toggle" type="button" aria-pressed="false" title="Stream a simulated live market: 1-minute bars, tick-by-tick trades, and a level-two book"><span class="live-dot" aria-hidden="true"></span>Live</button>
+        <select id="live_speed" aria-label="Live feed speed" title="Simulated clock speed (1x is wall-clock time)">
+          <option value="1" selected>1x</option>
+          <option value="10">10x</option>
+          <option value="60">60x</option>
+        </select>
       </div>
       <nav id="quick_actions" aria-label="Active chart actions">
         <button id="undo_drawing_btn" type="button" aria-label="Undo drawing" title="Undo the last drawing change in the active chart"><span data-icon="undo"></span></button>
@@ -728,6 +750,7 @@ import { custom_ohlc_pane_view } from "./fixture_custom_series.js";
 import { vert_line_canvas_primitive } from "./fixture_canvas_plugin.js";
 import { install_demo_catalogs } from "./demo_catalogs.js";
 import { install_general_dashboard } from "./general_dashboard.js";
+import { create_live_market } from "./live_market.js";
 
 const container = document.getElementById("chart_container");
 const status = document.getElementById("status");
@@ -944,6 +967,9 @@ window.__data = data;
 // volume: single-value histogram on the SAME pane, pinned to the bottom band via the overlay
 // price scale (industry-standard — no separate pane / divider), colored green/red by bar direction.
 const volume_data = volume_fixture(data);
+// Live mode replaces the main series' data; every volume mirror then takes the live volumes.
+let live_market = null;
+const current_volume_data = () => live_market?.volume_data() ?? volume_data;
 let vol_series = null;
 // Profile drawings aggregate the registered candle volume. Arming a profile tool without the
 // visible histogram registers a hidden copy so the tool works immediately.
@@ -956,10 +982,19 @@ const ensure_profile_volume = () => {
   profile_volume = chart.add_series("histogram", {
     overlay: true, visible: false, price_line_visible: false, last_value_visible: false,
   });
-  profile_volume.set_data(volume_data);
+  profile_volume.set_data(current_volume_data());
   register_profile_volume();
 };
-window.__demo_catalogs = install_demo_catalogs({ chart, series: main, data, on_series_change: sync_style_visibility });
+window.__demo_catalogs = install_demo_catalogs({
+  chart,
+  series: main,
+  data,
+  on_series_change: (kind) => {
+    sync_style_visibility(kind);
+    sync_live_countdowns();
+  },
+  live_source: () => live_market?.source() ?? null,
+});
 if (requested_feature === "trading") window.__demo_catalogs.lab.activate("trading-bracket");
 if (query.get("tradingLines") === "marker") window.__demo_catalogs.lab.activate("trading-lines-from-marker");
 if (requested_feature === "executions") window.__demo_catalogs.lab.activate("execution-marks");
@@ -1883,7 +1918,10 @@ document.getElementById("countdown_toggle").addEventListener("change", apply_ser
 // last price (a small random-walk mid with a fixed spread) so the Bid/Ask chips and lines move.
 let bid_ask_timer = null;
 let bid_ask_mid = null;
+let live_quote_shown = null;
 function push_bid_ask_quote() {
+  // While the live feed runs, the root chart's quotes come from its simulated book every frame.
+  if (live_market?.running() && active_series() === main) return;
   const last = active_series().last_value_data(true);
   const base = last?.value ?? last?.close ?? bid_ask_mid ?? 100;
   if (bid_ask_mid === null) bid_ask_mid = base;
@@ -1892,8 +1930,10 @@ function push_bid_ask_quote() {
   active_series().set_bid_ask(bid_ask_mid - spread / 2, bid_ask_mid + spread / 2);
 }
 document.getElementById("bid_ask_toggle").addEventListener("change", (e) => {
+  live_quote_shown = null;
   if (e.target.checked) {
     active_series().apply_options({ bid_ask_visible: true });
+    show_live_quote(live_market?.quote() ?? null);
     push_bid_ask_quote();
     bid_ask_timer = setInterval(push_bid_ask_quote, 600);
   } else {
@@ -1971,7 +2011,7 @@ document.getElementById("vol_toggle").addEventListener("change", (e) => {
       price_format: { type: "volume" },
       countdown_visible: false,
     });
-    vol_series.set_data(volume_data);
+    vol_series.set_data(current_volume_data());
     register_profile_volume();
   } else if (!e.target.checked && vol_series !== null) {
     // Exercises the real remove_series API (tombstones the engine slot, not just clears data).
@@ -2004,6 +2044,8 @@ const indicator_definitions = [
 ];
 const indicator_catalog = document.getElementById("indicator_catalog");
 const indicator_handles = new Map();
+// Hidden volume copies feeding VWAP and Volume Profile; Live mode streams into them too.
+const indicator_volumes = new Set();
 window.__demo_indicators = indicator_handles;
 for (const [id, title, create] of indicator_definitions) {
   const label = document.createElement("label");
@@ -2025,7 +2067,8 @@ for (const [id, title, create] of indicator_definitions) {
     try {
       if (id === "vwap" || id === "volume_profile") {
         volume = chart.add_series("histogram", { visible: false, title: "Synthetic demo volume" });
-        volume.set_data(volume_data);
+        volume.set_data(current_volume_data());
+        indicator_volumes.add(volume);
       }
       const result = create(volume);
       const outputs = Array.isArray(result) ? result : [result];
@@ -2034,12 +2077,18 @@ for (const [id, title, create] of indicator_definitions) {
         remove() {
           if (id === "volume_profile") result.remove();
           else for (const output of outputs) chart.remove_series(output);
-          if (volume) chart.remove_series(volume);
+          if (volume) {
+            indicator_volumes.delete(volume);
+            chart.remove_series(volume);
+          }
         },
       });
       if (id === "rsi") window.__rsi = result;
     } catch (cause) {
-      if (volume) chart.remove_series(volume);
+      if (volume) {
+        indicator_volumes.delete(volume);
+        chart.remove_series(volume);
+      }
       checkbox.checked = false;
       error.textContent = cause.message;
     }
@@ -2272,6 +2321,76 @@ function sync_chart_controls_from_engine() {
 if (parity_fixture === null) sync_chart_controls_from_engine();
 // A URL-requested advanced series (?feature=footprint) is already active by now.
 sync_style_visibility(window.__demo_catalogs.series.interaction_series().series_type());
+
+// ---- Live market (off by default): a worker-simulated exchange drives the root chart's candles,
+// volume, trade tape, order book, and bid/ask. Runtime fixtures never start it.
+function show_live_quote(quote) {
+  if (quote === null || !document.getElementById("bid_ask_toggle").checked || active_series() !== main) return;
+  const key = `${quote.bid}/${quote.ask}`;
+  if (key === live_quote_shown) return;
+  live_quote_shown = key;
+  main.set_bid_ask(quote.bid, quote.ask);
+}
+// The package's countdown follows the wall clock, so it is hidden while the simulated clock runs
+// faster than real time and restored afterwards.
+const suppressed_countdowns = new Map();
+function sync_live_countdowns() {
+  if (live_market === null) return;
+  const present = new Map(chart.series_order().map((series) => [series.id, series]));
+  if (live_market.running() && live_market.speed() > 1) {
+    for (const series of present.values()) {
+      if (series.options().countdown_visible !== true) continue;
+      series.apply_options({ countdown_visible: false });
+      suppressed_countdowns.set(series.id, series);
+    }
+    return;
+  }
+  for (const id of suppressed_countdowns.keys()) present.get(id)?.apply_options({ countdown_visible: true });
+  suppressed_countdowns.clear();
+}
+const live_controls = document.getElementById("live_controls");
+if (grid !== null && runtime_test === null) {
+  const live_toggle = document.getElementById("live_toggle");
+  const live_speed = document.getElementById("live_speed");
+  const market_symbol = document.getElementById("market_symbol");
+  const market_meta = document.getElementById("market_meta");
+  const market_price_label = document.getElementById("market_price");
+  const live_seed = Number.parseInt(query.get("liveSeed") ?? "", 10);
+  live_market = create_live_market({
+    chart,
+    main,
+    catalogs: window.__demo_catalogs,
+    volume_series: () => [vol_series, profile_volume, ...indicator_volumes].filter((series) => series !== null),
+    seed: Number.isFinite(live_seed) ? live_seed >>> 0 : undefined,
+    on_state: ({ running, installed, speed }) => {
+      live_toggle.setAttribute("aria-pressed", String(running));
+      live_speed.value = String(speed);
+      if (installed) market_symbol.textContent = "NCL · 1m";
+      market_meta.textContent = running
+        ? `Live simulated market · 1m${speed > 1 ? ` · ${speed}x` : ""}`
+        : installed ? "Simulated market · 1m · paused" : "Synthetic market · 1,000 bars";
+      sync_live_countdowns();
+    },
+    on_frame: ({ bar, quote }) => {
+      if (bar !== undefined) {
+        market_price_label.textContent = bar.close.toFixed(2);
+        market_price_label.dataset.direction = bar.close >= bar.open ? "up" : "down";
+      }
+      show_live_quote(quote);
+    },
+  });
+  const start_live = () => {
+    // Comparison symbols are hourly synthetic sets; they cannot share the live 1-minute axis.
+    if (comparison_entries(chart).size > 0) clear_demo_comparisons(chart);
+    live_market.start();
+  };
+  live_toggle.addEventListener("click", () => (live_market.running() ? live_market.stop() : start_live()));
+  live_speed.addEventListener("change", () => live_market.set_speed(Number(live_speed.value)));
+  window.__live_market = live_market; // debug/test handle
+  if (query.get("live") === "1") start_live();
+} else {
+  live_controls.hidden = true;
+}
 
 // crosshair-move subscription → OHLC legend (the public event API); a hovered primitive
 // object (e.g. the position band) shows its external id alongside.

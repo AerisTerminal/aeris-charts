@@ -1569,11 +1569,12 @@ test("brush: freehand drag draws a smooth stroke that survives commit unchanged"
   expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBeNull();
 
   // The selection shows anchor handles at the TWO ENDS only — not one per path point. A
-  // two-anchor trend line's handles give the same blue footprint.
+  // two-anchor trend line's handles give the same blue footprint. Two 2 px rings paint about 200
+  // blue pixels; a handle per path point would paint thousands.
   const with_handles = await capture(page);
   const brush_blue = count_color(with_handles, BLUE);
   expect(brush_blue, "end anchors visible").toBeGreaterThan(40);
-  expect(brush_blue, "not one handle per path point").toBeLessThan(200);
+  expect(brush_blue, "not one handle per path point").toBeLessThan(400);
   await focus_overlay(page);
   await page.keyboard.press("Escape"); // deselect
 

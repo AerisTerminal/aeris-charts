@@ -139,7 +139,7 @@ bottom follow the traded high and low while `profile_fit_prices` is true (the de
 top or bottom handle sets it false, so the box then limits the profiled prices; patching it back to
 true re-fits the box. Unselected, only the spine and box edges are hit targets. It shows delta left of its spine, total volume right of it with the value area highlighted, VAH/VAL and
 POC lines, and optional price-axis tags (`price_labels_visible`, default false). Options: `profile_rows` (1–2,048, default
-100; candle-sourced profiles paint at most 512), `profile_value_area_percent` and `profile_width_percent` (>0–100, defaults 70 and 40),
+100; candle-sourced profiles paint at most 512), `profile_value_area_percent` and `profile_width_percent` (>0–100, defaults 70 and 30),
 `profile_delta_visible`, `profile_poc_visible`, `profile_value_area_lines_visible`, and the
 `profile_{value_area,volume,positive,negative,poc}_color` palette (reads report the painted color;
 patching `""` restores the default). `drawing_property_schema(drawing)` lists these with labels,

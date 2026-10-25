@@ -2134,10 +2134,10 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
     ) {
         const ANCHOR_RADIUS: f64 = 3.0;
-        const ANCHOR_BORDER_WIDTH: f64 = 0.75;
+        const ANCHOR_BORDER_WIDTH: f64 = 2.0;
         const ANCHOR_BORDER: Color = PRIMARY;
-        // A light ring: whole device pixels, at least one (1 px at 1x and 2x, 2 px at 3x).
-        let border = (ANCHOR_BORDER_WIDTH * vpr).floor().max(1.0);
+        // The same solid 2 px ring as drawing handles, rounded to whole device pixels.
+        let border = (ANCHOR_BORDER_WIDTH * vpr).round().max(1.0);
         let pane = &self.panes[pane_index];
         let anchor_fill = || {
             let fallback = aeris_charts_core::style::DEFAULT_SURFACE_RGB;
