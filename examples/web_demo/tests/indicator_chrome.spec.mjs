@@ -108,6 +108,7 @@ test("indicator lifecycle events, lineage, pane geometry, and hover values feed 
 test("split divider live-tracks the axis border token on apply_options (no topology change)", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
+  await page.click('#tool_rail [data-panel-target="workspace"]');
   await page.click("#split_h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
   await wait_cell_charts(page);

@@ -79,6 +79,7 @@ test("native partial price line is default and shares full-line style and width 
   const is_line = (c) => Math.abs(c[0] - 255) < 40 && Math.abs(c[1] - 0) < 40 && Math.abs(c[2] - 255) < 40;
   const css_w = await page.evaluate(() => document.querySelector("#chart_container").getBoundingClientRect().width);
 
+  await page.click('#tool_rail [data-panel-target="series"]');
   await page.selectOption("#price_line_style", "0"); // solid
   await wait_for_chart(page);
   const solid_png = await capture(page);

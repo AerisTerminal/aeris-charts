@@ -1165,6 +1165,7 @@ test("the demo toolbar arms tools, creates, and clears all", async ({ page }) =>
     return { x: p.x + offset.left, y: p.y + offset.top };
   };
 
+  await page.click('#tool_rail [data-panel-target="drawings"]');
   await page.click("#drawings_group [data-tool='trend_line']");
   expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBe("trend_line");
   const armed = await page.evaluate(() => window.__chart.active_drawing_tool());
@@ -1655,6 +1656,7 @@ test("changing style mid-edit never wipes the typed text; font size control appl
   const spots = await anchor_spots(page);
   const p = await spot(page, spots.l0, spots.p_mid);
 
+  await page.click('#tool_rail [data-panel-target="drawings"]');
   await page.click("#drawings_group [data-tool='text']");
   await page.mouse.click(p.x + offset.left, p.y + offset.top);
   const editor = page.locator("#chart_container #aeris_charts-text-input");
@@ -1711,6 +1713,7 @@ test("tool customization templates new drawings and applies live to the selected
   };
 
   // Template: dotted, width 5, magenta — the next drawing carries them.
+  await page.click('#tool_rail [data-panel-target="drawings"]');
   await page.selectOption("#drawing_style", "dotted");
   await page.evaluate(() => {
     const width = document.getElementById("drawing_width");
@@ -1769,6 +1772,7 @@ test("trend labels rotate, reverse, template alignment, and never inherit text-t
   const a = await spot(page, spots.l0, spots.p_lo);
   const b = await spot(page, spots.l1, spots.p_hi);
 
+  await page.click('#tool_rail [data-panel-target="drawings"]');
   await page.fill("#drawing_text", "standalone only");
   await page.evaluate(() => {
     const input = document.getElementById("drawing_text_color");

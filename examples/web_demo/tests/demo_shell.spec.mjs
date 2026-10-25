@@ -226,6 +226,7 @@ test("charts never inject product attribution chrome", async ({ page }) => {
 test("demo controls have readable headings and usable desktop and phone targets", async ({ page }) => {
   await open_demo(page);
   await expect(page.locator("#feature_lab_group h2")).toHaveText("Feature lab");
+  await page.click('#tool_rail [data-panel-target="lab"]');
   for (const selector of ["#theme_toggle", "#inspector_toggle", "#feature_search", "#feature_filters button"]) {
     const sizes = await page.locator(selector).evaluateAll((elements) => elements.map((element) => {
       const rect = element.getBoundingClientRect();
@@ -255,12 +256,17 @@ test("section navigation leaves the chart in place and reduced motion removes sh
   await page.emulateMedia({ reducedMotion: "reduce" });
   await open_demo(page);
   const chart = await page.locator("#chart_wrap").boundingBox();
-  await page.locator('#tool_rail [data-scroll-target="drawings_group"]').click();
-  await expect(page.locator("#control_jump")).toHaveValue("drawings_group");
+  await expect(page.locator("#overlays_group")).toBeVisible();
+  await expect(page.locator("#drawings_group")).toBeHidden();
+  await page.locator('#tool_rail [data-panel-target="drawings"]').click();
+  await expect(page.locator("#control_jump")).toHaveValue("drawings");
+  await expect(page.locator("#panel_title")).toHaveText("Drawings");
   await expect(page.locator("#drawings_group h2")).toBeInViewport();
-  await page.locator("#control_jump").selectOption("type_group");
-  await expect(page.locator('#tool_rail [data-scroll-target="type_group"]')).toHaveAttribute("aria-current", "true");
+  await expect(page.locator("#overlays_group")).toBeHidden();
+  await page.locator("#control_jump").selectOption("series");
+  await expect(page.locator('#tool_rail [data-panel-target="series"]')).toHaveAttribute("aria-current", "true");
   await expect(page.locator("#type_group h2")).toBeInViewport();
+  await expect(page.locator("#drawings_group")).toBeHidden();
   expect(await page.locator("#chart_wrap").boundingBox()).toEqual(chart);
   await page.locator("#theme_toggle").click();
   // The shared stylesheet sets a tiny !important duration for reduced motion;
@@ -295,6 +301,7 @@ test("canonical series stay in Series while feature lab contains only composable
   expect(await page.locator('input[name="series"]').evaluateAll((radios) => radios.map((radio) => radio.value))).toEqual([
     "candlestick", "hollow_candlestick", "bar", "line", "line_markers", "area", "histogram", "baseline",
   ]);
+  await page.click('#tool_rail [data-panel-target="series"]');
   await expect(page.locator('#series_grid [data-series-id="footprint"]')).toBeVisible();
   await expect(page.locator('#series_grid [data-series-id="heatmap-standalone"]')).toBeVisible();
   await expect(page.locator('#series_grid [data-series-id="heatmap-line"]')).toBeVisible();
@@ -318,6 +325,7 @@ test("canonical series stay in Series while feature lab contains only composable
   expect(await page.evaluate(() => window.__chart.series_order().filter((item) => item.series_type() === "hlc_area").length)).toBe(1);
   expect(await page.evaluate(() => window.__main.options().visible)).toBe(false);
 
+  await page.click('#tool_rail [data-panel-target="lab"]');
   await page.locator('[data-feature-id="tooltip"]').click();
   expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toEqual(["tooltip"]);
   expect(await page.evaluate(() => window.__demo_catalogs.series.active_id())).toBe("hlc-area");
@@ -345,6 +353,7 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
       margins: window.__main.price_scale().options().scale_margins,
     };
   });
+  await page.click('#tool_rail [data-panel-target="series"]');
   await page.locator('#series_grid [data-series-id="footprint"]').click();
   await expect(page.locator("#candle_style")).toBeHidden();
   const state = await page.evaluate((anchor) => {
@@ -473,6 +482,7 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
 test("a URL-opened footprint shows its own style controls", async ({ page }) => {
   await open_demo(page, "/?backend=canvas2d&forceFallbackAdapter=1&feature=footprint");
   expect(await page.evaluate(() => window.__demo_catalogs.series.active_id())).toBe("footprint");
+  await page.click('#tool_rail [data-panel-target="series"]');
   await expect(page.locator("#footprint_style")).toBeVisible();
   await expect(page.locator("#candle_style")).toBeHidden();
 });
@@ -501,6 +511,7 @@ test("order-flow cards add and remove depth layers and sub-panes", async ({ page
   await open_demo(page);
   const panes = () => page.evaluate(() => window.__chart.panes().length);
   const base_panes = await panes();
+  await page.click('#tool_rail [data-panel-target="lab"]');
   await page.locator('[data-feature-filter="orderflow"]').click();
   await expect(page.locator("#feature_grid .feature-card:not([hidden])")).toHaveCount(4);
   for (const id of ["depth-heatmap", "depth-profile", "delta-histogram", "cvd"]) {
@@ -525,6 +536,7 @@ test("Delta Tooltip is unavailable on candlesticks and becomes available on area
   await page.evaluate(() => window.__demo_catalogs.lab.activate("delta-tooltip"));
   expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).not.toContain("delta-tooltip");
 
+  await page.click('#tool_rail [data-panel-target="series"]');
   await page.locator('input[name="series"][value="area"]').check();
   await expect(delta).toBeEnabled();
   await page.evaluate(() => window.__demo_catalogs.lab.activate("delta-tooltip"));
@@ -537,6 +549,7 @@ test("Delta Tooltip is unavailable on candlesticks and becomes available on area
 
 test("hollow candles are a Series choice backed by the canonical candlestick series", async ({ page }) => {
   await open_demo(page);
+  await page.click('#tool_rail [data-panel-target="series"]');
   await page.locator('input[name="series"][value="hollow_candlestick"]').check();
   expect(await page.evaluate(() => ({
     kind: window.__main.series_type(),
@@ -618,6 +631,7 @@ test("reported plugin scenarios use full data and official line compositions", a
 
 test("brushable area compares chronological delta in either primary-drag direction", async ({ page }) => {
   await open_demo(page);
+  await page.click('#tool_rail [data-panel-target="series"]');
   await page.locator('#series_grid [data-series-id="brushable-area"]').click();
   const targets = await page.evaluate(() => {
     const feature = window.__demo_catalogs.series.interaction_series();
@@ -713,6 +727,7 @@ for (const [backend, url] of [
     }));
     // The demo re-sends the line's default-on pulse with its style; that must not become an
     // opt-in that survives the switch to candles or bars.
+    await page.click('#tool_rail [data-panel-target="series"]');
     await page.locator('input[name="series"][value="line"]').check();
     expect(await pulse()).toEqual({ option: true, animating: true });
     for (const kind of ["candlestick", "hollow_candlestick", "bar"]) {

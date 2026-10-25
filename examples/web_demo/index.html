@@ -92,9 +92,12 @@
   #controls_strip { min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 0 20px; scrollbar-width: thin; scrollbar-color: var(--border-secondary) transparent; }
   #inspector .group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0; padding: 20px 0; border-bottom: 1px solid var(--border); scroll-margin-top: 0; }
   #inspector .group[hidden] { display: none; }
-  #drawing_catalog { flex-basis: 100%; }
-  #drawing_catalog .drawing_catalog_row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
-  #drawing_catalog .drawing_catalog_row > span { min-width: 84px; font-size: 12px; opacity: 0.7; }
+  /* Only the active panel's groups show; `hidden` stays free for per-series style groups. */
+  #inspector .group[data-panel-hidden] { display: none !important; }
+  #inspector .tool-category { flex-basis: 100%; margin-top: 8px; }
+  #inspector .tool-category h3 { margin: 0 0 6px; color: var(--text-secondary); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+  #inspector .tool-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+  #inspector .tool-buttons button[aria-pressed="true"] { color: var(--primary-foreground); background: var(--primary); border-color: var(--primary); }
   .icon_picker { display: grid; grid-template-columns: repeat(auto-fill, 32px); gap: 4px; flex: 1; min-width: 0; }
   .icon_picker button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-small); background: transparent; color: var(--icon); }
   .icon_picker button:hover { color: var(--icon-active); background: var(--hover-bg); }
@@ -231,36 +234,35 @@
   </header>
 
   <div id="workspace" data-inspector-open="true" data-demo-mode="financial">
-    <nav id="tool_rail" aria-label="Chart workspace sections">
-      <button type="button" data-scroll-target="feature_lab_group" aria-label="Feature lab" title="Feature lab" aria-current="true"><span data-icon="lab"></span></button>
-      <button type="button" data-scroll-target="type_group" aria-label="Series" title="Series"><span data-icon="candles"></span></button>
-      <button type="button" data-scroll-target="overlays_group" aria-label="Analysis" title="Analysis"><span data-icon="analysis"></span></button>
-      <button type="button" data-scroll-target="multi_chart_group" aria-label="Workspace" title="Workspace"><span data-icon="grid"></span></button>
-      <button type="button" data-scroll-target="drawings_group" aria-label="Drawings" title="Drawings"><span data-icon="draw"></span></button>
+    <nav id="tool_rail" aria-label="Control panels">
+      <button type="button" data-panel-target="indicators" aria-label="Indicators" title="Indicators: built-in studies and volume" aria-current="true"><span data-icon="analysis"></span></button>
+      <button type="button" data-panel-target="drawings" aria-label="Drawings" title="Drawings: every drawing tool and its style"><span data-icon="draw"></span></button>
+      <button type="button" data-panel-target="series" aria-label="Series" title="Series: chart type and series style"><span data-icon="candles"></span></button>
+      <button type="button" data-panel-target="lab" aria-label="Lab" title="Feature lab: order flow, trading, primitives, and plugins"><span data-icon="lab"></span></button>
+      <button type="button" data-panel-target="workspace" aria-label="Workspace" title="Workspace: split into multiple charts"><span data-icon="grid"></span></button>
       <span class="rail-spacer"></span>
-      <button type="button" data-scroll-target="chart_group" aria-label="Appearance" title="Appearance"><span data-icon="settings"></span></button>
+      <button type="button" data-panel-target="appearance" aria-label="Appearance" title="Appearance: theme, crosshair, axes, and interaction"><span data-icon="settings"></span></button>
     </nav>
 
     <aside id="inspector" aria-label="Chart controls" data-open="true">
       <div id="inspector_header">
-        <h1>Chart controls</h1>
-        <p>Explore the lab or jump to a control section.</p>
-        <label id="control_jump_label">Section
-          <select id="control_jump" aria-label="Jump to a control section">
-            <option value="feature_lab_group">Feature lab</option>
-            <option value="type_group">Series</option>
-            <option value="overlays_group">Analysis</option>
-            <option value="multi_chart_group">Workspace</option>
-            <option value="drawings_group">Drawings</option>
-            <option value="chart_group">Appearance</option>
-            <option value="interaction_group">Interaction</option>
+        <h1 id="panel_title">Indicators</h1>
+        <p id="panel_hint">Add built-in studies and the volume histogram.</p>
+        <label id="control_jump_label">Panel
+          <select id="control_jump" aria-label="Choose a control panel">
+            <option value="indicators">Indicators</option>
+            <option value="drawings">Drawings</option>
+            <option value="series">Series</option>
+            <option value="lab">Feature lab</option>
+            <option value="workspace">Workspace</option>
+            <option value="appearance">Appearance</option>
           </select>
         </label>
       </div>
 
     <div id="controls_strip" role="region" aria-label="Chart training controls">
 
-    <section class="group" id="feature_lab_group" data-caption="Feature lab">
+    <section class="group" id="feature_lab_group" data-panel="lab" data-caption="Feature lab">
       <h2>Feature lab</h2>
       <p class="feature-lab-intro">Explore composable helpers, order-flow layers, and trading scenarios. Primary series and drawing tools live in their canonical sections.</p>
       <label class="feature-search-wrap"><span data-icon="search"></span><input id="feature_search" type="search" placeholder="Search scenarios" aria-label="Search feature lab"></label>
@@ -275,7 +277,7 @@
       <div id="feature_lab_status"><span id="feature_active_count">No features active</span><button id="feature_clear" type="button">Clear lab</button></div>
     </section>
 
-    <div class="group" id="type_group" data-caption="Series">
+    <div class="group" id="type_group" data-panel="series" data-caption="Series">
       <h2>Series</h2>
       <label><input type="radio" name="series" value="candlestick" checked> candles</label>
       <label><input type="radio" name="series" value="hollow_candlestick"> hollow candles</label>
@@ -290,7 +292,7 @@
     </div>
 
     <!-- candle/bar colors: body, wick, and border per direction + part visibility -->
-    <div class="group" id="candle_style" data-caption="Candle style">
+    <div class="group" id="candle_style" data-panel="series" data-caption="Candle style">
       <h2>Candle style</h2>
       <label>up <input type="color" id="up_color" value="#089981"></label>
       <label>down <input type="color" id="down_color" value="#f7525f"></label>
@@ -304,7 +306,7 @@
     </div>
 
     <!-- line/area stroke -->
-    <div class="group" id="line_style" data-caption="Line style" hidden>
+    <div class="group" id="line_style" data-panel="series" data-caption="Line style" hidden>
       <h2>Line style</h2>
       <label id="line_color_label">color <input type="color" id="line_color" value="#2196f3"></label>
       <label>width <input type="range" id="line_width" min="1" max="8" step="1" value="2"><span id="line_width_val">2</span></label>
@@ -313,13 +315,13 @@
     </div>
 
     <!-- area fill -->
-    <div class="group" id="area_style" data-caption="Area style" hidden>
+    <div class="group" id="area_style" data-panel="series" data-caption="Area style" hidden>
       <h2>Area style</h2>
       <label>color <input type="color" id="area_top" value="#089981"></label>
     </div>
 
     <!-- footprint presentation: engine-owned cell modes and the per-bar summary -->
-    <div class="group" id="footprint_style" data-caption="Footprint style" hidden>
+    <div class="group" id="footprint_style" data-panel="series" data-caption="Footprint style" hidden>
       <h2>Footprint style</h2>
       <label>cells
         <select id="footprint_cell_mode">
@@ -368,7 +370,7 @@
       <button id="footprint_colors_reset" title="Return the colors above to the theme defaults">theme colors</button>
     </div>
 
-    <div class="group" id="overlays_group" data-caption="Indicators">
+    <div class="group" id="overlays_group" data-panel="indicators" data-caption="Indicators">
       <h2>Indicators</h2>
       <label>Find an indicator <input type="search" id="indicator_search" placeholder="Name or abbreviation"></label>
       <span class="hint">15 built-in indicators · select to add, clear to remove</span>
@@ -376,13 +378,13 @@
       <span id="indicator_empty" class="hint" hidden>No matching indicators</span>
       <span id="indicator_error" role="alert"></span>
     </div>
-    <div class="group" data-caption="Volume">
+    <div class="group" id="volume_group" data-panel="indicators" data-caption="Volume">
       <h2>Volume</h2>
       <label><input type="checkbox" id="vol_toggle"> Volume histogram</label>
       <span class="hint">Synthetic demo volume</span>
     </div>
 
-    <div class="group" id="multi_chart_group" data-caption="Multi-chart" title="Split into independent charts (engine workspace): each cell is a full chart with its own scales, type, and data. Click a chart to make it active — split/close, series type, and style then act on it; drag the divider to resize.">
+    <div class="group" id="multi_chart_group" data-panel="workspace" data-caption="Multi-chart" title="Split into independent charts (engine workspace): each cell is a full chart with its own scales, type, and data. Click a chart to make it active — split/close, series type, and style then act on it; drag the divider to resize.">
       <h2>Multi-chart</h2>
       <button id="split_h" type="button" title="Split the active chart side by side">split ↔</button>
       <button id="split_v" type="button" title="Split the active chart stacked">split ↕</button>
@@ -398,7 +400,7 @@
       <span class="hint" id="grid_usage"></span>
     </div>
 
-    <div class="group" data-caption="Plugins">
+    <div class="group" id="plugins_group" data-panel="lab" data-caption="Plugins">
       <h2>Plugins</h2>
       <label title="Pane primitive (plugin platform): alternating day shading behind the series"><input type="checkbox" id="bands_toggle"> day bands</label>
       <label title="Series primitive (plugin platform): position band with a price-axis tag on the main series"><input type="checkbox" id="pos_band_toggle"> position band</label>
@@ -408,41 +410,30 @@
       <label title="Canvas primitive (plugin platform C-e): the reference vertical-line plugin example, painted with raw Canvas2D calls on the plugin overlay"><input type="checkbox" id="vertline_toggle"> canvas v-line plugin</label>
     </div>
 
-    <div class="group" id="drawings_group" data-caption="Drawings" title="Engine-owned drawing tools (industry-standard): click a tool, then click the chart to place it. Long/Short Position creates its complete position on one click; trend/rect use two anchors; Path finishes on double-click or Enter and Backspace removes its latest pending vertex. Click a drawing to select it — drag its tool-specific controls or body to edit it; Delete/Backspace removes the selection, Escape deselects/cancels. Hold Ctrl to magnet-snap the crosshair and drawing controls to the nearest bar's OHLC; hold Shift to straighten supported tools or constrain a body move to one axis.">
-      <h2>Drawings</h2>
-      <button type="button" data-tool="trend_line" title="Trend line: two-anchor segment">trend</button>
-      <button type="button" data-tool="horizontal_line" title="Horizontal line across the pane at a price">h-line</button>
-      <button type="button" data-tool="horizontal_ray" title="Horizontal ray from the anchor to the right edge">h-ray</button>
-      <button type="button" data-tool="vertical_line" title="Vertical line spanning the pane at a bar">v-line</button>
-      <button type="button" data-tool="rectangle" title="Rectangle between two corners">rect</button>
-      <button type="button" data-tool="text" title="Text label at a point (uses the label text below)">text</button>
-      <button type="button" data-tool="path" title="Arrow-ended path: click straight-segment vertices; double-click or Enter to finish, Backspace to remove the latest vertex">path</button>
-      <button type="button" data-tool="brush" title="Freehand brush: drag to draw a smooth stroke; when selected its two end anchors re-anchor, the body moves">brush</button>
-      <button type="button" data-tool="long_position" title="Long Position: one click places entry, target, stop, and width">long position</button>
-      <button type="button" data-tool="short_position" title="Short Position: one click places entry, target, stop, and width">short position</button>
-      <button type="button" data-tool="price_range" title="Price range: click start and end; shows the signed price change, percentage, and ticks">price range</button>
-      <button type="button" data-tool="date_range" title="Date range: click start and end; shows the signed bar count and elapsed time">date range</button>
-      <button type="button" data-tool="date_price_range" title="Date and price range: click start and end; shows price and time statistics. Shift+click (or Shift+drag) anywhere measures without a tool; click again to finish, then click or Escape to dismiss">date &amp; price range</button>
-      <details id="drawing_catalog" open title="Every remaining engine catalog tool, grouped like a professional drawing toolbar">
-        <summary>all tools</summary>
-        <div class="drawing_catalog_row"><span>lines</span>
+    <div class="group" id="drawings_group" data-panel="drawings" data-caption="Drawing tools" title="Engine-owned drawing tools (industry-standard): click a tool, then click the chart to place it. Long/Short Position creates its complete position on one click; trend/rect use two anchors; Path finishes on double-click or Enter and Backspace removes its latest pending vertex. Click a drawing to select it — drag its tool-specific controls or body to edit it; Delete/Backspace removes the selection, Escape deselects/cancels. Hold Ctrl to magnet-snap the crosshair and drawing controls to the nearest bar's OHLC; hold Shift to straighten supported tools or constrain a body move to one axis.">
+      <h2>Drawing tools</h2>
+      <span class="hint">Pick a tool, then click the chart. Esc cancels. Double-click a drawing for its settings.</span>
+      <div class="tool-category" role="group" aria-label="Lines"><h3>Lines</h3><div class="tool-buttons">
+          <button type="button" data-tool="trend_line" title="Trend line: two-anchor segment">trend line</button>
           <button type="button" data-tool="ray">ray</button>
           <button type="button" data-tool="extended_line">extended line</button>
           <button type="button" data-tool="info_line">info line</button>
           <button type="button" data-tool="trend_angle">trend angle</button>
-          <button type="button" data-tool="cross_line">cross line</button>
           <button type="button" data-tool="arrow_line">arrow line</button>
-        </div>
-        <div class="drawing_catalog_row"><span>channels</span>
+          <button type="button" data-tool="horizontal_line" title="Horizontal line across the pane at a price">horizontal line</button>
+          <button type="button" data-tool="horizontal_ray" title="Horizontal ray from the anchor to the right edge">horizontal ray</button>
+          <button type="button" data-tool="vertical_line" title="Vertical line spanning the pane at a bar">vertical line</button>
+          <button type="button" data-tool="cross_line">cross line</button>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Channels"><h3>Channels</h3><div class="tool-buttons">
           <button type="button" data-tool="parallel_channel">parallel channel</button>
           <button type="button" data-tool="regression_trend">regression trend</button>
           <button type="button" data-tool="flat_top_channel">flat top channel</button>
           <button type="button" data-tool="flat_bottom_channel">flat bottom channel</button>
           <button type="button" data-tool="disjoint_channel">disjoint channel</button>
-        </div>
-        <div class="drawing_catalog_row"><span>shapes</span>
-          <button type="button" data-tool="polyline">polyline</button>
-          <button type="button" data-tool="highlighter">highlighter</button>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Shapes and freehand"><h3>Shapes and freehand</h3><div class="tool-buttons">
+          <button type="button" data-tool="rectangle" title="Rectangle between two corners">rectangle</button>
           <button type="button" data-tool="rotated_rectangle">rotated rectangle</button>
           <button type="button" data-tool="ellipse">ellipse</button>
           <button type="button" data-tool="circle">circle</button>
@@ -450,8 +441,26 @@
           <button type="button" data-tool="arc">arc</button>
           <button type="button" data-tool="curve">curve</button>
           <button type="button" data-tool="double_curve">double curve</button>
-        </div>
-        <div class="drawing_catalog_row"><span>fibonacci</span>
+          <button type="button" data-tool="polyline">polyline</button>
+          <button type="button" data-tool="path" title="Arrow-ended path: click straight-segment vertices; double-click or Enter to finish, Backspace to remove the latest vertex">path</button>
+          <button type="button" data-tool="brush" title="Freehand brush: drag to draw a smooth stroke; when selected its two end anchors re-anchor, the body moves">brush</button>
+          <button type="button" data-tool="highlighter">highlighter</button>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Measure"><h3>Measure</h3><div class="tool-buttons">
+          <button type="button" data-tool="price_range" title="Price range: click start and end; shows the signed price change, percentage, and ticks">price range</button>
+          <button type="button" data-tool="date_range" title="Date range: click start and end; shows the signed bar count and elapsed time">date range</button>
+          <button type="button" data-tool="date_price_range" title="Date and price range: click start and end; shows price and time statistics. Shift+click (or Shift+drag) anywhere measures without a tool; click again to finish, then click or Escape to dismiss">date &amp; price range</button>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Positions"><h3>Positions</h3><div class="tool-buttons">
+          <button type="button" data-tool="long_position" title="Long Position: one click places entry, target, stop, and width">long position</button>
+          <button type="button" data-tool="short_position" title="Short Position: one click places entry, target, stop, and width">short position</button>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Volume profile"><h3>Volume profile</h3><div class="tool-buttons">
+          <button type="button" data-tool="fixed_range_volume_profile">fixed range VP</button>
+          <button type="button" data-tool="anchored_volume_profile">anchored VP</button>
+          <button type="button" data-tool="anchored_vwap">anchored VWAP</button>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Fibonacci"><h3>Fibonacci</h3><div class="tool-buttons">
           <button type="button" data-tool="fibonacci_retracement">retracement</button>
           <button type="button" data-tool="fibonacci_extension">extension</button>
           <button type="button" data-tool="fibonacci_channel">channel</button>
@@ -462,71 +471,69 @@
           <button type="button" data-tool="fibonacci_circles">circles</button>
           <button type="button" data-tool="fibonacci_spiral">spiral</button>
           <button type="button" data-tool="fibonacci_wedge">wedge</button>
-        </div>
-        <div class="drawing_catalog_row"><span>pitchforks</span>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Gann"><h3>Gann</h3><div class="tool-buttons">
+          <button type="button" data-tool="gann_box">gann box</button>
+          <button type="button" data-tool="gann_square">gann square</button>
+          <button type="button" data-tool="gann_square_fixed">gann square fixed</button>
+          <button type="button" data-tool="gann_fan">gann fan</button>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Pitchforks"><h3>Pitchforks</h3><div class="tool-buttons">
           <button type="button" data-tool="andrews_pitchfork">andrews</button>
           <button type="button" data-tool="schiff_pitchfork">schiff</button>
           <button type="button" data-tool="modified_schiff_pitchfork">modified schiff</button>
           <button type="button" data-tool="inside_pitchfork">inside</button>
           <button type="button" data-tool="pitchfan">pitchfan</button>
-        </div>
-        <div class="drawing_catalog_row"><span>gann</span>
-          <button type="button" data-tool="gann_box">gann box</button>
-          <button type="button" data-tool="gann_square">gann square</button>
-          <button type="button" data-tool="gann_square_fixed">gann square fixed</button>
-          <button type="button" data-tool="gann_fan">gann fan</button>
-        </div>
-        <div class="drawing_catalog_row"><span>patterns</span>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Chart patterns"><h3>Chart patterns</h3><div class="tool-buttons">
           <button type="button" data-tool="pattern_xabcd">xabcd</button>
           <button type="button" data-tool="pattern_cypher">cypher</button>
           <button type="button" data-tool="pattern_abcd">abcd</button>
           <button type="button" data-tool="pattern_head_shoulders">head &amp; shoulders</button>
           <button type="button" data-tool="pattern_triangle">triangle pattern</button>
           <button type="button" data-tool="pattern_three_drives">three drives</button>
-        </div>
-        <div class="drawing_catalog_row"><span>elliott</span>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Elliott waves"><h3>Elliott waves</h3><div class="tool-buttons">
           <button type="button" data-tool="elliott_impulse">impulse</button>
           <button type="button" data-tool="elliott_correction">correction</button>
           <button type="button" data-tool="elliott_triangle">triangle wave</button>
           <button type="button" data-tool="elliott_double_combination">double combo</button>
           <button type="button" data-tool="elliott_triple_combination">triple combo</button>
-        </div>
-        <div class="drawing_catalog_row"><span>cycles</span>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Cycles"><h3>Cycles</h3><div class="tool-buttons">
           <button type="button" data-tool="cyclic_lines">cyclic lines</button>
           <button type="button" data-tool="time_cycles">time cycles</button>
           <button type="button" data-tool="sine_line">sine line</button>
-        </div>
-        <div class="drawing_catalog_row"><span>projection</span>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Projection"><h3>Projection</h3><div class="tool-buttons">
           <button type="button" data-tool="projection">projection</button>
           <button type="button" data-tool="forecast">forecast</button>
           <button type="button" data-tool="bars_pattern">bars pattern</button>
-        </div>
-        <div class="drawing_catalog_row"><span>volume</span>
-          <button type="button" data-tool="fixed_range_volume_profile">fixed range VP</button>
-          <button type="button" data-tool="anchored_volume_profile">anchored VP</button>
-          <button type="button" data-tool="anchored_vwap">anchored VWAP</button>
-        </div>
-        <div class="drawing_catalog_row"><span>annotations</span>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Text and notes"><h3>Text and notes</h3><div class="tool-buttons">
+          <button type="button" data-tool="text" title="Text label at a point (uses the label text below)">text</button>
           <button type="button" data-tool="note">note</button>
           <button type="button" data-tool="comment">comment</button>
           <button type="button" data-tool="callout">callout</button>
           <button type="button" data-tool="price_note">price note</button>
           <button type="button" data-tool="price_label">price label</button>
           <button type="button" data-tool="anchored_text">anchored text</button>
-          <button type="button" data-tool="icon_stamp">icon</button>
+          <button type="button" data-tool="signpost">signpost</button>
+          <button type="button" data-tool="flag_mark">flag</button>
+      </div></div>
+      <div class="tool-category" role="group" aria-label="Markers"><h3>Markers</h3><div class="tool-buttons">
           <button type="button" data-tool="arrow_marker_up">arrow up</button>
           <button type="button" data-tool="arrow_marker_down">arrow down</button>
           <button type="button" data-tool="arrow_marker_left">arrow left</button>
           <button type="button" data-tool="arrow_marker_right">arrow right</button>
-          <button type="button" data-tool="flag_mark">flag</button>
-          <button type="button" data-tool="signpost">signpost</button>
-        </div>
-        <div class="drawing_catalog_row"><span>icons</span><div id="icon_picker" class="icon_picker" role="group" aria-label="Built-in icons"></div></div>
-      </details>
-      <label title="Hypothetical balance used by position drawing statistics">balance <input type="number" id="position_account_size" min="0.01" max="1000000000000000" step="any" value="1000"></label>
-      <label title="Percentage of the hypothetical balance risked at the stop">risk % <input type="number" id="position_risk_percent" min="0" max="100" step="any" value="25"></label>
-      <label title="Host-supplied quantity for placing the selected Long/Short Position drawing">order qty <input type="number" id="position_order_quantity" min="0.00000001" step="any" value="1"></label>
-      <button id="place_position_order" type="button" disabled title="Place one host-authoritative bracket order from the selected Long/Short Position drawing">place order</button>
+          <button type="button" data-tool="icon_stamp">icon</button>
+          <div id="icon_picker" class="icon_picker" role="group" aria-label="Built-in icons"></div>
+      </div></div>
+    </div>
+
+    <div class="group" id="drawing_style_group" data-panel="drawings" data-caption="Drawing style">
+      <h2>Drawing style</h2>
+      <span class="hint">Applies to new drawings and live to the selected one.</span>
       <label title="Stroke/border color — templates new drawings and applies live to the selected one">color <input type="color" id="drawing_color" value="#168ef7"></label>
       <label title="Stroke style (solid/dotted/dashed) — templates new drawings and applies live to the selected one">style
         <select id="drawing_style">
@@ -580,7 +587,15 @@
       <span class="hint">Ctrl = snap (while drawing) · Alt+click chart = fullscreen · Ctrl+H/V = split ↔/↕ · Shift = straighten</span>
     </div>
 
-    <div class="group" data-caption="Crosshair">
+    <div class="group" id="position_tool_group" data-panel="drawings" data-caption="Position tool">
+      <h2>Long / short position</h2>
+      <label title="Hypothetical balance used by position drawing statistics">balance <input type="number" id="position_account_size" min="0.01" max="1000000000000000" step="any" value="1000"></label>
+      <label title="Percentage of the hypothetical balance risked at the stop">risk % <input type="number" id="position_risk_percent" min="0" max="100" step="any" value="25"></label>
+      <label title="Host-supplied quantity for placing the selected Long/Short Position drawing">order qty <input type="number" id="position_order_quantity" min="0.00000001" step="any" value="1"></label>
+      <button id="place_position_order" type="button" disabled title="Place one host-authoritative bracket order from the selected Long/Short Position drawing">place order</button>
+    </div>
+
+    <div class="group" id="crosshair_group" data-panel="appearance" data-caption="Crosshair">
       <h2>Crosshair</h2>
       <label>mode
         <select id="cross_mode">
@@ -603,7 +618,7 @@
       <label><input type="checkbox" id="cross_label_visible" checked> labels</label>
     </div>
 
-    <div class="group" id="chart_group" data-caption="Chart">
+    <div class="group" id="chart_group" data-panel="appearance" data-caption="Chart">
       <h2>Chart</h2>
       <label>theme
         <select id="theme_select">
@@ -630,7 +645,7 @@
       <label>size <input type="range" id="font_size" min="8" max="20" step="1" value="12"><span id="font_size_val">12</span></label>
     </div>
 
-    <div class="group" data-caption="Series chrome" title="Built-in live-price line and last-value axis label. Aeris defaults the line to the tracked value → right edge; full width remains available explicitly.">
+    <div class="group" id="series_chrome_group" data-panel="series" data-caption="Series chrome" title="Built-in live-price line and last-value axis label. Aeris defaults the line to the tracked value → right edge; full width remains available explicitly.">
       <h2>Series chrome</h2>
       <label><input type="checkbox" id="price_line_toggle" checked> price line</label>
       <label title="Live price line extent (price_line_extent)">extent
@@ -654,7 +669,7 @@
     </div>
 
     <!-- price/time axis cosmetics: border (reference borderColor/borderVisible) + text (textColor) -->
-    <div class="group" data-caption="Axes">
+    <div class="group" id="axes_group" data-panel="appearance" data-caption="Axes">
       <h2>Axes</h2>
       <label>border <input type="color" id="axis_border_color" value="#f1f1f1"></label>
       <label><input type="checkbox" id="axis_border_visible" checked> borders</label>
@@ -663,7 +678,7 @@
     </div>
 
     <!-- watermark (reference v4 shape) -->
-    <div class="group" id="watermark_group" data-caption="Watermark">
+    <div class="group" id="watermark_group" data-panel="appearance" data-caption="Watermark">
       <h2>Watermark</h2>
       <label><input type="checkbox" id="wm_visible"> show</label>
       <label>text <input type="text" id="wm_text" value="Aeris" size="6"></label>
@@ -672,7 +687,7 @@
     </div>
 
     <!-- interaction toggles: axis drag-to-scale, mouse kinetic (off by default, reference parity) -->
-    <div class="group" id="interaction_group" data-caption="Interaction" title="Drag a price/time axis to scale it; keyboard: arrows pan (Ctrl = fast), +/- zoom, Home fit, Esc clear">
+    <div class="group" id="interaction_group" data-panel="appearance" data-caption="Interaction" title="Drag a price/time axis to scale it; keyboard: arrows pan (Ctrl = fast), +/- zoom, Home fit, Esc clear">
       <h2>Interaction</h2>
       <label><input type="checkbox" id="axis_scale_toggle" checked> axis drag-scale</label>
       <label><input type="checkbox" id="kinetic_toggle"> mouse kinetic</label>

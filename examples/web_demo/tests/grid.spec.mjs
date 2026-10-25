@@ -108,6 +108,7 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     bearish: "#f7525f",
   });
 
+  await page.click('#tool_rail [data-panel-target="appearance"]');
   await page.selectOption("#theme_select", "light");
   await wait_grid(page);
   expect(await theme_state()).toEqual({
@@ -171,6 +172,7 @@ test("portable design tokens and disabled controls match the brand contract", as
     "danger-disabled": "#6b3135", "danger-disabled-foreground": "#d0646c",
   });
 
+  await page.click('#tool_rail [data-panel-target="appearance"]');
   await page.selectOption("#theme_select", "light");
   const light = await tokens();
   expect(Object.values(light).every(Boolean)).toBe(true);
@@ -250,6 +252,7 @@ test("main demo splits into independent charts, drags dividers, meters, caps, an
   expect((await page.evaluate(() => window.__grid.usage())).chart_count).toBe(1);
 
   // Split horizontally: two independent charts, both rendering candles.
+  await page.click('#tool_rail [data-panel-target="workspace"]');
   await page.click("#split_h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
   await wait_cell_charts(page);
@@ -322,6 +325,7 @@ test("main demo splits into independent charts, drags dividers, meters, caps, an
 test("the toolbar's series type and style act on the ACTIVE cell, not always the primary", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
+  await page.click('#tool_rail [data-panel-target="workspace"]');
   await page.click("#split_h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
   await wait_cell_charts(page);
@@ -329,6 +333,7 @@ test("the toolbar's series type and style act on the ACTIVE cell, not always the
 
   // Activate the second chart and switch it to area: only it changes.
   await activate_cell(page, 1);
+  await page.click('#tool_rail [data-panel-target="series"]');
   await expect(page.locator('input[name="series"][value="candlestick"]')).toBeChecked();
   await page.locator('input[name="series"][value="area"]').check();
   expect(await type_of(1), "active cell switched to area").toBe("area");
@@ -366,6 +371,7 @@ test("the toolbar's series type and style act on the ACTIVE cell, not always the
 test("demo theme persists across reloads while runtime fixtures stay deterministic", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
+  await page.click('#tool_rail [data-panel-target="appearance"]');
   await page.selectOption("#theme_select", "light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   expect(await page.evaluate(() => localStorage.getItem("aeris_charts.demo.theme"))).toBe("light");
@@ -376,6 +382,7 @@ test("demo theme persists across reloads while runtime fixtures stay determinist
   await expect(page.locator("#theme_select")).toHaveValue("light");
   expect(await page.evaluate(() => window.__chart.options().layout.background.color)).toBe("#ffffff");
 
+  await page.click('#tool_rail [data-panel-target="appearance"]');
   await page.selectOption("#theme_select", "dark");
   await page.reload();
   await wait_grid(page);
@@ -393,10 +400,12 @@ test("changing a split cell series does not clear the root chart's advanced seri
   await page.evaluate(() => window.__demo_catalogs.series.activate("hlc-area"));
   expect(await page.evaluate(() => window.__demo_catalogs.series.active_id())).toBe("hlc-area");
 
+  await page.click('#tool_rail [data-panel-target="workspace"]');
   await page.click("#split_h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
   await wait_cell_charts(page);
   await activate_cell(page, 1);
+  await page.click('#tool_rail [data-panel-target="series"]');
   await page.locator('input[name="series"][value="area"]').check();
 
   expect(await page.evaluate(() => window.__demo_catalogs.series.active_id())).toBe("hlc-area");
@@ -407,6 +416,7 @@ test("changing a split cell series does not clear the root chart's advanced seri
 test("divider drags never disturb a cell's candle spacing (even with interactions off)", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
+  await page.click('#tool_rail [data-panel-target="workspace"]');
   await page.click("#split_h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
   await wait_grid(page);
@@ -452,6 +462,7 @@ test("the divider keeps its canonical border line under a global border-box rese
   // divider paints its line as a gradient stop across a fixed 5px box, so no content box can
   // collapse under it.
   await page.addStyleTag({ content: "*, *::before, *::after { box-sizing: border-box !important; }" });
+  await page.click('#tool_rail [data-panel-target="workspace"]');
   await page.click("#split_h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
   await wait_cell_charts(page);
@@ -488,6 +499,7 @@ test("the divider keeps its canonical border line under a global border-box rese
 test("split dividers follow the axis border token (theme and explicit changes)", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
+  await page.click('#tool_rail [data-panel-target="workspace"]');
   await page.click("#split_h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
   await wait_cell_charts(page);
@@ -505,6 +517,7 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   expect(await divider_rgb()).toBe(to_rgb(await border_hex()));
 
   // Theme switch: the border token changes and the divider tracks it.
+  await page.click('#tool_rail [data-panel-target="appearance"]');
   await page.selectOption("#theme_select", "light");
   await wait_grid(page);
   const light_border = await border_hex();
@@ -545,12 +558,14 @@ test("Ctrl+H/V split the active cell; typing fields and the cap still hold", asy
   expect((await page.evaluate(() => window.__grid.usage())).chart_count).toBe(4);
 
   // Typing in an input does NOT split.
+  await page.click('#tool_rail [data-panel-target="drawings"]');
   await page.locator("#drawing_text").click();
   await page.keyboard.press("Control+v");
   await page.waitForTimeout(300);
   expect(await canvas_count(page)).toBe(16);
 
   // The paywall cap still gates the shortcut (max 4): the next Ctrl+H is a no-op.
+  await page.click('#tool_rail [data-panel-target="workspace"]');
   await page.selectOption("#max_charts", "4");
   await page.keyboard.press("Control+h");
   await page.waitForTimeout(300);
@@ -604,6 +619,7 @@ for (const backend of ["canvas2d", "auto"]) {
   test(`Alt+click maximizes a cell to full container and restores (${backend})`, async ({ page, browserName }) => {
     await page.goto(backend === "canvas2d" ? "/?backend=canvas2d" : "/");
     await wait_grid(page);
+    await page.click('#tool_rail [data-panel-target="workspace"]');
     await page.click("#split_h");
     await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
     await wait_cell_charts(page);
@@ -688,6 +704,7 @@ test("drawing tools and history route only to the stable active cell", async ({ 
         { x: rect.left + rect.width * 0.65, y: rect.top + rect.height * 0.65 },
       ];
     }, index);
+    await page.click('#tool_rail [data-panel-target="drawings"]');
     await page.click(`#drawings_group [data-tool='${tool}']`);
     await page.mouse.click(points[0].x, points[0].y);
     await page.mouse.click(points[1].x, points[1].y);
@@ -735,6 +752,7 @@ test("drawing tools and history route only to the stable active cell", async ({ 
 test("reset view targets only the active chart", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
+  await page.click('#tool_rail [data-panel-target="workspace"]');
   await page.click("#split_h");
   await wait_cell_charts(page);
 

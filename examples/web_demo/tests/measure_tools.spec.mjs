@@ -118,6 +118,7 @@ for (const backend of ["auto", "canvas2d"]) {
     const at = await open_chart(page, backend);
     for (const [index, kind] of ["price_range", "date_range", "date_price_range"].entries()) {
       await reset_text(page);
+      await page.click('#tool_rail [data-panel-target="drawings"]');
       await page.click(`#drawings_group [data-tool="${kind}"]`);
       // Each tool ends at a different point so its labels are new text runs.
       const end = { x: at.below.x + index * 23, y: at.below.y + index * 17 };

@@ -64,7 +64,16 @@ const backdrop = document.getElementById("mobile_backdrop");
 const inspector_toggle = document.getElementById("inspector_toggle");
 const compact_layout = window.matchMedia("(max-width: 820px)");
 const control_jump = document.getElementById("control_jump");
-const section_buttons = [...document.querySelectorAll("#tool_rail [data-scroll-target]")];
+const panel_buttons = [...document.querySelectorAll("#tool_rail [data-panel-target]")];
+const panel_groups = [...document.querySelectorAll("#controls_strip [data-panel]")];
+const panels = {
+  indicators: "Add built-in studies and the volume histogram.",
+  drawings: "Every drawing tool by category, then the style and position settings.",
+  series: "Main series type, its colors, and its price line chrome.",
+  lab: "Order-flow, trading, primitive, and plugin scenarios.",
+  workspace: "Split the chart into independent charts.",
+  appearance: "Theme, grid, crosshair, axes, watermark, and interaction.",
+};
 
 new ResizeObserver(([entry]) => {
   document.documentElement.style.setProperty("--demo-header-height", `${entry.target.getBoundingClientRect().height}px`);
@@ -92,23 +101,27 @@ backdrop.addEventListener("click", () => {
 set_inspector(!compact_layout.matches);
 compact_layout.addEventListener("change", (event) => set_inspector(!event.matches));
 
-function jump_to_section(id) {
-  set_inspector(true);
-  // Section navigation is frequent; immediate positioning keeps the chart stable.
-  document.getElementById(id)?.scrollIntoView({ behavior: "instant", block: "start" });
-  control_jump.value = id;
-  for (const peer of section_buttons) peer.setAttribute("aria-current", String(peer.dataset.scrollTarget === id));
+// One panel at a time: each rail button shows only its own control groups.
+function show_panel(name, { open = true } = {}) {
+  if (!(name in panels)) return;
+  if (open) set_inspector(true);
+  for (const group of panel_groups) group.toggleAttribute("data-panel-hidden", group.dataset.panel !== name);
+  control_jump.value = name;
+  document.getElementById("panel_title").textContent = control_jump.selectedOptions[0].textContent;
+  document.getElementById("panel_hint").textContent = panels[name];
+  document.getElementById("controls_strip").scrollTop = 0;
+  for (const peer of panel_buttons) peer.setAttribute("aria-current", String(peer.dataset.panelTarget === name));
 }
 
-control_jump.addEventListener("change", () => jump_to_section(control_jump.value));
-for (const button of section_buttons) {
+control_jump.addEventListener("change", () => show_panel(control_jump.value));
+for (const button of panel_buttons) {
   const label = document.createElement("span");
   label.textContent = button.getAttribute("aria-label");
   button.appendChild(label);
-  button.addEventListener("click", () => {
-    jump_to_section(button.dataset.scrollTarget);
-  });
+  button.addEventListener("click", () => show_panel(button.dataset.panelTarget));
 }
+const requested_panel = new URLSearchParams(location.search).get("panel");
+show_panel(requested_panel in panels ? requested_panel : "indicators", { open: false });
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && compact_layout.matches && inspector.dataset.open === "true") {

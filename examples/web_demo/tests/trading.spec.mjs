@@ -113,6 +113,7 @@ test("selected position drawing places one host-sized bracket request", async ({
       y: rect.top + window.__main.price_to_coordinate((bar.high + bar.low) / 2),
     };
   });
+  await page.click('#tool_rail [data-panel-target="drawings"]');
   await page.click('#drawings_group [data-tool="long_position"]');
   await page.mouse.click(placement.x, placement.y);
 

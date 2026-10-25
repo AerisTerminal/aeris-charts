@@ -1377,7 +1377,10 @@ The interactive `gpui_probe` example and `examples/web_demo` keep demo controls 
 scrolling inspector so adding control groups does not reduce chart height. Section navigation,
 inspector visibility, and responsive shell layout belong to these example hosts. GPUI uses its
 native scroll and keyboard-focus facilities; the browser uses semantic headings, labeled controls,
-and a dismissible compact inspector. These shells retain the existing engine/API action paths;
+and a dismissible compact inspector. The browser inspector shows one panel at a time (Indicators,
+Drawings, Series, Lab, Workspace, Appearance), selected from the tool rail or the `?panel=` URL
+parameter; drawing tools are grouped by category inside the Drawings panel. These shells retain the
+existing engine/API action paths;
 the finite GPUI probe and browser runtime fixtures keep their dedicated measurement layouts.
 GPUI paints rotated text through transformed SVG sprites because its shaped-line painter has no
 rotation parameter. Each sprite leaves a one-em transparent margin around the measured run while

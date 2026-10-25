@@ -1551,6 +1551,7 @@ async function drag_position(page, backend, kind, theme) {
     };
   });
   expect(placement.tick).toBe(0.01);
+  await page.click('#tool_rail [data-panel-target="drawings"]');
   await page.click(`#drawings_group [data-tool="${kind}"]`);
   await page.mouse.click(placement.x, placement.y);
   const initial = await page.evaluate(() => window.__chart.drawings().at(-1).points());
@@ -1718,6 +1719,7 @@ for (const kind of ["long_position", "short_position"]) {
         const box = document.getElementById("chart_container").getBoundingClientRect();
         return { x: box.left + window.__chart.time_scale().logical_to_coordinate(logical), y: box.top + window.__main.price_to_coordinate(bar.close) };
       });
+      await page.click('#tool_rail [data-panel-target="drawings"]');
       await page.click(`#drawings_group [data-tool="${kind}"]`);
       await page.mouse.click(placement.x, placement.y);
       await page.mouse.move(2, 2);

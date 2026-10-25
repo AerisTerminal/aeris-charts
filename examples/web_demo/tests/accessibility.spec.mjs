@@ -50,6 +50,7 @@ for (const theme of ["light", "dark"]) {
         console.log(`${scenario} ${theme} descriptions:`, await assert_descriptions(page));
       }
       if (scenario === "split grid") {
+        await page.click('#tool_rail [data-panel-target="workspace"]');
         await page.locator("#split_h").click();
         await page.waitForFunction(() => window.__grid.cells().length >= 2 &&
           window.__grid.cells().every((cell) => cell.chart?.backend?.() !== undefined));
