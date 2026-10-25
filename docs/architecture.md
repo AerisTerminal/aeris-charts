@@ -703,9 +703,21 @@ final fixed price grid; this keeps historical levels comparable as the candle ra
 remains an OHLCV approximation. Period queries retain detailed developing history within their own
 aggregate limit; ordinary frame construction omits that history when the paths are hidden.
 
-Fixed-range profile, anchored profile and anchored VWAP drawing kinds bind a validated source and
-lower their geometry into the common ordered frame; the browser drawing-kind map uses the same
-wire IDs as the engine tool catalog.
+Fixed-range profile, anchored profile and anchored VWAP drawing kinds lower their geometry into the
+common ordered frame; the browser drawing-kind map uses the same wire IDs as the engine tool
+catalog. The engine resolves each drawing's source itself (`profile_drawings.rs`): an explicit
+`configure_profile_drawing` binding wins, then the trade tape of an order-flow presentation or
+footprint series in the drawing's pane, then the candle volume series the host registered for a
+candlestick or bar series with `set_series_volume_source`. Hosts therefore supply only data; a tool
+drawn interactively renders as soon as a source exists. Frame refresh keeps one cached snapshot per
+live profile drawing, keyed by source, anchor time range, rows and value-area percent, and
+recalculates only when that key or the source revision changes; tape rows merge whole ticks to fit
+the row count. Volume-profile drawings paint a Deepcharts-style dual histogram around a spine at
+the first anchor (aggressor or candle-direction delta to the left, total volume to the right with the
+value area highlighted), VAH/VAL lines in the drawing stroke, a POC line, optional extension to the
+pane edge, and POC/VAH/VAL price-axis tags. Rows, value-area percent, width, visibility toggles and
+the five palette colors are drawing options validated by the patch path and persisted in the V1
+`volume_profile` style block.
 Consecutive TPO boundaries with the same host session identity merge into one profile with
 continuous period indices; distinct identities split profiles, and gaps between supplied
 segments add no synthetic periods. Initial balance counts periods from the first segment.

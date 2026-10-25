@@ -819,6 +819,7 @@ impl ChartEngine {
         }
         let movable_label_start = out.labels.len();
         self.append_rectangle_drawing_axis_views(&mut out, &measure);
+        self.append_profile_drawing_axis_views(&mut out, &measure);
         self.append_position_drawing_axis_views(&mut out, &measure);
         self.append_measure_drawing_axis_views(&mut out, &measure);
         self.append_price_line_labels(&mut out.labels, &measure);
@@ -1297,6 +1298,125 @@ impl ChartEngine {
                 });
             }
         }
+    }
+
+    /// Volume profile drawings tag their point of control and value-area edges on the bound
+    /// price scale: the POC in its own color, the value-area edges in the drawing color.
+    fn append_profile_drawing_axis_views<F>(&self, out: &mut AxisFrame, measure: &F)
+    where
+        F: Fn(&str, bool) -> f64,
+    {
+        for drawing in &self.drawings {
+            if !drawing.kind.is_volume_profile()
+                || !drawing.visible
+                || !drawing.price_labels_visible
+                || !drawing.interval_visibility.allows(self.drawing_interval)
+            {
+                continue;
+            }
+            let Some(data) = self.profile_drawing_data(drawing) else {
+                continue;
+            };
+            let crate::ProfileDrawingSnapshot::Volume(profile) = data.as_ref() else {
+                continue;
+            };
+            let colors = drawing.profile_colors();
+            let lines = drawing.profile_value_area_lines_visible;
+            for (visible, price, background) in [
+                (drawing.profile_poc_visible, profile.poc, colors.poc),
+                (lines, profile.value_area_high, colors.line),
+                (lines, profile.value_area_low, colors.line),
+            ] {
+                if let (true, Some(price)) = (visible, price) {
+                    self.push_drawing_price_tag(drawing, price, background, out, measure);
+                }
+            }
+        }
+    }
+
+    fn push_drawing_price_tag<F>(
+        &self,
+        drawing: &crate::Drawing,
+        price: f64,
+        background: Color,
+        out: &mut AxisFrame,
+        measure: &F,
+    ) where
+        F: Fn(&str, bool) -> f64,
+    {
+        let (Some(pane), Some(anchor)) =
+            (self.panes.get(drawing.pane_index), drawing.points.first())
+        else {
+            return;
+        };
+        let Some((_, y)) = self.drawing_to_px_for(
+            drawing.pane_index,
+            drawing.price_scale,
+            crate::DrawingPoint {
+                logical: anchor.logical,
+                price,
+            },
+        ) else {
+            return;
+        };
+        if y < pane.top || y > pane.top + pane.height {
+            return;
+        }
+        let target = match drawing.price_scale {
+            crate::DrawingPriceScale::Right => PriceScaleTarget::Right,
+            crate::DrawingPriceScale::Left => PriceScaleTarget::Left,
+            crate::DrawingPriceScale::Overlay => PriceScaleTarget::Overlay,
+        };
+        let Some(scale) = self.price_scale_for(drawing.pane_index, target) else {
+            return;
+        };
+        let base = self.drawing_scale_base_for(drawing.pane_index, drawing.price_scale);
+        let logical_price = scale.price_to_logical_value(price, base);
+        let text = self.format_tick_value(drawing.pane_index, target, scale, logical_price);
+        let width = AxisMetrics::price_tag_width(measure(&text, false));
+        let height = self.axis_metrics().price_tag_height();
+        let options = self.options.get();
+        let left_side = match drawing.price_scale {
+            crate::DrawingPriceScale::Left => true,
+            crate::DrawingPriceScale::Right => false,
+            crate::DrawingPriceScale::Overlay => !options.right_price_scale.visible,
+        };
+        let visible = if left_side {
+            options.left_price_scale.visible
+        } else {
+            options.right_price_scale.visible
+        };
+        if !visible {
+            return;
+        }
+        let (x, align, background_x) = if left_side {
+            (
+                self.pane_left - AxisMetrics::PRICE_TEXT_INSET,
+                AxisTextAlign::Right,
+                self.pane_left - width,
+            )
+        } else {
+            (
+                self.pane_left + self.pane_w + AxisMetrics::PRICE_TEXT_INSET,
+                AxisTextAlign::Left,
+                self.pane_left + self.pane_w,
+            )
+        };
+        out.labels.push(AxisLabel {
+            text,
+            x,
+            y,
+            color: self.axis_label_text_color(background),
+            align,
+            midpoint: AxisTextMidpoint::Label,
+            font_scale: AXIS_FONT_SCALE,
+            bold: false,
+            background: Some((background_x, y - height / 2.0, width, height, background)),
+            background_corners: AxisLabelCorners::for_align(align),
+            measure_extra: 0.0,
+            attach_group: None,
+            border: None,
+        });
     }
 
     /// Measuring tools project their endpoints onto the axes while active (selected, being

@@ -70,7 +70,7 @@ use conflation::{
 
 const UP: Color = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
 const DOWN: Color = Color::rgb(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2);
-const PRIMARY: Color = Color::rgb(
+pub(crate) const PRIMARY: Color = Color::rgb(
     DEFAULT_PRIMARY_RGB.0,
     DEFAULT_PRIMARY_RGB.1,
     DEFAULT_PRIMARY_RGB.2,
@@ -1625,6 +1625,7 @@ impl ChartEngine {
             self.frame_build_stats.layout_rebuilds += 1;
         }
         self.refresh_volume_profile_indicators();
+        self.refresh_profile_drawings();
         let visible = self.visible_range_for_frame();
         if autoscale_dirty {
             self.autoscale_visible();

@@ -281,3 +281,79 @@ test("periodic bid/ask and delta profiles paint and refresh from tape", async ({
   expect(result.developing_changed).toBe(true);
   expect(result.foreign_anchor_rejected).toBe(true);
 });
+
+test("drawn fixed range volume profile reads the registered volume source", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    chart.remove_series(window.__main);
+    const base = 1_700_000_000;
+    const candles = chart.add_series("candlestick", { up_color: "#26a69a", down_color: "#ef5350" });
+    const volume = chart.add_series("histogram", { visible: false });
+    const bars = Array.from({ length: 40 }, (_, index) => {
+      const open = 100 + Math.sin(index / 4) * 5;
+      const close = open + (index % 3 - 1);
+      return {
+        time: base + index * 60,
+        open,
+        high: Math.max(open, close) + 1,
+        low: Math.min(open, close) - 1,
+        close,
+      };
+    });
+    candles.set_data(bars);
+    volume.set_data(bars.map((bar, index) => ({ time: bar.time, value: 100 + index * 10 })));
+    chart.time_scale().fit_content();
+    const magenta_pixels = () => {
+      const canvas = chart.take_screenshot();
+      const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+      let count = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        if (pixels[index] === 255 && pixels[index + 1] === 0 && pixels[index + 2] === 255) count++;
+      }
+      return count;
+    };
+    const fixed = chart.add_drawing("fixed_range_volume_profile", [
+      { logical: 5, price: 100 }, { logical: 35, price: 100 },
+    ]);
+    fixed.apply_options({
+      profile_volume_color: "#ff00ff",
+      profile_value_area_color: "#ff00ff",
+      profile_rows: 24,
+    });
+    const without_source = magenta_pixels();
+    chart.set_series_volume_source(candles, volume);
+    const with_source = magenta_pixels();
+    const options = fixed.options();
+    let rejected_rows = false;
+    try {
+      fixed.apply_options({ profile_rows: 0 });
+    } catch {
+      rejected_rows = true;
+    }
+    const state = chart.export_state();
+    chart.set_series_volume_source(candles, null);
+    const cleared = magenta_pixels();
+    return {
+      without_source,
+      with_source,
+      cleared,
+      rows: options.profile_rows,
+      value_area: options.profile_value_area_percent,
+      price_labels: options.price_labels_visible,
+      rows_after_reject: fixed.options().profile_rows,
+      rejected_rows,
+      persisted: state.drawings.find((drawing) => drawing.id === fixed.id)?.style?.volume_profile,
+    };
+  });
+  expect(result.without_source).toBe(0);
+  expect(result.with_source).toBeGreaterThan(0);
+  expect(result.cleared).toBe(0);
+  expect(result.rows).toBe(24);
+  expect(result.value_area).toBe(70);
+  expect(result.price_labels).toBe(true);
+  expect(result.rows_after_reject).toBe(24);
+  expect(result.persisted?.rows).toBe(24);
+  expect(result.persisted?.volume_color).toBe("#ff00ff");
+});

@@ -19678,7 +19678,7 @@ fn profile_and_anchored_vwap_drawings_lower_into_the_shared_frame() {
         .unwrap();
     let profile_frame = chart.build_frame();
     assert!(profile_frame.panes[0].main.iter().any(|prim| matches!(prim,
-        Prim::HLine { color, .. } if *color == Color::rgb(245, 166, 35)
+        Prim::HLine { color, .. } if *color == crate::profile_drawings::PROFILE_POC_COLOR
     )));
 
     let anchored = chart

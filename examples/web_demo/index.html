@@ -920,6 +920,10 @@ window.__data = data;
 // price scale (industry-standard — no separate pane / divider), colored green/red by bar direction.
 const volume_data = volume_fixture(data);
 let vol_series = null;
+// Fixed Range and Anchored Volume Profile drawings aggregate the registered candle volume.
+const register_profile_volume = () => {
+  if (["candlestick", "bar"].includes(main.series_type())) chart.set_series_volume_source(main, vol_series);
+};
 window.__demo_catalogs = install_demo_catalogs({ chart, series: main, data, on_series_change: sync_style_visibility });
 if (requested_feature === "trading") window.__demo_catalogs.lab.activate("trading-bracket");
 if (query.get("tradingLines") === "marker") window.__demo_catalogs.lab.activate("trading-lines-from-marker");
@@ -940,6 +944,7 @@ if (requested_feature === "markers") {
     last_value_visible: false,
   });
   vol_series.set_data(volume_data);
+  register_profile_volume();
 }
 
 // ---- pane primitive demo (plugin platform Phase C-a) -----------------------------------------
@@ -1826,6 +1831,7 @@ document.getElementById("vol_toggle").addEventListener("change", (e) => {
       countdown_visible: false,
     });
     vol_series.set_data(volume_data);
+    register_profile_volume();
   } else if (!e.target.checked && vol_series !== null) {
     // Exercises the real remove_series API (tombstones the engine slot, not just clears data).
     chart.remove_series(vol_series);

@@ -273,10 +273,33 @@ struct DrawingV1 {
     style: DrawingStyleV1,
 }
 
+/// Presentation and calculation settings of a volume-profile drawing.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct VolumeProfileStyleV1 {
+    rows: usize,
+    value_area_percent: f64,
+    width_percent: f64,
+    delta_visible: bool,
+    poc_visible: bool,
+    value_area_lines_visible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value_area_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    volume_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    positive_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    negative_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    poc_color: Option<String>,
+}
+
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct DrawingStyleV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     profile: Option<crate::ProfileDrawingOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    volume_profile: Option<VolumeProfileStyleV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     position_account_size: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -959,6 +982,21 @@ impl ChartEngine {
                     anchor_times_micros: self.drawing_anchor_times_for(drawing),
                     style: DrawingStyleV1 {
                         profile: drawing.profile.clone(),
+                        volume_profile: drawing.kind.is_volume_profile().then(|| {
+                            VolumeProfileStyleV1 {
+                                rows: drawing.profile_rows,
+                                value_area_percent: drawing.profile_value_area_percent,
+                                width_percent: drawing.profile_width_percent,
+                                delta_visible: drawing.profile_delta_visible,
+                                poc_visible: drawing.profile_poc_visible,
+                                value_area_lines_visible: drawing.profile_value_area_lines_visible,
+                                value_area_color: drawing.profile_value_area_color.clone(),
+                                volume_color: drawing.profile_volume_color.clone(),
+                                positive_color: drawing.profile_positive_color.clone(),
+                                negative_color: drawing.profile_negative_color.clone(),
+                                poc_color: drawing.profile_poc_color.clone(),
+                            }
+                        }),
                         position_account_size: matches!(
                             drawing.kind,
                             DrawingKind::LongPosition | DrawingKind::ShortPosition
@@ -1085,7 +1123,9 @@ impl ChartEngine {
                         level_trend_line: (drawing.kind.has_levels() && drawing.level_trend_line)
                             .then_some(true),
                         middle_point_visible: drawing.middle_point_visible.then_some(true),
-                        price_labels_visible: drawing.price_labels_visible.then_some(true),
+                        price_labels_visible: (drawing.price_labels_visible
+                            != drawing.kind.is_volume_profile())
+                        .then_some(drawing.price_labels_visible),
                         stats_position: (drawing.stats_position != DrawingTextHAlign::Right)
                             .then(|| drawing.stats_position.name().to_string()),
                         stats_always_visible: (drawing.stats_always_visible
@@ -1896,7 +1936,46 @@ impl ChartEngine {
                         item.id
                     )));
                 }
-                drawing.profile = Some(profile);
+                drawing.apply_profile_binding(profile);
+            }
+            if let Some(profile) = style.volume_profile {
+                if !drawing.kind.is_volume_profile()
+                    || !crate::profile_drawings::valid_profile_drawing_rows(profile.rows)
+                    || !crate::profile_drawings::valid_profile_drawing_percent(
+                        profile.value_area_percent,
+                    )
+                    || !crate::profile_drawings::valid_profile_drawing_percent(
+                        profile.width_percent,
+                    )
+                {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid volume profile style",
+                        item.id
+                    )));
+                }
+                for (color, name) in [
+                    (&profile.value_area_color, "profile value area color"),
+                    (&profile.volume_color, "profile volume color"),
+                    (&profile.positive_color, "profile positive color"),
+                    (&profile.negative_color, "profile negative color"),
+                    (&profile.poc_color, "profile POC color"),
+                ] {
+                    if let Some(color) = color {
+                        validate_color(color, name)?;
+                    }
+                }
+                drawing.profile_rows = profile.rows;
+                drawing.profile_value_area_percent = profile.value_area_percent;
+                drawing.profile_width_percent = profile.width_percent;
+                drawing.profile_delta_visible = profile.delta_visible;
+                drawing.profile_poc_visible = profile.poc_visible;
+                drawing.profile_value_area_lines_visible = profile.value_area_lines_visible;
+                let keep = |color: Option<String>| color.filter(|color| !color.is_empty());
+                drawing.profile_value_area_color = keep(profile.value_area_color);
+                drawing.profile_volume_color = keep(profile.volume_color);
+                drawing.profile_positive_color = keep(profile.positive_color);
+                drawing.profile_negative_color = keep(profile.negative_color);
+                drawing.profile_poc_color = keep(profile.poc_color);
             }
             if let Some(name) = style.name {
                 if name.len() > crate::MAX_DRAWING_NAME_BYTES {

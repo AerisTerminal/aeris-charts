@@ -2644,6 +2644,26 @@ export interface drawing_options {
   box_border_color: string;
   /** Text-tool container border width in CSS px (default 1). */
   box_border_width: number;
+  /** Price-axis tags for the drawing's key levels (POC/VAH/VAL on volume profiles; default true there). */
+  price_labels_visible: boolean;
+  /** Volume-profile row count, 1 to 2,048 (default 100). Volume profile drawings only. */
+  profile_rows?: number;
+  /** Value-area share of total volume, above 0 to 100 (default 70). */
+  profile_value_area_percent?: number;
+  /** Histogram width as a percentage of the drawn range (default 40). */
+  profile_width_percent?: number;
+  /** Delta histogram left of the spine (default true). */
+  profile_delta_visible?: boolean;
+  /** Point-of-control line (default true). */
+  profile_poc_visible?: boolean;
+  /** Value-area high/low lines in the drawing stroke (default true). */
+  profile_value_area_lines_visible?: boolean;
+  /** Profile palette; `""` uses the engine default for that slot. */
+  profile_value_area_color?: string;
+  profile_volume_color?: string;
+  profile_positive_color?: string;
+  profile_negative_color?: string;
+  profile_poc_color?: string;
 }
 
 /** A drawing as listed by {@link chart_api.drawings}. This inspection shape is not persistence. */
@@ -2727,6 +2747,21 @@ export interface persisted_drawing_style_v1 {
   box_color?: string;
   box_border_color?: string;
   box_border_width?: number;
+  price_labels_visible?: boolean;
+  /** Volume-profile drawing presentation; omitted colors restore the engine defaults. */
+  volume_profile?: {
+    rows: number;
+    value_area_percent: number;
+    width_percent: number;
+    delta_visible: boolean;
+    poc_visible: boolean;
+    value_area_lines_visible: boolean;
+    value_area_color?: string;
+    volume_color?: string;
+    positive_color?: string;
+    negative_color?: string;
+    poc_color?: string;
+  };
 }
 
 /** One semantic drawing in the durable V1 persistence contract. */
@@ -3984,6 +4019,12 @@ export interface chart_api {
   add_periodic_profile_presentation(anchor: series_api, request: periodic_profile_presentation_request, options?: Partial<periodic_profile_presentation_options>): number;
   remove_periodic_profile_presentation(id: number): boolean;
   anchored_vwap(source: profile_source, start_timestamp_micros: number, end_timestamp_micros: number, band_multiplier: number): readonly anchored_vwap_point[] | null;
+  /**
+   * Register the candle volume series that Fixed Range and Anchored Volume Profile drawings on
+   * `price_series` aggregate; `null` clears it. An order-flow tape installed on the series takes
+   * precedence, and an explicit `configure_profile_drawing` source overrides both.
+   */
+  set_series_volume_source(price_series: series_api, volume_series: series_api | null): void;
   configure_profile_drawing(drawing: drawing_api, options: profile_drawing_options): void;
   profile_drawing_snapshot(drawing: drawing_api): profile_drawing_snapshot | null;
   add_series(kind: "footprint", options?: Partial<any_series_options> & Partial<footprint_series_options>): footprint_series_api;

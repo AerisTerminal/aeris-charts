@@ -43,6 +43,7 @@ mod ordering;
 mod persistence;
 mod price_line_api;
 mod price_scale_api;
+mod profile_drawings;
 mod profiles;
 mod resampling;
 mod series_query_api;
@@ -1858,6 +1859,13 @@ pub struct ChartEngine {
     next_depth_event_layer_id: u64,
     depth_profiles: HashMap<u64, depth::DepthProfile>,
     next_depth_profile_id: u64,
+    /// Host-registered volume series per OHLC price series (price, volume).
+    series_volume_sources: Vec<(SeriesId, SeriesId)>,
+    /// Canonical tape of each installed order-flow presentation (primary series, stream).
+    order_flow_tapes: Vec<(SeriesId, u64)>,
+    /// One calculated snapshot per live profile-bound drawing.
+    profile_drawing_cache: Vec<profile_drawings::ProfileDrawingCacheEntry>,
+    profile_drawing_recalculations: u64,
     /// Sequence identity mapping waiting for the data-layer synchronization triggered by a
     /// non-time footprint rebuild. It is consumed before ordinary timestamp rebasing so drawing
     /// anchors follow the same full-resolution bars even when row keys are reused.
@@ -2169,6 +2177,10 @@ impl ChartEngine {
             next_depth_event_layer_id: 1,
             depth_profiles: HashMap::new(),
             next_depth_profile_id: 1,
+            series_volume_sources: Vec::new(),
+            order_flow_tapes: Vec::new(),
+            profile_drawing_cache: Vec::new(),
+            profile_drawing_recalculations: 0,
             pending_sequence_mapping: None,
             drawing_anchor_times: HashMap::new(),
             drawing_time_anchors: HashMap::new(),
@@ -3455,6 +3467,7 @@ impl ChartEngine {
             live_streams.contains(stream_id) && !dependents.is_empty()
         });
         self.forget_removed_external_study_outputs(&tombstones);
+        self.forget_series_volume_sources(&tombstones);
         self.clear_sequence_axis_if_unused();
         self.series_order.retain(|sid| !tombstones.contains(sid));
         // A hovered series leaving the chart releases the hovered-on-top z-bump with it.

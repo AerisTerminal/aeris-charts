@@ -3216,6 +3216,19 @@ impl AerisChart {
             .is_ok()
     }
 
+    /// Register (`volume_series >= 0`) or clear (`-1`) the volume series that profile drawings
+    /// on `price_series` aggregate when no order-flow tape is installed.
+    pub fn set_series_volume_source(&mut self, price_series: u32, volume_series: i32) -> bool {
+        let volume = u32::try_from(volume_series).ok();
+        if volume.is_none() && volume_series != -1 {
+            return false;
+        }
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_series_volume_source(price_series, volume)
+    }
+
     pub fn profile_drawing_snapshot_json(&self, drawing_id: u32) -> String {
         let inner = self.inner.borrow();
         serde_json::to_string(&inner.engine.profile_drawing_snapshot(drawing_id).ok())

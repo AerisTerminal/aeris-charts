@@ -861,14 +861,10 @@ impl ChartEngine {
             self.build_bars_pattern_prims(drawing, pane_w_px, vpr, out, points);
             return;
         }
-        if matches!(
-            drawing.kind,
-            DrawingKind::FixedRangeVolumeProfile
-                | DrawingKind::AnchoredVolumeProfile
-                | DrawingKind::AnchoredVwap
-        ) && drawing.profile.is_some()
+        if drawing.kind.is_profile_bound()
+            && let Some(snapshot) = self.profile_drawing_data(drawing)
         {
-            self.build_profile_drawing_prims(drawing, px, pane_w_px, vpr, out, points);
+            self.build_profile_drawing_prims(drawing, &snapshot, px, pane_w_px, vpr, out, points);
             return;
         }
         let color = Color::parse_css(&drawing.color).unwrap_or(PRIMARY);
@@ -2551,117 +2547,130 @@ impl ChartEngine {
         }
     }
 
+    /// Volume profile drawings paint around one spine at the range start: total volume to the
+    /// right (value-area rows in the value-area color), delta to the left, then the range
+    /// edges, value-area lines and point of control. Rows and levels come from the shared
+    /// media-space geometry, so hit testing and axis tags agree with these pixels.
     #[allow(clippy::too_many_arguments)]
     fn build_profile_drawing_prims(
         &self,
         drawing: &Drawing,
+        snapshot: &crate::ProfileDrawingSnapshot,
         px: &[(f64, f64)],
         pane_w_px: i32,
         vpr: f64,
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
     ) {
-        let Ok(snapshot) = self.profile_drawing_snapshot_for_frame(drawing.id) else {
-            return;
-        };
+        let hpr = f64::from(pane_w_px) / self.pane_w.max(1.0);
         match snapshot {
             crate::ProfileDrawingSnapshot::Volume(profile) => {
-                let Some(options) = drawing.profile.as_ref() else {
+                let anchors_x = px.iter().map(|point| point.0 / hpr).collect::<Vec<_>>();
+                let Some(geometry) = self.profile_drawing_geometry(drawing, profile, &anchors_x)
+                else {
                     return;
                 };
-                let left = px
-                    .first()
-                    .map_or(0.0, |point| point.0)
-                    .clamp(0.0, f64::from(pane_w_px));
-                let right = match drawing.kind {
-                    DrawingKind::FixedRangeVolumeProfile => px
-                        .get(1)
-                        .map_or(left, |point| point.0)
-                        .clamp(0.0, f64::from(pane_w_px)),
-                    _ => f64::from(pane_w_px),
-                };
-                let range_left = left.min(right);
-                let range_right = left.max(right);
-                let available = (range_right - range_left).max(1.0) * options.width_percent / 100.0;
-                let max_volume = profile
-                    .rows
-                    .iter()
-                    .map(|row| row.total_volume)
-                    .fold(0.0_f64, f64::max);
-                if max_volume <= 0.0 {
-                    return;
-                }
-                let bid = Color::rgba(247, 82, 95, 150);
-                let ask = Color::rgba(8, 153, 129, 150);
-                let unknown = Color::rgba(120, 130, 145, 130);
-                for row in &profile.rows {
-                    let Some((_, y0)) = self.drawing_to_px_for(
-                        drawing.pane_index,
-                        drawing.price_scale,
-                        crate::DrawingPoint {
-                            logical: drawing.points[0].logical,
-                            price: row.low,
-                        },
-                    ) else {
-                        continue;
-                    };
-                    let Some((_, y1)) = self.drawing_to_px_for(
-                        drawing.pane_index,
-                        drawing.price_scale,
-                        crate::DrawingPoint {
-                            logical: drawing.points[0].logical,
-                            price: row.high,
-                        },
-                    ) else {
-                        continue;
-                    };
-                    let width = available * row.total_volume / max_volume;
-                    let x0 = range_right - width;
-                    let height = ((y0 - y1).abs() * vpr).round().max(1.0) as i32;
-                    let y = (y0.min(y1) * vpr).round() as i32;
-                    let mut cursor = x0;
-                    for (volume, color) in [
-                        (row.bid_volume, bid),
-                        (row.unknown_volume, unknown),
-                        (row.ask_volume, ask),
-                    ] {
-                        if volume <= 0.0 {
-                            continue;
-                        }
-                        let segment = width * volume / row.total_volume;
+                let colors = drawing.profile_colors();
+                let snap_x = |x: f64| (x * hpr).round() as i32;
+                let snap_y = |y: f64| (y * vpr).round() as i32;
+                let spine = snap_x(geometry.spine);
+                self.for_each_profile_drawing_row(drawing, profile, &geometry, |row| {
+                    let y = snap_y(row.top);
+                    let mut h = (snap_y(row.bottom) - y).max(1);
+                    // Separate rows by one device pixel once they are tall enough to read.
+                    if h >= 3 {
+                        h -= 1;
+                    }
+                    let right = snap_x(row.volume_right);
+                    if right > spine {
                         out.push(Prim::Rect {
                             rect: IRect {
-                                x: (cursor * vpr).round() as i32,
+                                x: spine,
                                 y,
-                                w: (segment * vpr).round().max(1.0) as i32,
-                                h: height,
+                                w: right - spine,
+                                h,
                             },
-                            color,
+                            color: if row.value_area {
+                                colors.value_area
+                            } else {
+                                colors.volume
+                            },
                         });
-                        cursor += segment;
                     }
-                }
-                if let Some(poc) = profile
-                    .poc
-                    .and_then(|price| {
-                        self.drawing_to_px_for(
-                            drawing.pane_index,
-                            drawing.price_scale,
-                            crate::DrawingPoint {
-                                logical: drawing.points[0].logical,
-                                price,
+                    let left = snap_x(row.delta_left);
+                    if left < spine {
+                        out.push(Prim::Rect {
+                            rect: IRect {
+                                x: left,
+                                y,
+                                w: spine - left,
+                                h,
                             },
-                        )
-                    })
-                    .map(|(_, y)| y * vpr)
-                {
+                            color: if row.positive {
+                                colors.positive
+                            } else {
+                                colors.negative
+                            },
+                        });
+                    }
+                });
+                let crisp = (drawing.width * vpr).round().max(1.0) as i32;
+                let edge = Color::rgba(
+                    colors.line.r(),
+                    colors.line.g(),
+                    colors.line.b(),
+                    colors.line.a().min(140),
+                );
+                let (left, right) = (snap_x(geometry.left), snap_x(geometry.right));
+                let level_right = if drawing.extend_right {
+                    pane_w_px
+                } else {
+                    right
+                };
+                let (top, bottom) = (snap_y(geometry.top), snap_y(geometry.bottom));
+                for y in [top, bottom] {
                     out.push(Prim::HLine {
-                        y: poc.round() as i32,
-                        x0: ((range_right - available) * vpr).round() as i32,
-                        x1: (range_right * vpr).round() as i32,
+                        y,
+                        x0: left,
+                        x1: right,
                         width: vpr.round().max(1.0) as i32,
                         style: LineStyle::Solid,
-                        color: Color::rgb(245, 166, 35),
+                        color: edge,
+                    });
+                }
+                out.push(Prim::VLine {
+                    x: spine,
+                    y0: top,
+                    y1: bottom,
+                    width: crisp,
+                    style: LineStyle::Solid,
+                    color: colors.line,
+                });
+                if drawing.profile_value_area_lines_visible {
+                    for (_, y) in [geometry.value_area_high, geometry.value_area_low]
+                        .into_iter()
+                        .flatten()
+                    {
+                        out.push(Prim::HLine {
+                            y: snap_y(y),
+                            x0: left,
+                            x1: level_right,
+                            width: crisp,
+                            style: drawing.style,
+                            color: colors.line,
+                        });
+                    }
+                }
+                if drawing.profile_poc_visible
+                    && let Some((_, y)) = geometry.poc
+                {
+                    out.push(Prim::HLine {
+                        y: snap_y(y),
+                        x0: left,
+                        x1: level_right,
+                        width: (2.0 * vpr).round().max(1.0) as i32,
+                        style: LineStyle::Solid,
+                        color: colors.poc,
                     });
                 }
             }
@@ -2685,7 +2694,7 @@ impl ChartEngine {
                             drawing.price_scale,
                             crate::DrawingPoint { logical, price },
                         ) {
-                            target.push([x as f32 * vpr as f32, y as f32 * vpr as f32]);
+                            target.push([(x * hpr) as f32, (y * vpr) as f32]);
                         }
                     }
                 }
@@ -2778,6 +2787,11 @@ impl ChartEngine {
                         vertex_label_color(drawing, stroke)
                     }
                     ("text_color", None) => self.drawing_text_color(drawing),
+                    ("profile_value_area_color", _) => drawing.profile_colors().value_area,
+                    ("profile_volume_color", _) => drawing.profile_colors().volume,
+                    ("profile_positive_color", _) => drawing.profile_colors().positive,
+                    ("profile_negative_color", _) => drawing.profile_colors().negative,
+                    ("profile_poc_color", _) => drawing.profile_colors().poc,
                     _ => return None,
                 };
                 Some((property.name, color))

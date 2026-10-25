@@ -2298,6 +2298,7 @@ impl ChartEngine {
         }
         self.trade_streams.remove(&stream_id);
         self.trade_stream_keys.retain(|_, id| *id != stream_id);
+        self.forget_order_flow_tape(stream_id);
         Ok(())
     }
 
@@ -2524,6 +2525,7 @@ impl ChartEngine {
             self.remove_order_flow_presentation(presentation);
             return Err(error);
         }
+        self.remember_order_flow_tape(primary_series, stream);
         Ok(presentation)
     }
 

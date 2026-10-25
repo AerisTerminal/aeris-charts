@@ -5687,6 +5687,13 @@ export class chart_impl implements chart_api {
     )) as anchored_vwap_point[] | null;
   }
 
+  set_series_volume_source(price_series: series_api, volume_series: series_api | null): void {
+    if (!this.wasm.set_series_volume_source(price_series.id, volume_series?.id ?? -1)) {
+      throw new AerisChartsError("invalid_options", "the price series must be candlestick or bar and the volume source a histogram series");
+    }
+    this.repaint();
+  }
+
   configure_profile_drawing(drawing: drawing_api, options: profile_drawing_options): void {
     if (!this.wasm.configure_profile_drawing_json(drawing.id, JSON.stringify(options))) {
       throw new AerisChartsError("invalid_options", "invalid profile drawing or source");

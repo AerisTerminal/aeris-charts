@@ -978,6 +978,8 @@ impl Probe {
             s.histogram_updown = true;
             s.price_line_visible = false;
             s.title = "Volume".into();
+            // Volume-profile drawings read this registration; a non-OHLC primary has none.
+            self.engine.set_series_volume_source(0, Some(id));
             self.volume_id = Some(id);
         }
         self.dirty = true;

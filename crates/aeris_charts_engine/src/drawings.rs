@@ -427,6 +427,11 @@ impl DrawingBounds {
                 }
             }
         }
+        // The delta histogram reaches left of the range start by the same share of the span.
+        if drawing.kind == DrawingKind::FixedRangeVolumeProfile && drawing.profile_delta_visible {
+            min_logical -=
+                (max_logical - min_logical).abs() * drawing.profile_width_percent / 100.0;
+        }
         let spec = drawing.kind.spec();
         if spec.bounds_padding_ratio > 0.0 {
             let logical_pad = (max_logical - min_logical).abs() * spec.bounds_padding_ratio;
@@ -448,6 +453,13 @@ impl DrawingBounds {
         ) && (drawing.extend_left || drawing.extend_right);
         let logical = match spec.logical_extent {
             DrawingLogicalExtent::Full => LogicalBounds::Full,
+            // Its span (and so the delta side) grows with the latest bar.
+            DrawingLogicalExtent::FromFirst
+                if drawing.kind == DrawingKind::AnchoredVolumeProfile
+                    && drawing.profile_delta_visible =>
+            {
+                LogicalBounds::Full
+            }
             DrawingLogicalExtent::FromFirst => LogicalBounds::From(min_logical),
             DrawingLogicalExtent::Ray => LogicalBounds::Ray {
                 start: drawing.points[0].logical,
@@ -1098,8 +1110,25 @@ pub struct Drawing {
     /// `bars`, `line_open`, `line_high`, `line_low`, or `line_close`.
     pub bars_pattern_mode: String,
     pub price_scale: DrawingPriceScale,
-    /// Optional engine-data binding for volume-profile and anchored-VWAP drawings.
+    /// Optional explicit engine-data binding for volume-profile and anchored-VWAP drawings.
+    /// `None` resolves the pane's order-flow tape or registered volume series at frame time.
     pub profile: Option<crate::ProfileDrawingOptions>,
+    /// Volume-profile rows across the profiled price range.
+    pub profile_rows: usize,
+    /// Share of volume (percent) in the value area around the point of control.
+    pub profile_value_area_percent: f64,
+    /// Longest histogram bar on each side of the spine, as a percent of the profiled time span.
+    pub profile_width_percent: f64,
+    /// Delta histogram left of the spine; total volume always paints right of it.
+    pub profile_delta_visible: bool,
+    pub profile_poc_visible: bool,
+    pub profile_value_area_lines_visible: bool,
+    /// Volume-profile CSS colors; `None` paints the built-in profile palette.
+    pub profile_value_area_color: Option<String>,
+    pub profile_volume_color: Option<String>,
+    pub profile_positive_color: Option<String>,
+    pub profile_negative_color: Option<String>,
+    pub profile_poc_color: Option<String>,
     /// Hypothetical account balance for position drawing statistics; never a broker balance.
     pub position_account_size: f64,
     /// Percentage of the hypothetical balance risked at the stop (0..=100).
@@ -1426,7 +1455,7 @@ impl Drawing {
             level_label_v_align: DrawingTextVAlign::Top,
             level_trend_line: false,
             middle_point_visible: false,
-            price_labels_visible: false,
+            price_labels_visible: kind.is_volume_profile(),
             stats_position: DrawingTextHAlign::Right,
             stats_always_visible: kind == DrawingKind::InfoLine,
             screen_x: 0.5,
@@ -1439,6 +1468,17 @@ impl Drawing {
             bars_pattern_mode: "bars".to_string(),
             price_scale: DrawingPriceScale::Right,
             profile: None,
+            profile_rows: crate::profile_drawings::DEFAULT_PROFILE_DRAWING_ROWS,
+            profile_value_area_percent: crate::profile_drawings::DEFAULT_PROFILE_DRAWING_VALUE_AREA,
+            profile_width_percent: crate::profile_drawings::DEFAULT_PROFILE_DRAWING_WIDTH,
+            profile_delta_visible: true,
+            profile_poc_visible: true,
+            profile_value_area_lines_visible: true,
+            profile_value_area_color: None,
+            profile_volume_color: None,
+            profile_positive_color: None,
+            profile_negative_color: None,
+            profile_poc_color: None,
             position_account_size: 1000.0,
             position_risk_percent: 25.0,
             position_profit_color: None,
@@ -2092,6 +2132,28 @@ pub(crate) struct DrawingPatch {
     #[serde(alias = "boxBorderWidth")]
     box_border_width: Option<f64>,
     profile: Option<crate::ProfileDrawingOptions>,
+    #[serde(alias = "profileRows")]
+    profile_rows: Option<usize>,
+    #[serde(alias = "profileValueAreaPercent")]
+    profile_value_area_percent: Option<f64>,
+    #[serde(alias = "profileWidthPercent")]
+    profile_width_percent: Option<f64>,
+    #[serde(alias = "profileDeltaVisible")]
+    profile_delta_visible: Option<bool>,
+    #[serde(alias = "profilePocVisible")]
+    profile_poc_visible: Option<bool>,
+    #[serde(alias = "profileValueAreaLinesVisible")]
+    profile_value_area_lines_visible: Option<bool>,
+    #[serde(alias = "profileValueAreaColor")]
+    profile_value_area_color: Option<String>,
+    #[serde(alias = "profileVolumeColor")]
+    profile_volume_color: Option<String>,
+    #[serde(alias = "profilePositiveColor")]
+    profile_positive_color: Option<String>,
+    #[serde(alias = "profileNegativeColor")]
+    profile_negative_color: Option<String>,
+    #[serde(alias = "profilePocColor")]
+    profile_poc_color: Option<String>,
     #[serde(alias = "positionAccountSize")]
     position_account_size: Option<f64>,
     #[serde(alias = "positionRiskPercent")]
@@ -2204,6 +2266,32 @@ impl Drawing {
             || patch
                 .regression_deviations
                 .is_some_and(|value| !value.is_finite() || !(0.0..=10.0).contains(&value))
+        {
+            return false;
+        }
+        let profile_patched = patch.profile_rows.is_some()
+            || patch.profile_value_area_percent.is_some()
+            || patch.profile_width_percent.is_some()
+            || patch.profile_delta_visible.is_some()
+            || patch.profile_poc_visible.is_some()
+            || patch.profile_value_area_lines_visible.is_some()
+            || patch.profile_value_area_color.is_some()
+            || patch.profile_volume_color.is_some()
+            || patch.profile_positive_color.is_some()
+            || patch.profile_negative_color.is_some()
+            || patch.profile_poc_color.is_some();
+        if profile_patched
+            && (!self.kind.is_volume_profile()
+                || patch
+                    .profile_rows
+                    .is_some_and(|rows| !crate::profile_drawings::valid_profile_drawing_rows(rows))
+                || [
+                    patch.profile_value_area_percent,
+                    patch.profile_width_percent,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|value| !crate::profile_drawings::valid_profile_drawing_percent(value)))
         {
             return false;
         }
@@ -2574,9 +2662,57 @@ impl Drawing {
             self.regression_deviations = deviations;
         }
         if let Some(profile) = patch.profile {
-            self.profile = Some(profile);
+            self.apply_profile_binding(profile);
+        }
+        if let Some(rows) = patch.profile_rows {
+            self.profile_rows = rows;
+        }
+        if let Some(value) = patch.profile_value_area_percent {
+            self.profile_value_area_percent = value;
+        }
+        if let Some(value) = patch.profile_width_percent {
+            self.profile_width_percent = value;
+        }
+        if let Some(value) = patch.profile_delta_visible {
+            self.profile_delta_visible = value;
+        }
+        if let Some(value) = patch.profile_poc_visible {
+            self.profile_poc_visible = value;
+        }
+        if let Some(value) = patch.profile_value_area_lines_visible {
+            self.profile_value_area_lines_visible = value;
+        }
+        for (slot, css) in [
+            (
+                &mut self.profile_value_area_color,
+                patch.profile_value_area_color,
+            ),
+            (&mut self.profile_volume_color, patch.profile_volume_color),
+            (
+                &mut self.profile_positive_color,
+                patch.profile_positive_color,
+            ),
+            (
+                &mut self.profile_negative_color,
+                patch.profile_negative_color,
+            ),
+            (&mut self.profile_poc_color, patch.profile_poc_color),
+        ] {
+            if let Some(css) = css {
+                update_css_slot(slot, css);
+            }
         }
         true
+    }
+
+    /// An explicit binding also carries the calculation parameters a host configured with it.
+    pub(crate) fn apply_profile_binding(&mut self, profile: crate::ProfileDrawingOptions) {
+        if self.kind.is_volume_profile() {
+            self.profile_rows = profile.row_count;
+            self.profile_value_area_percent = profile.value_area_percent;
+            self.profile_width_percent = profile.width_percent;
+        }
+        self.profile = Some(profile);
     }
 
     pub(crate) fn options_json(&self) -> serde_json::Value {
@@ -2637,6 +2773,25 @@ impl Drawing {
                 serde_json::json!(self.middle_line_color.as_deref().unwrap_or(""));
             options["middle_line_width"] = serde_json::json!(self.middle_line_width);
             options["middle_line_style"] = serde_json::json!(style_name(self.middle_line_style));
+        }
+        if self.kind.is_volume_profile() {
+            options["profile_rows"] = serde_json::json!(self.profile_rows);
+            options["profile_value_area_percent"] =
+                serde_json::json!(self.profile_value_area_percent);
+            options["profile_width_percent"] = serde_json::json!(self.profile_width_percent);
+            options["profile_delta_visible"] = serde_json::json!(self.profile_delta_visible);
+            options["profile_poc_visible"] = serde_json::json!(self.profile_poc_visible);
+            options["profile_value_area_lines_visible"] =
+                serde_json::json!(self.profile_value_area_lines_visible);
+            for (name, slot) in [
+                ("profile_value_area_color", &self.profile_value_area_color),
+                ("profile_volume_color", &self.profile_volume_color),
+                ("profile_positive_color", &self.profile_positive_color),
+                ("profile_negative_color", &self.profile_negative_color),
+                ("profile_poc_color", &self.profile_poc_color),
+            ] {
+                options[name] = serde_json::json!(slot.as_deref().unwrap_or(""));
+            }
         }
         if self.kind == DrawingKind::RegressionTrend {
             options["regression_source_id"] = serde_json::json!(self.regression_source_id);
@@ -4517,7 +4672,7 @@ impl ChartEngine {
             return false;
         };
         let before = self.drawings[index].clone();
-        self.drawings[index].profile = Some(profile);
+        self.drawings[index].apply_profile_binding(profile);
         self.drawings[index].revision = self.drawings[index].revision.saturating_add(1);
         let after = self.drawings[index].clone();
         self.update_drawing_runtime(id);
@@ -5680,6 +5835,14 @@ impl ChartEngine {
                 }
             }
             return false;
+        }
+        if drawing.kind.is_volume_profile() {
+            let anchors_x = px.iter().map(|point| point.0).collect::<Vec<_>>();
+            if let Some(hit) =
+                self.profile_drawing_body_hit(drawing, &anchors_x, x, y, hit_tolerance)
+            {
+                return hit;
+            }
         }
         let Some(pane) = self.panes.get(drawing.pane_index) else {
             return false;

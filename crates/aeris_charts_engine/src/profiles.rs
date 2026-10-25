@@ -13,8 +13,8 @@ use aeris_charts_render::color::Color;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AggressorSide, ChartEngine, DrawingId, DrawingKind, NativePrimitiveId, ResampleBoundary,
-    SeriesId, SeriesKind,
+    AggressorSide, ChartEngine, DrawingId, NativePrimitiveId, ResampleBoundary, SeriesId,
+    SeriesKind,
 };
 
 pub const MAX_PROFILE_PERIODS: usize = 5_000;
@@ -576,13 +576,7 @@ impl ChartEngine {
         let drawing = self
             .drawing(drawing_id)
             .ok_or(ProfileError::UnknownSource)?;
-        if !matches!(
-            drawing.kind,
-            DrawingKind::FixedRangeVolumeProfile
-                | DrawingKind::AnchoredVolumeProfile
-                | DrawingKind::AnchoredVwap
-        ) || !options.valid()
-        {
+        if !drawing.kind.is_profile_bound() || !options.valid() {
             return Err(ProfileError::InvalidRequest);
         }
         self.validate_profile_source(options.source)?;
@@ -595,78 +589,26 @@ impl ChartEngine {
         self.drawing(drawing_id)?.profile.as_ref()
     }
 
+    /// The current calculation of a profile-bound drawing, including developing levels, from
+    /// the same resolved source and parameters the frame paints.
     pub fn profile_drawing_snapshot(
         &self,
         drawing_id: DrawingId,
     ) -> Result<ProfileDrawingSnapshot, ProfileError> {
-        self.profile_drawing_snapshot_impl(drawing_id, true)
-    }
-
-    pub(crate) fn profile_drawing_snapshot_for_frame(
-        &self,
-        drawing_id: DrawingId,
-    ) -> Result<ProfileDrawingSnapshot, ProfileError> {
-        self.profile_drawing_snapshot_impl(drawing_id, false)
-    }
-
-    fn profile_drawing_snapshot_impl(
-        &self,
-        drawing_id: DrawingId,
-        include_developing: bool,
-    ) -> Result<ProfileDrawingSnapshot, ProfileError> {
         let drawing = self
             .drawing(drawing_id)
             .ok_or(ProfileError::UnknownSource)?;
-        let options = drawing
-            .profile
-            .as_ref()
-            .ok_or(ProfileError::UnknownSource)?;
-        let first = drawing
-            .points
-            .first()
-            .ok_or(ProfileError::InvalidRequest)?
-            .logical;
-        let last = match drawing.kind {
-            DrawingKind::FixedRangeVolumeProfile => {
-                drawing
-                    .points
-                    .get(1)
-                    .ok_or(ProfileError::InvalidRequest)?
-                    .logical
-            }
-            DrawingKind::AnchoredVolumeProfile | DrawingKind::AnchoredVwap => {
-                self.data.merged_times().len().saturating_sub(1) as f64
-            }
-            _ => return Err(ProfileError::InvalidRequest),
-        };
-        let start = self
-            .logical_timestamp_micros(first.min(last))
-            .ok_or(ProfileError::InvalidRequest)?;
-        let end = self
-            .logical_timestamp_micros(first.max(last))
-            .ok_or(ProfileError::InvalidRequest)?
-            .saturating_add(1);
-        if drawing.kind == DrawingKind::AnchoredVwap {
-            return self
-                .anchored_vwap(options.source, start, end, options.band_multiplier)
-                .map(ProfileDrawingSnapshot::Vwap);
+        if !drawing.kind.is_profile_bound() {
+            return Err(ProfileError::InvalidRequest);
         }
-        self.volume_profile_snapshot_impl(
-            &ProfileRequest {
-                source: options.source,
-                start_timestamp_micros: start,
-                end_timestamp_micros: end,
-                tick_size: options.tick_size,
-                row_count: options.row_count,
-                value_area_percent: options.value_area_percent,
-            },
-            include_developing,
-            None,
-        )
-        .map(ProfileDrawingSnapshot::Volume)
+        let key = self
+            .profile_drawing_key(drawing)
+            .ok_or(ProfileError::UnknownSource)?;
+        self.compute_profile_drawing(&key, true)
+            .ok_or(ProfileError::InvalidRequest)
     }
 
-    fn logical_timestamp_micros(&self, logical: f64) -> Option<i64> {
+    pub(crate) fn logical_timestamp_micros(&self, logical: f64) -> Option<i64> {
         if !logical.is_finite() || logical < 0.0 {
             return None;
         }
@@ -680,7 +622,10 @@ impl ChartEngine {
             .map(|time| time.saturating_mul(1_000_000))
     }
 
-    fn validate_profile_source(&self, source: ProfileSource) -> Result<(), ProfileError> {
+    pub(crate) fn validate_profile_source(
+        &self,
+        source: ProfileSource,
+    ) -> Result<(), ProfileError> {
         match source {
             ProfileSource::Tape { stream_id } => self
                 .trade_stream(stream_id)
@@ -714,7 +659,7 @@ impl ChartEngine {
         self.volume_profile_snapshot_impl(request, true, None)
     }
 
-    fn volume_profile_snapshot_impl(
+    pub(crate) fn volume_profile_snapshot_impl(
         &self,
         request: &ProfileRequest,
         include_developing: bool,

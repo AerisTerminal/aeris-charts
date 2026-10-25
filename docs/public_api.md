@@ -120,6 +120,27 @@ invalidates the handle. Profiles are runtime-only distributions, not scalar outp
 not included in V1 state exports; recreate their bindings after restoring the source data.
 The older `create_volume_profile()` helper remains a drawing of caller-supplied bins.
 
+### Fixed Range and Anchored Volume Profile drawings
+
+```ts
+chart.set_series_volume_source(candles, volume); // null clears the registration
+const frvp = chart.add_drawing("fixed_range_volume_profile", [
+  { logical: 120, price: 100 }, { logical: 240, price: 100 },
+]);
+frvp.apply_options({ profile_rows: 80, profile_value_area_percent: 70, extend_right: true });
+```
+
+The tool needs no per-drawing setup. It aggregates the trade tape when an order-flow presentation
+or footprint series is installed in its pane, otherwise the volume series registered for the
+candlestick or bar series. `configure_profile_drawing` still pins an explicit source. The drawing
+shows delta left of its spine, total volume right of it with the value area highlighted, VAH/VAL and
+POC lines, and price-axis tags (`price_labels_visible`). Options: `profile_rows` (1–2,048, default
+100), `profile_value_area_percent` and `profile_width_percent` (>0–100, defaults 70 and 40),
+`profile_delta_visible`, `profile_poc_visible`, `profile_value_area_lines_visible`, and the
+`profile_{value_area,volume,positive,negative,poc}_color` palette (`""` restores the default).
+Invalid values reject the whole patch. These options persist in V1 state under `volume_profile`.
+Candle-sourced delta is a close-versus-open estimate, not aggressor flow.
+
 Generated `wasm-bindgen` classes, methods reachable only through implementation objects, telemetry,
 benchmark counters, demo globals, fixtures, and test hooks are internal even when JavaScript can
 inspect them at runtime. `drawings_json()` is an internal inspection shape, not persistence.

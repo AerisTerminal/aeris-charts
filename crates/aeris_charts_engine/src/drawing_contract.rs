@@ -496,8 +496,6 @@ fn has_stroke_color(kind: DrawingKind) -> bool {
             | DrawingKind::ShortPosition
             | DrawingKind::Text
             | DrawingKind::AnchoredText
-            | DrawingKind::FixedRangeVolumeProfile
-            | DrawingKind::AnchoredVolumeProfile
     )
 }
 
@@ -640,6 +638,12 @@ pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
         s.add(Inputs, "regression_deviations", "Deviation", Number)
             .bounded(0.0, 10.0);
     }
+    if kind.is_volume_profile() {
+        s.add(Inputs, "profile_rows", "Rows", Integer)
+            .bounded(1.0, crate::MAX_PROFILE_ROWS as f64);
+        s.add(Inputs, "profile_value_area_percent", "Value area %", Number)
+            .bounded(1.0, 100.0);
+    }
 
     if has_stroke_color(kind) {
         s.add(Style, "color", "Line", Color).on_toolbar();
@@ -680,6 +684,27 @@ pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
             .on_toolbar();
         s.add(Style, "position_loss_color", "Stop", Color)
             .on_toolbar();
+    }
+    if kind.is_volume_profile() {
+        s.add(Style, "profile_width_percent", "Width %", Number)
+            .bounded(1.0, 100.0);
+        s.add(Style, "profile_value_area_color", "Value area", Color)
+            .on_toolbar();
+        s.add(Style, "profile_volume_color", "Volume", Color);
+        s.add(Style, "profile_delta_visible", "Delta profile", Boolean);
+        s.add(Style, "profile_positive_color", "Positive delta", Color);
+        s.add(Style, "profile_negative_color", "Negative delta", Color);
+        s.add(Style, "profile_poc_visible", "Point of control", Boolean);
+        s.add(Style, "profile_poc_color", "POC color", Color)
+            .on_toolbar();
+        s.add(
+            Style,
+            "profile_value_area_lines_visible",
+            "Value area lines",
+            Boolean,
+        );
+        s.add(Style, "extend_right", "Extend levels right", Boolean);
+        s.add(Style, "price_labels_visible", "Price labels", Boolean);
     }
     if kind == DrawingKind::Rectangle {
         s.add(Style, "border_visible", "Border", Boolean);
