@@ -44,7 +44,7 @@
   #demo_mode_switch button[aria-pressed="true"] { background: var(--surface); color: var(--demo-accent-text); box-shadow: 0 0 0 1px var(--border-secondary); }
   .market-summary { display: flex; align-items: center; gap: 10px; min-width: 0; padding-left: 16px; border-left: 1px solid var(--border); }
   .market-symbol { font-size: 13px; font-weight: 600; white-space: nowrap; }
-  .market-meta { color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+  .market-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
   .market-price { min-width: 48px; color: var(--demo-bullish-text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .market-price[data-direction="down"] { color: var(--demo-bearish-text); }
   #comparison_controls { display: flex; gap: 6px; align-items: center; margin-left: auto; }
@@ -53,6 +53,11 @@
   #comparison_controls button { padding: 0 10px; font-size: 12px; font-weight: 600; }
   #comparison_controls button:hover:not(:disabled) { background: var(--hover-bg); }
   #comparison_clear:disabled { color: var(--text-muted); }
+#comparison_list { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+#comparison_list .comparison-row { display: flex; align-items: center; gap: 8px; }
+#comparison_list .comparison-name { min-width: 56px; font-weight: 600; }
+#comparison_list .comparison-swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+#comparison_list select { flex: 1; }
   #live_controls { display: flex; gap: 6px; align-items: center; }
   #live_controls[hidden] { display: none; }
   #live_controls button, #live_controls select { height: 40px; color: var(--text-default); background: var(--surface-secondary); border: 1px solid var(--border-secondary); border-radius: var(--radius-compact); font-size: 12px; }
@@ -228,10 +233,16 @@
       </div>
       <div id="comparison_controls" role="group" aria-label="Comparison series controls">
         <select id="comparison_symbol" aria-label="Comparison symbol">
-          <option value="MOON">MOON · candles</option>
-          <option value="ORBIT">ORBIT · candles</option>
+          <option value="MOON">MOON</option>
+          <option value="ORBIT">ORBIT</option>
         </select>
-        <button id="comparison_add" type="button" title="Add the selected symbol on its own price scale">Compare</button>
+        <select id="comparison_placement" aria-label="Comparison placement" title="Where a new comparison symbol is placed; move it later in Series › Comparisons">
+          <option value="same" selected>Main scale %</option>
+          <option value="left">Left scale</option>
+          <option value="right">Right scale</option>
+          <option value="pane">New pane</option>
+        </select>
+        <button id="comparison_add" type="button" title="Add the selected symbol, drawn like the active chart's series">Compare</button>
         <button id="comparison_clear" type="button" title="Remove comparison symbols from the active chart" disabled>Clear <span id="comparison_count">0</span></button>
       </div>
       <div id="live_controls" role="group" aria-label="Live market feed">
@@ -311,6 +322,12 @@
       <label><input type="radio" name="series" value="baseline"> baseline</label>
       <p class="feature-lab-intro">Advanced engine-owned series</p>
       <div id="series_grid" class="scenario-grid" role="group" aria-label="Advanced series"></div>
+    </div>
+
+    <div class="group" id="comparisons_group" data-panel="series" data-caption="Comparisons">
+      <h2>Comparisons</h2>
+      <span class="hint" id="comparison_hint">Add a symbol with Compare in the header. It is drawn like the main series; move it between the main scale (percent), its own left or right scale, and its own pane here.</span>
+      <div id="comparison_list" role="list" aria-label="Comparison symbols"></div>
     </div>
 
     <!-- candle/bar colors: body, wick, and border per direction + part visibility -->
@@ -1261,22 +1278,21 @@ const drawing_tool_buttons = [...document.querySelectorAll("#drawings_group [dat
 const active_chart_router = grid ?? chart;
 const active_chart = () => grid?.active_cell().chart ?? chart;
 
-// Header comparison controls create real pane-local named scales using ordinary full-pane
-// autoscale. Test-only fixtures isolate drag targets separately; the user-facing demo stays dense.
+// Header comparison controls add real symbols drawn like the chart's own series. Each one lives on
+// the main scale (switched to percentage so different price levels compare), its own pane-local
+// named scale on either side (ordinary full-pane autoscale), or its own pane.
 const comparison_configs = {
   MOON: {
     scale_id: "demo-comparison-moon",
-    side: "left",
     seed: 871,
     start_price: 58,
     close_span: 1.8,
     wick_span: 0.75,
-    up_color: "#2962ff",
-    down_color: "#ff6d00",
+    up_color: "#ff9800",
+    down_color: "#ab47bc",
   },
   ORBIT: {
     scale_id: "demo-comparison-orbit",
-    side: "right",
     seed: 1499,
     start_price: 184,
     close_span: 3.6,
@@ -1286,18 +1302,195 @@ const comparison_configs = {
   },
 };
 
+const COMPARISON_PLACEMENTS = {
+  same: "Main scale %",
+  left: "Left scale",
+  right: "Right scale",
+  pane: "Own pane",
+};
+const PERCENTAGE_MODE = 2;
+
 function comparison_entries(target = active_chart()) {
   target.__demo_comparisons ??= new Map();
   return target.__demo_comparisons;
 }
 
-function sync_comparison_controls() {
-  const count = comparison_entries().size;
-  document.getElementById("comparison_count").textContent = String(count);
-  document.getElementById("comparison_clear").disabled = count === 0;
+// The primary series of a chart: the root chart's main series or a split cell's seeded series.
+function primary_series(target) {
+  return target === chart ? main : target.__seed_series ?? null;
 }
 
-function add_demo_comparison(symbol, target = active_chart()) {
+// The radio-level presentation of a series (hollow candles and line + markers are presentations
+// of the candlestick and line kinds).
+function presented_series_kind(series) {
+  const kind = series.series_type();
+  const options = series.options();
+  if (kind === "candlestick" && options.up_color === "transparent" && options.down_color === "transparent") {
+    return "hollow_candlestick";
+  }
+  if (kind === "line" && options.point_markers) return "line_markers";
+  return kind;
+}
+
+// Engine kind and options that draw a comparison symbol like `presented` in its own colors.
+function comparison_presentation(config, presented) {
+  const up = config.up_color;
+  const down = config.down_color;
+  switch (presented) {
+    case "hollow_candlestick":
+      return ["candlestick", {
+        up_color: "transparent", down_color: "transparent", border_visible: true,
+        border_up_color: up, border_down_color: down, wick_up_color: up, wick_down_color: down,
+      }];
+    case "bar":
+      return ["bar", { up_color: up, down_color: down }];
+    case "line":
+    case "line_markers":
+      return ["line", { color: up, line_width: 2, point_markers: presented === "line_markers" }];
+    case "area":
+    case "histogram":
+      return [presented, { color: up }];
+    case "baseline":
+      return ["baseline", { top_line_color: up, bottom_line_color: down }];
+    default:
+      return ["candlestick", {
+        up_color: up, down_color: down,
+        border_up_color: up, border_down_color: down, wick_up_color: up, wick_down_color: down,
+      }];
+  }
+}
+
+function comparison_kind_for(target) {
+  const primary = primary_series(target);
+  return primary === null ? "candlestick" : presented_series_kind(primary);
+}
+
+// Re-draw every comparison on `target` like its primary series after a type change.
+function sync_comparison_kinds(target = active_chart()) {
+  const presented = comparison_kind_for(target);
+  for (const [symbol, entry] of comparison_entries(target)) {
+    const [kind, options] = comparison_presentation(comparison_configs[symbol], presented);
+    if (entry.series.series_type() !== kind) entry.series.set_type(kind);
+    entry.series.apply_options(options);
+  }
+}
+
+function show_comparison_scale(target, config, side) {
+  const scale_options = { visible: true, minimum_width: 0, scale_margins: { top: 0, bottom: 0 } };
+  const info = target.price_scales(0).find((scale) => scale.id === config.scale_id);
+  if (info === undefined) {
+    target.add_price_scale({ id: config.scale_id, side, ...scale_options }, 0);
+    return;
+  }
+  if (info.side !== side) {
+    const outermost = target.price_scales(0)
+      .filter((scale) => scale.side === side && !scale.built_in && scale.id !== config.scale_id).length;
+    target.move_price_scale(config.scale_id, side, outermost, 0);
+  }
+  target.price_scale(config.scale_id, 0).apply_options(scale_options);
+}
+
+// Empty named scales intentionally retain their configuration; hide them so a later placement can
+// reuse the stable scale identity without leaving an empty axis strip.
+function hide_comparison_scale(target, config) {
+  if (target.price_scales(0).some((scale) => scale.id === config.scale_id)) {
+    target.price_scale(config.scale_id, 0).apply_options({ visible: false });
+  }
+}
+
+// The main scale is in percentage mode exactly while a comparison shares it, and returns to the
+// mode it had before the first one joined.
+function sync_main_scale_mode(target) {
+  const primary = primary_series(target);
+  if (primary === null) return;
+  const scale = target.price_scale(primary.price_scale_id(), 0);
+  const sharing = [...comparison_entries(target).values()].some((entry) => entry.placement === "same");
+  if (sharing && target.__demo_comparison_restore_mode === undefined) {
+    target.__demo_comparison_restore_mode = scale.options().mode;
+    scale.apply_options({ mode: PERCENTAGE_MODE });
+  } else if (!sharing && target.__demo_comparison_restore_mode !== undefined) {
+    scale.apply_options({ mode: target.__demo_comparison_restore_mode });
+    target.__demo_comparison_restore_mode = undefined;
+  }
+}
+
+function place_comparison(target, symbol, placement) {
+  const entry = comparison_entries(target).get(symbol);
+  const config = comparison_configs[symbol];
+  const primary = primary_series(target);
+  if (entry === undefined || !(placement in COMPARISON_PLACEMENTS)) return false;
+  const main_scale = primary?.price_scale_id() ?? "right";
+  if (placement === "pane") {
+    if (entry.series.pane_index() === 0) {
+      // A pane-local named scale does not exist in the new pane; leave on the pane's built-in.
+      entry.series.move_to_price_scale(main_scale);
+      entry.series.move_to_pane(target.panes().length);
+    }
+    hide_comparison_scale(target, config);
+  } else {
+    if (entry.series.pane_index() !== 0) entry.series.move_to_pane(0);
+    if (placement === "same") {
+      entry.series.move_to_price_scale(main_scale);
+      hide_comparison_scale(target, config);
+    } else {
+      show_comparison_scale(target, config, placement);
+      entry.series.move_to_price_scale(config.scale_id);
+    }
+  }
+  entry.placement = placement;
+  sync_main_scale_mode(target);
+  sync_comparison_controls();
+  status.textContent = `${symbol} moved to ${COMPARISON_PLACEMENTS[placement].toLowerCase()}`;
+  return true;
+}
+
+function remove_comparison(target, symbol) {
+  const entries = comparison_entries(target);
+  const entry = entries.get(symbol);
+  if (entry === undefined) return;
+  target.remove_series(entry.series);
+  hide_comparison_scale(target, comparison_configs[symbol]);
+  entries.delete(symbol);
+  sync_main_scale_mode(target);
+  sync_comparison_controls();
+}
+
+function sync_comparison_controls() {
+  const target = active_chart();
+  const entries = comparison_entries(target);
+  document.getElementById("comparison_count").textContent = String(entries.size);
+  document.getElementById("comparison_clear").disabled = entries.size === 0;
+  const list = document.getElementById("comparison_list");
+  list.replaceChildren(...[...entries].map(([symbol, entry]) => {
+    const row = document.createElement("div");
+    row.className = "comparison-row";
+    row.setAttribute("role", "listitem");
+    row.dataset.symbol = symbol;
+    const swatch = document.createElement("span");
+    swatch.className = "comparison-swatch";
+    swatch.style.background = comparison_configs[symbol].up_color;
+    const name = document.createElement("span");
+    name.className = "comparison-name";
+    name.textContent = symbol;
+    const placement = document.createElement("select");
+    placement.setAttribute("aria-label", `${symbol} placement`);
+    placement.dataset.comparisonPlacement = symbol;
+    for (const [value, label] of Object.entries(COMPARISON_PLACEMENTS)) {
+      placement.add(new Option(label, value, false, value === entry.placement));
+    }
+    placement.addEventListener("change", () => place_comparison(target, symbol, placement.value));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Remove ${symbol}`);
+    remove.addEventListener("click", () => remove_comparison(target, symbol));
+    row.append(swatch, name, placement, remove);
+    return row;
+  }));
+  document.getElementById("comparison_hint").hidden = entries.size > 0;
+}
+
+function add_demo_comparison(symbol, target = active_chart(), placement = document.getElementById("comparison_placement").value) {
   const config = comparison_configs[symbol];
   if (config === undefined) return null;
   const entries = comparison_entries(target);
@@ -1305,33 +1498,8 @@ function add_demo_comparison(symbol, target = active_chart()) {
     status.textContent = `${symbol} is already on the active chart`;
     return entries.get(symbol).series;
   }
-
-  const existing_scale = target.price_scales().some((scale) => scale.id === config.scale_id);
-  if (existing_scale) {
-    target.price_scale(config.scale_id).apply_options({
-      visible: true,
-      minimum_width: 0,
-      scale_margins: { top: 0, bottom: 0 },
-    });
-  } else {
-    target.add_price_scale({
-      id: config.scale_id,
-      side: config.side,
-      visible: true,
-      minimum_width: 0,
-      scale_margins: { top: 0, bottom: 0 },
-    });
-  }
-  const series = target.add_series("candlestick", {
-    price_scale_id: config.scale_id,
-    title: symbol,
-    up_color: config.up_color,
-    down_color: config.down_color,
-    wick_up_color: config.up_color,
-    wick_down_color: config.down_color,
-    border_up_color: config.up_color,
-    border_down_color: config.down_color,
-  });
+  const [kind, options] = comparison_presentation(config, comparison_kind_for(target));
+  const series = target.add_series(kind, { ...options, title: symbol });
   series.set_data(generate_data(data.length, {
     seed: config.seed,
     start_price: config.start_price,
@@ -1339,22 +1507,15 @@ function add_demo_comparison(symbol, target = active_chart()) {
     wick_span: config.wick_span,
     end_time: data_end_time(),
   }));
-  entries.set(symbol, { series, scale_id: config.scale_id });
+  entries.set(symbol, { series, placement: "same" });
+  place_comparison(target, symbol, placement in COMPARISON_PLACEMENTS ? placement : "same");
   target.time_scale().fit_content();
-  sync_comparison_controls();
-  status.textContent = `${symbol} added on its own ${config.side} scale`;
+  status.textContent = `${symbol} added on the ${COMPARISON_PLACEMENTS[entries.get(symbol).placement].toLowerCase()}`;
   return series;
 }
 
 function clear_demo_comparisons(target = active_chart()) {
-  const entries = comparison_entries(target);
-  for (const { series, scale_id } of entries.values()) {
-    // Empty named scales intentionally retain their configuration; hide them so a later add can
-    // reuse the stable scale identity without leaving an empty axis strip in the demo.
-    target.price_scale(scale_id).apply_options({ visible: false });
-    target.remove_series(series);
-  }
-  entries.clear();
+  for (const symbol of [...comparison_entries(target).keys()]) remove_comparison(target, symbol);
   sync_comparison_controls();
   status.textContent = "Comparison symbols cleared";
 }
@@ -1365,6 +1526,7 @@ document.getElementById("comparison_add").addEventListener("click", () => {
 document.getElementById("comparison_clear").addEventListener("click", () => clear_demo_comparisons());
 window.__add_demo_comparison = add_demo_comparison;
 window.__clear_demo_comparisons = clear_demo_comparisons;
+window.__place_demo_comparison = (symbol, placement, target = active_chart()) => place_comparison(target, symbol, placement);
 
 function sync_drawing_tool_buttons(tool) {
   for (const button of drawing_tool_buttons) {
@@ -1860,11 +2022,7 @@ function sync_active_toolbar() {
   const current = active_series();
   const kind = current.series_type();
   const options = current.options();
-  const presented_kind = kind === "candlestick" && options.up_color === "transparent" && options.down_color === "transparent"
-    ? "hollow_candlestick"
-    : kind === "line" && options.point_markers
-      ? "line_markers"
-      : kind;
+  const presented_kind = presented_series_kind(current);
   document.getElementById("point_markers_toggle").checked = options.point_markers === true;
   document.getElementById("last_price_pulse_toggle").checked = options.last_price_animation === true;
   const radio = document.querySelector(`input[name="series"][value="${presented_kind}"]`);
@@ -2165,6 +2323,7 @@ document.querySelectorAll('input[name="series"]').forEach((el) => {
     document.getElementById("last_price_pulse_toggle").checked = active_series().options().last_price_animation === true;
     sync_style_visibility(kind);
     apply_main_style();
+    sync_comparison_kinds();
   });
 });
 document.getElementById("cross_mode").addEventListener("change", (e) => {

@@ -14,8 +14,10 @@ test("header comparison controls add and clear independently scaled symbols", as
   await wait_grid(page);
 
   await page.selectOption("#comparison_symbol", "MOON");
+  await page.selectOption("#comparison_placement", "left");
   await page.click("#comparison_add");
   await page.selectOption("#comparison_symbol", "ORBIT");
+  await page.selectOption("#comparison_placement", "right");
   await page.click("#comparison_add");
 
   const added = await page.evaluate(() => ({
@@ -70,6 +72,65 @@ test("header comparison controls add and clear independently scaled symbols", as
   await page.selectOption("#comparison_symbol", "MOON");
   await page.click("#comparison_add");
   expect(await page.evaluate(() => window.__chart.__demo_comparisons.size)).toBe(1);
+});
+
+test("comparisons follow the main series type and move between scales and panes", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/?panel=series");
+  await wait_grid(page);
+  const state = () => page.evaluate(() => {
+    const chart = window.__chart;
+    return {
+      panes: chart.panes().length,
+      main_mode: chart.price_scale(window.__main.price_scale_id()).options().mode,
+      entries: Object.fromEntries([...chart.__demo_comparisons].map(([symbol, entry]) => [symbol, {
+        kind: entry.series.series_type(),
+        pane: entry.series.pane_index(),
+        scale: entry.series.price_scale_id(),
+      }])),
+      sides: Object.fromEntries(chart.price_scales(0)
+        .filter((scale) => scale.id.startsWith("demo-comparison-") && scale.visible)
+        .map((scale) => [scale.id, scale.side])),
+    };
+  });
+
+  // The default placement shares the main scale, which switches to percentage while shared.
+  await page.locator('input[name="series"][value="bar"]').check();
+  await expect(page.locator("#comparison_placement")).toHaveValue("same");
+  await page.click("#comparison_add");
+  let current = await state();
+  expect(current.entries.MOON).toEqual({ kind: "bar", pane: 0, scale: "right" });
+  expect(current.main_mode).toBe(2);
+
+  await page.selectOption('[data-comparison-placement="MOON"]', "right");
+  current = await state();
+  expect(current.entries.MOON.scale).toBe("demo-comparison-moon");
+  expect(current.sides).toEqual({ "demo-comparison-moon": "right" });
+  expect(current.main_mode).toBe(0);
+  await page.selectOption('[data-comparison-placement="MOON"]', "left");
+  expect((await state()).sides).toEqual({ "demo-comparison-moon": "left" });
+
+  await page.selectOption('[data-comparison-placement="MOON"]', "pane");
+  current = await state();
+  expect(current.panes).toBe(2);
+  expect(current.entries.MOON.pane).toBe(1);
+  expect(current.sides).toEqual({});
+
+  await page.locator('input[name="series"][value="line"]').check();
+  expect((await state()).entries.MOON.kind).toBe("line");
+
+  await page.selectOption('[data-comparison-placement="MOON"]', "same");
+  current = await state();
+  expect(current.panes).toBe(1);
+  expect(current.entries.MOON.pane).toBe(0);
+  expect(current.main_mode).toBe(2);
+
+  await page.click('#comparison_list [aria-label="Remove MOON"]');
+  current = await state();
+  expect(current.entries).toEqual({});
+  expect(current.main_mode).toBe(0);
+  expect(errors).toEqual([]);
 });
 
 test("demo chrome and controls follow the chart theme", async ({ page }) => {

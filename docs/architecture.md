@@ -1384,7 +1384,10 @@ Drawings, Series, Lab, Workspace, Appearance), selected from the tool rail or th
 parameter; drawing tools are grouped by category inside the Drawings panel. The browser demo's
 optional Live mode (header toggle or `?live=1`, never under runtime fixtures) runs a simulated
 market in a Web Worker and applies its batches once per animation frame through the public API
-only: trade-stream updates, bar and volume updates, bid/ask, and depth updates. These shells retain the
+only: trade-stream updates, bar and volume updates, bid/ask, and depth updates. Demo comparison
+series follow the main series type and are placed through the public pane and price-scale API: on
+the main scale (switched to percentage mode while any comparison shares it), on a separate left or
+right scale, or in their own pane. These shells retain the
 existing engine/API action paths;
 the finite GPUI probe and browser runtime fixtures keep their dedicated measurement layouts.
 GPUI paints rotated text through transformed SVG sprites because its shaped-line painter has no
