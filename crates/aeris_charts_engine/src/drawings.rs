@@ -2783,14 +2783,17 @@ impl Drawing {
             options["profile_poc_visible"] = serde_json::json!(self.profile_poc_visible);
             options["profile_value_area_lines_visible"] =
                 serde_json::json!(self.profile_value_area_lines_visible);
-            for (name, slot) in [
-                ("profile_value_area_color", &self.profile_value_area_color),
-                ("profile_volume_color", &self.profile_volume_color),
-                ("profile_positive_color", &self.profile_positive_color),
-                ("profile_negative_color", &self.profile_negative_color),
-                ("profile_poc_color", &self.profile_poc_color),
+            // Reads report the painted color so settings panels can show the default; a patch
+            // with `""` still clears the override.
+            let colors = self.profile_colors();
+            for (name, color) in [
+                ("profile_value_area_color", colors.value_area),
+                ("profile_volume_color", colors.volume),
+                ("profile_positive_color", colors.positive),
+                ("profile_negative_color", colors.negative),
+                ("profile_poc_color", colors.poc),
             ] {
-                options[name] = serde_json::json!(slot.as_deref().unwrap_or(""));
+                options[name] = serde_json::json!(color.to_css());
             }
         }
         if self.kind == DrawingKind::RegressionTrend {

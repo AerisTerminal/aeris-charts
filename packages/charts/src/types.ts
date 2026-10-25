@@ -2517,8 +2517,22 @@ export type drawing_label_position = "above" | "on" | "below" | "inside" | "outs
 export interface drawing_label_options { metric: drawing_label_metric; visible: boolean; position: drawing_label_position; text?: string }
 export interface drawing_level { value: number; color: string; visible: boolean; style: string; fill_between: boolean; fill_color?: string; label_visible: boolean }
 export type drawing_wave_degree = "subminuette" | "minuette" | "minute" | "minor" | "intermediate" | "primary" | "cycle" | "supercycle" | "grand_supercycle";
-export type drawing_property_type = "boolean" | "number" | "integer" | "string" | "color" | "enum" | "points" | "levels" | "interval_set";
-export interface drawing_property_descriptor { name: string; property_type: drawing_property_type; default: unknown; min?: number; max?: number; enum_values: string[] }
+export type drawing_property_type = "boolean" | "number" | "integer" | "string" | "color" | "enum" | "points" | "levels" | "labels" | "interval_set";
+export type drawing_property_group = "general" | "inputs" | "style" | "text" | "coordinates" | "visibility";
+export interface drawing_property_descriptor {
+  name: string;
+  /** English display label. */
+  label: string;
+  /** Settings section; `general` properties belong to the object tree or toolbar, not a dialog. */
+  group: drawing_property_group;
+  /** Offered as a quick control on a floating drawing toolbar. */
+  toolbar?: boolean;
+  property_type: drawing_property_type;
+  default: unknown;
+  min?: number;
+  max?: number;
+  enum_values?: string[];
+}
 export interface drawing_property_schema { revision: number; kind: drawing_kind; properties: drawing_property_descriptor[] }
 
 /** A built-in vector icon: the `icon_name` value and inline SVG markup for pickers. */
@@ -2658,7 +2672,7 @@ export interface drawing_options {
   profile_poc_visible?: boolean;
   /** Value-area high/low lines in the drawing stroke (default true). */
   profile_value_area_lines_visible?: boolean;
-  /** Profile palette; `""` uses the engine default for that slot. */
+  /** Profile palette as painted (CSS); patching `""` restores the engine default for that slot. */
   profile_value_area_color?: string;
   profile_volume_color?: string;
   profile_positive_color?: string;

@@ -357,3 +357,57 @@ test("drawn fixed range volume profile reads the registered volume source", asyn
   expect(result.persisted?.rows).toBe(24);
   expect(result.persisted?.volume_color).toBe("#ff00ff");
 });
+
+test("demo profile tool draws without the volume toggle and its settings dialog edits options", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  await page.waitForFunction(() => performance.now() > 600);
+  await page.evaluate(() => document.querySelector("#drawings_group [data-tool='fixed_range_volume_profile']").click());
+  expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBe("fixed_range_volume_profile");
+  const point = (logical) => page.evaluate((logical) => {
+    const rect = document.getElementById("chart_container").getBoundingClientRect();
+    const close = window.__data[Math.round(logical)].close;
+    return {
+      x: rect.left + window.__chart.time_scale().logical_to_coordinate(logical),
+      y: rect.top + window.__main.price_to_coordinate(close),
+    };
+  }, logical);
+  const length = await page.evaluate(() => window.__data.length);
+  const start = await point(length - 120);
+  const end = await point(length - 30);
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  const poc = await page.evaluate(() => {
+    const chart = window.__chart;
+    const drawing = chart.drawings().find((item) => item.kind() === "fixed_range_volume_profile");
+    const snapshot = chart.profile_drawing_snapshot(drawing);
+    const rect = document.getElementById("chart_container").getBoundingClientRect();
+    return {
+      id: drawing.id,
+      total: snapshot?.data?.totalVolume ?? 0,
+      y: rect.top + window.__main.price_to_coordinate(snapshot.data.poc),
+    };
+  });
+  expect(poc.total).toBeGreaterThan(0);
+  expect(await page.isHidden("#drawing_settings")).toBe(true);
+  await page.mouse.dblclick(start.x + 12, poc.y);
+  await expect(page.locator("#drawing_settings")).toBeVisible();
+  const rows = page.locator("#drawing_settings [data-property='profile_rows']");
+  await expect(rows).toHaveValue("100");
+  await rows.fill("30");
+  await rows.dispatchEvent("change");
+  await page.locator("#drawing_settings [data-property='profile_delta_visible']").uncheck();
+  await page.locator("#drawing_settings [data-property='profile_poc_color']").evaluate((input) => {
+    input.value = "#00e5ff";
+    input.dispatchEvent(new Event("change"));
+  });
+  await rows.fill("0");
+  await rows.dispatchEvent("change");
+  const options = await page.evaluate((id) => window.__chart.drawings().find((item) => item.id === id).options(), poc.id);
+  expect(options.profile_rows).toBe(30);
+  expect(options.profile_delta_visible).toBe(false);
+  expect(options.profile_poc_color).toBe("#00e5ff");
+  await expect(rows).toHaveValue("30");
+  await page.click("#drawing_settings_close");
+  await expect(page.locator("#drawing_settings")).toBeHidden();
+});

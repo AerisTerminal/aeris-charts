@@ -143,6 +143,11 @@
   #chart_container { position: absolute; inset: 0; touch-action: none; overscroll-behavior: none; }
   #legend { position: absolute; top: 12px; left: 12px; z-index: 3; font-size: 12px; color: var(--text-default); background: color-mix(in srgb, var(--surface) 88%, transparent); padding: 5px 8px; border-radius: var(--radius-small); pointer-events: none; font-variant-numeric: tabular-nums; }
   #mobile_backdrop { display: none; }
+  #drawing_settings { position: absolute; top: 12px; right: 96px; z-index: 6; width: 260px; max-height: calc(100% - 24px); overflow: auto; padding: 12px; color: var(--text-default); background: var(--surface); border: 1px solid var(--border-secondary); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.35); font-size: 12px; }
+  #drawing_settings header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-weight: 600; font-size: 13px; }
+  #drawing_settings h3 { margin: 10px 0 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-secondary); }
+  #drawing_settings label { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
+  #drawing_settings input[type="number"], #drawing_settings select { width: 96px; }
   [data-runtime-chrome="hidden"] #wrap { grid-template-rows: minmax(0, 1fr); }
   [data-runtime-chrome="hidden"] #workspace { grid-template-columns: minmax(0, 1fr); }
   [data-runtime-chrome="hidden"] #tool_rail, [data-runtime-chrome="hidden"] #inspector { display: none; }
@@ -570,6 +575,7 @@
           <option value="bottom">bottom</option>
         </select>
       </label>
+      <button id="open_drawing_settings" type="button" title="Open settings for the selected drawing (or double-click a drawing)">settings</button>
       <button id="clear_drawings" type="button" title="Remove every drawing">clear all</button>
       <span class="hint">Ctrl = snap (while drawing) · Alt+click chart = fullscreen · Ctrl+H/V = split ↔/↕ · Shift = straighten</span>
     </div>
@@ -677,6 +683,10 @@
     <main id="chart_wrap">
       <div id="chart_container"></div>
       <div id="legend">O — H — L — C —</div>
+<section id="drawing_settings" role="dialog" aria-label="Drawing settings" hidden>
+  <header><span id="drawing_settings_title">Settings</span><button type="button" id="drawing_settings_close" aria-label="Close settings">×</button></header>
+  <div id="drawing_settings_fields"></div>
+</section>
     </main>
     <main id="general_workspace" aria-label="General charts workspace">
       <div class="general-error" id="general_dashboard_error" role="alert"></div>
@@ -920,9 +930,19 @@ window.__data = data;
 // price scale (industry-standard — no separate pane / divider), colored green/red by bar direction.
 const volume_data = volume_fixture(data);
 let vol_series = null;
-// Fixed Range and Anchored Volume Profile drawings aggregate the registered candle volume.
+// Profile drawings aggregate the registered candle volume. Arming a profile tool without the
+// visible histogram registers a hidden copy so the tool works immediately.
+let profile_volume = null;
 const register_profile_volume = () => {
-  if (["candlestick", "bar"].includes(main.series_type())) chart.set_series_volume_source(main, vol_series);
+  if (["candlestick", "bar"].includes(main.series_type())) chart.set_series_volume_source(main, vol_series ?? profile_volume);
+};
+const ensure_profile_volume = () => {
+  if (vol_series !== null || profile_volume !== null) return;
+  profile_volume = chart.add_series("histogram", {
+    overlay: true, visible: false, price_line_visible: false, last_value_visible: false,
+  });
+  profile_volume.set_data(volume_data);
+  register_profile_volume();
 };
 window.__demo_catalogs = install_demo_catalogs({ chart, series: main, data, on_series_change: sync_style_visibility });
 if (requested_feature === "trading") window.__demo_catalogs.lab.activate("trading-bracket");
@@ -1348,8 +1368,10 @@ function drawing_options_from_inputs(kind = null) {
   if (kind === "text") options.text = document.getElementById("drawing_text").value;
   return options;
 }
+const profile_tools = new Set(["fixed_range_volume_profile", "anchored_volume_profile", "anchored_vwap"]);
 function arm_drawing_tool(kind) {
   const tool = active_chart_router.active_drawing_tool() === kind ? null : kind;
+  if (profile_tools.has(tool) && active_chart() === chart) ensure_profile_volume();
   active_chart_router.set_drawing_tool(tool, drawing_options_from_inputs(tool));
 }
 for (const button of drawing_tool_buttons) {
@@ -1403,7 +1425,111 @@ function css_to_hex(css) {
   if (!m) return null;
   return "#" + [m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("");
 }
+// Settings dialog generated from the engine's per-kind property schema, so every tool gets its
+// own inputs and style options without demo code per tool.
+const drawing_settings = document.getElementById("drawing_settings");
+const drawing_settings_fields = document.getElementById("drawing_settings_fields");
+const drawing_settings_types = new Set(["boolean", "number", "integer", "color", "enum"]);
+const drawing_settings_groups = [["inputs", "Inputs"], ["style", "Style"], ["text", "Text"]];
+let drawing_settings_target = null;
+function close_drawing_settings() {
+  drawing_settings.hidden = true;
+  drawing_settings_target = null;
+}
+function open_drawing_settings() {
+  const selected = active_chart().selected_drawing();
+  if (selected === null) {
+    status.textContent = "Select a drawing first";
+    close_drawing_settings();
+    return;
+  }
+  drawing_settings_target = selected;
+  render_drawing_settings();
+}
+function render_drawing_settings() {
+  const drawing = drawing_settings_target;
+  drawing_settings_fields.replaceChildren();
+  if (drawing === null) return;
+  let schema;
+  let options;
+  try {
+    schema = active_chart().drawing_property_schema(drawing);
+    options = drawing.options();
+  } catch {
+    close_drawing_settings();
+    return;
+  }
+  document.getElementById("drawing_settings_title").textContent = drawing.kind().replaceAll("_", " ");
+  for (const [group, title] of drawing_settings_groups) {
+    const properties = schema.properties.filter((p) => p.group === group && drawing_settings_types.has(p.property_type));
+    if (properties.length === 0) continue;
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    drawing_settings_fields.append(heading);
+    for (const property of properties) drawing_settings_fields.append(drawing_setting_field(drawing, property, options[property.name] ?? property.default));
+  }
+  drawing_settings.hidden = false;
+}
+function drawing_setting_field(drawing, property, value) {
+  const label = document.createElement("label");
+  label.append(property.label || property.name);
+  let input;
+  if (property.property_type === "enum") {
+    input = document.createElement("select");
+    for (const choice of property.enum_values) input.add(new Option(choice.replaceAll("_", " "), choice));
+    input.value = value;
+  } else {
+    input = document.createElement("input");
+    if (property.property_type === "boolean") {
+      input.type = "checkbox";
+      input.checked = Boolean(value);
+    } else if (property.property_type === "color") {
+      input.type = "color";
+      input.value = css_to_hex(value) ?? "#000000";
+    } else {
+      input.type = "number";
+      input.step = property.property_type === "integer" ? "1" : "any";
+      if (property.min !== undefined) input.min = String(property.min);
+      if (property.max !== undefined) input.max = String(property.max);
+      input.value = String(value);
+    }
+  }
+  input.dataset.property = property.name;
+  input.addEventListener("change", () => {
+    const next = input.type === "checkbox" ? input.checked
+      : input.type === "number" ? Number(input.value)
+      : input.value;
+    try {
+      drawing.apply_options({ [property.name]: next });
+      status.textContent = `${property.label || property.name} updated`;
+    } catch {
+      status.textContent = `${property.label || property.name}: value rejected`;
+    }
+    render_drawing_settings();
+  });
+  label.append(input);
+  return label;
+}
+document.getElementById("drawing_settings_close").addEventListener("click", close_drawing_settings);
+document.getElementById("open_drawing_settings").addEventListener("click", open_drawing_settings);
+chart.subscribe_dbl_click(() => {
+  // A double-click that opened inline text editing keeps focus in the editor; leave it alone.
+  setTimeout(() => {
+    if (document.activeElement?.matches?.("input, textarea, [contenteditable='true']")) return;
+    if (active_chart().selected_drawing() !== null) open_drawing_settings();
+  }, 0);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !drawing_settings.hidden) close_drawing_settings();
+});
+function sync_drawing_settings_with_selection() {
+  if (drawing_settings_target === null) return;
+  const selected = active_chart().selected_drawing();
+  if (selected === null || selected.id !== drawing_settings_target.id) close_drawing_settings();
+  else render_drawing_settings();
+}
 function sync_drawing_inputs_from_selection() {
+  sync_drawing_settings_with_selection();
   const selected = active_chart().selected_drawing();
   const position_order_button = document.getElementById("place_position_order");
   const position_selected = selected !== null && ["long_position", "short_position"].includes(selected.kind());
@@ -1836,6 +1962,7 @@ document.getElementById("vol_toggle").addEventListener("change", (e) => {
     // Exercises the real remove_series API (tombstones the engine slot, not just clears data).
     chart.remove_series(vol_series);
     vol_series = null;
+    register_profile_volume();
   }
 });
 

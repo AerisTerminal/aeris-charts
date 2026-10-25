@@ -137,7 +137,9 @@ shows delta left of its spine, total volume right of it with the value area high
 POC lines, and price-axis tags (`price_labels_visible`). Options: `profile_rows` (1–2,048, default
 100), `profile_value_area_percent` and `profile_width_percent` (>0–100, defaults 70 and 40),
 `profile_delta_visible`, `profile_poc_visible`, `profile_value_area_lines_visible`, and the
-`profile_{value_area,volume,positive,negative,poc}_color` palette (`""` restores the default).
+`profile_{value_area,volume,positive,negative,poc}_color` palette (reads report the painted color;
+patching `""` restores the default). `drawing_property_schema(drawing)` lists these with labels,
+groups and bounds, so a host settings dialog can render them without per-tool code.
 Invalid values reject the whole patch. These options persist in V1 state under `volume_profile`.
 Candle-sourced delta is a close-versus-open estimate, not aggressor flow.
 
