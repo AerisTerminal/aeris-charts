@@ -8,15 +8,17 @@ impl ChartEngine {
     /// Keep the stored crosshair position for host callbacks and snapping, but do not paint its
     /// lines, markers, or labels through the object the pointer is acting on.
     pub(crate) fn crosshair_suppressed_by_interaction(&self) -> bool {
-        // A live Shift-click measure reads the pointer through the crosshair, even while it
-        // passes over other chart objects.
-        if self.measure_following() {
+        // Placing a drawing or a live Shift-click measure reads the pointer through the
+        // crosshair, even while it passes over other chart objects.
+        if self.measure_following()
+            || self.active_drawing_tool().is_some()
+            || self.pending_drawing().is_some()
+            || self.brush_capture().is_some()
+        {
             return false;
         }
         self.hovered_drawing.is_some()
             || self.drawing_drag.is_some()
-            || self.pending_drawing().is_some()
-            || self.brush_capture().is_some()
             || self.trading_state.feedback_hover.is_some()
             || matches!(
                 self.trading_state.interaction,

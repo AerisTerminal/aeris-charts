@@ -14234,7 +14234,7 @@ fn trading_objects_suppress_the_visual_crosshair_without_clearing_its_position()
 }
 
 #[test]
-fn drawing_hover_drag_and_creation_suppress_the_visual_crosshair() {
+fn drawing_hover_and_drag_suppress_the_visual_crosshair_but_creation_keeps_it() {
     let mut chart = crosshair_chart();
     configure_distinct_crosshair(&mut chart);
     let id = chart
@@ -14269,8 +14269,20 @@ fn drawing_hover_drag_and_creation_suppress_the_visual_crosshair() {
     assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
 
     assert!(chart.drawing_create_begin(crate::DrawingKind::Rectangle, None));
-    assert_eq!(visual_crosshair_presence(&mut chart), (false, false));
+    assert!(!chart.crosshair_suppressed_by_interaction());
+    assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
+    // Placing a new drawing across an existing one keeps the crosshair the anchor snaps to.
+    chart.set_hovered_drawing(Some(id));
+    assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
+    chart.set_hovered_drawing(None);
     chart.drawing_create_cancel();
+    assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
+
+    let (x, y) = (chart.time_scale.index_to_coordinate(1), 250.0);
+    assert!(chart.brush_create_start(None, x, y));
+    chart.brush_create_add(x + 40.0, y + 20.0);
+    assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
+    chart.brush_create_cancel();
     assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
 }
 

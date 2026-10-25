@@ -3628,7 +3628,11 @@ fn ctrl_magnet_snaps_the_crosshair_to_ohlc() {
     let (from, to) = chart.visible_range_for_frame().unwrap();
     let snapped_y = chart.crosshair_snap(0, x, y_free, from, to).1;
     assert_eq!(snapped_y.round() as i32, y_at(&chart, 12.0).round() as i32);
-    assert_eq!(crosshair_hline_y(&mut chart), None);
+    assert_eq!(
+        crosshair_hline_y(&mut chart),
+        Some(snapped_y.round() as i32),
+        "the crosshair stays visible on the snapped price while placing"
+    );
     let drawing_id = chart.drawing_create_click(x, y_free, MAGNET) as DrawingId;
     let (_, drawing_y) = chart
         .drawing_to_px(0, chart.drawing(drawing_id).unwrap().points[0])

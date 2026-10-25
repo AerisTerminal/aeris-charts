@@ -1680,7 +1680,7 @@ timer, or DOM node exactly once; none of that runtime state enters engine persis
 
 The engine input controller owns the crosshair-action chip as a press target: hovering it resolves the pointer cursor, its press prevents chart pan and selection underneath, and an unmoved release within the hit area emits the shared action request. Pointer cancellation discards the pending press. The GPUI demo shows the request's pane and price in its status line.
 
-Interactive chart objects own pointer feedback: the shared frame suppresses the complete visual crosshair (lines, markers, and axis labels) while any trading object or drawing is hovered, created, or dragged. A following Shift-click measure is the exception: it reads the pointer through the crosshair, so the crosshair stays visible even over other objects. The engine retains the crosshair position for snapping and host callbacks, while each host continues to show the object's pointer, click, grab, or drag cursor.
+Interactive chart objects own pointer feedback: the shared frame suppresses the complete visual crosshair (lines, markers, and axis labels) while any trading object or drawing is hovered or dragged. Placing a drawing (an armed tool, a pending multi-point creation, or a freehand brush stroke) and a following Shift-click measure are the exceptions: they read the pointer through the crosshair, so the crosshair stays visible even over other objects. The engine retains the crosshair position for snapping and host callbacks, while each host continues to show the object's pointer, click, grab, or drag cursor.
 
 ## Performance contract
 
