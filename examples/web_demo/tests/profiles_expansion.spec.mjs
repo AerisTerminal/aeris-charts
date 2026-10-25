@@ -352,7 +352,7 @@ test("drawn fixed range volume profile reads the registered volume source", asyn
   expect(result.cleared).toBe(0);
   expect(result.rows).toBe(24);
   expect(result.value_area).toBe(70);
-  expect(result.price_labels).toBe(true);
+  expect(result.price_labels).toBe(false);
   expect(result.rows_after_reject).toBe(24);
   expect(result.persisted?.rows).toBe(24);
   expect(result.persisted?.volume_color).toBe("#ff00ff");
@@ -364,33 +364,58 @@ test("demo profile tool draws without the volume toggle and its settings dialog 
   await page.waitForFunction(() => performance.now() > 600);
   await page.evaluate(() => document.querySelector("#drawings_group [data-tool='fixed_range_volume_profile']").click());
   expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBe("fixed_range_volume_profile");
-  const point = (logical) => page.evaluate((logical) => {
-    const rect = document.getElementById("chart_container").getBoundingClientRect();
-    const close = window.__data[Math.round(logical)].close;
-    return {
-      x: rect.left + window.__chart.time_scale().logical_to_coordinate(logical),
-      y: rect.top + window.__main.price_to_coordinate(close),
-    };
-  }, logical);
   const length = await page.evaluate(() => window.__data.length);
-  const start = await point(length - 120);
-  const end = await point(length - 30);
-  await page.mouse.click(start.x, start.y);
-  await page.mouse.click(end.x, end.y);
-  const poc = await page.evaluate(() => {
+  // The box spans the range's full traded prices: top-left above the highs, bottom-right below the lows.
+  const corners = await page.evaluate(({ from, to }) => {
+    const rect = document.getElementById("chart_container").getBoundingClientRect();
+    const bars = window.__data.slice(from, to + 1);
+    const high = Math.max(...bars.map((bar) => bar.high));
+    const low = Math.min(...bars.map((bar) => bar.low));
+    const pad = (high - low) * 0.05;
+    const x = (logical) => rect.left + window.__chart.time_scale().logical_to_coordinate(logical);
+    const y = (price) => rect.top + window.__main.price_to_coordinate(price);
+    return {
+      start: { x: x(from), y: y(high + pad) },
+      end: { x: x(to), y: y(low - pad) },
+      middle: { y: y((high + low) / 2) },
+    };
+  }, { from: length - 120, to: length - 30 });
+  const { start, end } = corners;
+  // A loose click pair inside the range: the box still snaps to the traded high and low.
+  await page.mouse.click(start.x, corners.middle.y - 10);
+  await page.mouse.click(end.x, corners.middle.y + 10);
+  const profile = () => page.evaluate(() => {
     const chart = window.__chart;
     const drawing = chart.drawings().find((item) => item.kind() === "fixed_range_volume_profile");
     const snapshot = chart.profile_drawing_snapshot(drawing);
     const rect = document.getElementById("chart_container").getBoundingClientRect();
+    const top = Math.max(...drawing.points().map((point) => point.price));
     return {
       id: drawing.id,
       total: snapshot?.data?.totalVolume ?? 0,
+      fit: drawing.options().profile_fit_prices,
+      top_y: rect.top + window.__main.price_to_coordinate(top),
       y: rect.top + window.__main.price_to_coordinate(snapshot.data.poc),
     };
   });
+  await expect.poll(async () => (await profile()).top_y).toBeLessThan(corners.middle.y - 40);
+  const poc = await profile();
   expect(poc.total).toBeGreaterThan(0);
+  expect(poc.fit).toBe(true);
+  // Dragging the selected box's top edge down to the middle pins it and profiles only the lower half.
+  const mid_x = (start.x + end.x) / 2;
+  await page.mouse.move(mid_x, poc.top_y);
+  await page.mouse.down();
+  await page.mouse.move(mid_x, corners.middle.y, { steps: 4 });
+  await page.mouse.up();
+  const narrowed = await profile();
+  expect(narrowed.fit).toBe(false);
+  expect(narrowed.total).toBeGreaterThan(0);
+  expect(narrowed.total).toBeLessThan(poc.total);
+  await page.evaluate(() => window.__chart.undo_drawing());
+  await expect.poll(async () => (await profile()).total).toBe(poc.total);
   expect(await page.isHidden("#drawing_settings")).toBe(true);
-  await page.mouse.dblclick(start.x + 12, poc.y);
+  await page.mouse.dblclick(start.x, poc.y);
   await expect(page.locator("#drawing_settings")).toBeVisible();
   const rows = page.locator("#drawing_settings [data-property='profile_rows']");
   await expect(rows).toHaveValue("100");

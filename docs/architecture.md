@@ -710,12 +710,19 @@ catalog. The engine resolves each drawing's source itself (`profile_drawings.rs`
 footprint series in the drawing's pane, then the candle volume series the host registered for a
 candlestick or bar series with `set_series_volume_source`. Hosts therefore supply only data; a tool
 drawn interactively renders as soon as a source exists. Frame refresh keeps one cached snapshot per
-live profile drawing, keyed by source, anchor time range, rows and value-area percent, and
-recalculates only when that key or the source revision changes; tape rows merge whole ticks to fit
-the row count. Volume-profile drawings paint a Deepcharts-style dual histogram around a spine at
+live profile drawing, keyed by source, anchor time range, price window, rows and value-area percent,
+and recalculates only when that key or the source revision changes; tape rows merge whole ticks to
+fit the row count, and candle rows are capped at the candle model's 512. The fixed-range profile is
+a box: its two anchors are opposite corners, so it shares the rectangle's eight handles and edge
+and corner drags. While `profile_fit_prices` holds (the default), frame refresh snaps the box's top
+and bottom anchors to the traded high and low of its time span. Dragging a top or bottom handle
+clears it, and the box then limits the profile to trades (or the uniform share of each candle's
+range) inside its price window. The box paints and stays hittable before any source exists. Like
+a rectangle, profile drawings hit on their spine and box edges only; the histogram and box
+interior grab the drawing once it is selected, so an unselected profile never blocks panning. Volume-profile drawings paint a Deepcharts-style dual histogram around a spine at
 the first anchor (aggressor or candle-direction delta to the left, total volume to the right with the
 value area highlighted), VAH/VAL lines in the drawing stroke, a POC line, optional extension to the
-pane edge, and POC/VAH/VAL price-axis tags. Rows, value-area percent, width, visibility toggles and
+pane edge, and opt-in POC/VAH/VAL price-axis tags. Rows, value-area percent, width, visibility toggles and
 the five palette colors are drawing options validated by the patch path and persisted in the V1
 `volume_profile` style block.
 Consecutive TPO boundaries with the same host session identity merge into one profile with

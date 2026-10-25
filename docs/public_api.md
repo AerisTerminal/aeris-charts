@@ -124,8 +124,9 @@ The older `create_volume_profile()` helper remains a drawing of caller-supplied 
 
 ```ts
 chart.set_series_volume_source(candles, volume); // null clears the registration
+// Opposite box corners; the box's top and bottom snap to the traded range of bars 120–240.
 const frvp = chart.add_drawing("fixed_range_volume_profile", [
-  { logical: 120, price: 100 }, { logical: 240, price: 100 },
+  { logical: 120, price: 110 }, { logical: 240, price: 95 },
 ]);
 frvp.apply_options({ profile_rows: 80, profile_value_area_percent: 70, extend_right: true });
 ```
@@ -133,9 +134,12 @@ frvp.apply_options({ profile_rows: 80, profile_value_area_percent: 70, extend_ri
 The tool needs no per-drawing setup. It aggregates the trade tape when an order-flow presentation
 or footprint series is installed in its pane, otherwise the volume series registered for the
 candlestick or bar series. `configure_profile_drawing` still pins an explicit source. The drawing
-shows delta left of its spine, total volume right of it with the value area highlighted, VAH/VAL and
-POC lines, and price-axis tags (`price_labels_visible`). Options: `profile_rows` (1–2,048, default
-100), `profile_value_area_percent` and `profile_width_percent` (>0–100, defaults 70 and 40),
+is a box with corner and edge handles. Its left and right edges set the time range, and its top and
+bottom follow the traded high and low while `profile_fit_prices` is true (the default). Dragging a
+top or bottom handle sets it false, so the box then limits the profiled prices; patching it back to
+true re-fits the box. Unselected, only the spine and box edges are hit targets. It shows delta left of its spine, total volume right of it with the value area highlighted, VAH/VAL and
+POC lines, and optional price-axis tags (`price_labels_visible`, default false). Options: `profile_rows` (1–2,048, default
+100; candle-sourced profiles paint at most 512), `profile_value_area_percent` and `profile_width_percent` (>0–100, defaults 70 and 40),
 `profile_delta_visible`, `profile_poc_visible`, `profile_value_area_lines_visible`, and the
 `profile_{value_area,volume,positive,negative,poc}_color` palette (reads report the painted color;
 patching `""` restores the default). `drawing_property_schema(drawing)` lists these with labels,

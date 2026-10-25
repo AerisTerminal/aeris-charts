@@ -1234,6 +1234,99 @@ fn a_selected_rectangle_paints_eight_handles_and_a_styleable_border() {
 }
 
 #[test]
+fn a_fixed_range_profile_box_fits_the_traded_range_until_an_edge_pins_it() {
+    let mut chart = settled_chart();
+    let volume = chart.add_series(SeriesKind::Histogram);
+    let times = (0..10).map(|i| (i * 3600) as f64).collect::<Vec<_>>();
+    let volumes = [1.0; 10];
+    chart
+        .set_series_data(volume, &times, &volumes, &volumes, &volumes, &volumes)
+        .unwrap();
+    assert!(chart.set_series_volume_source(0, Some(volume)));
+    // Drawn with a loose box: the profile still covers every traded price of bars 1..=8.
+    let id = chart
+        .add_drawing(
+            DrawingKind::FixedRangeVolumeProfile,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 11.5,
+                },
+                DrawingPoint {
+                    logical: 8.0,
+                    price: 11.2,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let profiled = |chart: &ChartEngine| {
+        let Ok(crate::ProfileDrawingSnapshot::Volume(profile)) = chart.profile_drawing_snapshot(id)
+        else {
+            panic!("volume snapshot");
+        };
+        profile.rows.iter().map(|row| row.total_volume).sum::<f64>()
+    };
+    assert!((profiled(&chart) - 8.0).abs() < 1e-9);
+    chart.build_frame();
+    let drawing = chart.drawing(id).unwrap();
+    assert!(drawing.profile_fit_prices);
+    let (top, bottom) = (drawing.points[0].price, drawing.points[1].price);
+    assert!(
+        top >= 13.0 && bottom <= 10.0,
+        "box snapped to {bottom}..{top}"
+    );
+    assert!((drawing.points[0].logical - 1.0).abs() < 1e-9);
+
+    chart.set_selected_drawing(Some(id));
+    let frame = chart.build_frame();
+    let handles = painted_handles(&frame);
+    let squares = handles.iter().filter(|handle| handle.2).count();
+    assert_eq!(
+        handles.len() - squares,
+        4,
+        "four round corners: {handles:?}"
+    );
+    assert_eq!(squares, 4, "four square midpoints: {handles:?}");
+
+    // Moving the right edge left re-fits the box to the shorter range (bars 1..=4 top out at 12).
+    let mid_y = (y_at(&chart, top) + y_at(&chart, bottom)) / 2.0;
+    assert!(chart.drawing_drag_start_at(x_at(&chart, 8.0), mid_y));
+    chart.drawing_drag_to(x_at(&chart, 4.0), mid_y, DrawingModifiers::default());
+    chart.drawing_drag_end();
+    chart.build_frame();
+    let drawing = chart.drawing(id).unwrap();
+    assert!(drawing.profile_fit_prices);
+    assert!(drawing.points[0].price < 13.0, "{:?}", drawing.points);
+
+    // Pulling the top edge below the 12 bar pins the box and drops that volume.
+    let high = drawing.points[0].price;
+    let mx = (x_at(&chart, 1.0) + x_at(&chart, 4.0)) / 2.0;
+    assert!(chart.drawing_drag_start_at(mx, y_at(&chart, high)));
+    chart.drawing_drag_to(mx, y_at(&chart, 11.5), DrawingModifiers::default());
+    chart.drawing_drag_end();
+    chart.build_frame();
+    assert!(!chart.drawing(id).unwrap().profile_fit_prices);
+    assert!(
+        (profiled(&chart) - 3.0).abs() < 1e-9,
+        "{}",
+        profiled(&chart)
+    );
+    assert!(chart.drawing(id).unwrap().points[0].price < 12.0);
+
+    // Unselected, the box's right edge grabs it and the open chart beside it does not.
+    chart.set_selected_drawing(None);
+    let right = x_at(&chart, 4.0);
+    let inside_y = y_at(&chart, 10.8);
+    assert_eq!(
+        chart.hit_test_drawing(right, inside_y).map(|hit| hit.id),
+        Some(id)
+    );
+    assert!(chart.hit_test_drawing(right + 20.0, inside_y).is_none());
+}
+
+#[test]
 fn rectangle_border_default_and_explicit_override_survive_persistence() {
     let mut chart = settled_chart();
     let id = chart

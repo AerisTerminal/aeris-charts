@@ -685,6 +685,14 @@ pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
         s.add(Style, "position_loss_color", "Stop", Color)
             .on_toolbar();
     }
+    if kind == DrawingKind::FixedRangeVolumeProfile {
+        s.add(
+            Style,
+            "profile_fit_prices",
+            "Fit box to traded range",
+            Boolean,
+        );
+    }
     if kind.is_volume_profile() {
         s.add(Style, "profile_width_percent", "Width %", Number)
             .bounded(1.0, 100.0);

@@ -471,9 +471,12 @@ impl DrawingBounds {
                 max: max_logical,
             },
         };
+        // A zero-height fixed range box profiles every price, so its rows are unbounded.
+        let unbounded_profile = drawing.kind == DrawingKind::FixedRangeVolumeProfile
+            && drawing.profile_price_window().is_none();
         let (min_price, max_price) = match spec.price_extent {
             DrawingPriceExtent::Full => (None, None),
-            DrawingPriceExtent::Finite if line_extension => (None, None),
+            DrawingPriceExtent::Finite if line_extension || unbounded_profile => (None, None),
             DrawingPriceExtent::Finite => (Some(min_price), Some(max_price)),
         };
         Self {
@@ -1119,6 +1122,9 @@ pub struct Drawing {
     pub profile_value_area_percent: f64,
     /// Longest histogram bar on each side of the spine, as a percent of the profiled time span.
     pub profile_width_percent: f64,
+    /// Fixed range box only: the box's top and bottom follow the traded high and low of its time
+    /// span. Dragging a top or bottom handle clears it, so the box then limits the price range.
+    pub profile_fit_prices: bool,
     /// Delta histogram left of the spine; total volume always paints right of it.
     pub profile_delta_visible: bool,
     pub profile_poc_visible: bool,
@@ -1455,7 +1461,7 @@ impl Drawing {
             level_label_v_align: DrawingTextVAlign::Top,
             level_trend_line: false,
             middle_point_visible: false,
-            price_labels_visible: kind.is_volume_profile(),
+            price_labels_visible: false,
             stats_position: DrawingTextHAlign::Right,
             stats_always_visible: kind == DrawingKind::InfoLine,
             screen_x: 0.5,
@@ -1471,6 +1477,7 @@ impl Drawing {
             profile_rows: crate::profile_drawings::DEFAULT_PROFILE_DRAWING_ROWS,
             profile_value_area_percent: crate::profile_drawings::DEFAULT_PROFILE_DRAWING_VALUE_AREA,
             profile_width_percent: crate::profile_drawings::DEFAULT_PROFILE_DRAWING_WIDTH,
+            profile_fit_prices: true,
             profile_delta_visible: true,
             profile_poc_visible: true,
             profile_value_area_lines_visible: true,
@@ -2138,6 +2145,8 @@ pub(crate) struct DrawingPatch {
     profile_value_area_percent: Option<f64>,
     #[serde(alias = "profileWidthPercent")]
     profile_width_percent: Option<f64>,
+    #[serde(alias = "profileFitPrices")]
+    profile_fit_prices: Option<bool>,
     #[serde(alias = "profileDeltaVisible")]
     profile_delta_visible: Option<bool>,
     #[serde(alias = "profilePocVisible")]
@@ -2280,6 +2289,9 @@ impl Drawing {
             || patch.profile_positive_color.is_some()
             || patch.profile_negative_color.is_some()
             || patch.profile_poc_color.is_some();
+        if patch.profile_fit_prices.is_some() && self.kind != DrawingKind::FixedRangeVolumeProfile {
+            return false;
+        }
         if profile_patched
             && (!self.kind.is_volume_profile()
                 || patch
@@ -2673,6 +2685,9 @@ impl Drawing {
         if let Some(value) = patch.profile_width_percent {
             self.profile_width_percent = value;
         }
+        if let Some(value) = patch.profile_fit_prices {
+            self.profile_fit_prices = value;
+        }
         if let Some(value) = patch.profile_delta_visible {
             self.profile_delta_visible = value;
         }
@@ -2780,6 +2795,9 @@ impl Drawing {
                 serde_json::json!(self.profile_value_area_percent);
             options["profile_width_percent"] = serde_json::json!(self.profile_width_percent);
             options["profile_delta_visible"] = serde_json::json!(self.profile_delta_visible);
+            if self.kind == DrawingKind::FixedRangeVolumeProfile {
+                options["profile_fit_prices"] = serde_json::json!(self.profile_fit_prices);
+            }
             options["profile_poc_visible"] = serde_json::json!(self.profile_poc_visible);
             options["profile_value_area_lines_visible"] =
                 serde_json::json!(self.profile_value_area_lines_visible);
@@ -4499,7 +4517,7 @@ impl ChartEngine {
         Some(id)
     }
 
-    fn update_drawing_runtime(&self, id: DrawingId) {
+    pub(crate) fn update_drawing_runtime(&self, id: DrawingId) {
         let Some(drawing) = self.drawing(id) else {
             return;
         };
@@ -6381,6 +6399,14 @@ impl ChartEngine {
             drawing.snap_time_to_data,
         );
         let magnet = effective_drawing_magnet(modifiers, drawing.magnet);
+        // Moving the fixed range box's top or bottom edge pins its price range.
+        if kind == DrawingKind::FixedRangeVolumeProfile
+            && matches!(part, DrawingDragPart::Anchor(slot) if slot != 3 && slot != 7)
+            && dy != 0.0
+            && let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id)
+        {
+            drawing.profile_fit_prices = false;
+        }
         if kind == DrawingKind::AnchoredText {
             let (dx, dy) = if modifiers.straighten && part == DrawingDragPart::Body {
                 if dx.abs() >= dy.abs() {

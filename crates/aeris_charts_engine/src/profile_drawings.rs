@@ -7,6 +7,11 @@
 //! pane's primary price series. Frame construction, hit testing, and axis labels read one
 //! cached snapshot through [`ChartEngine::profile_drawing_data`] and one geometry resolver, so
 //! every consumer sees identical rows and levels.
+//!
+//! A fixed range profile is a box: its two anchors are opposite corners and its time span
+//! selects the bars or trades. While `profile_fit_prices` holds, frame refresh snaps the box's
+//! top and bottom to the traded high and low; once the user resizes either edge, the box's
+//! price span limits the profiled prices instead. A zero-height box profiles every price.
 
 use std::borrow::Cow;
 
@@ -43,6 +48,7 @@ pub(crate) struct ProfileDrawingKey {
     rows: usize,
     value_area_percent: f64,
     band_multiplier: f64,
+    price_window: Option<(f64, f64)>,
 }
 
 #[derive(Clone, Debug)]
@@ -110,6 +116,19 @@ impl DrawingKind {
 }
 
 impl Drawing {
+    /// The fixed range box's inclusive price span, or `None` for an unbounded profile.
+    pub(crate) fn profile_price_window(&self) -> Option<(f64, f64)> {
+        if self.kind != DrawingKind::FixedRangeVolumeProfile || self.profile_fit_prices {
+            return None;
+        }
+        let (a, b) = (self.points.first()?.price, self.points.get(1)?.price);
+        let (low, high) = (a.min(b), a.max(b));
+        let representable = low.is_finite()
+            && high.is_finite()
+            && high - low > f64::EPSILON * high.abs().max(low.abs()).max(1.0);
+        representable.then_some((low, high))
+    }
+
     pub(crate) fn profile_colors(&self) -> ProfileDrawingColors {
         ProfileDrawingColors {
             value_area: css_or(
@@ -129,6 +148,21 @@ impl Drawing {
             line: Color::parse_css(&self.color).unwrap_or(crate::frame::PRIMARY),
         }
     }
+}
+
+/// The inclusive low and high of a profile's rows, or `None` without rows.
+fn profile_price_extent(profile: &ProfileSnapshot) -> Option<(f64, f64)> {
+    let low = profile
+        .rows
+        .iter()
+        .map(|row| row.low)
+        .fold(f64::INFINITY, f64::min);
+    let high = profile
+        .rows
+        .iter()
+        .map(|row| row.high)
+        .fold(f64::NEG_INFINITY, f64::max);
+    (low.is_finite() && high.is_finite()).then_some((low, high))
 }
 
 pub(crate) fn valid_profile_drawing_rows(rows: usize) -> bool {
@@ -312,6 +346,7 @@ impl ChartEngine {
                 .profile
                 .as_ref()
                 .map_or(1.0, |options| options.band_multiplier),
+            price_window: drawing.profile_price_window(),
         })
     }
 
@@ -335,18 +370,20 @@ impl ChartEngine {
             ProfileSource::Tape { stream_id } => self.tape_profile_row_tick(stream_id, key)?,
             ProfileSource::Candles { .. } => key.tick,
         };
-        self.volume_profile_snapshot_impl(
-            &ProfileRequest {
-                source: key.source,
-                start_timestamp_micros: key.start_micros,
-                end_timestamp_micros: key.end_micros,
-                tick_size,
-                row_count: key.rows,
-                value_area_percent: key.value_area_percent,
-            },
-            include_developing,
-            None,
-        )
+        let request = ProfileRequest {
+            source: key.source,
+            start_timestamp_micros: key.start_micros,
+            end_timestamp_micros: key.end_micros,
+            tick_size,
+            row_count: key.rows,
+            value_area_percent: key.value_area_percent,
+        };
+        match key.price_window {
+            Some(window) => {
+                self.volume_profile_window_snapshot(&request, window, include_developing)
+            }
+            None => self.volume_profile_snapshot_impl(&request, include_developing, None),
+        }
         .ok()
         .map(ProfileDrawingSnapshot::Volume)
     }
@@ -362,6 +399,9 @@ impl ChartEngine {
                 trade.timestamp_micros >= key.start_micros
                     && trade.timestamp_micros < key.end_micros
                     && trade.price.is_finite()
+                    && key
+                        .price_window
+                        .is_none_or(|(low, high)| low <= trade.price && trade.price <= high)
             })
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), trade| {
                 (low.min(trade.price), high.max(trade.price))
@@ -392,8 +432,9 @@ impl ChartEngine {
         self.compute_profile_drawing(&key, false).map(Cow::Owned)
     }
 
-    /// Recalculate only profile drawings whose inputs changed. Entries are bounded by live
-    /// profile drawings; a change invalidates the retained drawing layer once.
+    /// Recalculate only profile drawings whose inputs changed, then snap fitted fixed range
+    /// boxes to their traded range. Entries are bounded by live profile drawings; a change
+    /// invalidates the retained drawing layer once.
     pub(crate) fn refresh_profile_drawings(&mut self) {
         let before = self.profile_drawing_cache.len();
         let drawings = &self.drawings;
@@ -429,6 +470,41 @@ impl ChartEngine {
                     self.profile_drawing_recalculations.wrapping_add(1);
             }
         }
+        let mut fitted = Vec::new();
+        for drawing in self.drawings.iter().filter(|drawing| {
+            drawing.kind == DrawingKind::FixedRangeVolumeProfile
+                && drawing.profile_fit_prices
+                && drawing.points.len() == 2
+        }) {
+            let Some(ProfileDrawingSnapshot::Volume(profile)) = self
+                .profile_drawing_cache
+                .iter()
+                .find(|entry| entry.id == drawing.id)
+                .and_then(|entry| entry.snapshot.as_ref())
+            else {
+                continue;
+            };
+            let Some((low, high)) = profile_price_extent(profile) else {
+                continue;
+            };
+            // The anchor that was higher stays the top corner.
+            let (top, bottom) = if drawing.points[0].price >= drawing.points[1].price {
+                (0, 1)
+            } else {
+                (1, 0)
+            };
+            if drawing.points[top].price != high || drawing.points[bottom].price != low {
+                fitted.push((drawing.id, top, bottom, low, high));
+            }
+        }
+        for (id, top, bottom, low, high) in fitted {
+            if let Some(drawing) = self.drawings.iter_mut().find(|drawing| drawing.id == id) {
+                drawing.points[top].price = high;
+                drawing.points[bottom].price = low;
+            }
+            self.update_drawing_runtime(id);
+            changed = true;
+        }
         if changed {
             self.invalidate_frame_drawings();
         }
@@ -441,11 +517,12 @@ impl ChartEngine {
     }
 
     /// Media-space layout of a volume profile drawing. `anchors_x` are the drawing's rendered
-    /// anchor x positions (media px); the price axis resolves row edges and levels.
+    /// anchor x positions (media px); the price axis resolves row edges and levels. A fixed
+    /// range box has a layout before any data arrives; an anchored profile needs its rows.
     pub(crate) fn profile_drawing_geometry(
         &self,
         drawing: &Drawing,
-        profile: &ProfileSnapshot,
+        profile: Option<&ProfileSnapshot>,
         anchors_x: &[f64],
     ) -> Option<ProfileDrawingGeometry> {
         let first = *anchors_x.first()?;
@@ -471,16 +548,17 @@ impl ChartEngine {
             }
             _ => return None,
         };
-        let high = profile
-            .rows
-            .iter()
-            .map(|row| row.high)
-            .fold(f64::NEG_INFINITY, f64::max);
-        let low = profile
-            .rows
-            .iter()
-            .map(|row| row.low)
-            .fold(f64::INFINITY, f64::min);
+        let (mut low, mut high) = profile
+            .and_then(profile_price_extent)
+            .unwrap_or((f64::INFINITY, f64::NEG_INFINITY));
+        if let Some(window) = drawing.profile_price_window() {
+            (low, high) = window;
+        } else if !(high.is_finite() && low.is_finite())
+            && drawing.kind == DrawingKind::FixedRangeVolumeProfile
+        {
+            let (a, b) = (drawing.points.first()?.price, drawing.points.get(1)?.price);
+            (low, high) = (a.min(b), a.max(b));
+        }
         if !(high.is_finite() && low.is_finite()) {
             return None;
         }
@@ -500,9 +578,9 @@ impl ChartEngine {
             side,
             top: top.min(bottom),
             bottom: top.max(bottom),
-            poc: level(profile.poc),
-            value_area_high: level(profile.value_area_high),
-            value_area_low: level(profile.value_area_low),
+            poc: level(profile.and_then(|profile| profile.poc)),
+            value_area_high: level(profile.and_then(|profile| profile.value_area_high)),
+            value_area_low: level(profile.and_then(|profile| profile.value_area_low)),
         })
     }
 
@@ -569,7 +647,8 @@ impl ChartEngine {
         }
     }
 
-    /// Whether a media-space point lies on a volume profile drawing's painted extent.
+    /// Whether a media-space point lies on a volume profile drawing's painted extent: the
+    /// histogram on either side of the spine, or a fixed range box edge.
     pub(crate) fn profile_drawing_body_hit(
         &self,
         drawing: &Drawing,
@@ -578,17 +657,30 @@ impl ChartEngine {
         y: f64,
         tolerance: f64,
     ) -> Option<bool> {
-        let data = self.profile_drawing_data(drawing)?;
-        let ProfileDrawingSnapshot::Volume(profile) = data.as_ref() else {
-            return None;
+        let data = self.profile_drawing_data(drawing);
+        let profile = match data.as_deref() {
+            Some(ProfileDrawingSnapshot::Volume(profile)) => Some(profile),
+            Some(ProfileDrawingSnapshot::Vwap(_)) => return None,
+            None if drawing.kind == DrawingKind::FixedRangeVolumeProfile => None,
+            None => return None,
         };
         let geometry = self.profile_drawing_geometry(drawing, profile, anchors_x)?;
-        Some(
-            x >= geometry.left - tolerance
-                && x <= geometry.right + tolerance
-                && y >= geometry.top - tolerance
-                && y <= geometry.bottom + tolerance,
-        )
+        let within_rows = y >= geometry.top - tolerance && y <= geometry.bottom + tolerance;
+        let boxed = drawing.kind == DrawingKind::FixedRangeVolumeProfile;
+        let on_spine = within_rows && (x - geometry.spine).abs() <= tolerance;
+        let within_span = x >= geometry.spine - tolerance && x <= geometry.right + tolerance;
+        let on_box = boxed
+            && ((within_span
+                && ((y - geometry.top).abs() <= tolerance
+                    || (y - geometry.bottom).abs() <= tolerance))
+                || (within_rows && (x - geometry.right).abs() <= tolerance));
+        // Like a rectangle, the histogram and box interior grab the drawing only once it is
+        // selected; unselected, they pan the chart like empty space.
+        let grabs_interior = self.selected_drawing == Some(drawing.id)
+            && within_rows
+            && x >= geometry.left - tolerance
+            && x <= geometry.right.max(geometry.spine + geometry.side) + tolerance;
+        Some(on_spine || on_box || grabs_interior)
     }
 }
 
@@ -848,12 +940,13 @@ mod tests {
     }
 
     #[test]
-    fn the_painted_extent_is_the_hit_area_including_the_delta_side() {
+    fn the_histogram_pans_until_selected_while_the_spine_always_grabs() {
         let (mut chart, volume) = chart(1.0);
         chart.set_series_volume_source(0, Some(volume));
         let id = fixed_range(&mut chart);
         let frame = chart.build_frame();
         let main = &frame.panes[0].main;
+        let spine = f64::from(spine_x(main).unwrap());
         let delta = [PROFILE_POSITIVE_COLOR, PROFILE_NEGATIVE_COLOR]
             .into_iter()
             .flat_map(|color| rects(main, color))
@@ -861,6 +954,13 @@ mod tests {
             .unwrap();
         let x = f64::from(delta.x) + 1.0;
         let y = f64::from(delta.y) + f64::from(delta.h) / 2.0;
+        assert_eq!(
+            chart.hit_test_drawing(x, y),
+            None,
+            "no barrier over the chart"
+        );
+        assert_eq!(chart.hit_test_drawing(spine, y).map(|hit| hit.id), Some(id));
+        chart.set_selected_drawing(Some(id));
         assert_eq!(chart.hit_test_drawing(x, y).map(|hit| hit.id), Some(id));
     }
 
@@ -883,19 +983,22 @@ mod tests {
     fn axis_tags_name_the_point_of_control_and_value_area() {
         let (mut chart, volume) = chart(1.0);
         chart.set_series_volume_source(0, Some(volume));
-        fixed_range(&mut chart);
-        chart.build_frame();
-        let axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
-        let poc = axis
-            .labels
-            .iter()
-            .filter(|label| {
-                label
-                    .background
-                    .is_some_and(|background| background.4 == PROFILE_POC_COLOR)
-            })
-            .count();
-        assert_eq!(poc, 1);
+        let id = fixed_range(&mut chart);
+        let poc_tags = |chart: &mut ChartEngine| {
+            chart.build_frame();
+            let axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+            axis.labels
+                .iter()
+                .filter(|label| {
+                    label
+                        .background
+                        .is_some_and(|background| background.4 == PROFILE_POC_COLOR)
+                })
+                .count()
+        };
+        assert_eq!(poc_tags(&mut chart), 0, "axis tags are opt-in");
+        assert!(chart.drawing_apply_options(id, r#"{"price_labels_visible":true}"#));
+        assert_eq!(poc_tags(&mut chart), 1);
     }
 
     #[test]
@@ -905,7 +1008,7 @@ mod tests {
         let id = fixed_range(&mut chart);
         assert!(chart.drawing_apply_options(
             id,
-            r##"{"profile_rows":37,"profile_width_percent":55,"profile_delta_visible":false,"profile_volume_color":"#123456","price_labels_visible":false}"##
+            r##"{"profile_rows":37,"profile_width_percent":55,"profile_delta_visible":false,"profile_volume_color":"#123456","price_labels_visible":true,"profile_fit_prices":false}"##
         ));
         let json = chart.export_state_json().unwrap();
         let (mut restored, _) = self::chart(1.0);
@@ -914,7 +1017,8 @@ mod tests {
         assert_eq!(drawing.profile_rows, 37);
         assert_eq!(drawing.profile_width_percent, 55.0);
         assert!(!drawing.profile_delta_visible);
-        assert!(!drawing.price_labels_visible);
+        assert!(drawing.price_labels_visible);
+        assert!(!drawing.profile_fit_prices);
         assert_eq!(drawing.profile_volume_color.as_deref(), Some("#123456"));
     }
 

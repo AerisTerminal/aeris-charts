@@ -279,6 +279,9 @@ struct VolumeProfileStyleV1 {
     rows: usize,
     value_area_percent: f64,
     width_percent: f64,
+    /// Absent in states saved before the fixed range box could pin its prices.
+    #[serde(default = "volume_profile_fit_prices_default")]
+    fit_prices: bool,
     delta_visible: bool,
     poc_visible: bool,
     value_area_lines_visible: bool,
@@ -292,6 +295,10 @@ struct VolumeProfileStyleV1 {
     negative_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     poc_color: Option<String>,
+}
+
+const fn volume_profile_fit_prices_default() -> bool {
+    true
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -987,6 +994,7 @@ impl ChartEngine {
                                 rows: drawing.profile_rows,
                                 value_area_percent: drawing.profile_value_area_percent,
                                 width_percent: drawing.profile_width_percent,
+                                fit_prices: drawing.profile_fit_prices,
                                 delta_visible: drawing.profile_delta_visible,
                                 poc_visible: drawing.profile_poc_visible,
                                 value_area_lines_visible: drawing.profile_value_area_lines_visible,
@@ -1123,9 +1131,7 @@ impl ChartEngine {
                         level_trend_line: (drawing.kind.has_levels() && drawing.level_trend_line)
                             .then_some(true),
                         middle_point_visible: drawing.middle_point_visible.then_some(true),
-                        price_labels_visible: (drawing.price_labels_visible
-                            != drawing.kind.is_volume_profile())
-                        .then_some(drawing.price_labels_visible),
+                        price_labels_visible: drawing.price_labels_visible.then_some(true),
                         stats_position: (drawing.stats_position != DrawingTextHAlign::Right)
                             .then(|| drawing.stats_position.name().to_string()),
                         stats_always_visible: (drawing.stats_always_visible
@@ -1967,6 +1973,7 @@ impl ChartEngine {
                 drawing.profile_rows = profile.rows;
                 drawing.profile_value_area_percent = profile.value_area_percent;
                 drawing.profile_width_percent = profile.width_percent;
+                drawing.profile_fit_prices = profile.fit_prices;
                 drawing.profile_delta_visible = profile.delta_visible;
                 drawing.profile_poc_visible = profile.poc_visible;
                 drawing.profile_value_area_lines_visible = profile.value_area_lines_visible;

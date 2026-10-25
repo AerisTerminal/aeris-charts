@@ -2658,7 +2658,7 @@ export interface drawing_options {
   box_border_color: string;
   /** Text-tool container border width in CSS px (default 1). */
   box_border_width: number;
-  /** Price-axis tags for the drawing's key levels (POC/VAH/VAL on volume profiles; default true there). */
+  /** Price-axis tags for the drawing's key levels (POC/VAH/VAL on volume profiles; default false). */
   price_labels_visible: boolean;
   /** Volume-profile row count, 1 to 2,048 (default 100). Volume profile drawings only. */
   profile_rows?: number;
@@ -2666,6 +2666,11 @@ export interface drawing_options {
   profile_value_area_percent?: number;
   /** Histogram width as a percentage of the drawn range (default 40). */
   profile_width_percent?: number;
+  /**
+   * Fixed range box only: its top and bottom follow the traded high and low (default true).
+   * Dragging a top or bottom handle sets it false, so the box limits the profiled prices.
+   */
+  profile_fit_prices?: boolean;
   /** Delta histogram left of the spine (default true). */
   profile_delta_visible?: boolean;
   /** Point-of-control line (default true). */
@@ -2767,6 +2772,7 @@ export interface persisted_drawing_style_v1 {
     rows: number;
     value_area_percent: number;
     width_percent: number;
+    fit_prices?: boolean;
     delta_visible: boolean;
     poc_visible: boolean;
     value_area_lines_visible: boolean;

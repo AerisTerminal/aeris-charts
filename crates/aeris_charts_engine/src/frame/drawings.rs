@@ -861,11 +861,21 @@ impl ChartEngine {
             self.build_bars_pattern_prims(drawing, pane_w_px, vpr, out, points);
             return;
         }
-        if drawing.kind.is_profile_bound()
-            && let Some(snapshot) = self.profile_drawing_data(drawing)
-        {
-            self.build_profile_drawing_prims(drawing, &snapshot, px, pane_w_px, vpr, out, points);
-            return;
+        if drawing.kind.is_profile_bound() {
+            let snapshot = self.profile_drawing_data(drawing);
+            // The fixed range box paints (and stays controllable) before any data arrives.
+            if snapshot.is_some() || drawing.kind == DrawingKind::FixedRangeVolumeProfile {
+                self.build_profile_drawing_prims(
+                    drawing,
+                    snapshot.as_deref(),
+                    px,
+                    pane_w_px,
+                    vpr,
+                    out,
+                    points,
+                );
+                return;
+            }
         }
         let color = Color::parse_css(&drawing.color).unwrap_or(PRIMARY);
         let crisp_width = (drawing.width * vpr).round().max(1.0) as i32;
@@ -2549,13 +2559,14 @@ impl ChartEngine {
 
     /// Volume profile drawings paint around one spine at the range start: total volume to the
     /// right (value-area rows in the value-area color), delta to the left, then the range
-    /// edges, value-area lines and point of control. Rows and levels come from the shared
-    /// media-space geometry, so hit testing and axis tags agree with these pixels.
+    /// edges (the full box for a fixed range), value-area lines and point of control. Rows and
+    /// levels come from the shared media-space geometry, so hit testing and axis tags agree
+    /// with these pixels.
     #[allow(clippy::too_many_arguments)]
     fn build_profile_drawing_prims(
         &self,
         drawing: &Drawing,
-        snapshot: &crate::ProfileDrawingSnapshot,
+        snapshot: Option<&crate::ProfileDrawingSnapshot>,
         px: &[(f64, f64)],
         pane_w_px: i32,
         vpr: f64,
@@ -2564,7 +2575,11 @@ impl ChartEngine {
     ) {
         let hpr = f64::from(pane_w_px) / self.pane_w.max(1.0);
         match snapshot {
-            crate::ProfileDrawingSnapshot::Volume(profile) => {
+            Some(crate::ProfileDrawingSnapshot::Volume(_)) | None => {
+                let profile = match snapshot {
+                    Some(crate::ProfileDrawingSnapshot::Volume(profile)) => Some(profile),
+                    _ => None,
+                };
                 let anchors_x = px.iter().map(|point| point.0 / hpr).collect::<Vec<_>>();
                 let Some(geometry) = self.profile_drawing_geometry(drawing, profile, &anchors_x)
                 else {
@@ -2574,46 +2589,48 @@ impl ChartEngine {
                 let snap_x = |x: f64| (x * hpr).round() as i32;
                 let snap_y = |y: f64| (y * vpr).round() as i32;
                 let spine = snap_x(geometry.spine);
-                self.for_each_profile_drawing_row(drawing, profile, &geometry, |row| {
-                    let y = snap_y(row.top);
-                    let mut h = (snap_y(row.bottom) - y).max(1);
-                    // Separate rows by one device pixel once they are tall enough to read.
-                    if h >= 3 {
-                        h -= 1;
-                    }
-                    let right = snap_x(row.volume_right);
-                    if right > spine {
-                        out.push(Prim::Rect {
-                            rect: IRect {
-                                x: spine,
-                                y,
-                                w: right - spine,
-                                h,
-                            },
-                            color: if row.value_area {
-                                colors.value_area
-                            } else {
-                                colors.volume
-                            },
-                        });
-                    }
-                    let left = snap_x(row.delta_left);
-                    if left < spine {
-                        out.push(Prim::Rect {
-                            rect: IRect {
-                                x: left,
-                                y,
-                                w: spine - left,
-                                h,
-                            },
-                            color: if row.positive {
-                                colors.positive
-                            } else {
-                                colors.negative
-                            },
-                        });
-                    }
-                });
+                if let Some(profile) = profile {
+                    self.for_each_profile_drawing_row(drawing, profile, &geometry, |row| {
+                        let y = snap_y(row.top);
+                        let mut h = (snap_y(row.bottom) - y).max(1);
+                        // Separate rows by one device pixel once they are tall enough to read.
+                        if h >= 3 {
+                            h -= 1;
+                        }
+                        let right = snap_x(row.volume_right);
+                        if right > spine {
+                            out.push(Prim::Rect {
+                                rect: IRect {
+                                    x: spine,
+                                    y,
+                                    w: right - spine,
+                                    h,
+                                },
+                                color: if row.value_area {
+                                    colors.value_area
+                                } else {
+                                    colors.volume
+                                },
+                            });
+                        }
+                        let left = snap_x(row.delta_left);
+                        if left < spine {
+                            out.push(Prim::Rect {
+                                rect: IRect {
+                                    x: left,
+                                    y,
+                                    w: spine - left,
+                                    h,
+                                },
+                                color: if row.positive {
+                                    colors.positive
+                                } else {
+                                    colors.negative
+                                },
+                            });
+                        }
+                    });
+                }
                 let crisp = (drawing.width * vpr).round().max(1.0) as i32;
                 let edge = Color::rgba(
                     colors.line.r(),
@@ -2621,22 +2638,27 @@ impl ChartEngine {
                     colors.line.b(),
                     colors.line.a().min(140),
                 );
-                let (left, right) = (snap_x(geometry.left), snap_x(geometry.right));
+                let right = snap_x(geometry.right);
+                // Levels start at the spine so they never cross the delta histogram.
                 let level_right = if drawing.extend_right {
                     pane_w_px
                 } else {
                     right
                 };
                 let (top, bottom) = (snap_y(geometry.top), snap_y(geometry.bottom));
-                for y in [top, bottom] {
-                    out.push(Prim::HLine {
-                        y,
-                        x0: left,
-                        x1: right,
-                        width: vpr.round().max(1.0) as i32,
-                        style: LineStyle::Solid,
-                        color: edge,
-                    });
+                let boxed = drawing.kind == DrawingKind::FixedRangeVolumeProfile;
+                let hairline = vpr.round().max(1.0) as i32;
+                if boxed {
+                    for y in [top, bottom] {
+                        out.push(Prim::HLine {
+                            y,
+                            x0: spine,
+                            x1: right,
+                            width: hairline,
+                            style: LineStyle::Solid,
+                            color: edge,
+                        });
+                    }
                 }
                 out.push(Prim::VLine {
                     x: spine,
@@ -2646,6 +2668,16 @@ impl ChartEngine {
                     style: LineStyle::Solid,
                     color: colors.line,
                 });
+                if boxed {
+                    out.push(Prim::VLine {
+                        x: right,
+                        y0: top,
+                        y1: bottom,
+                        width: hairline,
+                        style: LineStyle::Solid,
+                        color: edge,
+                    });
+                }
                 if drawing.profile_value_area_lines_visible {
                     for (_, y) in [geometry.value_area_high, geometry.value_area_low]
                         .into_iter()
@@ -2653,7 +2685,7 @@ impl ChartEngine {
                     {
                         out.push(Prim::HLine {
                             y: snap_y(y),
-                            x0: left,
+                            x0: spine,
                             x1: level_right,
                             width: crisp,
                             style: drawing.style,
@@ -2666,7 +2698,7 @@ impl ChartEngine {
                 {
                     out.push(Prim::HLine {
                         y: snap_y(y),
-                        x0: left,
+                        x0: spine,
                         x1: level_right,
                         width: (2.0 * vpr).round().max(1.0) as i32,
                         style: LineStyle::Solid,
@@ -2674,7 +2706,7 @@ impl ChartEngine {
                     });
                 }
             }
-            crate::ProfileDrawingSnapshot::Vwap(values) => {
+            Some(crate::ProfileDrawingSnapshot::Vwap(values)) => {
                 let mut center = Vec::with_capacity(values.len());
                 let mut upper = Vec::with_capacity(values.len());
                 let mut lower = Vec::with_capacity(values.len());

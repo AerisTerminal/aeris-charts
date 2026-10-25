@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use aeris_charts_indicators::volume_profile::{
-    ProfileBar, volume_profile, volume_profile_developing,
+    MAX_VOLUME_PROFILE_ROWS, ProfileBar, volume_profile, volume_profile_developing,
 };
 use aeris_charts_render::color::Color;
 use serde::{Deserialize, Serialize};
@@ -667,16 +667,35 @@ impl ChartEngine {
     ) -> Result<ProfileSnapshot, ProfileError> {
         self.volume_profile_snapshot_segments_impl(
             request,
-            None,
+            ProfileSelection::default(),
             include_developing,
             developing_sample_limit,
+        )
+    }
+
+    /// The profile of only the volume traded inside `price_window` (inclusive low/high), as a
+    /// box-shaped drawing selects it. Rows span the traded part of the window.
+    pub(crate) fn volume_profile_window_snapshot(
+        &self,
+        request: &ProfileRequest,
+        price_window: (f64, f64),
+        include_developing: bool,
+    ) -> Result<ProfileSnapshot, ProfileError> {
+        self.volume_profile_snapshot_segments_impl(
+            request,
+            ProfileSelection {
+                segments: None,
+                price_window: Some(price_window),
+            },
+            include_developing,
+            None,
         )
     }
 
     fn volume_profile_snapshot_segments_impl(
         &self,
         request: &ProfileRequest,
-        segments: Option<&[ResampleBoundary]>,
+        selection: ProfileSelection<'_>,
         include_developing: bool,
         developing_sample_limit: Option<usize>,
     ) -> Result<ProfileSnapshot, ProfileError> {
@@ -686,7 +705,7 @@ impl ChartEngine {
             ProfileSource::Tape { stream_id } => self.tape_profile(
                 stream_id,
                 request,
-                segments,
+                selection,
                 include_developing,
                 developing_sample_limit,
             ),
@@ -697,7 +716,7 @@ impl ChartEngine {
                 price_series,
                 volume_series,
                 request,
-                segments,
+                selection,
                 include_developing,
                 developing_sample_limit,
             ),
@@ -814,7 +833,10 @@ impl ChartEngine {
                     row_count,
                     value_area_percent,
                 },
-                Some(segments),
+                ProfileSelection {
+                    segments: Some(segments),
+                    price_window: None,
+                },
                 include_developing,
                 developing_sample_limit,
             )?;
@@ -1168,7 +1190,10 @@ impl ChartEngine {
         &self,
         stream_id: u64,
         request: &ProfileRequest,
-        segments: Option<&[ResampleBoundary]>,
+        ProfileSelection {
+            segments,
+            price_window,
+        }: ProfileSelection<'_>,
         include_developing: bool,
         developing_sample_limit: Option<usize>,
     ) -> Result<ProfileSnapshot, ProfileError> {
@@ -1177,15 +1202,16 @@ impl ChartEngine {
             .ok_or(ProfileError::UnknownSource)?;
         let mut rows: BTreeMap<i64, ProfileRowSnapshot> = BTreeMap::new();
         let mut developing = Vec::new();
-        let in_period = |timestamp: i64| {
-            timestamp >= request.start_timestamp_micros
-                && timestamp < request.end_timestamp_micros
-                && timestamp_in_profile_segments(timestamp, segments)
+        let in_period = |trade: &crate::FootprintTrade| {
+            trade.timestamp_micros >= request.start_timestamp_micros
+                && trade.timestamp_micros < request.end_timestamp_micros
+                && timestamp_in_profile_segments(trade.timestamp_micros, segments)
+                && price_window.is_none_or(|(low, high)| low <= trade.price && trade.price <= high)
         };
         let trade_count = if developing_sample_limit.is_some() {
             stream
                 .classified_trades()
-                .filter(|(trade, _)| in_period(trade.timestamp_micros))
+                .filter(|(trade, _)| in_period(trade))
                 .count()
         } else {
             0
@@ -1199,7 +1225,7 @@ impl ChartEngine {
         });
         for (trade_index, (trade, side)) in stream
             .classified_trades()
-            .filter(|(trade, _)| in_period(trade.timestamp_micros))
+            .filter(|(trade, _)| in_period(trade))
             .enumerate()
         {
             let level = price_level(trade.price, request.tick_size);
@@ -1269,7 +1295,10 @@ impl ChartEngine {
         price_series: SeriesId,
         volume_series: SeriesId,
         request: &ProfileRequest,
-        segments: Option<&[ResampleBoundary]>,
+        ProfileSelection {
+            segments,
+            price_window,
+        }: ProfileSelection<'_>,
         include_developing: bool,
         developing_sample_limit: Option<usize>,
     ) -> Result<ProfileSnapshot, ProfileError> {
@@ -1291,26 +1320,24 @@ impl ChartEngine {
                 if !timestamp_in_profile_segments(times[row].saturating_mul(1_000_000), segments) {
                     return None;
                 }
-                volume_times
-                    .binary_search(&times[row])
-                    .ok()
-                    .map(|volume_row| {
-                        (
-                            times[row] * 1_000_000,
-                            ProfileBar {
-                                open: prices[0][row],
-                                high: prices[1][row],
-                                low: prices[2][row],
-                                close: prices[3][row],
-                                volume: volumes[3][volume_row],
-                            },
-                        )
-                    })
+                let volume_row = volume_times.binary_search(&times[row]).ok()?;
+                let bar = ProfileBar {
+                    open: prices[0][row],
+                    high: prices[1][row],
+                    low: prices[2][row],
+                    close: prices[3][row],
+                    volume: volumes[3][volume_row],
+                };
+                let bar = match price_window {
+                    Some(window) => clip_bar_to_price_window(bar, window)?,
+                    None => bar,
+                };
+                Some((times[row] * 1_000_000, bar))
             })
             .collect::<Vec<_>>();
         let profile = volume_profile(
             bars.iter().map(|(_, bar)| *bar),
-            request.row_count.min(MAX_PROFILE_ROWS),
+            request.row_count.min(MAX_VOLUME_PROFILE_ROWS),
             request.value_area_percent,
             request.tick_size,
         )
@@ -1388,6 +1415,33 @@ fn ordered_price_key(price: f64) -> u64 {
     }
 }
 
+/// Which of a source's volume a profile counts: host periods (none = the whole request range)
+/// and an inclusive price window (none = every price).
+#[derive(Clone, Copy, Default)]
+struct ProfileSelection<'a> {
+    segments: Option<&'a [ResampleBoundary]>,
+    price_window: Option<(f64, f64)>,
+}
+
+/// The part of a candle inside a price window, assuming volume is uniform over its range
+/// (the candle profile's own model), or `None` when the candle lies outside the window.
+fn clip_bar_to_price_window(bar: ProfileBar, (low, high): (f64, f64)) -> Option<ProfileBar> {
+    if bar.high < low || bar.low > high {
+        return None;
+    }
+    if bar.high <= bar.low {
+        return Some(bar);
+    }
+    let clipped_low = bar.low.max(low);
+    let clipped_high = bar.high.min(high);
+    Some(ProfileBar {
+        low: clipped_low,
+        high: clipped_high,
+        volume: bar.volume * ((clipped_high - clipped_low) / (bar.high - bar.low)),
+        ..bar
+    })
+}
+
 fn timestamp_in_profile_segments(
     timestamp_micros: i64,
     segments: Option<&[ResampleBoundary]>,
@@ -1458,6 +1512,68 @@ fn value_area_levels(
 mod tests {
     use super::*;
     use crate::{FootprintAggregationOptions, FootprintTrade, SeriesKind};
+
+    #[test]
+    fn price_window_keeps_the_proportional_share_of_each_candle() {
+        let bar = ProfileBar {
+            open: 10.0,
+            high: 14.0,
+            low: 10.0,
+            close: 14.0,
+            volume: 8.0,
+        };
+        let clipped = clip_bar_to_price_window(bar, (12.0, 20.0)).unwrap();
+        assert_eq!(
+            (clipped.low, clipped.high, clipped.volume),
+            (12.0, 14.0, 4.0)
+        );
+        assert!(clip_bar_to_price_window(bar, (15.0, 20.0)).is_none());
+        let flat = ProfileBar {
+            high: 11.0,
+            low: 11.0,
+            ..bar
+        };
+        assert_eq!(
+            clip_bar_to_price_window(flat, (11.0, 12.0)).unwrap().volume,
+            8.0
+        );
+    }
+
+    #[test]
+    fn candle_profile_accepts_more_rows_than_the_candle_model_paints() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let candles = chart.add_series(SeriesKind::Candlestick);
+        let volume = chart.add_series(SeriesKind::Histogram);
+        let times = [0.0, 60.0];
+        chart
+            .set_series_data(
+                candles,
+                &times,
+                &[10.0, 11.0],
+                &[12.0, 13.0],
+                &[9.0, 10.0],
+                &[11.0, 12.0],
+            )
+            .unwrap();
+        chart
+            .set_series_data(volume, &times, &[5.0; 2], &[5.0; 2], &[5.0; 2], &[5.0; 2])
+            .unwrap();
+        let snapshot = chart
+            .volume_profile_snapshot(&ProfileRequest {
+                source: ProfileSource::Candles {
+                    price_series: candles,
+                    volume_series: volume,
+                },
+                start_timestamp_micros: 0,
+                end_timestamp_micros: 120_000_000,
+                tick_size: 0.001,
+                row_count: MAX_PROFILE_ROWS,
+                value_area_percent: 70.0,
+            })
+            .unwrap();
+        assert!(!snapshot.rows.is_empty());
+        assert!(snapshot.rows.len() <= MAX_VOLUME_PROFILE_ROWS);
+    }
 
     #[test]
     fn candle_profile_requires_ohlc_and_histogram_sources() {
