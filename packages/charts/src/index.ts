@@ -31,7 +31,7 @@ export * from "./offscreen.js";
 export * from "./shortcuts.js";
 export * from "./grid.js";
 import { chart_impl } from "./impl.js";
-import { ensure_init, restore_chart_host, snapshot_chart_host } from "./impl.js";
+import { announce_license, ensure_init, has_license_key, restore_chart_host, snapshot_chart_host } from "./impl.js";
 import { AerisChartsError } from "./errors.js";
 import { enable_accessibility } from "./accessibility.js";
 import type { accessibility_options } from "./accessibility.js";
@@ -65,6 +65,7 @@ export async function create_chart(
   options?: deep_partial<chart_options>,
 ): Promise<chart_api> {
   await ensure_init();
+  announce_license(options?.licenseKey);
 
   // Four stacked, absolutely-positioned canvases fill the container: dedicated WebGPU and
   // Canvas2D panes below the transparent plugin overlay (Phase C-e canvas primitives), below the
@@ -154,6 +155,7 @@ export async function create_chart(
       };
     let engine_options: Record<string, unknown> = rest;
     delete engine_options.backend;
+    delete engine_options.licenseKey;
     delete engine_options.__simulate_webgpu_adapter_failure;
     delete engine_options.__force_webgpu_fallback_adapter;
     let panes_resize: boolean | undefined;
@@ -207,6 +209,7 @@ export async function create_chart(
           : accessibility as accessibility_options,
       );
     }
+    if (!has_license_key(options?.licenseKey)) chart.show_attribution();
     chart.render();
     return chart;
   } catch (error) {

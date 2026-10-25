@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Devraj Mahar (Aeris Terminal). Additional terms apply; see NOTICE.
+
 //! Headless Aeris chart engine.
 //!
 //! This crate owns chart state and behavior without depending on WASM, the DOM, WebGPU, or a

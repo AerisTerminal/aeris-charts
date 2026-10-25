@@ -4,7 +4,7 @@
  * Packs the package exactly as npm would for publish, installs the tarball into a scratch dir,
  * and asserts the installed artifact is complete and importable:
  *   1. `npm pack` produces a tarball containing JavaScript, types, WebAssembly, the portable
- *      design system, and LICENSE.
+ *      design system, LICENSE, and NOTICE.
  *   2. `npm install <tarball>` into an empty consumer dir.
  *   3. The installed core module imports in Node (side-effect-free) and exposes both naming styles.
  *   4. `dist/aeris_charts_wasm_bg.wasm` is present inside the installed package (non-trivial size).
@@ -48,6 +48,7 @@ try {
     "package/dist/aeris_charts_wasm_bg.wasm",
     "package/dist/aeris_charts.css",
     "package/LICENSE",
+    "package/NOTICE",
   ]) {
     assert.ok(files.includes(required), `tarball is missing ${required}`);
   }
@@ -75,10 +76,25 @@ try {
   }
 
   // 4. The wasm binary shipped with real content.
-  const wasm = statSync(
-    join(installed_package, "dist", "aeris_charts_wasm_bg.wasm"),
-  );
+  const wasm_path = join(installed_package, "dist", "aeris_charts_wasm_bg.wasm");
+  const wasm = statSync(wasm_path);
   assert.ok(wasm.size > 100_000, `wasm binary suspiciously small (${wasm.size} bytes)`);
+
+  // 5. The NOTICE section 7(b) legal notices survive packaging and release optimization: the
+  //    NOTICE file, the runtime console notice, and the shader provenance marker.
+  assert.equal(
+    readFileSync(join(installed_package, "NOTICE"), "utf8").replaceAll("\r\n", "\n"),
+    readFileSync(join(pkg_dir, "..", "..", "NOTICE"), "utf8").replaceAll("\r\n", "\n"),
+    "packaged NOTICE differs from the repository NOTICE",
+  );
+  const wasm_bytes = readFileSync(wasm_path);
+  for (const marker of [
+    "Powered by Aeris Charts (AGPL-3.0-only)",
+    "// aeris_charts provenance:",
+    "[aeris_core_pipeline_v1_devraj]",
+  ]) {
+    assert.ok(wasm_bytes.includes(marker), `release wasm is missing license marker: ${marker}`);
+  }
 
   const pkg = JSON.parse(
     readFileSync(join(installed_package, "package.json"), "utf8"),

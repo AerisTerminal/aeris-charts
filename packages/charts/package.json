@@ -51,7 +51,8 @@
   },
   "files": [
     "dist",
-    "!dist/index.js.map"
+    "!dist/index.js.map",
+    "NOTICE"
   ],
   "sideEffects": [
     "./dist/aeris_charts.css"
@@ -64,7 +65,7 @@
     "check:release-gates": "node scripts/release_gate_guard.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('pkg',{recursive:true,force:true})\"",
     "build:wasm": "node scripts/build_wasm.mjs",
-    "build:js": "esbuild src/index.ts --bundle --format=esm --minify --sourcemap --loader:.svg=text --outfile=dist/index.js",
+    "build:js": "esbuild src/index.ts --bundle --format=esm --minify --sourcemap --loader:.svg=text --loader:.png=dataurl --outfile=dist/index.js",
     "build:react": "esbuild src/react.ts --bundle --format=esm --minify --sourcemap --external:react --external:./index.js --outfile=dist/react.js",
     "build:types": "tsc --declaration --emitDeclarationOnly --outDir dist --noEmit false",
     "build:copy-wasm": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('pkg/aeris_charts_wasm_bg.wasm','dist/aeris_charts_wasm_bg.wasm')\"",

@@ -38,6 +38,9 @@
 
 /// WGSL twin of [`blend_output`]; concatenated into the quad and tri pipeline shaders.
 pub(crate) const SOURCE_OVER_WGSL: &str = r#"
+// aeris_charts provenance: Aeris Charts, Copyright (C) 2026 Devraj Mahar (Aeris Terminal).
+// AGPL-3.0-only with NOTICE terms, or commercial license: integrations@aeristerminal.com
+// [aeris_core_pipeline_v1_devraj]
 // Canvas2D-exact source-over for 8-bit-grid colors (see crates/aeris_charts_render_wgpu/src/blend.rs).
 fn aeris_charts_source_over(c: vec4<f32>) -> vec4<f32> {
     let a255 = c.a * 255.0;
@@ -118,6 +121,8 @@ mod tests {
     #[test]
     fn wgsl_function_present() {
         assert!(SOURCE_OVER_WGSL.contains("fn aeris_charts_source_over"));
+        // NOTICE section 7(b) requires this provenance marker in every shipped shader.
+        assert!(SOURCE_OVER_WGSL.contains("[aeris_core_pipeline_v1_devraj]"));
     }
 
     #[test]

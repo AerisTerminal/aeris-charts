@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Devraj Mahar (Aeris Terminal). Additional terms apply; see NOTICE.
+
 //! aeris_charts_wasm — browser host shell.
 //!
 //! Phase 0: a real chart pipeline end to end — `aeris_charts_core` scales -> candle geometry ->
@@ -33,6 +36,9 @@ mod ring_source;
 #[path = "chart/image_runs.rs"]
 mod image_runs;
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod license;
+
 #[cfg(target_arch = "wasm32")]
 mod canvas2d_target;
 #[cfg(target_arch = "wasm32")]
@@ -42,6 +48,8 @@ mod workspace;
 
 #[cfg(target_arch = "wasm32")]
 pub use chart::{AerisChart, create_chart};
+#[cfg(target_arch = "wasm32")]
+pub use license::license_notice;
 #[cfg(target_arch = "wasm32")]
 pub use workspace::AerisWorkspace;
 

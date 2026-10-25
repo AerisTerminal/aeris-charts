@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Devraj Mahar (Aeris Terminal). Additional terms apply; see NOTICE.
+
 //! Native rasterizer target for the [`aeris_charts_render::canvas2d`] executor (roadmap Phase D1/D2).
 //!
 //! Implements [`Canvas2d`] on top of [`tiny_skia`] — a pure-Rust CPU rasterizer —

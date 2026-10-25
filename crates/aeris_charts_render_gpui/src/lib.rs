@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Devraj Mahar (Aeris Terminal). Additional terms apply; see NOTICE.
+
 //! Optional GPUI executor for Aeris's backend-neutral `DrawList<Prim>` frame.
 //!
 //! Aeris's engine emits one ordered, backend-neutral primitive stream; WebGPU, Canvas2D and

@@ -4,9 +4,11 @@
  */
 
 // @ts-ignore -- pkg is a build artifact, present after build:wasm
-import init, { AerisChart } from "../pkg/aeris_charts_wasm.js";
+import init, { AerisChart, license_notice } from "../pkg/aeris_charts_wasm.js";
 
 import { install_gestures } from "./gestures.js";
+import logo_light_theme from "./assets/brand/aeris_logo_light_theme.png";
+import logo_dark_theme from "./assets/brand/aeris_logo_dark_theme.png";
 import type { pane_primitive, pane_primitive_handle, series_primitive, series_primitive_handle } from "./primitives.js";
 import type { canvas_primitive, canvas_primitive_handle, canvas_pane_view } from "./canvas_plugins.js";
 import { create_canvas_render_target } from "./canvas_plugins.js";
@@ -86,6 +88,19 @@ type persistence_error_result = {
 function throw_persistence_error(result: persistence_error_result): never {
   throw new AerisChartsError(result.error.code, result.error.message);
 }
+
+/** Whether the host supplied an Aeris Charts Commercial License key. */
+export function has_license_key(license_key: unknown): boolean {
+  return typeof license_key === "string" && license_key.trim().length > 0;
+}
+
+/** Print the runtime license notice once per page unless a commercial license key is supplied. */
+export function announce_license(license_key: unknown): void {
+  license_notice(has_license_key(license_key));
+}
+
+const ATTRIBUTION_INSET_PX = 8;
+
 /**
  * Instantiate the wasm module once per page. `wasm_url` overrides the default asset resolution
  * (`new URL("aeris_charts_wasm_bg.wasm", import.meta.url)` beside the bundle) — the escape hatch for
@@ -4232,6 +4247,9 @@ export class chart_impl implements chart_api {
   private readonly canvas_primitives: canvas_primitive_entry[] = [];
   private plugin_resize_observer: ResizeObserver | null = null;
   private backend_loss_count = 0;
+  private attribution: HTMLAnchorElement | null = null;
+  private attribution_left = -1;
+  private attribution_bottom = -1;
   private readonly backend_loss_handler = (): void => {
     if (this.removed) return;
     this.backend_loss_count += 1;
@@ -4412,9 +4430,57 @@ export class chart_impl implements chart_api {
       this.text_editor_reposition?.();
       this.run_canvas_primitives();
       this.emit_visible_range_changes();
+      this.place_attribution();
       // The engine owns whether a pulse is drawn (line/area default on, data required), so any
       // repaint-driving change — new series, type change, data, removal — re-syncs the loop.
       this.sync_animation();
+    }
+  }
+
+  /**
+   * Show the Aeris Terminal attribution logo in the bottom-left corner of the bottom pane. NOTICE
+   * section 7(b) requires it for AGPL use; `create_chart` skips it for commercial license keys.
+   */
+  show_attribution(): void {
+    if (this.removed || this.attribution !== null) return;
+    const link = document.createElement("a");
+    link.href = "https://aeristerminal.com/";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.title = "Charts by Aeris Terminal";
+    link.setAttribute("aria-label", "Charts by Aeris Terminal");
+    link.style.cssText = "position:absolute;display:block;width:20px;height:20px;line-height:0;";
+    const logo = document.createElement("img");
+    logo.alt = "";
+    logo.width = 20;
+    logo.height = 20;
+    logo.draggable = false;
+    logo.style.cssText = "display:block;width:20px;height:20px;";
+    link.appendChild(logo);
+    this.container.appendChild(link);
+    this.attribution = link;
+    this.sync_attribution_theme();
+    this.place_attribution();
+  }
+
+  private sync_attribution_theme(): void {
+    const logo = this.attribution?.firstElementChild as HTMLImageElement | null | undefined;
+    if (logo) logo.src = this.selected_theme === "dark" ? logo_dark_theme : logo_light_theme;
+  }
+
+  /** Track the left price axis and time axis so the logo stays inside the pane corner. */
+  private place_attribution(): void {
+    const link = this.attribution;
+    if (link === null) return;
+    const left = this.wasm.price_scale_width(0, 1) + ATTRIBUTION_INSET_PX;
+    const bottom = this.wasm.time_scale_height() + ATTRIBUTION_INSET_PX;
+    if (left !== this.attribution_left) {
+      this.attribution_left = left;
+      link.style.left = `${left}px`;
+    }
+    if (bottom !== this.attribution_bottom) {
+      this.attribution_bottom = bottom;
+      link.style.bottom = `${bottom}px`;
     }
   }
 
@@ -7234,6 +7300,7 @@ export class chart_impl implements chart_api {
         accessibility?: boolean | accessibility_options;
       };
     let engine_options: Record<string, unknown> = rest;
+    delete engine_options.licenseKey;
     // layout.panes.enableResize (reference) drives the separator drag here, not the engine; strip it
     // alongside the other gesture keys before forwarding.
     const panes = (rest.layout as { panes?: { enableResize?: boolean } } | undefined)?.panes;
@@ -7248,6 +7315,7 @@ export class chart_impl implements chart_api {
     // the selected theme even after arbitrary color customizations.
     if (theme !== undefined) {
       this.selected_theme = theme;
+      this.sync_attribution_theme();
       this.wasm.apply_options(JSON.stringify(theme_options(theme_palette(theme))));
     }
     if (
@@ -8279,6 +8347,8 @@ export class chart_impl implements chart_api {
     this.fallback_pane.remove();
     this.plugin_canvas.remove();
     this.overlay.remove();
+    this.attribution?.remove();
+    this.attribution = null;
     restore_chart_host(this.container, this.host_snapshot);
   }
 }

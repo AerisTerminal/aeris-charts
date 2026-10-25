@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Devraj Mahar (Aeris Terminal). Additional terms apply; see NOTICE.
+
 //! aeris_charts_render — backend-agnostic draw-list IR and rendering math.
 //!
 //! The headless engine emits [`draw_list::DrawList`]s; GPUI, WebGPU, Canvas2D, and native

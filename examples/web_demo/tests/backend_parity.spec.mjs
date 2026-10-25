@@ -254,6 +254,9 @@ test("scaled four-color image matches WebGPU, Canvas2D, and native", async ({ br
       const chart = await api.create_chart(host, {
         autoSize: false,
         backend: requested_backend,
+        // The native executor renders only the engine frame; drop the package-owned DOM attribution
+        // logo so the screenshot holds the same pixels.
+        licenseKey: "parity-fixture",
         __force_webgpu_fallback_adapter: true,
         layout: { background: { type: "solid", color: "#ffffff" } },
         grid: { vertLines: { visible: false }, horzLines: { visible: false } },

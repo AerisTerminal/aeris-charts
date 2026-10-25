@@ -1,0 +1,69 @@
+Aeris Charts
+Copyright (C) 2026 Devraj Mahar (Aeris Terminal). All rights not granted below are reserved.
+
+Aeris Charts is dual-licensed. You may use it under either:
+
+1. The GNU Affero General Public License, version 3 only (AGPL-3.0-only), in the LICENSE file,
+   together with the additional terms in this NOTICE; or
+2. A separate Aeris Charts Commercial License agreed in writing with Aeris Terminal.
+   Contact integrations@aeristerminal.com.
+
+
+When you need a commercial license
+----------------------------------
+
+Shipping Aeris Charts in a website, web app, desktop app, mobile app, SDK, or device conveys it
+to your users. Under the AGPL you must then release the complete Corresponding Source of the
+combined work, including your own application code built on Aeris Charts, under the AGPL. A
+modified version that users interact with over a network must also offer them its source
+(AGPL section 13).
+
+Open-source projects that publish their complete source under the AGPL-3.0 may use Aeris Charts
+free of charge. Closed-source, proprietary, white-label, OEM, or embedded products that cannot
+meet those obligations need an Aeris Charts Commercial License before deployment.
+
+
+Additional terms under AGPL-3.0 section 7
+-----------------------------------------
+
+These terms apply to all material in this repository and in the @aeristerminal/aeris-charts
+package that is copyrighted by Aeris Terminal.
+
+a. Legal notices (section 7(b)). Every copy and every modified version must keep intact:
+   - this NOTICE file and the copyright and license headers in the source files;
+   - the license notice that Aeris Charts prints to the browser console at runtime
+     ("Powered by Aeris Charts ..."), which is part of the Appropriate Legal Notices of any
+     work that contains Aeris Charts;
+   - the Aeris Terminal attribution logo that Aeris Charts displays in the bottom-left corner
+     of each chart, with its link to https://aeristerminal.com/; and
+   - the provenance markers embedded in the shader sources and the compiled WebAssembly module
+     (identifier "aeris_core_pipeline_v1_devraj").
+   Only holders of a valid Aeris Charts Commercial License may hide the runtime notice and the
+   attribution logo, through the `licenseKey` chart option.
+
+b. Attribution (section 7(c)). You must not misrepresent where this material came from or claim
+   it as your own work. Modified versions must be marked as modified, with the date of the
+   change, and must not be presented as the original Aeris Charts.
+
+c. Names and trademarks (sections 7(d) and 7(e)). No right is granted to use the names "Aeris",
+   "Aeris Charts", or "Aeris Terminal", or related logos, except to state truthfully that your
+   work is based on Aeris Charts. You may not use these names to endorse or promote your product
+   without written permission.
+
+Removing or altering these notices or markers violates these terms and terminates your rights
+under AGPL-3.0 section 8. It may also constitute removal of copyright management information
+under 17 U.S.C. section 1202 and equivalent laws in other countries.
+
+
+Earlier releases
+----------------
+
+Versions published before these additional terms were added remain available under the plain
+AGPL-3.0-only terms they were published with.
+
+
+Third-party material
+--------------------
+
+Third-party components keep their own licenses, stated in the corresponding source files (for
+example, the MIT-licensed Phosphor Icons subset in crates/aeris_charts_engine/src/drawings/icons.rs).

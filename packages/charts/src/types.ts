@@ -1810,6 +1810,13 @@ export interface chart_options {
   /** Install a ResizeObserver so the chart tracks its container's size. Default `false` (reference parity). */
   autoSize: boolean;
   /**
+   * Aeris Charts Commercial License key. Any non-empty key hides the once-per-page license notice
+   * in the browser console and the bottom-left Aeris Terminal attribution logo. Only commercial
+   * licensees may set it; AGPL use must keep both (see NOTICE). Package-level: read at chart
+   * creation and never forwarded to the engine.
+   */
+  licenseKey: string;
+  /**
    * Temporarily promote hovered chart content above idle (default `true`). When on, hovering a
    * series promotes its whole indicator group (all Bollinger/ribbon outputs together, internal
    * order kept) and hovering a drawing promotes it above ordinary price; dragging/editing tops

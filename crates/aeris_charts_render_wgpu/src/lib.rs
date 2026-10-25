@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Devraj Mahar (Aeris Terminal). Additional terms apply; see NOTICE.
+
 //! aeris_charts_render_wgpu — WebGPU backend.
 //!
 //! Pipelines: solid quads (integer rects — candles, wicks, grid, crosshair), textured quads
