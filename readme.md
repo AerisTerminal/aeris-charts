@@ -3,6 +3,12 @@
 Aeris Charts is the Rust chart engine for [Aeris Terminal](https://aeristerminal.com) and browser
 hosts. One deterministic chart model powers WebGPU, Canvas2D, GPUI, and native rendering.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/aeris_engine_showcase_dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/aeris_engine_showcase_light.png">
+  <img alt="Aeris Charts showing a footprint chart with volume, a volume profile, a candlestick chart, and an area chart in one workspace" src="docs/assets/aeris_engine_showcase_dark.png">
+</picture>
+
 The project includes professional chart interactions, drawings, technical indicators, multiple panes and scales, custom series, primitives, shared-memory market-data input, and backend parity tooling.
 
 ## Rust crates
