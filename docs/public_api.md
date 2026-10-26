@@ -200,8 +200,13 @@ dotted, and dashed modes. Indicator outputs inherit the same default because the
 series. `create_partial_price_line()` remains only as a compatibility controller over these canonical
 series options, not a separate primitive or rendering implementation.
 
-Chart surfaces do not inject product attribution or branding. `layout` contains only visual chart
-configuration; there is no attribution-logo option in the public chart contract.
+`create_chart` adds a small Aeris Terminal logo link (to https://aeristerminal.com/) in the
+bottom-left corner of the bottom pane, using the light- or dark-theme logo to match the selected
+theme, and the first chart on a page prints one license notice to the browser console. Both are
+required legal notices under [NOTICE](../NOTICE). Commercial licensees pass `licenseKey` to hide
+them; the key is read at creation and never reaches the engine. `layout` contains only visual chart
+configuration. Worker (`create_offscreen_chart`) charts print the console notice but have no DOM
+logo.
 
 `create_chart(container, { initialPane: { horizontal_domain } })` constructs the canonical first
 pane with continuous, temporal, category, or polar semantics. General-first charts contain no hidden
