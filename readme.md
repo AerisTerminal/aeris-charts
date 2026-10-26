@@ -1,5 +1,12 @@
 # Aeris Charts
 
+[![npm version](https://img.shields.io/npm/v/@aeristerminal/aeris-charts?logo=npm&label=npm&color=cb3837)](https://www.npmjs.com/package/@aeristerminal/aeris-charts)
+[![CI](https://img.shields.io/github/actions/workflow/status/AerisTerminal/aeris-charts/ci.yml?branch=main&logo=github&label=CI)](https://github.com/AerisTerminal/aeris-charts/actions/workflows/ci.yml)
+[![TypeScript types](https://img.shields.io/npm/types/@aeristerminal/aeris-charts?logo=typescript&logoColor=white)](https://www.npmjs.com/package/@aeristerminal/aeris-charts)
+[![License: AGPL-3.0-only](https://img.shields.io/npm/l/@aeristerminal/aeris-charts?color=blue)](LICENSE)
+[![Engine: Rust + WebAssembly](https://img.shields.io/badge/engine-Rust%20%2B%20WebAssembly-dea584?logo=rust)](docs/architecture.md)
+[![Renderers: WebGPU, Canvas2D, GPUI](https://img.shields.io/badge/renderers-WebGPU%20%7C%20Canvas2D%20%7C%20GPUI-5b5bd6)](docs/architecture.md)
+
 Aeris Charts is the Rust chart engine for [Aeris Terminal](https://aeristerminal.com) and browser
 hosts. One deterministic chart model powers WebGPU, Canvas2D, GPUI, and native rendering.
 
@@ -40,7 +47,8 @@ unfinished auctions, exhaustion and absorption. Rules, options and snapshot sema
 
 ## Browser package
 
-The browser SDK is published to the public npm registry as `@aeristerminal/aeris-charts`. No
+The browser SDK is published to the public npm registry as
+[`@aeristerminal/aeris-charts`](https://www.npmjs.com/package/@aeristerminal/aeris-charts). No
 registry configuration or token is needed:
 
 ```sh
