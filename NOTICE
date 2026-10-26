@@ -36,8 +36,7 @@ a. Legal notices (section 7(b)). Every copy and every modified version must keep
      work that contains Aeris Charts;
    - the Aeris Terminal attribution logo that Aeris Charts displays in the bottom-left corner
      of each chart, with its link to https://aeristerminal.com/; and
-   - the provenance markers embedded in the shader sources and the compiled WebAssembly module
-     (identifier "aeris_core_pipeline_v1_devraj").
+   - the provenance notice embedded in the shader sources and the compiled WebAssembly module.
    Only holders of a valid Aeris Charts Commercial License may hide the runtime notice and the
    attribution logo, through the `licenseKey` chart option.
 

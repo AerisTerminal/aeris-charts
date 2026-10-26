@@ -81,7 +81,7 @@ try {
   assert.ok(wasm.size > 100_000, `wasm binary suspiciously small (${wasm.size} bytes)`);
 
   // 5. The NOTICE section 7(b) legal notices survive packaging and release optimization: the
-  //    NOTICE file, the runtime console notice, and the shader provenance marker.
+  //    NOTICE file, the runtime console notice, and the shader provenance notice.
   assert.equal(
     readFileSync(join(installed_package, "NOTICE"), "utf8").replaceAll("\r\n", "\n"),
     readFileSync(join(pkg_dir, "..", "..", "NOTICE"), "utf8").replaceAll("\r\n", "\n"),
@@ -91,7 +91,6 @@ try {
   for (const marker of [
     "Powered by Aeris Charts (AGPL-3.0-only)",
     "// aeris_charts provenance:",
-    "[aeris_core_pipeline_v1_devraj]",
   ]) {
     assert.ok(wasm_bytes.includes(marker), `release wasm is missing license marker: ${marker}`);
   }

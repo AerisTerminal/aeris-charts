@@ -33,9 +33,7 @@ mod tests {
     }
 
     #[test]
-    fn notice_carries_contact_but_not_the_provenance_marker() {
+    fn notice_carries_commercial_contact() {
         assert!(NOTICE.contains("integrations@aeristerminal.com"));
-        // The marker stays in the shipped shaders only; the console notice is user-facing.
-        assert!(!NOTICE.contains("aeris_core_pipeline_v1_devraj"));
     }
 }

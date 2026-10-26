@@ -340,7 +340,7 @@ Aeris Charts is dual-licensed:
 Shipping the package in a web page or app conveys it to your users, so the AGPL then requires
 releasing the complete source of the combined application. The NOTICE terms also require keeping
 the copyright notices, the browser-console license notice, the bottom-left Aeris Terminal logo
-link on each chart, and the provenance markers in the shaders and WebAssembly module. Commercial
+link on each chart, and the provenance notice in the shaders and WebAssembly module. Commercial
 licensees hide the console notice and the logo with the `licenseKey` chart option. Contributions are accepted under the agreement in
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
