@@ -34,18 +34,14 @@ unfinished auctions, exhaustion and absorption. Rules, options and snapshot sema
 
 ## Browser package
 
-The browser SDK is published through GitHub Packages as `@aeristerminal/aeris-charts`. Configure
-the Aeris Terminal scope before installing:
-
-```text
-@aeristerminal:registry=https://npm.pkg.github.com
-```
+The browser SDK is published to the public npm registry as `@aeristerminal/aeris-charts`. No
+registry configuration or token is needed:
 
 ```sh
 npm install @aeristerminal/aeris-charts
 ```
 
-Version tags publish automatically after release credentials are configured and the tag matches
+Version tags publish automatically, with npm provenance, when the tag matches
 `packages/charts/package.json` exactly
 (for example, package version `0.9.0` is released from tag `v0.9.0`).
 

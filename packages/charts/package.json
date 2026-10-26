@@ -1,13 +1,13 @@
 {
   "name": "@aeristerminal/aeris-charts",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "type": "module",
   "description": "Aeris all-in-one financial and general charting SDK powered by Rust and WebAssembly.",
   "license": "AGPL-3.0-only",
   "author": "Aeris Terminal",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aeristerminal/aeris-charts.git",
+    "url": "git+https://github.com/AerisTerminal/aeris-charts.git",
     "directory": "packages/charts"
   },
   "bugs": {
@@ -33,7 +33,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

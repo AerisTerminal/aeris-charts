@@ -23,18 +23,16 @@ function verify(ciSource, publishSource) {
     "machine-calibrated evidence must remain non-authoritative");
   assert.match(publishSource, /tags: \["v\*"\]/,
     "version tags must trigger publication");
-  assert.match(publishSource, /actions: read[\s\S]*contents: read[\s\S]*packages: write/,
-    "publication must be able to verify CI, read the release source, and publish packages");
-  assert.match(publishSource, /registry-url: https:\/\/npm\.pkg\.github\.com/,
-    "the scoped browser package must publish through GitHub Packages");
+  assert.match(publishSource, /actions: read[\s\S]*contents: read[\s\S]*id-token: write/,
+    "publication must be able to verify CI, read the release source, and mint an npm OIDC token");
+  assert.match(publishSource, /registry-url: https:\/\/registry\.npmjs\.org/,
+    "the browser package must publish to the public npm registry so installs need no configuration");
   assert.match(publishSource, /scope: "@aeristerminal"/,
-    "GitHub Packages publication must use the Aeris Terminal scope");
-  assert.match(publishSource, /NODE_AUTH_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/,
-    "GitHub Packages publication must use the workflow token");
+    "npm publication must use the Aeris Terminal scope");
   assert.match(publishSource, /Verify source passed CI[\s\S]*actions\/workflows\/ci\.yml\/runs/,
     "publication must require successful CI for the release source");
-  assert.match(publishSource, /npm publish --tag latest/,
-    "publication must update the latest package tag");
+  assert.match(publishSource, /npm publish --provenance --access public --tag latest/,
+    "publication must be public, carry provenance, and update the latest package tag");
 }
 
 verify(ci, publish);
@@ -51,8 +49,9 @@ for (const [brokenCi, brokenPublish] of [
   [ci.replace("node benchmarks/benchmark.mjs size", "node benchmarks/benchmark.mjs test"), publish],
   [ci.replace("id: portable-browser-suite", "id: portable-browser-suite\n        continue-on-error: true"), publish],
   [ci, publish.replace("actions/workflows/ci.yml/runs", "actions/workflows/missing.yml/runs")],
-  [ci, publish.replace("https://npm.pkg.github.com", "https://registry.npmjs.org")],
-  [ci, publish.replace("npm publish --tag latest", "npm publish")],
+  [ci, publish.replace("https://registry.npmjs.org", "https://npm.pkg.github.com")],
+  [ci, publish.replace("id-token: write", "id-token: none")],
+  [ci, publish.replace("npm publish --provenance --access public --tag latest", "npm publish")],
 ]) {
   assert.throws(() => verify(brokenCi, brokenPublish), "a simulated release-gate regression was not detected");
 }

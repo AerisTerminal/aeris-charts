@@ -125,7 +125,7 @@ Run Playwright once per batch when the batch changes browser-facing behavior, an
 
 Rust crates are repository-only and keep `publish = false`; never publish them to crates.io. Hosts
 consume them through pinned Git revisions or local paths. The only published artifact is the
-`@aeristerminal/aeris-charts` npm package on GitHub Packages, released by pushing a `v<version>` tag
+`@aeristerminal/aeris-charts` package on the public npm registry, released by pushing a `v<version>` tag
 that matches `packages/charts/package.json` after CI passes on that commit.
 
 When a batch is complete and its gates pass, review the diff, commit the batch once with a structured message describing the delivered capabilities and verification, push `main` to `github` without force, and report remaining manual verification honestly.

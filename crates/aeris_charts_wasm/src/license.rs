@@ -3,7 +3,7 @@
 
 pub(crate) const NOTICE: &str = "Powered by Aeris Charts (AGPL-3.0-only). Commercial license \
      required for closed-source deployment: integrations@aeristerminal.com | \
-     https://aeristerminal.com [aeris_core_pipeline_v1_devraj]";
+     https://aeristerminal.com";
 
 /// True at most once per module instance, and never for a licensed caller.
 fn take_announcement(announced: &std::sync::atomic::AtomicBool, licensed: bool) -> bool {
@@ -33,8 +33,9 @@ mod tests {
     }
 
     #[test]
-    fn notice_carries_contact_and_provenance_marker() {
+    fn notice_carries_contact_but_not_the_provenance_marker() {
         assert!(NOTICE.contains("integrations@aeristerminal.com"));
-        assert!(NOTICE.contains("aeris_core_pipeline_v1_devraj"));
+        // The marker stays in the shipped shaders only; the console notice is user-facing.
+        assert!(!NOTICE.contains("aeris_core_pipeline_v1_devraj"));
     }
 }
