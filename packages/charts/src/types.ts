@@ -2613,7 +2613,7 @@ export interface drawing_options {
   price_scale_id: "left" | "right" | "overlay";
   /** Line/border color (default: the canonical primary token). */
   color: string;
-  /** Stroke width in CSS px (default 2; 1 for a rectangle's border). */
+  /** Stroke width in CSS px (default 2 for straight-line tools; 1 for shapes, channels, and level tools). */
   width: number;
   /** Stroke style (default `"dashed"` for Fibonacci tools, including their levels; `"solid"` otherwise). */
   style: line_style;

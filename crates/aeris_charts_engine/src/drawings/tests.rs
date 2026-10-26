@@ -654,9 +654,19 @@ fn drawings_move_bar_by_bar_horizontally_and_land_prices_on_the_scale_tick() {
 }
 
 #[test]
-fn every_tool_defaults_to_a_one_pixel_line_except_freehand_strokes() {
+fn line_tools_default_to_two_pixels_freehand_wider_and_other_tools_to_one() {
     for spec in crate::drawings::tools::DRAWING_TOOL_SPECS {
         let expected = match spec.kind {
+            DrawingKind::TrendLine
+            | DrawingKind::HorizontalLine
+            | DrawingKind::HorizontalRay
+            | DrawingKind::VerticalLine
+            | DrawingKind::Ray
+            | DrawingKind::ExtendedLine
+            | DrawingKind::InfoLine
+            | DrawingKind::TrendAngle
+            | DrawingKind::CrossLine
+            | DrawingKind::ArrowLine => 2.0,
             DrawingKind::Brush => 4.0,
             DrawingKind::Highlighter => 22.0,
             _ => 1.0,
@@ -6684,7 +6694,7 @@ fn signpost_drops_from_one_click_with_a_vertical_post_and_square_handle() {
 fn arrow_line_ends_in_the_path_tools_open_chevron() {
     let mut chart = settled_chart();
     let (a, b) = ((2.0, 10.5), (6.0, 12.0));
-    chart
+    let id = chart
         .add_drawing(
             DrawingKind::ArrowLine,
             0,
@@ -6695,7 +6705,9 @@ fn arrow_line_ends_in_the_path_tools_open_chevron() {
     let frame = chart.build_frame();
     let start = (x_at(&chart, a.0), y_at(&chart, a.1));
     let end = (x_at(&chart, b.0), y_at(&chart, b.1));
-    let expected = crate::drawings::path_arrow_points(&[start, end], 1.0, 1.0).unwrap();
+    let width = chart.drawing(id).unwrap().width;
+    assert_eq!(width, 2.0);
+    let expected = crate::drawings::path_arrow_points(&[start, end], width, 1.0).unwrap();
     let pane = &frame.panes[0];
     assert!(pane.main.iter().any(|prim| {
         match *prim {

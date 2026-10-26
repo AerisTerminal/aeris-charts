@@ -1149,7 +1149,7 @@ pub struct Drawing {
     pub regression_deviations: f64,
     /// Line/border color CSS string (default [`DRAWING_DEFAULT_COLOR`]).
     pub color: String,
-    /// Stroke width in CSS px (default 2; 1 for a rectangle's border).
+    /// Stroke width in CSS px (default 2 for straight-line tools; 1 for shapes, channels, and level tools).
     pub width: f64,
     pub style: LineStyle,
     /// Rectangle fill CSS string; `None` fills with the border color at 20% alpha. Unused by

@@ -148,6 +148,10 @@ pub(crate) struct DrawingToolSpec {
     pub(crate) requests_text_editor: bool,
 }
 
+/// Stroke width of the straight-line tools (trend, horizontal, vertical, ray, extended, info,
+/// angle, cross, and arrow lines). Shapes, channels, and multi-level tools keep a 1 px stroke.
+const LINE_TOOL_WIDTH: f64 = 2.0;
+
 const TREND_LINE: DrawingToolSpec = DrawingToolSpec {
     kind: DrawingKind::TrendLine,
     wire_id: 0,
@@ -159,7 +163,7 @@ const TREND_LINE: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Finite,
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
-    default_width: 1.0,
+    default_width: LINE_TOOL_WIDTH,
     default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
@@ -175,7 +179,7 @@ const HORIZONTAL_LINE: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Full,
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
-    default_width: 1.0,
+    default_width: LINE_TOOL_WIDTH,
     default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
@@ -191,7 +195,7 @@ const HORIZONTAL_RAY: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::FromFirst,
     price_extent: DrawingPriceExtent::Finite,
     bounds_padding_ratio: 0.0,
-    default_width: 1.0,
+    default_width: LINE_TOOL_WIDTH,
     default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
@@ -207,7 +211,7 @@ const VERTICAL_LINE: DrawingToolSpec = DrawingToolSpec {
     logical_extent: DrawingLogicalExtent::Finite,
     price_extent: DrawingPriceExtent::Full,
     bounds_padding_ratio: 0.0,
-    default_width: 1.0,
+    default_width: LINE_TOOL_WIDTH,
     default_style: LineStyle::Solid,
     requests_text_editor: false,
 };
