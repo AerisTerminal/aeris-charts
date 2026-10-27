@@ -249,7 +249,17 @@ impl ChartEngine {
         price: f64,
     ) -> Option<f64> {
         let target = PriceScaleTarget::from(target);
-        self.runtime_price_coordinate(pane_index, target, price)
+        let pane = self.panes.get(pane_index)?;
+        let coordinate = self.runtime_price_coordinate(pane_index, target, price)?;
+        if coordinate.is_nan() {
+            return None;
+        }
+        // Trading lines, markers, and group connectors share this projection. Keep distant
+        // prices outside the pane (the frame scissor hides them), but bound their geometry
+        // before integer encoding: casting an extreme negative coordinate to i32::MIN makes
+        // the GPUI stroke's center - width / 2 overflow at ordinary device pixel ratios.
+        let margin = pane.height.max(1.0);
+        Some(coordinate.clamp(pane.top - margin, pane.top + pane.height + margin))
     }
 
     /// Vertical extent `(top, bottom)` in CSS px of what the primary series of `target` paints

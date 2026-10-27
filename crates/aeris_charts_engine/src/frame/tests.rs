@@ -20,6 +20,74 @@ const LIVE_TEXT: Color = Color::rgb(0xff, 0xff, 0xff);
 const LIVE_COUNTDOWN: Color = Color::rgba(0xff, 0xff, 0xff, 0xb3);
 
 #[test]
+fn off_viewport_working_order_line_keeps_gpui_stroke_coordinates_safe() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 2.0);
+    chart
+        .set_series_data(
+            0,
+            &[60.0, 120.0],
+            &[100.0; 2],
+            &[101.0; 2],
+            &[99.0; 2],
+            &[100.0; 2],
+        )
+        .unwrap();
+    chart.build_frame();
+    chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 90.0, 110.0);
+    chart
+        .set_trading_snapshot(crate::TradingSnapshot {
+            orders: vec![crate::WorkingOrder {
+                id: crate::OrderId::new("offscreen-working").unwrap(),
+                account_id: None,
+                pane_index: 0,
+                price_scale: crate::TradingPriceScale::Right,
+                side: crate::OrderSide::Sell,
+                kind: crate::OrderKind::Limit,
+                role: crate::OrderRole::Working,
+                status: crate::OrderStatus::Working,
+                price: 1.0e16,
+                stop_price: None,
+                trailing_trigger_price: None,
+                break_even_trigger_price: None,
+                quantity: 1.0,
+                filled_quantity: 0.0,
+                position_id: None,
+                parent_order_id: None,
+                bracket_id: None,
+                oco_group_id: None,
+                revision: 1,
+                annotations: Vec::new(),
+            }],
+            ..crate::TradingSnapshot::default()
+        })
+        .unwrap();
+    let mut regions = Vec::new();
+    let mut lines = Vec::new();
+    chart.build_trading_frame_for_test(0, 2.0, 2.0, &mut regions, &mut lines);
+    let order_lines: Vec<_> = lines
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::HLine { y, width, .. } => Some((*y, *width)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !order_lines.is_empty(),
+        "the order projects into the trading frame"
+    );
+    for (y, width) in order_lines {
+        assert!(
+            y.checked_sub(width / 2).is_some(),
+            "GPUI line_span_start must not overflow"
+        );
+        assert!(
+            y.abs() < 100_000,
+            "offscreen geometry remains near the viewport"
+        );
+    }
+}
+
+#[test]
 fn custom_marker_plot_uses_exact_visible_prices_without_line_or_whitespace_marks() {
     use crate::custom_studies::{
         CustomStudyDefinition, CustomStudyFault, CustomStudyInput, CustomStudyOutput,

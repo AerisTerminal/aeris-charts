@@ -1707,6 +1707,8 @@ Drawing work is independently bounded before frame emission. Charts with at most
 
 Trading state is capped at 4,096 live positions, orders, and executions per chart, and pending intent delivery is capped at 256 entries. Expected terminal workloads (10, 50, 100, and 500 trading objects) use a direct topmost-first pane scan for hits and one retained trading rebuild per semantic/preview mutation; unchanged frames reuse both trading layers. This deliberately avoids a spatial tree until measurements justify one. Engine memory telemetry includes trading vector, intent-queue, and retained string capacity.
 
+Trading price projection bounds off-viewport coordinates to one pane height beyond each edge before integer frame encoding. The pane scissor hides those lines, while connected trading geometry remains bounded and can reappear when the viewport returns to its price. This prevents a saturated `i32::MIN` line center from overflowing a GPUI stroke at higher pixel ratios.
+
 Track CPU frame time, GPU time where available, draw calls, dropped and presented frames, memory, ring overruns, interaction latency, and steady-state allocation. Device loss or unavailable WebGPU must fail over without losing headless chart state.
 
 Each browser chart owns reusable WebGPU vertex buffers for its retained semantic draw groups. Buffers grow geometrically to a high-water capacity, upload only when the corresponding group revision changes, never shrink during the chart lifetime, and are released with the chart's GPU state. The public last-frame telemetry also reports buffer allocations, buffer writes, uploaded bytes, and retained-layer rebuild counts so stable and localized-update behavior is directly testable.
