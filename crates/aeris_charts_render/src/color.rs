@@ -92,13 +92,14 @@ impl Color {
         self.0 as u8
     }
 
-    /// Perceptual luminance (Rec. 601), 0..255.
+    /// Grayscale brightness, 0..255, with the reference's `rgbaToGrayscale` weights. Green
+    /// weighs more than in Rec. 601, so saturated greens, cyans and light blues read as light.
     pub fn luminance(&self) -> f64 {
-        0.299 * self.r() as f64 + 0.587 * self.g() as f64 + 0.114 * self.b() as f64
+        0.199 * self.r() as f64 + 0.687 * self.g() as f64 + 0.114 * self.b() as f64
     }
 
     /// Contrast text color for a label on this background — black on light, white on dark.
-    /// Approximates the reference's `generateContrastColors`.
+    /// The reference's `generateContrastColors` rule.
     pub fn contrast_text(&self) -> Color {
         if self.luminance() > 160.0 {
             Color::rgb(0, 0, 0)
@@ -292,6 +293,24 @@ mod tests {
             Color::rgb(0, 0, 0)
         );
         assert_eq!(Color::rgb(0x08, 0x99, 0x81).to_hex(), "#089981");
+    }
+
+    #[test]
+    fn contrast_text_reads_saturated_light_colors_as_light() {
+        let black = Color::rgb(0, 0, 0);
+        let white = Color::rgb(255, 255, 255);
+        for (color, expected) in [
+            (Color::rgb(0x05, 0xff, 0x00), black),
+            (Color::rgb(0x45, 0xb8, 0xf2), black),
+            (Color::rgb(0xff, 0xab, 0x00), black),
+            (Color::rgb(0x33, 0x5c, 0xff), white),
+            (Color::rgb(0x26, 0xa6, 0x9a), white),
+            (Color::rgb(0xef, 0x53, 0x50), white),
+            (Color::rgb(0x08, 0x99, 0x81), white),
+            (Color::rgb(0xf2, 0x36, 0x45), white),
+        ] {
+            assert_eq!(color.contrast_text(), expected, "{}", color.to_hex());
+        }
     }
 
     #[test]

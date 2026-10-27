@@ -18058,6 +18058,25 @@ fn area_brush_changes_rebuild_only_the_brushed_series() {
 }
 
 #[test]
+fn last_value_chip_text_stays_dark_on_a_bright_green_candle_color() {
+    let mut chart = ohlc_chart(SeriesKind::Candlestick, 3);
+    chart.series[0].up_color = Some("#05ff00".into());
+    chart.series[0].down_color = Some("#05ff00".into());
+    let green = Color::parse_css("#05ff00").unwrap();
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
+    let chip = axis
+        .labels
+        .iter()
+        .find(|l| matches!(l.background, Some((.., c)) if c == green))
+        .expect("the last-value chip wears the candle color");
+    assert_eq!(chip.color, Color::rgb(0, 0, 0));
+}
+
+#[test]
 fn last_value_label_background_honors_the_per_point_color() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 3);
     // The final bar carries a custom body color: the last-value label (and the built-in
