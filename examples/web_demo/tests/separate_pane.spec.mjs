@@ -182,11 +182,11 @@ test("pane divider returns to its grab point after hitting the height clamp", as
   await page.mouse.down();
   await page.mouse.move(geometry.x, geometry.top + geometry.separator + 400);
   const clamped = await separator();
-  await page.mouse.move(geometry.x, geometry.top + geometry.separator + 60);
+  await page.mouse.move(geometry.x, geometry.top + geometry.separator + 40);
   const reversed = await separator();
   await page.mouse.up();
-  expect(clamped).toBeGreaterThan(geometry.separator + 60);
-  expect(reversed).toBeCloseTo(geometry.separator + 60, 0);
+  expect(clamped).toBeGreaterThan(geometry.separator + 40);
+  expect(reversed).toBeCloseTo(geometry.separator + 40, 0);
 });
 
 test("touch divider keeps its original grab point after the height clamp", async ({ page }) => {
@@ -213,14 +213,14 @@ test("touch divider keeps its original grab point after the height clamp", async
     const far = touch(initial + 400);
     send("touchmove", [far], [far]);
     const clamped = Array.from(chart.wasm.pane_separator_ys())[0];
-    const back = touch(initial + 60);
+    const back = touch(initial + 40);
     send("touchmove", [back], [back]);
     const reversed = Array.from(chart.wasm.pane_separator_ys())[0];
     send("touchend", [], [back]);
     return { initial, clamped, reversed };
   });
-  expect(result.clamped).toBeGreaterThan(result.initial + 50);
-  expect(result.reversed).toBeCloseTo(result.initial + 50, 0);
+  expect(result.clamped).toBeGreaterThan(result.initial + 30);
+  expect(result.reversed).toBeCloseTo(result.initial + 30, 0);
 });
 
 for (const backend of ["canvas2d", "webgpu"]) {

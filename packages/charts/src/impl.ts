@@ -7488,7 +7488,8 @@ export class chart_impl implements chart_api {
       | { kind: "context_menu"; x: number; y: number }
       | { kind: "delta_tooltip_changed" }
       | { kind: "general_brush_changed" }
-      | { kind: "general_legend_changed" };
+      | { kind: "general_legend_changed" }
+      | { kind: "panes_resized" };
     const events = JSON.parse(this.wasm.take_input_events_json()) as controller_event[];
     for (const event of events) {
       switch (event.kind) {

@@ -5559,7 +5559,7 @@ fn oscillator_indicators_get_their_own_pane_and_band_levels() {
     let rsi = chart.add_rsi(0, 2).expect("valid rsi");
     // A fresh oscillator pane holds the output at the reduced stretch.
     assert_eq!(chart.panes.len(), 2);
-    assert!((chart.panes[1].stretch_factor - 0.25).abs() < 1e-9);
+    assert!((chart.panes[1].stretch_factor - crate::SEPARATE_INDICATOR_PANE_STRETCH).abs() < 1e-9);
     let entry = chart.series.iter().find(|s| s.id == rsi).unwrap();
     assert_eq!(entry.pane_index, 1);
     assert_eq!(
@@ -5821,9 +5821,9 @@ fn a_recreated_indicator_pane_keeps_its_share_after_a_separator_drag() {
             < 1e-9
     );
     chart.layout_panes(400.0);
-    // 0.25 / 1.25 of the layout, less the separator.
+    // 0.15 / 1.15 of the layout, less the separator.
     assert!(
-        chart.panes[1].height > 400.0 * 0.19,
+        chart.panes[1].height > 400.0 * 0.12,
         "the recreated pane keeps its share of the layout: {}",
         chart.panes[1].height
     );

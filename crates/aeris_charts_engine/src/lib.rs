@@ -55,8 +55,15 @@ mod tests;
 mod trading;
 mod workspace;
 
-/// Initial stretch for engine-created separate indicator panes across all hosts.
-pub(crate) const SEPARATE_INDICATOR_PANE_STRETCH: f64 = 0.25;
+/// Initial stretch for engine-created separate indicator panes across all hosts, relative to the
+/// main pane.
+pub(crate) const SEPARATE_INDICATOR_PANE_STRETCH: f64 = 0.15;
+/// Smallest pane height, relative to the main pane, that [`ChartEngine::set_pane_height_share`]
+/// applies.
+pub const MIN_PANE_HEIGHT_SHARE: f64 = 0.02;
+/// Largest pane height, relative to the main pane, that [`ChartEngine::set_pane_height_share`]
+/// applies.
+pub const MAX_PANE_HEIGHT_SHARE: f64 = 50.0;
 
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
@@ -5900,8 +5907,6 @@ impl ChartEngine {
         changed
     }
 
-    /// Lay out stacked panes inside the chart content area. This is shared by hosts that need
-    /// pane bounds before frame submission (for example, to draw axis separators).
     /// The stretch a fresh separate pane needs to take the share of the layout that
     /// `SEPARATE_INDICATOR_PANE_STRETCH` expresses against the main pane. Separator drags store
     /// pane heights as pixel-sized stretch factors, so a bare constant would collapse the new
@@ -5914,6 +5919,40 @@ impl ChartEngine {
         SEPARATE_INDICATOR_PANE_STRETCH * main
     }
 
+    /// Height of pane `index` as a multiple of the main pane's height. The share does not depend
+    /// on the chart's pixel height or on whether a separator drag stored the stretch factors in
+    /// pixels, so a host can persist it and give a recreated pane the same size. `None` for the
+    /// main pane and for indexes past the last pane.
+    #[must_use]
+    pub fn pane_height_share(&self, index: usize) -> Option<f64> {
+        if index == 0 {
+            return None;
+        }
+        let main = self.panes.first()?.stretch_factor.max(0.01);
+        let pane = self.panes.get(index)?;
+        Some(pane.stretch_factor.max(0.01) / main)
+    }
+
+    /// Sizes pane `index` to `share` of the main pane's height, clamped to
+    /// [`MIN_PANE_HEIGHT_SHARE`]..=[`MAX_PANE_HEIGHT_SHARE`]; other panes keep their stretch.
+    /// Returns whether the layout changed. The main pane, a missing pane and a non-finite share
+    /// are rejected.
+    pub fn set_pane_height_share(&mut self, index: usize, share: f64) -> bool {
+        if index == 0 || index >= self.panes.len() || !share.is_finite() {
+            return false;
+        }
+        let main = self.panes[0].stretch_factor.max(0.01);
+        let stretch = share.clamp(MIN_PANE_HEIGHT_SHARE, MAX_PANE_HEIGHT_SHARE) * main;
+        if (self.panes[index].stretch_factor - stretch).abs() <= stretch * 1e-9 {
+            return false;
+        }
+        self.panes[index].stretch_factor = stretch;
+        self.invalidate_frame_all();
+        true
+    }
+
+    /// Lay out stacked panes inside the chart content area. This is shared by hosts that need
+    /// pane bounds before frame submission (for example, to draw axis separators).
     pub fn layout_panes(&mut self, content_h: f64) {
         let usable =
             (content_h - PANE_SEPARATOR * self.panes.len().saturating_sub(1) as f64).max(1.0);

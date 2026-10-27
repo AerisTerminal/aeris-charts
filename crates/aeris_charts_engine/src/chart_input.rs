@@ -378,6 +378,9 @@ pub enum ChartInputEvent {
     GeneralBrushChanged,
     /// A click on the engine-drawn general legend toggled a series' visibility.
     GeneralLegendChanged,
+    /// A separator drag or focused separator key changed pane heights. Hosts that persist pane
+    /// heights read them again through [`ChartEngine::pane_height_share`].
+    PanesResized,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1092,6 +1095,7 @@ impl ChartEngine {
                     let delta = y - grab_offset_y - pane_below.top;
                     self.drag_pane_separator(index, delta);
                     self.input.layout_dirty = true;
+                    self.note_panes_resized();
                 }
                 // The separator is chrome: the crosshair hides during the resize drag.
                 self.clear_pointer_hover();
@@ -1824,6 +1828,9 @@ impl ChartEngine {
                     _ => false,
                 };
                 self.input.layout_dirty |= handled;
+                if handled {
+                    self.note_panes_resized();
+                }
                 handled
             }
             ChartFocusTarget::Separator(_) => false,
@@ -1901,6 +1908,13 @@ impl ChartEngine {
             self.input.events.pop_front();
         }
         self.input.events.push_back(event);
+    }
+
+    /// A separator drag resizes on every motion sample; one pending notice is enough.
+    fn note_panes_resized(&mut self) {
+        if !self.input.events.contains(&ChartInputEvent::PanesResized) {
+            self.push_input_event(ChartInputEvent::PanesResized);
+        }
     }
 
     /// Hover motion can change the comparison on every sample; one pending notice is enough.
@@ -3761,6 +3775,70 @@ mod tests {
         assert_ne!(chart.hovered_drawing(), Some(id));
         chart.input_pointer_move(at(300.0, 220.0), false);
         assert_eq!(chart.hovered_drawing(), Some(id));
+    }
+
+    #[test]
+    fn separator_resize_reports_one_panes_resized_and_its_share_rebuilds_a_new_chart() {
+        let mut chart = chart();
+        chart.add_rsi(0, 2).expect("valid rsi");
+        relayout(&mut chart);
+        let default_share = chart.pane_height_share(1).unwrap();
+        assert!((default_share - crate::SEPARATE_INDICATOR_PANE_STRETCH).abs() < 1e-9);
+        assert_eq!(chart.pane_height_share(0), None);
+        assert_eq!(chart.pane_height_share(2), None);
+        let _ = chart.take_input_events();
+
+        let separator = chart.panes[1].top;
+        drag(&mut chart, (200.0, separator), (200.0, separator + 30.0));
+        relayout(&mut chart);
+        let events = chart.take_input_events();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == ChartInputEvent::PanesResized)
+                .count(),
+            1,
+            "a drag coalesces into one notice: {events:?}"
+        );
+        let resized_share = chart.pane_height_share(1).unwrap();
+        assert!(resized_share < default_share, "the pane below shrank");
+        let resized_ratio = chart.panes[1].height / chart.panes[0].height;
+
+        // A rebuilt chart (for example after an interval switch) restores the persisted share.
+        let mut rebuilt = self::chart();
+        rebuilt.add_rsi(0, 2).expect("valid rsi");
+        assert!(rebuilt.set_pane_height_share(1, resized_share));
+        assert!(
+            !rebuilt.set_pane_height_share(1, resized_share),
+            "unchanged"
+        );
+        relayout(&mut rebuilt);
+        let rebuilt_ratio = rebuilt.panes[1].height / rebuilt.panes[0].height;
+        assert!((rebuilt_ratio - resized_ratio).abs() < 1e-6);
+
+        assert!(
+            !rebuilt.set_pane_height_share(0, 0.5),
+            "the main pane is the reference"
+        );
+        assert!(!rebuilt.set_pane_height_share(2, 0.5));
+        assert!(!rebuilt.set_pane_height_share(1, f64::NAN));
+        assert!(rebuilt.set_pane_height_share(1, 1_000.0));
+        assert_eq!(
+            rebuilt.pane_height_share(1),
+            Some(crate::MAX_PANE_HEIGHT_SHARE)
+        );
+
+        let none = InputModifiers::default();
+        let _ = rebuilt.take_input_events();
+        assert!(rebuilt.input_target_key_down(
+            ChartFocusTarget::Separator(0),
+            ChartKey::Home,
+            none
+        ));
+        assert_eq!(
+            rebuilt.take_input_events(),
+            vec![ChartInputEvent::PanesResized]
+        );
     }
 
     #[test]

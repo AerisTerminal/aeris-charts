@@ -5713,6 +5713,7 @@ impl AerisChart {
                 ChartInputEvent::GeneralLegendChanged => {
                     serde_json::json!({"kind":"general_legend_changed"})
                 }
+                ChartInputEvent::PanesResized => serde_json::json!({"kind":"panes_resized"}),
                 ChartInputEvent::ContextMenu(menu) => {
                     let region = match menu.region {
                         ChartRegion::Pane => "pane",

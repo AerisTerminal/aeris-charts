@@ -775,7 +775,10 @@ mod tests {
         let external = chart.external_study_outputs()[0].series_id;
         let external_pane = chart.series_entry(external).unwrap().pane_index;
         assert_ne!(external_pane, rsi_pane);
-        assert_eq!(chart.panes[rsi_pane].stretch_factor, 0.5);
+        assert_eq!(
+            chart.panes[rsi_pane].stretch_factor,
+            2.0 * crate::SEPARATE_INDICATOR_PANE_STRETCH
+        );
         assert_eq!(
             chart.panes[external_pane].stretch_factor,
             chart.panes[rsi_pane].stretch_factor

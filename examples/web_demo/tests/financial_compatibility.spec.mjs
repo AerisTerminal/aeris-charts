@@ -15,8 +15,8 @@ test("CVD and delta start at the same small height as oscillator panes", async (
     chart.add_rsi(window.__main, 5);
     return chart.panes().map((pane) => pane.get_stretch_factor());
   });
-  expect(factors.slice(1)).toEqual([0.25, 0.25, 0.25]);
-  expect(factors[0]).toBeGreaterThan(0.25);
+  expect(factors.slice(1)).toEqual([0.15, 0.15, 0.15]);
+  expect(factors[0]).toBeGreaterThan(0.15);
 });
 
 test("delta histogram scales symmetrically around zero", async ({ page }) => {

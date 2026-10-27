@@ -1438,6 +1438,7 @@ impl Probe {
                 ChartInputEvent::DeltaTooltipChanged => "delta tooltip changed".into(),
                 ChartInputEvent::GeneralBrushChanged => "general brush changed".into(),
                 ChartInputEvent::GeneralLegendChanged => "general legend changed".into(),
+                ChartInputEvent::PanesResized => "panes resized".into(),
             };
         }
     }
