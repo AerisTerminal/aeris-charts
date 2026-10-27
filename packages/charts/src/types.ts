@@ -1291,29 +1291,10 @@ export interface comparison_legend_entry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "session_levels" | "previous_period_levels" | "opening_range" | "swing_points" | "market_structure" | "fair_value_gaps" | "order_blocks" | "aroon" | "awesome_oscillator" | "dpo" | "chande_momentum" | "bollinger_metrics" | "envelopes" | "alma" | "accumulation_distribution" | "price_volume_trend" | "chaikin_oscillator" | "klinger" | "kama" | "mcginley" | "linear_regression" | "choppiness" | "atr_bands" | "relative_volume" | "volume_oscillator" | "elder_force" | "ease_of_movement" | "historical_volatility" | "trix" | "kst" | "tsi" | "mass_index" | "vortex" | "coppock_curve" | "fisher_transform" | "ultimate_oscillator" | "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "zigzag" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
+export type indicator_kind = "session_levels" | "previous_period_levels" | "opening_range" | "swing_points" | "aroon" | "awesome_oscillator" | "dpo" | "chande_momentum" | "bollinger_metrics" | "envelopes" | "alma" | "accumulation_distribution" | "price_volume_trend" | "chaikin_oscillator" | "klinger" | "kama" | "mcginley" | "linear_regression" | "choppiness" | "atr_bands" | "relative_volume" | "volume_oscillator" | "elder_force" | "ease_of_movement" | "historical_volatility" | "trix" | "kst" | "tsi" | "mass_index" | "vortex" | "coppock_curve" | "fisher_transform" | "ultimate_oscillator" | "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "zigzag" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
 /** UTC groups by calendar day/week/month; host uses spans supplied by set_study_calendar. */
 export type study_calendar_policy = "utc" | "host";
 export type previous_period = "day" | "week" | "month";
-export type structure_break_on = "close" | "wick";
-export type structure_mitigation = "touch" | "half" | "full";
-export type structure_mitigation_price = "wick" | "close";
-export type order_block_zone = "wick" | "body";
-export interface structure_zone_options {
-  mitigation?: structure_mitigation;
-  mitigation_price?: structure_mitigation_price;
-  max_active?: number;
-  show_mitigated?: boolean;
-}
-export interface fair_value_gap_options extends structure_zone_options {
-  min_size?: number;
-}
-export interface order_block_options extends structure_zone_options {
-  left?: number;
-  right?: number;
-  break_on?: structure_break_on;
-  zone?: order_block_zone;
-}
 export type pivot_kind = "standard" | "fibonacci" | "camarilla" | "woodie" | "demark";
 export type vwap_reset = "session" | "weekly" | "monthly";
 export type indicator_parameter_type = "integer" | "number" | "boolean" | "source" | "series" | "choice";
@@ -1326,27 +1307,15 @@ export interface indicator_parameter_descriptor {
   /** Present only for choice parameters, in editor display order. */
   options?: string[];
 }
-export type study_marker_kind = "swing_high" | "swing_low" | { bos: { up: boolean } } | { choch: { up: boolean } };
+export type study_marker_kind = "swing_high" | "swing_low";
 export interface study_marker {
   row: number;
   confirm_row: number;
   price: number;
   kind: study_marker_kind;
-  from_row: number | null;
-}
-export interface study_zone {
-  start_row: number;
-  confirm_row: number;
-  top: number;
-  bottom: number;
-  bullish: boolean;
-  end_row: number | null;
-  /** True when max_active retired this zone rather than price mitigating it. */
-  retired: boolean;
 }
 export interface study_annotations {
   markers: study_marker[];
-  zones: study_zone[];
 }
 export interface indicator_output_descriptor {
   name: string;
@@ -1420,7 +1389,7 @@ export interface custom_study_binding_options extends Partial<series_options> {
  * (kind + params), the source series it derives from, and which output slot it is — everything
  * a platform needs to render its own industry-standard indicator chip (title, params, source,
  * hide/remove actions) without the engine owning any UI. Bollinger slots: 0 = upper,
- * 1 = middle, 2 = lower; EMA ribbon slots follow its five configured periods; SMA/EMA: always 0.
+ * 1 = middle, 2 = lower; SMA/EMA: always 0.
  */
 export interface indicator_info {
   /** Stable identity shared by all outputs in one indicator binding. */
@@ -1433,15 +1402,7 @@ export interface indicator_info {
     duration_seconds: number | null;
     left: number | null;
     right: number | null;
-    break_on: structure_break_on | null;
-    min_size: number | null;
-    mitigation: structure_mitigation | null;
-    mitigation_price: structure_mitigation_price | null;
-    max_active: number | null;
-    show_mitigated: boolean | null;
-    zone: order_block_zone | null;
     period: number | null;
-    periods: [number, number, number, number, number] | null;
     pivot_kind: pivot_kind | null;
     deviation: number | null;
     fast: number | null;
@@ -1480,25 +1441,14 @@ export interface indicator_info {
   style: indicator_output_style;
   /** Stable display name for this output, preserving binding output order. */
   output_name: string;
-  /** Bollinger: 0 = upper, 1 = middle, 2 = lower. EMA ribbon: fastest-to-slowest configured
-   *  period. MACD: 0 = line, 1 = signal, 2 = histogram. Stochastic: 0 = %K, 1 = %D.
+  /** Bollinger: 0 = upper, 1 = middle, 2 = lower. MACD: 0 = line, 1 = signal, 2 = histogram.
+   *  Stochastic: 0 = %K, 1 = %D.
    *  Single-output indicators: 0. */
   output_index: number;
   output_count: number;
 }
 
-/** Five EMA periods in fastest-to-slowest output order. */
-export type ema_ribbon_periods = readonly [number, number, number, number, number];
 export type kst_periods = readonly [number, number, number, number];
-
-/** Per-output style overrides in the same order as {@link ema_ribbon_periods}. */
-export type ema_ribbon_options = readonly [
-  Partial<series_options>?,
-  Partial<series_options>?,
-  Partial<series_options>?,
-  Partial<series_options>?,
-  Partial<series_options>?,
-];
 
 /** Series lifecycle event (platform chrome: legend chips, indicator counts). */
 export interface series_change_event {
@@ -4113,12 +4063,6 @@ export interface chart_api {
   add_previous_period_levels(source: series_api, period?: previous_period, calendar?: study_calendar_policy, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Running opening high/low/mid, fixed after duration_seconds from the session start. */
   add_opening_range(source: series_api, duration_seconds: number, calendar?: study_calendar_policy, options?: Partial<series_options>): [series_api, series_api, series_api];
-  /** BOS/CHoCH segments rendered by the engine; the returned anchor is whitespace. */
-  add_market_structure(source: series_api, left?: number, right?: number, break_on?: structure_break_on, options?: Partial<series_options>): series_api;
-  /** Three-candle imbalance zones with bounded active retention; returns a whitespace anchor. */
-  add_fair_value_gaps(source: series_api, config?: fair_value_gap_options, options?: Partial<series_options>): series_api;
-  /** Last opposite candle before a confirmed swing break; returns a whitespace anchor. */
-  add_order_blocks(source: series_api, config?: order_block_options, options?: Partial<series_options>): series_api;
   add_awesome_oscillator(source: series_api, options?: Partial<series_options>): series_api;
   add_dpo(source: series_api, period: number, options?: Partial<series_options>): series_api;
   add_chande_momentum(source: series_api, period: number, options?: Partial<series_options>): series_api;
@@ -4134,12 +4078,6 @@ export interface chart_api {
   add_smma(source: series_api, period: number, options?: Partial<series_options>): series_api;
   add_rma(source: series_api, period: number, options?: Partial<series_options>): series_api;
   add_hma(source: series_api, period: number, options?: Partial<series_options>): series_api;
-  /** Add one five-output EMA ribbon on the source pane. Defaults to 5/10/20/50/200; the third
-   *  output (EMA 20 by default) uses violet `#7d52f4`. */
-  add_ema_ribbon(source: series_api, periods?: ema_ribbon_periods, options?: ema_ribbon_options): [series_api, series_api, series_api, series_api, series_api];
-  /** Atomically update all EMA ribbon periods without replacing its five series handles.
-   *  `indicator` may be any output returned by {@link add_ema_ribbon}. */
-  set_ema_ribbon_periods(indicator: series_api, periods: ema_ribbon_periods): boolean;
   /** Add upper, middle, and lower Rust-native Bollinger-band lines (with the industry-standard
    *  background fill between the bands). */
   add_bollinger(source: series_api, period: number, deviation?: number, options?: Partial<series_options>): [series_api, series_api, series_api];

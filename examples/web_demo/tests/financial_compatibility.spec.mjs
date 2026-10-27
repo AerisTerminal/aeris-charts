@@ -15,8 +15,8 @@ test("CVD and delta start at the same small height as oscillator panes", async (
     chart.add_rsi(window.__main, 5);
     return chart.panes().map((pane) => pane.get_stretch_factor());
   });
-  expect(factors.slice(1)).toEqual([0.3, 0.3, 0.3]);
-  expect(factors[0]).toBeGreaterThan(0.3);
+  expect(factors.slice(1)).toEqual([0.25, 0.25, 0.25]);
+  expect(factors[0]).toBeGreaterThan(0.25);
 });
 
 test("delta histogram scales symmetrically around zero", async ({ page }) => {
@@ -122,7 +122,7 @@ test("financial product composes through one public chart and ordered frame", as
     const indicator_groups = [
       [chart.add_sma(source, 10)],
       [chart.add_ema(source, 12)],
-      chart.add_ema_ribbon(source, [3, 5, 8, 13, 21]),
+      [3, 5, 8, 13, 21].map((period) => chart.add_ema(source, period)),
       chart.add_bollinger(source, 10, 2),
       [chart.add_rsi(source, 5)],
       chart.add_macd(source, 3, 6, 3),
@@ -199,7 +199,7 @@ test("financial product composes through one public chart and ordered frame", as
   ]));
   expect(result.footprint).toEqual({ type: "footprint", bars: 1 });
   expect(new Set(result.indicator_kinds)).toEqual(new Set([
-    "sma", "ema", "ema_ribbon", "bollinger", "rsi",
+    "sma", "ema", "bollinger", "rsi",
     "macd", "stochastic", "atr", "vwap", "wma",
   ]));
   expect(result.drawing_kinds).toEqual([

@@ -7316,8 +7316,8 @@ mod tests {
         let delta = chart.add_delta_series(stream, 2).unwrap();
         assert_eq!(chart.series_entry(cvd).unwrap().pane_index, 1);
         assert_eq!(chart.series_entry(delta).unwrap().pane_index, 2);
-        assert_eq!(chart.panes[1].stretch_factor, 0.3);
-        assert_eq!(chart.panes[2].stretch_factor, 0.3);
+        assert_eq!(chart.panes[1].stretch_factor, 0.25);
+        assert_eq!(chart.panes[2].stretch_factor, 0.25);
 
         chart.layout_panes(400.0);
         assert_eq!(chart.panes[1].height, chart.panes[2].height);
@@ -7367,8 +7367,8 @@ mod tests {
         assert!(presentation.cumulative_delta_series().is_some());
         assert!(presentation.delta_series().is_some());
         let big_trades = presentation.big_trades().unwrap();
-        assert_eq!(chart.panes[1].stretch_factor, 0.3);
-        assert_eq!(chart.panes[2].stretch_factor, 0.3);
+        assert_eq!(chart.panes[1].stretch_factor, 0.25);
+        assert_eq!(chart.panes[2].stretch_factor, 0.25);
         let entry = chart.series_entry(footprint).unwrap();
         assert!(entry.last_value_visible && entry.price_line_visible && entry.countdown_visible);
         // The primary is never cut over: the host supplies it as whitespace instead.

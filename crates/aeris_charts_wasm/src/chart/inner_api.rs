@@ -4,9 +4,8 @@
 use super::inner_render::measure_text_ctx;
 use super::*;
 use aeris_charts_engine::{
-    ChartEngine, IndicatorInputSource, IndicatorKind, IndicatorOutputStyle, OrderBlockZone,
-    PivotKind, PreviousPeriod, StructureBreakOn, StructureMitigation, StructureMitigationPrice,
-    StudyCalendarPolicy, SyntheticBarOptions, SyntheticSourceBar, VwapReset,
+    ChartEngine, IndicatorInputSource, IndicatorKind, IndicatorOutputStyle, PivotKind,
+    PreviousPeriod, StudyCalendarPolicy, SyntheticBarOptions, SyntheticSourceBar, VwapReset,
 };
 
 impl ChartInner {
@@ -327,110 +326,6 @@ impl ChartInner {
             .add_opening_range(source_id as SeriesId, duration_seconds, calendar)
     }
 
-    pub fn add_market_structure(
-        &mut self,
-        source_id: u32,
-        left: u32,
-        right: u32,
-        break_on: &str,
-    ) -> Vec<u32> {
-        let break_on = match break_on {
-            "close" => StructureBreakOn::Close,
-            "wick" => StructureBreakOn::Wick,
-            _ => return Vec::new(),
-        };
-        self.engine.add_market_structure(
-            source_id as SeriesId,
-            left as usize,
-            right as usize,
-            break_on,
-        )
-    }
-
-    pub fn add_fair_value_gaps(
-        &mut self,
-        source_id: u32,
-        min_size: f64,
-        mitigation: &str,
-        mitigation_price: &str,
-        max_active: u32,
-        show_mitigated: bool,
-    ) -> Vec<u32> {
-        let (Some(mitigation), Some(mitigation_price)) = (
-            Self::structure_mitigation(mitigation),
-            Self::structure_mitigation_price(mitigation_price),
-        ) else {
-            return Vec::new();
-        };
-        self.engine.add_fair_value_gaps(
-            source_id as SeriesId,
-            min_size,
-            mitigation,
-            mitigation_price,
-            max_active as usize,
-            show_mitigated,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_order_blocks(
-        &mut self,
-        source_id: u32,
-        left: u32,
-        right: u32,
-        break_on: &str,
-        zone: &str,
-        mitigation: &str,
-        mitigation_price: &str,
-        max_active: u32,
-        show_mitigated: bool,
-    ) -> Vec<u32> {
-        let break_on = match break_on {
-            "close" => StructureBreakOn::Close,
-            "wick" => StructureBreakOn::Wick,
-            _ => return Vec::new(),
-        };
-        let zone = match zone {
-            "wick" => OrderBlockZone::Wick,
-            "body" => OrderBlockZone::Body,
-            _ => return Vec::new(),
-        };
-        let (Some(mitigation), Some(mitigation_price)) = (
-            Self::structure_mitigation(mitigation),
-            Self::structure_mitigation_price(mitigation_price),
-        ) else {
-            return Vec::new();
-        };
-        self.engine.add_order_blocks(
-            source_id as SeriesId,
-            left as usize,
-            right as usize,
-            break_on,
-            zone,
-            mitigation,
-            mitigation_price,
-            max_active as usize,
-            show_mitigated,
-        )
-    }
-
-    fn structure_mitigation(value: &str) -> Option<StructureMitigation> {
-        match value {
-            "touch" => Some(StructureMitigation::Touch),
-            "half" => Some(StructureMitigation::Half),
-            "full" => Some(StructureMitigation::Full),
-            _ => None,
-        }
-    }
-
-    fn structure_mitigation_price(value: &str) -> Option<StructureMitigationPrice> {
-        match value {
-            "wick" => Some(StructureMitigationPrice::Wick),
-            "close" => Some(StructureMitigationPrice::Close),
-            _ => None,
-        }
-    }
-
     pub fn add_awesome_oscillator(&mut self, source_id: u32) -> u32 {
         self.engine
             .add_awesome_oscillator(source_id as SeriesId)
@@ -621,16 +516,6 @@ impl ChartInner {
 
     pub fn add_ichimoku(&mut self, source_id: u32) -> Vec<u32> {
         self.engine.add_ichimoku(source_id as SeriesId)
-    }
-
-    pub fn add_ema_ribbon(&mut self, source_id: u32, periods: [u32; 5]) -> Vec<u32> {
-        self.engine
-            .add_ema_ribbon(source_id as SeriesId, periods.map(|period| period as usize))
-    }
-
-    pub fn set_ema_ribbon_periods(&mut self, id: u32, periods: [u32; 5]) -> bool {
-        self.engine
-            .set_ema_ribbon_periods(id as SeriesId, periods.map(|period| period as usize))
     }
 
     pub fn add_bollinger(&mut self, source_id: u32, period: u32, deviation: f64) -> Vec<u32> {

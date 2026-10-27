@@ -20,14 +20,11 @@ test("replay seeks in both directions match fresh prefix loads without a replay 
     chart.remove_series(window.__main);
     const source = chart.add_series("candlestick");
     source.set_data(candles);
-    const market = chart.add_market_structure(source, 1, 1);
-    const gaps = chart.add_fair_value_gaps(source);
-    const blocks = chart.add_order_blocks(source, { left: 1, right: 1 });
+    const swings = chart.add_swing_points(source, 1, 1);
     const levels = chart.add_session_levels(source);
     const snapshot = () => ({
-      market: chart.study_annotations(market),
-      gaps: chart.study_annotations(gaps),
-      blocks: chart.study_annotations(blocks),
+      swings: chart.study_annotations(swings[0]),
+      swing_levels: swings.map((output) => output.data().map(({ time, value }) => ({ time, value: value ?? null }))),
       levels: levels.map((output) => output.data().map(({ time, value }) => ({ time, value: value ?? null }))),
     });
     const complete = snapshot();
@@ -39,19 +36,15 @@ test("replay seeks in both directions match fresh prefix loads without a replay 
     return { complete, sought, resumed: snapshot() };
   }, { candles, cursors });
 
-  expect(replay.complete.market.markers.some(({ row }) => row > 3)).toBe(true);
-  expect(replay.complete.blocks.zones.some(({ confirm_row }) => confirm_row > 3)).toBe(true);
+  expect(replay.complete.swings.markers.some(({ row }) => row > 3)).toBe(true);
+  expect(replay.complete.swings.markers.some(({ confirm_row }) => confirm_row > 3)).toBe(true);
   expect(replay.complete.levels[0]).toHaveLength(candles.length);
   expect(replay.complete.levels[0].at(-1).value).toBe(21);
   expect(replay.resumed).toEqual(replay.complete);
 
   for (const { cursor, clock, snapshot } of replay.sought) {
     expect(clock).toBe(candles[cursor].time * 1_000_000);
-    for (const { markers, zones } of [snapshot.market, snapshot.gaps, snapshot.blocks]) {
-      expect(markers.every(({ row, confirm_row }) => row <= cursor && confirm_row <= cursor)).toBe(true);
-      expect(zones.every(({ start_row, confirm_row, end_row }) =>
-        start_row <= cursor && confirm_row <= cursor && (end_row === null || end_row <= cursor))).toBe(true);
-    }
+    expect(snapshot.swings.markers.every(({ row, confirm_row }) => row <= cursor && confirm_row <= cursor)).toBe(true);
     expect(snapshot.levels.every((output) => output.length === cursor + 1)).toBe(true);
 
     await page.reload();
@@ -61,16 +54,13 @@ test("replay seeks in both directions match fresh prefix loads without a replay 
       chart.remove_series(window.__main);
       const source = chart.add_series("candlestick");
       source.set_data(candles.slice(0, cursor + 1));
-      const market = chart.add_market_structure(source, 1, 1);
-      const gaps = chart.add_fair_value_gaps(source);
-      const blocks = chart.add_order_blocks(source, { left: 1, right: 1 });
+      const swings = chart.add_swing_points(source, 1, 1);
       const levels = chart.add_session_levels(source);
       return {
         clock: chart.replay_clock_micros(),
         snapshot: {
-          market: chart.study_annotations(market),
-          gaps: chart.study_annotations(gaps),
-          blocks: chart.study_annotations(blocks),
+          swings: chart.study_annotations(swings[0]),
+          swing_levels: swings.map((output) => output.data().map(({ time, value }) => ({ time, value: value ?? null }))),
           levels: levels.map((output) => output.data().map(({ time, value }) => ({ time, value: value ?? null }))),
         },
       };

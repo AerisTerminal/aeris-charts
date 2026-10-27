@@ -126,7 +126,7 @@ test("demo catalog creates and clears every session study output", async ({ page
   await expect(page.locator("#indicator_error")).toBeEmpty();
 });
 
-test("all seven study kinds inherit the source pane without creating oscillator panes", async ({ page }) => {
+test("all four study kinds inherit the source pane without creating oscillator panes", async ({ page }) => {
   await page.goto("/?backend=canvas2d");
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
   const result = await page.evaluate(() => {
@@ -144,9 +144,6 @@ test("all seven study kinds inherit the source pane without creating oscillator 
       chart.add_previous_period_levels(source),
       chart.add_opening_range(source, 60),
       chart.add_swing_points(source, 1, 1),
-      [chart.add_market_structure(source, 1, 1)],
-      [chart.add_fair_value_gaps(source)],
-      [chart.add_order_blocks(source, { left: 1, right: 1 })],
     ];
     return {
       sourcePane: source.pane_index(),
@@ -158,10 +155,10 @@ test("all seven study kinds inherit the source pane without creating oscillator 
   });
   expect(result.sourcePane).toBe(1);
   expect(result.paneCount).toBe(2);
-  expect(result.outputs.map((group) => group.length)).toEqual([2, 3, 3, 2, 1, 1, 1]);
+  expect(result.outputs.map((group) => group.length)).toEqual([2, 3, 3, 2]);
   expect(result.outputs.map((group) => group[0].kind)).toEqual([
     "session_levels", "previous_period_levels", "opening_range",
-    "swing_points", "market_structure", "fair_value_gaps", "order_blocks",
+    "swing_points",
   ]);
   expect(result.outputs.flat().every(({ pane }) => pane === result.sourcePane), JSON.stringify(result)).toBe(true);
 });

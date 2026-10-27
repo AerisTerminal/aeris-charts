@@ -27,8 +27,7 @@ import type {
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   depth_event_columns, depth_event_layer_options, depth_heatmap_options, depth_ladder_row, depth_options, depth_profile_options, depth_snapshot_columns, depth_study_snapshot, depth_update_columns,
   drawing_point, drawing_tool_change_handler, drawing_interval, drawing_property_schema, drawing_kind_options, drawing_template, builtin_drawing_icon,
-  ema_ribbon_options, ema_ribbon_periods, kst_periods, fair_value_gap_options, order_block_options,
-  structure_break_on, structure_zone_options, study_calendar_policy, previous_period,
+  kst_periods, study_calendar_policy, previous_period,
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
   general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_range, general_brush_snapshot, general_legend_snapshot, general_pane_composition, general_pane_composition_result, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
@@ -5803,30 +5802,6 @@ export class chart_impl implements chart_api {
     return this.indicator_series(this.wasm.add_hma(source.id, Math.max(1, Math.floor(period))), options);
   }
 
-  add_ema_ribbon(
-    source: series_api,
-    periods: ema_ribbon_periods = [5, 10, 20, 50, 200],
-    options?: ema_ribbon_options,
-  ): [series_api, series_api, series_api, series_api, series_api] {
-    const normalized = periods.map((period) => Math.max(1, Math.floor(period))) as [number, number, number, number, number];
-    const ids = this.wasm.add_ema_ribbon(source.id, ...normalized);
-    if (ids.length !== 5) throw new AerisChartsError("invalid_options", "invalid EMA ribbon configuration");
-    return [
-      this.indicator_series(ids[0]!, options?.[0]),
-      this.indicator_series(ids[1]!, options?.[1]),
-      this.indicator_series(ids[2]!, options?.[2]),
-      this.indicator_series(ids[3]!, options?.[3]),
-      this.indicator_series(ids[4]!, options?.[4]),
-    ];
-  }
-
-  set_ema_ribbon_periods(indicator: series_api, periods: ema_ribbon_periods): boolean {
-    const normalized = periods.map((period) => Math.max(1, Math.floor(period))) as [number, number, number, number, number];
-    const updated = this.wasm.set_ema_ribbon_periods(indicator.id, ...normalized);
-    if (updated) this.repaint();
-    return updated;
-  }
-
   add_bollinger(source: series_api, period: number, deviation = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
     const ids = this.wasm.add_bollinger(source.id, Math.max(1, Math.floor(period)), deviation);
     if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Bollinger configuration");
@@ -6569,15 +6544,6 @@ export class chart_impl implements chart_api {
       throw new AerisChartsError("invalid_options", "structure pivot left and right must be integers from 1 to 50");
     }
   }
-  private validate_structure_zones(config: structure_zone_options): void {
-    if (!config || typeof config !== "object" || Array.isArray(config) ||
-        (config.mitigation !== undefined && !["touch", "half", "full"].includes(config.mitigation)) ||
-        (config.mitigation_price !== undefined && !["wick", "close"].includes(config.mitigation_price)) ||
-        (config.max_active !== undefined && (!Number.isInteger(config.max_active) || config.max_active < 1 || config.max_active > 64)) ||
-        (config.show_mitigated !== undefined && typeof config.show_mitigated !== "boolean")) {
-      throw new AerisChartsError("invalid_options", "invalid structure mitigation, price, max_active (1–64), or show_mitigated");
-    }
-  }
   add_swing_points(source: series_api, left = 5, right = 5, options?: Partial<series_options>): [series_api, series_api] {
     this.validate_structure_pivots(left, right);
     const ids = this.wasm.add_swing_points(source.id, left, right);
@@ -6626,35 +6592,6 @@ export class chart_impl implements chart_api {
       this.indicator_series(ids[1]!, options),
       this.indicator_series(ids[2]!, options),
     ];
-  }
-  add_market_structure(source: series_api, left = 5, right = 5, break_on: structure_break_on = "close", options?: Partial<series_options>): series_api {
-    this.validate_structure_pivots(left, right);
-    if (!["close", "wick"].includes(break_on)) throw new AerisChartsError("invalid_options", "break_on must be close or wick");
-    const ids = this.wasm.add_market_structure(source.id, left, right, break_on);
-    if (ids.length !== 1) throw new AerisChartsError("invalid_options", "invalid Market Structure source or configuration");
-    return this.indicator_series(ids[0]!, options);
-  }
-  add_fair_value_gaps(source: series_api, config: fair_value_gap_options = {}, options?: Partial<series_options>): series_api {
-    this.validate_structure_zones(config);
-    const { min_size = 0, mitigation = "touch", mitigation_price = "wick", max_active = 20, show_mitigated = false } = config;
-    if (!Number.isFinite(min_size) || min_size < 0) throw new AerisChartsError("invalid_options", "min_size must be finite and nonnegative");
-    const ids = this.wasm.add_fair_value_gaps(source.id, min_size, mitigation, mitigation_price, max_active, show_mitigated);
-    if (ids.length !== 1) throw new AerisChartsError("invalid_options", "invalid Fair Value Gaps source or configuration");
-    return this.indicator_series(ids[0]!, options);
-  }
-  add_order_blocks(source: series_api, config: order_block_options = {}, options?: Partial<series_options>): series_api {
-    this.validate_structure_zones(config);
-    const { left = 5, right = 5, break_on = "close", zone = "wick",
-      mitigation = "touch", mitigation_price = "wick", max_active = 20, show_mitigated = false } = config;
-    this.validate_structure_pivots(left, right);
-    if (!["close", "wick"].includes(break_on) || !["wick", "body"].includes(zone)) {
-      throw new AerisChartsError("invalid_options", "break_on must be close or wick; zone must be wick or body");
-    }
-    const ids = this.wasm.add_order_blocks(
-      source.id, left, right, break_on, zone, mitigation, mitigation_price, max_active, show_mitigated,
-    );
-    if (ids.length !== 1) throw new AerisChartsError("invalid_options", "invalid Order Blocks source or configuration");
-    return this.indicator_series(ids[0]!, options);
   }
 
   add_awesome_oscillator(source: series_api, options?: Partial<series_options>): series_api {

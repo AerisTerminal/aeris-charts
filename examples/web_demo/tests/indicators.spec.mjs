@@ -559,83 +559,6 @@ test("Ultimate Oscillator weights buying pressure across three windows", async (
   expect(result.after).not.toBe(result.before);
 });
 
-test("EMA ribbon owns five colored outputs and updates periods in place", async ({ page }) => {
-  await page.goto("/");
-  await wait_grid(page);
-  const result = await page.evaluate(() => {
-    const ribbon = window.__chart.add_ema_ribbon(window.__main);
-    const before_ids = ribbon.map((series) => series.id);
-    const before = ribbon.map((series) => {
-      const info = series.indicator_info();
-      return {
-        color: series.options().color,
-        line_width: series.options().line_width,
-        title: series.options().title,
-        binding_id: info.binding_id,
-        kind: info.kind,
-        period: info.period,
-        periods: info.parameters.periods,
-        output_name: info.output_name,
-        output_index: info.output_index,
-        output_count: info.output_count,
-      };
-    });
-
-    ribbon[1].apply_options({ title: "Custom EMA" });
-    const updated = window.__chart.set_ema_ribbon_periods(ribbon[2], [6, 12, 24, 60, 120]);
-    const after = ribbon.map((series) => ({
-      id: series.id,
-      color: series.options().color,
-      title: series.options().title,
-      period: series.indicator_info().period,
-      periods: series.indicator_info().parameters.periods,
-    }));
-    return { before_ids, before, updated, after };
-  });
-
-  expect(result.before.map((output) => output.color)).toEqual([
-    "#335cff",
-    "#FF9800",
-    "#7d52f4",
-    "#fb4ba3",
-    "#fb3748",
-  ]);
-  expect(result.before.map((output) => output.title)).toEqual([
-    "EMA 5",
-    "EMA 10",
-    "EMA 20",
-    "EMA 50",
-    "EMA 200",
-  ]);
-  expect(result.before.map((output) => output.kind)).toEqual(Array(5).fill("ema_ribbon"));
-  expect(result.before.map((output) => output.line_width)).toEqual(Array(5).fill(1));
-  expect(result.before.map((output) => output.period)).toEqual([5, 10, 20, 50, 200]);
-  expect(result.before.map((output) => output.output_name)).toEqual([
-    "EMA 1",
-    "EMA 2",
-    "EMA 3",
-    "EMA 4",
-    "EMA 5",
-  ]);
-  expect(result.before.map((output) => output.output_index)).toEqual([0, 1, 2, 3, 4]);
-  expect(result.before.map((output) => output.output_count)).toEqual(Array(5).fill(5));
-  expect(new Set(result.before.map((output) => output.binding_id)).size).toBe(1);
-  expect(result.before.every((output) => JSON.stringify(output.periods) === "[5,10,20,50,200]")).toBe(true);
-
-  expect(result.updated).toBe(true);
-  expect(result.after.map((output) => output.id)).toEqual(result.before_ids);
-  expect(result.after.map((output) => output.color)).toEqual(result.before.map((output) => output.color));
-  expect(result.after.map((output) => output.title)).toEqual([
-    "EMA 6",
-    "Custom EMA",
-    "EMA 24",
-    "EMA 60",
-    "EMA 120",
-  ]);
-  expect(result.after.map((output) => output.period)).toEqual([6, 12, 24, 60, 120]);
-  expect(result.after.every((output) => JSON.stringify(output.periods) === "[6,12,24,60,120]")).toBe(true);
-});
-
 test("indicator sources recover from empty, short, and retention-trimmed warm-up", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
@@ -1171,14 +1094,6 @@ test("browser schemas retain every multi-parameter Rust canonical default", asyn
   // Includes volume-source descriptors when they are the second parameter.
   const defaults = {
     swing_points: { left: 5, right: 5 },
-    market_structure: { left: 5, right: 5, break_on: "close" },
-    fair_value_gaps: {
-      min_size: 0, mitigation: "touch", mitigation_price: "wick", max_active: 20, show_mitigated: false,
-    },
-    order_blocks: {
-      left: 5, right: 5, break_on: "close", zone: "wick",
-      mitigation: "touch", mitigation_price: "wick", max_active: 20, show_mitigated: false,
-    },
     previous_period_levels: { period: "day", calendar: "utc" },
     opening_range: { duration_seconds: 1800, calendar: "utc" },
     stochastic_rsi: { rsi_period: 14, stochastic_period: 14 },
@@ -1187,7 +1102,6 @@ test("browser schemas retain every multi-parameter Rust canonical default", asyn
     alma: { period: 14, offset: 0.85, sigma: 6 },
     keltner: { period: 14, multiplier: 2 },
     supertrend: { period: 14, multiplier: 3 },
-    ema_ribbon: { period_1: 5, period_2: 10, period_3: 20, period_4: 50, period_5: 200 },
     bollinger: { period: 14, deviation: 2 },
     macd: { fast: 12, slow: 26, signal: 9 },
     stochastic: { k_period: 14, d_period: 3 },

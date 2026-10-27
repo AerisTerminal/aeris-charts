@@ -14,10 +14,9 @@ reproduction commands below.
 
 - **I2 breadth tier** — 29 additional indicator kinds on the shared binding, schema,
   persistence, and checkpoint paths (inventory and repair semantics in `docs/architecture.md`).
-- **I3 structure tier** — swing points, market structure (BOS/CHoCH), fair value gaps, order
-  blocks, session high/low, previous day/week/month levels, and opening range, all as typed
-  engine bindings with interval-indexed annotations painted by the shared frame (no new
-  primitives, no backend forks).
+- **I3 structure tier** — swing points, session high/low, previous day/week/month levels, and
+  opening range, all as typed engine bindings with interval-indexed annotations painted by the
+  shared frame (no new primitives, no backend forks).
 - **I4 custom studies** — typed registration/binding API in Rust and TypeScript with
   engine-owned scheduling, bounds (64 types, 32 bindings, 1–5 outputs), fault stream, and V3
   persistence; distinct from external studies where the host pushes computed values.
@@ -35,14 +34,12 @@ the last valid input; window studies stay blank while their source window contai
 gap, then recover. A historical correction before an output's first row can move its
 start, so the engine replaces that aligned output rather than updating an absent row.
 These rules also apply when built-in and custom studies are chained in either order.
-Market structure, fair value gap, and order block anchors are the exception: each has
-one blank entry for every source time, including leading and interior gaps.
 
 ## Screenshots
 
 | File (under `%TEMP%\aeris-b9-evidence\`) | Scene |
 | --- | --- |
-| `structure-studies-light.png` | All seven structure/session studies on the demo candles, light theme, Canvas2D |
+| `structure-studies-light.png` | All four structure/session studies on the demo candles, light theme, Canvas2D |
 | `structure-studies-dark.png` | Same scene, dark theme |
 | `structure-studies-overflow.png` | Same studies with the full 1,000-bar history fitted (`fit_content`) — dense zoomed-out view exercising the bounded annotation painter |
 | `auction-markers-dark.png` | Footprint series bound to a synthetic trade stream with 117 auction marks (39 unfinished auctions, 39 absorptions, 39 exhaustions) and revisitation rays, dark theme |
@@ -61,9 +58,7 @@ agent-browser --session b9evidence --executable-path $chrome `
 
 # Structure studies scene (themed + overflow shots). Run through `eval --stdin` or `-b`:
 #   const c = window.__chart, m = window.__main;
-#   c.add_swing_points(m, 5, 5); c.add_market_structure(m, 5, 5);
-#   c.add_fair_value_gaps(m, { show_mitigated: true });
-#   c.add_order_blocks(m, { show_mitigated: true });
+#   c.add_swing_points(m, 5, 5);
 #   c.add_session_levels(m); c.add_previous_period_levels(m);
 #   c.add_opening_range(m, 1800);
 # Overflow shot additionally runs: c.time_scale().fit_content();
@@ -78,7 +73,7 @@ agent-browser --session b9evidence --executable-path $chrome screenshot <out.png
 
 WebGPU visuals use Playwright (the config's SwiftShader flags), e.g.
 `npx playwright test tests/custom_studies.spec.mjs --project=chromium`, which includes the
-combined Canvas2D/WebGPU parity scene for structure studies and auction markers.
+combined Canvas2D/WebGPU parity scene for swing-point markers and auction markers.
 
 ## Accessibility review
 
@@ -109,7 +104,6 @@ help/learn/docs portals (URLs below; accessed 2026-10-06). No account-only mater
 | Footprint / numbers bars | Engine-owned footprint series on the canonical trade stream, LOD-selected rendering | Volume Footprint chart type on Supercharts (support doc 43000726164) | Numbers Bars study with bid/ask text, imbalances (NumbersBars doc) | Cluster charts (footprint) as a core chart type |
 | Unfinished auctions | Built-in mark kind with documented deterministic rules, optional revisitation ray, snapshot API | Not a documented footprint feature; community Pine approximations only | Supported on Numbers Bars (documented in support-board guidance and Numbers Bars inputs) | Dedicated Unfinished Auction indicator (help article 72000602495) |
 | Exhaustion / absorption markers | Built-in parameterized kinds (strictly-decreasing finish, ratio + rejection rules) | Not documented as native marks | Available through Numbers Bars diagonal imbalance highlighting and ACSIL studies | Documented footprint patterns (absorption, finished/unfinished auctions) in ATAS learn portal |
-| Market structure / FVG / order blocks | Typed engine bindings with interval-indexed annotations, rebuilt from source on restore | No native equivalents; community Pine scripts dominate | Via community/ACSIL custom studies | Via custom indicators (ATAS API) |
 | Session / previous-period / opening-range levels | Built-in studies with UTC or host-supplied session calendars (≤ 20,000 spans, runtime-only) | Session-based drawing via Pine (`time`/`session` functions); no host-calendar injection | Daily/weekly/monthly levels via chart settings and studies | Session tools via indicator settings |
 | Custom study API | Typed Rust + TypeScript: declared inputs/params/outputs, engine-owned incremental scheduling, bounded types/bindings/outputs, fault stream, V3 persistence | Pine Script v6: single language, script-managed drawing objects with per-script object limits | ACSIL: C++ DLL interface, full manual lifecycle | ATAS API: .NET/C# custom indicators |
 
@@ -140,25 +134,24 @@ Measured values (budget in parentheses):
 | K — 100× replay, 6,000 s / 60 frames | 0.58 ms (16.67); memory flat 5.65 MiB |
 | L — two 1.2M-update depth soaks | worst batch 10.10 ms (150); frame 0.31 ms (16.67); live-edge image 0.00 MiB (0.02); memory flat 66.03 MiB |
 | M — sustained order-flow tape (600 × 4-trade batches + frame) | p50 0.054 ms, p99 0.09 ms (4.00); worst 5.25 ms (16.67); late print 0.31 ms (16.67); ceiling pass |
-| N — 7 structure studies × 1M rows | initial build 356.18 ms; tip-replacement p99 0.16 ms (8.00); one historical correction 20k rows back 9.89 ms (100); 3,999 FVG + 2,108 order-block zones retained |
+| N — 4 structure studies × 1M rows | initial build 208.53 ms; tip-replacement p99 0.03 ms (8.00); one historical correction 20k rows back 5.85 ms (100); 5,411 swing markers retained |
 | O — **new:** sustained tape with auction markers | p50 0.057 ms, p99 0.17 ms (4.00); worst 7.57 ms (16.67); late print 0.55 ms (16.67); 5,084 retained marks; ceiling pass |
-| Q — **new:** live indicator updates, 76 cases covering all 71 `IndicatorKind` variants | slowest tip-append p99 0.028 ms (0.50); steepest append growth 10k to 1M rows ×2.7 (×10); slowest tip-replace p99 0.144 ms (0.50); steepest replace growth ×2.6 (×10); all cases together append p99 0.515 ms and replace p99 0.595 ms (4.00); every case matches a fresh engine at 1M rows |
+| Q — **new:** live indicator updates, 73 cases covering all 67 `IndicatorKind` variants | slowest tip-append p99 0.025 ms (0.50); steepest append growth 10k to 1M rows ×2.5 (×10); slowest tip-replace p99 0.071 ms (0.50); steepest replace growth ×2.7 (×10); all cases together append p99 0.646 ms and replace p99 0.452 ms (4.00); every case matches a fresh engine at 1M rows |
 
 Target Q was recorded on 2026-10-08 with 1,000 tip appends and 1,000 tip replacements per case at
 10,000 and 1,000,000 rows. Per-binding and all-attached p99 budgets of 0.5 ms and 4.0 ms sit an
 order of magnitude above the measured worst cases, and the ×10 growth limit over the 10k-row p99
 (floored at 0.01 ms) catches any per-tick cost linear in history, which shows as about ×100.
 
-Target N tip-replacement p99 is now 0.16 ms on this machine with all seven structure bindings.
+Target N tip-replacement p99 is now 0.03 ms on this machine with all four structure bindings.
 The axis reads the 1M-row merged timeline in place on both synchronization passes rather than
 copying it per update. Tick-time copies remain necessary for sequence axes and changing time
-projections. The earlier whitespace-only structure-anchor optimization also avoids a
-full-column backward base-index scan.
+projections.
 
 Supporting gates on the same tree: `cargo fmt --all -- --check` clean; `cargo clippy -p
 aeris_charts_core -p aeris_charts_engine -p aeris_charts_native --all-targets -- -D warnings`
 clean; `cargo test -p aeris_charts_core` 184 passed and `cargo test -p aeris_charts_engine`
-981 passed (includes the new base-index and anchor-flag regression tests). Browser-side parity
+981 passed (includes the new base-index regression tests). Browser-side parity
 and persistence evidence for these features was collected during milestone validation
 (`custom_studies.spec.mjs`, `structure_studies.spec.mjs`, `session_studies.spec.mjs`,
 `footprint.spec.mjs`; see `validation/extensions/` syntheses).

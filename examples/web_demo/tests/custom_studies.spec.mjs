@@ -112,15 +112,13 @@ test("leading whitespace trims built-in and custom outputs and preserves chains 
       const custom = ["sma", "ema", "rsi"].map(
         (name) => chart.add_custom_study(`test.trim.${name}`, source)[0]);
       const chained = [chart.add_rsi(builtin[1], period), chart.add_sma(custom[1], period)];
-      return { source, builtin, custom, chained,
-        anchor: chart.add_fair_value_gaps(source) };
+      return { source, builtin, custom, chained };
     };
     const study = create(rows);
     const capture = (set) => ({
       builtin: set.builtin.map((handle) => handle.data()),
       custom: set.custom.map((handle) => handle.data()),
       chained: set.chained.map((handle) => handle.data()),
-      anchor: set.anchor.data(),
     });
     const initial = capture(study);
     const initialRows = rows.map((row) => ({ ...row }));
@@ -135,8 +133,6 @@ test("leading whitespace trims built-in and custom outputs and preserves chains 
       expect(stage.builtin[i]).toEqual(stage.custom[i]);
       expect(stage.builtin[i][0].value).toBeDefined();
     }
-    expect(stage.anchor).toHaveLength(result.rows.length);
-    expect(stage.anchor.every(({ value }) => value === undefined)).toBe(true);
     expect(stage.chained.every((values) => values.some(({ value }) => value !== undefined))).toBe(true);
   }
   expect(result.initial.builtin[0][0].time).toBe(result.rows[5].time);
@@ -560,7 +556,7 @@ test("I2, I3 and custom studies retain definitions and values in one layout", as
     chart.register_custom_study(definition);
     const i2 = chart.add_kama(source, 10, 2, 30);
     const i3 = chart.add_swing_points(source, 2, 2);
-    const zones = chart.add_fair_value_gaps(source, { mitigation: "half", show_mitigated: true });
+    const range = chart.add_opening_range(source, 86_400);
     const custom = chart.add_custom_study("test.cross", source)[0];
     const state = chart.export_state();
     const host = document.createElement("div");
@@ -576,18 +572,18 @@ test("I2, I3 and custom studies retain definitions and values in one layout", as
     const kinds = outputs.map((entry) => entry.indicator_info()?.kind).filter(Boolean);
     const restoredKama = outputs.find((entry) => entry.indicator_info()?.kind === "kama");
     const restoredSwing = outputs.find((entry) => entry.indicator_info()?.kind === "swing_points");
-    const restoredZones = outputs.find((entry) => entry.indicator_info()?.kind === "fair_value_gaps");
+    const restoredRange = outputs.find((entry) => entry.indicator_info()?.kind === "opening_range");
     const restoredCustom = outputs.find((entry) => entry.indicator_info()?.kind === "test.cross");
     const comparison = {
       kama: [i2.data(), restoredKama?.data()],
       swing: [i3[0].data(), restoredSwing?.data()],
       custom: [custom.data(), restoredCustom?.data()],
       markers: [chart.study_annotations(i3[0]).markers, restored.study_annotations(restoredSwing).markers],
-      zones: [chart.study_annotations(zones).zones, restored.study_annotations(restoredZones).zones],
-      styles: [[i2, i3[0], zones, custom].map((entry) => entry.indicator_info().style),
-        [restoredKama, restoredSwing, restoredZones, restoredCustom].map((entry) => entry.indicator_info().style)],
-      params: [[i2, i3[0], zones, custom].map((entry) => entry.indicator_info().parameters),
-        [restoredKama, restoredSwing, restoredZones, restoredCustom].map((entry) => entry.indicator_info().parameters)],
+      range: [range[0].data(), restoredRange?.data()],
+      styles: [[i2, i3[0], range[0], custom].map((entry) => entry.indicator_info().style),
+        [restoredKama, restoredSwing, restoredRange, restoredCustom].map((entry) => entry.indicator_info().style)],
+      params: [[i2, i3[0], range[0], custom].map((entry) => entry.indicator_info().parameters),
+        [restoredKama, restoredSwing, restoredRange, restoredCustom].map((entry) => entry.indicator_info().parameters)],
     };
     restored.remove();
     host.remove();
@@ -597,14 +593,15 @@ test("I2, I3 and custom studies retain definitions and values in one layout", as
   expect(result.imported.unresolved_custom_studies).toEqual([]);
   expect(result.kinds).toContain("kama");
   expect(result.kinds).toContain("swing_points");
-  expect(result.kinds).toContain("fair_value_gaps");
+  expect(result.kinds).toContain("opening_range");
   expect(result.kinds).toContain("test.cross");
-  expect(result.comparison.zones[0].length).toBeGreaterThan(0);
-  expect(result.comparison.params[0][2].mitigation).toBe("half");
+  expect(result.comparison.markers[0].length).toBeGreaterThan(0);
+  expect(result.comparison.range[0].some(({ value }) => value !== undefined)).toBe(true);
+  expect(result.comparison.params[0][2].duration_seconds).toBe(86_400);
   for (const [left, right] of Object.values(result.comparison)) expect(right).toEqual(left);
 });
 
-test("structure zones and auction marks share Canvas2D and WebGPU geometry", async ({ browser }) => {
+test("swing markers and auction marks share Canvas2D and WebGPU geometry", async ({ browser }) => {
   const snapshots = [];
   for (const backend of ["canvas2d", "webgpu"]) {
     const page = await browser.newPage({ viewport: { width: 1100, height: 720 }, deviceScaleFactor: 1 });
@@ -624,9 +621,6 @@ test("structure zones and auction marks share Canvas2D and WebGPU geometry", asy
       }));
       source.set_data(rows);
       const swings = chart.add_swing_points(source, 1, 1);
-      const market = chart.add_market_structure(source, 1, 1);
-      const gaps = chart.add_fair_value_gaps(source, { show_mitigated: true });
-      const blocks = chart.add_order_blocks(source, { left: 1, right: 1, show_mitigated: true });
       chart.register_custom_study({
         type: "test.parity-marker", version: 1, title: "Marker",
         parameters: [],
@@ -653,9 +647,6 @@ test("structure zones and auction marks share Canvas2D and WebGPU geometry", asy
       chart.time_scale().apply_options({ bar_spacing: 38 });
       return {
         swing: chart.study_annotations(swings[0]),
-        market: chart.study_annotations(market),
-        gaps: chart.study_annotations(gaps),
-        blocks: chart.study_annotations(blocks),
         customMarkerValues: customMarker.data().filter(({ value }) => value !== undefined),
         marks: auction.snapshot(),
       };
@@ -665,9 +656,6 @@ test("structure zones and auction marks share Canvas2D and WebGPU geometry", asy
     await page.close();
   }
   expect(snapshots[0].geometry).toEqual(snapshots[1].geometry);
-  expect(snapshots[0].geometry.gaps.zones.length).toBeGreaterThan(0);
-  expect(snapshots[0].geometry.blocks.zones.length).toBeGreaterThan(0);
-  expect(snapshots[0].geometry.market.markers.length).toBeGreaterThan(0);
   expect(snapshots[0].geometry.swing.markers.length).toBeGreaterThan(0);
   expect(snapshots[0].geometry.customMarkerValues).toHaveLength(2);
   expect(snapshots[0].geometry.marks.length).toBeGreaterThan(0);
@@ -713,23 +701,25 @@ test("structure zones and auction marks share Canvas2D and WebGPU geometry", asy
       expect(local_contrast, `non-edge fill mismatch at chart pixel (${x}, ${y})`).toBeGreaterThanOrEqual(delta);
     }
   }
-  expect(rounding_pixels, "zone, overlapping fill and body rounding must be exercised").toBeGreaterThan(0);
+  expect(rounding_pixels, "overlapping fill and body rounding must be exercised").toBeGreaterThan(0);
   expect(coverage_pixels, "primitive AA and text must be exercised").toBeGreaterThan(0);
   expect(count_different(chart_canvas, chart_gpu)).toBe(rounding_pixels + coverage_pixels);
   expect(interior_max, "all fill and alpha-blend interiors stay within two channel units").toBeLessThanOrEqual(2);
-  // Windows SwiftShader, 1100x720 DPR 1: 8,574 strict pixels: 8,146 are 1-2 unit
-  // rect/zone/overlap rounding; 428 are localized contour/glyph coverage, max 87 on
+  // Windows SwiftShader, 1100x720 DPR 1: 880 strict pixels: 339 are 1-2 unit
+  // rect/overlap rounding; 541 are localized contour/glyph coverage, max 87 on
   // triangle/label edges over the #171717 dark surface. An AA coverage difference scales
   // with foreground-to-surface contrast, so a pure-black surface would raise that same edge
-  // to 96 (87 x 250/227); the count is unchanged. About 150 of those sit on the unsnapped 2 px swing-level
+  // to 96 (87 x 250/227); the count is unchanged. Most of them sit on the unsnapped 2 px swing-level
   // stroke, whose edge row lands at ~15% coverage in this pane height (footprint
-  // clusters reserve their summary rows), where Canvas2D and WebGPU AA differ most.
+  // clusters reserve their summary rows), where Canvas2D and WebGPU AA differ most, and on
+  // the swing triangles and marker arcs. No translucent rect covers those edges, so their
+  // full contrast counts.
   // The 2,600/40 baseline from primitives.spec.mjs covers a different scene without
   // this many translucent rects.
   // backend_parity.spec.mjs also accepts marker AA up to 66 when paint order is exact.
   // Require the actual non-rounding residual with ~13% count and 3-unit edge margin,
   // rather than hiding a real fill/geometry divergence behind pixelmatch threshold 0.1.
-  expect(coverage_pixels, "whole-chart AA/text residual").toBeLessThanOrEqual(485);
+  expect(coverage_pixels, "whole-chart AA/text residual").toBeLessThanOrEqual(612);
   expect(coverage_max, "whole-chart AA/text maximum channel delta").toBeLessThanOrEqual(99);
   expect(max_channel_delta(chart_canvas, chart_gpu)).toBe(coverage_max);
 });

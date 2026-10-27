@@ -353,7 +353,6 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
         .unwrap();
     assert!(chart.add_sma(0, 10).is_some());
     assert!(chart.add_ema(0, 12).is_some());
-    assert_eq!(chart.add_ema_ribbon(0, [3, 5, 8, 13, 21]).len(), 5);
     assert_eq!(chart.add_bollinger(0, 20, 2.0).len(), 3);
     assert_eq!(chart.add_keltner(0, 20, 2.0).len(), 3);
     assert_eq!(chart.add_adx_dmi(0, 14).len(), 3);
@@ -407,9 +406,6 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
         vec![
             IndicatorKind::Sma { period: 10 },
             IndicatorKind::Ema { period: 12 },
-            IndicatorKind::EmaRibbon {
-                periods: [3, 5, 8, 13, 21],
-            },
             IndicatorKind::Bollinger {
                 period: 20,
                 deviation: 2.0,
@@ -2664,12 +2660,11 @@ fn ema_family_defaults_to_one_pixel_and_respects_explicit_widths() {
         .unwrap();
 
     let sma = chart.add_sma(0, 5).unwrap();
-    let mut ema_outputs = vec![
+    let ema_outputs = vec![
         chart.add_ema(0, 5).unwrap(),
         chart.add_dema(0, 5).unwrap(),
         chart.add_tema(0, 5).unwrap(),
     ];
-    ema_outputs.extend(chart.add_ema_ribbon(0, [2, 3, 5, 8, 13]));
     assert_eq!(chart.series_entry(sma).unwrap().line_width, Some(2.0));
     for &id in &ema_outputs {
         assert_eq!(chart.series_entry(id).unwrap().line_width, Some(1.0));
@@ -2686,78 +2681,6 @@ fn ema_family_defaults_to_one_pixel_and_respects_explicit_widths() {
         assert_eq!(chart.series_entry(id).unwrap().line_width, Some(1.0));
     }
     assert_eq!(chart.series_entry(sma).unwrap().line_width, Some(2.0));
-}
-
-#[test]
-fn ema_ribbon_owns_five_colored_outputs_and_updates_periods_atomically() {
-    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
-    let times = (0..300).map(|index| index as f64).collect::<Vec<_>>();
-    let values = (0..300)
-        .map(|index| 100.0 + index as f64 * 0.1 + (index as f64 * 0.17).sin())
-        .collect::<Vec<_>>();
-    chart
-        .set_series_data(0, &times, &values, &values, &values, &values)
-        .unwrap();
-
-    let outputs = chart.add_ema_ribbon(0, EMA_RIBBON_DEFAULT_PERIODS);
-    assert_eq!(outputs.len(), 5);
-    for (index, &output) in outputs.iter().enumerate() {
-        let series = chart.series_entry(output).unwrap();
-        assert_eq!(
-            series.line_color.as_deref(),
-            Some(EMA_RIBBON_DEFAULT_COLORS[index])
-        );
-        assert_eq!(
-            series.title,
-            format!("EMA {}", EMA_RIBBON_DEFAULT_PERIODS[index])
-        );
-        let info = chart.indicator_info(output).unwrap();
-        assert_eq!(info.kind, "ema_ribbon");
-        assert_eq!(info.binding_id, outputs[0]);
-        assert_eq!(info.parameters.periods, Some(EMA_RIBBON_DEFAULT_PERIODS));
-        assert_eq!(info.period, EMA_RIBBON_DEFAULT_PERIODS[index]);
-        assert_eq!(info.output_index, index);
-        assert_eq!(info.output_count, 5);
-        assert_eq!(
-            info.output_name,
-            ["EMA 1", "EMA 2", "EMA 3", "EMA 4", "EMA 5"][index]
-        );
-    }
-    assert_eq!(
-        chart
-            .series_entry(outputs[2])
-            .unwrap()
-            .line_color
-            .as_deref(),
-        Some("#7d52f4")
-    );
-    assert_indicator_binding_matches_full(&chart, 0);
-
-    let dependent = chart.add_ema(outputs[0], 2).unwrap();
-    chart.series_entry_mut(outputs[1]).unwrap().title = "Custom EMA".to_string();
-    let before = chart.indicator_bindings();
-    assert!(!chart.set_ema_ribbon_periods(outputs[4], [6, 12, 0, 60, 120]));
-    assert_eq!(chart.indicator_bindings(), before);
-
-    let updated = [6, 12, 24, 60, 120];
-    assert!(chart.set_ema_ribbon_periods(outputs[2], updated));
-    let binding = &chart.indicator_bindings()[0];
-    assert_eq!(binding.outputs, outputs);
-    assert_eq!(binding.kind, IndicatorKind::EmaRibbon { periods: updated });
-    assert_eq!(chart.series_entry(outputs[0]).unwrap().title, "EMA 6");
-    assert_eq!(chart.series_entry(outputs[1]).unwrap().title, "Custom EMA");
-    assert_eq!(chart.series_entry(outputs[2]).unwrap().title, "EMA 24");
-    assert_eq!(
-        chart
-            .series_entry(outputs[2])
-            .unwrap()
-            .line_color
-            .as_deref(),
-        Some("#7d52f4")
-    );
-    assert_indicator_binding_matches_full(&chart, 0);
-    assert_indicator_binding_matches_full(&chart, 1);
-    assert!(!chart.data.series_data(dependent).unwrap().0.is_empty());
 }
 
 #[test]
@@ -3074,10 +2997,6 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 points.iter().map(|point| point.lagging).collect(),
             ]
         }
-        IndicatorKind::EmaRibbon { periods } => periods
-            .into_iter()
-            .map(|period| aeris_charts_indicators::ema(source[3], period))
-            .collect(),
         IndicatorKind::Bollinger { period, deviation } => {
             let points = aeris_charts_indicators::bollinger(source[3], period, deviation);
             vec![
@@ -3362,9 +3281,6 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
         }
         IndicatorKind::Wma { period } => vec![aeris_charts_indicators::wma(source[3], period)],
         IndicatorKind::SwingPoints { .. }
-        | IndicatorKind::MarketStructure { .. }
-        | IndicatorKind::FairValueGaps { .. }
-        | IndicatorKind::OrderBlocks { .. }
         | IndicatorKind::SessionLevels { .. }
         | IndicatorKind::PreviousPeriodLevels { .. }
         | IndicatorKind::OpeningRange { .. } => {
@@ -3435,9 +3351,6 @@ fn all_engine_indicator_kinds() -> Vec<IndicatorKind> {
         IndicatorKind::Vwma { period: 5 },
         IndicatorKind::StandardDeviation { period: 5 },
         IndicatorKind::Donchian { period: 5 },
-        IndicatorKind::EmaRibbon {
-            periods: [3, 5, 8, 13, 21],
-        },
         IndicatorKind::Bollinger {
             period: 5,
             deviation: 2.0,
@@ -3586,8 +3499,8 @@ fn all_engine_indicator_kinds() -> Vec<IndicatorKind> {
     ]
 }
 
-/// A settled chart with swinging bars (strong legs leave fair-value gaps and structure breaks)
-/// and a hidden volume series for volume-based studies.
+/// A settled chart with swinging bars (strong legs confirm swing points) and a hidden volume
+/// series for volume-based studies.
 fn selectable_indicator_chart(kind: &IndicatorKind) -> (ChartEngine, Vec<SeriesId>) {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let volume = chart.add_series(SeriesKind::Histogram);
@@ -3700,31 +3613,7 @@ fn painted_indicator_points(chart: &ChartEngine, outputs: &[SeriesId]) -> Vec<(f
 #[test]
 fn every_indicator_is_selectable_on_its_painted_geometry() {
     let mut kinds = all_engine_indicator_kinds();
-    kinds.extend([
-        IndicatorKind::SwingPoints { left: 2, right: 2 },
-        IndicatorKind::MarketStructure {
-            left: 2,
-            right: 2,
-            break_on: StructureBreakOn::Wick,
-        },
-        IndicatorKind::FairValueGaps {
-            min_size: 0.0,
-            mitigation: StructureMitigation::Touch,
-            mitigation_price: StructureMitigationPrice::Wick,
-            max_active: 8,
-            show_mitigated: true,
-        },
-        IndicatorKind::OrderBlocks {
-            left: 2,
-            right: 2,
-            break_on: StructureBreakOn::Wick,
-            zone: OrderBlockZone::Wick,
-            mitigation: StructureMitigation::Touch,
-            mitigation_price: StructureMitigationPrice::Wick,
-            max_active: 8,
-            show_mitigated: true,
-        },
-    ]);
+    kinds.push(IndicatorKind::SwingPoints { left: 2, right: 2 });
     for kind in kinds {
         let (mut chart, outputs) = selectable_indicator_chart(&kind);
         let points = painted_indicator_points(&chart, &outputs);
@@ -3915,9 +3804,6 @@ fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
     kinds.extend(
         [
             "swing_points",
-            "market_structure",
-            "fair_value_gaps",
-            "order_blocks",
             "session_levels",
             "previous_period_levels",
             "opening_range",
@@ -3927,8 +3813,8 @@ fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
     );
     assert_eq!(
         kinds.len(),
-        72,
-        "70 variants with both Envelopes and both Volume average modes"
+        68,
+        "66 variants with both Envelopes and both Volume average modes"
     );
     // Rebuild each kind in a *different* engine, not merely via the dense
     // formula used by assert_indicator_binding_matches_full.
@@ -4154,9 +4040,6 @@ impl LiveIndicatorFixture {
         kinds.extend(
             [
                 "swing_points",
-                "market_structure",
-                "fair_value_gaps",
-                "order_blocks",
                 "session_levels",
                 "previous_period_levels",
                 "opening_range",
@@ -4464,31 +4347,6 @@ fn every_scalar_indicator_trims_leading_whitespace_and_repairs_before_its_start(
 }
 
 #[test]
-fn structure_anchors_keep_every_source_time_when_scalar_outputs_trim() {
-    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
-    let times = (0..40).map(|i| i as f64 * 60.0).collect::<Vec<_>>();
-    let mut values = (0..40).map(|i| 100.0 + i as f64).collect::<Vec<_>>();
-    values[..3].fill(f64::NAN);
-    values[20] = f64::NAN;
-    chart
-        .set_series_data(0, &times, &values, &values, &values, &values)
-        .unwrap();
-    for name in ["market_structure", "fair_value_gaps", "order_blocks"] {
-        let kind = IndicatorKind::schema_definition(name, 14, 2.0).unwrap();
-        let output = chart.add_indicator_kind(0, kind.clone(), None)[0];
-        let (anchor_times, columns) = chart.data.series_data(output).unwrap();
-        assert_eq!(
-            anchor_times,
-            times.iter().map(|t| *t as i64).collect::<Vec<_>>(),
-            "{kind:?}"
-        );
-        assert!(columns[3].iter().all(|value| value.is_nan()));
-        assert!(chart.update_series_bar(0, times[0], [99.0; 4]));
-        assert_eq!(chart.data.series_data(output).unwrap().0.len(), times.len());
-    }
-}
-
-#[test]
 fn swing_and_session_outputs_trim_like_a_source_without_leading_gaps() {
     let times = (0..100).map(|i| i as f64 * 1_800.0).collect::<Vec<_>>();
     let mut values = (0..100)
@@ -4791,12 +4649,9 @@ fn every_scalar_engine_binding_keeps_gap_rows_blank_after_repair() {
 #[test]
 fn every_structure_and_session_binding_preserves_gap_whitespace() {
     // The I3 scanners keep their own session and annotation rules; this
-    // checks the shared source-row whitespace contract for all seven kinds.
+    // checks the shared source-row whitespace contract for all four kinds.
     for name in [
         "swing_points",
-        "market_structure",
-        "fair_value_gaps",
-        "order_blocks",
         "session_levels",
         "previous_period_levels",
         "opening_range",
@@ -5565,15 +5420,16 @@ fn a_selected_scale_price_format_carries_to_series_that_join_the_scale() {
     let late = chart.add_series(SeriesKind::Line);
     chart.set_series_price_scale(late, PriceScaleTarget::Left);
     assert_eq!(chart.series_entry(late).unwrap().price_format.precision, 0);
-    let ribbon = chart.add_indicator_kind(
+    let bands = chart.add_indicator_kind(
         0,
-        IndicatorKind::EmaRibbon {
-            periods: [2, 3, 4, 5, 6],
+        IndicatorKind::Bollinger {
+            period: 2,
+            deviation: 2.0,
         },
         None,
     );
-    assert_eq!(ribbon.len(), 5);
-    for id in ribbon {
+    assert_eq!(bands.len(), 3);
+    for id in bands {
         let output = chart.series_entry(id).unwrap();
         assert_eq!(output.pane_index, 0);
         assert_eq!(output.price_scale_target, PriceScaleTarget::Left);
@@ -5703,7 +5559,7 @@ fn oscillator_indicators_get_their_own_pane_and_band_levels() {
     let rsi = chart.add_rsi(0, 2).expect("valid rsi");
     // A fresh oscillator pane holds the output at the reduced stretch.
     assert_eq!(chart.panes.len(), 2);
-    assert!((chart.panes[1].stretch_factor - 0.3).abs() < 1e-9);
+    assert!((chart.panes[1].stretch_factor - 0.25).abs() < 1e-9);
     let entry = chart.series.iter().find(|s| s.id == rsi).unwrap();
     assert_eq!(entry.pane_index, 1);
     assert_eq!(
@@ -5965,8 +5821,9 @@ fn a_recreated_indicator_pane_keeps_its_share_after_a_separator_drag() {
             < 1e-9
     );
     chart.layout_panes(400.0);
+    // 0.25 / 1.25 of the layout, less the separator.
     assert!(
-        chart.panes[1].height > 400.0 * 0.2,
+        chart.panes[1].height > 400.0 * 0.19,
         "the recreated pane keeps its share of the layout: {}",
         chart.panes[1].height
     );
@@ -11502,34 +11359,12 @@ mod session_study_regressions {
     }
 
     #[test]
-    fn pd2_clock_seek_matches_fresh_prefix_for_all_seven_structure_studies() {
+    fn pd2_clock_seek_matches_fresh_prefix_for_all_four_structure_studies() {
         let times = (1..=12).map(f64::from).collect::<Vec<_>>();
         let highs = [10., 14., 12., 18., 16., 20., 19., 17., 25., 21., 24., 15.];
         let lows = [8., 9., 10., 15., 11., 8., 16., 13., 22., 17., 20., 9.];
         let kinds = [
             IndicatorKind::SwingPoints { left: 1, right: 1 },
-            IndicatorKind::MarketStructure {
-                left: 1,
-                right: 1,
-                break_on: StructureBreakOn::Wick,
-            },
-            IndicatorKind::FairValueGaps {
-                min_size: 0.0,
-                mitigation: StructureMitigation::Touch,
-                mitigation_price: StructureMitigationPrice::Wick,
-                max_active: 3,
-                show_mitigated: true,
-            },
-            IndicatorKind::OrderBlocks {
-                left: 1,
-                right: 1,
-                break_on: StructureBreakOn::Wick,
-                zone: OrderBlockZone::Wick,
-                mitigation: StructureMitigation::Touch,
-                mitigation_price: StructureMitigationPrice::Wick,
-                max_active: 3,
-                show_mitigated: true,
-            },
             IndicatorKind::SessionLevels {
                 calendar: StudyCalendarPolicy::Utc,
             },
@@ -11563,13 +11398,7 @@ mod session_study_regressions {
                         "{kind:?} prefix {len}"
                     );
                 }
-                if matches!(
-                    kind,
-                    IndicatorKind::SwingPoints { .. }
-                        | IndicatorKind::MarketStructure { .. }
-                        | IndicatorKind::FairValueGaps { .. }
-                        | IndicatorKind::OrderBlocks { .. }
-                ) {
+                if matches!(kind, IndicatorKind::SwingPoints { .. }) {
                     assert_eq!(
                         replay.study_annotations(actual[0]).unwrap(),
                         fresh.study_annotations(expected[0]).unwrap(),
@@ -11599,28 +11428,7 @@ mod session_study_regressions {
             .collect::<Vec<_>>();
         let kinds = [
             IndicatorKind::SwingPoints { left: 1, right: 1 },
-            IndicatorKind::MarketStructure {
-                left: 1,
-                right: 1,
-                break_on: StructureBreakOn::Wick,
-            },
-            IndicatorKind::FairValueGaps {
-                min_size: 0.,
-                mitigation: StructureMitigation::Touch,
-                mitigation_price: StructureMitigationPrice::Wick,
-                max_active: 3,
-                show_mitigated: true,
-            },
-            IndicatorKind::OrderBlocks {
-                left: 1,
-                right: 1,
-                break_on: StructureBreakOn::Wick,
-                zone: OrderBlockZone::Wick,
-                mitigation: StructureMitigation::Touch,
-                mitigation_price: StructureMitigationPrice::Wick,
-                max_active: 3,
-                show_mitigated: true,
-            },
+            IndicatorKind::SwingPoints { left: 2, right: 1 },
         ];
         let mut chart = ChartEngine::new(800., 500., 1.);
         chart
@@ -11670,7 +11478,7 @@ mod session_study_regressions {
             }
             let snapshot = chart.study_annotations(actual[0]).unwrap();
             assert!(
-                !snapshot.markers().is_empty() || !snapshot.zones().is_empty(),
+                !snapshot.markers().is_empty(),
                 "{kind:?} must generate annotations after trimming"
             );
             assert_eq!(
@@ -11682,14 +11490,7 @@ mod session_study_regressions {
                 snapshot
                     .markers()
                     .iter()
-                    .all(|marker| marker.row < retained.len()
-                        && marker.from_row.is_none_or(|row| row < retained.len()))
-            );
-            assert!(
-                snapshot
-                    .zones()
-                    .iter()
-                    .all(|zone| zone.start_row < retained.len())
+                    .all(|marker| marker.row < retained.len())
             );
         }
     }
@@ -11811,7 +11612,6 @@ mod session_study_regressions {
             confirm_row: 2,
             price: 15.,
             kind: aeris_charts_indicators::StudyMarkerKind::SwingHigh,
-            from_row: None,
         });
         assert!(chart.inject_study_annotations_for_test(session[0], annotations));
         let document = chart.export_state_json().unwrap();

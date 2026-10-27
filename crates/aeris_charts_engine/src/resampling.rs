@@ -446,7 +446,6 @@ mod tests {
             confirm_row: 3,
             price: 12.0,
             kind: StudyMarkerKind::SwingHigh,
-            from_row: None,
         });
         chart.inject_study_annotations_for_test(host, annotations);
         chart

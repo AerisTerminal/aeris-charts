@@ -40,10 +40,9 @@ use aeris_charts_engine::{
     FootprintTrade, FootprintVisualOptions, GeneralAxisOptions, GeneralHitMode, GeneralScaleType,
     GeneralSeriesOptions, GeneralXyInput, GestureResolver, HorizontalDomain, InputDevice,
     InputTarget, ORDER_FLOW_MAX_RETAINED_SESSIONS, ORDER_FLOW_MAX_RETAINED_TRADES,
-    ORDER_FLOW_MAX_STREAM_BYTES, OrderBlockZone, OrderFlowPresentationOptions,
-    PeriodicProfilePresentationOptions, PeriodicProfilePresentationRequest, PointerSample,
-    PreviousPeriod, ProfileSource, ResampleBoundary, SeriesKind, StructureBreakOn,
-    StructureMitigation, StructureMitigationPrice, StudyCalendarPolicy, TradeStudyOptions,
+    ORDER_FLOW_MAX_STREAM_BYTES, OrderFlowPresentationOptions, PeriodicProfilePresentationOptions,
+    PeriodicProfilePresentationRequest, PointerSample, PreviousPeriod, ProfileSource,
+    ResampleBoundary, SeriesKind, StudyCalendarPolicy, TradeStudyOptions,
 };
 use aeris_charts_render::draw_list::Prim;
 use aeris_charts_render_wgpu::{DrawGroup, TexQuadInstance, prims_to_group};
@@ -1472,67 +1471,29 @@ fn main() {
     );
 
     // ---- Target N: structure studies over 1M rows -------------------------------------------
-    // All seven I3 studies bound to one 1M-row source. Tail updates replace the final row, so
+    // All four I3 studies bound to one 1M-row source. Tail updates replace the final row, so
     // each binding repairs only its tip (rebuild_from(n-1)); the historical correction reopens a
     // row STRUCTURE_CORRECTION_ROWS back, so repair is bounded by that suffix plus one checkpoint
-    // interval and bounded pivot/order-block lookback, never the full history.
+    // interval and bounded pivot lookback, never the full history.
     const STRUCTURE_BARS: usize = 1_000_000;
     const STRUCTURE_TIP_SAMPLES: usize = 200;
-    // Measured tip p99 is ~0.16 ms with all seven bindings: the canonical axis reads merged times
-    // in place, without copying the 1M-row timeline on either synchronization pass.
+    // The canonical axis reads merged times in place, without copying the 1M-row timeline on
+    // either synchronization pass.
     const STRUCTURE_TIP_BUDGET_MS: f64 = 8.0;
     const STRUCTURE_CORRECTION_ROWS: usize = 20_000;
     const STRUCTURE_CORRECTION_BUDGET_MS: f64 = 100.0;
-    let (times, open, high, low, close) = {
-        let (times, mut open, mut high, mut low, mut close) = gen_series(STRUCTURE_BARS, 11.0);
-        // Periodic price jumps make the fixture produce real fair-value gaps and order blocks;
-        // a smooth sinusoid never gaps, so the zone studies would measure empty work.
-        let mut drift = 0.0;
-        for row in 0..STRUCTURE_BARS {
-            if row % 500 == 499 {
-                drift += if (row / 500) % 2 == 0 { 6.0 } else { -6.0 };
-            }
-            open[row] += drift;
-            high[row] += drift;
-            low[row] += drift;
-            close[row] += drift;
-        }
-        (times, open, high, low, close)
-    };
+    let (times, open, high, low, close) = gen_series(STRUCTURE_BARS, 11.0);
     let mut structure = ChartEngine::new(1600.0, 800.0, 1.0);
     structure
         .set_series_data(0, &times, &open, &high, &low, &close)
         .expect("valid structure fixture");
     let started = Instant::now();
     let swing = structure.add_swing_points(0, 5, 5);
-    structure.add_market_structure(0, 5, 5, StructureBreakOn::Close);
-    let fvg = structure.add_fair_value_gaps(
-        0,
-        0.0,
-        StructureMitigation::Touch,
-        StructureMitigationPrice::Wick,
-        20,
-        true,
-    );
-    let order_blocks = structure.add_order_blocks(
-        0,
-        5,
-        5,
-        StructureBreakOn::Close,
-        OrderBlockZone::Wick,
-        StructureMitigation::Touch,
-        StructureMitigationPrice::Wick,
-        20,
-        true,
-    );
     structure.add_session_levels(0, StudyCalendarPolicy::Utc);
     structure.add_previous_period_levels(0, PreviousPeriod::Day, StudyCalendarPolicy::Utc);
     structure.add_opening_range(0, 3_600, StudyCalendarPolicy::Utc);
     let structure_build_ms = started.elapsed().as_secs_f64() * 1000.0;
-    assert!(
-        !swing.is_empty() && !fvg.is_empty() && !order_blocks.is_empty(),
-        "structure bindings are created"
-    );
+    assert!(!swing.is_empty(), "structure bindings are created");
     let last_row = STRUCTURE_BARS - 1;
     let mut tip_samples = Vec::with_capacity(STRUCTURE_TIP_SAMPLES);
     for sample in 0..STRUCTURE_TIP_SAMPLES {
@@ -1561,16 +1522,12 @@ fn main() {
         ],
     );
     let structure_correction_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let fvg_annotations = structure
-        .study_annotations(fvg[0])
-        .expect("fvg annotations snapshot");
-    let order_block_annotations = structure
-        .study_annotations(order_blocks[0])
-        .expect("order block annotations snapshot");
+    let swing_annotations = structure
+        .study_annotations(swing[0])
+        .expect("swing annotations snapshot");
     println!(
-        "Target N — 7 structure studies x {STRUCTURE_BARS} rows (initial build {structure_build_ms:.2} ms; {} FVG zones, {} order-block zones retained):",
-        fvg_annotations.zones().len(),
-        order_block_annotations.zones().len(),
+        "Target N — 4 structure studies x {STRUCTURE_BARS} rows (initial build {structure_build_ms:.2} ms; {} swing markers):",
+        swing_annotations.markers().len(),
     );
     let n_tip = report(
         "tail update p99 (tip replacement, all bindings)",

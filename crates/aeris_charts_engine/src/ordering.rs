@@ -370,42 +370,40 @@ mod tests {
     }
 
     #[test]
-    fn ema_ribbon_is_one_group_and_explicit_order_overrides_grouping() {
+    fn five_output_study_is_one_group_and_explicit_order_overrides_grouping() {
         let mut chart = chart_with_bars(250);
-        let ribbon = chart.add_ema_ribbon(0, [2, 3, 4, 5, 6]);
-        assert_eq!(ribbon.len(), 5);
+        let study = chart.add_ichimoku(0);
+        assert_eq!(study.len(), 5);
         assert_eq!(
             chart.effective_series_order(),
-            vec![ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4], 0]
+            vec![study[0], study[1], study[2], study[3], study[4], 0]
         );
-        chart.set_hovered_series(Some(ribbon[3]));
+        chart.set_hovered_series(Some(study[3]));
         assert_eq!(
             chart.effective_series_order(),
-            vec![0, ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4]],
-            "hovering any ribbon output promotes all five in order"
+            vec![0, study[0], study[1], study[2], study[3], study[4]],
+            "hovering any output promotes all five in order"
         );
         chart.set_hovered_series(None);
-        // Explicit override: idle paints verbatim, so the ribbon can cover price when asked.
-        assert!(chart.set_series_order(vec![
-            0, ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4]
-        ]));
+        // Explicit override: idle paints verbatim, so the study can cover price when asked.
+        assert!(chart.set_series_order(vec![0, study[0], study[1], study[2], study[3], study[4]]));
         assert!(chart.series_order_is_explicit());
         assert_eq!(
             chart.effective_series_order(),
-            vec![0, ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4]]
+            vec![0, study[0], study[1], study[2], study[3], study[4]]
         );
         // Hovering a middle output under explicit order still promotes the whole group
-        // intact — never [ribbon[0], ribbon[2], ribbon[1]]-style splits.
-        chart.set_hovered_series(Some(ribbon[1]));
+        // intact — never [study[0], study[2], study[1]]-style splits.
+        chart.set_hovered_series(Some(study[1]));
         assert_eq!(
             chart.effective_series_order(),
-            vec![0, ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4]],
+            vec![0, study[0], study[1], study[2], study[3], study[4]],
             "explicit hover keeps internal group order"
         );
         chart.set_hovered_series(None);
         assert_eq!(
             chart.effective_series_order(),
-            vec![0, ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4]]
+            vec![0, study[0], study[1], study[2], study[3], study[4]]
         );
     }
 

@@ -30,9 +30,8 @@ as `aeris_charts_render_wgpu` or `aeris_charts_native` (see [Repository layout](
 Built-in indicators share an engine-owned binding, typed schema, incremental calculation,
 rendering, and layout persistence path. The catalog includes trend, momentum, volatility and
 volume studies, the I2 breadth tier (including KST, Klinger, regression channels, TSI, Vortex,
-KAMA, Choppiness Index and ATR bands), and seven I3 structure/session studies: swing points,
-market structure, fair value gaps, order blocks, session highs/lows, previous period levels and
-opening range. Session studies use UTC boundaries or a runtime-only host-supplied study calendar.
+KAMA, Choppiness Index and ATR bands), and four I3 structure/session studies: swing points,
+session highs/lows, previous period levels and opening range. Session studies use UTC boundaries or a runtime-only host-supplied study calendar.
 See [studies.md](docs/studies.md) and the indicator sections of [architecture.md](docs/architecture.md).
 
 Rust hosts can register typed custom studies with `ChartEngine::register_custom_study` and bind

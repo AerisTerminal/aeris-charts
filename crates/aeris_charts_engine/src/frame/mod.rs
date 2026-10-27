@@ -2012,14 +2012,13 @@ impl ChartEngine {
                             &mut series_layer.layer.points,
                             scale,
                         );
-                        if let Some((source, annotations, show_mitigated)) =
+                        if let Some((source, annotations)) =
                             self.study_annotations_for_anchor(rs.id)
                         {
                             self.build_study_annotations_frame(
                                 rs.id,
                                 source,
                                 annotations,
-                                show_mitigated,
                                 from,
                                 to,
                                 pane_w_px as i32,

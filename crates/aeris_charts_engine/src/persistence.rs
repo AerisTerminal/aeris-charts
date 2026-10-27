@@ -32,6 +32,13 @@ const MAX_TEXT_BYTES: usize = 65_536;
 const MAX_TOTAL_TEXT_BYTES: usize = 1_048_576;
 const MAX_COLOR_BYTES: usize = 256;
 const MAX_STYLE_NUMBER: f64 = 1_000.0;
+/// Study kinds the engine no longer ships. Saved study layouts may still name them.
+const RETIRED_INDICATOR_KINDS: [&str; 4] = [
+    "ema_ribbon",
+    "market_structure",
+    "fair_value_gaps",
+    "order_blocks",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PersistenceRestoreResult {
@@ -505,14 +512,59 @@ fn validate_positive_number(value: f64, field: &str) -> Result<(), ChartError> {
     Ok(())
 }
 
+/// Removes retired study kinds from a V3 envelope so the rest of the layout still restores.
+/// A study whose price or volume source is a dropped study's output is dropped with it, and
+/// surviving output references are renumbered. Out-of-order references are left untouched for
+/// validation to reject.
+fn drop_retired_indicators(envelope: &mut serde_json::Value) {
+    let Some(indicators) = envelope
+        .get_mut("indicators")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    let mut remap: Vec<Option<usize>> = Vec::with_capacity(indicators.len());
+    let mut kept = 0;
+    for indicator in indicators.iter_mut() {
+        let mut dropped = indicator
+            .pointer("/kind/kind")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|kind| RETIRED_INDICATOR_KINDS.contains(&kind));
+        for field in ["source", "volume_source"] {
+            let Some(source) = indicator.get_mut(field) else {
+                continue;
+            };
+            if source.get("kind").and_then(serde_json::Value::as_str) != Some("output") {
+                continue;
+            }
+            let target = source
+                .get("study")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|study| usize::try_from(study).ok())
+                .and_then(|study| remap.get(study).copied());
+            match target {
+                Some(Some(study)) => source["study"] = study.into(),
+                Some(None) => dropped = true,
+                None => {}
+            }
+        }
+        remap.push((!dropped).then(|| {
+            kept += 1;
+            kept - 1
+        }));
+    }
+    let mut index = 0;
+    indicators.retain(|_| {
+        index += 1;
+        remap[index - 1].is_some()
+    });
+}
+
 fn incremental_output_count(kind: &IndicatorKind) -> usize {
     match kind {
         IndicatorKind::Custom { output_count, .. } => *output_count,
         IndicatorKind::SwingPoints { .. } | IndicatorKind::SessionLevels { .. } => 2,
         IndicatorKind::PreviousPeriodLevels { .. } | IndicatorKind::OpeningRange { .. } => 3,
-        IndicatorKind::MarketStructure { .. }
-        | IndicatorKind::FairValueGaps { .. }
-        | IndicatorKind::OrderBlocks { .. } => 1,
         IndicatorKind::Aroon { .. } => 2,
         IndicatorKind::AwesomeOscillator => 1,
         IndicatorKind::Dpo { .. } => 1,
@@ -566,7 +618,6 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         IndicatorKind::ParabolicSar => 1,
         IndicatorKind::SuperTrend { .. } => 1,
         IndicatorKind::Ichimoku => 5,
-        IndicatorKind::EmaRibbon { .. } => aeris_charts_indicators::MAX_OUTPUTS,
         IndicatorKind::Bollinger { .. } => 3,
         IndicatorKind::LinearRegression { .. } => 3,
         IndicatorKind::AtrBands { .. } => 3,
@@ -622,10 +673,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
                 })
                 && serde_json::to_vec(parameters).is_ok_and(|bytes| bytes.len() <= 65_536)
         }
-        IndicatorKind::SwingPoints { .. }
-        | IndicatorKind::MarketStructure { .. }
-        | IndicatorKind::FairValueGaps { .. }
-        | IndicatorKind::OrderBlocks { .. } => super::indicators::structure_kind_is_valid(kind),
+        IndicatorKind::SwingPoints { .. } => super::indicators::structure_kind_is_valid(kind),
         IndicatorKind::SessionLevels { .. } | IndicatorKind::PreviousPeriodLevels { .. } => true,
         IndicatorKind::OpeningRange {
             duration_seconds, ..
@@ -666,7 +714,6 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
             *period > 0 && multiplier.is_finite() && *multiplier >= 0.0
         }
         IndicatorKind::Ichimoku => true,
-        IndicatorKind::EmaRibbon { periods } => periods.iter().all(|period| *period > 0),
         IndicatorKind::Bollinger { period, deviation }
         | IndicatorKind::BollingerMetrics { period, deviation } => {
             *period > 0 && deviation.is_finite() && *deviation >= 0.0
@@ -2423,6 +2470,8 @@ impl ChartEngine {
                     "unsupported or missing persistence schema",
                 ));
             }
+            let mut envelope = envelope;
+            drop_retired_indicators(&mut envelope);
             let state: StateV3 = serde_json::from_value(envelope).map_err(|error| {
                 ChartError::new(
                     ErrorCode::SerializationError,
@@ -2494,13 +2543,8 @@ impl ChartEngine {
         }
         for (study, indicator) in state.indicators.iter().enumerate() {
             if !indicator_kind_is_valid(&indicator.kind)
-                || matches!(
-                    indicator.kind,
-                    IndicatorKind::SwingPoints { .. }
-                        | IndicatorKind::MarketStructure { .. }
-                        | IndicatorKind::FairValueGaps { .. }
-                        | IndicatorKind::OrderBlocks { .. }
-                ) && indicator.source_input != IndicatorInputSource::Close
+                || matches!(indicator.kind, IndicatorKind::SwingPoints { .. })
+                    && indicator.source_input != IndicatorInputSource::Close
             {
                 return Err(invalid(format!("indicator {study} has invalid parameters")));
             }
@@ -3036,28 +3080,7 @@ mod tests {
         let mut chart = settled_chart();
         let kinds = [
             crate::IndicatorKind::SwingPoints { left: 2, right: 3 },
-            crate::IndicatorKind::MarketStructure {
-                left: 2,
-                right: 3,
-                break_on: crate::indicators::StructureBreakOn::Wick,
-            },
-            crate::IndicatorKind::FairValueGaps {
-                min_size: 0.5,
-                mitigation: crate::indicators::StructureMitigation::Full,
-                mitigation_price: crate::indicators::StructureMitigationPrice::Close,
-                max_active: 12,
-                show_mitigated: true,
-            },
-            crate::IndicatorKind::OrderBlocks {
-                left: 2,
-                right: 3,
-                break_on: crate::indicators::StructureBreakOn::Close,
-                zone: crate::indicators::OrderBlockZone::Body,
-                mitigation: crate::indicators::StructureMitigation::Touch,
-                mitigation_price: crate::indicators::StructureMitigationPrice::Wick,
-                max_active: 16,
-                show_mitigated: false,
-            },
+            crate::IndicatorKind::SwingPoints { left: 1, right: 4 },
         ];
         for kind in &kinds {
             assert!(!chart.add_indicator_kind(0, kind.clone(), None).is_empty());
@@ -3077,8 +3100,6 @@ mod tests {
         for (index, field, value) in [
             (0, "left", serde_json::json!(0)),
             (1, "right", serde_json::json!(51)),
-            (2, "max_active", serde_json::json!(0)),
-            (3, "max_active", serde_json::json!(65)),
         ] {
             let mut invalid: serde_json::Value = serde_json::from_str(&document).unwrap();
             invalid["indicators"][index]["kind"][field] = value;
@@ -3095,6 +3116,48 @@ mod tests {
                 .import_state_json(&invalid.to_string())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn retired_study_kinds_are_dropped_with_their_dependents_on_import() {
+        let mut chart = settled_chart();
+        chart.add_sma(0, 3).unwrap();
+        let rsi = chart.add_rsi(0, 4).unwrap();
+        chart.add_sma(rsi, 2).unwrap();
+        let mut document: serde_json::Value =
+            serde_json::from_str(&chart.export_state_json().unwrap()).unwrap();
+        let saved = document["indicators"].as_array().unwrap().clone();
+        assert_eq!(saved[2]["source"]["study"], serde_json::json!(1));
+        let style = saved[0]["styles"][0].clone();
+        let mut ribbon = saved[0].clone();
+        ribbon["kind"] = serde_json::json!({"kind": "ema_ribbon", "periods": [5, 10, 20, 50, 200]});
+        ribbon["styles"] = serde_json::Value::Array(vec![style.clone(); 5]);
+        let mut gaps = saved[0].clone();
+        gaps["kind"] = serde_json::json!({"kind": "fair_value_gaps", "min_size": 0.0});
+        let mut ribbon_sma = saved[0].clone();
+        ribbon_sma["source"] = serde_json::json!({"kind": "output", "study": 0, "output": 2});
+        let mut rsi_sma = saved[2].clone();
+        rsi_sma["source"]["study"] = serde_json::json!(4);
+        document["indicators"] =
+            serde_json::json!([ribbon, saved[0], gaps, ribbon_sma, saved[1], rsi_sma,]);
+
+        let mut restored = settled_chart();
+        restored
+            .import_state_json(&serde_json::to_string(&document).unwrap())
+            .unwrap();
+        let bindings = restored.indicator_bindings();
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|binding| binding.kind.clone())
+                .collect::<Vec<_>>(),
+            [
+                crate::IndicatorKind::Sma { period: 3 },
+                crate::IndicatorKind::Rsi { period: 4 },
+                crate::IndicatorKind::Sma { period: 2 },
+            ]
+        );
+        assert_eq!(bindings[2].source, bindings[1].outputs[0]);
     }
 
     #[test]

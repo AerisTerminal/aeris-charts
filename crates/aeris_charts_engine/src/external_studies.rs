@@ -5,8 +5,8 @@
 
 use crate::indicators::{indicator_output_style, output_style_is_valid};
 use crate::{
-    ChartEngine, EMA_RIBBON_DEFAULT_COLORS, IndicatorChromeOptions, IndicatorOutputStyle,
-    SEPARATE_INDICATOR_PANE_STRETCH, SeriesId, SeriesKind, SeriesThresholdRegion,
+    ChartEngine, IndicatorChromeOptions, IndicatorOutputStyle, SeriesId, SeriesKind,
+    SeriesThresholdRegion,
 };
 use aeris_charts_core::model::data_validation::{MAX_SAFE_VALUE, validate_timestamp};
 use std::fmt;
@@ -15,6 +15,8 @@ const NANOS_PER_SECOND: i64 = 1_000_000_000;
 const DEFAULT_EXTERNAL_STUDY_LINE_WIDTH: f64 = 2.0;
 const MAX_EXTERNAL_STUDY_TITLE_BYTES: usize = 256;
 const MAX_EXTERNAL_STUDY_LEGEND_LABEL_BYTES: usize = 128;
+const DEFAULT_EXTERNAL_STUDY_COLORS: [&str; 5] =
+    ["#335cff", "#FF9800", "#7d52f4", "#fb4ba3", "#fb3748"];
 
 /// Hard chart-local bound for host-computed scalar outputs.
 pub const MAX_EXTERNAL_STUDY_OUTPUTS: usize = 256;
@@ -282,6 +284,7 @@ impl ChartEngine {
                         let _ = self.remove_series(series_id);
                         return Err(ExternalStudyError::InstallationRejected);
                     };
+                    self.panes[index].stretch_factor = self.separate_pane_stretch();
                     let Some(pane_id) = self.pane_stable_id(index) else {
                         let _ = self.remove_series(series_id);
                         let _ = self.remove_pane(index);
@@ -295,7 +298,7 @@ impl ChartEngine {
         if !self.try_set_series_pane_and_scale(
             series_id,
             pane_index,
-            SEPARATE_INDICATOR_PANE_STRETCH,
+            self.separate_pane_stretch(),
             scale_id(descriptor.scale),
         ) {
             let _ = self.remove_series(series_id);
@@ -604,7 +607,7 @@ fn set_series_data(
 }
 
 fn default_output_color(output_index: usize) -> String {
-    EMA_RIBBON_DEFAULT_COLORS[output_index % EMA_RIBBON_DEFAULT_COLORS.len()].to_owned()
+    DEFAULT_EXTERNAL_STUDY_COLORS[output_index % DEFAULT_EXTERNAL_STUDY_COLORS.len()].to_owned()
 }
 
 /// Descriptor-driven presentation refreshed on every push. Color and width are set once at
@@ -740,13 +743,52 @@ mod tests {
         assert_eq!(chart.external_study_for_series(outputs[0].series_id), None);
     }
 
-    fn install_ribbon(chart: &mut ChartEngine, study_id: u64, generation: u64) {
+    #[test]
+    fn dedicated_external_study_pane_matches_engine_study_pane_height() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let times = [1_000_000_000, 2_000_000_000];
+        let values = [Some(1.0), Some(2.0)];
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0],
+                &[1.0, 2.0],
+                &[1.0, 2.0],
+                &[1.0, 2.0],
+                &[1.0, 2.0],
+            )
+            .unwrap();
+        chart.panes[0].stretch_factor = 2.0;
+        let rsi = chart.add_rsi(0, 2).unwrap();
+        let rsi_pane = chart.series_entry(rsi).unwrap().pane_index;
+        assert_eq!(
+            chart.install_external_study_output(
+                5,
+                0,
+                descriptor("Signal", ExternalStudyPaneTarget::Dedicated { group: 0 }),
+                1,
+                &times,
+                &values,
+            ),
+            Ok(true)
+        );
+        let external = chart.external_study_outputs()[0].series_id;
+        let external_pane = chart.series_entry(external).unwrap().pane_index;
+        assert_ne!(external_pane, rsi_pane);
+        assert_eq!(chart.panes[rsi_pane].stretch_factor, 0.5);
+        assert_eq!(
+            chart.panes[external_pane].stretch_factor,
+            chart.panes[rsi_pane].stretch_factor
+        );
+    }
+
+    fn install_five_outputs(chart: &mut ChartEngine, study_id: u64, generation: u64) {
         for output_index in 0..5 {
             assert_eq!(
                 chart.install_external_study_output(
                     study_id,
                     output_index,
-                    descriptor("EMA Ribbon", ExternalStudyPaneTarget::Price),
+                    descriptor("Five outputs", ExternalStudyPaneTarget::Price),
                     generation,
                     &[1_000_000_000, 2_000_000_000],
                     &[Some(1.0), Some(2.0)],
@@ -766,11 +808,11 @@ mod tests {
     #[test]
     fn external_study_output_style_survives_pushes_and_study_toggles() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
-        install_ribbon(&mut chart, 9, 1);
+        install_five_outputs(&mut chart, 9, 1);
         let defaults = chart.external_study_output_style(9, 2).unwrap();
         assert_eq!(
             defaults.line_color.as_deref(),
-            Some(EMA_RIBBON_DEFAULT_COLORS[2])
+            Some(DEFAULT_EXTERNAL_STUDY_COLORS[2])
         );
         assert_eq!(defaults.line_width, Some(DEFAULT_EXTERNAL_STUDY_LINE_WIDTH));
         assert!(defaults.visible);
@@ -800,7 +842,7 @@ mod tests {
         );
         assert!(!chart.set_external_study_output_style(9, 5, defaults.clone()));
 
-        install_ribbon(&mut chart, 9, 2);
+        install_five_outputs(&mut chart, 9, 2);
         assert_eq!(
             chart.external_study_output_style(9, 2),
             Some(styled),
@@ -852,7 +894,7 @@ mod tests {
         let reset = chart.external_study_output_style(4, 0).unwrap();
         assert_eq!(
             reset.line_color.as_deref(),
-            Some(EMA_RIBBON_DEFAULT_COLORS[0])
+            Some(DEFAULT_EXTERNAL_STUDY_COLORS[0])
         );
         assert_eq!(reset.line_width, Some(DEFAULT_EXTERNAL_STUDY_LINE_WIDTH));
         assert!(!reset.visible, "a style reset keeps visibility");
@@ -861,7 +903,7 @@ mod tests {
     #[test]
     fn removing_one_external_output_series_releases_its_slot() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
-        install_ribbon(&mut chart, 11, 1);
+        install_five_outputs(&mut chart, 11, 1);
         let removed = chart.external_study_output_info(11, 3).unwrap().series_id;
         assert!(chart.remove_series(removed));
         assert_eq!(chart.external_study_output_info(11, 3), None);
@@ -870,7 +912,7 @@ mod tests {
             chart.install_external_study_output(
                 11,
                 2,
-                descriptor("EMA Ribbon", ExternalStudyPaneTarget::Price),
+                descriptor("Five outputs", ExternalStudyPaneTarget::Price),
                 2,
                 &[1_000_000_000],
                 &[Some(5.0)],
@@ -882,7 +924,7 @@ mod tests {
             chart.install_external_study_output(
                 11,
                 3,
-                descriptor("EMA Ribbon", ExternalStudyPaneTarget::Price),
+                descriptor("Five outputs", ExternalStudyPaneTarget::Price),
                 2,
                 &[1_000_000_000],
                 &[Some(5.0)],

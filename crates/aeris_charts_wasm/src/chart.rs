@@ -2697,61 +2697,6 @@ impl AerisChart {
             .borrow_mut()
             .add_opening_range(source_id, duration_seconds, calendar)
     }
-    pub fn add_market_structure(
-        &mut self,
-        source_id: u32,
-        left: u32,
-        right: u32,
-        break_on: &str,
-    ) -> Vec<u32> {
-        self.inner
-            .borrow_mut()
-            .add_market_structure(source_id, left, right, break_on)
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_fair_value_gaps(
-        &mut self,
-        source_id: u32,
-        min_size: f64,
-        mitigation: &str,
-        mitigation_price: &str,
-        max_active: u32,
-        show_mitigated: bool,
-    ) -> Vec<u32> {
-        self.inner.borrow_mut().add_fair_value_gaps(
-            source_id,
-            min_size,
-            mitigation,
-            mitigation_price,
-            max_active,
-            show_mitigated,
-        )
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_order_blocks(
-        &mut self,
-        source_id: u32,
-        left: u32,
-        right: u32,
-        break_on: &str,
-        zone: &str,
-        mitigation: &str,
-        mitigation_price: &str,
-        max_active: u32,
-        show_mitigated: bool,
-    ) -> Vec<u32> {
-        self.inner.borrow_mut().add_order_blocks(
-            source_id,
-            left,
-            right,
-            break_on,
-            zone,
-            mitigation,
-            mitigation_price,
-            max_active,
-            show_mitigated,
-        )
-    }
 
     pub fn add_awesome_oscillator(&mut self, source_id: u32) -> u32 {
         self.inner.borrow_mut().add_awesome_oscillator(source_id)
@@ -2905,37 +2850,6 @@ impl AerisChart {
 
     pub fn add_ichimoku(&mut self, source_id: u32) -> Vec<u32> {
         self.inner.borrow_mut().add_ichimoku(source_id)
-    }
-
-    /// Add one five-output EMA ribbon on the source pane.
-    pub fn add_ema_ribbon(
-        &mut self,
-        source_id: u32,
-        period_1: u32,
-        period_2: u32,
-        period_3: u32,
-        period_4: u32,
-        period_5: u32,
-    ) -> Vec<u32> {
-        self.inner.borrow_mut().add_ema_ribbon(
-            source_id,
-            [period_1, period_2, period_3, period_4, period_5],
-        )
-    }
-
-    /// Atomically update an EMA ribbon while retaining all five output identities.
-    pub fn set_ema_ribbon_periods(
-        &mut self,
-        id: u32,
-        period_1: u32,
-        period_2: u32,
-        period_3: u32,
-        period_4: u32,
-        period_5: u32,
-    ) -> bool {
-        self.inner
-            .borrow_mut()
-            .set_ema_ribbon_periods(id, [period_1, period_2, period_3, period_4, period_5])
     }
 
     /// Add upper, middle, and lower Bollinger-band lines. Returns an empty array for invalid input.

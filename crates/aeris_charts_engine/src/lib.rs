@@ -56,7 +56,7 @@ mod trading;
 mod workspace;
 
 /// Initial stretch for engine-created separate indicator panes across all hosts.
-pub(crate) const SEPARATE_INDICATOR_PANE_STRETCH: f64 = 0.3;
+pub(crate) const SEPARATE_INDICATOR_PANE_STRETCH: f64 = 0.25;
 
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
@@ -65,7 +65,7 @@ use std::num::NonZeroU32;
 use std::ops::{Deref, DerefMut};
 
 pub use aeris_charts_indicators::study_annotations::{
-    SessionSpan, StudyAnnotations, StudyMarker, StudyMarkerKind, StudyZone,
+    SessionSpan, StudyAnnotations, StudyMarker, StudyMarkerKind,
 };
 pub use aeris_charts_indicators::{PivotKind, VwapReset};
 mod auction_markers;
@@ -210,11 +210,10 @@ pub use host_layout::{
     ExportFrame, ExportFrameRequest, FinancialFramePreparation, FinancialFrameRequest,
 };
 pub use indicators::{
-    EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS, INDICATOR_SCHEMA_REVISION,
-    IndicatorBindingInfo, IndicatorChromeOptions, IndicatorInputSource, IndicatorKind,
-    IndicatorOutputDescriptor, IndicatorOutputStyle, IndicatorPane, IndicatorParameterDescriptor,
-    IndicatorParameterType, IndicatorSchema, OrderBlockZone, PreviousPeriod, StructureBreakOn,
-    StructureMitigation, StructureMitigationPrice, StudyCalendarPolicy,
+    INDICATOR_SCHEMA_REVISION, IndicatorBindingInfo, IndicatorChromeOptions, IndicatorInputSource,
+    IndicatorKind, IndicatorOutputDescriptor, IndicatorOutputStyle, IndicatorPane,
+    IndicatorParameterDescriptor, IndicatorParameterType, IndicatorSchema, PreviousPeriod,
+    StudyCalendarPolicy,
 };
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use interaction::{

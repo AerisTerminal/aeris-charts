@@ -17,12 +17,9 @@ pub use session_studies::{
     session_study,
 };
 pub use structure_studies::{
-    BreakOn, MAX_ORDER_BLOCK_SEARCH_ROWS, Mitigation, MitigationPrice, OrderBlockZone,
     StructureStudy, StructureStudyKind, StructureStudyResult, structure_study,
 };
-pub use study_annotations::{
-    SessionSpan, StudyAnnotations, StudyMarker, StudyMarkerKind, StudyZone,
-};
+pub use study_annotations::{SessionSpan, StudyAnnotations, StudyMarker, StudyMarkerKind};
 
 use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc};
 
@@ -4911,10 +4908,6 @@ enum IncrementalKind {
         state: RecursiveHistory<SuperTrendState>,
     },
     Ichimoku,
-    EmaRibbon {
-        periods: [usize; MAX_OUTPUTS],
-        states: Box<[RecursiveHistory<EmaState>; MAX_OUTPUTS]>,
-    },
     Bollinger {
         period: usize,
         deviation: f64,
@@ -5278,16 +5271,6 @@ impl IncrementalState {
 
     pub fn ichimoku() -> Self {
         Self::new(IncrementalKind::Ichimoku, 5)
-    }
-
-    pub fn ema_ribbon(periods: [usize; MAX_OUTPUTS]) -> Self {
-        Self::new(
-            IncrementalKind::EmaRibbon {
-                periods,
-                states: Box::new(std::array::from_fn(|_| RecursiveHistory::new())),
-            },
-            MAX_OUTPUTS,
-        )
     }
 
     pub fn bollinger(period: usize, deviation: f64) -> Self {
@@ -5686,9 +5669,6 @@ impl IncrementalState {
             IncrementalKind::Dema { state, .. } => state.bytes(),
             IncrementalKind::Tema { state, .. } => state.bytes(),
             IncrementalKind::Smma { state, .. } => state.bytes(),
-            IncrementalKind::EmaRibbon { states, .. } => {
-                states.iter().map(RecursiveHistory::bytes).sum()
-            }
             IncrementalKind::Rsi { state, .. } => state.bytes(),
             IncrementalKind::Macd { state, .. } => state.bytes(),
             IncrementalKind::Stochastic { state, tail_k, .. } => {
@@ -6360,29 +6340,6 @@ impl IncrementalState {
                     }
                 }
                 state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::EmaRibbon { periods, states } => {
-                for (output_index, (&period, state)) in
-                    periods.iter().zip(states.iter_mut()).enumerate()
-                {
-                    let (start, mut accumulator) = state.begin(n, requested);
-                    self.last_work_rows = self.last_work_rows.saturating_add(n - start);
-                    let mut tail = None;
-                    let mut before_tail = None;
-                    for row in start..n {
-                        let previous = accumulator;
-                        let value = ema_step(&mut accumulator, input.close[row], period);
-                        state.checkpoint(row, accumulator);
-                        if row >= self.output_from[output_index] {
-                            self.outputs[output_index].push(value.unwrap_or(f64::NAN));
-                        }
-                        if row + 1 == n {
-                            tail = Some(accumulator);
-                            before_tail = (row > 0).then_some(previous);
-                        }
-                    }
-                    state.finish(n, tail, before_tail);
-                }
             }
             IncrementalKind::Bollinger { period, deviation } => {
                 let start = self.output_from[0];
@@ -7439,9 +7396,6 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         IncrementalKind::ParabolicSar { .. } => [0, 0, 0, 0, 0],
         IncrementalKind::SuperTrend { period, .. } => [*period, 0, 0, 0, 0],
         IncrementalKind::Ichimoku => [8, 25, 25, 51, 0],
-        IncrementalKind::EmaRibbon { periods, .. } => {
-            periods.map(|period| period.saturating_sub(1))
-        }
         IncrementalKind::Bollinger { period, .. } => {
             let mut starts = [0; MAX_OUTPUTS];
             starts[..3].fill(period.saturating_sub(1));
@@ -8729,7 +8683,6 @@ mod tests {
         ParabolicSar,
         SuperTrend,
         Ichimoku,
-        EmaRibbon,
         Bollinger,
         BollingerMetrics,
         EnvelopesSma,
@@ -8849,10 +8802,6 @@ mod tests {
                     points.iter().map(|point| point.lagging).collect(),
                 ]
             }
-            TestKind::EmaRibbon => [3, 5, 8, 13, 21]
-                .into_iter()
-                .map(|period| ema(input.close, period))
-                .collect(),
             TestKind::Bollinger => {
                 let points = bollinger(input.close, 5, 2.0);
                 vec![
@@ -9201,10 +9150,6 @@ mod tests {
             (TestKind::Smma, IncrementalState::smma(5)),
             (TestKind::Dema, IncrementalState::dema(5)),
             (TestKind::Tema, IncrementalState::tema(5)),
-            (
-                TestKind::EmaRibbon,
-                IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
-            ),
             (
                 TestKind::EnvelopesEma,
                 IncrementalState::envelopes(5, 10.0, true),
@@ -9943,7 +9888,7 @@ mod tests {
         // A compact (gap rows deleted) run is independent of whitespace handling.
         // Fixed seeds and small bounded series keep the complete catalog inexpensive.
         let kinds = all_test_states();
-        assert_eq!(kinds.len(), 64, "update the oracle when a kind is added");
+        assert_eq!(kinds.len(), 63, "update the oracle when a kind is added");
         for seed in [0x4b53_5421_u64, 0x8acd_2026] {
             let mut random = seed;
             let mut next = || {
@@ -10304,13 +10249,6 @@ mod tests {
                         points.iter().map(|point| point.2).collect(),
                     ],
                     IncrementalState::envelopes(p, 10.0, exponential),
-                )
-            }
-            TestKind::EmaRibbon => {
-                let periods = [q, q + 2, q + 4, q + 7, p + q + 8];
-                (
-                    periods.iter().map(|&width| ema(c, width)).collect(),
-                    IncrementalState::ema_ribbon(periods),
                 )
             }
             TestKind::Alma => single!(alma(c, p, 0.85, 6.0), IncrementalState::alma(p, 0.85, 6.0)),
@@ -10975,10 +10913,6 @@ mod tests {
             (TestKind::ParabolicSar, IncrementalState::parabolic_sar()),
             (TestKind::SuperTrend, IncrementalState::supertrend(5, 3.0)),
             (TestKind::Ichimoku, IncrementalState::ichimoku()),
-            (
-                TestKind::EmaRibbon,
-                IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
-            ),
             (TestKind::Bollinger, IncrementalState::bollinger(5, 2.0)),
             (
                 TestKind::BollingerMetrics,
@@ -11751,36 +11685,6 @@ mod tests {
             IncrementalState::stochastic(5, 3),
             1,
             26.065449201630944,
-        );
-        assert_final(
-            "EMA ribbon 5",
-            IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
-            0,
-            101.49995512853438,
-        );
-        assert_final(
-            "EMA ribbon 10",
-            IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
-            1,
-            101.96328975462541,
-        );
-        assert_final(
-            "EMA ribbon 20",
-            IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
-            2,
-            102.57828153839074,
-        );
-        assert_final(
-            "EMA ribbon 50",
-            IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
-            3,
-            103.03218446733823,
-        );
-        assert_final(
-            "EMA ribbon 200",
-            IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
-            4,
-            103.17775917896441,
         );
         assert_final("HMA", IncrementalState::hma(5), 0, 100.81322452527017);
         assert_final("VWMA", IncrementalState::vwma(5), 0, 101.17891567509746);

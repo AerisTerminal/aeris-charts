@@ -285,8 +285,8 @@ pub(crate) fn hit_test_line_series(
         .then_some((line_min_distance, SeriesHitKind::Line))
 }
 
-/// A study-annotation shape's distance to the cursor, in CSS px. Zones are ranges, BOS/CHoCH
-/// strokes are lines, swing glyphs are points; anything else (labels, borders) adds nothing.
+/// A study-annotation shape's distance to the cursor, in CSS px. Rects are ranges, strokes are
+/// lines, swing glyphs are points; anything else (labels, borders) adds nothing.
 fn annotation_prim_hit(
     prim: &Prim,
     x: f64,
@@ -394,14 +394,14 @@ fn better_hit(
 }
 
 impl ChartEngine {
-    /// The painted annotation shapes (zones, structure strokes, swing glyphs) of a study whose
+    /// The painted annotation shapes (swing glyphs) of a study whose
     /// first output is `anchor`, in device px at the frame's pixel ratios. Hit testing and
     /// selection anchors use this exact paint geometry.
     pub(crate) fn study_annotation_shapes(
         &self,
         anchor: SeriesId,
     ) -> Option<(Vec<Prim>, f64, f64)> {
-        let (source, annotations, show_mitigated) = self.study_annotations_for_anchor(anchor)?;
+        let (source, annotations) = self.study_annotations_for_anchor(anchor)?;
         let (from, to) = self.visible_range_for_frame()?;
         let (hpr, vpr) = self.frame_pixel_ratios();
         let mut prims = Vec::new();
@@ -409,7 +409,6 @@ impl ChartEngine {
             anchor,
             source,
             annotations,
-            show_mitigated,
             from,
             to,
             (self.pane_w * hpr).round().max(1.0) as i32,
@@ -546,8 +545,7 @@ impl ChartEngine {
                 kind,
             })
         };
-        // A structure study's anchor output is whitespace by contract; its zones and strokes
-        // still hit through the source series' scale.
+        // Study annotation glyphs hit through the source series' scale.
         let annotation = self.study_annotation_hit(id, x_css, y_css);
         let Some((from, to)) = self.visible_range_for_frame() else {
             return as_hit(annotation);

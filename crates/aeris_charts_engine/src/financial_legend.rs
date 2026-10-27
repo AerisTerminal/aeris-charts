@@ -134,8 +134,8 @@ impl ChartEngine {
                         .filter_map(|series| {
                             let output = self.indicator_info(series.id)?;
                             let value = snapshot_value(&snapshots, series.id)?;
-                            // Ribbon lines and volume columns read by their color alone.
-                            let unlabeled = matches!(output.kind.as_ref(), "ema_ribbon" | "volume");
+                            // Volume columns read by their color alone.
+                            let unlabeled = output.kind == "volume";
                             Some(FinancialLegendValue {
                                 text: if output.output_count > 1 && !unlabeled {
                                     format!("{} {value}", output.output_name)
@@ -160,11 +160,7 @@ impl ChartEngine {
                 identity: FinancialLegendIdentity::Indicator(info.binding_id),
                 first_series_id: first.id,
                 pane: first.pane_index,
-                title: if info.kind == "ema_ribbon" {
-                    "EMA Ribbon".to_string()
-                } else {
-                    first.title.clone()
-                },
+                title: first.title.clone(),
                 values,
                 tone: FinancialLegendTone::Neutral,
                 visible,

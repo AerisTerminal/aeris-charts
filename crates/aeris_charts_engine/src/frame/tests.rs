@@ -14,9 +14,7 @@ use crate::{
 };
 use aeris_charts_core::model::data_layer::DataLayer;
 use aeris_charts_core::model::plot_list::{PlotList, PlotValues};
-use aeris_charts_indicators::study_annotations::{
-    StudyAnnotations, StudyMarker, StudyMarkerKind, StudyZone,
-};
+use aeris_charts_indicators::study_annotations::{StudyAnnotations, StudyMarker, StudyMarkerKind};
 
 const LIVE_TEXT: Color = Color::rgb(0xff, 0xff, 0xff);
 const LIVE_COUNTDOWN: Color = Color::rgba(0xff, 0xff, 0xff, 0xb3);
@@ -169,26 +167,6 @@ fn combined_structure_custom_marker_and_auction_frame_uses_existing_primitives()
         .set_series_data(0, &times, &open, &high, &low, &close)
         .unwrap();
     chart.add_indicator_kind(0, IndicatorKind::SwingPoints { left: 1, right: 1 }, None);
-    chart.add_indicator_kind(
-        0,
-        IndicatorKind::MarketStructure {
-            left: 1,
-            right: 1,
-            break_on: crate::StructureBreakOn::Close,
-        },
-        None,
-    );
-    chart.add_indicator_kind(
-        0,
-        IndicatorKind::FairValueGaps {
-            min_size: 0.0,
-            mitigation: crate::StructureMitigation::Touch,
-            mitigation_price: crate::StructureMitigationPrice::Wick,
-            max_active: 20,
-            show_mitigated: true,
-        },
-        None,
-    );
     chart
         .register_custom_study(
             CustomStudyDefinition {
@@ -263,20 +241,8 @@ fn combined_structure_custom_marker_and_auction_frame_uses_existing_primitives()
     let prims = &frame.panes[0].main;
     assert!(chart.custom_marker_plot(marker));
     assert!(
-        prims.iter().any(|p| matches!(p, Prim::Rect { .. })),
-        "zone fill"
-    );
-    assert!(
-        prims.iter().any(|p| matches!(p, Prim::RectFrame { .. })),
-        "zone border"
-    );
-    assert!(
-        prims.iter().any(|p| matches!(p, Prim::HLine { .. })),
-        "structure segment"
-    );
-    assert!(
-        prims.iter().any(|p| matches!(p, Prim::Text { .. })),
-        "structure label"
+        prims.iter().any(|p| matches!(p, Prim::RoundRect { .. })),
+        "swing marker shaft"
     );
     assert!(
         prims
@@ -294,22 +260,12 @@ fn combined_structure_custom_marker_and_auction_frame_uses_existing_primitives()
 fn study_binding_paints_inside_its_output_layer_without_host_markers() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
     let output = chart.add_sma(0, 2).unwrap();
-    let border = Color::rgb(0x11, 0x22, 0x33);
-    chart
-        .series
-        .iter_mut()
-        .find(|series| series.id == output)
-        .unwrap()
-        .line_color = Some("#112233".into());
     let mut study = StudyAnnotations::default();
-    study.push_zone(StudyZone {
-        start_row: 3,
-        confirm_row: 4,
-        top: 110.0,
-        bottom: 105.0,
-        bullish: true,
-        end_row: None,
-        retired: false,
+    study.push_marker(StudyMarker {
+        row: 4,
+        confirm_row: 5,
+        price: 108.0,
+        kind: StudyMarkerKind::SwingHigh,
     });
     assert!(chart.inject_study_annotations_for_test(output, study));
     let frame = chart.build_frame();
@@ -317,7 +273,7 @@ fn study_binding_paints_inside_its_output_layer_without_host_markers() {
         frame.panes[0]
             .main
             .iter()
-            .any(|prim| matches!(prim, Prim::RectFrame { color, .. } if *color == border))
+            .any(|prim| matches!(prim, Prim::Triangle { .. }))
     );
     assert!(chart.series.iter().all(|series| series.markers.is_empty()));
     chart
@@ -332,278 +288,79 @@ fn study_binding_paints_inside_its_output_layer_without_host_markers() {
         !hidden.panes[0]
             .main
             .iter()
-            .any(|prim| matches!(prim, Prim::RectFrame { color, .. } if *color == border))
+            .any(|prim| matches!(prim, Prim::Triangle { .. }))
     );
 }
 
 #[test]
-fn mitigated_zone_visibility_follows_the_binding_choice() {
-    let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
-    let border = Color::rgb(0x11, 0x22, 0x33);
-    for (show_mitigated, visible) in [(false, false), (true, true)] {
-        let output = chart.add_fair_value_gaps(
-            0,
-            0.0,
-            crate::StructureMitigation::Touch,
-            crate::StructureMitigationPrice::Wick,
-            20,
-            show_mitigated,
-        )[0];
-        assert!(chart.set_indicator_output_style(
-            output,
-            crate::IndicatorOutputStyle {
-                visible: true,
-                line_color: Some("#112233".into()),
-                ..Default::default()
-            },
-        ));
-        let mut annotations = StudyAnnotations::default();
-        annotations.push_zone(StudyZone {
-            start_row: 3,
-            confirm_row: 4,
-            top: 110.0,
-            bottom: 105.0,
-            bullish: true,
-            end_row: Some(10),
-            retired: false,
-        });
-        assert!(chart.inject_study_annotations_for_test(output, annotations));
-        let frame = chart.build_frame();
-        assert_eq!(
-            frame.panes[0]
-                .main
-                .iter()
-                .any(|prim| matches!(prim, Prim::RectFrame { color, .. } if *color == border)),
-            visible,
-        );
-        assert!(chart.remove_indicator_binding(output));
-    }
-}
-
-#[test]
-fn study_annotations_paint_in_shared_order_and_clip_to_the_pane() {
+fn study_annotations_paint_swing_glyphs_inside_the_pane() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
     chart.build_frame();
     let anchor = chart.series[0].id;
-    chart.series_entry_mut(anchor).unwrap().line_style = 2;
     let mut study = StudyAnnotations::default();
-    study.push_zone(StudyZone {
-        start_row: 2,
-        confirm_row: 3,
-        top: 112.0,
-        bottom: 100.0,
-        bullish: true,
-        end_row: None,
-        retired: false,
-    });
-    study.push_zone(StudyZone {
-        start_row: 4,
-        confirm_row: 5,
-        top: 110.0,
-        bottom: 99.0,
-        bullish: false,
-        end_row: Some(10),
-        retired: false,
-    });
-    study.push_marker(StudyMarker {
-        row: 8,
-        confirm_row: 8,
-        price: 108.0,
-        kind: StudyMarkerKind::Bos { up: true },
-        from_row: Some(2),
-    });
     study.push_marker(StudyMarker {
         row: 9,
         confirm_row: 10,
         price: 109.0,
         kind: StudyMarkerKind::SwingHigh,
-        from_row: None,
+    });
+    study.push_marker(StudyMarker {
+        row: 12,
+        confirm_row: 13,
+        price: 110.0,
+        kind: StudyMarkerKind::SwingLow,
     });
     let mut prims = Vec::new();
-    chart.build_study_annotations_frame(
-        anchor, anchor, &study, false, 0, 19, 800, 1.0, 1.0, &mut prims,
-    );
-    assert!(matches!(prims[0], Prim::Rect { .. }));
-    assert!(matches!(prims[1], Prim::RectFrame { .. }));
-    assert!(matches!(
-        prims[2],
-        Prim::HLine {
-            style: LineStyle::Dashed,
-            ..
-        }
-    ));
-    assert!(
+    chart.build_study_annotations_frame(anchor, anchor, &study, 0, 19, 800, 1.0, 1.0, &mut prims);
+    assert!(matches!(prims[0], Prim::Triangle { .. }));
+    assert!(matches!(prims[1], Prim::RoundRect { .. }));
+    assert_eq!(
         prims
             .iter()
-            .any(|p| matches!(p, Prim::Text { text, .. } if text == "BOS"))
+            .filter(|p| matches!(p, Prim::Triangle { .. }))
+            .count(),
+        2
     );
-    assert!(prims.iter().any(|p| matches!(p, Prim::Triangle { .. })));
     let pane = &chart.panes[0];
-    let top = pane.top.round() as i32;
-    let bottom = (pane.top + pane.height).round() as i32;
-    if let Prim::Rect { rect, .. } = prims[0] {
-        assert!(rect.x >= 0 && rect.x + rect.w <= 800);
-        assert!(rect.y >= top && rect.y + rect.h <= bottom);
-    }
-    prims.clear();
-    chart.build_study_annotations_frame(
-        anchor, anchor, &study, true, 6, 19, 800, 1.0, 1.0, &mut prims,
-    );
-    assert_eq!(
-        prims
-            .iter()
-            .filter(|p| matches!(p, Prim::Rect { .. }))
-            .count(),
-        2
-    );
-    assert!(
-        prims
-            .iter()
-            .all(|p| !matches!(p, Prim::Rect { rect, .. } if rect.x < 0))
-    );
-}
-#[test]
-fn structure_segment_uses_anchor_output_style_with_dashed_default() {
-    let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
-    let anchor = chart.add_market_structure(0, 1, 1, crate::StructureBreakOn::Wick)[0];
-    chart.build_frame();
-    let mut study = StudyAnnotations::default();
-    study.push_marker(StudyMarker {
-        row: 8,
-        confirm_row: 8,
-        price: 108.0,
-        kind: StudyMarkerKind::Bos { up: true },
-        from_row: Some(2),
-    });
-    let segment_style = |chart: &ChartEngine| {
-        let mut prims = Vec::new();
-        chart.build_study_annotations_frame(
-            anchor, 0, &study, false, 0, 19, 800, 1.0, 1.0, &mut prims,
-        );
-        prims.into_iter().find_map(|prim| match prim {
-            Prim::HLine { style, .. } => Some(style),
-            _ => None,
-        })
-    };
-    assert_eq!(segment_style(&chart), Some(LineStyle::Dashed));
-    for (line_style, expected) in [
-        (0, LineStyle::Solid),
-        (1, LineStyle::Dotted),
-        (2, LineStyle::Dashed),
-    ] {
-        assert!(chart.set_indicator_output_style(
-            anchor,
-            crate::IndicatorOutputStyle {
-                visible: true,
-                line_style,
-                ..Default::default()
-            },
-        ));
-        assert_eq!(segment_style(&chart), Some(expected));
+    let top = pane.top as f32;
+    let bottom = (pane.top + pane.height) as f32;
+    for prim in &prims {
+        if let Prim::Triangle { a, b, c, .. } = prim {
+            for [x, y] in [a, b, c] {
+                assert!((0.0..=800.0).contains(x));
+                assert!(*y >= top && *y <= bottom);
+            }
+        }
     }
 }
 
 #[test]
-fn retired_zone_is_hidden_until_show_mitigated_and_ends_at_retirement() {
-    let mut chart = ohlc_chart(SeriesKind::Candlestick, 20);
-    chart.build_frame();
-    let anchor = chart.series[0].id;
-    let mut study = StudyAnnotations::default();
-    for (start_row, confirm_row) in [(2, 3), (5, 6)] {
-        study.push_zone_with_cap(
-            StudyZone {
-                start_row,
-                confirm_row,
-                top: 112.,
-                bottom: 100.,
-                bullish: true,
-                end_row: None,
-                retired: false,
-            },
-            1,
-        );
-    }
-    assert!(study.zones()[0].retired);
-    assert_eq!(study.zones()[0].end_row, Some(6));
-    let mut hidden = Vec::new();
-    chart.build_study_annotations_frame(
-        anchor,
-        anchor,
-        &study,
-        false,
-        0,
-        19,
-        800,
-        1.,
-        1.,
-        &mut hidden,
-    );
-    let mut shown = Vec::new();
-    chart.build_study_annotations_frame(
-        anchor, anchor, &study, true, 0, 19, 800, 1., 1., &mut shown,
-    );
-    assert_eq!(
-        hidden
-            .iter()
-            .filter(|p| matches!(p, Prim::RectFrame { .. }))
-            .count(),
-        1
-    );
-    assert_eq!(
-        shown
-            .iter()
-            .filter(|p| matches!(p, Prim::RectFrame { .. }))
-            .count(),
-        2
-    );
-    let (Prim::RectFrame { rect: retired, .. }, Prim::RectFrame { rect: active, .. }) =
-        (&shown[1], &shown[3])
-    else {
-        panic!("fill then border for both zones")
-    };
-    assert!(retired.x + retired.w < active.x + active.w);
-}
-
-#[test]
-fn study_annotations_cull_offscreen_rows_and_drop_dense_labels() {
+fn study_annotations_cull_offscreen_rows() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 200);
     chart.build_frame();
     let anchor = chart.series[0].id;
     let mut study = StudyAnnotations::default();
-    for row in [3, 30] {
+    for row in [3, 31] {
         study.push_marker(StudyMarker {
             row,
             confirm_row: row,
-            price: 120.0,
-            kind: StudyMarkerKind::Choch { up: false },
-            from_row: Some(row - 2),
+            price: 100.0 + row as f64,
+            kind: StudyMarkerKind::SwingLow,
         });
     }
-    study.push_marker(StudyMarker {
-        row: 31,
-        confirm_row: 31,
-        price: 120.0,
-        kind: StudyMarkerKind::SwingLow,
-        from_row: None,
-    });
     chart.time_scale.set_bar_spacing(2.0);
     let mut prims = Vec::new();
-    chart.build_study_annotations_frame(
-        anchor, anchor, &study, false, 20, 40, 800, 1.0, 1.0, &mut prims,
-    );
+    chart.build_study_annotations_frame(anchor, anchor, &study, 20, 40, 800, 1.0, 1.0, &mut prims);
     assert_eq!(
         prims
             .iter()
-            .filter(|p| matches!(p, Prim::HLine { .. }))
+            .filter(|p| matches!(p, Prim::Triangle { .. }))
             .count(),
         1
     );
-    assert!(!prims.iter().any(|p| matches!(p, Prim::Text { .. })));
     chart.series[0].visible = false;
     prims.clear();
-    chart.build_study_annotations_frame(
-        anchor, anchor, &study, false, 20, 40, 800, 1.0, 1.0, &mut prims,
-    );
+    chart.build_study_annotations_frame(anchor, anchor, &study, 20, 40, 800, 1.0, 1.0, &mut prims);
     assert!(prims.is_empty());
 }
 
@@ -17878,22 +17635,6 @@ fn updown_volume_takes_its_direction_from_a_footprint_over_a_whitespace_primary(
     chart
         .update_order_flow_presentation(presentation, tape, false)
         .unwrap();
-    // Structure bindings keep a whitespace-only anchor for their zones. It must not
-    // displace the primary or hide the footprint fallback for volume tint.
-    let reference = chart.add_series(SeriesKind::Candlestick);
-    let prices = [100.0, 101.0, 105.0, 101.0];
-    chart
-        .set_series_data(reference, &times, &prices, &prices, &prices, &prices)
-        .unwrap();
-    let gaps = chart.add_fair_value_gaps(
-        reference,
-        0.0,
-        crate::StructureMitigation::Touch,
-        crate::StructureMitigationPrice::Wick,
-        20,
-        true,
-    );
-    assert_eq!(chart.data.series_is_whitespace_only(gaps[0]), Some(true));
     chart.time_scale.set_width(1200.0);
     chart.fit_content();
 
@@ -21405,7 +21146,7 @@ fn idle_bollinger_paints_below_candles_and_hover_promotes_the_group() {
 }
 
 #[test]
-fn line_area_sma_and_ribbon_follow_group_order_across_creation_orders_and_streaming() {
+fn line_area_sma_and_emas_follow_group_order_across_creation_orders_and_streaming() {
     for source_kind in [
         crate::SeriesKind::Line,
         crate::SeriesKind::Area,
@@ -21423,15 +21164,15 @@ fn line_area_sma_and_ribbon_follow_group_order_across_creation_orders_and_stream
             .unwrap();
         chart.time_scale.set_width(800.0);
         chart.fit_content();
-        // Different creation orders: ribbon first, then SMA, vs SMA first — idle tier is
-        // stable within the indicator group (insertion), always below ordinary price.
-        let ribbon = chart.add_ema_ribbon(0, [2, 3, 4, 5, 6]);
+        // Idle tier is stable within the indicator group (insertion), always below ordinary
+        // price.
+        let emas = [2, 3, 4, 5, 6].map(|period| chart.add_ema(0, period).unwrap());
         let sma = chart.add_sma(0, 5).unwrap();
         let order = chart.effective_series_order();
-        // Idle indicators (ribbon 5 + sma) precede ordinary source 0.
+        // Idle indicators (five EMAs + SMA) precede ordinary source 0.
         assert_eq!(
             &order[..6],
-            &[ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4], sma][..]
+            &[emas[0], emas[1], emas[2], emas[3], emas[4], sma][..]
         );
         assert_eq!(order[6], 0);
         assert_retained_frame_matches_clean_rebuild(&mut chart);
