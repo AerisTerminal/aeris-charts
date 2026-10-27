@@ -1051,17 +1051,14 @@ impl ChartEngine {
             // exactly like the geometry builders.
             SeriesKind::Line => verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR),
             SeriesKind::Area => series_stroke_color(series),
-            SeriesKind::Histogram => {
-                if let Some((up, down)) = self.delta_histogram_colors(series) {
-                    return if plot.value_at(row, PlotValueIndex::Close) < 0.0 {
-                        down
-                    } else {
-                        up
-                    };
-                }
-                let color = verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR);
-                if color != LINE { color } else { HISTOGRAM }
-            }
+            // The column the bar actually paints, so delta and up/down colors reach the chrome.
+            SeriesKind::Histogram => plot
+                .index_at(row)
+                .and_then(|index| self.histogram_column_color_at(series.id, index))
+                .unwrap_or_else(|| {
+                    let color = verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR);
+                    if color != LINE { color } else { HISTOGRAM }
+                }),
             // reference baseline colorer: top line color at/above the baseline, bottom below it.
             SeriesKind::Baseline => {
                 let close = plot.value_at(row, PlotValueIndex::Close);
@@ -1538,6 +1535,7 @@ impl ChartEngine {
         } else if self.retained_frame.last_overlay_key != Some(overlay_key) {
             self.frame_invalidation.overlay();
         }
+        self.time_scale.set_pixel_ratio(self.frame_pixel_ratios().0);
         let time_scale_revision = self.time_scale.revision();
         if self.retained_frame.last_time_scale_revision != time_scale_revision {
             self.frame_invalidation.time_coordinates();
@@ -2746,6 +2744,7 @@ impl ChartEngine {
         } else {
             self.css_height.max(1.0)
         };
+        self.time_scale.set_pixel_ratio(self.frame_pixel_ratios().0);
         self.layout_panes(self.pane_h);
     }
 

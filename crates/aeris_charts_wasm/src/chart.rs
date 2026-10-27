@@ -5700,6 +5700,9 @@ impl AerisChart {
                 ChartInputEvent::RemoveSeries(id) => {
                     serde_json::json!({"kind":"remove_series","id":id})
                 }
+                ChartInputEvent::IndicatorRemoved(id) => {
+                    serde_json::json!({"kind":"indicator_removed","id":id})
+                }
                 ChartInputEvent::CrosshairLeft => serde_json::json!({"kind":"crosshair_left"}),
                 ChartInputEvent::DeltaTooltipChanged => {
                     serde_json::json!({"kind":"delta_tooltip_changed"})

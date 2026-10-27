@@ -331,6 +331,7 @@ impl ChartEngine {
         self.pane_w = (self.css_width - left_axis_w - axis_w).max(1.0);
         self.pane_h = content_h;
         self.axis_w = axis_w;
+        self.time_scale.set_pixel_ratio(self.frame_pixel_ratios().0);
         self.frame_layout_prepared();
     }
 

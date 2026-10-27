@@ -1431,6 +1431,9 @@ impl Probe {
                         format!("series #{series} was already removed")
                     }
                 }
+                ChartInputEvent::IndicatorRemoved(binding) => {
+                    format!("removed indicator #{binding}")
+                }
                 ChartInputEvent::CrosshairLeft => "crosshair left".into(),
                 ChartInputEvent::DeltaTooltipChanged => "delta tooltip changed".into(),
                 ChartInputEvent::GeneralBrushChanged => "general brush changed".into(),

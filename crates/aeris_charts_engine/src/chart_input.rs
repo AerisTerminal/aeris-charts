@@ -368,6 +368,10 @@ pub enum ChartInputEvent {
     /// Delete was pressed on a selected series the engine does not own (a host-installed series or
     /// an external study). The host decides how its own objects are removed.
     RemoveSeries(SeriesId),
+    /// Delete removed an engine-owned indicator binding, named by its binding id (its first
+    /// output). The engine has already removed every output; hosts that keep state for that
+    /// binding drop it and record the removal.
+    IndicatorRemoved(SeriesId),
     /// Delta-tooltip comparison state changed; the host notifies its range subscribers.
     DeltaTooltipChanged,
     /// A committed or cancelled general brush gesture changed its semantic range.
@@ -2514,8 +2518,9 @@ impl ChartEngine {
         }
     }
 
-    /// Delete the selection: a drawing or an engine indicator binding is removed here; any other
-    /// selected series is host-owned and is requested through [`ChartInputEvent::RemoveSeries`].
+    /// Delete the selection: a drawing or an engine indicator binding is removed here and a removed
+    /// binding is reported through [`ChartInputEvent::IndicatorRemoved`]; any other selected
+    /// series is host-owned and is requested through [`ChartInputEvent::RemoveSeries`].
     fn delete_selection(&mut self) -> bool {
         if self.remove_selected_drawing() {
             self.input.last_click = None;
@@ -2529,9 +2534,11 @@ impl ChartEngine {
             return false;
         };
         if self.external_study_for_series(series).is_none()
-            && self.remove_indicator_for_series(series)
+            && let Some(binding) = self.indicator_binding_id(series)
+            && self.remove_indicator_binding(binding)
         {
             self.set_selected_series(None);
+            self.push_input_event(ChartInputEvent::IndicatorRemoved(binding));
             return true;
         }
         self.push_input_event(ChartInputEvent::RemoveSeries(series));
@@ -4744,6 +4751,32 @@ mod tests {
         assert_eq!(
             chart.take_input_events(),
             vec![ChartInputEvent::RemoveSeries(0)]
+        );
+    }
+
+    #[test]
+    fn keyboard_delete_of_an_indicator_output_reports_its_binding() {
+        let mut chart = chart();
+        let outputs = chart.add_indicator_kind(
+            0,
+            IndicatorKind::Bollinger {
+                period: 20,
+                deviation: 2.0,
+            },
+            None,
+        );
+        let [binding, _, lower] = outputs[..] else {
+            panic!("Bollinger bands publish three outputs");
+        };
+        chart.take_input_events();
+        chart.set_selected_series(Some(lower));
+        assert!(chart.input_key_down(ChartKey::Delete, InputModifiers::default(), false, 0.0));
+        assert!(!chart.has_indicator_bindings());
+        assert_eq!(chart.selected_series(), None);
+        assert_eq!(
+            chart.take_input_events(),
+            vec![ChartInputEvent::IndicatorRemoved(binding)],
+            "a host tracking the binding learns it is gone, and is not asked to remove a series"
         );
     }
 

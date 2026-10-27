@@ -82,6 +82,17 @@ pub struct TimeScaleCore {
     /// `_isAllScalingAndScrollingDisabled`, time-scale.ts:975-986): label alignment only —
     /// never consulted by the spacing/offset math, which reads the raw fix-edge options.
     interaction_disabled: bool,
+    /// Horizontal device pixels per media pixel of the pane bitmap. Coordinates translate by the
+    /// right offset's distance from `snap_origin` rounded to whole device pixels, so a pan shifts
+    /// every painted position by the same integer amount and per-bar rounding, sub-pixel
+    /// bucketing, and antialiasing never reshuffle while the chart moves. `right_offset` itself
+    /// keeps the exact value for gesture accumulation and the public scroll position.
+    pixel_ratio: f64,
+    /// The right offset at which the painted and exact transforms last agreed, and the bar
+    /// spacing it belongs to. A spacing change restarts the snap there, so a zoom lands its anchor
+    /// exactly instead of up to half a device pixel off.
+    snap_origin: f64,
+    snap_spacing: f64,
     /// Canonical source revision for every value that can affect time coordinates or time-axis
     /// presentation. Mutators advance this intrinsically so hosts cannot change scale state while
     /// leaving retained geometry on an older transform.
@@ -103,6 +114,9 @@ impl TimeScaleCore {
             scale_start_point: None,
             common_transition_start_state: None,
             interaction_disabled: false,
+            pixel_ratio: 1.0,
+            snap_origin: right_offset,
+            snap_spacing: bar_spacing,
             revision: 1,
         }
     }
@@ -112,7 +126,15 @@ impl TimeScaleCore {
     }
 
     fn changed(&mut self) {
+        if self.bar_spacing != self.snap_spacing {
+            self.restart_pixel_snap();
+        }
         self.revision = self.revision.wrapping_add(1).max(1);
+    }
+
+    fn restart_pixel_snap(&mut self) {
+        self.snap_origin = self.right_offset;
+        self.snap_spacing = self.bar_spacing;
     }
 
     pub fn options(&self) -> &TimeScaleOptions {
@@ -129,6 +151,29 @@ impl TimeScaleCore {
 
     pub fn right_offset(&self) -> f64 {
         self.right_offset
+    }
+
+    pub fn pixel_ratio(&self) -> f64 {
+        self.pixel_ratio
+    }
+
+    /// Set the horizontal device-pixel ratio coordinates snap their translation to. Non-finite or
+    /// non-positive ratios are ignored.
+    pub fn set_pixel_ratio(&mut self, ratio: f64) {
+        if ratio.is_finite() && ratio > 0.0 && ratio != self.pixel_ratio {
+            self.pixel_ratio = ratio;
+            self.changed();
+        }
+    }
+
+    /// The right offset coordinates are drawn at: `right_offset` moved from `snap_origin` by a
+    /// whole number of device pixels at the current bar spacing.
+    fn painted_right_offset(&self) -> f64 {
+        let step = self.bar_spacing * self.pixel_ratio;
+        if self.bar_spacing != self.snap_spacing || !step.is_finite() || step <= 0.0 {
+            return self.right_offset;
+        }
+        self.snap_origin + ((self.right_offset - self.snap_origin) * step).round() / step
     }
 
     pub fn points_len(&self) -> usize {
@@ -187,14 +232,14 @@ impl TimeScaleCore {
             return 0.0;
         }
         let base_index = self.base_index();
-        let delta_from_right = base_index as f64 + self.right_offset - logical;
+        let delta_from_right = base_index as f64 + self.painted_right_offset() - logical;
         self.width - (delta_from_right + 0.5) * self.bar_spacing - 1.0
     }
 
     /// Batch conversion: writes x for each index. The hot path for series rendering.
     pub fn indexes_to_coordinates(&self, indices: &[TimePointIndex], out_x: &mut [Coordinate]) {
         debug_assert_eq!(indices.len(), out_x.len());
-        let base = self.base_index() as f64 + self.right_offset;
+        let base = self.base_index() as f64 + self.painted_right_offset();
         for (i, &index) in indices.iter().enumerate() {
             let delta_from_right = base - index as f64;
             out_x[i] = self.width - (delta_from_right + 0.5) * self.bar_spacing - 1.0;
@@ -206,9 +251,13 @@ impl TimeScaleCore {
     }
 
     pub fn coordinate_to_float_index(&self, x: Coordinate) -> f64 {
+        self.float_index_at(x, self.painted_right_offset())
+    }
+
+    fn float_index_at(&self, x: Coordinate, right_offset: f64) -> f64 {
         let delta_from_right = self.right_offset_for_coordinate(x);
         let base_index = self.base_index();
-        let index = base_index as f64 + self.right_offset - delta_from_right;
+        let index = base_index as f64 + right_offset - delta_from_right;
         // JS-compatible fp-noise cleanup
         (index * 1_000_000.0).round() / 1_000_000.0
     }
@@ -586,19 +635,24 @@ impl TimeScaleCore {
     }
 
     fn zoom_impl(&mut self, zoom_point: Coordinate, scale: f64, keep_zoom_point: bool) {
+        // The anchor is the point the user sees under the cursor, which is the painted transform.
         let float_index_at_zoom_point = self.coordinate_to_float_index(zoom_point);
 
         let bar_spacing = self.bar_spacing;
         let new_bar_spacing = bar_spacing + scale * (bar_spacing / 10.0);
 
         self.set_bar_spacing(new_bar_spacing);
+        if self.bar_spacing == bar_spacing {
+            return;
+        }
 
         if keep_zoom_point {
             // move the index under zoom_point back to its coordinate
             let new_offset = self.right_offset
-                + (float_index_at_zoom_point - self.coordinate_to_float_index(zoom_point));
+                + (float_index_at_zoom_point - self.float_index_at(zoom_point, self.right_offset));
             self.set_right_offset(new_offset);
         }
+        self.restart_pixel_snap();
     }
 
     // --- axis-drag scale ---
@@ -785,6 +839,40 @@ mod tests {
     }
 
     #[test]
+    fn fractional_scroll_translates_coordinates_by_whole_device_pixels() {
+        for ratio in [1.0, 1.25, 2.0] {
+            let mut s = scale(500.0, 6.3, 0.0, 80, 79);
+            s.set_pixel_ratio(ratio);
+            let device = |s: &TimeScaleCore| -> Vec<f64> {
+                (0..80)
+                    .map(|index| s.index_to_coordinate(index) * ratio)
+                    .collect()
+            };
+            let start = device(&s);
+            for offset in [0.013, 0.37, 1.91, -3.6] {
+                s.set_right_offset(offset);
+                assert_eq!(
+                    s.right_offset(),
+                    offset,
+                    "the exact scroll position is kept"
+                );
+                let moved = device(&s);
+                let shift = moved[0] - start[0];
+                assert!(
+                    (shift - shift.round()).abs() < 1e-9,
+                    "shift {shift} at ratio {ratio}"
+                );
+                for (now, before) in moved.iter().zip(&start) {
+                    assert!((now - before - shift).abs() < 1e-9);
+                }
+                let x = s.index_to_coordinate(40);
+                // Bar centers map back to `index - 0.5` (see `coordinate_roundtrip`).
+                assert!((s.coordinate_to_float_index(x) - 39.5).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
     fn coordinate_roundtrip() {
         // coordinate_to_float_index(index_to_coordinate(i)) == i - 0.5 by construction
         // (float index measures the logical cell boundary; ceil snaps back to the bar index)
@@ -867,6 +955,23 @@ mod tests {
             "point drifted: {before} -> {after}"
         );
         assert_ne!(s.right_offset(), 0.0);
+    }
+
+    #[test]
+    fn zoom_after_a_fractional_pan_keeps_the_painted_point_under_the_cursor() {
+        let mut s = scale(400.0, 6.0, 0.0, 500, 300);
+        s.set_pixel_ratio(1.25);
+        let cursor = 250.3;
+        for step in 0..40 {
+            s.set_right_offset(s.right_offset() + 0.137);
+            let before = s.coordinate_to_float_index(cursor);
+            s.zoom_focused(cursor, if step % 2 == 0 { 0.7 } else { -0.4 });
+            let after = s.coordinate_to_float_index(cursor);
+            assert!(
+                (before - after).abs() < 1e-6,
+                "step {step}: point drifted: {before} -> {after}"
+            );
+        }
     }
 
     #[test]

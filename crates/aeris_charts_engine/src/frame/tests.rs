@@ -17536,6 +17536,81 @@ fn a_volume_indicator_draws_its_columns_in_its_own_up_and_down_colors() {
 }
 
 #[test]
+fn volume_indicator_last_value_chips_follow_the_restyled_column_and_average_colors() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [0.0, 60.0, 120.0, 180.0];
+    let open = [100.0; 4];
+    let mut close = [101.0, 99.0, 102.0, 98.0];
+    chart
+        .set_series_data(0, &times, &open, &[103.0; 4], &[97.0; 4], &close)
+        .unwrap();
+    let weights = chart.add_series(SeriesKind::Histogram);
+    let values = [10.0, 20.0, 30.0, 40.0];
+    chart
+        .set_series_data(weights, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.set_series_visible(weights, false);
+    let outputs = chart.add_indicator_kind(
+        0,
+        crate::IndicatorKind::Volume {
+            period: 2,
+            exponential: false,
+        },
+        Some(weights),
+    );
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let chip_colors = |chart: &mut ChartEngine| -> Vec<Color> {
+        chart
+            .build_axis_frame(
+                80.0,
+                |t, _bold| t.len() as f64 * 7.0,
+                |t, _bold| t.len() as f64 * 6.0,
+            )
+            .labels
+            .iter()
+            .filter_map(|label| label.background.map(|(.., color)| color))
+            .collect()
+    };
+    assert!(
+        chip_colors(&mut chart).contains(&VOLUME_DOWN.solid()),
+        "the final bar falls, so its column chip wears the default down tint"
+    );
+
+    let up = Color::parse_css("#1e90ff").unwrap();
+    let down = Color::parse_css("#ff8c00").unwrap();
+    let average = Color::parse_css("#00ff00").unwrap();
+    let mut style = chart.indicator_info(outputs[0]).unwrap().style;
+    style.up_color = Some("#1e90ff".into());
+    style.down_color = Some("#ff8c00".into());
+    assert!(chart.set_indicator_output_style(outputs[0], style));
+    let mut style = chart.indicator_info(outputs[1]).unwrap().style;
+    style.line_color = Some("#00ff00".into());
+    assert!(chart.set_indicator_output_style(outputs[1], style));
+    let chips = chip_colors(&mut chart);
+    assert!(
+        chips.contains(&down),
+        "column chip follows the restyled down color: {chips:?}"
+    );
+    assert!(
+        chips.contains(&average),
+        "average chip follows its restyled line: {chips:?}"
+    );
+    assert!(!chips.contains(&HISTOGRAM));
+
+    close[3] = 104.0;
+    chart
+        .set_series_data(0, &times, &open, &[105.0; 4], &[97.0; 4], &close)
+        .unwrap();
+    let chips = chip_colors(&mut chart);
+    assert!(
+        chips.contains(&up),
+        "a rising final bar flips the chip to the up color: {chips:?}"
+    );
+    assert!(!chips.contains(&down));
+}
+
+#[test]
 fn style_reset_preserves_mixed_updown_volume_colors() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let times = [0.0, 60.0, 120.0, 180.0];
@@ -22469,4 +22544,118 @@ fn point_axes_default_to_half_a_step_of_outer_padding() {
     let outer = |scale| GeneralAxisOptions::new("x", 0, AxisDimension::X, scale).band_padding_outer;
     assert_eq!(outer(GeneralScaleType::Point), 0.5);
     assert_eq!(outer(GeneralScaleType::Band), 0.1);
+}
+
+/// Series primitives in paint order, split into the x coordinates a pan may translate and
+/// every other field, which a pan must leave unchanged.
+fn pan_series_geometry(chart: &mut ChartEngine) -> Vec<(Vec<f64>, String)> {
+    let frame = chart.build_frame();
+    let pane = &frame.panes[0];
+    chart
+        .frame_series_segments(0)
+        .iter()
+        .filter(|segment| segment.series_id.is_some())
+        .flat_map(|segment| &pane.main[segment.start..segment.end])
+        .map(|prim| match prim {
+            Prim::Rect { rect, color } => (
+                vec![f64::from(rect.x)],
+                format!("rect {} {} {} {color:?}", rect.y, rect.w, rect.h),
+            ),
+            Prim::RectFrame {
+                rect,
+                border,
+                color,
+            } => (
+                vec![f64::from(rect.x)],
+                format!("frame {} {} {} {border} {color:?}", rect.y, rect.w, rect.h),
+            ),
+            Prim::Polyline {
+                first_point,
+                point_count,
+                width,
+                color,
+                ..
+            } => {
+                let points =
+                    &pane.points[*first_point as usize..(*first_point + *point_count) as usize];
+                (
+                    points.iter().map(|point| f64::from(point[0])).collect(),
+                    format!(
+                        "polyline {width} {color:?} {:?}",
+                        points.iter().map(|point| point[1]).collect::<Vec<_>>()
+                    ),
+                )
+            }
+            other => (Vec::new(), format!("{other:?}")),
+        })
+        .collect()
+}
+
+#[test]
+fn sub_pixel_pans_translate_series_geometry_by_whole_device_pixels() {
+    let count = 90usize;
+    let times: Vec<f64> = (0..count).map(|row| row as f64 * 60.0).collect();
+    let close: Vec<f64> = (0..count)
+        .map(|row| 100.0 + (row as f64 * 0.37).sin() * 6.0)
+        .collect();
+    let open: Vec<f64> = close
+        .iter()
+        .enumerate()
+        .map(|(row, close)| close + if row % 3 == 0 { 1.5 } else { -1.2 })
+        .collect();
+    let high: Vec<f64> = open
+        .iter()
+        .zip(&close)
+        .map(|(o, c)| o.max(*c) + 0.8)
+        .collect();
+    let low: Vec<f64> = open
+        .iter()
+        .zip(&close)
+        .map(|(o, c)| o.min(*c) - 0.8)
+        .collect();
+    for dpr in [1.0, 1.25] {
+        let mut chart = ChartEngine::new(900.0, 500.0, dpr);
+        chart
+            .set_series_data(0, &times, &open, &high, &low, &close)
+            .unwrap();
+        let volume = chart.add_series(SeriesKind::Histogram);
+        chart
+            .set_series_data(volume, &times, &close, &close, &close, &close)
+            .unwrap();
+        chart.add_sma(0, 5).unwrap();
+        chart.time_scale.set_width(900.0);
+        chart.set_bar_spacing(6.3);
+        chart.set_right_offset(4.0);
+        let start = pan_series_geometry(&mut chart);
+        assert!(start.iter().any(|(_, rest)| rest.starts_with("rect")));
+        assert!(start.iter().any(|(_, rest)| rest.starts_with("polyline")));
+        let hpr = chart.frame_pixel_ratios().0;
+        let mut shifts = Vec::new();
+        for fraction in [0.13, 0.37, 0.61, 0.89, 1.42] {
+            chart.set_right_offset(4.0 + fraction / (6.3 * hpr));
+            let moved = pan_series_geometry(&mut chart);
+            assert_eq!(moved.len(), start.len(), "dpr {dpr}, pan {fraction} px");
+            let shift = moved
+                .iter()
+                .zip(&start)
+                .find_map(|((now, _), (before, _))| Some(now.first()? - before.first()?))
+                .unwrap();
+            assert!(
+                (shift - shift.round()).abs() < 1e-3,
+                "dpr {dpr}, pan {fraction} px: shift {shift}"
+            );
+            for ((now_x, now_rest), (before_x, before_rest)) in moved.iter().zip(&start) {
+                assert_eq!(now_rest, before_rest, "dpr {dpr}, pan {fraction} px");
+                assert_eq!(now_x.len(), before_x.len());
+                for (now, before) in now_x.iter().zip(before_x) {
+                    assert!(
+                        (now - before - shift).abs() < 1e-3,
+                        "dpr {dpr}, pan {fraction} px: {now} vs {before} + {shift}"
+                    );
+                }
+            }
+            shifts.push(shift.round());
+        }
+        assert!(shifts.contains(&0.0) && shifts.iter().any(|shift| *shift != 0.0));
+    }
 }

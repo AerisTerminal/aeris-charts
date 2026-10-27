@@ -980,6 +980,14 @@ struct StrokeSegment {
 /// points per pixel column loses most of its points.
 pub const STROKE_SIMPLIFY_TOLERANCE_PX: f32 = 0.25;
 
+/// Horizontal gap (device px) between consecutive points that ends a simplified run.
+///
+/// Points this far apart are always kept, so a line at ordinary bar spacing is tessellated
+/// through every point. Which points a run drops depends on where the chain of anchors started;
+/// letting runs cross such gaps would let a bar scrolling past the pane edge move kept points
+/// along the whole line, which shimmers while panning.
+const STROKE_SIMPLIFY_RUN_GAP_PX: f32 = 1.0;
+
 /// Streaming sleeve simplification of a device-space polyline.
 ///
 /// Each output segment starts at the previous output point and covers a run of input points
@@ -987,7 +995,9 @@ pub const STROKE_SIMPLIFY_TOLERANCE_PX: f32 = 0.25;
 /// stays inside every earlier point's tolerance wedge and it is at least as far from the anchor
 /// as all of them, so every covered point projects onto the segment instead of past its end
 /// (a spike that turns back is never cut off). Anything else ends the run, which only costs a
-/// kept point. The first and last points are always kept exactly, and no allocation is made.
+/// kept point, and so does a candidate at least [`STROKE_SIMPLIFY_RUN_GAP_PX`] to the right of
+/// the point before it. The first and last points are always kept exactly, and no
+/// allocation is made.
 pub struct StrokeSimplify<'a> {
     points: &'a [LinePoint],
     tolerance: f32,
@@ -1013,10 +1023,16 @@ impl<'a> StrokeSimplify<'a> {
     fn run_end(&self, anchor: usize) -> usize {
         let start = self.at(anchor);
         let mut end: Option<usize> = None;
+        let mut previous_x = start[0];
         let mut reach = 0.0f32;
         let (mut low, mut high) = (f32::NEG_INFINITY, f32::INFINITY);
         for index in anchor + 1..self.points.len() {
             let [x, y] = self.at(index);
+            // The slack absorbs f32 rounding of points exactly one pixel apart.
+            if end.is_some() && x - previous_x >= STROKE_SIMPLIFY_RUN_GAP_PX - 1e-3 {
+                break;
+            }
+            previous_x = x;
             let (dx, dy) = (x - start[0], y - start[1]);
             let distance = (dx * dx + dy * dy).sqrt();
             if !distance.is_finite() {
@@ -1863,11 +1879,11 @@ mod tests {
 
     #[test]
     fn collinear_and_duplicate_points_collapse_to_the_endpoints() {
-        let points: Vec<LinePoint> = (0..=20)
+        let points: Vec<LinePoint> = (0..=80)
             .flat_map(|index| {
                 let point = LinePoint {
-                    x: index as f64,
-                    y: index as f64 * 0.5,
+                    x: index as f64 * 0.25,
+                    y: index as f64 * 0.125,
                 };
                 [point, point]
             })
@@ -1879,6 +1895,26 @@ mod tests {
             vec![[0.0, 0.0]]
         );
         assert_eq!(StrokeSimplify::new(&[], 0.25).count(), 0);
+    }
+
+    #[test]
+    fn points_a_pixel_apart_are_all_kept_wherever_the_line_starts() {
+        // A nearly straight moving average at ordinary spacing: dropping any point would let the
+        // kept set depend on the first (edge) point, which changes while panning.
+        let line = |start: usize| -> Vec<LinePoint> {
+            (start..200)
+                .map(|index| LinePoint {
+                    x: index as f64 * 6.3 + 0.4,
+                    y: 100.0 + index as f64 * 0.01,
+                })
+                .collect()
+        };
+        for start in 0..4 {
+            let points = line(start);
+            let kept: Vec<[f32; 2]> = StrokeSimplify::new(&points, 0.25).collect();
+            let all: Vec<[f32; 2]> = points.iter().map(|p| [p.x as f32, p.y as f32]).collect();
+            assert_eq!(kept, all);
+        }
     }
 
     #[test]
