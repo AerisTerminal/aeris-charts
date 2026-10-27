@@ -676,7 +676,7 @@ impl ChartEngine {
                 || (within_rows && (x - geometry.right).abs() <= tolerance));
         // Like a rectangle, the histogram and box interior grab the drawing only once it is
         // selected; unselected, they pan the chart like empty space.
-        let grabs_interior = self.selected_drawing == Some(drawing.id)
+        let grabs_interior = self.is_drawing_selected(drawing.id)
             && within_rows
             && x >= geometry.left - tolerance
             && x <= geometry.right.max(geometry.spine + geometry.side) + tolerance;

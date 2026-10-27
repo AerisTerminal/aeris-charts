@@ -1044,7 +1044,7 @@ impl ChartEngine {
                 self.append_rectangle_axis_view(
                     drawing,
                     &drawing.points,
-                    self.selected_drawing == Some(drawing.id),
+                    self.is_drawing_selected(drawing.id),
                     false,
                     out,
                     measure,
@@ -1429,7 +1429,7 @@ impl ChartEngine {
         for drawing in &self.drawings {
             if drawing.kind.is_measure()
                 && drawing.points.len() == 2
-                && self.selected_drawing == Some(drawing.id)
+                && self.is_drawing_selected(drawing.id)
                 && drawing.visible
                 && drawing.interval_visibility.allows(self.drawing_interval)
             {

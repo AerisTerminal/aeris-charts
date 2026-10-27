@@ -268,13 +268,13 @@ impl ChartEngine {
         if hovered && self.hover_promotion_enabled() {
             return PRIORITY_HOVERED;
         }
-        if self.selected_drawing == Some(id) {
+        if self.is_drawing_selected(id) {
             // Hovered + selected takes hovered above (handled above when promotion enabled);
             // with promotion disabled a hovered+selected drawing stays selected-promoted.
             return PRIORITY_SELECTED;
         }
         // Hovered with promotion disabled falls through to selected-or-idle below.
-        if hovered && self.selected_drawing == Some(id) {
+        if hovered && self.is_drawing_selected(id) {
             return PRIORITY_SELECTED;
         }
         PRIORITY_IDLE

@@ -147,6 +147,19 @@ groups and bounds, so a host settings dialog can render them without per-tool co
 Invalid values reject the whole patch. These options persist in V1 state under `volume_profile`.
 Candle-sourced delta is a close-versus-open estimate, not aggressor flow.
 
+### Drawing multi-selection
+
+Ctrl/⌘ + drag on empty pane space (mouse or pen) draws a selection box. Releasing it selects every
+drawing whose painted geometry the box touches, on the pane where the drag started; a box that
+touches nothing clears the selection, and a Ctrl/⌘ click without movement is an ordinary click.
+`selected_drawings()` returns the set and `set_selected_drawings(drawings)` replaces it (the first
+live drawing becomes the `selected_drawing()` primary). Delete/Backspace and
+`remove_selected_drawings()` remove the whole selection. `apply_selected_drawings_options(patch)`,
+`set_selected_drawings_locked(locked)`, `set_selected_drawings_visibility(visible)`, and
+`clone_selected_drawings(logical_offset, price_offset)` act on every selected drawing. A style patch
+reaches each drawing only for the settings its kind lists in `drawing_property_schema`, so one
+toolbar edit restyles a mixed selection. Each group action is one undo step; undoing a removal
+restores the drawings selected, and clones replace the selection.
 Generated `wasm-bindgen` classes, methods reachable only through implementation objects, telemetry,
 benchmark counters, demo globals, fixtures, and test hooks are internal even when JavaScript can
 inspect them at runtime. `drawings_json()` is an internal inspection shape, not persistence.

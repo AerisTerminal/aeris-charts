@@ -402,6 +402,9 @@ enum PressMode {
         committed_on_press: bool,
     },
     DrawingDrag,
+    /// A Ctrl/⌘ press on empty pane space: dragging draws a selection box that selects every
+    /// drawing it touches on release; a release without movement is an ordinary click.
+    DrawingMarquee,
     TouchTracking,
     DeltaTooltip,
     GeneralBrush,
@@ -422,9 +425,11 @@ impl PressMode {
             Self::Separator { .. } => InputTarget::Separator,
             Self::Trading { .. } => InputTarget::Trading,
             Self::Alert => InputTarget::Alert,
-            Self::Measure | Self::DrawingCreation { .. } | Self::DrawingDrag | Self::TextEditor => {
-                InputTarget::Drawing
-            }
+            Self::Measure
+            | Self::DrawingCreation { .. }
+            | Self::DrawingDrag
+            | Self::DrawingMarquee
+            | Self::TextEditor => InputTarget::Drawing,
             Self::Pane { .. }
             | Self::TouchTracking
             | Self::DeltaTooltip
@@ -1113,6 +1118,11 @@ impl ChartEngine {
                     self.update_input_general_brush(start, (x, y));
                 }
             }
+            Some(PressMode::DrawingMarquee) if primary_pressed => {
+                if self.input.press.is_some_and(|press| press.moved) {
+                    self.update_drawing_marquee(x, y);
+                }
+            }
             Some(PressMode::Pane { price_pan, panning }) if primary_pressed => {
                 self.continue_pan(input, update.kind, price_pan, panning);
             }
@@ -1238,6 +1248,9 @@ impl ChartEngine {
             // the release action, which the double-click replaces.
             match press.mode {
                 PressMode::DrawingDrag => self.finish_drawing_drag(false),
+                PressMode::DrawingMarquee => {
+                    self.cancel_drawing_marquee();
+                }
                 PressMode::TimeAxis => self.time_axis_end_scale(),
                 PressMode::PriceAxis { pane, target } => {
                     self.price_axis_end_scale(pane, target);
@@ -1358,6 +1371,16 @@ impl ChartEngine {
             PressMode::DrawingDrag => {
                 self.finish_drawing_drag(moved);
                 if !moved {
+                    self.input_primary_click(x, y, press.text_press_selected);
+                    self.push_input_event(ChartInputEvent::Click { x, y });
+                }
+            }
+            PressMode::DrawingMarquee => {
+                if moved {
+                    self.update_drawing_marquee(x, y);
+                    self.finish_drawing_marquee();
+                } else {
+                    self.cancel_drawing_marquee();
                     self.input_primary_click(x, y, press.text_press_selected);
                     self.push_input_event(ChartInputEvent::Click { x, y });
                 }
@@ -2099,6 +2122,9 @@ impl ChartEngine {
                     self.cancel_trading_drag();
                 }
                 PressMode::DrawingDrag => self.drawing_drag_cancel(),
+                PressMode::DrawingMarquee => {
+                    self.cancel_drawing_marquee();
+                }
                 PressMode::DrawingCreation { capture: true, .. } => self.cancel_drawing_creation(),
                 PressMode::GeneralBrush => {
                     if let Some(prior) = self.input.general_brush_before.take()
@@ -2232,6 +2258,13 @@ impl ChartEngine {
         }
         if self.drawing_drag_start_at(x, y) {
             return PressMode::DrawingDrag;
+        }
+        if (input.modifiers.control || input.modifiers.meta)
+            && input.device != InputDevice::Touch
+            && self.hit_test_drawing(x, y).is_none()
+            && self.begin_drawing_marquee(x, y)
+        {
+            return PressMode::DrawingMarquee;
         }
         if self.delta_tooltip_mouse_down_with_shift(x, input.modifiers.shift) {
             self.sync_brushable_areas();
@@ -2704,6 +2737,7 @@ impl ChartEngine {
                 PressMode::TextEditor => return ChartCursor::Text,
                 PressMode::Measure
                 | PressMode::DrawingCreation { .. }
+                | PressMode::DrawingMarquee
                 | PressMode::TouchTracking
                 | PressMode::DeltaTooltip
                 | PressMode::GeneralBrush => {
@@ -3556,6 +3590,96 @@ mod tests {
         assert_ne!(chart.drawing(id).unwrap().points, before);
     }
 
+    #[test]
+    fn control_drag_on_empty_pane_box_selects_touched_drawings_for_group_delete() {
+        let mut chart = chart();
+        for (from, to) in [
+            ((120.0, 120.0), (300.0, 220.0)),
+            ((120.0, 300.0), (300.0, 400.0)),
+        ] {
+            chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None);
+            click(&mut chart, from.0, from.1);
+            click(&mut chart, to.0, to.1);
+        }
+        let mut ids = chart.drawings().iter().map(|d| d.id).collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids.len(), 2);
+        let before = chart.drawings().to_vec();
+        chart.set_selected_drawing(None);
+        let scroll = chart.scroll_position();
+        let held = |x: f64, y: f64, timestamp_ms: f64, meta: bool| PointerInput {
+            modifiers: InputModifiers {
+                control: !meta,
+                meta,
+                ..InputModifiers::default()
+            },
+            timestamp_ms,
+            ..at(x, y)
+        };
+
+        // A box crossing both lines, started on empty pane, selects both without panning.
+        chart.input_pointer_down(held(190.0, 100.0, 1_000.0, false), 1);
+        chart.input_pointer_move(held(200.0, 200.0, 1_010.0, false), true);
+        chart.input_pointer_move(held(230.0, 380.0, 1_020.0, false), true);
+        chart.input_pointer_up(held(230.0, 380.0, 1_030.0, false));
+        assert_eq!(chart.selected_drawings(), ids.as_slice());
+        assert_eq!(chart.scroll_position(), scroll);
+        assert_eq!(chart.drawings(), before.as_slice(), "nothing moved");
+
+        // Delete removes the whole selection; one undo restores it, still selected.
+        assert!(chart.input_key_down(ChartKey::Delete, InputModifiers::default(), false, 0.0));
+        assert!(chart.drawings().is_empty());
+        assert!(chart.input_key_down(
+            ChartKey::Undo,
+            InputModifiers {
+                control: true,
+                ..InputModifiers::default()
+            },
+            false,
+            0.0
+        ));
+        assert_eq!(chart.drawings(), before.as_slice());
+        assert_eq!(chart.selected_drawings(), ids.as_slice());
+
+        // ⌘ works the same; a box over empty space clears the selection.
+        chart.input_pointer_down(held(500.0, 60.0, 5_000.0, true), 1);
+        chart.input_pointer_move(held(540.0, 80.0, 5_010.0, true), true);
+        chart.input_pointer_move(held(560.0, 90.0, 5_020.0, true), true);
+        chart.input_pointer_up(held(560.0, 90.0, 5_030.0, true));
+        assert!(chart.selected_drawings().is_empty());
+
+        // Escape abandons an open box.
+        chart.set_selected_drawings(&ids);
+        chart.input_pointer_down(held(500.0, 60.0, 9_000.0, false), 1);
+        chart.input_pointer_move(held(560.0, 90.0, 9_010.0, false), true);
+        chart.input_key_down(ChartKey::Escape, InputModifiers::default(), false, 9_015.0);
+        chart.input_pointer_up(held(560.0, 90.0, 9_020.0, false));
+        assert!(chart.drawing_marquee.is_none());
+    }
+
+    #[test]
+    fn control_click_on_empty_pane_without_movement_is_a_plain_click() {
+        let mut chart = chart();
+        chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None);
+        click(&mut chart, 120.0, 120.0);
+        click(&mut chart, 300.0, 220.0);
+        let id = chart.drawings()[0].id;
+        chart.set_selected_drawing(Some(id));
+        let held = PointerInput {
+            modifiers: InputModifiers {
+                control: true,
+                ..InputModifiers::default()
+            },
+            ..at(500.0, 60.0)
+        };
+        chart.input_pointer_down(held, 1);
+        chart.input_pointer_up(held);
+        assert!(chart.drawing_marquee.is_none());
+        assert!(
+            chart.selected_drawings().is_empty(),
+            "a click on empty pane deselects as usual"
+        );
+    }
     #[test]
     fn control_drag_duplicates_a_drawing_as_one_undoable_creation() {
         let mut chart = chart();

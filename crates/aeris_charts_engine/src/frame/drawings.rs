@@ -35,6 +35,8 @@ const ANCHOR_BORDER_WIDTH: f64 = 2.0;
 /// Square handles keep slightly rounded corners.
 const ANCHOR_SQUARE_RADIUS: f64 = 2.0;
 const ANCHOR_BORDER: Color = PRIMARY;
+const MARQUEE_FILL: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x1F);
+const MARQUEE_EDGE: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0xB3);
 /// Opacity of a volume profile's box and spine over the chart text color.
 const PROFILE_FRAME_ALPHA: u8 = 80;
 const POSITION_ENTRY_WIDTH_CSS: f64 = 0.5;
@@ -735,9 +737,376 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
     ) {
-        let Some(id) = self.selected_drawing else {
+        // The primary paints last, so its handles sit above overlapping selected drawings.
+        let primary = self.selected_drawing;
+        for &id in self
+            .selected_drawings
+            .iter()
+            .filter(|&&id| Some(id) != primary)
+            .chain(primary.iter())
+        {
+            self.build_drawing_selection_frame(pane_index, id, pane_w_px, hpr, vpr, out, points);
+        }
+    }
+
+    /// The Ctrl/Cmd selection box while it is being dragged: a translucent fill with a crisp
+    /// border on whole device pixels, above every drawing in its pane.
+    pub(super) fn build_drawing_marquee_frame(
+        &self,
+        pane_index: usize,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        let Some([left, top, right, bottom]) = self
+            .drawing_marquee
+            .filter(|marquee| marquee.pane == pane_index)
+            .and_then(|marquee| marquee.bounds())
+        else {
             return;
         };
+        let (x0, y0) = ((left * hpr).round() as i32, (top * vpr).round() as i32);
+        let (x1, y1) = ((right * hpr).round() as i32, (bottom * vpr).round() as i32);
+        let rect = IRect {
+            x: x0,
+            y: y0,
+            w: (x1 - x0).max(1),
+            h: (y1 - y0).max(1),
+        };
+        out.push(Prim::Rect {
+            rect,
+            color: MARQUEE_FILL,
+        });
+        out.push(Prim::RectFrame {
+            rect,
+            border: hpr.min(vpr).round().max(1.0) as i32,
+            color: MARQUEE_EDGE,
+        });
+    }
+
+    /// Drawings on `pane_index` whose painted geometry touches the media-px box
+    /// `[left, top, right, bottom]` (x pane-relative, y chart-top), topmost first. The test runs
+    /// against the same primitives the frame paints, so every kind is matched by exactly what
+    /// the user sees: a stroke or filled area crossing the box selects it, while a box inside
+    /// an unfilled outline does not. Hidden drawings never match; locked drawings do.
+    pub(crate) fn drawings_touching_box(
+        &self,
+        pane_index: usize,
+        bounds: [f64; 4],
+    ) -> Vec<DrawingId> {
+        let pane_w_px = self.pane_w.round().max(1.0) as i32;
+        let mut prims = Vec::new();
+        let mut points = Vec::new();
+        let mut touched = Vec::new();
+        for drawing in self.drawings.iter().rev() {
+            if drawing.pane_index != pane_index
+                || !drawing.visible
+                || !drawing.interval_visibility.allows(self.drawing_interval)
+            {
+                continue;
+            }
+            let Some(px) = self.drawing_render_px(drawing) else {
+                continue;
+            };
+            prims.clear();
+            points.clear();
+            self.build_drawing_prims(drawing, &px, pane_w_px, 1.0, &mut prims, &mut points);
+            self.build_drawing_text(drawing, &px, pane_w_px, 1.0, &mut prims);
+            self.build_drawing_labels(drawing, &px, 1.0, &mut prims);
+            if prims
+                .iter()
+                .any(|prim| self.prim_touches_box(prim, &points, bounds))
+            {
+                touched.push(drawing.id);
+            }
+        }
+        touched
+    }
+
+    /// Whether one painted primitive overlaps the box. Fully transparent paint never counts.
+    fn prim_touches_box(&self, prim: &Prim, points: &[[f32; 2]], bounds: [f64; 4]) -> bool {
+        let [left, top, right, bottom] = bounds;
+        let overlaps = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            x0.min(x1) <= right && x0.max(x1) >= left && y0.min(y1) <= bottom && y0.max(y1) >= top
+        };
+        // The box lies wholly inside the hole of a hollow shape.
+        let within =
+            |x0: f64, y0: f64, x1: f64, y1: f64| left > x0 && right < x1 && top > y0 && bottom < y1;
+        let point = |p: [f32; 2]| (f64::from(p[0]), f64::from(p[1]));
+        let run = |first: u32, count: u32| {
+            let first = first as usize;
+            points
+                .get(first..first.saturating_add(count as usize))
+                .unwrap_or(&[])
+        };
+        let stroke = |path: &[(f64, f64)], width: f64| {
+            let pad = width.max(1.0) / 2.0;
+            let grown = [left - pad, top - pad, right + pad, bottom + pad];
+            match path {
+                [] => false,
+                [(x, y)] => *x >= grown[0] && *x <= grown[2] && *y >= grown[1] && *y <= grown[3],
+                _ => path
+                    .windows(2)
+                    .any(|pair| segment_crosses_box(pair[0], pair[1], grown)),
+            }
+        };
+        let filled = |polygon: &[(f64, f64)]| {
+            !polygon.is_empty()
+                && (polygon
+                    .iter()
+                    .any(|&(x, y)| x >= left && x <= right && y >= top && y <= bottom)
+                    || (0..polygon.len()).any(|index| {
+                        segment_crosses_box(
+                            polygon[index],
+                            polygon[(index + 1) % polygon.len()],
+                            bounds,
+                        )
+                    })
+                    || crate::drawings::point_in_polygon((left, top), polygon))
+        };
+        let irect = |rect: &IRect| {
+            (
+                f64::from(rect.x),
+                f64::from(rect.y),
+                f64::from(rect.x + rect.w),
+                f64::from(rect.y + rect.h),
+            )
+        };
+        let band = |upper: u32, lower: u32, count: u32| {
+            let polygon = run(upper, count)
+                .iter()
+                .chain(run(lower, count).iter().rev())
+                .map(|&p| point(p))
+                .collect::<Vec<_>>();
+            filled(&polygon)
+        };
+        let text_box = |x: f32, y: f32, text: &str, size: f32, family: &str, weight, italic| {
+            let width = self.measure_text_run(text, f64::from(size), family, weight, italic);
+            let half = f64::from(size) * 0.6;
+            (width, half, f64::from(x), f64::from(y))
+        };
+        let aligned_left = |x: f64, width: f64, align: TextAlign| match align {
+            TextAlign::Left => x,
+            TextAlign::Center => x - width / 2.0,
+            TextAlign::Right => x - width,
+        };
+        match prim {
+            Prim::Rect { rect, color } => {
+                let (x0, y0, x1, y1) = irect(rect);
+                color.a() != 0 && overlaps(x0, y0, x1, y1)
+            }
+            Prim::GradientRect { rect, .. } => {
+                let (x0, y0, x1, y1) = irect(rect);
+                overlaps(x0, y0, x1, y1)
+            }
+            Prim::RectFrame {
+                rect,
+                border,
+                color,
+            } => {
+                let (x0, y0, x1, y1) = irect(rect);
+                let border = f64::from(*border);
+                color.a() != 0
+                    && overlaps(x0, y0, x1, y1)
+                    && !within(x0 + border, y0 + border, x1 - border, y1 - border)
+            }
+            Prim::HLine {
+                y,
+                x0,
+                x1,
+                width,
+                color,
+                ..
+            } => {
+                let y = f64::from(*y);
+                color.a() != 0
+                    && stroke(
+                        &[(f64::from(*x0), y), (f64::from(*x1), y)],
+                        f64::from(*width),
+                    )
+            }
+            Prim::VLine {
+                x,
+                y0,
+                y1,
+                width,
+                color,
+                ..
+            } => {
+                let x = f64::from(*x);
+                color.a() != 0
+                    && stroke(
+                        &[(x, f64::from(*y0)), (x, f64::from(*y1))],
+                        f64::from(*width),
+                    )
+            }
+            Prim::Polyline {
+                first_point,
+                point_count,
+                width,
+                color,
+                ..
+            } => {
+                let path = run(*first_point, *point_count)
+                    .iter()
+                    .map(|&p| point(p))
+                    .collect::<Vec<_>>();
+                color.a() != 0 && stroke(&path, f64::from(*width))
+            }
+            Prim::AreaFill {
+                first_point,
+                point_count,
+                base_y,
+                ..
+            } => {
+                let line = run(*first_point, *point_count);
+                let (Some(&first), Some(&last)) = (line.first(), line.last()) else {
+                    return false;
+                };
+                let mut polygon = line.iter().map(|&p| point(p)).collect::<Vec<_>>();
+                polygon.push((f64::from(last[0]), f64::from(*base_y)));
+                polygon.push((f64::from(first[0]), f64::from(*base_y)));
+                filled(&polygon)
+            }
+            Prim::BandFill {
+                upper_first,
+                lower_first,
+                point_count,
+                fill,
+                ..
+            } => fill.a() != 0 && band(*upper_first, *lower_first, *point_count),
+            Prim::BandGradientFill {
+                upper_first,
+                lower_first,
+                point_count,
+                ..
+            } => band(*upper_first, *lower_first, *point_count),
+            Prim::RoundRect {
+                x,
+                y,
+                w,
+                h,
+                fill,
+                border_width,
+                border_color,
+                ..
+            } => {
+                let (x0, y0) = (f64::from(*x), f64::from(*y));
+                let (x1, y1) = (x0 + f64::from(*w), y0 + f64::from(*h));
+                let border = f64::from(*border_width);
+                if fill.a() != 0 {
+                    overlaps(x0, y0, x1, y1)
+                } else {
+                    border > 0.0
+                        && border_color.a() != 0
+                        && overlaps(x0, y0, x1, y1)
+                        && !within(x0 + border, y0 + border, x1 - border, y1 - border)
+                }
+            }
+            Prim::GradientRoundRect { x, y, w, h, .. } => {
+                let (x0, y0) = (f64::from(*x), f64::from(*y));
+                overlaps(x0, y0, x0 + f64::from(*w), y0 + f64::from(*h))
+            }
+            Prim::Circle {
+                cx,
+                cy,
+                radius,
+                fill,
+                stroke_width,
+                stroke,
+            } => {
+                let (cx, cy, radius) = (f64::from(*cx), f64::from(*cy), f64::from(*radius));
+                let half = if stroke.a() != 0 {
+                    f64::from(*stroke_width).max(0.0) / 2.0
+                } else {
+                    0.0
+                };
+                let nearest = (cx.clamp(left, right) - cx).hypot(cy.clamp(top, bottom) - cy);
+                if nearest > radius + half {
+                    false
+                } else if fill.a() != 0 {
+                    true
+                } else {
+                    let farthest = (cx - left)
+                        .abs()
+                        .max((cx - right).abs())
+                        .hypot((cy - top).abs().max((cy - bottom).abs()));
+                    half > 0.0 && farthest >= radius - half
+                }
+            }
+            Prim::Triangle { a, b, c, color } => {
+                color.a() != 0 && filled(&[point(*a), point(*b), point(*c)])
+            }
+            Prim::MeshFill {
+                first_point,
+                point_count,
+                color,
+            } => {
+                color.a() != 0
+                    && run(*first_point, *point_count)
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .any(|&[a, b, c]| filled(&[point(a), point(b), point(c)]))
+            }
+            Prim::Background { .. } => false,
+            Prim::Text {
+                x,
+                y,
+                text,
+                color,
+                size,
+                family,
+                align,
+                weight,
+                italic,
+            } => {
+                let (width, half, x, y) = text_box(*x, *y, text, *size, family, *weight, *italic);
+                let x0 = aligned_left(x, width, *align);
+                color.a() != 0 && overlaps(x0, y - half, x0 + width, y + half)
+            }
+            Prim::RotatedText {
+                x,
+                y,
+                text,
+                color,
+                size,
+                family,
+                align,
+                weight,
+                italic,
+                angle,
+            } => {
+                let (width, half, x, y) = text_box(*x, *y, text, *size, family, *weight, *italic);
+                let x0 = aligned_left(0.0, width, *align);
+                let (sin, cos) = f64::from(*angle).sin_cos();
+                let corners = [
+                    (x0, -half),
+                    (x0 + width, -half),
+                    (x0 + width, half),
+                    (x0, half),
+                ]
+                .map(|(dx, dy)| (x + dx * cos - dy * sin, y + dx * sin + dy * cos));
+                color.a() != 0 && filled(&corners)
+            }
+            Prim::Image { rect, .. } => {
+                let (x0, y0) = (f64::from(rect[0]), f64::from(rect[1]));
+                overlaps(x0, y0, x0 + f64::from(rect[2]), y0 + f64::from(rect[3]))
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_drawing_selection_frame(
+        &self,
+        pane_index: usize,
+        id: DrawingId,
+        pane_w_px: i32,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+    ) {
         let Some(drawing) = self.drawing(id) else {
             return;
         };
@@ -834,7 +1203,7 @@ impl ChartEngine {
         let Some(id) = self.hovered_text else {
             return;
         };
-        if self.selected_drawing == Some(id) {
+        if self.is_drawing_selected(id) {
             return;
         }
         let Some(drawing) = self.drawing(id) else {
@@ -4460,7 +4829,7 @@ impl ChartEngine {
     ) {
         // Statistic labels belong to the active position only; idle positions show their zones.
         for drawing in self.drawings.iter().filter(|drawing| {
-            self.selected_drawing == Some(drawing.id)
+            self.is_drawing_selected(drawing.id)
                 && drawing.pane_index == pane_index
                 && drawing.visible
                 && drawing.interval_visibility.allows(self.drawing_interval)

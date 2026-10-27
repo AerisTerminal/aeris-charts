@@ -623,9 +623,9 @@ pub(crate) struct RetainedFrame {
     last_price_scale_revisions: Vec<Vec<u64>>,
     /// Timestamp union and display-projection identity read by measuring-tool elapsed time.
     last_time_label_key: [u64; 3],
-    /// Primary drawing selection observed by the last frame. Position statistic labels live in
-    /// the retained chrome layer but only paint for the selected position.
-    last_selected_drawing: Option<crate::DrawingId>,
+    /// Drawing selection (ascending ids) observed by the last frame. Position statistic labels
+    /// live in the retained chrome layer but only paint for selected positions.
+    last_selected_drawings: Vec<crate::DrawingId>,
     /// Trend line whose `+ Add text` prompt the retained drawings layer paints. The prompt follows
     /// selection and editing, which do not otherwise rebuild that layer.
     last_line_text_prompt: Option<crate::DrawingId>,
@@ -1573,23 +1573,19 @@ impl ChartEngine {
                 self.frame_invalidation.drawings();
             }
         }
-        if self.retained_frame.last_selected_drawing != self.selected_drawing {
-            let previous = std::mem::replace(
-                &mut self.retained_frame.last_selected_drawing,
-                self.selected_drawing,
-            );
-            if [previous, self.selected_drawing]
-                .into_iter()
-                .flatten()
-                .any(|id| {
-                    self.drawing(id).is_some_and(|drawing| {
-                        matches!(
-                            drawing.kind,
-                            crate::DrawingKind::LongPosition | crate::DrawingKind::ShortPosition
-                        )
-                    })
-                })
-            {
+        if self.retained_frame.last_selected_drawings != self.selected_drawings {
+            let previous = &self.retained_frame.last_selected_drawings;
+            let position_changed = self.drawings.iter().any(|drawing| {
+                matches!(
+                    drawing.kind,
+                    crate::DrawingKind::LongPosition | crate::DrawingKind::ShortPosition
+                ) && (previous.binary_search(&drawing.id).is_ok()
+                    || self.is_drawing_selected(drawing.id))
+            });
+            self.retained_frame
+                .last_selected_drawings
+                .clone_from(&self.selected_drawings);
+            if position_changed {
                 self.frame_invalidation.chrome();
             }
         }
@@ -2270,6 +2266,7 @@ impl ChartEngine {
                     &mut cache.overlay.prims,
                     &mut cache.overlay.points,
                 );
+                self.build_drawing_marquee_frame(pi, hpr, vpr, &mut cache.overlay.prims);
                 self.build_crosshair_frame(
                     pi,
                     pane_w_px as i32,

@@ -2530,3 +2530,52 @@ test("Ctrl OHLC magnet engages only during drawing creation or drag", async ({ p
   expect(await magnet()).toBe(false);
   await page.keyboard.up("Control");
 });
+
+test("Ctrl/Cmd + drag on empty pane box-selects touched drawings for group actions", async ({ page }) => {
+  await goto_fixture(page);
+  const ids = await page.evaluate(() => {
+    const at = (y) => window.__main.coordinate_to_price(y);
+    const l = Math.floor(window.__chart.time_scale().get_visible_logical_range().from) + 5;
+    return [100, 160, 300].map((y) => window.__chart.add_drawing("horizontal_line", [{ logical: l, price: at(y) }]).id);
+  });
+  await settle_frames(page);
+  const before = await drawings(page);
+  const selected = () => page.evaluate(() => window.__chart.selected_drawings().map((d) => d.id));
+
+  // The box starts on empty pane, crosses the first two lines, and stops short of the third.
+  await page.mouse.move(200, 80);
+  await page.keyboard.down("Control");
+  await page.mouse.down();
+  await page.mouse.move(260, 180, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Control");
+  await settle_frames(page);
+  expect(await selected()).toEqual(ids.slice(0, 2));
+  expect(await drawings(page), "the box moves nothing").toEqual(before);
+
+  // One style patch reaches every selected drawing and nothing else.
+  expect(await page.evaluate(() => window.__chart.apply_selected_drawings_options({ color: "#7b1fa2" }))).toBe(2);
+  expect(await page.evaluate(() => window.__chart.drawings().map((d) => d.options().color))).toEqual([
+    "#7b1fa2", "#7b1fa2", expect.not.stringMatching(/^#7b1fa2$/),
+  ]);
+
+  // Delete removes the whole selection; one undo restores both, still selected.
+  await focus_overlay(page);
+  await page.keyboard.press("Delete");
+  expect((await drawings(page)).map((d) => d.id)).toEqual([ids[2]]);
+  await page.keyboard.press("Control+z");
+  expect((await drawings(page)).map((d) => d.id)).toEqual(ids);
+  expect(await selected()).toEqual(ids.slice(0, 2));
+
+  // Clones become the selection; a box over empty space clears it.
+  const clones = await page.evaluate(() => window.__chart.clone_selected_drawings(0, 0).map((d) => d.id));
+  expect(clones).toHaveLength(2);
+  expect(await selected()).toEqual(clones);
+  await page.mouse.move(200, 210);
+  await page.keyboard.down("Control");
+  await page.mouse.down();
+  await page.mouse.move(260, 250, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Control");
+  expect(await selected()).toEqual([]);
+});

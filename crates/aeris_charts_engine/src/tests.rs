@@ -10891,7 +10891,7 @@ fn pane_separators_span_the_full_chart_width_at_rest_and_on_hover() {
     let resting = prims
         .iter()
         .filter_map(|p| match p {
-            Prim::Rect { rect, .. } if rect.y == separator_y && rect.h == 2 => Some(*rect),
+            Prim::Rect { rect, .. } if rect.y == separator_y && rect.h == 1 => Some(*rect),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -10915,7 +10915,7 @@ fn pane_separators_span_the_full_chart_width_at_rest_and_on_hover() {
     let hover = prims
         .iter()
         .find_map(|p| match p {
-            Prim::Rect { rect, .. } if rect.h == 10 => Some(*rect),
+            Prim::Rect { rect, .. } if rect.h == 9 => Some(*rect),
             _ => None,
         })
         .expect("the hover band");
@@ -10925,7 +10925,7 @@ fn pane_separators_span_the_full_chart_width_at_rest_and_on_hover() {
 }
 
 #[test]
-fn axis_borders_are_one_css_px_and_pane_separators_two() {
+fn axis_borders_and_pane_separators_are_one_css_px() {
     use aeris_charts_render::draw_list::Prim;
 
     for dpr in [1.0_f64, 1.25, 1.5, 2.0, 3.0] {
@@ -10954,8 +10954,8 @@ fn axis_borders_are_one_css_px_and_pane_separators_two() {
         let separator_h = (crate::PANE_SEPARATOR * dpr).round().max(1.0) as i32;
         assert_eq!(expected, dpr.floor() as i32, "1 CSS px border at dpr {dpr}");
         assert!(
-            (separator_h - (2.0 * dpr) as i32).abs() <= 1,
-            "2 CSS px separator at dpr {dpr}"
+            separator_h == (dpr.round() as i32).max(1),
+            "1 CSS px separator at dpr {dpr}"
         );
 
         assert!(

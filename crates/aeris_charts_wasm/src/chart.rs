@@ -6190,9 +6190,39 @@ impl AerisChart {
     pub fn selected_drawing(&self) -> Option<u32> {
         self.inner.borrow().selected_drawing()
     }
-    /// Delete/Backspace: remove the selected drawing. False while nothing is selected.
+    /// Delete/Backspace: remove every selected drawing. False while nothing is selected.
     pub fn remove_selected_drawing(&mut self) -> bool {
         self.inner.borrow_mut().remove_selected_drawing()
+    }
+    /// Remove every selected drawing as one undo step; returns how many were removed.
+    pub fn remove_selected_drawings(&mut self) -> u32 {
+        self.inner.borrow_mut().remove_selected_drawings()
+    }
+    /// Merge one options patch into every selected drawing that has those settings, as one
+    /// undo step; returns how many drawings accepted it.
+    pub fn apply_selected_drawings_options(&mut self, json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .apply_selected_drawings_options(json)
+    }
+    pub fn set_selected_drawings_locked(&mut self, locked: bool) -> u32 {
+        self.inner.borrow_mut().set_selected_drawings_locked(locked)
+    }
+    pub fn set_selected_drawings_visibility(&mut self, visible: bool) -> u32 {
+        self.inner
+            .borrow_mut()
+            .set_selected_drawings_visibility(visible)
+    }
+    /// Copy every selected drawing with a semantic anchor offset as one undo step; the copies
+    /// become the selection. Returns the new ids as a JSON array.
+    pub fn clone_selected_drawings_json(
+        &mut self,
+        logical_offset: f64,
+        price_offset: f64,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .clone_selected_drawings_json(logical_offset, price_offset)
     }
     /// Press routing for the gesture layer: opens an anchor/body drag on the drawing under the
     /// point (false = the host falls through to pan/scroll). A successful grab selects the

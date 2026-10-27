@@ -8953,3 +8953,285 @@ fn trend_line_stats_card_follows_its_visibility_setting() {
     assert!(chart.drawing_apply_options(id, r#"{"stats_always_visible":true}"#));
     assert_eq!(cards(&mut chart), baseline + 1);
 }
+
+fn add_rectangle(chart: &mut ChartEngine, logical: f64, price: f64) -> DrawingId {
+    chart
+        .add_drawing(
+            DrawingKind::Rectangle,
+            0,
+            vec![
+                DrawingPoint { logical, price },
+                DrawingPoint {
+                    logical: logical + 2.0,
+                    price: price + 1.0,
+                },
+            ],
+            None,
+        )
+        .unwrap()
+}
+
+fn add_text(chart: &mut ChartEngine) -> DrawingId {
+    chart
+        .add_drawing(
+            DrawingKind::Text,
+            0,
+            vec![DrawingPoint {
+                logical: 5.0,
+                price: 11.5,
+            }],
+            None,
+        )
+        .unwrap()
+}
+
+#[test]
+fn selection_set_keeps_live_ids_with_the_first_as_primary() {
+    let mut chart = settled_chart();
+    let trend = add_trend(&mut chart);
+    let rect = add_rectangle(&mut chart, 1.0, 10.0);
+    let text = add_text(&mut chart);
+
+    assert!(chart.set_selected_drawings(&[rect, 9_999, trend, rect]));
+    assert_eq!(chart.selected_drawing(), Some(rect));
+    let mut expected = vec![trend, rect];
+    expected.sort_unstable();
+    assert_eq!(chart.selected_drawings(), expected.as_slice());
+    assert!(chart.is_drawing_selected(trend));
+    assert!(!chart.is_drawing_selected(text));
+
+    // Selecting one drawing replaces the set; clearing drops every member.
+    chart.set_selected_drawing(Some(text));
+    assert_eq!(chart.selected_drawings(), &[text]);
+    chart.set_selected_drawings(&[trend, rect]);
+    chart.set_selected_drawing(None);
+    assert!(chart.selected_drawings().is_empty());
+    assert_eq!(chart.selected_drawing(), None);
+
+    // Removing a member through any path keeps the set consistent.
+    chart.set_selected_drawings(&[trend, rect]);
+    assert!(chart.remove_drawing(trend));
+    assert_eq!(chart.selected_drawings(), &[rect]);
+    assert_eq!(chart.selected_drawing(), Some(rect));
+}
+
+#[test]
+fn every_selected_drawing_paints_its_handles() {
+    let mut chart = settled_chart();
+    let trend = add_trend(&mut chart);
+    let rect = add_rectangle(&mut chart, 1.0, 10.0);
+    // Handles are round rects; a lone selected line also shows its text prompt, which a
+    // multi-selection omits, so only handles are counted.
+    let handles = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::RoundRect { .. }))
+            .count()
+    };
+    let idle = handles(&mut chart);
+    chart.set_selected_drawing(Some(trend));
+    let one = handles(&mut chart) - idle;
+    assert!(one > 0);
+    chart.set_selected_drawing(Some(rect));
+    let other = handles(&mut chart) - idle;
+    assert!(other > 0);
+    chart.set_selected_drawings(&[trend, rect]);
+    assert_eq!(handles(&mut chart), idle + one + other);
+}
+
+#[test]
+fn removing_the_selection_is_one_undo_step_that_restores_it_selected() {
+    let mut chart = settled_chart();
+    let trend = add_trend(&mut chart);
+    let rect = add_rectangle(&mut chart, 1.0, 10.0);
+    let text = add_text(&mut chart);
+    let before = chart.drawings().to_vec();
+
+    chart.set_selected_drawings(&[trend, text]);
+    assert_eq!(chart.remove_selected_drawings(), 2);
+    assert_eq!(
+        chart.drawings().iter().map(|d| d.id).collect::<Vec<_>>(),
+        vec![rect]
+    );
+    assert!(chart.selected_drawings().is_empty());
+
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawings(), before.as_slice());
+    let mut expected = vec![trend, text];
+    expected.sort_unstable();
+    assert_eq!(chart.selected_drawings(), expected.as_slice());
+
+    assert!(chart.redo_drawing());
+    assert_eq!(chart.drawings().len(), 1);
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawings(), before.as_slice());
+
+    assert_eq!(chart.remove_drawings(&[rect, 9_999]), 1);
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawings(), before.as_slice());
+}
+
+#[test]
+fn a_selection_style_patch_reaches_only_drawings_that_have_each_setting() {
+    let mut chart = settled_chart();
+    let trend = add_trend(&mut chart);
+    let rect = add_rectangle(&mut chart, 1.0, 10.0);
+    let text = add_text(&mut chart);
+    let before = chart.drawings().to_vec();
+    let has = |id: DrawingId, chart: &ChartEngine, name: &str| {
+        crate::drawing_contract::drawing_property_schema(chart.drawing(id).unwrap().kind)
+            .properties
+            .iter()
+            .any(|property| property.name == name)
+    };
+    assert!(has(trend, &chart, "extend_right"));
+    assert!(!has(text, &chart, "width"));
+
+    chart.set_selected_drawings(&[trend, rect, text]);
+    let patch = r##"{"width":4,"extend_right":true}"##;
+    let accepting = [trend, rect, text]
+        .into_iter()
+        .filter(|&id| has(id, &chart, "width") || has(id, &chart, "extend_right"))
+        .count();
+    assert_eq!(chart.apply_selected_drawings_options(patch), accepting);
+    assert_eq!(chart.drawing(trend).unwrap().width, 4.0);
+    assert!(chart.drawing(trend).unwrap().extend_right);
+    assert_eq!(chart.drawing(rect).unwrap().width, 4.0);
+    assert_eq!(
+        chart.drawing(rect).unwrap().extend_right,
+        has(rect, &chart, "extend_right")
+    );
+    assert_eq!(chart.drawing(text), before.iter().find(|d| d.id == text));
+
+    // Unselected drawings never change, and the whole edit is one undo step.
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawings(), before.as_slice());
+    assert!(chart.redo_drawing());
+    assert_eq!(chart.drawing(trend).unwrap().width, 4.0);
+
+    assert_eq!(chart.apply_selected_drawings_options("not json"), 0);
+    assert_eq!(chart.apply_selected_drawings_options(r#"{"unknown":1}"#), 0);
+}
+
+#[test]
+fn a_selection_options_edit_session_commits_as_one_undo_step() {
+    let mut chart = settled_chart();
+    let trend = add_trend(&mut chart);
+    let rect = add_rectangle(&mut chart, 1.0, 10.0);
+    let before = chart.drawings().to_vec();
+    chart.set_selected_drawings(&[trend, rect]);
+
+    assert!(chart.begin_selected_drawings_options_edit());
+    for color in ["#ff0000", "#00ff00", "#0000ff"] {
+        let patch = serde_json::json!({ "color": color }).to_string();
+        assert_eq!(chart.apply_selected_drawings_options(&patch), 2);
+    }
+    assert!(chart.cancel_drawing_options_edit());
+    assert_eq!(chart.drawings(), before.as_slice());
+
+    assert!(chart.begin_selected_drawings_options_edit());
+    for color in ["#ff0000", "#0000ff"] {
+        let patch = serde_json::json!({ "color": color }).to_string();
+        assert_eq!(chart.apply_selected_drawings_options(&patch), 2);
+    }
+    assert!(chart.commit_drawing_options_edit());
+    assert!(
+        chart
+            .drawings()
+            .iter()
+            .all(|drawing| drawing.color == "#0000ff")
+    );
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawings(), before.as_slice());
+    assert!(chart.undo_drawing());
+    assert_eq!(
+        chart.drawings().len(),
+        1,
+        "the session recorded exactly one step"
+    );
+}
+
+#[test]
+fn locking_hiding_and_cloning_the_selection_are_single_undo_steps() {
+    let mut chart = settled_chart();
+    let trend = add_trend(&mut chart);
+    let rect = add_rectangle(&mut chart, 1.0, 10.0);
+    let text = add_text(&mut chart);
+    let before = chart.drawings().to_vec();
+    chart.set_selected_drawings(&[trend, rect]);
+
+    assert_eq!(chart.set_selected_drawings_locked(true), 2);
+    assert!(chart.drawing(trend).unwrap().locked && chart.drawing(rect).unwrap().locked);
+    assert!(!chart.drawing(text).unwrap().locked);
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawings(), before.as_slice());
+
+    assert_eq!(chart.set_selected_drawings_visibility(false), 2);
+    assert!(!chart.drawing(trend).unwrap().visible && !chart.drawing(rect).unwrap().visible);
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawings(), before.as_slice());
+
+    let copies = chart.clone_selected_drawings(1.0, 0.5);
+    assert_eq!(copies.len(), 2);
+    assert_eq!(chart.drawings().len(), 5);
+    let mut selected = copies.clone();
+    selected.sort_unstable();
+    assert_eq!(chart.selected_drawings(), selected.as_slice());
+    for (copy, source) in copies.iter().zip([trend, rect]) {
+        let copy = chart.drawing(*copy).unwrap();
+        let source = chart.drawing(source).unwrap();
+        assert_eq!(copy.kind, source.kind);
+        for (moved, original) in copy.points.iter().zip(&source.points) {
+            assert_eq!(moved.logical, original.logical + 1.0);
+            assert_eq!(moved.price, original.price + 0.5);
+        }
+    }
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawings(), before.as_slice());
+    assert!(chart.clone_selected_drawings(f64::NAN, 0.0).is_empty());
+}
+
+#[test]
+fn a_selection_box_selects_every_drawing_it_touches() {
+    let mut chart = settled_chart();
+    let trend = add_trend(&mut chart);
+    let rect = add_rectangle(&mut chart, 0.5, 12.5);
+    let far = add_rectangle(&mut chart, 7.5, 10.0);
+
+    // A box crossing only the trend line's middle and the rectangle's edge picks both.
+    let (left, right) = (x_at(&chart, 2.0), x_at(&chart, 5.0));
+    let (top, bottom) = (y_at(&chart, 13.0), y_at(&chart, 11.0));
+    let rects = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::Rect { .. } | Prim::RectFrame { .. }))
+            .count()
+    };
+    let closed = rects(&mut chart);
+    assert!(chart.begin_drawing_marquee(left, top));
+    chart.update_drawing_marquee(right, bottom);
+    assert_eq!(
+        rects(&mut chart),
+        closed + 2,
+        "the open box paints a fill and an edge"
+    );
+    assert!(chart.finish_drawing_marquee());
+    let mut expected = vec![trend, rect];
+    expected.sort_unstable();
+    assert_eq!(chart.selected_drawings(), expected.as_slice());
+    assert!(!chart.is_drawing_selected(far));
+
+    // An empty box clears the selection; a cancelled box keeps it.
+    chart.set_selected_drawings(&[far]);
+    assert!(chart.begin_drawing_marquee(left, top));
+    chart.update_drawing_marquee(right, bottom);
+    assert!(chart.cancel_drawing_marquee());
+    assert_eq!(chart.selected_drawings(), &[far]);
+    let (x, y) = (x_at(&chart, 5.0), y_at(&chart, 10.2));
+    assert!(chart.begin_drawing_marquee(x, y));
+    chart.update_drawing_marquee(x + 4.0, y + 4.0);
+    assert!(chart.finish_drawing_marquee());
+    assert!(chart.selected_drawings().is_empty());
+}

@@ -6973,6 +6973,54 @@ export class chart_impl implements chart_api {
     return info ? new drawing_impl(this, info.id, info.kind, info.pane_index) : null;
   }
 
+  selected_drawings(): drawing_api[] {
+    return this.drawing_handles(JSON.parse(this.wasm.selected_drawings_json()) as number[]);
+  }
+
+  set_selected_drawings(drawings: readonly (drawing_api | number)[]): void {
+    const ids = drawings.map((drawing) => (typeof drawing === "number" ? drawing : drawing.id));
+    if (this.wasm.set_selected_drawings(JSON.stringify(ids))) this.repaint();
+  }
+
+  remove_selected_drawings(): number {
+    const removed = this.wasm.remove_selected_drawings();
+    if (removed !== 0) this.repaint();
+    return removed;
+  }
+
+  apply_selected_drawings_options(options: Partial<drawing_options>): number {
+    const applied = this.wasm.apply_selected_drawings_options(JSON.stringify(options));
+    if (applied !== 0) this.repaint();
+    return applied;
+  }
+
+  set_selected_drawings_locked(locked: boolean): number {
+    const changed = this.wasm.set_selected_drawings_locked(locked);
+    if (changed !== 0) this.repaint();
+    return changed;
+  }
+
+  set_selected_drawings_visibility(visible: boolean): number {
+    const changed = this.wasm.set_selected_drawings_visibility(visible);
+    if (changed !== 0) this.repaint();
+    return changed;
+  }
+
+  clone_selected_drawings(logical_offset = 0, price_offset = 0): drawing_api[] {
+    const ids = JSON.parse(this.wasm.clone_selected_drawings_json(logical_offset, price_offset)) as number[];
+    if (ids.length !== 0) this.repaint();
+    return this.drawing_handles(ids);
+  }
+
+  private drawing_handles(ids: readonly number[]): drawing_api[] {
+    if (ids.length === 0) return [];
+    const list = JSON.parse(this.wasm.drawings_json()) as drawing_info[];
+    return ids
+      .map((id) => list.find((drawing) => drawing.id === id))
+      .filter((drawing): drawing is drawing_info => drawing !== undefined)
+      .map((drawing) => new drawing_impl(this, drawing.id, drawing.kind, drawing.pane_index));
+  }
+
   /** Whether an interactive drawing tool is armed (the recognizer routes pane clicks to creation). */
   creation_armed(): boolean {
     return this.active_drawing_tool() !== null;

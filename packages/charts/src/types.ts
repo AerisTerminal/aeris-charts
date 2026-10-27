@@ -4500,8 +4500,32 @@ export interface chart_api {
   /** Fire after an engine-owned interactive drawing is committed. */
   subscribe_drawing_created(handler: drawing_created_handler): void;
   unsubscribe_drawing_created(handler: drawing_created_handler): void;
-  /** The currently selected drawing (click-to-select; Delete/Backspace removes it), or `null`. */
+  /**
+   * The primary selected drawing (click-to-select; Delete/Backspace removes the selection), or
+   * `null`. With a multi-selection this is the first drawing passed to
+   * {@link chart_api.set_selected_drawings} or the topmost drawing a selection box touched.
+   */
   selected_drawing(): drawing_api | null;
+  /**
+   * Every selected drawing, in id order. Ctrl/Cmd + drag on empty pane draws a selection box
+   * that selects every drawing it touches.
+   */
+  selected_drawings(): drawing_api[];
+  /** Replace the selection; the first live drawing becomes primary. Unknown ids are ignored. */
+  set_selected_drawings(drawings: readonly (drawing_api | number)[]): void;
+  /** Remove every selected drawing as one undo step. Returns how many were removed. */
+  remove_selected_drawings(): number;
+  /**
+   * Merge one options patch into every selected drawing as one undo step. Each drawing takes
+   * only the settings its kind supports. Returns how many drawings accepted the patch.
+   */
+  apply_selected_drawings_options(options: Partial<drawing_options>): number;
+  /** Lock or unlock every selected drawing as one undo step. Returns how many changed. */
+  set_selected_drawings_locked(locked: boolean): number;
+  /** Show or hide every selected drawing as one undo step. Returns how many changed. */
+  set_selected_drawings_visibility(visible: boolean): number;
+  /** Copy every selected drawing with a semantic anchor offset; the copies become the selection. */
+  clone_selected_drawings(logical_offset?: number, price_offset?: number): drawing_api[];
   /** Fire after the visible logical range changes. */
   subscribe_visible_logical_range_change(handler: visible_logical_range_handler): void;
   unsubscribe_visible_logical_range_change(handler: visible_logical_range_handler): void;

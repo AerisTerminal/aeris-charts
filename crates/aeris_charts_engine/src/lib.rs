@@ -1394,7 +1394,7 @@ impl<'a> IntoIterator for &'a mut SeriesStore {
 
 /// Pane-boundary layout slot in CSS pixels. The visible separator rule fills exactly this slot on
 /// the device-pixel grid; hover/hit geometry is independently expanded for usability.
-pub const PANE_SEPARATOR: f64 = 2.0;
+pub const PANE_SEPARATOR: f64 = 1.0;
 
 /// `pane_index` sentinel for a series whose pane was removed (reference `removePane` orphans the
 /// pane's series — `paneForSource` turns null): the series keeps its data but renders and
@@ -2057,11 +2057,14 @@ pub struct ChartEngine {
     drawing_runtime: RefCell<DrawingRuntime>,
     /// Next chart-unique drawing id (never reused; starts at 1 — 0 is the "no drawing" sentinel).
     next_drawing_id: DrawingId,
-    /// The drawing the host last clicked (industry-standard selection): while set, the frame
-    /// build paints anchor handles at its defining points and its anchors accept drags.
+    /// Primary drawing selection: the one a toolbar describes. Always a member of
+    /// `selected_drawings` when set.
     selected_drawing: Option<DrawingId>,
-    /// Additional object-tree selections. `selected_drawing` remains the compatibility primary.
+    /// Every selected drawing in ascending id order. Each paints its selection chrome and
+    /// handles, and selection operations act on all of them.
     selected_drawings: Vec<DrawingId>,
+    /// Ctrl/⌘ selection box being dragged on a pane.
+    drawing_marquee: Option<crate::drawings::DrawingMarquee>,
     /// Active anchor/body drag session on a drawing (drawings.rs; the interaction.rs session
     /// pattern — the engine owns the start snapshot and the math).
     drawing_drag: Option<DrawingDrag>,
@@ -2288,6 +2291,7 @@ impl ChartEngine {
             selected_drawing: None,
             selected_drawings: Vec::new(),
             drawing_drag: None,
+            drawing_marquee: None,
             drawing_baselines_need_frame_refresh: false,
             drawing_history: DrawingHistory::default(),
             drawing_controller: DrawingController::default(),

@@ -1776,6 +1776,28 @@ pub struct TextCapMetrics {
 /// (deterministic for native tests).
 pub type TextCapCenterFn = Box<dyn Fn(f64, &str, u16, bool) -> TextCapMetrics>;
 
+/// Ctrl/⌘ selection box over one pane in media px (x pane-relative, y chart-top).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DrawingMarquee {
+    pub(crate) pane: usize,
+    pub(crate) from: (f64, f64),
+    pub(crate) to: (f64, f64),
+}
+
+impl DrawingMarquee {
+    /// The box as `[left, top, right, bottom]`; `None` until the pointer has moved.
+    pub(crate) fn bounds(self) -> Option<[f64; 4]> {
+        (self.from != self.to).then(|| {
+            [
+                self.from.0.min(self.to.0),
+                self.from.1.min(self.to.1),
+                self.from.0.max(self.to.0),
+                self.from.1.max(self.to.1),
+            ]
+        })
+    }
+}
+
 /// Active anchor/body drag session (the interaction.rs session pattern: the engine owns the
 /// start snapshot and the math; hosts forward drag positions).
 pub(crate) struct DrawingDrag {
@@ -1831,6 +1853,8 @@ enum DrawingCommand {
         before: Vec<Drawing>,
         after: Vec<Drawing>,
     },
+    /// Several commands committed as one undo step: applied in order, undone in reverse.
+    Batch(Vec<DrawingCommand>),
 }
 
 impl DrawingCommand {
@@ -1861,6 +1885,20 @@ impl DrawingCommand {
                     drawing.rebase_logical_with(map);
                 }
             }
+            Self::Batch(commands) => {
+                for command in commands {
+                    command.rebase_logical_with(map);
+                }
+            }
+        }
+    }
+
+    /// One undo step for `commands`: `None` when empty, the command itself when alone.
+    fn batch(mut commands: Vec<Self>) -> Option<Self> {
+        match commands.len() {
+            0 => None,
+            1 => commands.pop(),
+            _ => Some(Self::Batch(commands)),
         }
     }
 }
@@ -1872,17 +1910,22 @@ impl DrawingCommand {
 pub(crate) struct DrawingHistory {
     undo: Vec<DrawingCommand>,
     redo: Vec<DrawingCommand>,
-    /// Snapshot taken when a settings session opened (`begin_drawing_options_edit`). While set,
-    /// updates to that drawing are live previews that coalesce into one entry on commit. It lives
-    /// with the stack so every history reset also ends a session whose baseline it invalidated.
-    options_edit: Option<Drawing>,
+    /// Snapshots taken when a settings session opened (`begin_drawing_options_edit` or
+    /// `begin_selected_drawings_options_edit`). While non-empty, updates to those drawings are
+    /// live previews that coalesce into one entry on commit. It lives with the stack so every
+    /// history reset also ends a session whose baseline it invalidated.
+    options_edit: Vec<Drawing>,
 }
 
 impl DrawingHistory {
     pub(crate) fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
-        self.options_edit = None;
+        self.options_edit.clear();
+    }
+
+    fn in_options_edit(&self, id: DrawingId) -> bool {
+        self.options_edit.iter().any(|before| before.id == id)
     }
 
     fn rebase_logical_with<F>(&mut self, map: F)
@@ -1991,7 +2034,7 @@ fn distance_to_segment(x: f64, y: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f6
     (x - (x1 + dx * clamped)).hypot(y - (y1 + dy * clamped))
 }
 
-fn point_in_polygon(point: (f64, f64), vertices: &[(f64, f64)]) -> bool {
+pub(crate) fn point_in_polygon(point: (f64, f64), vertices: &[(f64, f64)]) -> bool {
     let mut inside = false;
     for index in 0..vertices.len() {
         let a = vertices[index];
@@ -2966,15 +3009,20 @@ impl ChartEngine {
         }
     }
 
-    fn record_drawing_command(&mut self, command: DrawingCommand) {
-        if let DrawingCommand::Update { before, .. } = &command
-            && self
-                .drawing_history
-                .options_edit
-                .as_ref()
-                .is_some_and(|session| session.id == before.id)
-        {
-            return;
+    fn record_drawing_command(&mut self, mut command: DrawingCommand) {
+        let history = &self.drawing_history;
+        match &mut command {
+            DrawingCommand::Update { before, .. } if history.in_options_edit(before.id) => return,
+            DrawingCommand::Batch(commands) => {
+                commands.retain(|command| {
+                    !matches!(command, DrawingCommand::Update { before, .. }
+                        if history.in_options_edit(before.id))
+                });
+                if commands.is_empty() {
+                    return;
+                }
+            }
+            _ => {}
         }
         if self.drawing_history.undo.len() == DRAWING_HISTORY_LIMIT {
             self.drawing_history.undo.remove(0);
@@ -3002,25 +3050,18 @@ impl ChartEngine {
         self.drawing_runtime
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
-        self.selected_drawing = Some(id);
+        self.select_only_drawing(id);
     }
 
     fn remove_drawing_snapshot(&mut self, id: DrawingId) -> Option<(Drawing, usize)> {
         let index = self.drawings.iter().position(|drawing| drawing.id == id)?;
-        if self
-            .drawing_history
-            .options_edit
-            .as_ref()
-            .is_some_and(|session| session.id == id)
-        {
+        if self.drawing_history.in_options_edit(id) {
             self.commit_drawing_options_edit();
         }
         let drawing = self.drawings.remove(index);
         self.forget_persisted_anchors(id);
         self.drawing_runtime.borrow_mut().remove(id, &self.drawings);
-        if self.selected_drawing == Some(id) {
-            self.selected_drawing = None;
-        }
+        self.deselect_drawing(id);
         if self.drawing_drag.as_ref().is_some_and(|drag| drag.id == id) {
             self.drawing_drag = None;
         }
@@ -3080,7 +3121,7 @@ impl ChartEngine {
                     self.drawings.clear();
                     self.drawing_runtime.borrow_mut().clear();
                 }
-                self.selected_drawing = None;
+                self.clear_drawing_selection_state();
                 self.drawing_drag = None;
                 self.editing_drawing = None;
                 self.drawing_text_edit = None;
@@ -3098,6 +3139,30 @@ impl ChartEngine {
                 self.drawing_runtime
                     .borrow_mut()
                     .rebuild_all(&self.drawings, self.panes.len());
+                self.prune_drawing_selection();
+            }
+            DrawingCommand::Batch(commands) => {
+                if undo {
+                    for command in commands.iter().rev() {
+                        self.apply_drawing_command(command, true);
+                    }
+                } else {
+                    for command in commands {
+                        self.apply_drawing_command(command, false);
+                    }
+                }
+                // Drawings a step brings back return selected together, as they left.
+                let restored = commands
+                    .iter()
+                    .filter_map(|command| match command {
+                        DrawingCommand::Create { drawing, .. } if !undo => Some(drawing.id),
+                        DrawingCommand::Delete { drawing, .. } if undo => Some(drawing.id),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                if !restored.is_empty() {
+                    self.set_selected_drawings(&restored);
+                }
             }
         }
     }
@@ -3139,8 +3204,8 @@ impl ChartEngine {
             || self
                 .drawing_history
                 .options_edit
-                .as_ref()
-                .is_some_and(|before| self.drawing(before.id) != Some(before))
+                .iter()
+                .any(|before| self.drawing(before.id) != Some(before))
     }
 
     pub fn can_redo_drawing(&self) -> bool {
@@ -4632,51 +4697,88 @@ impl ChartEngine {
     /// but enters history only once, as a single undo step on commit. Opening a session on
     /// another drawing commits the previous one. Returns false for an unknown id.
     pub fn begin_drawing_options_edit(&mut self, id: DrawingId) -> bool {
-        if self
-            .drawing_history
-            .options_edit
-            .as_ref()
-            .is_some_and(|before| before.id == id)
+        self.begin_options_edit_for(&[id])
+    }
+
+    /// Open one settings session on every selected drawing, so a live edit applied through
+    /// [`Self::apply_selected_drawings_options`] commits as a single undo step. Opening it again
+    /// for the same selection keeps the session. Returns false while nothing is selected.
+    pub fn begin_selected_drawings_options_edit(&mut self) -> bool {
+        let ids = self.selected_drawings.clone();
+        self.begin_options_edit_for(&ids)
+    }
+
+    fn begin_options_edit_for(&mut self, ids: &[DrawingId]) -> bool {
+        let history = &self.drawing_history;
+        if !ids.is_empty()
+            && history.options_edit.len() == ids.len()
+            && ids.iter().all(|&id| history.in_options_edit(id))
         {
             return true;
         }
-        let Some(before) = self.drawing(id).cloned() else {
+        let before = ids
+            .iter()
+            .filter_map(|&id| self.drawing(id).cloned())
+            .collect::<Vec<_>>();
+        if before.is_empty() {
             return false;
-        };
+        }
         self.commit_drawing_options_edit();
-        self.drawing_history.options_edit = Some(before);
+        self.drawing_history.options_edit = before;
         true
     }
 
-    /// The drawing whose settings session is open, if any.
+    /// The drawing whose settings session is open, if any (the first of a selection session).
     pub fn drawing_options_edit(&self) -> Option<DrawingId> {
         self.drawing_history
             .options_edit
-            .as_ref()
+            .first()
             .map(|before| before.id)
     }
 
     /// Close the open settings session, recording its net change as one undo step. Returns
     /// whether a session was open.
     pub fn commit_drawing_options_edit(&mut self) -> bool {
-        let Some(before) = self.drawing_history.options_edit.take() else {
+        let session = std::mem::take(&mut self.drawing_history.options_edit);
+        if session.is_empty() {
             return false;
-        };
-        self.record_drawing_edit(before);
+        }
+        let mut commands = Vec::with_capacity(session.len());
+        for before in session {
+            let Some(after) = self.drawing(before.id).cloned() else {
+                continue;
+            };
+            if before != after {
+                self.forget_persisted_anchors(before.id);
+                commands.push(DrawingCommand::Update {
+                    before,
+                    after: Box::new(after),
+                });
+            }
+        }
+        if let Some(command) = DrawingCommand::batch(commands) {
+            self.record_drawing_command(command);
+        }
         true
     }
 
-    /// Close the open settings session and restore the drawing exactly as it was when the session
-    /// opened, without a history entry. Returns whether a session was open.
+    /// Close the open settings session and restore its drawings exactly as they were when the
+    /// session opened, without a history entry. Returns whether a session was open.
     pub fn cancel_drawing_options_edit(&mut self) -> bool {
-        let Some(before) = self.drawing_history.options_edit.take() else {
+        let session = std::mem::take(&mut self.drawing_history.options_edit);
+        if session.is_empty() {
             return false;
-        };
-        if self
-            .drawing(before.id)
-            .is_some_and(|current| *current != before)
-        {
-            self.replace_drawing_snapshot(&before);
+        }
+        let mut restored = false;
+        for before in session {
+            if self
+                .drawing(before.id)
+                .is_some_and(|current| *current != before)
+            {
+                restored |= self.replace_drawing_snapshot(&before);
+            }
+        }
+        if restored {
             self.invalidate_frame_drawings();
             self.bump_drawing_sync_revision();
         }
@@ -4831,7 +4933,7 @@ impl ChartEngine {
         self.drawing_anchor_times.clear();
         self.drawing_time_anchors.clear();
         self.drawing_runtime.borrow_mut().clear();
-        self.selected_drawing = None;
+        self.clear_drawing_selection_state();
         self.drawing_drag = None;
         self.hovered_drawing = None;
         self.hovered_text = None;
@@ -4886,25 +4988,83 @@ impl ChartEngine {
         serde_json::to_string(&values).unwrap_or_default()
     }
 
-    /// Set a bounded multi-selection. The first id becomes the compatibility primary selection.
+    /// Set a bounded multi-selection. Unknown and repeated ids are ignored; the first live id
+    /// becomes the primary selection whose settings a toolbar shows. Every selected drawing
+    /// paints its selection chrome, offers its handles, and takes part in the selection
+    /// operations (`remove_selected_drawings`, `apply_selected_drawings_options`,
+    /// `clone_selected_drawings`). Returns whether the selection changed.
     pub fn set_selected_drawings(&mut self, ids: &[DrawingId]) -> bool {
-        let mut selected = Vec::with_capacity(ids.len().min(crate::MAX_DRAWING_OBJECTS));
-        for &id in ids.iter().take(crate::MAX_DRAWING_OBJECTS) {
-            if self.drawing(id).is_some() && !selected.contains(&id) {
-                selected.push(id);
-            }
-        }
-        let changed = selected != self.selected_drawings;
+        let live = self
+            .drawings
+            .iter()
+            .map(|drawing| drawing.id)
+            .collect::<std::collections::HashSet<_>>();
+        let mut selected = ids
+            .iter()
+            .take(crate::MAX_DRAWING_OBJECTS)
+            .copied()
+            .filter(|id| live.contains(id))
+            .collect::<Vec<_>>();
+        let primary = selected.first().copied();
+        selected.sort_unstable();
+        selected.dedup();
+        let changed = selected != self.selected_drawings || primary != self.selected_drawing;
         self.selected_drawings = selected;
-        self.selected_drawing = self.selected_drawings.first().copied();
+        self.selected_drawing = primary;
         if changed {
             self.invalidate_frame_overlay();
+        }
+        if primary.is_some() {
+            self.clear_volume_profile_selection();
+            self.clear_depth_selection();
         }
         changed
     }
 
+    /// Every selected drawing in ascending id order; the primary is [`Self::selected_drawing`].
     pub fn selected_drawings(&self) -> &[DrawingId] {
         &self.selected_drawings
+    }
+
+    /// Whether `id` belongs to the drawing selection.
+    pub fn is_drawing_selected(&self, id: DrawingId) -> bool {
+        self.selected_drawings.binary_search(&id).is_ok()
+    }
+
+    fn select_only_drawing(&mut self, id: DrawingId) {
+        self.selected_drawing = Some(id);
+        self.selected_drawings.clear();
+        self.selected_drawings.push(id);
+    }
+
+    pub(crate) fn clear_drawing_selection_state(&mut self) {
+        self.selected_drawing = None;
+        self.selected_drawings.clear();
+    }
+
+    fn deselect_drawing(&mut self, id: DrawingId) {
+        if let Ok(index) = self.selected_drawings.binary_search(&id) {
+            self.selected_drawings.remove(index);
+        }
+        if self.selected_drawing == Some(id) {
+            self.selected_drawing = self.selected_drawings.first().copied();
+        }
+    }
+
+    /// Drop selected ids whose drawing no longer exists, keeping a live primary.
+    fn prune_drawing_selection(&mut self) {
+        if self.selected_drawings.is_empty() {
+            return;
+        }
+        let live = self
+            .drawings
+            .iter()
+            .map(|drawing| drawing.id)
+            .collect::<std::collections::HashSet<_>>();
+        self.selected_drawings.retain(|id| live.contains(id));
+        if !self.selected_drawing.is_some_and(|id| live.contains(&id)) {
+            self.selected_drawing = self.selected_drawings.first().copied();
+        }
     }
 
     /// Copy selected or explicitly supplied drawings to a bounded, revisioned payload.
@@ -4992,6 +5152,7 @@ impl ChartEngine {
             staged.push(drawing);
         }
         let mut ids = Vec::with_capacity(staged.len());
+        let mut commands = Vec::with_capacity(staged.len());
         let final_id = self
             .next_drawing_id
             .checked_add(u32::try_from(staged.len()).ok()?)?;
@@ -5002,13 +5163,16 @@ impl ChartEngine {
             self.drawings.push(drawing);
             self.insert_drawing_runtime(id);
             let index = self.drawings.len() - 1;
-            self.record_drawing_command(DrawingCommand::Create {
+            commands.push(DrawingCommand::Create {
                 drawing: self.drawings[index].clone(),
                 index,
             });
             ids.push(id);
         }
         debug_assert_eq!(self.next_drawing_id, final_id);
+        if let Some(command) = DrawingCommand::batch(commands) {
+            self.record_drawing_command(command);
+        }
         self.invalidate_frame_drawings();
         self.bump_drawing_sync_revision();
         Some(ids)
@@ -5136,25 +5300,176 @@ impl ChartEngine {
         })
     }
 
-    /// Atomically remove a set of drawings in object-tree order.
+    /// Atomically remove a set of drawings as one undo step. Unknown ids are ignored. Returns
+    /// how many drawings were removed.
     pub fn remove_drawings(&mut self, ids: &[DrawingId]) -> usize {
-        let mut removed = 0;
-        for id in ids
+        let ids = ids
             .iter()
             .take(crate::MAX_DRAWING_OBJECTS)
             .copied()
-            .collect::<Vec<_>>()
-        {
-            removed += usize::from(self.remove_drawing(id));
-        }
-        let live_ids = self
+            .collect::<std::collections::HashSet<_>>();
+        self.remove_drawing_set(&ids)
+    }
+
+    /// Remove every selected drawing (Delete/Backspace) as one undo step; undoing it restores
+    /// them selected. Returns how many drawings were removed.
+    pub fn remove_selected_drawings(&mut self) -> usize {
+        let ids = self
+            .selected_drawings
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        self.remove_drawing_set(&ids)
+    }
+
+    fn remove_drawing_set(&mut self, ids: &std::collections::HashSet<DrawingId>) -> usize {
+        // Topmost first, so each recorded index stays valid while undo reinserts bottom-up.
+        let doomed = self
             .drawings
             .iter()
+            .rev()
+            .filter(|drawing| ids.contains(&drawing.id))
             .map(|drawing| drawing.id)
-            .collect::<std::collections::HashSet<_>>();
-        self.selected_drawings.retain(|id| live_ids.contains(id));
-        self.selected_drawing = self.selected_drawings.first().copied();
+            .collect::<Vec<_>>();
+        if doomed.is_empty() {
+            return 0;
+        }
+        self.invalidate_frame_drawings();
+        let mut commands = Vec::with_capacity(doomed.len());
+        for id in doomed {
+            if let Some((drawing, index)) = self.remove_drawing_snapshot(id) {
+                commands.push(DrawingCommand::Delete { drawing, index });
+            }
+        }
+        let removed = commands.len();
+        if let Some(command) = DrawingCommand::batch(commands) {
+            self.record_drawing_command(command);
+            self.bump_drawing_sync_revision();
+        }
         removed
+    }
+
+    /// Merge one JSON options patch into every selected drawing that has those settings, as
+    /// one undo step. Each drawing takes only the keys its kind's property schema lists
+    /// (snake_case names, see [`Self::drawing_property_schema_json`]), so one toolbar edit
+    /// restyles a mixed selection without failing on kinds that lack a setting. Returns how
+    /// many drawings accepted the patch; a malformed patch changes nothing and returns 0.
+    pub fn apply_selected_drawings_options(&mut self, json: &str) -> usize {
+        let Ok(serde_json::Value::Object(patch)) = serde_json::from_str::<serde_json::Value>(json)
+        else {
+            return 0;
+        };
+        self.invalidate_frame_drawings();
+        let mut supported: Vec<(DrawingKind, Vec<String>)> = Vec::new();
+        let mut commands = Vec::new();
+        let mut applied = 0;
+        for id in self.selected_drawings.clone() {
+            let Some(index) = self.drawings.iter().position(|drawing| drawing.id == id) else {
+                continue;
+            };
+            let kind = self.drawings[index].kind;
+            let names = match supported.iter().position(|(known, _)| *known == kind) {
+                Some(slot) => &supported[slot].1,
+                None => {
+                    let names = crate::drawing_contract::drawing_property_schema(kind)
+                        .properties
+                        .into_iter()
+                        .map(|property| property.name)
+                        .collect();
+                    supported.push((kind, names));
+                    &supported[supported.len() - 1].1
+                }
+            };
+            let filtered = patch
+                .iter()
+                .filter(|(key, _)| names.iter().any(|name| name == *key))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<serde_json::Map<_, _>>();
+            if filtered.is_empty() {
+                continue;
+            }
+            let Ok(typed) = serde_json::from_value::<DrawingPatch>(filtered.into()) else {
+                continue;
+            };
+            let before = self.drawings[index].clone();
+            let mut after = before.clone();
+            if !after.apply_patch(typed) {
+                continue;
+            }
+            applied += 1;
+            if after != before {
+                after.revision = after.revision.saturating_add(1);
+                self.drawings[index] = after.clone();
+                self.update_drawing_runtime(id);
+                commands.push(DrawingCommand::Update {
+                    before,
+                    after: Box::new(after),
+                });
+            }
+        }
+        if let Some(command) = DrawingCommand::batch(commands) {
+            self.record_drawing_command(command);
+            self.bump_drawing_sync_revision();
+        }
+        applied
+    }
+
+    /// Lock or unlock every selected drawing as one undo step. Returns how many accepted it.
+    pub fn set_selected_drawings_locked(&mut self, locked: bool) -> usize {
+        self.apply_selected_drawings_options(&serde_json::json!({ "locked": locked }).to_string())
+    }
+
+    /// Show or hide every selected drawing as one undo step. Returns how many accepted it.
+    pub fn set_selected_drawings_visibility(&mut self, visible: bool) -> usize {
+        self.apply_selected_drawings_options(&serde_json::json!({ "visible": visible }).to_string())
+    }
+
+    /// Copy every selected drawing on top of the original, shifted by a semantic anchor offset,
+    /// as one undo step. The copies replace the selection. Returns the new ids in z-order.
+    pub fn clone_selected_drawings(
+        &mut self,
+        logical_offset: f64,
+        price_offset: f64,
+    ) -> Vec<DrawingId> {
+        if !logical_offset.is_finite() || !price_offset.is_finite() {
+            return Vec::new();
+        }
+        self.commit_drawing_options_edit();
+        let sources = self
+            .drawings
+            .iter()
+            .filter(|drawing| self.is_drawing_selected(drawing.id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut ids = Vec::with_capacity(sources.len());
+        let mut commands = Vec::with_capacity(sources.len());
+        for mut copy in sources {
+            let Some(id) = self.take_drawing_id() else {
+                break;
+            };
+            copy.id = id;
+            copy.z_order = id as i32;
+            copy.revision = 1;
+            for point in &mut copy.points {
+                point.logical += logical_offset;
+                point.price += price_offset;
+            }
+            self.drawings.push(copy);
+            self.insert_drawing_runtime(id);
+            let index = self.drawings.len() - 1;
+            commands.push(DrawingCommand::Create {
+                drawing: self.drawings[index].clone(),
+                index,
+            });
+            ids.push(id);
+        }
+        if let Some(command) = DrawingCommand::batch(commands) {
+            self.record_drawing_command(command);
+            self.bump_drawing_sync_revision();
+            self.invalidate_frame_drawings();
+            self.set_selected_drawings(&ids);
+        }
+        ids
     }
 
     /// Apply a named style template of the same kind. Only style keys apply: identity, content,
@@ -5359,7 +5674,7 @@ impl ChartEngine {
             }
             let text = if !drawing.text.is_empty() {
                 drawing.display_text()
-            } else if self.selected_drawing == Some(drawing.id)
+            } else if self.line_text_prompt() == Some(drawing.id)
                 || self.editing_drawing == Some(drawing.id)
             {
                 // An empty line's prompt is only a target once selection shows it.
@@ -5456,11 +5771,13 @@ impl ChartEngine {
     /// never sticks.
     pub fn set_selected_drawing(&mut self, id: Option<DrawingId>) {
         self.invalidate_frame_overlay();
-        self.selected_drawing = id.filter(|&sid| self.drawings.iter().any(|d| d.id == sid));
-        self.selected_drawings = self.selected_drawing.into_iter().collect();
-        if self.selected_drawing.is_some() {
-            self.clear_volume_profile_selection();
-            self.clear_depth_selection();
+        match id.filter(|&sid| self.drawings.iter().any(|d| d.id == sid)) {
+            Some(id) => {
+                self.select_only_drawing(id);
+                self.clear_volume_profile_selection();
+                self.clear_depth_selection();
+            }
+            None => self.clear_drawing_selection_state(),
         }
     }
 
@@ -5528,7 +5845,9 @@ impl ChartEngine {
     /// The empty line showing its `+ Add text` prompt: only the selected one, while it can be
     /// edited and is not already being edited. Hover alone never shows it.
     pub(crate) fn line_text_prompt(&self) -> Option<DrawingId> {
-        let id = self.selected_drawing?;
+        let id = self
+            .selected_drawing
+            .filter(|_| self.selected_drawings.len() == 1)?;
         let drawing = self.drawing(id)?;
         (drawing.kind.has_line_text()
             && drawing.text.is_empty()
@@ -5568,17 +5887,78 @@ impl ChartEngine {
     /// hit (the host then skips its series-selection path).
     pub fn select_drawing_at(&mut self, x: f64, y: f64) -> bool {
         self.invalidate_frame_overlay();
-        self.selected_drawing = self.hit_test_drawing(x, y).map(|hit| hit.id);
-        self.selected_drawings = self.selected_drawing.into_iter().collect();
+        match self.hit_test_drawing(x, y) {
+            Some(hit) => self.select_only_drawing(hit.id),
+            None => self.clear_drawing_selection_state(),
+        }
         self.selected_drawing.is_some()
     }
 
-    /// Remove the selected drawing (Delete/Backspace). Returns false while nothing is selected.
+    /// Remove the selection (Delete/Backspace): every selected drawing, as one undo step.
+    /// Returns false while nothing is selected.
     pub fn remove_selected_drawing(&mut self) -> bool {
-        let Some(id) = self.selected_drawing else {
+        self.remove_selected_drawings() > 0
+    }
+
+    // --- selection box ---
+
+    /// Open a selection box at a pane point. Returns false off the panes.
+    pub(crate) fn begin_drawing_marquee(&mut self, x: f64, y: f64) -> bool {
+        let Some(pane) = self.pane_at_y(y) else {
             return false;
         };
-        self.remove_drawing(id)
+        self.drawing_marquee = Some(DrawingMarquee {
+            pane,
+            from: (x, y),
+            to: (x, y),
+        });
+        true
+    }
+
+    /// Move the open selection box's free corner, clamped to the box's pane.
+    pub(crate) fn update_drawing_marquee(&mut self, x: f64, y: f64) {
+        let Some(marquee) = self.drawing_marquee else {
+            return;
+        };
+        let Some(pane) = self.panes.get(marquee.pane) else {
+            return;
+        };
+        let to = (
+            x.clamp(0.0, self.pane_w),
+            y.clamp(pane.top, pane.top + pane.height),
+        );
+        if to != marquee.to {
+            self.drawing_marquee = Some(DrawingMarquee { to, ..marquee });
+            self.invalidate_frame_overlay();
+        }
+    }
+
+    /// Close the selection box and select every drawing it touches, the topmost as primary;
+    /// a box touching nothing clears the selection. Returns whether a dragged box was open.
+    pub(crate) fn finish_drawing_marquee(&mut self) -> bool {
+        let Some(marquee) = self.drawing_marquee.take() else {
+            return false;
+        };
+        self.invalidate_frame_overlay();
+        let Some(bounds) = marquee.bounds() else {
+            return false;
+        };
+        let touched = self.drawings_touching_box(marquee.pane, bounds);
+        if touched.is_empty() {
+            self.set_selected_drawing(None);
+        } else {
+            self.set_selected_drawings(&touched);
+        }
+        true
+    }
+
+    /// Discard the selection box without changing the selection. Returns whether one was open.
+    pub(crate) fn cancel_drawing_marquee(&mut self) -> bool {
+        let open = self.drawing_marquee.take().is_some();
+        if open {
+            self.invalidate_frame_overlay();
+        }
+        open
     }
 
     // --- hit testing ---
@@ -5621,14 +6001,27 @@ impl ChartEngine {
         // The brush shows handles at its two ENDS only; the rectangle shows its eight
         // conventional anchors (four corners + four edge midpoints), the ellipse the four edge
         // midpoints on its outline; the rest show one per defining anchor, placed on the stroke
-        // it controls (`anchor_handle_points`).
-        if let Some(selected) = self.selected_drawing
-            && let Some(drawing) = self.drawing(selected)
-            && drawing.pane_index == pane
-            && drawing.visible
-            && drawing.interval_visibility.allows(self.drawing_interval)
-            && let Some(px) = self.drawing_render_px(drawing)
-        {
+        // it controls (`anchor_handle_points`). Every selected drawing shows handles; the
+        // primary's win where handles overlap.
+        let primary = self.selected_drawing;
+        for selected in primary.into_iter().chain(
+            self.selected_drawings
+                .iter()
+                .copied()
+                .filter(|&id| Some(id) != primary),
+        ) {
+            let Some(drawing) = self.drawing(selected) else {
+                continue;
+            };
+            if drawing.pane_index != pane
+                || !drawing.visible
+                || !drawing.interval_visibility.allows(self.drawing_interval)
+            {
+                continue;
+            }
+            let Some(px) = self.drawing_render_px(drawing) else {
+                continue;
+            };
             match drawing.kind.spec().handles {
                 DrawingHandleMode::None => {}
                 DrawingHandleMode::Endpoints if !px.is_empty() => {
@@ -5938,7 +6331,7 @@ impl ChartEngine {
             }
             DrawingBodyGeometry::Channel { first, second } => {
                 (drawing.fill_enabled
-                    && self.selected_drawing == Some(drawing.id)
+                    && self.is_drawing_selected(drawing.id)
                     && point_in_polygon((x, y), &[first[0], first[1], second[1], second[0]]))
                     || distance_to_segment(x, y, first[0].0, first[0].1, first[1].0, first[1].1)
                         <= tolerance
@@ -6062,7 +6455,7 @@ impl ChartEngine {
                     (bounds.left, bounds.bottom),
                 ];
                 (drawing.fill_enabled
-                    && self.selected_drawing == Some(drawing.id)
+                    && self.is_drawing_selected(drawing.id)
                     && x >= bounds.left
                     && x <= bounds.right
                     && y >= bounds.top
@@ -6114,7 +6507,7 @@ impl ChartEngine {
             }
             DrawingBodyGeometry::Quad { corners } => {
                 (drawing.fill_enabled
-                    && self.selected_drawing == Some(drawing.id)
+                    && self.is_drawing_selected(drawing.id)
                     && point_in_polygon((x, y), &corners))
                     || (0..4).any(|index| {
                         let a = corners[index];
@@ -6126,7 +6519,7 @@ impl ChartEngine {
                 if rx <= 0.0 || ry <= 0.0 {
                     false
                 } else if drawing.fill_enabled
-                    && self.selected_drawing == Some(drawing.id)
+                    && self.is_drawing_selected(drawing.id)
                     && ((x - center.0) / rx).powi(2) + ((y - center.1) / ry).powi(2) <= 1.0
                 {
                     true
@@ -6146,12 +6539,12 @@ impl ChartEngine {
                 let distance = (x - center.0).hypot(y - center.1);
                 (distance - radius).abs() <= tolerance
                     || (drawing.fill_enabled
-                        && self.selected_drawing == Some(drawing.id)
+                        && self.is_drawing_selected(drawing.id)
                         && distance <= radius)
             }
             DrawingBodyGeometry::Triangle { corners } => {
                 (drawing.fill_enabled
-                    && self.selected_drawing == Some(drawing.id)
+                    && self.is_drawing_selected(drawing.id)
                     && point_in_polygon((x, y), &corners))
                     || (0..3).any(|index| {
                         let a = corners[index];
@@ -6183,7 +6576,7 @@ impl ChartEngine {
                 if !within_x || !within_y {
                     return false;
                 }
-                if self.selected_drawing == Some(drawing.id) {
+                if self.is_drawing_selected(drawing.id) {
                     return true;
                 }
                 let near_v_edge = (x - left).abs() <= tolerance || (x - right).abs() <= tolerance;
@@ -6290,8 +6683,7 @@ impl ChartEngine {
         };
         if drawing.locked {
             // Locked objects remain selectable/hit-testable but never open a mutation session.
-            self.selected_drawing = Some(hit.id);
-            self.selected_drawings = vec![hit.id];
+            self.select_only_drawing(hit.id);
             return false;
         }
         let start_points = drawing.points.clone();
@@ -6301,7 +6693,7 @@ impl ChartEngine {
         let Some(start_px) = self.drawing_px(drawing) else {
             return false;
         };
-        self.selected_drawing = Some(hit.id);
+        self.select_only_drawing(hit.id);
         self.drawing_drag = Some(DrawingDrag {
             id: hit.id,
             part: hit.part,
@@ -7712,7 +8104,7 @@ impl ChartEngine {
         }
         self.drawings.push(drawing);
         self.insert_drawing_runtime(id);
-        self.selected_drawing = Some(id);
+        self.select_only_drawing(id);
         let index = self.drawings.len() - 1;
         self.record_drawing_command(DrawingCommand::Create {
             drawing: self.drawings[index].clone(),
@@ -7969,7 +8361,7 @@ impl ChartEngine {
         drawing.points = capture.points;
         self.drawings.push(drawing);
         self.insert_drawing_runtime(id);
-        self.selected_drawing = Some(id);
+        self.select_only_drawing(id);
         let index = self.drawings.len() - 1;
         self.record_drawing_command(DrawingCommand::Create {
             drawing: self.drawings[index].clone(),

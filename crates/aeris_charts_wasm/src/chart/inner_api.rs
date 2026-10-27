@@ -3105,9 +3105,33 @@ impl ChartInner {
     pub fn selected_drawing(&self) -> Option<u32> {
         self.engine.selected_drawing()
     }
-    /// Delete/Backspace: remove the selected drawing. False while nothing is selected.
+    /// Delete/Backspace: remove every selected drawing. False while nothing is selected.
     pub fn remove_selected_drawing(&mut self) -> bool {
         self.engine.remove_selected_drawing()
+    }
+    pub fn remove_selected_drawings(&mut self) -> u32 {
+        self.engine.remove_selected_drawings() as u32
+    }
+    pub fn apply_selected_drawings_options(&mut self, json: &str) -> u32 {
+        self.engine.apply_selected_drawings_options(json) as u32
+    }
+    pub fn set_selected_drawings_locked(&mut self, locked: bool) -> u32 {
+        self.engine.set_selected_drawings_locked(locked) as u32
+    }
+    pub fn set_selected_drawings_visibility(&mut self, visible: bool) -> u32 {
+        self.engine.set_selected_drawings_visibility(visible) as u32
+    }
+    pub fn clone_selected_drawings_json(
+        &mut self,
+        logical_offset: f64,
+        price_offset: f64,
+    ) -> String {
+        serde_json::to_string(
+            &self
+                .engine
+                .clone_selected_drawings(logical_offset, price_offset),
+        )
+        .unwrap_or_else(|_| "[]".to_string())
     }
     /// Press routing: opens an anchor/body drag on the drawing under the point (false = the host
     /// falls through to pan/scroll).
