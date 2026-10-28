@@ -6,11 +6,12 @@ use super::conflation::{
 };
 use super::*;
 use crate::{
-    AxisDimension, AxisPosition, CategoryScaleType, ContinuousScaleType, GeneralAreaBaseline,
-    GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralInterpolation, GeneralLineStyle,
-    GeneralPaneProposal, GeneralPointSymbol, GeneralReferenceOptions, GeneralReferenceValue,
-    GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralSeriesProposal, GeneralStackMode, GeneralXyInput, HorizontalDomain,
+    AxisDimension, AxisPosition, CandleBody, CategoryScaleType, ContinuousScaleType,
+    GeneralAreaBaseline, GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick,
+    GeneralInterpolation, GeneralLineStyle, GeneralPaneProposal, GeneralPointSymbol,
+    GeneralReferenceOptions, GeneralReferenceValue, GeneralRowId, GeneralRowIdentity,
+    GeneralScaleType, GeneralSeriesKind, GeneralSeriesOptions, GeneralSeriesProposal,
+    GeneralStackMode, GeneralXyInput, HorizontalDomain,
 };
 use aeris_charts_core::model::data_layer::DataLayer;
 use aeris_charts_core::model::plot_list::{PlotList, PlotValues};
@@ -17453,6 +17454,101 @@ fn candlestick_per_point_colors_override_each_channel() {
     // The uncolored bars keep the active theme's up-color resolution.
     let theme_up = Color::parse_css(aeris_charts_core::style::DEFAULT_MARKET_UP_CSS).unwrap();
     assert!(has(theme_up.0), "series up color still drawn");
+}
+
+/// One rising (bar 0) and one falling (bar 1) candlestick chart.
+fn two_direction_candle_chart() -> ChartEngine {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [1.0, 2.0];
+    let open = [10.0, 12.0];
+    let high = [12.0, 13.0];
+    let low = [9.0, 10.0];
+    let close = [11.0, 11.0];
+    chart
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart
+}
+
+/// Body prims are the wide rects; wicks are one device pixel wide in this fixture.
+fn wide_rect_colors(frame: &crate::frame::ChartFrame) -> Vec<Color> {
+    frame.panes[0]
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Rect { rect, color } if rect.w > 2 => Some(*color),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn hollow_candle_bodies_are_unfilled_while_the_frame_carries_the_direction() {
+    let mut chart = two_direction_candle_chart();
+    // Borders off: a hollow body is only visible through its frame, so the frame stays on.
+    chart.series[0].border_visible = Some(false);
+    assert_eq!(chart.candle_body(0), Some(CandleBody::Solid));
+    assert!(chart.set_candle_body(0, CandleBody::Hollow));
+    assert_eq!(chart.candle_body(0), Some(CandleBody::Hollow));
+    assert!(!chart.set_candle_body(999, CandleBody::Hollow));
+
+    let up = Color::parse_css(aeris_charts_core::style::DEFAULT_MARKET_UP_CSS).unwrap();
+    let down = Color::parse_css(aeris_charts_core::style::DEFAULT_MARKET_DOWN_CSS).unwrap();
+    let frame = chart.build_frame();
+    assert_eq!(
+        wide_rect_colors(&frame),
+        vec![Color::rgba(0, 0, 0, 0), Color::rgba(0, 0, 0, 0)],
+        "both bodies stay unfilled"
+    );
+    for direction in [up, down] {
+        assert!(
+            frame.panes[0]
+                .main
+                .iter()
+                .any(|prim| matches!(prim, Prim::RectFrame { color, .. } if *color == direction)),
+            "an unset border follows the direction's solid body color even with borders off"
+        );
+    }
+    // The appearance readback still reports the theme-following colors, never a sentinel.
+    let appearance = chart.financial_appearance(0).unwrap();
+    assert_eq!(appearance.up_color, crate::AppearanceColor::Theme);
+    assert_eq!(appearance.border_up_color, crate::AppearanceColor::Theme);
+}
+
+#[test]
+fn hollow_bullish_leaves_falling_bodies_solid() {
+    let mut chart = two_direction_candle_chart();
+    assert!(chart.set_candle_body(0, CandleBody::HollowBullish));
+    let down = Color::parse_css(aeris_charts_core::style::DEFAULT_MARKET_DOWN_CSS).unwrap();
+    let frame = chart.build_frame();
+    assert_eq!(
+        wide_rect_colors(&frame),
+        vec![Color::rgba(0, 0, 0, 0), down],
+        "only the rising body is unfilled"
+    );
+    // Back to solid: both bodies fill again.
+    assert!(chart.set_candle_body(0, CandleBody::Solid));
+    let up = Color::parse_css(aeris_charts_core::style::DEFAULT_MARKET_UP_CSS).unwrap();
+    let frame = chart.build_frame();
+    assert_eq!(wide_rect_colors(&frame), vec![up, down]);
+}
+
+#[test]
+fn hollow_bodies_keep_pinned_part_colors() {
+    let mut chart = two_direction_candle_chart();
+    chart.series[0].border_up_color = Some("#123456".into());
+    assert!(chart.set_candle_body(0, CandleBody::Hollow));
+    let frame = chart.build_frame();
+    let pinned = Color::rgb(0x12, 0x34, 0x56);
+    assert!(
+        frame.panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::RectFrame { color, .. } if *color == pinned)),
+        "a user-pinned border color wins over the direction fallback"
+    );
 }
 
 #[test]

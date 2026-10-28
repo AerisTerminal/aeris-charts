@@ -696,6 +696,7 @@ impl ChartEngine {
             work.candidates,
         );
         let point_colors = self.data.point_colors(rs.id);
+        let (hollow_up, hollow_down) = rs.candle_body.hollow_sides();
         let items = visible
             .into_iter()
             .map(|bar| {
@@ -707,13 +708,18 @@ impl ChartEngine {
                         .and_then(|colors| colors.color(channel, bar.source_row))
                         .map(Color)
                 };
+                // A hollow direction leaves its body unfilled; its color still carries the
+                // candle's frame and wick through the unset-color fallbacks above.
+                let hollow = (rising && hollow_up) || (!rising && hollow_down);
                 CandleItem {
                     x: bar.x_px / hpr,
                     open_y: scale.price_to_coordinate(bar.open, rs.base_value),
                     high_y: scale.price_to_coordinate(bar.high, rs.base_value),
                     low_y: scale.price_to_coordinate(bar.low, rs.base_value),
                     close_y: scale.price_to_coordinate(bar.close, rs.base_value),
-                    body_color: point(PointColorChannel::Body).unwrap_or(if rising {
+                    body_color: point(PointColorChannel::Body).unwrap_or(if hollow {
+                        Color::rgba(0, 0, 0, 0)
+                    } else if rising {
                         rs.up
                     } else {
                         rs.down
@@ -738,7 +744,8 @@ impl ChartEngine {
                 horizontal_pixel_ratio: hpr,
                 vertical_pixel_ratio: vpr,
                 wick_visible: rs.wick_visible,
-                border_visible: rs.border_visible,
+                // A hollow body is only visible through its frame, so the border stays on.
+                border_visible: rs.border_visible || rs.candle_body.has_hollow_side(),
             },
             out,
         );

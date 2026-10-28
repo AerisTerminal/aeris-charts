@@ -565,6 +565,42 @@ impl PriceLineExtent {
     }
 }
 
+/// Body presentation of a candlestick series (default [`Self::Solid`]).
+///
+/// A hollow direction leaves its body unfilled: the body's frame and wick carry the direction,
+/// so an unset border or wick color keeps following the direction's solid body color, and the
+/// body border is drawn even when the host turned borders off. Hosts select the style through
+/// [`ChartEngine::set_candle_body`]; the colors it paints with still arrive through the ordinary
+/// appearance and options channels, and a per-point body color keeps its channel priority for
+/// its bar. The style is inert on every other series kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CandleBody {
+    #[default]
+    Solid,
+    /// Both directions hollow.
+    Hollow,
+    /// Rising bodies hollow, falling bodies solid.
+    HollowBullish,
+    /// Falling bodies hollow, rising bodies solid.
+    HollowBearish,
+}
+
+impl CandleBody {
+    /// `(bullish, bearish)`: which directions leave the body unfilled.
+    pub const fn hollow_sides(self) -> (bool, bool) {
+        match self {
+            Self::Solid => (false, false),
+            Self::Hollow => (true, true),
+            Self::HollowBullish => (true, false),
+            Self::HollowBearish => (false, true),
+        }
+    }
+
+    const fn has_hollow_side(self) -> bool {
+        !matches!(self, Self::Solid)
+    }
+}
+
 /// One custom series' last-value record (Phase C-c): the plugin's current value for the item
 /// (the LAST element of `priceValueBuilder`, mirroring the Close slot of the reference's
 /// `[last, max, min, last]` custom plot-row mapping — get-series-plot-row-creator.ts), the bar
@@ -984,6 +1020,8 @@ pub struct SeriesEntry {
     /// Candlestick part visibility; `None` = visible (reference parity).
     pub wick_visible: Option<bool>,
     pub border_visible: Option<bool>,
+    /// Candlestick body presentation; inert for every other series kind.
+    pub candle_body: CandleBody,
     pub line_width: Option<f64>,
     /// Area fill gradient colors; `None` = engine defaults. Stored verbatim as CSS strings;
     /// parsed at render time.
@@ -1167,6 +1205,7 @@ impl SeriesEntry {
             border_down_color: None,
             wick_visible: None,
             border_visible: None,
+            candle_body: CandleBody::Solid,
             line_width: None,
             area_top_color: None,
             area_bottom_color: None,
@@ -1263,6 +1302,7 @@ impl SeriesEntry {
         self.border_down_color = defaults.border_down_color;
         self.wick_visible = defaults.wick_visible;
         self.border_visible = defaults.border_visible;
+        self.candle_body = defaults.candle_body;
         self.line_width = defaults.line_width;
         self.area_top_color = defaults.area_top_color;
         self.area_bottom_color = defaults.area_bottom_color;
@@ -4115,6 +4155,27 @@ impl ChartEngine {
     #[must_use]
     pub fn series_visible(&self, id: SeriesId) -> Option<bool> {
         self.series_entry(id).map(|series| series.visible)
+    }
+
+    /// Set a candlestick series' body presentation ([`CandleBody`]). The colors it paints with
+    /// still come from the series' ordinary appearance channels. The style is inert on other
+    /// kinds; returns false for an unknown or removed id.
+    pub fn set_candle_body(&mut self, id: SeriesId, body: CandleBody) -> bool {
+        let Some(series) = self.series_entry_mut(id) else {
+            return false;
+        };
+        if series.candle_body == body {
+            return true;
+        }
+        series.candle_body = body;
+        self.invalidate_frame_series(id);
+        true
+    }
+
+    /// Current body presentation of a live series.
+    #[must_use]
+    pub fn candle_body(&self, id: SeriesId) -> Option<CandleBody> {
+        self.series_entry(id).map(|series| series.candle_body)
     }
 
     /// Toggle one typed series-chrome flag without a JSON round trip.
