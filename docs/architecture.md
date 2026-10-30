@@ -882,7 +882,7 @@ so Shift-measure and pan start on it; an armed tool places on top of order and p
 feedback, and a selected unlocked drawing's handles likewise win hover and cursor over them), the shared 5 px threshold
 through the `GestureResolver`, axis and separator drags, kinetic coasting, click-to-select and
 text-edit activation, double-click resets, keyboard bindings, wheel routing, hover promotion, the
-trading-tooltip dwell deadline, and a semantic `ChartCursor`. A price-axis, time-axis, or pane-separator
+trading-tooltip dwell and bar replay playback deadlines, and a semantic `ChartCursor`. A price-axis, time-axis, or pane-separator
 drag clears hover for its whole duration, so the crosshair never pins to the plot edge while the
 pointer works an axis. Motion that arrives with the primary
 button already up (a release the host never saw), Escape, and `input_cancel` abandon the open gesture
@@ -891,8 +891,8 @@ without committing it, exactly like browser pointer-capture loss. Host-configura
 `price_axis_wheel_zoom`). Work only a host can perform arrives as a bounded queue of
 `ChartInputEvent`s (context menu, click and double-click notification, text-editor opening, created
 drawing, removal of a host-owned series, a native indicator the keyboard Delete removed (reported
-by its binding id so hosts tracking it stop restoring it), crosshair leave, and Delta Tooltip range
-change). A
+by its binding id so hosts tracking it stop restoring it), crosshair leave, Delta Tooltip range
+change, and bar replay state change). A
 double-click ends whatever press it lands in (measure, trading drag, pan, price pan, capture
 creation) before applying its reset. Browser and offscreen adapters, and
 the GPUI probe, drain host-owned series removals after controller input; the browser also forwards
@@ -1136,6 +1136,29 @@ not reconstruct replay state. Non-time dependents use their shared sequence proj
 interpreting logical row keys as UTC seconds; arbitrary independently timed series are not valid on
 that domain.
 
+Bar replay mode (`aeris_charts_engine` `replay.rs`) drives that same clock; it adds no second data
+path. Its phases are off, selecting, paused, and playing. Selecting arms the input controller's
+`ChartCursor::Trim`: the pane claims every press, an unmoved release trims at the bar under the
+pointer, a drag still pans, hover promotion is suspended, and Escape returns to the previous phase.
+The crosshair layer then paints only the trim cursor: a 3 px solid vertical line in the theme
+primary at the snapped bar, a primary badge with the engine's scissors icon at the pointer, and a
+background wash over the bars right of that bar. The horizontal crosshair line and price label are
+not drawn, and the time label names the addressed bar. Browsers hide the platform cursor; GPUI
+cannot, so its adapter maps the trim cursor to the I-beam. A trim sets the clock to the close of the
+chosen bar: one microsecond before the next canonical row, the newest print of a trade-stream time
+bar, or the last print that still joins a sequence bar. Steps move between those same boundaries,
+reading the canonical timeline behind the clock, so time, trade, volume, range, synthetic, and
+resampled bars reveal or hide one whole bar per step; an interval step moves the clock by a fixed
+time, revealing intrabar prints. A clock change rebuilds resampled targets from the source rows the
+clock leaves visible. Playback runs on the host input clock: `input_wake_deadline_ms` asks for the
+next step and `input_tick` takes at most one step per wake, re-anchoring a late or throttled host
+instead of bursting, and pausing at the end of retained history. While replay is paused or
+playing, Shift+Right/Left step and Shift+Down toggles playback. Every change queues
+`ChartInputEvent::ReplayChanged`; hosts render toolbars from `replay_state()` and own no replay
+logic. Jump to real time clears the clock; exit restores the clock the host had set before replay
+began. The dashed host-clock marker is hidden while the mode is on, because the chart already ends
+at the replay clock.
+
 Moving the clock forward applies newly revealed canonical events through the ordinary live path.
 Backward trade seeks restore the nearest retained aggregation checkpoint, replay only the reported
 suffix, and produce the same bars as a fresh load to that clock. Checkpoints are recorded every
@@ -1149,7 +1172,8 @@ the clock changes only source truth and performs no dependent work. The existing
 `update_typed` path is the bulk ordered bar boundary, while trade batches cross as parallel typed
 arrays and update all stream dependents once. The release `perf_gate` advances a shared
 footprint/candle chart through 6,000 recorded seconds at 100×, builds every frame, and requires
-steady-state retained memory not to grow across complete passes. It also streams a sustained
+steady-state retained memory not to grow across complete passes. On the same chart, 600 bar replay
+steps, each with a frame build and a toolbar state read, must each fit a 60 Hz frame. It also streams a sustained
 order-flow tape across the retention ceiling and injects a late print one bar behind the tip,
 requiring the per-update p99, the worst retention crossing, and the late print to fit a 60 Hz frame,
 and streams seven sessions of one-minute order flow, requiring every batch through sealing and

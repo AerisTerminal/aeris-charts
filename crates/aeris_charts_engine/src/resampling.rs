@@ -289,6 +289,17 @@ impl ChartEngine {
         }
     }
 
+    /// Rebuild every resampled target from its currently visible source rows. A replay clock
+    /// change must do this: a target bar built from the full source would otherwise keep the
+    /// high, low, and close of source rows the clock hides.
+    pub(crate) fn refresh_all_resampled_targets(&mut self) {
+        let mut targets = self.resampled_series.keys().copied().collect::<Vec<_>>();
+        targets.sort_unstable();
+        for target in targets {
+            let _ = self.refresh_resampled_target(target);
+        }
+    }
+
     fn refresh_resampled_target(&mut self, target: SeriesId) -> Result<(), ResampleError> {
         let (source, volume_source, volume_target, options) = {
             let binding = self

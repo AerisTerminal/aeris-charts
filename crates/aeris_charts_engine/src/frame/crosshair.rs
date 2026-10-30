@@ -3,6 +3,13 @@
 use super::*;
 use crate::HorizontalDomain;
 
+/// CSS px width of the bar replay trim line.
+const REPLAY_TRIM_LINE_WIDTH: f64 = 3.0;
+/// CSS px radius of the scissors badge at the pointer.
+const REPLAY_TRIM_BADGE_RADIUS: f64 = 13.0;
+/// CSS px edge of the scissors icon inside the badge.
+const REPLAY_TRIM_ICON_SIZE: f64 = 16.0;
+
 impl ChartEngine {
     /// Interactive chart objects own pointer feedback while they are hovered or manipulated.
     /// Keep the stored crosshair position for host callbacks and snapping, but do not paint its
@@ -38,6 +45,10 @@ impl ChartEngine {
         let Some((x_css, y_css)) = self.clamped_crosshair() else {
             return;
         };
+        if self.replay_selecting() {
+            self.build_replay_trim_frame(pane_index, pane_w_px, (x_css, y_css), hpr, vpr, out);
+            return;
+        }
         if self.crosshair_mode == CrosshairMode::Hidden
             || self.crosshair_suppressed_by_interaction()
         {
@@ -168,6 +179,103 @@ impl ChartEngine {
                 stroke: fill,
             });
         }
+    }
+
+    /// The bar replay trim cursor replaces the crosshair: a solid primary line through the bar it
+    /// would cut, the future to its right dimmed, and a scissors badge at the pointer. It shows
+    /// whatever the crosshair mode, because it is the selection gesture's only feedback.
+    fn build_replay_trim_frame(
+        &self,
+        pane_index: usize,
+        pane_w_px: i32,
+        (x_css, y_css): (f64, f64),
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        if !self.pane_uses_financial_time(pane_index) {
+            return;
+        }
+        let Some(index) = self.replay_index_at(x_css) else {
+            return;
+        };
+        let pane = &self.panes[pane_index];
+        let (primary, foreground) = match self.theme {
+            crate::ChartTheme::Light => (
+                aeris_charts_core::style::LIGHT_PRIMARY_CSS,
+                aeris_charts_core::style::LIGHT_PRIMARY_FOREGROUND_CSS,
+            ),
+            crate::ChartTheme::Dark => (
+                aeris_charts_core::style::DARK_PRIMARY_CSS,
+                aeris_charts_core::style::DARK_PRIMARY_FOREGROUND_CSS,
+            ),
+        };
+        let primary = Color::parse_css(primary).unwrap_or(PRIMARY);
+        let foreground = Color::parse_css(foreground).unwrap_or(Color::rgb(0xff, 0xff, 0xff));
+        let background = css_color(
+            &self.options.get().layout.background.color,
+            Color::rgb(0xff, 0xff, 0xff),
+        );
+        let x = self.time_scale.index_to_coordinate(index as i64);
+        let top = (pane.top * vpr).round() as i32;
+        let bottom = ((pane.top + pane.height) * vpr).round() as i32;
+        let dim_x = (((x + self.bar_spacing() / 2.0) * hpr).round() as i32).max(0);
+        if dim_x < pane_w_px {
+            out.push(Prim::Rect {
+                rect: IRect {
+                    x: dim_x,
+                    y: top,
+                    w: pane_w_px - dim_x,
+                    h: bottom - top,
+                },
+                color: Color::rgba(
+                    background.r(),
+                    background.g(),
+                    background.b(),
+                    crate::replay::REPLAY_DIM_ALPHA,
+                ),
+            });
+        }
+        out.push(Prim::VLine {
+            x: (x * hpr).round() as i32,
+            y0: top,
+            y1: bottom,
+            width: (REPLAY_TRIM_LINE_WIDTH * hpr).round().max(1.0) as i32,
+            style: LineStyle::Solid,
+            color: primary,
+        });
+        if self.pane_at_y(y_css) != Some(pane_index) {
+            return;
+        }
+        let cx = (x * hpr).round();
+        let cy = (y_css * vpr).round();
+        out.push(Prim::Circle {
+            cx: cx as f32,
+            cy: cy as f32,
+            radius: (REPLAY_TRIM_BADGE_RADIUS * vpr) as f32,
+            fill: primary,
+            stroke_width: 0.0,
+            stroke: primary,
+        });
+        // A whole-device-px square keeps the raster 1:1 on every executor.
+        let edge = (REPLAY_TRIM_ICON_SIZE * vpr).round().max(1.0);
+        let image = self.icon_rasters.borrow_mut().raster(
+            &crate::drawings::SCISSORS_ICON,
+            edge as u32,
+            foreground,
+        );
+        out.push(Prim::Image {
+            rect: [
+                (cx - edge / 2.0).round() as f32,
+                (cy - edge / 2.0).round() as f32,
+                image.width as f32,
+                image.height as f32,
+            ],
+            source: image.full_source(),
+            image,
+            opacity: 1.0,
+            sampling: ImageSampling::Linear,
+        });
     }
 
     /// reference `PaneWidget._setCrosshairPosition` (pane-widget.ts:714-719) clamps the cursor into

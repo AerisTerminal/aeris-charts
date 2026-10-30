@@ -38,7 +38,9 @@ pub(crate) use geometry::{
     PositionGeometry, PositionZone, anchor_handle_points, arc_segments, ellipse_segments,
     resolve_drawing_geometry,
 };
-pub(crate) use icons::{BUILTIN_ICONS, IconRasterCache, arrow_marker_icon, builtin_icon};
+pub(crate) use icons::{
+    BUILTIN_ICONS, IconRasterCache, SCISSORS_ICON, arrow_marker_icon, builtin_icon,
+};
 pub use text_block::normalize_drawing_text;
 pub(crate) use text_block::{LINE_HEIGHT_EM, TextBlock, TextRun};
 pub(crate) use tools::{

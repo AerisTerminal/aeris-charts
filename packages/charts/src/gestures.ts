@@ -12,7 +12,7 @@ type modifier_sample = { shiftKey: boolean; ctrlKey: boolean; altKey: boolean; m
 type point = { x: number; y: number };
 const enum InputDeviceCode { Mouse = 0, Touch = 1, Pen = 2 }
 
-export function install_gestures(chart: chart_impl): () => void {
+export function install_gestures(chart: chart_impl): { detach: () => void; sync: () => void } {
   const overlay = chart.overlay_el();
   const wasm = chart.wasm;
   // Captures are platform resources. Gesture membership and routing stay in the engine.
@@ -28,6 +28,7 @@ export function install_gestures(chart: chart_impl): () => void {
   let input_wake_deadline: number | null = null;
   let scroll_anim: number | null = null;
   let windows_chrome: boolean | null = null;
+  let detached = false;
 
   const local_xy = (event: { clientX: number; clientY: number }): point => {
     // Media coordinates are container-relative.
@@ -54,6 +55,9 @@ export function install_gestures(chart: chart_impl): () => void {
   const cursor_names = [
     "crosshair", "default", "pointer", "text", "move", "grabbing", "grab", "grabbing",
     "ns-resize", "ew-resize", "nwse-resize", "nesw-resize", "row-resize",
+    // 13 defers to the host primitive's cursor. 14 is the replay trim cursor, which the engine
+    // paints as its line and scissors badge.
+    "crosshair", "none",
   ] as const;
   const HOST_PRIMITIVE_CURSOR = 13;
 
@@ -311,6 +315,7 @@ export function install_gestures(chart: chart_impl): () => void {
     chart.consume_input_events();
     chart.repaint();
     chart.announce_view();
+    schedule_input_wake();
     if (wasm.input_animating()) ensure_input_frames();
   };
   const on_keyup = (event: KeyboardEvent) => {
@@ -323,9 +328,12 @@ export function install_gestures(chart: chart_impl): () => void {
     if (captures.size > 0) cancel_active_input();
     if (wasm.input_animating()) stop_scroll_anim();
     clear_input_wake();
+    // Wakes the engine still asks for, such as replay playback, outlive a cancelled gesture.
+    if (document.visibilityState === "visible") schedule_input_wake();
   };
   const on_visibility_change = () => {
     if (document.visibilityState !== "visible") cancel_if_active();
+    else schedule_input_wake();
   };
   const gesture_resize_observer = new ResizeObserver(cancel_if_active);
   gesture_resize_observer.observe(overlay);
@@ -354,7 +362,7 @@ export function install_gestures(chart: chart_impl): () => void {
   window.addEventListener("aeris_charts-chart-backend-lost", cancel_if_active);
   document.addEventListener("visibilitychange", on_visibility_change);
 
-  return () => {
+  const detach = () => {
     stop_scroll_anim();
     clear_input_wake();
     overlay.removeEventListener("wheel", on_wheel);
@@ -379,5 +387,8 @@ export function install_gestures(chart: chart_impl): () => void {
     document.removeEventListener("visibilitychange", on_visibility_change);
     gesture_resize_observer.disconnect();
     cancel_active_input();
+    detached = true;
+    clear_input_wake();
   };
+  return { detach, sync: () => { if (!detached) sync_controller_pointer(); } };
 }

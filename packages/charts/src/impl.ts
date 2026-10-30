@@ -43,7 +43,7 @@ import type {
   price_scale_info, price_scale_options, ring_source_layout,
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
-  replay_clock_stats, replay_seek_stats, resample_boundary, resample_options, resampled_bar, study_annotations, synthetic_bar_options, trade_stream_stats,
+  replay_change_handler, replay_clock_stats, replay_seek_stats, replay_state, replay_step, resample_boundary, resample_options, resampled_bar, study_annotations, synthetic_bar_options, trade_stream_stats,
   profile_source, profile_request, profile_snapshot, naked_profile_level, tpo_request, tpo_snapshot, tpo_presentation_options,
   periodic_profile_presentation_request, periodic_profile_presentation_options,
   anchored_vwap_point, profile_drawing_options, profile_drawing_snapshot,
@@ -4013,6 +4013,8 @@ export class chart_impl implements chart_api {
   private readonly crosshair_action_handlers = new Set<crosshair_action_request_handler>();
   private observer: ResizeObserver | null = null;
   private detach_gestures: (() => void) | null = null;
+  /** Re-reads controller cursor, events, repaint, and input wake after a non-input command. */
+  private sync_gesture_input: (() => void) | null = null;
   private removed = false;
   private readonly series_by_id = new Map<number, series_impl>();
   /** Options-volume column series → the removal of their whole study. */
@@ -4073,6 +4075,7 @@ export class chart_impl implements chart_api {
   /** The armed tool last reported to listeners; the engine may disarm on its own. */
   private reported_tool: drawing_kind | null = null;
   private readonly tool_change_subs = new Set<drawing_tool_change_handler>();
+  private readonly replay_change_subs = new Set<replay_change_handler>();
   private readonly drawing_created_subs = new Set<drawing_created_handler>();
   /** Borderless caret surface shared by two explicitly separate product edit modes. */
   private text_editor: HTMLElement | null = null;
@@ -4354,7 +4357,9 @@ export class chart_impl implements chart_api {
       this.container.setAttribute("aria-label", label);
       this.host_snapshot.owned_aria_label = label;
     }
-    this.detach_gestures = install_gestures(this);
+    const gestures = install_gestures(this);
+    this.detach_gestures = gestures.detach;
+    this.sync_gesture_input = gestures.sync;
     if (auto_size) {
       this.wasm.enable_auto_resize();
       this.bind_dpr_watcher();
@@ -4991,6 +4996,52 @@ export class chart_impl implements chart_api {
     } catch (error) {
       if (error instanceof AerisChartsError) throw error;
       throw_footprint_error(result);
+    }
+  }
+
+  replay_state(): replay_state {
+    return JSON.parse(this.wasm.replay_state_json()) as replay_state;
+  }
+
+  replay_select_start(): replay_state { return this.replay_command("select_start"); }
+  replay_cancel_selection(): replay_state { return this.replay_command("cancel_selection"); }
+  replay_select_time(time_micros: number): replay_state {
+    return this.replay_command("select_time", time_micros);
+  }
+  replay_play(): replay_state { return this.replay_command("play"); }
+  replay_pause(): replay_state { return this.replay_command("pause"); }
+  replay_toggle_play(): replay_state { return this.replay_command("toggle_play"); }
+  replay_step_forward(): replay_state { return this.replay_command("step_forward"); }
+  replay_step_back(): replay_state { return this.replay_command("step_back"); }
+  set_replay_speed(steps_per_second: number): replay_state {
+    return this.replay_command("speed", steps_per_second);
+  }
+  set_replay_step(step: replay_step): replay_state {
+    return this.replay_command("step", step.kind === "bar" ? Number.NaN : step.micros);
+  }
+  replay_jump_to_realtime(): replay_state { return this.replay_command("jump_to_realtime"); }
+  replay_exit(): replay_state { return this.replay_command("exit"); }
+
+  subscribe_replay_change(handler: replay_change_handler): void {
+    this.replay_change_subs.add(handler);
+  }
+
+  unsubscribe_replay_change(handler: replay_change_handler): void {
+    this.replay_change_subs.delete(handler);
+  }
+
+  private replay_command(command: string, value = Number.NaN): replay_state {
+    const result = this.wasm.replay_command_json(command, value);
+    // Playback runs on the controller wake, and the trim cursor and replay events are
+    // controller output, so every command ends with the same sync as an input event.
+    try {
+      return parse_general_result<replay_state>(result);
+    } finally {
+      if (this.sync_gesture_input) this.sync_gesture_input();
+      else {
+        this.consume_input_events();
+        this.repaint();
+      }
     }
   }
 
@@ -7650,9 +7701,11 @@ export class chart_impl implements chart_api {
       | { kind: "delta_tooltip_changed" }
       | { kind: "general_brush_changed" }
       | { kind: "general_legend_changed" }
-      | { kind: "panes_resized" };
+      | { kind: "panes_resized" }
+      | { kind: "replay_changed" };
     const json = this.wasm.take_input_events_json();
     const events = json === "[]" ? [] : JSON.parse(json) as controller_event[];
+    let replay_changed = false;
     for (const event of events) {
       switch (event.kind) {
         case "drawing_created":
@@ -7687,7 +7740,14 @@ export class chart_impl implements chart_api {
         case "general_legend_changed":
           this.notify_general_legend_change();
           break;
+        case "replay_changed":
+          replay_changed = true;
+          break;
       }
+    }
+    if (replay_changed && this.replay_change_subs.size > 0) {
+      const state = this.replay_state();
+      for (const handler of this.replay_change_subs) handler(state);
     }
     this.sync_drawing_tool();
     if (complete_press) {
@@ -8459,6 +8519,7 @@ export class chart_impl implements chart_api {
     this.plugin_resize_observer?.disconnect();
     this.observer = null;
     this.detach_gestures = null;
+    this.sync_gesture_input = null;
     this.plugin_resize_observer = null;
     for (const series of this.series_by_id.values()) series.mark_removed();
     this.series_by_id.clear();
@@ -8481,6 +8542,7 @@ export class chart_impl implements chart_api {
     this.general_legend_change_subs.clear();
     this.tool_listener = null;
     this.tool_change_subs.clear();
+    this.replay_change_subs.clear();
     this.drawing_created_subs.clear();
     this.accessibility_handle?.detach();
     this.accessibility_handle = null;

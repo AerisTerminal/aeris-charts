@@ -1439,6 +1439,9 @@ impl Probe {
                 ChartInputEvent::GeneralBrushChanged => "general brush changed".into(),
                 ChartInputEvent::GeneralLegendChanged => "general legend changed".into(),
                 ChartInputEvent::PanesResized => "panes resized".into(),
+                ChartInputEvent::ReplayChanged => {
+                    format!("replay {:?}", self.engine.replay_state().phase)
+                }
             };
         }
     }

@@ -75,8 +75,9 @@ impl GpuiChartInput {
         }
     }
 
-    /// Delay until the engine's next deferred input work (the trading-tooltip dwell). Hosts
-    /// schedule one wake and then call [`Self::prepare_frame`] by repainting.
+    /// Delay until the engine's next deferred input work (the trading-tooltip dwell or the next
+    /// bar replay playback step). Hosts schedule one wake and then call
+    /// [`Self::prepare_frame`] by repainting.
     pub fn wake_delay(&self, engine: &ChartEngine) -> Option<Duration> {
         engine
             .input_wake_deadline_ms()
@@ -295,6 +296,9 @@ pub fn chart_keystrokes() -> Vec<Keystroke> {
 /// GPUI's Windows backend draws `OpenHand`/`ClosedHand` as the arrow, so on Windows movable
 /// drawings use the pointing hand and vertically dragged trading lines use the native
 /// vertical-resize cursor instead of looking inert.
+///
+/// GPUI cannot hide the platform cursor, so the bar replay trim cursor uses the I-beam, which
+/// sits on the engine-painted trim line instead of adding a horizontal stroke.
 pub fn cursor_style(cursor: ChartCursor) -> CursorStyle {
     match cursor {
         ChartCursor::Crosshair => CursorStyle::Crosshair,
@@ -314,6 +318,7 @@ pub fn cursor_style(cursor: ChartCursor) -> CursorStyle {
         ChartCursor::ResizeNesw => CursorStyle::ResizeUpRightDownLeft,
         ChartCursor::ResizeRow => CursorStyle::ResizeRow,
         ChartCursor::HostPrimitive => CursorStyle::Crosshair,
+        ChartCursor::Trim => CursorStyle::IBeam,
     }
 }
 

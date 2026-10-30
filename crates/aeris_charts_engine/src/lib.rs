@@ -48,6 +48,7 @@ mod price_line_api;
 mod price_scale_api;
 mod profile_drawings;
 mod profiles;
+mod replay;
 mod resampling;
 mod series_query_api;
 #[cfg(test)]
@@ -256,6 +257,10 @@ pub use profiles::{
     ProfileDisplayMode, ProfileDrawingOptions, ProfileDrawingSnapshot, ProfileError,
     ProfileRequest, ProfileRowSnapshot, ProfileSnapshot, ProfileSource, TpoCellMode,
     TpoPresentationOptions, TpoRequest, TpoRowSnapshot, TpoSnapshot,
+};
+pub use replay::{
+    MAX_REPLAY_INTERVAL_MICROS, MAX_REPLAY_SPEED, MIN_REPLAY_SPEED, ReplayPhase, ReplaySnapshot,
+    ReplayStep,
 };
 pub use resampling::{
     MAX_RESAMPLE_BOUNDARIES, MAX_RESAMPLED_SERIES, ResampleBoundary, ResampleError,
@@ -2022,6 +2027,8 @@ pub struct ChartEngine {
     /// Host-owned replay clock. Canonical rows remain retained while the data layer and canonical
     /// trade streams expose only facts at or before this microsecond boundary.
     replay_clock_micros: Option<i64>,
+    /// Bar replay mode driving `replay_clock_micros`; runtime-only, never persisted.
+    replay: replay::ReplayState,
     pub crosshair: Option<(f64, f64)>,
     /// Optional chart-wide time anchor used by percentage/indexed comparison overlays and their
     /// legend. The anchor is a time identity only; each series resolves its own value at that
@@ -2296,6 +2303,7 @@ impl ChartEngine {
             now_override: None,
             bar_countdown_active: true,
             replay_clock_micros: None,
+            replay: replay::ReplayState::default(),
             crosshair: None,
             comparison_anchor: None,
             drawing_interval: None,

@@ -1760,7 +1760,9 @@ impl ChartEngine {
         let min_line_width = vpr.floor().max(1.0) as i32;
         let mut tooltip = None;
 
-        if let Some(clock_micros) = self.replay_clock_micros {
+        // Bar replay ends the chart at its clock and draws its own trim line, so the host-clock
+        // marker would only cover the newest bar.
+        if let Some(clock_micros) = self.replay_clock_micros.filter(|_| !self.replay_mode_on()) {
             let time = if self.sequence_points().is_some() {
                 clock_micros as f64 / 1_000_000.0
             } else {

@@ -2968,8 +2968,11 @@ impl ChartEngine {
         let Some((from, to)) = self.visible_range_for_frame() else {
             return;
         };
-        if self.crosshair_mode == CrosshairMode::Hidden
-            || self.crosshair_suppressed_by_interaction()
+        // The replay trim cursor keeps only its time label, at the bar it would cut.
+        let trim = self.replay_selecting();
+        if !trim
+            && (self.crosshair_mode == CrosshairMode::Hidden
+                || self.crosshair_suppressed_by_interaction())
         {
             return;
         }
@@ -2980,6 +2983,7 @@ impl ChartEngine {
         let metrics = self.axis_metrics();
         let ch = &options.crosshair;
         if ch.horz_line.label_visible
+            && !trim
             && let Some(pi) = self
                 .panes
                 .iter()
@@ -3048,8 +3052,11 @@ impl ChartEngine {
                 });
             }
         }
-        if ch.vert_line.label_visible && x_css <= self.pane_w && self.time_axis_shown() {
-            let index = self.snapped_crosshair_index(x_css);
+        if (ch.vert_line.label_visible || trim) && x_css <= self.pane_w && self.time_axis_shown() {
+            let index = match self.replay_index_at(x_css).filter(|_| trim) {
+                Some(index) => index as i64,
+                None => self.snapped_crosshair_index(x_css),
+            };
             // Deterministic time-based charts may have display-only projected timestamps in the
             // empty area on either side of canonical data. Sequence axes still return `None`.
             if let Some(time) = self.axis_time_key_at_logical(index) {

@@ -11,7 +11,8 @@
 //!   Target G — mixed 100k-row general dashboard frame, hit interaction, and retained memory
 //!   Target H — combined 50k-bar financial + 50k-point general frame and retained memory
 //!   Target I — 100k-row numeric error bars frame, hit interaction, and retained memory
-//!   Target K — 100x replay clock advance, shared projections, frame work, and flat retained memory
+//!   Target K — 100x replay clock advance, shared projections, frame work, flat retained memory,
+//!              and bar replay mode steps with their frame and toolbar state
 //!   Target L — sustained depth updates, bounded heatmap frame work, and live-edge upload size
 //!   Target M — sustained live order-flow tape: per-batch update + frame, retention, late print
 //!   Target N — 1M-row structure studies: tail update p99 and one bounded historical correction
@@ -1299,6 +1300,34 @@ fn main() {
         replay_memory_first as f64 / (1024.0 * 1024.0),
         replay_memory_second as f64 / (1024.0 * 1024.0),
     );
+    // Bar replay mode on the same chart: each step finds the next bar boundary, moves the clock,
+    // builds the frame, and answers the toolbar state a host reads after every change.
+    const BAR_REPLAY_STEPS: usize = 600;
+    replay
+        .replay_select_time(REPLAY_SECONDS as i64 / 2 * 1_000_000)
+        .expect("select bar replay start");
+    let bar_replay_started = Instant::now();
+    for step in 0..BAR_REPLAY_STEPS {
+        let moved = if step % 4 == 3 {
+            replay.replay_step_back()
+        } else {
+            replay.replay_step_forward()
+        };
+        assert!(
+            moved.expect("bar replay step"),
+            "bar replay step {step} moved"
+        );
+        replay.build_frame_into(&mut replay_frame);
+        std::hint::black_box(replay.replay_state());
+    }
+    let bar_replay_ms =
+        bar_replay_started.elapsed().as_secs_f64() * 1000.0 / BAR_REPLAY_STEPS as f64;
+    replay.replay_exit().expect("exit bar replay");
+    let k_bar_replay = report(
+        "bar replay step + shared frame + state",
+        bar_replay_ms,
+        FRAME_BUDGET_MS,
+    );
 
     // ---- Target L: bounded depth soak and shared image heatmap -------------------------------
     let mut depth = ChartEngine::new(1600.0, 800.0, 1.0);
@@ -1640,6 +1669,7 @@ fn main() {
         && i_memory
         && k_frame
         && k_flat_memory
+        && k_bar_replay
         && l_update
         && l_frame
         && l_upload

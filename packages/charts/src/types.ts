@@ -2784,6 +2784,30 @@ export interface replay_clock_stats extends replay_seek_stats {
   rebuilt_depth_events: number;
 }
 
+/**
+ * Bar replay mode. `selecting` arms the engine's trim cursor: the next click on the main pane
+ * chooses the last visible bar, a drag still pans, and Escape cancels.
+ */
+export type replay_phase = "off" | "selecting" | "paused" | "playing";
+
+/** One replay step reveals one bar, or moves the clock by a fixed interval (intrabar on trade streams). */
+export type replay_step = { kind: "bar" } | { kind: "interval"; micros: number };
+
+/** The bar replay state a host toolbar renders. */
+export interface replay_state {
+  phase: replay_phase;
+  /** The chart replay clock; `null` shows all data. */
+  clock_micros: number | null;
+  /** Playback steps per second, 0.1 to 10. */
+  speed: number;
+  step: replay_step;
+  can_step_back: boolean;
+  /** `false` once replay has revealed all retained history. */
+  can_step_forward: boolean;
+}
+
+export type replay_change_handler = (state: replay_state) => void;
+
 /** V2 adds engine-owned general pane, axis, dataset, and series state. */
 export interface chart_state_v2 {
   schema: "aeris_charts-state";
@@ -3979,6 +4003,33 @@ export interface chart_api {
   time_and_sales(stream_id: number, options?: Partial<time_and_sales_options>): readonly time_and_sales_row[] | null;
   replay_clock_micros(): number | null;
   set_replay_clock_micros(clock_micros: number | null): replay_clock_stats;
+  /**
+   * Bar replay. The engine owns the trim cursor, selection, stepping, and playback cadence; a
+   * host toolbar calls these commands and renders {@link replay_state}. While replay is paused or
+   * playing, Shift+Right steps forward, Shift+Left steps back, and Shift+Down toggles playback.
+   */
+  replay_state(): replay_state;
+  /** Arm the trim cursor. During replay this re-selects the start bar; Escape returns to the paused replay. */
+  replay_select_start(): replay_state;
+  replay_cancel_selection(): replay_state;
+  /** Trim at the bar containing `time_micros` and pause there. */
+  replay_select_time(time_micros: number): replay_state;
+  replay_play(): replay_state;
+  replay_pause(): replay_state;
+  replay_toggle_play(): replay_state;
+  replay_step_forward(): replay_state;
+  /** Hide the newest bar, always keeping at least one. */
+  replay_step_back(): replay_state;
+  /** Playback steps per second, 0.1 to 10. */
+  set_replay_speed(steps_per_second: number): replay_state;
+  set_replay_step(step: replay_step): replay_state;
+  /** Leave replay showing all data, live updates included. */
+  replay_jump_to_realtime(): replay_state;
+  /** Leave replay and restore the replay clock the host had set before it began. */
+  replay_exit(): replay_state;
+  /** Called after every replay change, whether from a command, a click, a key, or playback. */
+  subscribe_replay_change(handler: replay_change_handler): void;
+  unsubscribe_replay_change(handler: replay_change_handler): void;
   /** Configure one candlestick/bar series as the chart's exclusive non-time price transform. */
   configure_synthetic_bar_series(series: series_api | number, options: synthetic_bar_options): void;
   /** Replace the transform's canonical OHLC source through the columnar boundary. */

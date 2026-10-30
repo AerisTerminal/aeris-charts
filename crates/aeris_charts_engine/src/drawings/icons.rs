@@ -44,12 +44,15 @@ pub(crate) fn builtin_icon(name: &str) -> Option<&'static BuiltinIcon> {
     BUILTIN_ICONS.iter().find(|icon| icon.name == name)
 }
 
-pub(crate) fn builtin_icon_index(icon: &BuiltinIcon) -> usize {
-    BUILTIN_ICONS
-        .iter()
-        .position(|candidate| std::ptr::eq(candidate, icon))
-        .unwrap_or(0)
-}
+/// The bar replay trim cursor's scissors: two ring handles over crossed blades pointing down.
+/// An original Aeris outline on the same 256-unit grid, not part of the Phosphor subset and not
+/// offered as a stamp. Ring holes wind against their rims; blades wind with them.
+pub(crate) const SCISSORS_ICON: BuiltinIcon = BuiltinIcon {
+    name: "aeris-scissors",
+    d: "M42,58A40,40,0,1,1,122,58A40,40,0,1,1,42,58ZM58,58A24,24,0,1,0,106,58A24,24,0,1,0,58,58Z\
+        M134,58A40,40,0,1,1,214,58A40,40,0,1,1,134,58ZM150,58A24,24,0,1,0,198,58A24,24,0,1,0,150,58Z\
+        M88,96L120,78L158,250ZM136,78L168,96L98,250ZM119,162A9,9,0,1,1,137,162A9,9,0,1,1,119,162Z",
+};
 
 /// The icon an arrow marker paints and its tip in icon units: the marker's anchor is the tip,
 /// so the arrow points at the bar or price it marks.
@@ -93,8 +96,8 @@ impl BuiltinIcon {
     }
 }
 
-/// A cached raster's identity: built-in icon index, device size, and RGBA color.
-type IconRasterKey = (usize, u32, [u8; 4]);
+/// A cached raster's identity: icon name, device size, and RGBA color.
+type IconRasterKey = (&'static str, u32, [u8; 4]);
 
 /// Rasters kept per chart; enough for every built-in icon at a couple of sizes and colors.
 const MAX_ICON_RASTERS: usize = 64;
@@ -121,7 +124,7 @@ impl IconRasterCache {
     pub(crate) fn raster(&mut self, icon: &BuiltinIcon, size: u32, color: Color) -> RasterImage {
         let size = size.clamp(1, MAX_ICON_RASTER_PX);
         let id = (
-            builtin_icon_index(icon),
+            icon.name,
             size,
             [color.r(), color.g(), color.b(), color.a()],
         );
@@ -812,6 +815,24 @@ mod tests {
     }
 
     #[test]
+    fn scissors_rings_keep_their_holes_and_blades_stay_inked() {
+        let alpha = |x: usize, y: usize, pixels: &[u8]| pixels[(y * 256 + x) * 4 + 3];
+        let pixels = SCISSORS_ICON.rasterize(256, Color::rgb(255, 255, 255));
+        // Ring rims ink, ring centers stay open, and the blades, wound with the rims, ink where
+        // they meet and cross.
+        for center in [82, 174] {
+            assert_eq!(alpha(center, 58, &pixels), 0);
+            assert_eq!(alpha(center, 58 - 32, &pixels), 255);
+        }
+        assert_eq!(alpha(128, 162, &pixels), 255);
+        assert!(alpha(104, 90, &pixels) > 0 && alpha(152, 90, &pixels) > 0);
+        assert_eq!(alpha(128, 240, &pixels), 0);
+        for &(x, y) in SCISSORS_ICON.contours(1.0).iter().flatten() {
+            assert!((0.0..=ICON_VIEWBOX).contains(&x) && (0.0..=ICON_VIEWBOX).contains(&y));
+        }
+    }
+
+    #[test]
     fn every_builtin_icon_fills_inside_its_square() {
         let mut names = std::collections::HashSet::new();
         for icon in BUILTIN_ICONS {
@@ -844,6 +865,7 @@ mod tests {
             );
         }
         assert!((50..=60).contains(&BUILTIN_ICONS.len()));
+        assert!(builtin_icon(SCISSORS_ICON.name).is_none());
         for kind in [
             DrawingKind::ArrowMarkerUp,
             DrawingKind::ArrowMarkerDown,

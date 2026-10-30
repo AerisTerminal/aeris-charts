@@ -2,9 +2,9 @@
 
 use super::*;
 use aeris_charts_engine::{
-    AggressorSide, CumulativeDeltaReset, CumulativeDeltaStyle, FootprintBarAggregation,
-    FootprintCellMode, FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind,
-    TimeAndSalesOptions, TradeStudyOptions,
+    AggressorSide, ChartError, CumulativeDeltaReset, CumulativeDeltaStyle, ErrorCode,
+    FootprintBarAggregation, FootprintCellMode, FootprintSeriesOptions, FootprintTrade,
+    FootprintUpdateKind, ReplayPhase, ReplayStep, TimeAndSalesOptions, TradeStudyOptions,
 };
 
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -482,6 +482,84 @@ impl ChartInner {
             .map_or_else(error_json, |stats| {
                 serde_json::to_string(&stats).unwrap_or_else(|error| error_json(error.to_string()))
             })
+    }
+
+    pub(super) fn replay_state_json(&self) -> String {
+        let state = self.engine.replay_state();
+        let phase = match state.phase {
+            ReplayPhase::Off => "off",
+            ReplayPhase::Selecting => "selecting",
+            ReplayPhase::Paused => "paused",
+            ReplayPhase::Playing => "playing",
+        };
+        let step = match state.step {
+            ReplayStep::Bar => serde_json::json!({ "kind": "bar" }),
+            ReplayStep::Interval { micros } => {
+                serde_json::json!({ "kind": "interval", "micros": micros })
+            }
+        };
+        serde_json::json!({
+            "phase": phase,
+            "clock_micros": state.clock_micros,
+            "speed": state.speed,
+            "step": step,
+            "can_step_back": state.can_step_back,
+            "can_step_forward": state.can_step_forward,
+        })
+        .to_string()
+    }
+
+    /// One bar replay command; `value` carries the command's number (NaN when unused). Answers
+    /// the general result envelope with the replay state after the command.
+    pub(super) fn replay_command_json(&mut self, command: &str, value: f64) -> String {
+        let integer = |what: &str| {
+            (value.is_finite() && value.abs() <= MAX_SAFE_INTEGER && value.fract() == 0.0)
+                .then_some(value as i64)
+                .ok_or_else(|| {
+                    ChartError::new(
+                        ErrorCode::InvalidOptions,
+                        format!("{what} must be an integer number of microseconds"),
+                    )
+                })
+        };
+        let engine = &mut self.engine;
+        let result = match command {
+            "select_start" => engine.replay_select_start(),
+            // Both report through the returned state whether anything changed.
+            "cancel_selection" => {
+                engine.replay_cancel_selection();
+                Ok(())
+            }
+            "select_time" => {
+                integer("replay start time").and_then(|time| engine.replay_select_time(time))
+            }
+            "play" => engine.replay_play(),
+            "pause" => {
+                engine.replay_pause();
+                Ok(())
+            }
+            "toggle_play" => engine.replay_toggle_play(),
+            "step_forward" => engine.replay_step_forward().map(|_| ()),
+            "step_back" => engine.replay_step_back().map(|_| ()),
+            "speed" => engine.set_replay_speed(value),
+            "step" if value.is_nan() => engine.set_replay_step(ReplayStep::Bar),
+            "step" => integer("replay interval")
+                .and_then(|micros| engine.set_replay_step(ReplayStep::Interval { micros })),
+            "jump_to_realtime" => engine.replay_jump_to_realtime(),
+            "exit" => engine.replay_exit(),
+            _ => Err(ChartError::new(
+                ErrorCode::UnsupportedOperation,
+                format!("unknown replay command {command}"),
+            )),
+        };
+        match result {
+            Ok(()) => format!(r#"{{"ok":true,"result":{}}}"#, self.replay_state_json()),
+            Err(error) => serde_json::json!({
+                "ok": false,
+                "error": { "code": error.code().name(), "message": error.message() }
+            })
+            .to_string(),
+        }
     }
 
     pub(super) fn add_trade_stream(&mut self, key: &str, options_json: &str) -> u32 {

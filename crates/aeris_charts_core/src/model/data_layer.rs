@@ -439,6 +439,44 @@ impl DataLayer {
         })
     }
 
+    /// Owned canonical timelines, including rows hidden by the replay cutoff. Aligned indicator
+    /// outputs share their source's times and add nothing.
+    fn owned_times(&self) -> impl Iterator<Item = &[i64]> + '_ {
+        self.live_slots
+            .values()
+            .map(|&slot| &self.series[slot])
+            .filter(|series| series.time_alias.is_none())
+            .map(|series| series.times.as_slice())
+    }
+
+    /// Oldest canonical timestamp strictly after `time`, ignoring the replay cutoff.
+    pub fn canonical_time_after(&self, time: i64) -> Option<i64> {
+        self.owned_times()
+            .filter_map(|times| times.get(times.partition_point(|&t| t <= time)).copied())
+            .min()
+    }
+
+    /// Newest canonical timestamp strictly before `time`, ignoring the replay cutoff.
+    pub fn canonical_time_before(&self, time: i64) -> Option<i64> {
+        self.owned_times()
+            .filter_map(|times| {
+                times[..times.partition_point(|&t| t < time)]
+                    .last()
+                    .copied()
+            })
+            .max()
+    }
+
+    /// Oldest and newest canonical timestamps, ignoring the replay cutoff.
+    pub fn canonical_time_bounds(&self) -> Option<(i64, i64)> {
+        let first = self
+            .owned_times()
+            .filter_map(|t| t.first().copied())
+            .min()?;
+        let last = self.owned_times().filter_map(|t| t.last().copied()).max()?;
+        Some((first, last))
+    }
+
     /// Start an owner-level market-data transaction. This is allocation-free until a merged-union
     /// rebuild changes the sequence; tail appends and value-only replacements therefore stay free.
     pub fn begin_merged_time_transaction(&mut self) {
@@ -1550,6 +1588,13 @@ mod tests {
         assert_eq!(dl.merged_times(), &[1, 2, 3]);
         assert_eq!(dl.series_data(first).unwrap().0, &[1, 2, 3]);
         assert_eq!(dl.series_data(second).unwrap().0, &[2]);
+        // Replay stepping walks the full canonical timeline behind the cutoff.
+        assert_eq!(dl.canonical_time_after(3), Some(4));
+        assert_eq!(dl.canonical_time_after(4), Some(6));
+        assert_eq!(dl.canonical_time_after(6), None);
+        assert_eq!(dl.canonical_time_before(3), Some(2));
+        assert_eq!(dl.canonical_time_before(1), None);
+        assert_eq!(dl.canonical_time_bounds(), Some((1, 6)));
         assert_eq!(indices(&dl, first), vec![0, 1, 2]);
         assert_eq!(indices(&dl, second), vec![1]);
 

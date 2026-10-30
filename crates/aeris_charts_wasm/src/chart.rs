@@ -1816,6 +1816,14 @@ impl AerisChart {
             .set_replay_clock_micros(clock_micros)
     }
 
+    pub fn replay_state_json(&self) -> String {
+        self.inner.borrow().replay_state_json()
+    }
+
+    pub fn replay_command_json(&mut self, command: &str, value: f64) -> String {
+        self.inner.borrow_mut().replay_command_json(command, value)
+    }
+
     pub fn configure_synthetic_bar_series(&mut self, id: u32, options_json: &str) -> String {
         self.inner
             .borrow_mut()
@@ -5777,6 +5785,7 @@ impl AerisChart {
                     serde_json::json!({"kind":"general_legend_changed"})
                 }
                 ChartInputEvent::PanesResized => serde_json::json!({"kind":"panes_resized"}),
+                ChartInputEvent::ReplayChanged => serde_json::json!({"kind":"replay_changed"}),
                 ChartInputEvent::ContextMenu(menu) => {
                     let region = match menu.region {
                         ChartRegion::Pane => "pane",

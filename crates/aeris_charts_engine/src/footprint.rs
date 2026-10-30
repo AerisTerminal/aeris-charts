@@ -1148,6 +1148,164 @@ impl FootprintAggregator {
         })
     }
 
+    /// The replay clock that completes the next bar after `clock`: the partly revealed bar if the
+    /// clock sits inside one, else the bar that follows. Bar boundaries come from the same rule
+    /// that builds bars, so time, trade, volume, and range bars all step one bar at a time. A
+    /// clock cannot split equal-timestamp prints, so such prints reveal together.
+    pub(crate) fn replay_next_bar_close(&self, clock: i64) -> Option<i64> {
+        if self.bars.len() == self.sealed_bars {
+            return self
+                .bars
+                .iter()
+                .map(|bar| bar.end_timestamp_micros)
+                .find(|&end| end > clock);
+        }
+        let from = self
+            .trades
+            .partition_point(|trade| trade.event.timestamp_micros <= clock);
+        // The visible forming bar seeds the walk only when it was projected at this clock.
+        let mut probe = self.replay_visible_probe(clock);
+        let mut last = None;
+        for stored in &self.trades[from..] {
+            let trade = &stored.event;
+            if probe
+                .as_ref()
+                .is_none_or(|bar| self.must_start_bar(bar, trade))
+            {
+                if last.is_some() {
+                    return last;
+                }
+                probe = Some(FootprintBar {
+                    start_timestamp_micros: match self.options.bars {
+                        FootprintBarAggregation::Time {
+                            interval_micros,
+                            anchor_micros,
+                        } => aligned_bucket_start(
+                            trade.timestamp_micros,
+                            interval_micros as i64,
+                            anchor_micros,
+                        ),
+                        _ => trade.timestamp_micros,
+                    },
+                    session_id: trade.session_id,
+                    high: trade.price,
+                    low: trade.price,
+                    ..FootprintBar::default()
+                });
+            }
+            replay_probe_add(
+                probe
+                    .as_mut()
+                    .expect("a walked trade always owns a probe bar"),
+                trade,
+            );
+            last = Some(trade.timestamp_micros);
+        }
+        last
+    }
+
+    /// The clock that completes the newest bar visible at `clock`: the prints that would still
+    /// join it are revealed, the next bar stays hidden. Answers only for the clock this stream is
+    /// projected at.
+    pub(crate) fn replay_forming_bar_close(&self, clock: i64) -> Option<i64> {
+        let mut probe = self.replay_visible_probe(clock)?;
+        let mut close = self.bars().last()?.end_timestamp_micros;
+        if self.bars.len() == self.sealed_bars {
+            return Some(close);
+        }
+        let from = self
+            .trades
+            .partition_point(|trade| trade.event.timestamp_micros <= clock);
+        for stored in &self.trades[from..] {
+            let trade = &stored.event;
+            if self.must_start_bar(&probe, trade) {
+                break;
+            }
+            replay_probe_add(&mut probe, trade);
+            close = trade.timestamp_micros;
+        }
+        Some(close)
+    }
+
+    /// The newest visible bar as a boundary probe, when this stream is projected at `clock`.
+    fn replay_visible_probe(&self, clock: i64) -> Option<FootprintBar> {
+        if self.replay_clock_micros != Some(clock) {
+            return None;
+        }
+        self.bars().last().map(|bar| FootprintBar {
+            start_timestamp_micros: bar.start_timestamp_micros,
+            session_id: bar.session_id,
+            high: bar.high,
+            low: bar.low,
+            total_volume: bar.total_volume,
+            trade_count: bar.trade_count,
+            ..FootprintBar::default()
+        })
+    }
+
+    /// The replay clock that hides the newest visible bar while keeping at least one bar.
+    /// Answers only for the clock this stream is projected at.
+    pub(crate) fn replay_previous_bar_clock(&self, clock: i64) -> Option<i64> {
+        if self.replay_clock_micros != Some(clock) {
+            return None;
+        }
+        let bars = self.bars();
+        if bars.len() < 2 {
+            return None;
+        }
+        let last = bars.last()?;
+        if self.bars.len() == self.sealed_bars {
+            // Sealed bars reveal at their close, so the previous close keeps that bar visible.
+            return Some(bars[bars.len() - 2].end_timestamp_micros);
+        }
+        Some(last.start_timestamp_micros.saturating_sub(1))
+    }
+
+    /// The clock that completes the time bar containing `time_micros`; `None` for non-time bars
+    /// or an empty bucket.
+    pub(crate) fn replay_time_bar_close(&self, time_micros: i64) -> Option<i64> {
+        let FootprintBarAggregation::Time {
+            interval_micros,
+            anchor_micros,
+        } = self.options.bars
+        else {
+            return None;
+        };
+        let start = aligned_bucket_start(time_micros, interval_micros as i64, anchor_micros);
+        let end = start.saturating_add(interval_micros as i64);
+        if let Some(bar) = self.bars[..self.sealed_bars]
+            .iter()
+            .find(|bar| bar.start_timestamp_micros == start)
+        {
+            return Some(bar.end_timestamp_micros);
+        }
+        let upper = self
+            .trades
+            .partition_point(|trade| trade.event.timestamp_micros < end);
+        let newest = self.trades[..upper].last()?.event.timestamp_micros;
+        (newest >= start).then_some(newest)
+    }
+
+    /// The earliest clock showing one bar and the clock showing all retained history.
+    pub(crate) fn replay_bounds(&self) -> Option<(i64, i64)> {
+        let first = self
+            .bars
+            .first()
+            .filter(|_| self.sealed_bars > 0)
+            .map(|bar| bar.end_timestamp_micros)
+            .or_else(|| {
+                self.trades
+                    .first()
+                    .map(|trade| trade.event.timestamp_micros)
+            })?;
+        let last = self
+            .trades
+            .last()
+            .map(|trade| trade.event.timestamp_micros)
+            .or_else(|| self.bars.last().map(|bar| bar.end_timestamp_micros))?;
+        Some((first, last.max(first)))
+    }
+
     pub fn reset_work_stats(&mut self) {
         self.work = FootprintWorkStats::default();
     }
@@ -2128,7 +2286,9 @@ impl ChartEngine {
             .is_none()
             .then(|| clock_micros.map(|clock| clock.div_euclid(MICROS_PER_SECOND)))
             .flatten();
-        self.data.set_time_cutoff(cutoff_seconds);
+        if self.data.set_time_cutoff(cutoff_seconds) {
+            self.refresh_all_resampled_targets();
+        }
         self.recompute_all_indicators();
         self.sync_time_points();
         self.invalidate_frame_scene();
@@ -4080,6 +4240,14 @@ fn price_level(price: f64, tick_size: f64) -> i64 {
 
 fn aligned_bucket_start(timestamp: i64, interval: i64, anchor: i64) -> i64 {
     anchor + (timestamp - anchor).div_euclid(interval) * interval
+}
+
+/// Grow a replay boundary probe by one print: exactly the fields bar-start rules read.
+fn replay_probe_add(bar: &mut FootprintBar, trade: &FootprintTrade) {
+    bar.high = bar.high.max(trade.price);
+    bar.low = bar.low.min(trade.price);
+    bar.total_volume += trade.volume;
+    bar.trade_count = bar.trade_count.saturating_add(1);
 }
 
 fn recompute_bar_derived(bar: &mut FootprintBar, options: FootprintImbalanceOptions) {

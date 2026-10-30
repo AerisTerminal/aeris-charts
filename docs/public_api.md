@@ -40,6 +40,13 @@ The supported root surface is:
   Figure transforms through `configure_synthetic_bar_series`, `set_synthetic_bar_source[_typed]`,
   and `update_synthetic_bar_source`; synthetic source/history remains host-owned and is not part of
   chart-state persistence;
+- engine-owned bar replay through `replay_select_start`, `replay_cancel_selection`,
+  `replay_select_time`, `replay_play`, `replay_pause`, `replay_toggle_play`,
+  `replay_step_forward`, `replay_step_back`, `set_replay_speed`, `set_replay_step`,
+  `replay_jump_to_realtime`, and `replay_exit`, each returning `replay_state`, plus
+  `replay_state()` and `subscribe_replay_change`. The engine owns the scissors trim cursor, the
+  trimming click, bar and interval steps, Shift+arrow keys, and playback timing; hosts own the
+  toolbar. The replay state is not part of chart-state persistence;
 - engine-resolved secondary-click context through `chart.subscribe_chart_context()`, including
   pane, time, logical index, coordinates, hit series, and the exact price on its scale; hosts own
   menus, clipboard operations, and order actions;

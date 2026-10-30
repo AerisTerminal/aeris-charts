@@ -134,6 +134,9 @@ pub enum ChartCursor {
     ResizeRow,
     /// A host primitive supplied a platform cursor; the engine chose its priority.
     HostPrimitive,
+    /// Bar replay start selection. The engine paints the trim line and scissors badge at the
+    /// pointer, so hosts hide the platform cursor where they can.
+    Trim,
 }
 
 impl ChartCursor {
@@ -381,6 +384,9 @@ pub enum ChartInputEvent {
     /// A separator drag or focused separator key changed pane heights. Hosts that persist pane
     /// heights read them again through [`ChartEngine::pane_height_share`].
     PanesResized,
+    /// Bar replay phase, clock, speed, or step changed; read it through
+    /// [`ChartEngine::replay_state`].
+    ReplayChanged,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -689,6 +695,9 @@ impl ChartEngine {
         y: f64,
         primitive: Option<HostPrimitiveHit>,
     ) -> ChartHover {
+        if self.replay_selecting() {
+            return ChartHover::None;
+        }
         let hover = self.arbitrate_hover(x, y, primitive);
         self.input.hover = hover;
         self.input.host_primitive_cursor =
@@ -718,14 +727,15 @@ impl ChartEngine {
             self.input.tooltip_deadline_ms,
             self.input.touch_longpress_deadline_ms,
             self.drawing_text_caret_deadline_ms(),
+            self.replay_wake_deadline_ms(),
         ]
         .into_iter()
         .flatten()
         .reduce(f64::min)
     }
 
-    /// Advance time-driven input state: animations, the trading-tooltip dwell, and the painted
-    /// text caret's blink. Hosts call this
+    /// Advance time-driven input state: animations, the trading-tooltip dwell, the painted text
+    /// caret's blink, and bar replay playback. Hosts call this
     /// once per prepared frame and when a wake deadline passes. Returns whether state changed.
     pub fn input_tick(&mut self, now_ms: f64) -> bool {
         let mut changed = false;
@@ -764,6 +774,7 @@ impl ChartEngine {
             changed |= self.arm_touch_tracking();
         }
         changed |= self.tick_drawing_text_caret(now_ms);
+        changed |= self.tick_replay(now_ms);
         if changed {
             self.input.frame_dirty = true;
         }
@@ -1400,7 +1411,11 @@ impl ChartEngine {
                 if panning {
                     self.end_pan(input.timestamp_ms, input.device);
                 }
-                if !moved {
+                if !moved && self.replay_selecting() {
+                    // The selection click is consumed; a quick next press is a fresh click.
+                    self.replay_select_at(x);
+                    self.input.last_click = None;
+                } else if !moved {
                     self.input_primary_click(x, y, press.text_press_selected);
                     self.push_input_event(ChartInputEvent::Click { x, y });
                 }
@@ -1593,6 +1608,27 @@ impl ChartEngine {
         if !chart_key_bound(key, modifiers) {
             return false;
         }
+        if self.replay_active()
+            && modifiers
+                == (InputModifiers {
+                    shift: true,
+                    ..InputModifiers::default()
+                })
+            && matches!(
+                key,
+                ChartKey::ArrowLeft | ChartKey::ArrowRight | ChartKey::ArrowDown
+            )
+        {
+            // Replay owns Shift+arrows while active, even at either end of the data. A clock the
+            // data cannot take leaves replay where it was.
+            let changed = match key {
+                ChartKey::ArrowRight => self.replay_step_forward(),
+                ChartKey::ArrowLeft => self.replay_step_back(),
+                _ => self.replay_toggle_play().map(|()| true),
+            };
+            self.input.frame_dirty |= changed.unwrap_or(false);
+            return true;
+        }
         let options = self.input.options;
         let step = if modifiers.control || modifiers.shift {
             10.0
@@ -1673,6 +1709,7 @@ impl ChartEngine {
             ChartKey::Escape => {
                 // `|=` evaluates every step: one Escape clears all transient state at once.
                 let mut cancelled = edit_cancelled;
+                cancelled |= self.replay_cancel_selection();
                 cancelled |= self.abandon_press();
                 cancelled |= self.discard_trading_interaction();
                 cancelled |= self.cancel_drawing_tool();
@@ -2237,6 +2274,11 @@ impl ChartEngine {
     /// anywhere in the pane, including on an order or position line, exactly as its crosshair
     /// cursor promises.
     fn begin_pane_press(&mut self, input: PointerInput) -> PressMode {
+        // The trim cursor claims every pane press: a click chooses the replay start bar and a
+        // drag still pans to reach it.
+        if self.replay_selecting() {
+            return self.pane_pan_press(input);
+        }
         let (x, y) = (input.x, input.y);
         let modifiers = drawing_modifiers(input.modifiers);
         let magnet_only = DrawingModifiers {
@@ -2295,6 +2337,11 @@ impl ChartEngine {
             self.input.general_brush_before = Some(self.general_brush_state());
             return PressMode::GeneralBrush;
         }
+        self.pane_pan_press(input)
+    }
+
+    fn pane_pan_press(&self, input: PointerInput) -> PressMode {
+        let (x, y) = (input.x, input.y);
         let price_pan = self
             .input
             .options
@@ -2695,6 +2742,17 @@ impl ChartEngine {
         let previous_general = self.general_hovered_key();
         let was_general = self.input.hover == ChartHover::General;
         self.set_crosshair_at(x, y);
+        // The trim cursor addresses bars only, so no chart object takes hover feedback.
+        if self.replay_selecting() {
+            self.clear_hover();
+            if self.clear_trading_hover() {
+                self.input.tooltip_deadline_ms = None;
+            }
+            if was_general {
+                self.queue_sync_event(ChartSyncEventKind::ClearCrosshair);
+            }
+            return;
+        }
         // Host primitives are re-arbitrated by hosts that own them through
         // `resolve_pointer_hover`; the built-in candidates resolve here.
         self.input.host_primitive_cursor = false;
@@ -2728,7 +2786,7 @@ impl ChartEngine {
         }
     }
 
-    fn refresh_input_cursor(&mut self) {
+    pub(crate) fn refresh_input_cursor(&mut self) {
         self.input.cursor = self.resolve_input_cursor();
     }
 
@@ -2784,6 +2842,13 @@ impl ChartEngine {
                     ChartCursor::Default
                 };
             }
+        }
+        if self.replay_selecting()
+            && self
+                .pane_at_y(y)
+                .is_some_and(|pane| self.pane_uses_financial_time(pane))
+        {
+            return ChartCursor::Trim;
         }
         // A live measure or an armed tool keeps the crosshair over every chart object.
         if self.measure_active() || self.active_drawing_tool().is_some() {
