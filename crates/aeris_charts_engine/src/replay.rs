@@ -638,17 +638,36 @@ mod tests {
         assert_eq!(chart.input_cursor(), ChartCursor::Trim);
         let trim_frame = chart.build_frame();
         assert_eq!(hlines(&trim_frame) + 1, hlines(&crosshair_frame));
-        assert_eq!(
-            count(&trim_frame, |p| matches!(
-                p,
+        let trim_lines: Vec<_> = trim_frame.panes[0]
+            .main
+            .iter()
+            .filter_map(|p| match p {
                 Prim::VLine {
-                    width: 3,
+                    width: 2,
                     style: LineStyle::Solid,
+                    color,
                     ..
-                }
-            )),
-            1
+                } => Some(*color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(trim_lines.len(), 1);
+        let axis = chart.build_axis_frame(
+            80.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
         );
+        let time_labels: Vec<_> = axis
+            .labels
+            .iter()
+            .filter(|label| label.midpoint == crate::AxisTextMidpoint::StableTime)
+            .collect();
+        assert_eq!(time_labels.len(), 1);
+        assert!(
+            matches!(time_labels[0].background, Some((.., color)) if color == trim_lines[0]),
+            "the trim time label shares the trim line color"
+        );
+        assert_ne!(time_labels[0].color, trim_lines[0]);
         assert_eq!(count(&trim_frame, |p| matches!(p, Prim::Image { .. })), 1);
         assert_eq!(
             count(

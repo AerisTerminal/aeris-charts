@@ -4,7 +4,7 @@ use super::*;
 use crate::HorizontalDomain;
 
 /// CSS px width of the bar replay trim line.
-const REPLAY_TRIM_LINE_WIDTH: f64 = 3.0;
+const REPLAY_TRIM_LINE_WIDTH: f64 = 2.0;
 /// CSS px radius of the scissors badge at the pointer.
 const REPLAY_TRIM_BADGE_RADIUS: f64 = 13.0;
 /// CSS px edge of the scissors icon inside the badge.
@@ -181,6 +181,25 @@ impl ChartEngine {
         }
     }
 
+    /// The theme primary and its foreground, shared by the trim line, its time-axis label, and
+    /// the scissors badge so the cursor reads as one object.
+    pub(super) fn replay_trim_colors(&self) -> (Color, Color) {
+        let (primary, foreground) = match self.theme {
+            crate::ChartTheme::Light => (
+                aeris_charts_core::style::LIGHT_PRIMARY_CSS,
+                aeris_charts_core::style::LIGHT_PRIMARY_FOREGROUND_CSS,
+            ),
+            crate::ChartTheme::Dark => (
+                aeris_charts_core::style::DARK_PRIMARY_CSS,
+                aeris_charts_core::style::DARK_PRIMARY_FOREGROUND_CSS,
+            ),
+        };
+        (
+            Color::parse_css(primary).unwrap_or(PRIMARY),
+            Color::parse_css(foreground).unwrap_or(Color::rgb(0xff, 0xff, 0xff)),
+        )
+    }
+
     /// The bar replay trim cursor replaces the crosshair: a solid primary line through the bar it
     /// would cut, the future to its right dimmed, and a scissors badge at the pointer. It shows
     /// whatever the crosshair mode, because it is the selection gesture's only feedback.
@@ -200,18 +219,7 @@ impl ChartEngine {
             return;
         };
         let pane = &self.panes[pane_index];
-        let (primary, foreground) = match self.theme {
-            crate::ChartTheme::Light => (
-                aeris_charts_core::style::LIGHT_PRIMARY_CSS,
-                aeris_charts_core::style::LIGHT_PRIMARY_FOREGROUND_CSS,
-            ),
-            crate::ChartTheme::Dark => (
-                aeris_charts_core::style::DARK_PRIMARY_CSS,
-                aeris_charts_core::style::DARK_PRIMARY_FOREGROUND_CSS,
-            ),
-        };
-        let primary = Color::parse_css(primary).unwrap_or(PRIMARY);
-        let foreground = Color::parse_css(foreground).unwrap_or(Color::rgb(0xff, 0xff, 0xff));
+        let (primary, foreground) = self.replay_trim_colors();
         let background = css_color(
             &self.options.get().layout.background.color,
             Color::rgb(0xff, 0xff, 0xff),

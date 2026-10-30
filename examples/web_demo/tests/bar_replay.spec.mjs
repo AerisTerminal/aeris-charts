@@ -85,10 +85,10 @@ test("the trim cursor replaces the platform cursor and a click trims at the bar"
   expect(await overlay_cursor(page)).toBe("none");
   await next_frame(page);
   const trim = await capture(page);
-  // The screenshot is in device pixels. The 3 CSS px primary line spans the pane, so one CSS
+  // The screenshot is in device pixels. The 2 CSS px primary line spans the pane, so half a CSS
   // pixel either side of its center still belongs to it.
   const scale = trim.width / point.chart_width;
-  for (const dx of [-1, 0, 1]) {
+  for (const dx of [-0.5, 0, 0.5]) {
     expect(primary_column_share(trim, (point.pane_x + dx) * scale, Math.floor(point.pane_height * scale)))
       .toBeGreaterThan(0.6);
   }

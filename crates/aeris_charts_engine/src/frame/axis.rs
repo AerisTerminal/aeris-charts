@@ -3068,12 +3068,18 @@ impl ChartEngine {
                     self.pane_left,
                     (self.pane_left + self.pane_w - width).max(self.pane_left),
                 );
-                let label_bg = css_color(&ch.vert_line.label_background_color, CROSSHAIR_LABEL_BG);
+                let (label_bg, label_text) = if trim {
+                    self.replay_trim_colors()
+                } else {
+                    let background =
+                        css_color(&ch.vert_line.label_background_color, CROSSHAIR_LABEL_BG);
+                    (background, self.axis_label_text_color(background))
+                };
                 labels.push(AxisLabel {
                     text,
                     x: box_x + width / 2.0,
                     y: self.pane_h + metrics.time_text_dy(),
-                    color: self.axis_label_text_color(label_bg),
+                    color: label_text,
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::StableTime,
                     font_scale: AXIS_FONT_SCALE,

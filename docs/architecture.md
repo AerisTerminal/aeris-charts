@@ -1140,11 +1140,11 @@ Bar replay mode (`aeris_charts_engine` `replay.rs`) drives that same clock; it a
 path. Its phases are off, selecting, paused, and playing. Selecting arms the input controller's
 `ChartCursor::Trim`: the pane claims every press, an unmoved release trims at the bar under the
 pointer, a drag still pans, hover promotion is suspended, and Escape returns to the previous phase.
-The crosshair layer then paints only the trim cursor: a 3 px solid vertical line in the theme
+The crosshair layer then paints only the trim cursor: a 2 px solid vertical line in the theme
 primary at the snapped bar, a primary badge with the engine's scissors icon at the pointer, and a
 background wash over the bars right of that bar. The horizontal crosshair line and price label are
-not drawn, and the time label names the addressed bar. Browsers hide the platform cursor; GPUI
-cannot, so its adapter maps the trim cursor to the I-beam. A trim sets the clock to the close of the
+not drawn, and the time label names the addressed bar on the same primary background. Browsers
+hide the platform cursor; GPUI cannot, so its adapter maps the trim cursor to the I-beam. A trim sets the clock to the close of the
 chosen bar: one microsecond before the next canonical row, the newest print of a trade-stream time
 bar, or the last print that still joins a sequence bar. Steps move between those same boundaries,
 reading the canonical timeline behind the clock, so time, trade, volume, range, synthetic, and
