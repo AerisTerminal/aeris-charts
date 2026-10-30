@@ -30,8 +30,7 @@ export function install_gestures(chart: chart_impl): () => void {
   let windows_chrome: boolean | null = null;
 
   const local_xy = (event: { clientX: number; clientY: number }): point => {
-    // Media coordinates are container-relative; the canvases themselves may sit up to one device
-    // pixel up/left of the container to land on the device-pixel grid.
+    // Media coordinates are container-relative.
     const bounds = (overlay.parentElement ?? overlay).getBoundingClientRect();
     return { x: event.clientX - bounds.left - wasm.pane_left(), y: event.clientY - bounds.top };
   };

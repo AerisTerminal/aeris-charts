@@ -2479,7 +2479,8 @@ test("combined financial and general panes retain data and export after WebGPU l
     document.body.appendChild(host);
     const chart = await create_chart(host, { backend: "auto", autoSize: false });
     chart.resize(540, 420, 1);
-    const candles = chart.add_series("candlestick");
+    // The wall-clock countdown would tick between the two exports being compared.
+    const candles = chart.add_series("candlestick", { countdown_visible: false });
     const rows = Array.from({ length: 12 }, (_, i) => ({
       time: 1_700_000_000 + 60 * i, open: 100 + i, high: 103 + i,
       low: 99 + i, close: 102 + i,

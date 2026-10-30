@@ -4046,10 +4046,9 @@ export class chart_impl implements chart_api {
   private general_motion_listener_bound = false;
   private readonly dpr_change_handler = (): void => {
     if (this.removed || !this.auto_size) return;
-    const bounds = this.container.getBoundingClientRect();
-    if (bounds.width >= 2 && bounds.height >= 2) {
-      this.apply_size(bounds.width, bounds.height, window.devicePixelRatio || 1);
-    }
+    this.pixel_ratio = window.devicePixelRatio || 1;
+    this.wasm.refresh_auto_size();
+    this.repaint();
     this.bind_dpr_watcher();
   };
   /** Crosshair position tracked TS-side (for crosshair-less screenshots); `null` when hidden. */
@@ -4090,9 +4089,6 @@ export class chart_impl implements chart_api {
   private repaint_raf: number | null = null;
   /** The plugin canvas holds pixels from a previous canvas-primitive pass. */
   private plugin_canvas_painted = false;
-  /** Container position the canvases were last placed on the device-pixel grid for. */
-  private aligned_left = Number.NaN;
-  private aligned_top = Number.NaN;
   /** Pending rAF handle for the ring-drain loop; `null` while no ring source is bound. */
   private ring_raf: number | null = null;
   /** Reused `[pair_count, series_id, rows, ...]` report from `drain_ring_sources`. */
@@ -4356,7 +4352,7 @@ export class chart_impl implements chart_api {
     }
     this.detach_gestures = install_gestures(this);
     if (auto_size) {
-      this.wasm.enable_auto_resize(container);
+      this.wasm.enable_auto_resize();
       this.bind_dpr_watcher();
     }
     // Canvas primitives (Phase C-e): the engine's own ResizeObserver (registered first, above)
@@ -4366,15 +4362,8 @@ export class chart_impl implements chart_api {
     // engine's auto-resize render has always completed by the time the pass runs.
     this.plugin_resize_observer = new ResizeObserver(() => {
       queueMicrotask(() => this.run_canvas_primitives());
-      // The repaint re-checks device-pixel alignment after layout settles; restyling the canvases
-      // inside this callback could resize an observed ancestor again within the same delivery.
-      this.schedule_repaint();
     });
     this.plugin_resize_observer.observe(container);
-    // Ancestor size changes are what move a chart without resizing it.
-    for (let ancestor = container.parentElement; ancestor !== null; ancestor = ancestor.parentElement) {
-      this.plugin_resize_observer.observe(ancestor);
-    }
   }
 
   /** Internal package boundary. Every post-disposal operation fails with one stable error. */
@@ -4467,20 +4456,6 @@ export class chart_impl implements chart_api {
     this.ring_raf = requestAnimationFrame(this.ring_tick);
   };
 
-  /**
-   * A host can move the chart without resizing it (a grid reflow, a sibling collapsing); the
-   * canvases must follow onto the new device-pixel phase or the compositor blurs every rule.
-   */
-  private align_canvases(): void {
-    // A manual size at a ratio other than the screen's is an explicit supersampled/test surface.
-    if (!this.auto_size && this.pixel_ratio !== (window.devicePixelRatio || 1)) return;
-    const origin = this.container.getBoundingClientRect();
-    if (origin.left === this.aligned_left && origin.top === this.aligned_top) return;
-    this.aligned_left = origin.left;
-    this.aligned_top = origin.top;
-    this.wasm.align_to_device_pixels(this.container);
-  }
-
   /** Repaint unless torn down. Named distinctly from the public `render` for internal use. */
   repaint(): void {
     if (this.repaint_raf !== null) {
@@ -4488,7 +4463,6 @@ export class chart_impl implements chart_api {
       this.repaint_raf = null;
     }
     if (!this.removed) {
-      this.align_canvases();
       this.wasm.render();
       // The text editor tracks its anchor through the change that drove this repaint
       // (wheel zoom/scroll, pinch, resize, data update) — before plugin passes composite.
@@ -4561,10 +4535,9 @@ export class chart_impl implements chart_api {
     if (canvas.width !== this.overlay.width) canvas.width = this.overlay.width;
     if (canvas.height !== this.overlay.height) canvas.height = this.overlay.height;
     const overlay_style = this.overlay.style;
-    if (canvas.style.transform !== overlay_style.transform || canvas.style.width !== overlay_style.width) {
+    if (canvas.style.width !== overlay_style.width || canvas.style.height !== overlay_style.height) {
       canvas.style.width = overlay_style.width;
       canvas.style.height = overlay_style.height;
-      canvas.style.transform = overlay_style.transform;
     }
     const ctx = this.plugin_ctx;
     if (this.canvas_primitives.length === 0) {
@@ -7451,7 +7424,7 @@ export class chart_impl implements chart_api {
   private set_auto_size(on: boolean): void {
     if (on === this.auto_size || this.removed) return;
     if (on) {
-      this.wasm.enable_auto_resize(this.container);
+      this.wasm.enable_auto_resize();
       this.auto_size = true;
       this.bind_dpr_watcher();
     } else {
@@ -8313,9 +8286,7 @@ export class chart_impl implements chart_api {
       canvas.height = bitmap_height;
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
-      canvas.style.transform = "";
     }
-    this.aligned_left = Number.NaN;
     this.wasm.resize(width, height, this.pixel_ratio);
     this.repaint();
   }

@@ -4562,11 +4562,8 @@ test("multiple reversed axes stay aligned through aspect resize, DPR, and font c
     const wait_for_size = (width, height) => new Promise((resolve, reject) => {
       let frames = 0;
       const poll = () => {
-        const canvas = host.querySelector("canvas");
-        const size = canvas === null ? [0, 0] : [
-          Number.parseFloat(canvas.style.width),
-          Number.parseFloat(canvas.style.height),
-        ];
+        const rect = host.querySelector("canvas")?.getBoundingClientRect();
+        const size = rect === undefined ? [0, 0] : [rect.width, rect.height];
         if (size[0] === width && size[1] === height) resolve(size);
         else if (++frames >= 120) reject(new Error(`chart did not resize to ${width}x${height}`));
         else requestAnimationFrame(poll);
@@ -4616,7 +4613,7 @@ test("multiple reversed axes stay aligned through aspect resize, DPR, and font c
     const resized = {
       hit: resized_hit.hit,
       pointer_hit,
-      css: [Number.parseFloat(canvas.style.width), Number.parseFloat(canvas.style.height)],
+      css: [canvas.getBoundingClientRect().width, canvas.getBoundingClientRect().height],
       bitmap: [canvas.width, canvas.height],
       screenshot_changed: chart.take_screenshot().toDataURL() !== initial.screenshot,
     };
@@ -4670,10 +4667,19 @@ test("general auto sizing disables cleanly and survives hidden-container reveal"
     const settle = () => new Promise((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 20)));
     });
+    // The displayed CSS box (`null` while hidden) and the backing store the engine renders into.
     const size = () => {
       const canvas = host.querySelector("canvas");
-      return [Number.parseFloat(canvas.style.width), Number.parseFloat(canvas.style.height)];
+      const rect = canvas.getBoundingClientRect();
+      return {
+        css: rect.width < 2 ? null : [rect.width, rect.height],
+        bitmap: [canvas.width, canvas.height],
+      };
     };
+    const device = (width, height) => [
+      Math.round(width * window.devicePixelRatio),
+      Math.round(height * window.devicePixelRatio),
+    ];
 
     await settle();
     const initial = size();
@@ -4705,20 +4711,21 @@ test("general auto sizing disables cleanly and survives hidden-container reveal"
     await settle();
     const revealed = size();
 
+    const expected = {
+      initial: { css: [320, 180], bitmap: device(320, 180) },
+      ignored_manual_resize: { css: [320, 180], bitmap: device(320, 180) },
+      disabled: { active: false, size: { css: [222, 111], bitmap: [222, 111] } },
+      reenabled_hidden: { active: true, size: { css: null, bitmap: [222, 111] } },
+      first_reveal: { css: [500, 300], bitmap: device(500, 300) },
+      hidden_again: { css: null, bitmap: device(500, 300) },
+      revealed: { css: [280, 160], bitmap: device(280, 160) },
+    };
     chart.remove();
     host.remove();
-    return { initial, ignored_manual_resize, disabled, reenabled_hidden, first_reveal, hidden_again, revealed };
+    return { expected, actual: { initial, ignored_manual_resize, disabled, reenabled_hidden, first_reveal, hidden_again, revealed } };
   });
 
-  expect(result).toEqual({
-    initial: [320, 180],
-    ignored_manual_resize: [320, 180],
-    disabled: { active: false, size: [222, 111] },
-    reenabled_hidden: { active: true, size: [222, 111] },
-    first_reveal: [500, 300],
-    hidden_again: [500, 300],
-    revealed: [280, 160],
-  });
+  expect(result.actual).toEqual(result.expected);
 });
 
 test("general series rebind and reorder atomically while preserving legend, data, and V2 restore", async ({ page }) => {
