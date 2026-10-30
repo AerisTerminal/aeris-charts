@@ -297,7 +297,7 @@ test("demo shell is responsive, icon-led, and has no horizontal control ribbon",
 test("canonical series stay in Series while feature lab contains only composable scenarios", async ({ page }) => {
   await open_demo(page);
   await expect(page.locator("#series_grid .feature-card")).toHaveCount(11);
-  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(15);
+  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(16);
   expect(await page.locator('input[name="series"]').evaluateAll((radios) => radios.map((radio) => radio.value))).toEqual([
     "candlestick", "hollow_candlestick", "bar", "line", "line_markers", "area", "histogram", "baseline",
   ]);
@@ -513,7 +513,7 @@ test("order-flow cards add and remove depth layers and sub-panes", async ({ page
   const base_panes = await panes();
   await page.click('#tool_rail [data-panel-target="lab"]');
   await page.locator('[data-feature-filter="orderflow"]').click();
-  await expect(page.locator("#feature_grid .feature-card:not([hidden])")).toHaveCount(4);
+  await expect(page.locator("#feature_grid .feature-card:not([hidden])")).toHaveCount(5);
   for (const id of ["depth-heatmap", "depth-profile", "delta-histogram", "cvd"]) {
     await page.locator(`[data-feature-id="${id}"]`).click();
     await expect(page.locator(`[data-feature-id="${id}"]`)).toHaveAttribute("aria-pressed", "true");
@@ -525,6 +525,45 @@ test("order-flow cards add and remove depth layers and sub-panes", async ({ page
   expect(await page.evaluate(() => window.__chart.depth_stream_id("DEMO:BOOK"))).toBeNull();
   await page.locator('[data-feature-id="depth-heatmap"]').click();
   expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toEqual(["depth-heatmap"]);
+  expect(errors).toEqual([]);
+});
+
+test("options volume card draws calls above and puts below zero in one sub-pane", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await open_demo(page);
+  const base_panes = await page.evaluate(() => window.__chart.panes().length);
+  await page.click('#tool_rail [data-panel-target="lab"]');
+  await page.locator('[data-feature-filter="orderflow"]').click();
+  await page.locator('[data-feature-id="options-volume"]').click();
+  await expect(page.locator('[data-feature-id="options-volume"]')).toHaveAttribute("aria-pressed", "true");
+  const shown = await page.evaluate(() => {
+    const panes = window.__chart.panes();
+    const series = panes.at(-1).get_series();
+    const price_times = window.__demo_catalogs.series.interaction_series().data().map((row) => row.time);
+    return {
+      panes: panes.length,
+      kinds: series.map((s) => s.series_type()),
+      titles: series.map((s) => s.options().title),
+      calls_up: series[0].data().every((row) => row.value >= 0),
+      puts_down: series[1].data().every((row) => row.value <= 0),
+      same_times: [0, 1].every((i) => JSON.stringify(series[i].data().map((row) => row.time)) === JSON.stringify(price_times)),
+      axis_label: series[0].price_formatter()(4000),
+      share: panes.at(-1).get_stretch_factor() / panes[0].get_stretch_factor(),
+    };
+  });
+  expect(shown).toEqual({
+    panes: base_panes + 1,
+    kinds: ["histogram", "histogram"],
+    titles: ["Calls", "Puts"],
+    calls_up: true,
+    puts_down: true,
+    same_times: true,
+    axis_label: expect.stringMatching(/^4(\.0)?K$/),
+    share: expect.closeTo(0.15, 9),
+  });
+  await page.locator('[data-feature-id="options-volume"]').click();
+  expect(await page.evaluate(() => window.__chart.panes().length)).toBe(base_panes);
   expect(errors).toEqual([]);
 });
 

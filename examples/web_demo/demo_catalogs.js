@@ -376,7 +376,20 @@ const DEPTH_LEVELS = 40;
  * Seeded synthetic order book and tape for the order-flow previews. Streams are created on first
  * use and released when the last layer that needs them is turned off.
  */
-function order_flow_features(chart, bars, live_source) {
+/**
+ * Seeded stand-in for host-supplied options flow: call and put volume per bar, a pure function of
+ * the bar time so live updates and reopening the preview show the same columns.
+ */
+function demo_options_volume(time) {
+  const rand = demo_rand(Math.imul(time >>> 0, 2654435761) ^ 0x0ca11);
+  const burst = rand() < 0.04 ? 1.5 + rand() * 1.5 : 1;
+  return {
+    calls: Math.round((250 + rand() * 900 + rand() * rand() * 900) * (rand() < 0.5 ? burst : 1)),
+    puts: Math.round((200 + rand() * 800 + rand() * rand() * 1200) * (rand() < 0.5 ? burst : 1)),
+  };
+}
+
+function order_flow_features(chart, bars, live_source, price_series) {
   const recent = bars.slice(-ORDER_FLOW_BARS);
   const step_micros = recent.length > 1 ? (recent[1].time - recent[0].time) * 1_000_000 : 60_000_000;
   const snap = (price) => Math.round(price / ORDER_FLOW_TICK) * ORDER_FLOW_TICK;
@@ -487,6 +500,40 @@ function order_flow_features(chart, bars, live_source) {
     {
       id: "cvd", label: "Cumulative delta", detail: "Session CVD candles", icon: "chart",
       activate: () => sub_pane((pane) => chart.add_cvd_series(tape(), pane, "session")),
+    },
+    {
+      id: "options-volume", label: "Options volume", detail: "Calls above zero, puts below", icon: "chart",
+      activate: () => {
+        const pane = chart.panes().length;
+        const shared = { pane, price_format: { type: "volume", precision: 1 }, countdown_visible: false, price_line_visible: false };
+        const calls = chart.add_series("histogram", { ...shared, title: "Calls", color: "#22c55e" });
+        const puts = chart.add_series("histogram", { ...shared, title: "Puts", color: "#f97316" });
+        const columns = (time) => {
+          const flow = demo_options_volume(time);
+          return [{ time, value: flow.calls }, { time, value: -flow.puts }];
+        };
+        const fill = () => {
+          const times = price_series.data().map((row) => row.time);
+          calls.set_data(times.map((time) => columns(time)[0]));
+          puts.set_data(times.map((time) => columns(time)[1]));
+        };
+        // Live bars append or replace the newest price bar; the flow columns follow it.
+        const follow = (scope) => {
+          if (scope === "full") return fill();
+          const last = price_series.data_by_index(Number.MAX_SAFE_INTEGER, -1);
+          if (last === null) return;
+          const [call, put] = columns(last.time);
+          calls.update(call);
+          puts.update(put);
+        };
+        fill();
+        price_series.subscribe_data_changed(follow);
+        return () => {
+          price_series.unsubscribe_data_changed(follow);
+          chart.remove_series(puts);
+          chart.remove_series(calls);
+        };
+      },
     },
   ];
 }
@@ -702,7 +749,7 @@ export function install_demo_catalogs({ chart, series, data, on_series_change, l
   const series_items = series_features(data, series, live_source).map((feature) => ({ ...feature, kind: "series" }));
   const primitive_items = primitive_features(chart, series, data).map((feature) => ({ ...feature, kind: "primitive" }));
   const trading_items = trading_features(chart, data).map((feature) => ({ ...feature, kind: "trading" }));
-  const order_flow_items = order_flow_features(chart, data, live_source).map((feature) => ({ ...feature, kind: "orderflow" }));
+  const order_flow_items = order_flow_features(chart, data, live_source, series).map((feature) => ({ ...feature, kind: "orderflow" }));
   const features = [...primitive_items, ...order_flow_items, ...trading_items];
   const cleanups = new Map();
   let active_series = null;
