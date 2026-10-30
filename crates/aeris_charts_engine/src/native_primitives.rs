@@ -2682,7 +2682,7 @@ mod tests {
 
         chart.pane_set_preserve_empty(0, true);
         let second_pane = chart.add_pane(true).unwrap();
-        chart.set_series_pane(0, second_pane, 1.0);
+        chart.set_series_pane(0, second_pane, Some(1.0));
         let moved = chart.build_frame();
         assert!(
             moved.panes[0]
@@ -2757,7 +2757,7 @@ mod tests {
 
         chart.pane_set_preserve_empty(0, true);
         let second_pane = chart.add_pane(true).unwrap();
-        chart.set_series_pane(0, second_pane, 1.0);
+        chart.set_series_pane(0, second_pane, Some(1.0));
         let moved = chart.build_frame();
         assert!(moved.panes[0].main.iter().all(
             |primitive| !matches!(primitive, Prim::Text { text, .. } if text == "Anchored Text")
@@ -2765,7 +2765,7 @@ mod tests {
         assert!(moved.panes[second_pane].main.iter().any(
             |primitive| matches!(primitive, Prim::Text { text, .. } if text == "Anchored Text")
         ));
-        chart.set_series_pane(0, 0, 1.0);
+        chart.set_series_pane(0, 0, Some(1.0));
         assert!(chart.remove_pane(second_pane));
 
         let before = chart.build_frame();

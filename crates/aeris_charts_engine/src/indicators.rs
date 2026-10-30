@@ -1219,7 +1219,7 @@ impl ChartEngine {
                         return false;
                     };
                     // The source pane exists, so no pane is created and no stretch applies.
-                    if !self.try_set_series_pane(output, source_pane, 1.0) {
+                    if !self.try_set_series_pane(output, source_pane, None) {
                         return false;
                     }
                     self.set_series_price_scale(output, PriceScaleTarget::Overlay);
@@ -2870,7 +2870,7 @@ impl ChartEngine {
                     for &id in &ids {
                         if let Some((output_pane, output_target)) = self.series_price_scale(id) {
                             if output_pane != pane {
-                                self.set_series_pane(id, pane, 1.0);
+                                self.set_series_pane(id, pane, None);
                             }
                             if output_target != target {
                                 self.set_series_price_scale(id, target);
@@ -3422,7 +3422,7 @@ impl ChartEngine {
             p.stretch_factor = stretch;
         }
         for &id in ids {
-            self.set_series_pane(id, pane, stretch);
+            self.set_series_pane(id, pane, Some(stretch));
         }
     }
 

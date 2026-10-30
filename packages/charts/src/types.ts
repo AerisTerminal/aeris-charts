@@ -1897,7 +1897,10 @@ export interface series_options {
   scale_margins: { top: number; bottom: number };
   /** Stacked pane index (0 = top/price pane). A new pane is created on demand (roadmap Phase B1). */
   pane: number;
-  /** Relative height of a newly-created pane (default 1; the price pane is 3). */
+  /**
+   * Stretch factor of a newly-created pane. Default: the compact height every separate indicator
+   * pane opens at (0.15 of the main pane).
+   */
   pane_stretch: number;
   /** Line/area join type (roadmap Phase B3). */
   line_type: "simple" | "stepped" | "curved";
@@ -3169,7 +3172,10 @@ export interface series_api {
   options(): any_series_options;
   /** Change how the primary series is drawn (candlestick/bar/line/area/histogram). */
   set_type(kind: series_kind): void;
-  /** Move this series into stacked pane `pane_index` (0 = price pane), creating it if needed. */
+  /**
+   * Move this series into stacked pane `pane_index` (0 = price pane), creating it if needed. A
+   * created pane takes `stretch`, or the compact separate-pane height when omitted.
+   */
   move_to_pane(pane_index: number, stretch?: number): void;
   /** Add a horizontal price line on this series; returns a handle with `.remove()`. */
   create_price_line(options: price_line_options): price_line_api;

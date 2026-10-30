@@ -79,6 +79,31 @@ test("RSI toggle stacks a separate pane with its own scale; unchecking prunes it
   expect(await page.evaluate(() => window.__chart.panes().length)).toBe(1);
 });
 
+test("every new separate pane opens at the same compact height as the RSI pane", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await wait_for_chart(page);
+  await page.check("#rsi_toggle");
+  await wait_for_chart(page);
+  const shares = await page.evaluate(() => {
+    const chart = window.__chart;
+    const share = (index) => chart.panes()[index].get_stretch_factor() / chart.panes()[0].get_stretch_factor();
+    const rsi = share(1);
+    const placed = chart.add_series("histogram", { pane: 2 });
+    const moved = chart.add_series("line");
+    moved.move_to_pane(3);
+    const empty = chart.add_pane(true).pane_index();
+    const result = { rsi, placed: share(2), moved: share(3), empty: share(empty) };
+    chart.remove_pane(empty);
+    chart.remove_series(moved);
+    chart.remove_series(placed);
+    return result;
+  });
+  expect(shares.rsi).toBeCloseTo(0.15, 9);
+  expect(shares.placed).toBeCloseTo(shares.rsi, 9);
+  expect(shares.moved).toBeCloseTo(shares.rsi, 9);
+  expect(shares.empty).toBeCloseTo(shares.rsi, 9);
+});
+
 test("pane divider follows the axis border color (theme-aware) until pinned", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await wait_for_chart(page);

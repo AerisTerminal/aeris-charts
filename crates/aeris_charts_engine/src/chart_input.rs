@@ -3926,6 +3926,8 @@ mod tests {
     fn separator_reversal_uses_the_original_grab_point_after_clamping() {
         let mut chart = chart();
         chart.add_pane(true).unwrap();
+        // An even split leaves room to drag past the clamp and back.
+        assert!(chart.set_pane_height_share(1, 1.0));
         relayout(&mut chart);
         let start = chart.panes[1].top;
         chart.input_pointer_down(at(200.0, start), 1);

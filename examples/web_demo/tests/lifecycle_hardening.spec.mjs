@@ -178,7 +178,7 @@ test("pane and price-scale handles follow the same pane through reorder", async 
     original_stretch: 3,
     original_auto_scale: false,
     added_index: 0,
-    added_stretch: 1,
+    added_stretch: expect.closeTo(0.15, 9),
     added_auto_scale: true,
   });
 });
@@ -210,7 +210,8 @@ test("removed pane handles never retarget a replacement pane", async ({ page }) 
     };
   });
   expect(result.replacement_index).toBe(result.removed_index);
-  expect(result.replacement_stretch).toBe(1);
+  // A fresh pane at the compact default, untouched by the stale handle's stretch of 7.
+  expect(result.replacement_stretch).toBeCloseTo(0.15, 9);
   expect(result.pane_error).toMatchObject({ code: "stale_handle" });
   expect(result.scale_error).toMatchObject({ code: "stale_handle" });
 });

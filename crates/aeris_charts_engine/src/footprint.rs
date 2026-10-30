@@ -2410,8 +2410,7 @@ impl ChartEngine {
             return Err(FootprintError::InvalidAggregation);
         }
         let id = self.add_series(options.style.series_kind());
-        let stretch = self.separate_pane_stretch();
-        self.set_series_pane(id, pane_index, stretch);
+        self.set_series_pane(id, pane_index, None);
         if let Some(series) = self.series_entry_mut(id) {
             series.title = "CVD".to_string();
         }
@@ -2441,8 +2440,7 @@ impl ChartEngine {
         self.trade_stream(stream_id)
             .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
         let id = self.add_series(SeriesKind::Histogram);
-        let stretch = self.separate_pane_stretch();
-        self.set_series_pane(id, pane_index, stretch);
+        self.set_series_pane(id, pane_index, None);
         if let Some(series) = self.series_entry_mut(id) {
             series.title = "Delta".to_string();
             series.delta_histogram = true;
@@ -5029,7 +5027,7 @@ mod tests {
                 true,
             )
             .unwrap();
-        assert!(chart.try_set_series_pane_and_scale(0, 0, 1.0, "footprint-dedicated"));
+        assert!(chart.try_set_series_pane_and_scale(0, 0, Some(1.0), "footprint-dedicated"));
         chart
             .configure_footprint_series(
                 0,

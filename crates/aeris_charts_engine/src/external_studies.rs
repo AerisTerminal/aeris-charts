@@ -298,7 +298,7 @@ impl ChartEngine {
         if !self.try_set_series_pane_and_scale(
             series_id,
             pane_index,
-            self.separate_pane_stretch(),
+            None,
             scale_id(descriptor.scale),
         ) {
             let _ = self.remove_series(series_id);

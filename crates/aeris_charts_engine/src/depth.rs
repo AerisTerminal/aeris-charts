@@ -2685,7 +2685,7 @@ mod tests {
                 &[50.0; 3],
             )
             .unwrap();
-        chart.set_series_pane(other, 1, 1.0);
+        chart.set_series_pane(other, 1, Some(1.0));
         chart.series_entry_mut(other).unwrap().title = "OSC".to_string();
         chart.layout_panes(372.0);
         chart.autoscale_visible();

@@ -1981,7 +1981,7 @@ class series_impl implements series_api {
       if (!this.chart.wasm.try_set_series_pane_and_scale(
         this.id,
         pane,
-        options.pane_stretch ?? 1,
+        options.pane_stretch,
         scale,
       )) {
         throw new AerisChartsError(
@@ -2053,7 +2053,7 @@ class series_impl implements series_api {
     this.chart.repaint();
   }
 
-  move_to_pane(pane_index: number, stretch = 1): void {
+  move_to_pane(pane_index: number, stretch?: number): void {
     this.assert_live();
     if (!this.chart.wasm.try_set_series_pane(this.id, pane_index, stretch)) {
       throw new AerisChartsError(

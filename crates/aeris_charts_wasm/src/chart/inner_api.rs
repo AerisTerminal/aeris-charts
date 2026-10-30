@@ -1620,14 +1620,19 @@ impl ChartInner {
         }
     }
 
-    /// Move a series into pane `pane_index`, creating panes (with the given stretch factor for a
-    /// newly-created last pane) as needed. Pane 0 is the top/price pane (roadmap Phase B1).
-    pub fn set_series_pane(&mut self, id: u32, pane_index: usize, stretch_factor: f64) {
+    /// Move a series into pane `pane_index`, creating panes (with the given stretch factor, or the
+    /// compact separate-pane height when `None`) as needed. Pane 0 is the top/price pane.
+    pub fn set_series_pane(&mut self, id: u32, pane_index: usize, stretch_factor: Option<f64>) {
         self.engine
             .set_series_pane(id as SeriesId, pane_index, stretch_factor);
     }
 
-    pub fn try_set_series_pane(&mut self, id: u32, pane_index: usize, stretch_factor: f64) -> bool {
+    pub fn try_set_series_pane(
+        &mut self,
+        id: u32,
+        pane_index: usize,
+        stretch_factor: Option<f64>,
+    ) -> bool {
         let changed = self
             .engine
             .try_set_series_pane(id as SeriesId, pane_index, stretch_factor);
@@ -1641,7 +1646,7 @@ impl ChartInner {
         &mut self,
         id: u32,
         pane_index: usize,
-        stretch_factor: f64,
+        stretch_factor: Option<f64>,
         price_scale_id: &str,
     ) -> bool {
         let changed = self.engine.try_set_series_pane_and_scale(

@@ -3723,14 +3723,19 @@ impl AerisChart {
     }
 
     /// Move a series into stacked pane `pane_index` (0 = top/price pane), creating panes as needed;
-    /// `stretch_factor` sizes a newly-created pane relative to the others. Call `render()` after
-    /// (roadmap Phase B1).
-    pub fn set_series_pane(&mut self, id: u32, pane_index: usize, stretch_factor: f64) {
+    /// `stretch_factor` sizes a newly-created pane relative to the others; `undefined` gives it the
+    /// compact separate-pane height. Call `render()` after (roadmap Phase B1).
+    pub fn set_series_pane(&mut self, id: u32, pane_index: usize, stretch_factor: Option<f64>) {
         self.inner
             .borrow_mut()
             .set_series_pane(id, pane_index, stretch_factor);
     }
-    pub fn try_set_series_pane(&mut self, id: u32, pane_index: usize, stretch_factor: f64) -> bool {
+    pub fn try_set_series_pane(
+        &mut self,
+        id: u32,
+        pane_index: usize,
+        stretch_factor: Option<f64>,
+    ) -> bool {
         self.inner
             .borrow_mut()
             .try_set_series_pane(id, pane_index, stretch_factor)
@@ -3739,7 +3744,7 @@ impl AerisChart {
         &mut self,
         id: u32,
         pane_index: usize,
-        stretch_factor: f64,
+        stretch_factor: Option<f64>,
         price_scale_id: &str,
     ) -> bool {
         self.inner.borrow_mut().try_set_series_pane_and_scale(

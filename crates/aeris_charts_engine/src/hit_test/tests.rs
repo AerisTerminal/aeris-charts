@@ -314,7 +314,7 @@ fn hits_are_restricted_to_the_pane_under_the_cursor() {
     chart
         .set_series_data(other, &times, &values, &values, &values, &values)
         .unwrap();
-    chart.set_series_pane(other, 1, 1.0);
+    chart.set_series_pane(other, 1, Some(1.0));
     chart.build_frame();
 
     let x = x_at(&chart, 5);

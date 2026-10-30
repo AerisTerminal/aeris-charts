@@ -22138,7 +22138,7 @@ fn retained_frame_matches_clean_rebuild_across_mutation_sequence() {
         .unwrap();
     assert_retained_frame_matches_clean_rebuild(&mut chart);
 
-    chart.set_series_pane(added, 1, 1.0);
+    chart.set_series_pane(added, 1, Some(1.0));
     assert_retained_frame_matches_clean_rebuild(&mut chart);
 }
 
@@ -22284,7 +22284,7 @@ fn one_current_bar_update_rebuilds_one_of_many_series() {
 fn multi_pane_current_bar_keeps_other_pane_series_retained() {
     let mut chart = retained_two_series_chart();
     let second = chart.pane_series_ids(0)[1];
-    chart.set_series_pane(second, 1, 1.0);
+    chart.set_series_pane(second, 1, Some(1.0));
     chart.build_frame();
 
     assert!(chart.update_series_bar(0, 3.0, [15.0, 16.0, 14.0, 15.8]));

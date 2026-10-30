@@ -3588,6 +3588,7 @@ impl ChartEngine {
         let (stable_id, persistent_id) = self.take_pane_ids().ok_or_else(|| {
             ChartError::new(ErrorCode::ResourceLimit, "pane identity space is exhausted")
         })?;
+        let financial = matches!(domain, HorizontalDomain::FinancialTime);
         let general_horizontal_domain = match self.general_horizontal_domains.register(domain) {
             Ok(binding) => binding,
             Err(error) => {
@@ -3599,6 +3600,9 @@ impl ChartEngine {
             }
         };
         let mut pane = Pane::with_chart_ids(stable_id, persistent_id);
+        if financial {
+            pane.stretch_factor = self.new_pane_stretch(None);
+        }
         pane.general_horizontal_domain = general_horizontal_domain;
         pane.preserve_empty = preserve_empty;
         self.apply_chart_scale_options(&mut pane);
@@ -3880,11 +3884,17 @@ impl ChartEngine {
             .collect()
     }
 
-    /// Move a series into pane `pane_index`, creating panes (with the given stretch factor
-    /// for a newly-created pane) as needed — reference `moveSeriesToPane` with `_getOrCreatePane`.
-    /// The pane the series left collapses when empty and not preserved (reference
-    /// `_cleanupIfPaneIsEmpty`, chart-model.ts:1135).
-    pub fn set_series_pane(&mut self, id: SeriesId, pane_index: usize, stretch_factor: f64) {
+    /// Move a series into pane `pane_index`, creating panes as needed — reference
+    /// `moveSeriesToPane` with `_getOrCreatePane`. A newly-created pane takes `stretch_factor`, or
+    /// the compact separate-pane height every engine indicator pane opens at when `None`. The pane
+    /// the series left collapses when empty and not preserved (reference `_cleanupIfPaneIsEmpty`,
+    /// chart-model.ts:1135).
+    pub fn set_series_pane(
+        &mut self,
+        id: SeriesId,
+        pane_index: usize,
+        stretch_factor: Option<f64>,
+    ) {
         self.try_set_series_pane(id, pane_index, stretch_factor);
     }
 
@@ -3892,7 +3902,7 @@ impl ChartEngine {
         &mut self,
         id: SeriesId,
         pane_index: usize,
-        stretch_factor: f64,
+        stretch_factor: Option<f64>,
     ) -> bool {
         if pane_index < self.panes.len() && !self.pane_uses_financial_time(pane_index) {
             return false;
@@ -3930,7 +3940,7 @@ impl ChartEngine {
                 return false;
             };
             let mut pane = Pane::with_chart_ids(stable_id, persistent_id);
-            pane.stretch_factor = stretch_factor.max(0.01);
+            pane.stretch_factor = self.new_pane_stretch(stretch_factor);
             self.apply_chart_scale_options(&mut pane);
             self.panes.push(pane);
         }
@@ -3954,7 +3964,7 @@ impl ChartEngine {
         &mut self,
         id: SeriesId,
         pane_index: usize,
-        stretch_factor: f64,
+        stretch_factor: Option<f64>,
         price_scale_id: &str,
     ) -> bool {
         if pane_index < self.panes.len() && !self.pane_uses_financial_time(pane_index) {
@@ -3972,7 +3982,7 @@ impl ChartEngine {
                 return false;
             };
             let mut pane = Pane::with_chart_ids(stable_id, persistent_id);
-            pane.stretch_factor = stretch_factor.max(0.01);
+            pane.stretch_factor = self.new_pane_stretch(stretch_factor);
             self.apply_chart_scale_options(&mut pane);
             self.panes.push(pane);
         }
@@ -5978,6 +5988,16 @@ impl ChartEngine {
             .first()
             .map_or(1.0, |pane| pane.stretch_factor.max(0.01));
         SEPARATE_INDICATOR_PANE_STRETCH * main
+    }
+
+    /// Stretch for a pane about to be appended: `requested`, or the compact separate-pane height
+    /// (the first pane is the main pane and keeps the full stretch).
+    fn new_pane_stretch(&self, requested: Option<f64>) -> f64 {
+        match requested {
+            Some(stretch) => stretch.max(0.01),
+            None if self.panes.is_empty() => 1.0,
+            None => self.separate_pane_stretch(),
+        }
     }
 
     /// Height of pane `index` as a multiple of the main pane's height. The share does not depend

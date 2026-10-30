@@ -339,7 +339,7 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
     assert!(chart.try_set_series_pane_and_scale(
         comparison,
         comparison_pane,
-        0.6,
+        Some(0.6),
         "phase-zero-comparison",
     ));
     assert_eq!(
@@ -2511,7 +2511,7 @@ fn value_snapshot_unifies_latest_exact_predecessor_format_and_placement() {
         )
         .unwrap();
     chart.convert_series_kind(comparison, SeriesKind::Area);
-    chart.set_series_pane(comparison, 1, 0.5);
+    chart.set_series_pane(comparison, 1, Some(0.5));
     chart.set_series_price_scale(comparison, PriceScaleTarget::Left);
 
     let latest = chart.value_snapshot(None);
@@ -5412,7 +5412,7 @@ fn a_selected_scale_price_format_carries_to_series_that_join_the_scale() {
     );
     let sma = chart.add_sma(0, 2).expect("valid SMA");
     assert_eq!(chart.series_entry(sma).unwrap().price_format.precision, 0);
-    assert!(chart.try_set_series_pane(sma, 1, 0.3));
+    assert!(chart.try_set_series_pane(sma, 1, Some(0.3)));
     assert_eq!(chart.series_entry(sma).unwrap().price_format.precision, 0);
 
     // Moving the scale's series to another built-in scale carries the selection with them.
@@ -5790,6 +5790,48 @@ fn the_volume_average_defaults_to_a_thin_line_over_thicker_columns() {
     };
     assert_eq!(width(&chart, outputs[0]), Some(2.0));
     assert_eq!(width(&chart, outputs[1]), Some(1.0));
+}
+
+#[test]
+fn every_new_financial_pane_opens_at_the_indicator_pane_height() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let price = [1.0, 2.0, 3.0, 4.0, 5.0];
+    chart
+        .set_series_data(0, &times, &price, &price, &price, &price)
+        .unwrap();
+    chart.add_rsi(0, 2).expect("valid rsi");
+    let indicator_share = chart.pane_height_share(1).unwrap();
+    assert!((indicator_share - crate::SEPARATE_INDICATOR_PANE_STRETCH).abs() < 1e-9);
+
+    // Host series placed into a new pane, moved into one, and an empty financial pane all open at
+    // the same share as the engine's own indicator pane.
+    let calls = chart.add_series(SeriesKind::Histogram);
+    assert!(chart.try_set_series_pane_and_scale(calls, 2, None, "right"));
+    let moved = chart.add_series(SeriesKind::Line);
+    assert!(chart.try_set_series_pane(moved, 3, None));
+    let empty = chart.add_pane(true).unwrap();
+    for pane in [2, 3, empty] {
+        let share = chart.pane_height_share(pane).unwrap();
+        assert!(
+            (share - indicator_share).abs() < 1e-9,
+            "pane {pane} opened at {share}"
+        );
+    }
+
+    // An explicit host stretch still wins, and general-domain panes keep their full share.
+    let sized = chart.add_series(SeriesKind::Line);
+    assert!(chart.try_set_series_pane(sized, 5, Some(0.5)));
+    assert!((chart.panes[5].stretch_factor - 0.5).abs() < 1e-9);
+    let general = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    assert!((chart.panes[general].stretch_factor - 1.0).abs() < 1e-9);
 }
 
 #[test]
@@ -9085,14 +9127,14 @@ fn panes_add_remove_swap_move_and_series_movement() {
     assert!(chart.pane_preserve_empty(pane2));
     assert!(!chart.pane_preserve_empty(pane1));
 
-    chart.set_series_pane(second, 1, 1.0);
-    chart.set_series_pane(third, 2, 1.0);
+    chart.set_series_pane(second, 1, Some(1.0));
+    chart.set_series_pane(third, 2, Some(1.0));
     assert_eq!(chart.pane_series_ids(0), vec![0]);
     assert_eq!(chart.pane_series_ids(1), vec![second]);
     assert_eq!(chart.pane_series_ids(2), vec![third]);
     // Render order within a pane: bottom first (reference pane.ts orderedSources).
     let fourth = chart.add_series(SeriesKind::Area);
-    chart.set_series_pane(fourth, 1, 1.0);
+    chart.set_series_pane(fourth, 1, Some(1.0));
     assert_eq!(chart.pane_series_ids(1), vec![second, fourth]);
 
     // swapPanes: the panes trade places with their series assignments and stretch factors.
@@ -9122,7 +9164,7 @@ fn panes_add_remove_swap_move_and_series_movement() {
     assert_eq!(chart.pane_series_ids(1), vec![third]);
     // A pane-less series re-assigned to a live pane renders again (ids in z-order, not
     // assignment order — reference pane.ts orderedSources).
-    chart.set_series_pane(second, 1, 1.0);
+    chart.set_series_pane(second, 1, Some(1.0));
     assert_eq!(chart.pane_series_ids(1), vec![second, third]);
     assert!(!chart.remove_pane(9), "stale index rejected");
     chart.remove_pane(0);
@@ -9425,7 +9467,7 @@ fn every_general_domain_variant_is_explicit_and_financial_series_cannot_enter() 
     for domain in domains {
         let pane = chart.add_pane_with_domain(true, domain).unwrap();
         assert_eq!(chart.pane_horizontal_domain(pane), Some(domain));
-        assert!(!chart.try_set_series_pane(main_series, pane, 1.0));
+        assert!(!chart.try_set_series_pane(main_series, pane, Some(1.0)));
         assert_eq!(chart.series_entry(main_series).unwrap().pane_index, 0);
         assert!(chart.pane_series_ids(pane).is_empty());
         assert_eq!(
@@ -9784,7 +9826,7 @@ fn empty_named_scales_survive_automatic_pane_cleanup() {
         .unwrap();
     let destination = chart.add_pane(true).unwrap();
 
-    assert!(chart.try_set_series_pane(0, destination, 1.0));
+    assert!(chart.try_set_series_pane(0, destination, Some(1.0)));
     assert_eq!(chart.panes.len(), 2);
     assert_eq!(
         chart.price_scale_target_for_id(0, "host-owned"),
@@ -9821,9 +9863,9 @@ fn named_scale_series_rebinding_and_pane_moves_are_atomic() {
     let before = chart.series_data(comparison);
 
     let destination_pane = chart.add_pane(true).unwrap();
-    assert!(!chart.try_set_series_pane(comparison, destination_pane, 1.0));
+    assert!(!chart.try_set_series_pane(comparison, destination_pane, Some(1.0)));
     assert_eq!(chart.series_price_scale(comparison), Some((0, source)));
-    assert!(!chart.try_set_series_pane_and_scale(comparison, 0, 1.0, "missing"));
+    assert!(!chart.try_set_series_pane_and_scale(comparison, 0, Some(1.0), "missing"));
     assert_eq!(chart.series_price_scale(comparison), Some((0, source)));
     assert_eq!(chart.series_data(comparison), before);
     assert_eq!(chart.series_kind(comparison), Some(SeriesKind::Area));
@@ -9837,7 +9879,7 @@ fn named_scale_series_rebinding_and_pane_moves_are_atomic() {
             true,
         )
         .unwrap();
-    assert!(chart.try_set_series_pane(comparison, destination_pane, 2.0));
+    assert!(chart.try_set_series_pane(comparison, destination_pane, Some(2.0)));
     assert_eq!(
         chart.series_price_scale(comparison),
         Some((destination_pane, destination))
@@ -9845,7 +9887,7 @@ fn named_scale_series_rebinding_and_pane_moves_are_atomic() {
     assert_eq!(chart.series_data(comparison), before);
     assert_eq!(chart.series_kind(comparison), Some(SeriesKind::Area));
 
-    assert!(chart.try_set_series_pane_and_scale(comparison, 0, 1.0, "right"));
+    assert!(chart.try_set_series_pane_and_scale(comparison, 0, Some(1.0), "right"));
     assert_eq!(
         chart.series_price_scale(comparison),
         Some((0, PriceScaleTarget::Right))
@@ -9944,7 +9986,7 @@ fn ordinary_public_handle_misuse_is_recoverable_not_a_panic() {
 #[test]
 fn invalid_series_cannot_create_panes() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
-    chart.set_series_pane(u32::MAX, 10_000, 1.0);
+    chart.set_series_pane(u32::MAX, 10_000, Some(1.0));
     assert_eq!(chart.panes.len(), 1);
 }
 
@@ -9953,20 +9995,20 @@ fn preserve_empty_pruning_on_series_removal_and_move_out() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     install_bars(&mut chart, 5);
     let second = chart.add_series(SeriesKind::Line);
-    chart.set_series_pane(second, 1, 1.0);
+    chart.set_series_pane(second, 1, Some(1.0));
     assert_eq!(chart.panes.len(), 2);
 
     // Moving the series back collapses the emptied, non-preserved pane (reference
     // chart-model.ts `_cleanupIfPaneIsEmpty` on moveSeriesToPane).
-    chart.set_series_pane(second, 0, 1.0);
+    chart.set_series_pane(second, 0, Some(1.0));
     assert_eq!(chart.panes.len(), 1, "empty non-preserved pane collapses");
 
     // A preserved pane survives both the move-out and a series removal.
-    chart.set_series_pane(second, 1, 1.0);
+    chart.set_series_pane(second, 1, Some(1.0));
     chart.pane_set_preserve_empty(1, true);
-    chart.set_series_pane(second, 0, 1.0);
+    chart.set_series_pane(second, 0, Some(1.0));
     assert_eq!(chart.panes.len(), 2, "preserved empty pane stays");
-    chart.set_series_pane(second, 1, 1.0);
+    chart.set_series_pane(second, 1, Some(1.0));
     chart.pane_set_preserve_empty(1, false);
     assert!(chart.remove_series(second));
     assert_eq!(
@@ -10045,7 +10087,7 @@ fn price_scale_apply_options_json_round_trip_and_chart_group_routing() {
     // Chart-group routing (reference pane.ts applyScaleOptions): a `rightPriceScale` patch
     // applies the five camelCase keys to every pane's right scale, present keys only.
     let extra = chart.add_series(SeriesKind::Line);
-    chart.set_series_pane(extra, 1, 1.0);
+    chart.set_series_pane(extra, 1, Some(1.0));
     chart
         .apply_options(
             r##"{"rightPriceScale":{"ticksVisible":true,"minimumWidth":64,"textColor":"#00ff00"},"leftPriceScale":{"alignLabels":false}}"##,
@@ -10190,7 +10232,7 @@ fn background_vertical_gradient_emits_a_per_pane_prim_solid_emits_none() {
         )
         .unwrap();
     let extra = chart.add_series(SeriesKind::Line);
-    chart.set_series_pane(extra, 1, 1.0);
+    chart.set_series_pane(extra, 1, Some(1.0));
     let frame = chart.build_frame();
     assert_eq!(frame.panes.len(), 2);
     for pane in &frame.panes {
@@ -10227,7 +10269,7 @@ fn separator_hover_mirrors_into_the_axis_frame() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     install_bars(&mut chart, 5);
     let extra = chart.add_series(SeriesKind::Line);
-    chart.set_series_pane(extra, 1, 1.0);
+    chart.set_series_pane(extra, 1, Some(1.0));
     chart.layout_panes(472.0);
     chart.time_scale.set_width(800.0);
 
@@ -10653,7 +10695,7 @@ fn panning_or_zooming_one_pane_scale_leaves_the_other_panes_untouched() {
 fn two_indicator_panes_and_a_named_pane_scale_stay_independent() {
     let mut chart = chart_with_indicator_pane();
     let extra = chart.add_series(SeriesKind::Line);
-    chart.set_series_pane(extra, 2, 1.0);
+    chart.set_series_pane(extra, 2, Some(1.0));
     let times: Vec<f64> = (1..=40).map(|i| i as f64).collect();
     let values: Vec<f64> = (0..40).map(|i| -50.0 - i as f64).collect();
     chart
@@ -10663,7 +10705,7 @@ fn two_indicator_panes_and_a_named_pane_scale_stay_independent() {
         .add_price_scale(1, "indicator-left", PriceScaleSide::Left, None, true)
         .expect("a named pane scale");
     let named_series = chart.add_series(SeriesKind::Line);
-    chart.set_series_pane(named_series, 1, 1.0);
+    chart.set_series_pane(named_series, 1, Some(1.0));
     let named_values: Vec<f64> = (0..40).map(|i| 1000.0 + i as f64 * 3.0).collect();
     chart
         .set_series_data(
@@ -10857,7 +10899,7 @@ fn pane_separators_have_identical_device_thickness_at_fractional_dpr() {
 
     let mut chart = chart_with_indicator_pane();
     let extra = chart.add_series(SeriesKind::Line);
-    chart.set_series_pane(extra, 2, 1.0);
+    chart.set_series_pane(extra, 2, Some(1.0));
     chart.dpr = 1.25;
     chart.recompute_layout_with_measure(
         true,

@@ -4598,7 +4598,7 @@ fn pane_candidates_are_isolated_and_removed_panes_drop_membership() {
         chart
             .set_series_data(series, &times, &values, &values, &values, &values)
             .unwrap();
-        chart.set_series_pane(series, pane, 1.0);
+        chart.set_series_pane(series, pane, Some(1.0));
     }
     for pane in 0..4 {
         for index in 0..250 {
