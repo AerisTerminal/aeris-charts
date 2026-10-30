@@ -128,3 +128,49 @@ test("playback advances on the controller wake and the replay keys step and paus
   expect(done).toMatchObject({ phase: "off", clock_micros: null });
   await expect(page.evaluate(() => window.__chart.replay_step_forward())).rejects.toThrow(/start bar/);
 });
+
+test("the demo replay toolbar drives the active chart through the public API", async ({ page }) => {
+  await page.goto("/");
+  await wait_for_chart(page, { grid: true });
+  const bar = page.locator("#replay_bar");
+  await expect(bar).toBeHidden();
+
+  await page.locator("#replay_toggle").click();
+  await expect(bar).toHaveAttribute("data-phase", "selecting");
+  await expect(page.locator("#replay_hint")).toBeVisible();
+  await expect(page.locator("#replay_play")).toBeHidden();
+
+  const point = await page.evaluate(() => {
+    const bounds = document.getElementById("chart_container").getBoundingClientRect();
+    return { x: bounds.left + bounds.width * 0.4, y: bounds.top + bounds.height * 0.4 };
+  });
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.click(point.x, point.y);
+  await expect(bar).toHaveAttribute("data-phase", "paused");
+  await expect(page.locator("#replay_toggle")).toHaveAttribute("aria-pressed", "true");
+  const start = await page.evaluate(() => window.__chart.replay_state().clock_micros);
+  expect(start).not.toBeNull();
+  await expect(page.locator("#replay_clock")).toContainText("UTC");
+
+  await page.locator("#replay_forward").click();
+  const stepped = await page.evaluate(() => window.__chart.replay_state().clock_micros);
+  expect(stepped).toBeGreaterThan(start);
+  await page.locator("#replay_back").click();
+  expect(await page.evaluate(() => window.__chart.replay_state().clock_micros)).toBe(start);
+
+  await page.locator("#replay_speed").selectOption("5");
+  await page.locator("#replay_step").selectOption("900");
+  expect(await page.evaluate(() => window.__chart.replay_state())).toMatchObject({
+    speed: 5, step: { kind: "interval", micros: 900_000_000 },
+  });
+
+  await page.locator("#replay_play").click();
+  await expect(bar).toHaveAttribute("data-phase", "playing");
+  await page.locator("#replay_play").click();
+  await expect(bar).toHaveAttribute("data-phase", "paused");
+
+  await page.locator("#replay_exit").click();
+  await expect(bar).toBeHidden();
+  await expect(page.locator("#replay_toggle")).toHaveAttribute("aria-pressed", "false");
+  expect((await page.evaluate(() => window.__chart.replay_state())).phase).toBe("off");
+});

@@ -1,14 +1,20 @@
 import Activity01Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/Activity01Icon.js";
 import Analytics01Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/Analytics01Icon.js";
+import Cancel01Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/Cancel01Icon.js";
 import ChartCandlestickIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/ChartCandlestickIcon.js";
 import ChartHistogramIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/ChartHistogramIcon.js";
 import GridViewIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/GridViewIcon.js";
 import MagicWand01Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/MagicWand01Icon.js";
 import Moon02Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/Moon02Icon.js";
+import NextIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/NextIcon.js";
 import PaintBrush01Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/PaintBrush01Icon.js";
 import PanelRightIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/PanelRightIcon.js";
+import PauseIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/PauseIcon.js";
+import PlayIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/PlayIcon.js";
+import PreviousIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/PreviousIcon.js";
 import Redo02Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/Redo02Icon.js";
 import RefreshIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/RefreshIcon.js";
+import ScissorIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/ScissorIcon.js";
 import Search01Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/Search01Icon.js";
 import Settings02Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/Settings02Icon.js";
 import Sun03Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/Sun03Icon.js";
@@ -19,13 +25,19 @@ const icons = {
   analysis: Analytics01Icon,
   candles: ChartCandlestickIcon,
   chart: ChartHistogramIcon,
+  close: Cancel01Icon,
   draw: PaintBrush01Icon,
   grid: GridViewIcon,
   lab: MagicWand01Icon,
   moon: Moon02Icon,
+  next: NextIcon,
   panel: PanelRightIcon,
+  pause: PauseIcon,
+  play: PlayIcon,
+  previous: PreviousIcon,
   redo: Redo02Icon,
   refresh: RefreshIcon,
+  scissors: ScissorIcon,
   search: Search01Icon,
   settings: Settings02Icon,
   sun: Sun03Icon,

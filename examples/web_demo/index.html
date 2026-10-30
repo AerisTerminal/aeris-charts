@@ -68,6 +68,25 @@
   #live_toggle[aria-pressed="true"] .live-dot { background: var(--bullish); animation: live-pulse 1.6s ease-in-out infinite; }
   @keyframes live-pulse { 50% { opacity: .3; } }
   #live_speed { padding: 0 6px; font-variant-numeric: tabular-nums; }
+  #replay_toggle { display: inline-flex; gap: 6px; align-items: center; height: 40px; padding: 0 10px; color: var(--text-default); background: var(--surface-secondary); border: 1px solid var(--border-secondary); border-radius: var(--radius-compact); font-size: 12px; font-weight: 600; }
+  #replay_toggle:hover { background: var(--hover-bg); }
+  #replay_toggle[aria-pressed="true"] { color: var(--demo-accent-text); border-color: color-mix(in srgb, var(--primary) 45%, transparent); }
+  #replay_toggle svg { width: 18px; height: 18px; }
+  #replay_bar { position: absolute; left: 50%; bottom: 44px; z-index: 5; display: flex; gap: 4px; align-items: center; padding: 4px; transform: translateX(-50%); color: var(--text-default); background: var(--surface); border: 1px solid var(--border-secondary); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.25); font-size: 12px; white-space: nowrap; }
+  #replay_bar[hidden] { display: none; }
+  #replay_bar button { display: inline-grid; place-items: center; min-width: 36px; height: 36px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-compact); background: transparent; color: var(--icon); }
+  #replay_bar button:hover:not(:disabled) { color: var(--icon-active); background: var(--hover-bg); }
+  #replay_bar button:disabled { opacity: .4; }
+  #replay_bar svg { width: 20px; height: 20px; }
+  #replay_bar select { height: 36px; padding: 0 6px; color: var(--text-default); background: var(--surface-secondary); border: 1px solid var(--border-secondary); border-radius: var(--radius-compact); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #replay_bar .replay-sep { width: 1px; height: 24px; margin: 0 2px; background: var(--border); }
+  #replay_hint { padding: 0 8px; color: var(--text-secondary); }
+  #replay_clock { min-width: 128px; padding: 0 6px; color: var(--text-secondary); font-variant-numeric: tabular-nums; text-align: center; }
+  #replay_realtime { font-weight: 600; color: var(--text-default) !important; }
+  #replay_bar[data-phase="selecting"] [data-replay-active],
+  #replay_bar:not([data-phase="selecting"]) #replay_hint { display: none; }
+  #replay_bar [data-icon="pause"], #replay_bar[data-phase="playing"] [data-icon="play"] { display: none; }
+  #replay_bar[data-phase="playing"] [data-icon="pause"] { display: inline-grid; }
   #quick_actions { display: flex; gap: 2px; align-items: center; }
   .icon-button, #quick_actions button, #tool_rail button { display: inline-grid; place-items: center; border: 1px solid transparent; background: transparent; color: var(--icon); }
   .icon-button, #quick_actions button { flex-shrink: 0; width: 40px; height: 40px; padding: 0; border-radius: var(--radius-default); }
@@ -92,6 +111,7 @@
   [data-demo-mode="general"] #comparison_controls,
   [data-demo-mode="general"] #quick_actions,
   [data-demo-mode="general"] #live_controls,
+  [data-demo-mode="general"] #replay_toggle,
   [data-demo-mode="general"] #status,
   [data-demo-mode="general"] #inspector_toggle { display: none; }
   #tool_rail { z-index: 12; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px; background: var(--surface); border-right: 1px solid var(--border); }
@@ -173,6 +193,7 @@
   [data-runtime-chrome="hidden"] #chart_wrap { grid-column: 1; }
   [data-runtime-chrome="hidden"] #demo_mode_switch { display: none; }
   @media (max-width: 1200px) { .market-meta, #status { display: none; } }
+  @media (max-width: 1440px) { #replay_toggle { padding: 0 10px; } #replay_toggle .replay-label { display: none; } }
   @media (max-width: 1080px) {
     #workspace { grid-template-columns: 76px minmax(0, 1fr) 320px; }
     #workspace[data-inspector-open="false"] { grid-template-columns: 76px minmax(0, 1fr); }
@@ -198,7 +219,7 @@
     html:not([data-demo-mode="general"]) .mobile-heading { display: block; margin: 0 auto 0 0; font-size: 16px; font-weight: 650; }
     #comparison_controls select { max-width: 120px; }
     #comparison_controls select, #comparison_controls button { height: 44px; }
-    #live_controls button, #live_controls select { height: 44px; }
+    #live_controls button, #live_controls select, #replay_toggle { height: 44px; }
   }
   @media (max-width: 600px) {
     #app_bar { flex-wrap: wrap; }
@@ -253,6 +274,7 @@
           <option value="60">60x</option>
         </select>
       </div>
+      <button id="replay_toggle" type="button" aria-pressed="false" aria-label="Bar replay" title="Bar replay: pick a start candle with the scissors cursor, then play the market forward"><span data-icon="scissors"></span><span class="replay-label">Replay</span></button>
       <nav id="quick_actions" aria-label="Active chart actions">
         <button id="undo_drawing_btn" type="button" aria-label="Undo drawing" title="Undo the last drawing change in the active chart"><span data-icon="undo"></span></button>
         <button id="redo_drawing_btn" type="button" aria-label="Redo drawing" title="Redo the last drawing change in the active chart"><span data-icon="redo"></span></button>
@@ -737,6 +759,34 @@
     <main id="chart_wrap">
       <div id="chart_container"></div>
       <div id="legend">O — H — L — C —</div>
+      <div id="replay_bar" role="toolbar" aria-label="Bar replay" data-phase="off" hidden>
+        <span id="replay_hint">Click a candle to start replay · Esc cancels</span>
+        <button id="replay_reselect" type="button" data-replay-active aria-label="Select a new start bar" title="Select a new start bar"><span data-icon="scissors"></span></button>
+        <span class="replay-sep" data-replay-active></span>
+        <button id="replay_back" type="button" data-replay-active aria-label="Step back" title="Step back (Shift+←)"><span data-icon="previous"></span></button>
+        <button id="replay_play" type="button" data-replay-active aria-label="Play or pause" title="Play / pause (Shift+↓)"><span data-icon="play"></span><span data-icon="pause"></span></button>
+        <button id="replay_forward" type="button" data-replay-active aria-label="Step forward" title="Step forward (Shift+→)"><span data-icon="next"></span></button>
+        <select id="replay_speed" data-replay-active aria-label="Replay speed" title="Playback steps per second">
+          <option value="0.5">0.5x</option>
+          <option value="1" selected>1x</option>
+          <option value="2">2x</option>
+          <option value="3">3x</option>
+          <option value="5">5x</option>
+          <option value="10">10x</option>
+        </select>
+        <select id="replay_step" data-replay-active aria-label="Replay step" title="How far one step moves">
+          <option value="bar" selected>1 bar</option>
+          <option value="60">1 min</option>
+          <option value="300">5 min</option>
+          <option value="900">15 min</option>
+          <option value="3600">1 hour</option>
+          <option value="14400">4 hours</option>
+        </select>
+        <span id="replay_clock" data-replay-active>—</span>
+        <span class="replay-sep" data-replay-active></span>
+        <button id="replay_realtime" type="button" data-replay-active title="Leave replay and show all data">Jump to real time</button>
+        <button id="replay_exit" type="button" aria-label="Exit replay" title="Exit replay"><span data-icon="close"></span></button>
+      </div>
 <section id="drawing_settings" role="dialog" aria-label="Drawing settings" hidden>
   <header><span id="drawing_settings_title">Settings</span><button type="button" id="drawing_settings_close" aria-label="Close settings">×</button></header>
   <div id="drawing_settings_fields"></div>
@@ -2550,6 +2600,73 @@ if (grid !== null && runtime_test === null) {
 } else {
   live_controls.hidden = true;
 }
+
+// ---- bar replay (engine-owned) ----------------------------------------------------------------
+// A host toolbar over the replay API: the engine owns the trim cursor, the start click, stepping,
+// playback cadence, and the Shift+arrow keys. The toolbar only issues commands and renders the
+// active chart's replay state from its change subscription.
+const replay_toggle = document.getElementById("replay_toggle");
+const replay_bar = document.getElementById("replay_bar");
+const replay_play = document.getElementById("replay_play");
+const replay_back = document.getElementById("replay_back");
+const replay_forward = document.getElementById("replay_forward");
+const replay_speed = document.getElementById("replay_speed");
+const replay_step = document.getElementById("replay_step");
+const replay_clock = document.getElementById("replay_clock");
+const replay_bound = new WeakSet();
+
+function render_replay(state) {
+  const active = state.phase !== "off";
+  replay_toggle.setAttribute("aria-pressed", String(active));
+  replay_bar.hidden = !active;
+  replay_bar.dataset.phase = state.phase;
+  replay_back.disabled = !state.can_step_back;
+  replay_forward.disabled = !state.can_step_forward;
+  replay_play.disabled = state.phase === "paused" && !state.can_step_forward;
+  replay_speed.value = String(state.speed);
+  replay_step.value = state.step.kind === "bar" ? "bar" : String(state.step.micros / 1_000_000);
+  replay_clock.textContent = state.clock_micros === null
+    ? "—"
+    : new Date(state.clock_micros / 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+}
+
+function replay_target() {
+  const target = active_chart();
+  if (!replay_bound.has(target)) {
+    replay_bound.add(target);
+    target.subscribe_replay_change((state) => { if (target === active_chart()) render_replay(state); });
+  }
+  return target;
+}
+
+function replay_command(run) {
+  const target = replay_target();
+  try {
+    render_replay(run(target));
+  } catch (error) {
+    console.warn("bar replay:", error);
+    render_replay(target.replay_state());
+  }
+}
+
+replay_toggle.addEventListener("click", () => replay_command((target) => {
+  const phase = target.replay_state().phase;
+  return phase === "off" ? target.replay_select_start() : target.replay_exit();
+}));
+document.getElementById("replay_reselect").addEventListener("click", () => replay_command((target) => target.replay_select_start()));
+replay_back.addEventListener("click", () => replay_command((target) => target.replay_step_back()));
+replay_play.addEventListener("click", () => replay_command((target) => target.replay_toggle_play()));
+replay_forward.addEventListener("click", () => replay_command((target) => target.replay_step_forward()));
+replay_speed.addEventListener("change", () => replay_command((target) => target.set_replay_speed(Number(replay_speed.value))));
+replay_step.addEventListener("change", () => replay_command((target) => target.set_replay_step(
+  replay_step.value === "bar" ? { kind: "bar" } : { kind: "interval", micros: Number(replay_step.value) * 1_000_000 },
+)));
+document.getElementById("replay_realtime").addEventListener("click", () => replay_command((target) => target.replay_jump_to_realtime()));
+document.getElementById("replay_exit").addEventListener("click", () => replay_command((target) =>
+  target.replay_state().phase === "selecting" ? target.replay_cancel_selection() : target.replay_exit()));
+// A press can change the grid's active cell; show that chart's replay state afterwards.
+container.addEventListener("pointerup", () => render_replay(replay_target().replay_state()));
+render_replay(replay_target().replay_state());
 
 // crosshair-move subscription → OHLC legend (the public event API); a hovered primitive
 // object (e.g. the position band) shows its external id alongside.
