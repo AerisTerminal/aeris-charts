@@ -43,8 +43,8 @@
     },
     {
       "path": "offscreen.d.ts",
-      "bytes": 7806,
-      "sha256": "1b56e9b83a3a949143a2682b7bf74f768300f4ababeaa1ae774087b872b15907"
+      "bytes": 7989,
+      "sha256": "1e68dd4d0b3559eb2fbfeb5e986b6025f5e452c2523f4a8bf7b3ae18a2519b4e"
     },
     {
       "path": "primitive_features.d.ts",

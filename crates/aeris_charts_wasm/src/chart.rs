@@ -31,6 +31,7 @@ mod text_runs;
 
 use custom_series::CustomSeriesEntry;
 use custom_studies::register_custom_study;
+use inner_render::BrowserTextWidths;
 use ring::{BoundRing, RingLayoutInput};
 use text_runs::TextRunStore;
 
@@ -493,6 +494,8 @@ struct ChartInner {
     fallback_pane: Option<web_sys::HtmlCanvasElement>,
     pane_ctx: CanvasRenderingContext2d,
     axis_ctx: CanvasRenderingContext2d,
+    /// Memoized widths measured through `axis_ctx`, shared with the engine's drawing-label hook.
+    text_widths: Rc<BrowserTextWidths>,
     backend_status: BackendStatus,
     bitmap_w: u32,
     bitmap_h: u32,
@@ -752,29 +755,26 @@ fn align_to_device_grid(container: &web_sys::Element, canvases: &[&web_sys::Html
 
 /// Sizes all three canvases to `(bw, bh)` device pixels on the device-pixel grid, then resizes +
 /// repaints the engine. Shared by the initial bind and every observer callback.
-#[allow(clippy::too_many_arguments)] // three canvases + the full size/DPR tuple
 fn apply_device_size(
     inner: &Rc<RefCell<ChartInner>>,
     container: &web_sys::HtmlElement,
-    gpu_pane: &web_sys::HtmlCanvasElement,
-    fallback_pane: &web_sys::HtmlCanvasElement,
-    overlay: &web_sys::HtmlCanvasElement,
+    canvases: [&web_sys::HtmlCanvasElement; 3],
     css_w: f64,
     css_h: f64,
     bw: f64,
     bh: f64,
 ) {
     let (bw_u, bh_u) = (bw.max(1.0) as u32, bh.max(1.0) as u32);
-    for c in [gpu_pane, fallback_pane, overlay] {
+    for c in canvases {
         c.set_width(bw_u);
         c.set_height(bh_u);
     }
-    align_to_device_grid(container, &[gpu_pane, fallback_pane, overlay]);
-    // Exact effective ratio -> the engine's internal round(css*dpr) lands back on (bw, bh),
-    // so surface, canvas backing store and physical pixels all agree.
-    let dpr = bw / css_w.max(1.0);
+    align_to_device_grid(container, &canvases);
+    // The engine's internal round(media * ratio) must land back on (bw, bh) on both axes, so
+    // surface, canvas backing store and physical pixels all agree.
+    let (width, height, dpr) = crate::device_viewport::engine_viewport(css_w, css_h, bw, bh);
     let mut c = inner.borrow_mut();
-    c.resize(css_w.max(1.0), css_h.max(1.0), dpr);
+    c.resize(width, height, dpr);
     let _ = c.render();
 }
 
@@ -855,6 +855,7 @@ pub async fn create_chart(
         gpu_pane: Some(gpu_pane_el.clone()),
         fallback_pane: Some(fallback_pane_el.clone()),
         pane_ctx,
+        text_widths: Rc::new(BrowserTextWidths::new(axis_ctx.clone())),
         axis_ctx,
         backend_status,
         bitmap_w,
@@ -899,19 +900,18 @@ pub async fn create_chart(
     // Drawing-label hit boxes measure through the same axis canvas the engine's own labels use
     // (drawings.rs `TextMeasureFn` — the host-injected formatter-hook pattern, so the engine
     // stays headless). The font spec matches the `Prim::Text` rasterizer exactly.
-    let measure_ctx = inner.axis_ctx.clone();
+    let widths = Rc::clone(&inner.text_widths);
     inner.engine.set_text_measure(Some(Box::new(
         move |text: &str, size: f64, family: &str, weight: u16, italic: bool| {
-            measure_ctx.set_font(&aeris_charts_render::draw_list::text_font_spec(
-                size as f32,
-                family,
-                weight,
-                italic,
-            ));
-            measure_ctx
-                .measure_text(text)
-                .map(|m| m.width())
-                .unwrap_or(0.0)
+            widths.width(
+                &aeris_charts_render::draw_list::text_font_spec(
+                    size as f32,
+                    family,
+                    weight,
+                    italic,
+                ),
+                text,
+            )
         },
     )));
     let cap_ctx = inner.axis_ctx.clone();
@@ -1003,6 +1003,7 @@ pub async fn create_offscreen_chart(
         gpu_pane: None,
         fallback_pane: None,
         pane_ctx,
+        text_widths: Rc::new(BrowserTextWidths::new(axis_ctx.clone())),
         axis_ctx,
         backend_status,
         bitmap_w,
@@ -1038,19 +1039,18 @@ pub async fn create_offscreen_chart(
         telemetry: FrameTelemetry::default(),
         clock: crate::telemetry::performance(),
     };
-    let measure_ctx = inner.axis_ctx.clone();
+    let widths = Rc::clone(&inner.text_widths);
     inner.engine.set_text_measure(Some(Box::new(
         move |text: &str, size: f64, family: &str, weight: u16, italic: bool| {
-            measure_ctx.set_font(&aeris_charts_render::draw_list::text_font_spec(
-                size as f32,
-                family,
-                weight,
-                italic,
-            ));
-            measure_ctx
-                .measure_text(text)
-                .map(|metrics| metrics.width())
-                .unwrap_or(0.0)
+            widths.width(
+                &aeris_charts_render::draw_list::text_font_spec(
+                    size as f32,
+                    family,
+                    weight,
+                    italic,
+                ),
+                text,
+            )
         },
     )));
     let cap_ctx = inner.axis_ctx.clone();
@@ -1542,9 +1542,7 @@ impl AerisChart {
             apply_device_size(
                 &inner,
                 &container_cb,
-                &gpu_pane,
-                &fallback_pane,
-                &overlay,
+                [&gpu_pane, &fallback_pane, &overlay],
                 css_w,
                 css_h,
                 bw,
@@ -1575,11 +1573,13 @@ impl AerisChart {
             apply_device_size(
                 &self.inner,
                 &container,
-                self.gpu_pane.as_ref().expect("HTML canvas checked above"),
-                self.fallback_pane
-                    .as_ref()
-                    .expect("HTML canvas checked above"),
-                self.overlay.as_ref().expect("HTML canvas checked above"),
+                [
+                    self.gpu_pane.as_ref().expect("HTML canvas checked above"),
+                    self.fallback_pane
+                        .as_ref()
+                        .expect("HTML canvas checked above"),
+                    self.overlay.as_ref().expect("HTML canvas checked above"),
+                ],
                 css_w,
                 css_h,
                 (css_w * dpr).round(),
@@ -6642,6 +6642,11 @@ impl AerisChart {
 
     pub fn render(&mut self) -> Result<(), JsValue> {
         self.inner.borrow_mut().render()
+    }
+
+    /// Host font-load hook: re-measure and re-rasterize all chart text on the next render.
+    pub fn invalidate_text_metrics(&mut self) {
+        self.inner.borrow_mut().invalidate_text_metrics();
     }
 
     /// Paint the retained backend-neutral frame into the warm Canvas2D pane without changing the

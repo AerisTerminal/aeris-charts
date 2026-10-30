@@ -10,6 +10,7 @@
 //! frame while a scrolling run (new phase each frame) correctly re-rasterizes.
 
 use std::collections::HashMap;
+use std::hash::Hash;
 
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::TextAlign;
@@ -106,6 +107,57 @@ impl TextRunCache {
 
     pub fn rasterizations(&self) -> u64 {
         self.rasterizations
+    }
+
+    /// Drop every cached run: a web font finished loading, so existing rasters are stale.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+/// Browser text-measurement memo bounded to two generations of `capacity` entries. A full
+/// current generation becomes the previous one, and a hit there is promoted, so labels that
+/// repeat every frame stay resident while churning ones (a moving crosshair price) age out
+/// without per-entry bookkeeping.
+pub struct MeasureCache<K, V> {
+    current: HashMap<K, V>,
+    previous: HashMap<K, V>,
+    capacity: usize,
+}
+
+impl<K: Hash + Eq, V: Copy> MeasureCache<K, V> {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            current: HashMap::new(),
+            previous: HashMap::new(),
+            capacity: capacity.max(1),
+        }
+    }
+
+    pub fn get(&mut self, key: &K) -> Option<V> {
+        if let Some(value) = self.current.get(key) {
+            return Some(*value);
+        }
+        let (key, value) = self.previous.remove_entry(key)?;
+        self.insert(key, value);
+        Some(value)
+    }
+
+    pub fn insert(&mut self, key: K, value: V) {
+        if self.current.len() >= self.capacity && !self.current.contains_key(&key) {
+            self.previous = std::mem::take(&mut self.current);
+        }
+        self.current.insert(key, value);
+    }
+
+    pub fn clear(&mut self) {
+        self.current.clear();
+        self.previous.clear();
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.current.len() + self.previous.len()
     }
 }
 
@@ -236,6 +288,9 @@ mod tests {
         // New inserts bind to the new epoch.
         cache.insert(key("hello", 0), run(5), 1);
         assert_eq!(cache.get(&key("hello", 0), 1), Some(run(5)));
+        // A loaded web font invalidates every raster without an atlas reset.
+        cache.clear();
+        assert_eq!(cache.get(&key("hello", 0), 1), None);
     }
 
     #[test]
@@ -255,6 +310,28 @@ mod tests {
             "touched entry survives"
         );
         assert!(cache.get(&key("overflow", 0), 0).is_some());
+    }
+
+    #[test]
+    fn measure_cache_stays_bounded_and_keeps_repeating_entries() {
+        let mut cache = MeasureCache::new(4);
+        for i in 0..4 {
+            cache.insert(i, i * 10);
+        }
+        assert_eq!(cache.get(&0), Some(0));
+        for i in 100..1_000 {
+            cache.insert(i, i);
+            assert!(cache.len() <= 8, "two generations bound the cache");
+            assert_eq!(
+                cache.get(&0),
+                Some(0),
+                "a hot entry survives every rotation"
+            );
+        }
+        assert_eq!(cache.get(&1), None, "cold entries age out");
+        cache.clear();
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.get(&0), None);
     }
 
     #[test]

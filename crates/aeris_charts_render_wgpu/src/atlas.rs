@@ -105,7 +105,10 @@ impl LabelAtlas {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            // RENDER_ATTACHMENT is required of every `copyExternalImageToTexture` destination.
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -161,17 +164,7 @@ impl LabelAtlas {
         pixels: &[u8],
     ) -> Option<AtlasSlot> {
         debug_assert_eq!(pixels.len(), (w * h * 4) as usize);
-        assert!(
-            w <= ATLAS_SIZE && h <= ATLAS_SIZE,
-            "label larger than atlas"
-        );
-
-        let epoch = self.packer.epoch;
-        let slot = self.packer.allocate(w, h)?;
-        if self.packer.epoch != epoch {
-            self.entries.clear();
-        }
-
+        let slot = self.allocate_slot(w, h)?;
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.texture,
@@ -189,15 +182,64 @@ impl LabelAtlas {
                 bytes_per_row: Some(w * 4),
                 rows_per_image: Some(h),
             },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
+            slot_extent(slot),
         );
-
         self.entries.insert(key, slot);
         Some(slot)
+    }
+
+    /// Packs the top-left `w` x `h` texels of a browser image source (a host label canvas) as
+    /// straight-alpha sRGB, the same texels `getImageData` returns, but copied on the GPU. A CPU
+    /// readback of a GPU-backed canvas stalls the frame for every newly rasterized label.
+    #[cfg(target_arch = "wasm32")]
+    pub fn insert_external(
+        &mut self,
+        queue: &wgpu::Queue,
+        key: String,
+        w: u32,
+        h: u32,
+        source: &wgpu::CopyExternalImageSourceInfo,
+    ) -> Option<AtlasSlot> {
+        let slot = self.allocate_slot(w, h)?;
+        queue.copy_external_image_to_texture(
+            source,
+            wgpu::CopyExternalImageDestInfo {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: slot.x,
+                    y: slot.y,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+                color_space: wgpu::PredefinedColorSpace::Srgb,
+                premultiplied_alpha: false,
+            },
+            slot_extent(slot),
+        );
+        self.entries.insert(key, slot);
+        Some(slot)
+    }
+
+    fn allocate_slot(&mut self, w: u32, h: u32) -> Option<AtlasSlot> {
+        assert!(
+            w <= ATLAS_SIZE && h <= ATLAS_SIZE,
+            "label larger than atlas"
+        );
+        let epoch = self.packer.epoch;
+        let slot = self.packer.allocate(w, h)?;
+        if self.packer.epoch != epoch {
+            self.entries.clear();
+        }
+        Some(slot)
+    }
+}
+
+fn slot_extent(slot: AtlasSlot) -> wgpu::Extent3d {
+    wgpu::Extent3d {
+        width: slot.w,
+        height: slot.h,
+        depth_or_array_layers: 1,
     }
 }
 

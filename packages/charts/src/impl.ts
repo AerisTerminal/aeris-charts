@@ -4088,6 +4088,8 @@ export class chart_impl implements chart_api {
   private interacting = false;
   /** Pending rAF handle for a coalesced repaint; `null` when no repaint is scheduled. */
   private repaint_raf: number | null = null;
+  /** The plugin canvas holds pixels from a previous canvas-primitive pass. */
+  private plugin_canvas_painted = false;
   /** Container position the canvases were last placed on the device-pixel grid for. */
   private aligned_left = Number.NaN;
   private aligned_top = Number.NaN;
@@ -4312,6 +4314,13 @@ export class chart_impl implements chart_api {
     // callback stack is fully unwound before Rust drops GPU resources and paints the warm 2D pane.
     queueMicrotask(() => this.repaint());
   };
+  // Text metrics and rasters measured before a web font finished loading describe the fallback
+  // face; axis widths and labels must re-measure once the real face is available.
+  private readonly font_loading_done_handler = (): void => {
+    if (this.removed) return;
+    this.wasm.invalidate_text_metrics();
+    this.repaint();
+  };
 
   constructor(
     wasm: AerisChart,
@@ -4332,6 +4341,7 @@ export class chart_impl implements chart_api {
     }
     this.plugin_ctx = plugin_ctx;
     window.addEventListener("aeris_charts-chart-backend-lost", this.backend_loss_handler);
+    document.fonts.addEventListener("loadingdone", this.font_loading_done_handler);
     this.last_visible_logical_range = this.read_visible_logical_range();
     this.last_visible_time_range = this.read_visible_time_range();
     this.last_ts_width = this.wasm.time_scale_width();
@@ -4557,8 +4567,13 @@ export class chart_impl implements chart_api {
       canvas.style.transform = overlay_style.transform;
     }
     const ctx = this.plugin_ctx;
+    if (this.canvas_primitives.length === 0) {
+      if (this.plugin_canvas_painted) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      this.plugin_canvas_painted = false;
+      return;
+    }
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (this.canvas_primitives.length === 0) return;
+    this.plugin_canvas_painted = true;
     // One target per frame, shared by every view (the reference shares one target per widget).
     // Media size is the canvas' own CSS box — pinned to the container, like the overlay's.
     const rect = canvas.getBoundingClientRect();
@@ -7586,7 +7601,8 @@ export class chart_impl implements chart_api {
       | { kind: "general_brush_changed" }
       | { kind: "general_legend_changed" }
       | { kind: "panes_resized" };
-    const events = JSON.parse(this.wasm.take_input_events_json()) as controller_event[];
+    const json = this.wasm.take_input_events_json();
+    const events = json === "[]" ? [] : JSON.parse(json) as controller_event[];
     for (const event of events) {
       switch (event.kind) {
         case "drawing_created":
@@ -8388,6 +8404,7 @@ export class chart_impl implements chart_api {
       this.general_motion_listener_bound = false;
     }
     window.removeEventListener("aeris_charts-chart-backend-lost", this.backend_loss_handler);
+    document.fonts.removeEventListener("loadingdone", this.font_loading_done_handler);
     this.unbind_dpr_watcher();
     this.detach_gestures?.();
     this.observer?.disconnect();

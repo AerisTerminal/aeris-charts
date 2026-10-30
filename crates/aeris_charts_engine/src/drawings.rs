@@ -4615,6 +4615,12 @@ impl ChartEngine {
     /// boxes (see [`TextMeasureFn`]).
     pub fn set_text_measure(&mut self, f: Option<TextMeasureFn>) {
         self.text_measure_fn = f;
+        self.invalidate_text_measurements();
+    }
+
+    /// Re-measure every host-measured text extent on the next frame, for a host whose measurer
+    /// answers changed without being replaced (a web font finished loading).
+    pub fn invalidate_text_measurements(&mut self) {
         for entry in self.drawing_runtime.borrow_mut().entries.values_mut() {
             entry.screen_valid = false;
             entry.text_key = u64::MAX;

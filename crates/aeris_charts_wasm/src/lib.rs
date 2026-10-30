@@ -36,6 +36,10 @@ mod ring_source;
 #[path = "chart/image_runs.rs"]
 mod image_runs;
 
+// Pure device-pixel canvas sizing; compiled for the host target too so its rounding tests run
+// outside the browser.
+#[cfg(any(target_arch = "wasm32", test))]
+mod device_viewport;
 #[cfg(any(target_arch = "wasm32", test))]
 mod license;
 

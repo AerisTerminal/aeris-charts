@@ -62,7 +62,7 @@ impl ChartInner {
         let font_family = layout.font_family;
         let axis_size = self.engine.axis_font_size();
         let countdown_size = self.engine.countdown_font_size();
-        let axis_ctx = &self.axis_ctx;
+        let widths = &self.text_widths;
         let dpr = self.dpr;
         let prepared = self.engine.prepare_financial_frame_with_measure(
             aeris_charts_engine::FinancialFrameRequest {
@@ -79,8 +79,8 @@ impl ChartInner {
                 axis_frame: Some(&mut self.axis_frame),
                 axis_primitives: None,
             },
-            |text, bold| measure_text_ctx(axis_ctx, dpr, &font_family, axis_size, bold, text),
-            |text, bold| measure_text_ctx(axis_ctx, dpr, &font_family, countdown_size, bold, text),
+            |text, bold| measure_text_ctx(widths, dpr, &font_family, axis_size, bold, text),
+            |text, bold| measure_text_ctx(widths, dpr, &font_family, countdown_size, bold, text),
         );
         self.telemetry.set_rebuilds(self.engine.frame_build_stats());
         if prepared.axis_rebuilt {
@@ -406,6 +406,21 @@ impl ChartInner {
         Ok(())
     }
 
+    /// A web font finished loading: cached widths, run metrics and rasters may describe the
+    /// fallback face. Drop them and relayout so axis strips, labels and drawing text re-measure.
+    pub fn invalidate_text_metrics(&mut self) {
+        self.text_widths.clear();
+        if let Some(runs) = self.text_runs.as_mut() {
+            runs.invalidate_fonts();
+        }
+        // Retained WebGPU groups still reference the stale rasters; force every group to re-lower.
+        self.gpu_atlas_epoch = self.gpu_atlas_epoch.wrapping_add(1);
+        self.engine.invalidate_text_measurements();
+        self.engine.invalidate_axis_frame();
+        self.axis_dirty = true;
+        self.recompute_layout(true);
+    }
+
     // ---- Shared axis/top-layer frame ----
 
     /// Convert the engine-owned [`AxisFrame`] plus watermark into the shared backend-neutral
@@ -693,8 +708,50 @@ mod style_tests {
     }
 }
 
+/// Browser canvas text widths memoized by resolved font and text. Axis, tick and drawing labels
+/// repeat every frame, and each uncached width costs a font set plus `measureText` across the
+/// JS boundary. Cleared when a web font finishes loading.
+pub(super) struct BrowserTextWidths {
+    ctx: CanvasRenderingContext2d,
+    cache: RefCell<crate::text_cache::MeasureCache<(String, String), f64>>,
+}
+
+/// Distinct label strings kept per generation; a dense chart shows well under this many.
+const TEXT_WIDTH_CACHE_CAPACITY: usize = 1024;
+
+impl BrowserTextWidths {
+    pub(super) fn new(ctx: CanvasRenderingContext2d) -> Self {
+        Self {
+            ctx,
+            cache: RefCell::new(crate::text_cache::MeasureCache::new(
+                TEXT_WIDTH_CACHE_CAPACITY,
+            )),
+        }
+    }
+
+    /// Advance width in the font's own pixels.
+    pub(super) fn width(&self, font: &str, text: &str) -> f64 {
+        let key = (font.to_owned(), text.to_owned());
+        if let Some(width) = self.cache.borrow_mut().get(&key) {
+            return width;
+        }
+        self.ctx.set_font(font);
+        let width = self
+            .ctx
+            .measure_text(text)
+            .map(|m| m.width())
+            .unwrap_or(0.0);
+        self.cache.borrow_mut().insert(key, width);
+        width
+    }
+
+    pub(super) fn clear(&self) {
+        self.cache.borrow_mut().clear();
+    }
+}
+
 pub(super) fn measure_text_ctx(
-    ctx: &CanvasRenderingContext2d,
+    widths: &BrowserTextWidths,
     dpr: f64,
     font_family: &str,
     font_size: f64,
@@ -702,6 +759,8 @@ pub(super) fn measure_text_ctx(
     text: &str,
 ) -> f64 {
     let weight = if bold { 700 } else { 400 };
-    ctx.set_font(&format!("{weight} {}px {font_family}", font_size * dpr));
-    ctx.measure_text(text).map(|m| m.width()).unwrap_or(0.0) / dpr
+    widths.width(
+        &format!("{weight} {}px {font_family}", font_size * dpr),
+        text,
+    ) / dpr
 }

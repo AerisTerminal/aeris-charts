@@ -47,6 +47,31 @@ const FRAME_STATS_SLOT = {
   trading_rebuilds: 19,
 } as const;
 
+type worker_frame_scope = {
+  requestAnimationFrame?: (callback: () => void) => number;
+  cancelAnimationFrame?: (handle: number) => void;
+  fonts?: FontFaceSet;
+};
+const worker_scope = globalThis as unknown as worker_frame_scope;
+
+// Dedicated workers expose requestAnimationFrame in current engines; older ones fall back to a
+// display-rate timer.
+function request_frame(callback: () => void): number {
+  if (typeof worker_scope.requestAnimationFrame === "function") {
+    return worker_scope.requestAnimationFrame(callback);
+  }
+  return setTimeout(callback, 16) as unknown as number;
+}
+
+function cancel_frame(handle: number): void {
+  if (typeof worker_scope.cancelAnimationFrame === "function") worker_scope.cancelAnimationFrame(handle);
+  else clearTimeout(handle);
+}
+
+function worker_fonts(): FontFaceSet | undefined {
+  return worker_scope.fonts;
+}
+
 const UNSUPPORTED_WORKER_OPTIONS = [
   "autoSize",
   "localization",
@@ -175,6 +200,13 @@ export class offscreen_chart {
   private last_ingestion: ingestion_diagnostics | null = null;
   private removed = false;
   private input_timer: ReturnType<typeof setTimeout> | null = null;
+  /** Pending frame callback advancing kinetic scroll or animated zoom. */
+  private input_frame: number | null = null;
+  private readonly font_loading_done_handler = (): void => {
+    if (this.removed) return;
+    this.wasm.invalidate_text_metrics();
+    this.render();
+  };
   private width: number;
   private height: number;
   private dpr: number;
@@ -207,6 +239,7 @@ export class offscreen_chart {
       });
     };
     globalThis.addEventListener("aeris_charts-chart-backend-lost", this.backend_loss_handler);
+    worker_fonts()?.addEventListener("loadingdone", this.font_loading_done_handler);
   }
 
   backend(): "webgpu" | "canvas2d" {
@@ -526,7 +559,11 @@ export class offscreen_chart {
       true,
       this.price_axis_wheel_zoom,
       event.timestamp_ms ?? performance.now(),
-    )) this.render();
+    )) {
+      this.consume_input_events();
+      this.render();
+    }
+    this.schedule_input_tick();
   }
 
   /** Route a worker key sample through the same controller used by browser and GPUI hosts. */
@@ -549,8 +586,23 @@ export class offscreen_chart {
     return handled;
   }
 
+  private request_input_frame(): void {
+    if (this.input_frame !== null) return;
+    this.input_frame = request_frame(() => {
+      this.input_frame = null;
+      if (this.removed) return;
+      if (this.wasm.input_tick(performance.now())) {
+        this.consume_input_events();
+        this.render();
+      }
+      this.schedule_input_tick();
+    });
+  }
+
   private consume_input_events(): void {
-    const events = JSON.parse(this.wasm.take_input_events_json()) as Array<
+    const json = this.wasm.take_input_events_json();
+    if (json === "[]") return;
+    const events = JSON.parse(json) as Array<
       { kind: string; id?: number }
     >;
     for (const event of events) {
@@ -562,17 +614,23 @@ export class offscreen_chart {
   }
 
   private schedule_input_tick(): void {
+    // Kinetic scroll and animated zoom advance on display frames, not a fixed timer.
+    if (this.wasm.input_animating()) {
+      this.request_input_frame();
+      return;
+    }
     if (this.input_timer !== null) return;
     const deadline = this.wasm.input_wake_deadline_ms();
-    const animating = this.wasm.input_animating();
-    if (!animating && (deadline === undefined || !Number.isFinite(deadline))) return;
-    const delay = animating ? 16 : Math.max(0, deadline! - performance.now());
+    if (deadline === undefined || !Number.isFinite(deadline)) return;
     this.input_timer = setTimeout(() => {
       this.input_timer = null;
       if (this.removed) return;
-      if (this.wasm.input_tick(performance.now())) this.render();
+      if (this.wasm.input_tick(performance.now())) {
+        this.consume_input_events();
+        this.render();
+      }
       this.schedule_input_tick();
-    }, delay);
+    }, Math.max(0, deadline - performance.now()));
   }
 
   visible_logical_range(): { from: number; to: number } | null {
@@ -614,7 +672,10 @@ export class offscreen_chart {
     if (this.removed) return;
     if (this.input_timer !== null) clearTimeout(this.input_timer);
     this.input_timer = null;
+    if (this.input_frame !== null) cancel_frame(this.input_frame);
+    this.input_frame = null;
     globalThis.removeEventListener("aeris_charts-chart-backend-lost", this.backend_loss_handler);
+    worker_fonts()?.removeEventListener("loadingdone", this.font_loading_done_handler);
     this.wasm.controller_pointer_cancel();
     this.backend_change_handlers.clear();
     this.removed = true;

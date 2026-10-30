@@ -2480,7 +2480,7 @@ impl ChartInner {
     /// scale height. The shared engine policy owns all geometry; this browser host supplies only
     /// Canvas text widths.
     pub(super) fn recompute_layout(&mut self, allow_axis_shrink: bool) {
-        let axis_ctx = self.axis_ctx.clone();
+        let widths = Rc::clone(&self.text_widths);
         let dpr = self.dpr;
         let layout = self.opts().layout;
         let font_family = layout.font_family;
@@ -2501,8 +2501,8 @@ impl ChartInner {
                 axis_frame: None,
                 axis_primitives: None,
             },
-            |text, bold| measure_text_ctx(&axis_ctx, dpr, &font_family, axis_size, bold, text),
-            |text, bold| measure_text_ctx(&axis_ctx, dpr, &font_family, countdown_size, bold, text),
+            |text, bold| measure_text_ctx(&widths, dpr, &font_family, axis_size, bold, text),
+            |text, bold| measure_text_ctx(&widths, dpr, &font_family, countdown_size, bold, text),
         );
     }
 

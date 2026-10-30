@@ -9,14 +9,16 @@
 //! pixels as the Canvas2D backend (measured 0-diff by the prim-text parity spec).
 //!
 //! The cache/placement logic is pure and lives in [`crate::text_cache`]; this module is the
-//! DOM seam (offscreen canvas + `getImageData` readback) and therefore wasm-only.
+//! DOM seam (offscreen canvas + GPU `copyExternalImageToTexture` upload) and therefore wasm-only.
 
-use aeris_charts_render::draw_list::{Prim, text_font_spec};
+use aeris_charts_render::draw_list::{Prim, TextAlign, text_font_spec};
 use aeris_charts_render_wgpu::{ATLAS_SIZE, LabelAtlas, TexQuadInstance};
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, OffscreenCanvas};
 
-use crate::text_cache::{CachedRun, TextRunCache, TextRunKey, frac_bits, left_edge, place_run};
+use crate::text_cache::{
+    CachedRun, MeasureCache, RunBBox, TextRunCache, TextRunKey, frac_bits, left_edge, place_run,
+};
 
 enum RasterCanvas {
     Html(HtmlCanvasElement),
@@ -36,12 +38,27 @@ impl RasterCanvas {
             }
         }
     }
+
+    fn copy_source(&self) -> wgpu::CopyExternalImageSourceInfo {
+        let source = match self {
+            Self::Html(canvas) => wgpu::ExternalImageSource::HTMLCanvasElement(canvas.clone()),
+            Self::Offscreen(canvas) => wgpu::ExternalImageSource::OffscreenCanvas(canvas.clone()),
+        };
+        wgpu::CopyExternalImageSourceInfo {
+            source,
+            origin: wgpu::Origin2d::ZERO,
+            flip_y: false,
+        }
+    }
 }
 
 pub(super) struct TextRunStore {
     canvas: RasterCanvas,
     ctx: CanvasRenderingContext2d,
     cache: TextRunCache,
+    /// Browser metrics per (font, align, text). Cache hits for unchanged labels then cross no JS
+    /// boundary at all; only a raster miss touches the canvas.
+    metrics: MeasureCache<(String, TextAlign, String), RunBBox>,
     /// Monotonic atlas key (the atlas's own string map is unused; the cache is keyed richer).
     next_slot_key: u64,
 }
@@ -78,6 +95,7 @@ impl TextRunStore {
             canvas,
             ctx,
             cache: TextRunCache::default(),
+            metrics: MeasureCache::new(crate::text_cache::TEXT_RUN_CACHE_CAPACITY),
             next_slot_key: 0,
         }
     }
@@ -126,24 +144,33 @@ impl TextRunStore {
         }
         let (x, y) = (*x, *y);
         let font = text_font_spec(*size, family, *weight, *italic);
-        self.ctx.set_font(&font);
-        self.ctx.set_text_align(align.canvas_keyword());
-        self.ctx.set_text_baseline("middle");
-        let metrics = self.ctx.measure_text(text).ok()?;
+        let metrics_key = (font, *align, text.clone());
+        let bbox = match self.metrics.get(&metrics_key) {
+            Some(bbox) => bbox,
+            None => {
+                self.ctx.set_font(&metrics_key.0);
+                self.ctx.set_text_align(align.canvas_keyword());
+                self.ctx.set_text_baseline("middle");
+                let metrics = self.ctx.measure_text(text).ok()?;
+                let bbox = crate::text_cache::RunBBox {
+                    width: metrics.width() as f32,
+                    abl: metrics.actual_bounding_box_left() as f32,
+                    abr: metrics.actual_bounding_box_right() as f32,
+                    asc: metrics.actual_bounding_box_ascent() as f32,
+                    desc: metrics.actual_bounding_box_descent() as f32,
+                };
+                self.metrics.insert(metrics_key.clone(), bbox);
+                bbox
+            }
+        };
+        let (font, _, text) = metrics_key;
         let key = TextRunKey {
-            text: text.clone(),
+            text,
             font,
             color: *color,
             align: *align,
-            frac_x: frac_bits(left_edge(x, *align, metrics.width() as f32)),
+            frac_x: frac_bits(left_edge(x, *align, bbox.width)),
             frac_y: frac_bits(y),
-        };
-        let bbox = crate::text_cache::RunBBox {
-            width: metrics.width() as f32,
-            abl: metrics.actual_bounding_box_left() as f32,
-            abr: metrics.actual_bounding_box_right() as f32,
-            asc: metrics.actual_bounding_box_ascent() as f32,
-            desc: metrics.actual_bounding_box_descent() as f32,
         };
         let epoch = atlas.epoch();
         let run = match self.cache.get(&key, epoch) {
@@ -198,17 +225,13 @@ impl TextRunStore {
                 f64::from(placement.draw_y),
             )
             .ok()?;
-        let pixels = self
-            .ctx
-            .get_image_data(0.0, 0.0, f64::from(placement.w), f64::from(placement.h))
-            .ok()?;
         self.next_slot_key += 1;
-        let slot = atlas.insert(
+        let slot = atlas.insert_external(
             queue,
             self.next_slot_key.to_string(),
             placement.w,
             placement.h,
-            &pixels.data(),
+            &self.canvas.copy_source(),
         )?;
         Some(CachedRun {
             slot,
@@ -228,5 +251,11 @@ impl TextRunStore {
 
     pub(super) fn rasterizations(&self) -> u64 {
         self.cache.rasterizations()
+    }
+
+    /// Forget cached metrics and rasters after a web font load changed glyph shapes.
+    pub(super) fn invalidate_fonts(&mut self) {
+        self.metrics.clear();
+        self.cache.clear();
     }
 }

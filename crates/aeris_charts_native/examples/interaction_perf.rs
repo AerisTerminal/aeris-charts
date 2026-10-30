@@ -1,7 +1,8 @@
 use std::time::Instant;
 
 use aeris_charts_core::scale::time_scale_core::{TimeScaleCore, TimeScaleOptions};
-use aeris_charts_engine::{ChartEngine, ChartFrame, SeriesKind};
+use aeris_charts_engine::{AxisFrame, ChartEngine, ChartFrame, FinancialFrameRequest, SeriesKind};
+use std::cell::Cell;
 
 type FixtureColumns = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
 
@@ -56,6 +57,55 @@ where
     println!("{label}: {iterations} frames, mean {mean:.3} us, p95 {p95:.3} us, max {max:.3} us");
 }
 
+/// One host repaint per crosshair move through the complete financial preparation (layout check,
+/// pane frame, axis frame), counting the host text-measure callbacks it requires.
+fn host_crosshair_benchmark(chart: &mut ChartEngine, label: &str, iterations: usize) {
+    let (width, height) = (chart.css_width, chart.css_height);
+    let mut frame = ChartFrame::default();
+    let mut axis = AxisFrame::default();
+    let measures = Cell::new(0u64);
+    let measure = |text: &str, _bold: bool| {
+        measures.set(measures.get() + 1);
+        text.len() as f64 * 7.0
+    };
+    let prepare = |chart: &mut ChartEngine, frame: &mut ChartFrame, axis: &mut AxisFrame| {
+        chart.prepare_financial_frame_with_measure(
+            FinancialFrameRequest {
+                width,
+                height,
+                dpr: 1.0,
+                force_layout: false,
+                allow_axis_shrink: false,
+                force_frame: false,
+                force_axis: false,
+                layout_only: false,
+                fit_content: false,
+                frame,
+                axis_frame: Some(axis),
+                axis_primitives: None,
+            },
+            measure,
+            measure,
+        )
+    };
+    prepare(chart, &mut frame, &mut axis);
+    measures.set(0);
+    let mut samples = Vec::with_capacity(iterations);
+    for i in 0..iterations {
+        chart.set_crosshair_at(40.0 + (i % 1200) as f64, 200.0 + (i % 120) as f64);
+        let start = Instant::now();
+        prepare(chart, &mut frame, &mut axis);
+        samples.push(start.elapsed().as_secs_f64() * 1_000_000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+    let p95 = samples[((samples.len() - 1) * 95) / 100];
+    let per_move = measures.get() as f64 / iterations as f64;
+    println!(
+        "{label}: {iterations} frames, mean {mean:.3} us, p95 {p95:.3} us, {per_move:.1} text measures/move"
+    );
+}
+
 fn main() {
     let bars: usize = std::env::var("AERIS_CHARTS_BARS")
         .ok()
@@ -86,6 +136,11 @@ fn main() {
     interaction_benchmark(&mut chart, "1M crosshair", iterations, |chart, i| {
         chart.crosshair = Some((40.0 + (i % 1520) as f64, 300.0 + (i % 120) as f64));
     });
+
+    let mut host = install_chart(5_000, 1280.0, 720.0);
+    host.set_bar_spacing(6.0);
+    host.scroll_to_real_time();
+    host_crosshair_benchmark(&mut host, "host crosshair repaint", iterations);
 
     // Stress the roadmap's 10-series × 50k-visible-bars target explicitly. The normal product
     // minimum spacing is 0.5 CSS px; this fixture lowers it to 0.08 so all 50k bars are visible,

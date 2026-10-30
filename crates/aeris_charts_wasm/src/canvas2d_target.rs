@@ -58,6 +58,21 @@ pub struct WasmCanvas2d<'a> {
     /// (`fillRect`/`stroke`/`fill`/`fillText`), not state setters or path building. Reported as
     /// part of `frame_stats().canvas2d_ops`.
     ops: u32,
+    /// Context state this target last set. Consecutive prims mostly share colors and fonts, and
+    /// every redundant setter is a JS call plus a CSS-string allocation. `None` means unknown.
+    state: ContextState,
+}
+
+#[derive(Default)]
+struct ContextState {
+    fill: Option<Color>,
+    stroke: Option<Color>,
+    line_width: Option<f32>,
+    dash: Option<Vec<f32>>,
+    font: Option<String>,
+    text_align: Option<TextAlign>,
+    text_baseline_middle: bool,
+    join_and_cap: bool,
 }
 
 impl<'a> WasmCanvas2d<'a> {
@@ -66,6 +81,7 @@ impl<'a> WasmCanvas2d<'a> {
             ctx,
             image_store: None,
             ops: 0,
+            state: ContextState::default(),
         }
     }
 
@@ -77,6 +93,7 @@ impl<'a> WasmCanvas2d<'a> {
             ctx,
             image_store: Some(image_store),
             ops: 0,
+            state: ContextState::default(),
         }
     }
 
@@ -92,6 +109,8 @@ impl Canvas2d for WasmCanvas2d<'_> {
     }
     fn restore(&mut self) {
         self.ctx.restore();
+        // Restore reverts to the state at the matching save, which this target did not track.
+        self.state = ContextState::default();
     }
     fn clip_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         self.ctx.begin_path();
@@ -100,7 +119,10 @@ impl Canvas2d for WasmCanvas2d<'_> {
     }
 
     fn set_fill_solid(&mut self, color: Color) {
-        self.ctx.set_fill_style_str(&css(color));
+        if self.state.fill != Some(color) {
+            self.ctx.set_fill_style_str(&css(color));
+            self.state.fill = Some(color);
+        }
     }
     fn set_fill_vgradient(&mut self, y_top: f32, y_bottom: f32, top: Color, bottom: Color) {
         // A zero-length gradient is invalid; nudge the endpoint so it degenerates to a near-solid.
@@ -115,19 +137,33 @@ impl Canvas2d for WasmCanvas2d<'_> {
         let _ = grad.add_color_stop(0.0, &css(top));
         let _ = grad.add_color_stop(1.0, &css(bottom));
         self.ctx.set_fill_style_canvas_gradient(&grad);
+        self.state.fill = None;
     }
     fn set_stroke(&mut self, color: Color) {
-        self.ctx.set_stroke_style_str(&css(color));
+        if self.state.stroke != Some(color) {
+            self.ctx.set_stroke_style_str(&css(color));
+            self.state.stroke = Some(color);
+        }
     }
     fn set_line_width(&mut self, width: f32) {
-        self.ctx.set_line_width(width as f64);
+        if self.state.line_width != Some(width) {
+            self.ctx.set_line_width(width as f64);
+            self.state.line_width = Some(width);
+        }
     }
     fn set_line_dash(&mut self, pattern: &[f32]) {
+        if self.state.dash.as_deref() == Some(pattern) {
+            return;
+        }
         let arr = js_sys::Array::new();
         for &seg in pattern {
             arr.push(&JsValue::from_f64(seg as f64));
         }
-        let _ = self.ctx.set_line_dash(&arr);
+        if self.ctx.set_line_dash(&arr).is_ok() {
+            self.state.dash = Some(pattern.to_vec());
+        } else {
+            self.state.dash = None;
+        }
     }
 
     fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
@@ -154,9 +190,13 @@ impl Canvas2d for WasmCanvas2d<'_> {
     }
     fn stroke(&mut self) {
         self.ops += 1;
-        // Set per stroke: host plugins share this context and may leave other join/cap state.
-        self.ctx.set_line_join("round");
-        self.ctx.set_line_cap("butt");
+        // Set once per target state: host plugins share this context and may leave other
+        // join/cap state between frames.
+        if !self.state.join_and_cap {
+            self.ctx.set_line_join("round");
+            self.ctx.set_line_cap("butt");
+            self.state.join_and_cap = true;
+        }
         self.ctx.stroke();
     }
     fn fill(&mut self) {
@@ -173,11 +213,20 @@ impl Canvas2d for WasmCanvas2d<'_> {
         color: Color,
         align: TextAlign,
     ) {
-        self.ctx.set_font(font);
-        self.ctx.set_fill_style_str(&css(color));
-        self.ctx.set_text_align(align.canvas_keyword());
+        if self.state.font.as_deref() != Some(font) {
+            self.ctx.set_font(font);
+            self.state.font = Some(font.to_owned());
+        }
+        self.set_fill_solid(color);
+        if self.state.text_align != Some(align) {
+            self.ctx.set_text_align(align.canvas_keyword());
+            self.state.text_align = Some(align);
+        }
         // House convention (axis labels): y is the vertical center of the run.
-        self.ctx.set_text_baseline("middle");
+        if !self.state.text_baseline_middle {
+            self.ctx.set_text_baseline("middle");
+            self.state.text_baseline_middle = true;
+        }
         self.ops += 1;
         let _ = self.ctx.fill_text(text, x as f64, y as f64);
     }
@@ -199,6 +248,7 @@ impl Canvas2d for WasmCanvas2d<'_> {
             self.fill_text(text, 0.0, 0.0, font, color, align);
         }
         self.ctx.restore();
+        self.state = ContextState::default();
     }
 
     fn draw_raster_image(
