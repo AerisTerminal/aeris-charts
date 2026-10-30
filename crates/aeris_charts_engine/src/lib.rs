@@ -128,9 +128,9 @@ pub use drawing_text_edit::{DrawingTextEditKey, DrawingTextEditLayout};
 pub use drawings::{
     BuiltinDrawingIcon, DRAWING_DEFAULT_COLOR, DRAWINGS_DOCUMENT_SCHEMA, DRAWINGS_DOCUMENT_VERSION,
     Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId, DrawingKind,
-    DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats, ImportedDrawing,
-    MAX_DRAWING_ICON_NAME_BYTES, MAX_DRAWING_ICON_SIZE, MAX_DRAWING_ICONS, TextCapCenterFn,
-    TextCapMetrics, TextMeasureFn,
+    DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingTextHAlign, DrawingWorkStats,
+    ImportedDrawing, MAX_DRAWING_ICON_NAME_BYTES, MAX_DRAWING_ICON_SIZE, MAX_DRAWING_ICONS,
+    TextCapCenterFn, TextCapMetrics, TextMeasureFn, normalize_drawing_text,
 };
 pub(crate) use drawings::{
     DrawingAnchorTime, DrawingController, DrawingDrag, DrawingHistory, DrawingIconRegistry,

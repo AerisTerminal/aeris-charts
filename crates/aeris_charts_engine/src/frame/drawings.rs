@@ -21,8 +21,8 @@ use crate::drawings::{
     Drawing, DrawingBodyGeometry, DrawingGeometryOptions, DrawingHandleMode, DrawingId,
     DrawingKind, DrawingPoint, DrawingTextHAlign, LINE_TEXT_PLACEHOLDER, MEASURE_LABEL_GAP,
     MeasureAxes, MeasureGeometry, PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD,
-    annotation_text_weight, arc_segments, arrow_marker_icon, builtin_icon, ellipse_segments,
-    gann_arc_segments, path_arrow_points, resolve_drawing_geometry,
+    TextBlock, TextRun, arc_segments, arrow_marker_icon, builtin_icon, drawing_text_weight,
+    ellipse_segments, gann_arc_segments, path_arrow_points, resolve_drawing_geometry,
 };
 use aeris_charts_core::model::plot_list::PlotValueIndex;
 
@@ -48,6 +48,8 @@ const POSITION_PROGRESS_ALPHA: u8 = 96;
 /// The hover ring's dimmed variant of the focus border (the public reference shows the same border at
 /// roughly half strength until the drawing is actually selected).
 const HOVER_BORDER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
+/// The painted text selection: a translucent primary wash over the selected glyphs.
+pub(super) const TEXT_SELECTION: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x59);
 const LINE_TEXT_PLACEHOLDER_ALPHA: u8 = 0x99;
 
 fn point_on_segment(a: (f64, f64), b: (f64, f64), t: f64) -> (f64, f64) {
@@ -62,27 +64,41 @@ const fn text_align(align: DrawingTextHAlign) -> TextAlign {
     }
 }
 
-/// A text run's padded box around its aligned anchor, in the run's own axes: the advance
-/// extent `(start, end)` along the run and the half height across it (the 1.2em line box).
-fn padded_text_box(align: TextAlign, width: f64, size: f64, pad: f64) -> ((f64, f64), f64) {
+/// A one-line text run's padded box around its aligned anchor, in the run's own axes: the
+/// advance extent `(start, end)` along the run and the extent across it (the 1.2em line box).
+fn padded_text_box(align: TextAlign, width: f64, size: f64, pad: f64) -> ((f64, f64), (f64, f64)) {
     let run = match align {
         TextAlign::Left => (-pad, width + pad),
         TextAlign::Center => (-width / 2.0 - pad, width / 2.0 + pad),
         TextAlign::Right => (-width - pad, pad),
     };
-    (run, size * 0.6 + pad)
+    let half_height = size * crate::drawings::LINE_HEIGHT_EM / 2.0 + pad;
+    (run, (-half_height, half_height))
+}
+
+/// A label block's padded box in its run's axes, like [`padded_text_box`] for every line.
+fn padded_block_box(
+    block: &TextBlock<'_>,
+    align: DrawingTextHAlign,
+    pad: f64,
+) -> ((f64, f64), (f64, f64)) {
+    let (left, top) = (block.left(align), block.top());
+    (
+        (left - pad, left + block.width + pad),
+        (top - pad, top + block.height() + pad),
+    )
 }
 
 /// The stretch of segment `a→b`, as parameters in `[0, 1]`, inside a label's padded box. The
 /// box is anchored at `anchor`, rotated by `angle`, and spans `run` along the label and
-/// `±half_height` across it. A stroke a label sits on opens over this stretch, so text never
+/// `across` its normal. A stroke a label sits on opens over this stretch, so text never
 /// crosses its own line whatever the drawing kind or the line's direction.
 fn text_box_cutout(
     a: (f64, f64),
     b: (f64, f64),
     anchor: (f64, f64),
     angle: f64,
-    (run, half_height): ((f64, f64), f64),
+    (run, across): ((f64, f64), (f64, f64)),
 ) -> Option<(f64, f64)> {
     let (sin, cos) = angle.sin_cos();
     let local = |point: (f64, f64)| {
@@ -93,7 +109,7 @@ fn text_box_cutout(
     let (mut start, mut end) = (0.0_f64, 1.0_f64);
     for (coordinate, delta, low, high) in [
         (from.0, to.0 - from.0, run.0, run.1),
-        (from.1, to.1 - from.1, -half_height, half_height),
+        (from.1, to.1 - from.1, across.0, across.1),
     ] {
         if delta.abs() <= f64::EPSILON {
             if coordinate < low || coordinate > high {
@@ -399,17 +415,6 @@ impl ChartEngine {
         (self.line_text_prompt() == Some(drawing.id)).then_some(LINE_TEXT_PLACEHOLDER)
     }
 
-    fn measure_drawing_frame_text(&self, drawing: &Drawing, text: &str, size: f64) -> f64 {
-        let layout = &self.options.get().layout;
-        self.measure_text_run(
-            text,
-            size,
-            &layout.font_family,
-            drawing.text_weight.unwrap_or(400),
-            drawing.text_italic,
-        )
-    }
-
     /// The stretch of a line's stroke `a→b` (bitmap px) that its middle-aligned label covers,
     /// so the stroke opens around the text. Lines without line text or with the label above or
     /// below the stroke stay whole. A rectangle's middle-aligned label sits on its middle line,
@@ -429,19 +434,20 @@ impl ChartEngine {
             return None;
         }
         let text = self.drawing_frame_gap_text(drawing)?;
-        let (size, x, y, align, angle) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
-        let mut width = self.measure_drawing_frame_text(drawing, text, size);
+        let run = self.text_run_geometry(drawing, px, pane_w_px, vpr)?;
+        let family = &self.options.get().layout.font_family;
+        let mut block = self.drawing_text_block(drawing, text, run.size, run.v_align, family);
         if self.editing_drawing == Some(drawing.id) {
-            // Match the host editor's one-em empty/minimum width. This leaves a compact caret
-            // slot and then grows from actual shaped advance.
-            width = width.max(size);
+            // Match the host editor's one-em minimum width. This leaves a compact caret slot
+            // and then grows from actual shaped advance.
+            block.width = block.width.max(run.size);
         }
         text_box_cutout(
             a,
             b,
-            (x, y),
-            angle,
-            padded_text_box(text_align(align), width, size, TEXT_PAD * vpr),
+            (run.x, run.y),
+            run.angle,
+            padded_block_box(&block, run.align, TEXT_PAD * vpr),
         )
     }
 
@@ -472,7 +478,7 @@ impl ChartEngine {
                 .collect::<Vec<_>>();
             self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
             self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
-            self.build_drawing_text_caret(drawing, &px, pane_w_px, vpr, out, points);
+            self.build_drawing_text_session(drawing, &px, pane_w_px, vpr, out, points);
             self.build_drawing_labels(drawing, &px, vpr, out);
         }
     }
@@ -524,7 +530,7 @@ impl ChartEngine {
                 let point_start = points.len();
                 self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
-                self.build_drawing_text_caret(drawing, &px, pane_w_px, vpr, out, points);
+                self.build_drawing_text_session(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_labels(drawing, &px, vpr, out);
                 parts.push(super::RetainedDrawingPart {
                     id: drawing.id,
@@ -561,7 +567,7 @@ impl ChartEngine {
                 let point_start = points.len();
                 self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
-                self.build_drawing_text_caret(drawing, &px, pane_w_px, vpr, out, points);
+                self.build_drawing_text_session(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_labels(drawing, &px, vpr, out);
                 parts.push(super::RetainedDrawingPart {
                     id: drawing.id,
@@ -2109,21 +2115,31 @@ impl ChartEngine {
                     color,
                 });
                 let layout = &self.options.get().layout;
-                out.push(Prim::Text {
-                    x: (left + label.padding) as f32,
-                    y: (top + height / 2.0) as f32,
-                    text: label.text,
-                    color: drawing
-                        .text_color
-                        .as_deref()
-                        .and_then(Color::parse_css)
-                        .unwrap_or_else(|| color.contrast_text()),
-                    size: label.size as f32,
-                    family: layout.font_family.clone(),
-                    align: TextAlign::Left,
-                    weight: drawing.text_weight.unwrap_or(400),
-                    italic: drawing.text_italic,
-                });
+                let ink = drawing
+                    .text_color
+                    .as_deref()
+                    .and_then(Color::parse_css)
+                    .unwrap_or_else(|| color.contrast_text());
+                let lines = TextBlock::unmeasured(
+                    &label.text,
+                    label.size,
+                    crate::drawings::DrawingTextVAlign::Middle,
+                );
+                for (x, y, line) in
+                    lines.line_anchors(left + label.padding, top + height / 2.0, 0.0)
+                {
+                    out.push(Prim::Text {
+                        x: x as f32,
+                        y: y as f32,
+                        text: line.to_string(),
+                        color: ink,
+                        size: label.size as f32,
+                        family: layout.font_family.clone(),
+                        align: TextAlign::Left,
+                        weight: drawing_text_weight(drawing),
+                        italic: drawing.text_italic,
+                    });
+                }
             }
             DrawingBodyGeometry::IconStamp { center, size } => {
                 let rect = [
@@ -3206,10 +3222,13 @@ impl ChartEngine {
             .collect()
     }
 
-    /// The engine-painted caret of an open drawing text session (native hosts). It sits on the
-    /// label's own transform: the run's measured advance places it, and it rotates with a trend
-    /// label. An empty run uses the one-em editing slot the middle-line cutout reserves.
-    fn build_drawing_text_caret(
+    /// The engine-painted selection and caret of an open drawing text session (native hosts).
+    /// Both sit on the label's own transform and line layout and rotate with a trend label:
+    /// the selection washes each selected line's run (plus a small nub for a selected line
+    /// break) as one mesh, and the caret is a 1 px bar spanning its line's box, placed by the
+    /// measured prefix on its line. An empty label uses the one-em editing slot the middle-line
+    /// cutout reserves.
+    fn build_drawing_text_session(
         &self,
         drawing: &Drawing,
         px: &[(f64, f64)],
@@ -3218,54 +3237,111 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
     ) {
-        let Some(session) = self.drawing_text_edit.as_ref().filter(|session| {
-            session.id == drawing.id && session.paint_caret && session.caret_shown
-        }) else {
+        let Some(session) = self
+            .drawing_text_edit
+            .as_ref()
+            .filter(|session| session.id == drawing.id && session.paint_caret)
+        else {
             return;
         };
-        let (size, x, y, align, angle) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
-        let text = drawing.display_text();
-        let advance = if text.is_empty() {
-            size
-        } else {
-            self.measure_drawing_frame_text(drawing, text, size)
+        let Some(run) = self.text_run_geometry(drawing, px, pane_w_px, vpr) else {
+            return;
         };
-        let prefix: String = text.chars().take(session.caret).collect();
-        let start = match align {
-            DrawingTextHAlign::Left => 0.0,
-            DrawingTextHAlign::Center => -advance / 2.0,
-            DrawingTextHAlign::Right => -advance,
+        let block = self.drawing_label_block(drawing, run.size);
+        let measure = self.drawing_text_measurer(drawing, run.size);
+        // Browser caret parity: offsets land on the next whole CSS px after the prefix run.
+        let offset = |prefix: &str| (measure(prefix) / vpr).ceil() * vpr;
+        let line_prefix = |index: usize, chars: usize| {
+            let text = block.lines[index].text;
+            &text[..text
+                .char_indices()
+                .nth(chars)
+                .map_or(text.len(), |(byte, _)| byte)]
         };
-        // Browser caret parity: a 1 CSS px bar at the next whole CSS px after the prefix run,
-        // spanning the label's 1.2em line box, rotated with the label.
-        let prefix_css = self.measure_drawing_frame_text(drawing, &prefix, size) / vpr;
-        let local_x = start + prefix_css.ceil() * vpr;
-        let half_height = size * 0.6;
+        let snap = run.angle.abs() <= 1e-6;
+        if let Some((start, end)) = session.selection() {
+            let first_point = points.len() as u32;
+            for (index, line) in block.lines.iter().enumerate() {
+                let line_len = line.text.chars().count();
+                let line_end = line.start + line_len;
+                if end < line.start || start > line_end {
+                    continue;
+                }
+                let from = start.max(line.start) - line.start;
+                let to = end.min(line_end) - line.start;
+                let left = block.line_left(index, run.align);
+                let mut x0 = left + offset(line_prefix(index, from));
+                let mut x1 = left + offset(line_prefix(index, to));
+                if end > line_end {
+                    x1 += run.size * 0.3;
+                }
+                let center = block.line_center(index);
+                let (mut y0, mut y1) = (
+                    center - block.line_height / 2.0,
+                    center + block.line_height / 2.0,
+                );
+                if snap {
+                    // An unrotated wash lands on whole device px like the crisp caret.
+                    (x0, x1) = ((run.x + x0).round() - run.x, (run.x + x1).round() - run.x);
+                    (y0, y1) = ((run.y + y0).round() - run.y, (run.y + y1).round() - run.y);
+                }
+                if x1 <= x0 || y1 <= y0 {
+                    continue;
+                }
+                let corner = |x: f64, y: f64| {
+                    let (x, y) = run.screen((x, y));
+                    [x as f32, y as f32]
+                };
+                let [a, b, c, d] = [
+                    corner(x0, y0),
+                    corner(x1, y0),
+                    corner(x1, y1),
+                    corner(x0, y1),
+                ];
+                points.extend([a, b, c, a, c, d]);
+            }
+            let point_count = points.len() as u32 - first_point;
+            if point_count > 0 {
+                out.push(Prim::MeshFill {
+                    first_point,
+                    point_count,
+                    color: TEXT_SELECTION,
+                });
+            }
+        }
+        if !session.caret_shown {
+            return;
+        }
+        let (line, prefix) = block.caret_prefix(session.caret);
+        let local_x = block.line_left(line, run.align) + offset(prefix);
+        let center = block.line_center(line);
+        let half_height = block.line_height / 2.0;
         let color = self.drawing_text_color(drawing);
-        if angle.abs() <= 1e-6 {
+        if snap {
             // An unrotated caret snaps to the device grid like every other crisp 1px rule, so
             // it keeps one thickness wherever the caret moves.
             let width = vpr.round().max(1.0) as i32;
+            let (top, bottom) = (
+                (run.y + center - half_height).round(),
+                (run.y + center + half_height).round(),
+            );
             out.push(Prim::Rect {
                 rect: IRect {
-                    x: (x + local_x).round() as i32,
-                    y: (y - half_height).round() as i32,
+                    x: (run.x + local_x).round() as i32,
+                    y: top as i32,
                     w: width,
-                    h: ((y + half_height).round() - (y - half_height).round()).max(1.0) as i32,
+                    h: (bottom - top).max(1.0) as i32,
                 },
                 color,
             });
             return;
         }
-        let (sin, cos) = angle.sin_cos();
         let at = |local_y: f64| {
-            [
-                (x + cos * local_x - sin * local_y) as f32,
-                (y + sin * local_x + cos * local_y) as f32,
-            ]
+            let (x, y) = run.screen((local_x, local_y));
+            [x as f32, y as f32]
         };
         let first_point = points.len() as u32;
-        points.extend([at(-half_height), at(half_height)]);
+        points.extend([at(center - half_height), at(center + half_height)]);
         out.push(Prim::Polyline {
             first_point,
             point_count: 2,
@@ -3276,42 +3352,33 @@ impl ChartEngine {
         });
     }
 
+    /// The label's run in bitmap px (drawings.rs `drawing_text_run`).
     fn text_run_geometry(
         &self,
         drawing: &Drawing,
         px: &[(f64, f64)],
         pane_w_px: i32,
         vpr: f64,
-    ) -> (f64, f64, f64, DrawingTextHAlign, f64) {
-        if let Some(annotation) = self.annotation_layout(drawing, px, vpr) {
-            return (
-                annotation.size,
-                annotation.text_x,
-                annotation.text_y,
-                DrawingTextHAlign::Left,
-                0.0,
-            );
+    ) -> Option<TextRun> {
+        self.drawing_text_run(drawing, px, f64::from(pane_w_px), vpr)
+    }
+
+    /// A label block's crisp integer-snapped box padded by `pad` on every side.
+    fn padded_block_rect(run: &TextRun, block: &TextBlock<'_>, pad: f64) -> IRect {
+        let (left, top) = (run.x + block.left(run.align), run.y + block.top());
+        IRect {
+            x: (left - pad).round() as i32,
+            y: (top - pad).round() as i32,
+            w: (block.width + 2.0 * pad).round().max(1.0) as i32,
+            h: (block.height() + 2.0 * pad).round().max(1.0) as i32,
         }
-        let layout = &self.options.get().layout;
-        let size = drawing.resolved_text_size(layout.font_size) * vpr;
-        let pane = &self.panes[drawing.pane_index];
-        let (x, y, align, angle) = ChartEngine::drawing_text_placement(
-            drawing,
-            px,
-            f64::from(pane_w_px),
-            pane.top * vpr,
-            pane.height * vpr,
-            size,
-            TEXT_PAD * vpr,
-        );
-        (size, x, y, align, angle)
     }
 
     /// The text tool's interaction chrome (hover ring, focus border): a crisp integer-snapped
-    /// hollow frame on the SAME box the host's editing wrap draws — the label run (advance ×
-    /// 1.2·size, the hit test's line-height convention) padded by the editing chrome's
-    /// 2 px border + 4 px padding (drawings.rs `TEXT_CHROME_PAD`). Selection, hover, and
-    /// typing mode land on one outline, so entering/leaving the editor moves nothing.
+    /// hollow frame on the SAME box the host's editing wrap draws — the label's line block
+    /// (widest line × one 1.2em line box per line, the hit test's convention) padded by the
+    /// editing chrome's 2 px border + 4 px padding (drawings.rs `TEXT_CHROME_PAD`). Selection,
+    /// hover, and typing mode land on one outline, so entering/leaving the editor moves nothing.
     fn push_text_chrome(
         &self,
         drawing: &Drawing,
@@ -3321,23 +3388,12 @@ impl ChartEngine {
         color: Color,
         out: &mut Vec<Prim>,
     ) {
-        let (size, x, y, align, _) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
-        let width = self.measure_drawing_text(drawing, size);
-        let height = size * 1.2;
-        let pad = TEXT_CHROME_PAD * vpr;
-        let left = match align {
-            DrawingTextHAlign::Left => x,
-            DrawingTextHAlign::Center => x - width / 2.0,
-            DrawingTextHAlign::Right => x - width,
+        let Some(run) = self.text_run_geometry(drawing, px, pane_w_px, vpr) else {
+            return;
         };
-        let rect = IRect {
-            x: (left - pad).round() as i32,
-            y: (y - height / 2.0 - pad).round() as i32,
-            w: (width + 2.0 * pad).round().max(1.0) as i32,
-            h: (height + 2.0 * pad).round().max(1.0) as i32,
-        };
+        let block = self.drawing_label_block(drawing, run.size);
         out.push(Prim::RectFrame {
-            rect,
+            rect: Self::padded_block_rect(&run, &block, TEXT_CHROME_PAD * vpr),
             border: (2.0 * vpr).round().max(1.0) as i32,
             color,
         });
@@ -3372,7 +3428,9 @@ impl ChartEngine {
             return;
         };
         let is_text_tool = drawing.kind == DrawingKind::Text || drawing.kind.is_text_annotation();
-        let (size, x, y, align, angle) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
+        let Some(run) = self.text_run_geometry(drawing, px, pane_w_px, vpr) else {
+            return;
+        };
         let layout = &self.options.get().layout;
         let mut color = self.drawing_text_color(drawing);
         if placeholder {
@@ -3395,20 +3453,8 @@ impl ChartEngine {
             .as_deref()
             .and_then(Color::parse_css);
         if is_text_tool && (box_fill.is_some() || box_border.is_some()) {
-            let width = self.measure_drawing_text(drawing, size);
-            let height = size * 1.2;
-            let pad = 4.0 * vpr;
-            let left = match align {
-                DrawingTextHAlign::Left => x,
-                DrawingTextHAlign::Center => x - width / 2.0,
-                DrawingTextHAlign::Right => x - width,
-            };
-            let rect = IRect {
-                x: (left - pad).round() as i32,
-                y: (y - height / 2.0 - pad).round() as i32,
-                w: (width + 2.0 * pad).round().max(1.0) as i32,
-                h: (height + 2.0 * pad).round().max(1.0) as i32,
-            };
+            let block = self.drawing_label_block(drawing, run.size);
+            let rect = Self::padded_block_rect(&run, &block, 4.0 * vpr);
             if let Some(fill) = box_fill {
                 out.push(Prim::Rect { rect, color: fill });
             }
@@ -3422,43 +3468,38 @@ impl ChartEngine {
             }
         }
 
-        let text_prim = Prim::RotatedText {
-            x: x as f32,
-            y: y as f32,
-            text: text.to_string(),
-            color,
-            size: size as f32,
-            family: layout.font_family.clone(),
-            align: text_align(align),
-            weight: drawing.text_weight.unwrap_or(400),
-            italic: drawing.text_italic,
-            angle: angle as f32,
-        };
-        if drawing.kind.has_line_text() {
-            out.push(text_prim);
-        } else if let Prim::RotatedText {
-            x,
-            y,
-            text,
-            color,
-            size,
-            family,
-            align,
-            weight,
-            italic,
-            ..
-        } = text_prim
-        {
-            out.push(Prim::Text {
-                x,
-                y,
-                text,
-                color,
-                size,
-                family,
-                align,
-                weight,
-                italic,
+        // One prim per line: backends never see a line break.
+        let lines = TextBlock::unmeasured(text, run.size, run.v_align);
+        for (x, y, line) in lines.line_anchors(run.x, run.y, run.angle) {
+            let (x, y, text) = (x as f32, y as f32, line.to_string());
+            let (size, family) = (run.size as f32, layout.font_family.clone());
+            let (align, weight) = (text_align(run.align), drawing_text_weight(drawing));
+            let italic = drawing.text_italic;
+            out.push(if drawing.kind.has_line_text() {
+                Prim::RotatedText {
+                    x,
+                    y,
+                    text,
+                    color,
+                    size,
+                    family,
+                    align,
+                    weight,
+                    italic,
+                    angle: run.angle as f32,
+                }
+            } else {
+                Prim::Text {
+                    x,
+                    y,
+                    text,
+                    color,
+                    size,
+                    family,
+                    align,
+                    weight,
+                    italic,
+                }
             });
         }
     }
@@ -3928,17 +3969,20 @@ impl ChartEngine {
             });
         }
         let text_color = if layout.placeholder { muted } else { ink };
-        out.push(Prim::Text {
-            x: layout.text_x as f32,
-            y: layout.text_y as f32,
-            text: layout.text,
-            color: text_color,
-            size: layout.size as f32,
-            family: self.options.get().layout.font_family.clone(),
-            align: TextAlign::Left,
-            weight: annotation_text_weight(drawing),
-            italic: drawing.text_italic,
-        });
+        let lines = TextBlock::unmeasured(&layout.text, layout.size, drawing.label_v_align());
+        for (x, y, line) in lines.line_anchors(layout.text_x, layout.text_y, 0.0) {
+            out.push(Prim::Text {
+                x: x as f32,
+                y: y as f32,
+                text: line.to_string(),
+                color: text_color,
+                size: layout.size as f32,
+                family: self.options.get().layout.font_family.clone(),
+                align: text_align(drawing.label_align()),
+                weight: drawing_text_weight(drawing),
+                italic: drawing.text_italic,
+            });
+        }
     }
 
     /// A box annotation's painted (box fill, box border, text ink, placeholder ink). Unset box
@@ -4300,16 +4344,17 @@ impl ChartEngine {
         };
         let layout = &self.options.get().layout;
         let size = drawing.resolved_text_size(layout.font_size) * scale;
-        let text_width = self.measure_text_run(
+        let block = self.drawing_text_block(
+            drawing,
             &text,
             size,
+            crate::drawings::DrawingTextVAlign::Middle,
             &layout.font_family,
-            drawing.text_weight.unwrap_or(400),
-            drawing.text_italic,
         );
+        let (text_width, text_height) = (block.width, block.height());
         let padding = 6.0 * scale;
         let tail = 6.0 * scale;
-        let height = size * 1.2 + 8.0 * scale;
+        let height = text_height + 8.0 * scale;
         PriceLabelLayout {
             rect: [
                 anchor.0,

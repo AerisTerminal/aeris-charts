@@ -2212,7 +2212,9 @@ impl ChartEngine {
                 if total_text > MAX_TOTAL_TEXT_BYTES {
                     return Err(resource("drawing text exceeds the document limit"));
                 }
-                drawing.text = text;
+                // Documents written before multi-line labels hold no line breaks, so they load
+                // unchanged; a hand-edited `\r\n` loads as one break.
+                drawing.text = crate::drawings::normalize_drawing_text(&text);
             }
             if let Some(color) = style.text_color {
                 validate_color(&color, "text_color")?;

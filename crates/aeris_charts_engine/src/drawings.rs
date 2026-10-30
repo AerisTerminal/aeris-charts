@@ -28,9 +28,10 @@ mod annotations;
 mod document;
 mod geometry;
 mod icons;
+mod text_block;
 mod tools;
 
-pub(crate) use annotations::{SIGNPOST_PRESET_HEIGHT, annotation_text_weight};
+pub(crate) use annotations::{SIGNPOST_PRESET_HEIGHT, drawing_text_weight};
 pub use document::{DRAWINGS_DOCUMENT_SCHEMA, DRAWINGS_DOCUMENT_VERSION, ImportedDrawing};
 pub(crate) use geometry::{
     DrawingBodyGeometry, DrawingGeometryOptions, FibonacciGeometry, MeasureAxes, MeasureGeometry,
@@ -38,6 +39,8 @@ pub(crate) use geometry::{
     resolve_drawing_geometry,
 };
 pub(crate) use icons::{BUILTIN_ICONS, IconRasterCache, arrow_marker_icon, builtin_icon};
+pub use text_block::normalize_drawing_text;
+pub(crate) use text_block::{LINE_HEIGHT_EM, TextBlock, TextRun};
 pub(crate) use tools::{
     DRAWING_TOOL_SPECS, DrawingHandleMode, DrawingLogicalExtent, DrawingMovementAxis,
     DrawingPlacement, DrawingPriceExtent, DrawingStraightenMode,
@@ -517,8 +520,9 @@ struct DrawingCache {
     media_px: Vec<(f64, f64)>,
     screen_bounds: ScreenBounds,
     text_key: u64,
+    /// The label block's measured width and height (text_block.rs) for culling bounds.
     text_width: f64,
-    text_size: f64,
+    text_height: f64,
     screen_valid: bool,
     geometry_valid: bool,
 }
@@ -534,7 +538,7 @@ impl DrawingCache {
             screen_bounds: ScreenBounds::default(),
             text_key: u64::MAX,
             text_width: 0.0,
-            text_size: 0.0,
+            text_height: 0.0,
             screen_valid: false,
             geometry_valid: false,
         }
@@ -1554,6 +1558,26 @@ impl Drawing {
     /// text removes the drawing (the public reference: no lingering "Add text" ghost on the chart).
     pub fn display_text(&self) -> &str {
         self.text.as_str()
+    }
+
+    /// The alignment the label's lines take at their anchor: box annotations type from their
+    /// box's text start; every other label follows its `text_h_align`.
+    pub(crate) fn label_align(&self) -> DrawingTextHAlign {
+        if self.kind.is_annotation() {
+            DrawingTextHAlign::Left
+        } else {
+            self.text_h_align
+        }
+    }
+
+    /// Which way the label's extra lines grow: box annotations center their lines in the box;
+    /// every other label follows its `text_v_align`.
+    pub(crate) fn label_v_align(&self) -> DrawingTextVAlign {
+        if self.kind.is_annotation() {
+            DrawingTextVAlign::Middle
+        } else {
+            self.text_v_align
+        }
     }
 
     /// The glyph size the label actually renders at in CSS px: `text_size` when set, else
@@ -2650,7 +2674,7 @@ impl Drawing {
             self.snap_time_to_data = snap;
         }
         if let Some(text) = patch.text {
-            self.text = text;
+            self.text = normalize_drawing_text(&text);
         }
         if let Some(css) = patch.text_color {
             update_css_slot(&mut self.text_color, css);
@@ -3918,9 +3942,9 @@ impl ChartEngine {
             extra_x = extra_x.max(160.0);
             extra_y = extra_y.max(24.0);
         }
-        if let Some((width, size)) = text_metrics {
+        if let Some((width, height)) = text_metrics {
             extra_x = extra_x.max(width + TEXT_PAD * 2.0);
-            extra_y = extra_y.max(size * 1.2 + TEXT_PAD * 2.0);
+            extra_y = extra_y.max(height + TEXT_PAD * 2.0);
         }
         entry.screen_bounds = ScreenBounds {
             left: left.min(right) - extra_x,
@@ -3962,9 +3986,9 @@ impl ChartEngine {
             extra_x = extra_x.max(160.0);
             extra_y = extra_y.max(24.0);
         }
-        if let Some((width, size)) = text_metrics {
+        if let Some((width, height)) = text_metrics {
             extra_x = extra_x.max(width + TEXT_PAD * 2.0);
-            extra_y = extra_y.max(size * 1.2 + TEXT_PAD * 2.0);
+            extra_y = extra_y.max(height + TEXT_PAD * 2.0);
         }
         let logical_pad = extra_x / self.time_scale.bar_spacing().max(f64::MIN_POSITIVE);
         let logical_intersects = match bounds.logical {
@@ -4081,38 +4105,40 @@ impl ChartEngine {
             if entry.text_key != key {
                 let (text, _) = self.annotation_text(drawing);
                 let size = drawing.resolved_text_size(font_size);
-                entry.text_width = self.measure_text_run(
+                let block = self.drawing_text_block(
+                    drawing,
                     &text,
                     size,
+                    DrawingTextVAlign::Middle,
                     font_family,
-                    annotation_text_weight(drawing),
-                    drawing.text_italic,
                 );
-                entry.text_size = size;
+                entry.text_width = block.width;
+                entry.text_height = block.height();
                 entry.text_key = key;
             }
-            return Some((entry.text_width + 48.0, entry.text_size + 16.0));
+            return Some((entry.text_width + 48.0, entry.text_height + 20.0));
         }
         if drawing.text.is_empty() && !drawing.kind.edits_text_inline() {
             return None;
         }
         if entry.text_key != key {
             let size = drawing.resolved_text_size(font_size);
-            entry.text_width = if drawing.kind.has_line_text() && drawing.text.is_empty() {
-                self.measure_text_run(
+            let block = if drawing.kind.has_line_text() && drawing.text.is_empty() {
+                self.drawing_text_block(
+                    drawing,
                     LINE_TEXT_PLACEHOLDER,
                     size,
+                    drawing.text_v_align,
                     font_family,
-                    drawing.text_weight.unwrap_or(400),
-                    drawing.text_italic,
                 )
             } else {
-                self.measure_drawing_text_with_family(drawing, size, font_family)
+                self.drawing_label_block_with_family(drawing, size, font_family)
             };
-            entry.text_size = size;
+            entry.text_width = block.width;
+            entry.text_height = block.height();
             entry.text_key = key;
         }
-        Some((entry.text_width, entry.text_size))
+        Some((entry.text_width, entry.text_height))
     }
 
     pub(crate) fn take_drawing_candidates(
@@ -4472,23 +4498,103 @@ impl ChartEngine {
         }
     }
 
-    /// Measure (or estimate) a label's width in the same px units as `size`. Empty text tools
-    /// use one em so the focus/hover chrome and hit target stay a caret-sized box (the host
-    /// never leaves an empty text drawing on the chart after editing).
-    pub(crate) fn measure_drawing_text(&self, drawing: &Drawing, size: f64) -> f64 {
-        let layout = &self.options.get().layout;
-        self.measure_drawing_text_with_family(drawing, size, &layout.font_family)
+    /// The label's run anchor for anchors `px` in the caller's px basis (media px times
+    /// `scale`; `pane_w` in the same basis): box annotations type at their box's text start,
+    /// every other label at its 3×3 placement. Frame construction, hit testing, the painted
+    /// caret, and the host editor all start from this anchor.
+    pub(crate) fn drawing_text_run(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        pane_w: f64,
+        scale: f64,
+    ) -> Option<TextRun> {
+        if let Some(annotation) = self.annotation_layout(drawing, px, scale) {
+            return Some(TextRun {
+                size: annotation.size,
+                x: annotation.text_x,
+                y: annotation.text_y,
+                align: drawing.label_align(),
+                angle: 0.0,
+                v_align: drawing.label_v_align(),
+            });
+        }
+        let pane = self.panes.get(drawing.pane_index)?;
+        let size = drawing.resolved_text_size(self.options.get().layout.font_size) * scale;
+        let (x, y, align, angle) = Self::drawing_text_placement(
+            drawing,
+            px,
+            pane_w,
+            pane.top * scale,
+            pane.height * scale,
+            size,
+            TEXT_PAD * scale,
+        );
+        Some(TextRun {
+            size,
+            x,
+            y,
+            align,
+            angle,
+            v_align: drawing.text_v_align,
+        })
     }
 
-    fn measure_drawing_text_with_family(&self, drawing: &Drawing, size: f64, family: &str) -> f64 {
-        if (drawing.kind == DrawingKind::Text || drawing.kind.is_text_annotation())
-            && drawing.text.is_empty()
+    /// The drawing's own label as a measured line block in the units of `size`. Empty text
+    /// tools and the label being typed keep a one-em slot so the focus/hover chrome, hit
+    /// target, and caret stay a caret-sized box (the host never leaves an empty text drawing on
+    /// the chart after editing).
+    pub(crate) fn drawing_label_block<'a>(&self, drawing: &'a Drawing, size: f64) -> TextBlock<'a> {
+        let layout = &self.options.get().layout;
+        self.drawing_label_block_with_family(drawing, size, &layout.font_family)
+    }
+
+    fn drawing_label_block_with_family<'a>(
+        &self,
+        drawing: &'a Drawing,
+        size: f64,
+        family: &str,
+    ) -> TextBlock<'a> {
+        let mut block = self.drawing_text_block(
+            drawing,
+            drawing.display_text(),
+            size,
+            drawing.label_v_align(),
+            family,
+        );
+        if drawing.kind == DrawingKind::Text
+            || drawing.kind.is_text_annotation()
+            || self.editing_drawing == Some(drawing.id)
         {
-            return size;
+            block.keep_empty_slot(size);
         }
-        let text = drawing.display_text();
-        let weight = drawing.text_weight.unwrap_or(400);
-        self.measure_text_run(text, size, family, weight, drawing.text_italic)
+        block
+    }
+
+    /// Measures runs of `drawing`'s label font at glyph `size`.
+    pub(crate) fn drawing_text_measurer<'a>(
+        &'a self,
+        drawing: &'a Drawing,
+        size: f64,
+    ) -> impl Fn(&str) -> f64 + 'a {
+        let family = &self.options.get().layout.font_family;
+        let weight = drawing_text_weight(drawing);
+        move |text| self.measure_text_run(text, size, family, weight, drawing.text_italic)
+    }
+
+    /// `text` laid out by the shared line rule in the drawing's label font at glyph `size`.
+    pub(crate) fn drawing_text_block<'a>(
+        &self,
+        drawing: &Drawing,
+        text: &'a str,
+        size: f64,
+        v_align: DrawingTextVAlign,
+        family: &str,
+    ) -> TextBlock<'a> {
+        let weight = drawing_text_weight(drawing);
+        TextBlock::measured(text, size, v_align, |line| {
+            self.measure_text_run(line, size, family, weight, drawing.text_italic)
+        })
     }
 
     pub(crate) fn measure_text_run(
@@ -5660,7 +5766,6 @@ impl ChartEngine {
     /// Topmost line label/placeholder at a media-px point. This keeps the browser host from
     /// duplicating text measurement or 3×3 line placement when opening inline edit.
     pub fn drawing_text_hit_at(&self, x: f64, y: f64) -> Option<DrawingId> {
-        let layout = &self.options.get().layout;
         let pane_index = self.pane_at_y(y)?;
         let candidates = self.take_drawing_candidates(pane_index, Some((x, y)));
         let hit = candidates.iter().rev().find_map(|&id| {
@@ -5672,47 +5777,27 @@ impl ChartEngine {
             {
                 return None;
             }
-            let text = if !drawing.text.is_empty() {
-                drawing.display_text()
+            let px = self.drawing_px(drawing)?;
+            let run = self.drawing_text_run(drawing, &px, self.pane_w, 1.0)?;
+            let block = if !drawing.text.is_empty() {
+                self.drawing_label_block(drawing, run.size)
             } else if self.line_text_prompt() == Some(drawing.id)
                 || self.editing_drawing == Some(drawing.id)
             {
                 // An empty line's prompt is only a target once selection shows it.
-                LINE_TEXT_PLACEHOLDER
+                let family = &self.options.get().layout.font_family;
+                self.drawing_text_block(
+                    drawing,
+                    LINE_TEXT_PLACEHOLDER,
+                    run.size,
+                    run.v_align,
+                    family,
+                )
             } else {
                 return None;
             };
-            let px = self.drawing_px(drawing)?;
-            let pane = self.panes.get(drawing.pane_index)?;
-            let size = drawing.resolved_text_size(layout.font_size);
-            let (tx, ty, align, angle) = Self::drawing_text_placement(
-                drawing,
-                &px,
-                self.pane_w,
-                pane.top,
-                pane.height,
-                size,
-                TEXT_PAD,
-            );
-            let width = self.measure_text_run(
-                text,
-                size,
-                &layout.font_family,
-                drawing.text_weight.unwrap_or(400),
-                drawing.text_italic,
-            );
-            let local_x = (x - tx) * angle.cos() + (y - ty) * angle.sin();
-            let local_y = -(x - tx) * angle.sin() + (y - ty) * angle.cos();
-            let left = match align {
-                DrawingTextHAlign::Left => 0.0,
-                DrawingTextHAlign::Center => -width / 2.0,
-                DrawingTextHAlign::Right => -width,
-            };
-            let half_height = size * 0.6;
-            (local_x >= left - TEXT_PAD
-                && local_x <= left + width + TEXT_PAD
-                && local_y >= -half_height - TEXT_PAD
-                && local_y <= half_height + TEXT_PAD)
+            block
+                .contains(run.local((x, y)), run.align, TEXT_PAD)
                 .then_some(drawing.id)
         });
         self.recycle_drawing_candidates(candidates);
@@ -6640,21 +6725,14 @@ impl ChartEngine {
                 // non-empty, else a one-em caret box — empty text paints nothing on the chart)
                 // plus the editing chrome's border+padding, so the painted hover/focus border
                 // is itself hittable.
-                let layout = &self.options.get().layout;
-                let size = drawing.resolved_text_size(layout.font_size);
+                let size = drawing.resolved_text_size(self.options.get().layout.font_size);
                 let reference = geometry.text_box;
                 let (tx, ty, align, _) = Self::text_placement(drawing, &reference, size, TEXT_PAD);
-                let width = self.measure_drawing_text(drawing, size);
-                let height = size * 1.2;
-                let left = match align {
-                    DrawingTextHAlign::Left => tx,
-                    DrawingTextHAlign::Center => tx - width / 2.0,
-                    DrawingTextHAlign::Right => tx - width,
-                };
-                x >= left - TEXT_CHROME_PAD
-                    && x <= left + width + TEXT_CHROME_PAD
-                    && y >= ty - height / 2.0 - TEXT_CHROME_PAD
-                    && y <= ty + height / 2.0 + TEXT_CHROME_PAD
+                self.drawing_label_block(drawing, size).contains(
+                    (x - tx, y - ty),
+                    align,
+                    TEXT_CHROME_PAD,
+                )
             }
         }
     }

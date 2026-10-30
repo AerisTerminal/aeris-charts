@@ -1975,6 +1975,58 @@ test("inline editor caret follows engine geometry for aligned and rotated labels
   }
 });
 
+test("Shift+Enter breaks drawing text into lines, Enter commits them, and paste keeps line breaks", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, p_mid }) => {
+    const drawing = window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], { text: "" });
+    window.__chart.open_text_editor(drawing);
+  }, s);
+  const editor = page.locator("#chart_container #aeris_charts-text-input");
+  await expect(editor).toBeFocused();
+  const layout = () => page.evaluate(() => JSON.parse(window.__chart.wasm.drawing_text_edit_layout_json()));
+  await page.keyboard.type("Entry");
+  await page.keyboard.press("Shift+Enter");
+  await expect(page.locator("#chart_container #aeris_charts-text-editor"), "Shift+Enter keeps editing").toHaveCount(1);
+  let current = await layout();
+  expect([current.line_count, current.caret_line], "a trailing break opens an empty second line").toEqual([2, 1]);
+  await page.keyboard.type("Stop");
+  current = await layout();
+  expect([current.line_count, current.caret_line]).toEqual([2, 1]);
+  expect(current.height).toBeCloseTo(2 * current.line_height, 6);
+  // The DOM caret sits on the engine's caret line, inside a wrap at the block's top edge.
+  const dom = await page.evaluate(() => ({
+    wrap_top: parseFloat(document.querySelector("#aeris_charts-text-editor").style.top),
+    caret_top: parseFloat(document.querySelector("#aeris_charts-text-caret").style.top),
+    dpr: window.devicePixelRatio,
+  }));
+  const snap_tolerance = 1 / dom.dpr + 1e-6;
+  expect(Math.abs(dom.wrap_top - current.top_edge)).toBeLessThanOrEqual(snap_tolerance);
+  expect(Math.abs(dom.wrap_top + dom.caret_top - current.caret_top)).toBeLessThanOrEqual(snap_tolerance);
+  expect(current.caret_top - current.top_edge).toBeCloseTo(current.line_height, 6);
+
+  await page.keyboard.press("Enter");
+  await settle_frames(page);
+  await expect(page.locator("#chart_container #aeris_charts-text-editor")).toHaveCount(0);
+  expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("Entry\nStop");
+
+  // Reopening keeps both lines; a pasted Windows line break lands as one newline, never markup.
+  await page.evaluate(() => window.__chart.open_text_editor(window.__chart.drawings()[0]));
+  await expect(editor).toBeFocused();
+  expect(await layout()).toMatchObject({ line_count: 2, caret_line: 1 });
+  await editor.evaluate((el) => {
+    const data = new DataTransfer();
+    data.setData("text/plain", "\r\nTarget");
+    data.setData("text/html", "<b>ignored</b>");
+    el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  current = await layout();
+  expect([current.line_count, current.caret_line]).toEqual([3, 2]);
+  expect(await editor.evaluate((el) => el.querySelector("b"))).toBeNull();
+  await page.keyboard.press("Enter");
+  expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("Entry\nStop\nTarget");
+});
+
 test("text tool: first click selects (focus border), a second click opens typing mode; Escape cancels", async ({ page }) => {
   await goto_fixture(page);
   // No crosshair pixels near the probes.

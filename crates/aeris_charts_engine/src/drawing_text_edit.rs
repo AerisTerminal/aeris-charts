@@ -1,21 +1,28 @@
-//! Engine-owned typing session for text-capable drawings (standalone text and line labels).
+//! Engine-owned typing session for text-capable drawings (standalone text, box annotations,
+//! and line labels).
 //!
 //! The session owns the product rules every host shares: live text updates, caret position,
-//! Enter/Escape semantics, and the empty lifecycle (an empty standalone text drawing is removed;
-//! an empty trend label simply has no label). Hosts only forward committed text input and editing
-//! keys. A browser host may keep its native editable surface for IME, clipboard, and accessibility
-//! and mirror it through [`ChartEngine::set_drawing_text_edit`]; native hosts ask the engine to
-//! paint the caret in the canonical frame.
+//! Enter/Shift+Enter/Escape semantics, and the empty lifecycle (an empty standalone text drawing
+//! is removed; an empty trend label simply has no label). Labels are multi-line: `\n` separates
+//! lines laid out by the shared line rule (drawings/text_block.rs), and caret motion follows that
+//! measured layout. Hosts only forward committed text input and editing keys. A browser host may
+//! keep its native editable surface for IME, clipboard, and accessibility and mirror it through
+//! [`ChartEngine::set_drawing_text_edit`]; native hosts ask the engine to paint the caret and
+//! the selection in the canonical frame.
 
 use crate::ChartEngine;
-use crate::drawings::{DrawingId, DrawingKind};
+use crate::drawings::{
+    DrawingId, DrawingKind, DrawingTextHAlign, drawing_text_weight, normalize_drawing_text,
+};
 
 /// Largest label the drawing contract accepts, in UTF-8 bytes.
-const MAX_DRAWING_TEXT_BYTES: usize = 256;
+pub(crate) const MAX_DRAWING_TEXT_BYTES: usize = 256;
 
 /// Editing keys a host forwards while a drawing text session is open. Movement keys extend the
 /// selection when the host passes `extend_selection` (Shift); word variants follow the host's
-/// word modifier (Ctrl on Windows/Linux, Alt/Option on macOS).
+/// word modifier (Ctrl on Windows/Linux, Alt/Option on macOS). `Home`/`End` go to the caret
+/// line's start and end; `Up`/`Down` move to the neighboring line at the nearest measured x,
+/// or to the label's start or end from its first or last line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrawingTextEditKey {
     Backspace,
@@ -28,10 +35,13 @@ pub enum DrawingTextEditKey {
     WordRight,
     Home,
     End,
+    Up,
+    Down,
 }
 
-/// The browser's transparent editing surface follows this engine-owned text run and caret.
-/// Coordinates are CSS-logical media pixels in the chart overlay's space.
+/// The browser's transparent editing surface follows this engine-owned line block and caret.
+/// Coordinates are CSS-logical media pixels in the chart overlay's space; edges and the caret
+/// are given before the label's rotation by `angle` around the anchor.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DrawingTextEditLayout<'a> {
     pub anchor_x: f64,
@@ -41,9 +51,20 @@ pub struct DrawingTextEditLayout<'a> {
     pub font_family: &'a str,
     pub font_weight: u16,
     pub font_italic: bool,
+    /// The alignment every line takes at the anchor.
+    pub align: DrawingTextHAlign,
+    /// The line block: its left and top edges, its width (the widest line, one em while empty),
+    /// and its height (one line box per line).
     pub left_edge: f64,
+    pub top_edge: f64,
     pub advance: f64,
+    pub height: f64,
+    pub line_height: f64,
+    pub line_count: usize,
+    /// The caret: its line, its x, and the top of its line box.
+    pub caret_line: usize,
     pub caret_x: f64,
+    pub caret_top: f64,
     /// The ink the frame paints the label with, for a host-drawn caret.
     pub ink: aeris_charts_render::color::Color,
 }
@@ -55,8 +76,8 @@ pub(crate) struct DrawingTextEditSession {
     pub(crate) text: String,
     /// Caret position in `char`s from the start of `text`.
     pub(crate) caret: usize,
-    /// Selection anchor in `char`s; the selection spans anchor..caret. Like the browser editor,
-    /// the selection is not painted, but typing, deletion, copy, and cut all honor it.
+    /// Selection anchor in `char`s; the selection spans anchor..caret. Typing, deletion, copy,
+    /// and cut all honor it, and the frame paints it wherever it paints the caret.
     anchor: Option<usize>,
     /// Native hosts have no editable surface of their own, so the frame paints the caret.
     pub(crate) paint_caret: bool,
@@ -69,13 +90,6 @@ pub(crate) struct DrawingTextEditSession {
 
 /// Half of the painted caret's blink cycle (the common platform 1.06 s rate).
 pub(crate) const CARET_BLINK_MS: f64 = 530.0;
-
-/// Labels are single-line: line breaks and other control characters become spaces.
-fn sanitize(text: &str) -> String {
-    text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
-}
 
 /// Start of the word before `caret`: skip whitespace leftwards, then the word itself.
 fn word_left(chars: &[char], caret: usize) -> usize {
@@ -105,6 +119,15 @@ fn byte_index(text: &str, caret: usize) -> usize {
     text.char_indices()
         .nth(caret)
         .map_or(text.len(), |(index, _)| index)
+}
+
+impl DrawingTextEditSession {
+    /// The selected `char` range, if any.
+    pub(crate) fn selection(&self) -> Option<(usize, usize)> {
+        self.anchor
+            .filter(|&anchor| anchor != self.caret)
+            .map(|anchor| (anchor.min(self.caret), anchor.max(self.caret)))
+    }
 }
 
 impl ChartEngine {
@@ -145,63 +168,34 @@ impl ChartEngine {
             .map(|session| (session.id, session.text.as_str(), session.caret))
     }
 
-    /// Resolve the open editor from the same placement and text measurements as the frame.
+    /// Resolve the open editor from the same run, line layout, and text measurements as the
+    /// frame.
     pub fn drawing_text_edit_layout(&self) -> Option<DrawingTextEditLayout<'_>> {
         let session = self.drawing_text_edit.as_ref()?;
         let drawing = self.drawing(session.id)?;
         let px = self.drawing_px(drawing)?;
-        let pane = self.panes.get(drawing.pane_index)?;
-        let layout = &self.options.get().layout;
-        let font_size = drawing.resolved_text_size(layout.font_size);
-        // Box annotations type at their box's text start (the same layout the frame paints).
-        let (anchor_x, anchor_y, align, angle) = match self.annotation_layout(drawing, &px, 1.0) {
-            Some(annotation) => (
-                annotation.text_x,
-                annotation.text_y,
-                crate::drawings::DrawingTextHAlign::Left,
-                0.0,
-            ),
-            None => Self::drawing_text_placement(
-                drawing,
-                &px,
-                self.pane_w,
-                pane.top,
-                pane.height,
-                font_size,
-                crate::drawings::TEXT_PAD,
-            ),
-        };
-        let measure = |text: &str| {
-            self.measure_text_run(
-                text,
-                font_size,
-                &layout.font_family,
-                drawing.text_weight.unwrap_or(400),
-                drawing.text_italic,
-            )
-        };
-        let advance = if session.text.is_empty() {
-            font_size
-        } else {
-            measure(&session.text)
-        };
-        let start = match align {
-            crate::drawings::DrawingTextHAlign::Left => 0.0,
-            crate::drawings::DrawingTextHAlign::Center => -advance / 2.0,
-            crate::drawings::DrawingTextHAlign::Right => -advance,
-        };
-        let prefix: String = session.text.chars().take(session.caret).collect();
+        let run = self.drawing_text_run(drawing, &px, self.pane_w, 1.0)?;
+        let block = self.drawing_label_block(drawing, run.size);
+        let measure = self.drawing_text_measurer(drawing, run.size);
+        let (line, prefix) = block.caret_prefix(session.caret);
         Some(DrawingTextEditLayout {
-            anchor_x,
-            anchor_y,
-            angle,
-            font_size,
-            font_family: &layout.font_family,
-            font_weight: drawing.text_weight.unwrap_or(400),
+            anchor_x: run.x,
+            anchor_y: run.y,
+            angle: run.angle,
+            font_size: run.size,
+            font_family: &self.options.get().layout.font_family,
+            font_weight: drawing_text_weight(drawing),
             font_italic: drawing.text_italic,
-            left_edge: anchor_x + start,
-            advance,
-            caret_x: anchor_x + start + measure(&prefix).ceil(),
+            align: run.align,
+            left_edge: run.x + block.left(run.align),
+            top_edge: run.y + block.top(),
+            advance: block.width,
+            height: block.height(),
+            line_height: block.line_height,
+            line_count: block.lines.len(),
+            caret_line: line,
+            caret_x: run.x + block.line_left(line, run.align) + measure(prefix).ceil(),
+            caret_top: run.y + block.line_center(line) - block.line_height / 2.0,
             ink: self.drawing_text_color(drawing),
         })
     }
@@ -253,18 +247,10 @@ impl ChartEngine {
         }
     }
 
-    /// The selected `char` range, if any.
-    fn drawing_text_edit_range(session: &DrawingTextEditSession) -> Option<(usize, usize)> {
-        session
-            .anchor
-            .filter(|&anchor| anchor != session.caret)
-            .map(|anchor| (anchor.min(session.caret), anchor.max(session.caret)))
-    }
-
     /// The selected text of the open session (for host copy/cut), if any.
     pub fn drawing_text_edit_selection(&self) -> Option<&str> {
         let session = self.drawing_text_edit.as_ref()?;
-        let (start, end) = Self::drawing_text_edit_range(session)?;
+        let (start, end) = session.selection()?;
         let text = session.text.as_str();
         Some(&text[byte_index(text, start)..byte_index(text, end)])
     }
@@ -284,15 +270,17 @@ impl ChartEngine {
         true
     }
 
-    /// Insert committed text input at the caret, replacing any selection. Input that would exceed
-    /// the label limit is rejected whole so a paste never lands half-applied.
+    /// Insert committed text input at the caret, replacing any selection. Line breaks are kept
+    /// (`\r\n` and `\r` become `\n`); other control characters become spaces. Input that
+    /// would exceed the label limit is rejected whole so a paste never lands half-applied.
     pub fn drawing_text_edit_insert(&mut self, input: &str) -> bool {
         let Some(session) = self.drawing_text_edit.as_ref() else {
             return false;
         };
-        let input = sanitize(input);
-        let (start, end) =
-            Self::drawing_text_edit_range(session).unwrap_or((session.caret, session.caret));
+        let input = normalize_drawing_text(input);
+        let (start, end) = session
+            .selection()
+            .unwrap_or((session.caret, session.caret));
         let mut text = session.text.clone();
         let (from, to) = (byte_index(&text, start), byte_index(&text, end));
         if input.is_empty() || text.len() - (to - from) + input.len() > MAX_DRAWING_TEXT_BYTES {
@@ -301,6 +289,15 @@ impl ChartEngine {
         text.replace_range(from..to, &input);
         let caret = start + input.chars().count();
         self.apply_drawing_text_edit_with_anchor(text, caret, None)
+    }
+
+    /// Enter: Shift+Enter (`line_break`) inserts a line break at the caret; plain Enter commits.
+    pub fn drawing_text_edit_enter(&mut self, line_break: bool) -> bool {
+        if line_break {
+            self.drawing_text_edit_insert("\n")
+        } else {
+            self.commit_drawing_text_edit()
+        }
     }
 
     /// Apply one editing key; `extend_selection` (Shift) turns movement into selection.
@@ -316,7 +313,7 @@ impl ChartEngine {
         let chars: Vec<char> = session.text.chars().collect();
         let len = chars.len();
         let caret = session.caret.min(len);
-        let range = Self::drawing_text_edit_range(session);
+        let range = session.selection();
         let deletion = match key {
             DrawingTextEditKey::Backspace => Some((caret.saturating_sub(1), caret)),
             DrawingTextEditKey::Delete => Some((caret, (caret + 1).min(len))),
@@ -344,8 +341,7 @@ impl ChartEngine {
                 DrawingTextEditKey::Right => (caret + 1).min(len),
                 DrawingTextEditKey::WordLeft => word_left(&chars, caret),
                 DrawingTextEditKey::WordRight => word_right(&chars, caret),
-                DrawingTextEditKey::Home => 0,
-                _ => len,
+                key => self.drawing_text_edit_line_target(key, caret, len),
             };
             let anchor = extend_selection.then(|| session.anchor.unwrap_or(caret));
             (session.text.clone(), target, anchor)
@@ -356,8 +352,45 @@ impl ChartEngine {
         self.apply_drawing_text_edit_with_anchor(text, next_caret, anchor)
     }
 
+    /// Where a line-aware motion key moves the caret, from the label's measured line layout:
+    /// `Home`/`End` to the caret line's ends, `Up`/`Down` to the neighboring line's
+    /// boundary nearest the caret's x (the label's start or end past the first or last line).
+    fn drawing_text_edit_line_target(
+        &self,
+        key: DrawingTextEditKey,
+        caret: usize,
+        len: usize,
+    ) -> usize {
+        let up = matches!(key, DrawingTextEditKey::Home | DrawingTextEditKey::Up);
+        let Some(drawing) = self
+            .drawing_text_edit
+            .as_ref()
+            .and_then(|session| self.drawing(session.id))
+        else {
+            return if up { 0 } else { len };
+        };
+        let size = drawing.resolved_text_size(self.options.get().layout.font_size);
+        let block = self.drawing_label_block(drawing, size);
+        let (line, prefix) = block.caret_prefix(caret);
+        let current = &block.lines[line];
+        let target = match key {
+            DrawingTextEditKey::Home => return current.start,
+            DrawingTextEditKey::End => return current.start + current.text.chars().count(),
+            DrawingTextEditKey::Up => line.checked_sub(1),
+            _ => Some(line + 1).filter(|&next| next < block.lines.len()),
+        };
+        let Some(target) = target else {
+            return if up { 0 } else { len };
+        };
+        let align = drawing.label_align();
+        let measure = self.drawing_text_measurer(drawing, size);
+        let x = block.line_left(line, align) + measure(prefix);
+        block.caret_near(target, x, align, measure).min(len)
+    }
+
     /// Place the caret at the character boundary nearest a media-px pointer, in the label's
-    /// rotated coordinates (the browser editor's click-to-place behavior for native hosts).
+    /// rotated coordinates: on the line nearest the pointer, at that line's nearest boundary
+    /// (the browser editor's click-to-place behavior for native hosts).
     pub fn drawing_text_edit_caret_at(&mut self, x: f64, y: f64) -> bool {
         let Some(session) = self.drawing_text_edit.as_ref() else {
             return false;
@@ -368,47 +401,17 @@ impl ChartEngine {
         let Some(px) = self.drawing_px(drawing) else {
             return false;
         };
-        let Some(pane) = self.panes.get(drawing.pane_index) else {
+        let Some(run) = self.drawing_text_run(drawing, &px, self.pane_w, 1.0) else {
             return false;
         };
-        let layout = &self.options.get().layout;
-        let size = drawing.resolved_text_size(layout.font_size);
-        let (tx, ty, align, angle) = Self::drawing_text_placement(
-            drawing,
-            &px,
-            self.pane_w,
-            pane.top,
-            pane.height,
-            size,
-            crate::drawings::TEXT_PAD,
+        let block = self.drawing_label_block(drawing, run.size);
+        let (local_x, local_y) = run.local((x, y));
+        let caret = block.caret_near(
+            block.line_near(local_y),
+            local_x,
+            run.align,
+            self.drawing_text_measurer(drawing, run.size),
         );
-        let measure = |text: &str| {
-            self.measure_text_run(
-                text,
-                size,
-                &layout.font_family,
-                drawing.text_weight.unwrap_or(400),
-                drawing.text_italic,
-            )
-        };
-        let text = session.text.as_str();
-        let advance = if text.is_empty() { size } else { measure(text) };
-        let start = match align {
-            crate::drawings::DrawingTextHAlign::Left => 0.0,
-            crate::drawings::DrawingTextHAlign::Center => -advance / 2.0,
-            crate::drawings::DrawingTextHAlign::Right => -advance,
-        };
-        let local_x = (x - tx) * angle.cos() + (y - ty) * angle.sin() - start;
-        let mut best = (0, local_x.abs());
-        let mut prefix = String::with_capacity(text.len());
-        for (index, c) in text.chars().enumerate() {
-            prefix.push(c);
-            let distance = (measure(&prefix) - local_x).abs();
-            if distance < best.1 {
-                best = (index + 1, distance);
-            }
-        }
-        let caret = best.0;
         if caret == session.caret && session.anchor.is_none() {
             return false;
         }
@@ -422,7 +425,7 @@ impl ChartEngine {
         if self.drawing_text_edit.is_none() {
             return false;
         }
-        let text = sanitize(text);
+        let text = normalize_drawing_text(text);
         if text.len() > MAX_DRAWING_TEXT_BYTES {
             return false;
         }
@@ -430,8 +433,9 @@ impl ChartEngine {
         self.apply_drawing_text_edit(text, caret)
     }
 
-    /// Enter / blur: keep the typed text. An empty standalone text drawing is removed; an empty
-    /// trend label leaves the line without a label.
+    /// Enter / blur: keep the typed text, trimmed of surrounding whitespace and blank lines. An
+    /// empty standalone text drawing is removed; an empty trend label leaves the line without a
+    /// label.
     pub fn commit_drawing_text_edit(&mut self) -> bool {
         let Some(session) = self.drawing_text_edit.take() else {
             return false;
@@ -641,9 +645,9 @@ mod tests {
         assert!(chart.drawing_text_edit_insert("ea"));
         assert_eq!(chart.drawing_text_edit(), Some((id, "Breakout", 4)));
         chart.drawing_text_edit_key(DrawingTextEditKey::End, false);
-        assert!(chart.drawing_text_edit_insert("\nnow"));
+        assert!(chart.drawing_text_edit_insert("\r\nnow"));
         assert!(chart.commit_drawing_text_edit());
-        assert_eq!(text(&chart, id).as_deref(), Some("Breakout now"));
+        assert_eq!(text(&chart, id).as_deref(), Some("Breakout\nnow"));
         assert_eq!(chart.editing_drawing(), None);
         assert!(chart.drawing_text_edit().is_none());
     }
@@ -758,6 +762,140 @@ mod tests {
         assert_eq!(chart.drawing_text_edit(), Some((id, "abcd", 3)));
         assert!(chart.drawing_text_edit_caret_at(x - 30.0, y));
         assert_eq!(chart.drawing_text_edit(), Some((id, "abcd", 0)));
+    }
+
+    /// A measurer whose advance is 10 px per char, so line widths are exact.
+    fn fixed_width(chart: &mut ChartEngine) {
+        chart.set_text_measure(Some(Box::new(|text, _, _, _, _| {
+            text.chars().count() as f64 * 10.0
+        })));
+    }
+
+    #[test]
+    fn every_entry_path_keeps_line_breaks_and_flattens_other_controls() {
+        let (mut chart, id) = chart_with(DrawingKind::Text, "");
+        assert!(chart.begin_drawing_text_edit(id, true));
+        assert!(chart.drawing_text_edit_insert("a\r\nb\tc"));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "a\nb c", 5)));
+        assert!(chart.drawing_text_edit_enter(true));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "a\nb c\n", 6)));
+        assert!(chart.set_drawing_text_edit("x\ry\u{7}", 3));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "x\ny ", 3)));
+        // Plain Enter commits, trimming the surrounding blank space but keeping inner breaks.
+        assert!(chart.set_drawing_text_edit("\n top\n\nbottom \n", 0));
+        assert!(chart.drawing_text_edit_enter(false));
+        assert_eq!(text(&chart, id).as_deref(), Some("top\n\nbottom"));
+        assert!(chart.drawing_apply_options(id, r#"{"text":"api\r\nset"}"#));
+        assert_eq!(text(&chart, id).as_deref(), Some("api\nset"));
+    }
+
+    #[test]
+    fn the_settings_session_stores_exactly_the_public_normalization() {
+        let (mut chart, id) = chart_with(DrawingKind::Text, "");
+        let typed = "first\r\nsecond\rthird\tend\u{1b}";
+        assert!(chart.begin_drawing_options_edit(id));
+        let patch = serde_json::json!({ "text": typed }).to_string();
+        assert!(chart.drawing_apply_options(id, &patch));
+        assert!(chart.commit_drawing_options_edit());
+        let expected = crate::normalize_drawing_text(typed);
+        assert_eq!(expected, "first\nsecond\nthird end ");
+        assert_eq!(text(&chart, id).as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn the_editor_layout_spans_every_line_and_follows_the_caret_line() {
+        let (mut chart, id) = chart_with(DrawingKind::Text, "");
+        fixed_width(&mut chart);
+        assert!(chart.drawing_apply_options(
+            id,
+            r#"{"text":"ab\nabcd","text_h_align":"center","text_v_align":"bottom","text_size":10}"#
+        ));
+        chart.build_frame();
+        assert!(chart.begin_drawing_text_edit(id, false));
+        let layout = chart.drawing_text_edit_layout().expect("live layout");
+        let (x, y) = (layout.anchor_x, layout.anchor_y);
+        assert_eq!(layout.align, DrawingTextHAlign::Center);
+        assert_eq!((layout.line_count, layout.line_height), (2, 12.0));
+        // The block is the widest line wide and two line boxes tall, growing down from the
+        // one-line slot for a bottom label.
+        assert_eq!((layout.advance, layout.height), (40.0, 24.0));
+        assert_eq!((layout.left_edge, layout.top_edge), (x - 20.0, y - 6.0));
+        // The caret ends the second line, which is centered on the anchor by itself.
+        assert_eq!(layout.caret_line, 1);
+        assert_eq!(layout.caret_x, x + 20.0);
+        assert_eq!(layout.caret_top, y + 6.0);
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Up, false));
+        let layout = chart.drawing_text_edit_layout().expect("live layout");
+        assert_eq!(chart.drawing_text_edit(), Some((id, "ab\nabcd", 2)));
+        assert_eq!((layout.caret_line, layout.caret_x), (0, x + 10.0));
+        assert_eq!(layout.caret_top, y - 6.0);
+    }
+
+    #[test]
+    fn clicks_place_the_caret_on_the_nearest_line_and_backspace_joins_lines() {
+        let (mut chart, id) = chart_with(DrawingKind::Text, "");
+        fixed_width(&mut chart);
+        assert!(chart.drawing_apply_options(
+            id,
+            r#"{"text":"abc\nde","text_h_align":"left","text_v_align":"bottom","text_size":10}"#
+        ));
+        chart.build_frame();
+        assert!(chart.begin_drawing_text_edit(id, true));
+        let (x, y, _) = chart.drawing_text_transform(id).unwrap();
+        // The second line's box spans y + 6 ..= y + 18.
+        assert!(chart.drawing_text_edit_caret_at(x + 11.0, y + 14.0));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abc\nde", 5)));
+        assert!(chart.drawing_text_edit_caret_at(x + 100.0, y + 40.0));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abc\nde", 6)));
+        assert!(chart.drawing_text_edit_caret_at(x + 21.0, y - 30.0));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abc\nde", 2)));
+        // Backspace at a line start joins it to the line above; Delete at a line end likewise.
+        assert!(chart.drawing_text_edit_caret_at(x, y + 12.0));
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Backspace, false));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abcde", 3)));
+        assert!(chart.drawing_text_edit_enter(true));
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Left, false));
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Delete, false));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abcde", 3)));
+        // Shift+Down on the last line selects to the label's end.
+        assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Down, true));
+        assert_eq!(chart.drawing_text_edit_selection(), Some("de"));
+    }
+
+    #[test]
+    fn line_labels_and_box_annotations_grow_with_every_line() {
+        let (mut chart, line) = chart_with(DrawingKind::HorizontalLine, "");
+        fixed_width(&mut chart);
+        assert!(chart.drawing_apply_options(
+            line,
+            r#"{"text":"one\ntwo","text_v_align":"top","text_h_align":"center","text_size":10}"#
+        ));
+        chart.build_frame();
+        // A top label grows upward: its second line holds the one-line slot, the first sits a
+        // line above it, and both are text targets.
+        let (x, y, _) = chart.drawing_text_transform(line).unwrap();
+        assert_eq!(chart.drawing_text_hit_at(x, y), Some(line));
+        assert_eq!(chart.drawing_text_hit_at(x, y - 12.0), Some(line));
+        assert_eq!(chart.drawing_text_hit_at(x, y - 30.0), None);
+
+        let (mut chart, note) = chart_with(DrawingKind::Note, "");
+        fixed_width(&mut chart);
+        chart.build_frame();
+        let height = |chart: &ChartEngine| {
+            let drawing = chart.drawing(note).unwrap();
+            let px = chart.drawing_px(drawing).unwrap();
+            chart.annotation_layout(drawing, &px, 1.0).unwrap().rect[3]
+        };
+        assert!(chart.drawing_apply_options(note, r#"{"text":"one","text_size":10}"#));
+        let one = height(&chart);
+        assert!(chart.drawing_apply_options(note, r#"{"text":"one\ntwo\nsix","text_size":10}"#));
+        assert_eq!(height(&chart), one + 24.0);
+        // The editor types on the box's centered block, from its first line's top.
+        assert!(chart.begin_drawing_text_edit(note, false));
+        let layout = chart.drawing_text_edit_layout().expect("live layout");
+        assert_eq!((layout.height, layout.line_count), (36.0, 3));
+        assert_eq!(layout.top_edge, layout.anchor_y - 18.0);
+        assert_eq!(layout.caret_top, layout.anchor_y + 6.0);
     }
 
     #[test]

@@ -3710,6 +3710,62 @@ function apply_tracking(v: tracking_mode_options, cfg: resolved_gestures): void 
   cfg.tracking_exit_mode = v.exit_mode ?? cfg.tracking_exit_mode;
 }
 
+/** Marks the `<br>` the editor keeps after a final line break so the DOM lays out that empty line. */
+const LAST_LINE_BREAK = "aerisLastLine";
+
+/**
+ * Read a drawing-text editing surface as the plain text the engine edits, never its markup:
+ * text nodes verbatim, a `<br>` as a line break unless it ends its block (the browser's
+ * empty-line placeholder) or is the editor's own last-line placeholder, and a line break around
+ * block children. With `stop`, reads only up to that DOM caret position, so caret offsets count
+ * exactly what the full read returns.
+ */
+function read_editor_text(root: HTMLElement, stop?: { node: Node; offset: number }): string {
+  let out = "";
+  let break_pending = false;
+  let done = false;
+  const line_break = () => {
+    if (out !== "" && !out.endsWith("\n")) out += "\n";
+    break_pending = false;
+  };
+  const emit = (value: string) => {
+    if (value === "") return;
+    if (break_pending) line_break();
+    out += value;
+  };
+  const visit = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const value = node.nodeValue ?? "";
+      if (node === stop?.node) {
+        emit(value.slice(0, stop.offset));
+        done = true;
+      } else {
+        emit(value);
+      }
+      return;
+    }
+    if (!(node instanceof HTMLElement)) return;
+    if (node.tagName === "BR") {
+      if (node.nextSibling !== null && !(LAST_LINE_BREAK in node.dataset)) emit("\n");
+      return;
+    }
+    const block = node !== root && (node.tagName === "DIV" || node.tagName === "P");
+    if (block) line_break();
+    for (const [index, child] of Array.from(node.childNodes).entries()) {
+      if (node === stop?.node && index === stop.offset) {
+        done = true;
+        return;
+      }
+      visit(child);
+      if (done) return;
+    }
+    if (node === stop?.node) done = true;
+    else if (block) break_pending = true;
+  };
+  visit(root);
+  return out;
+}
+
 class trading_impl implements trading_api {
   private readonly intent_handlers = new Set<trading_intent_handler>();
 
@@ -7056,8 +7112,8 @@ export class chart_impl implements chart_api {
    * Open the typing-mode editor for a text drawing (the public reference's overlay-caret model): a
    * borderless wrap whose glyphs are TRANSPARENT — the engine keeps painting both the label
    * and the focus border underneath, so entering edit cannot lift the text or shift the
-   * outline. Each keystroke pushes the text into the engine live; Enter/blur commits, Escape
-   * restores the pre-edit text. Leaving empty removes the drawing.
+   * outline. Each keystroke pushes the text into the engine live; Shift+Enter breaks the line,
+   * Enter/blur commits, Escape restores the pre-edit text. Leaving empty removes the drawing.
    */
   open_text_editor(drawing: drawing_api): void {
     this.open_inline_editor(drawing);
@@ -7070,7 +7126,10 @@ export class chart_impl implements chart_api {
     type edit_layout = {
       anchor_x: number; anchor_y: number; angle: number; font_size: number;
       font_family: string; font_weight: number; font_italic: boolean;
-      left_edge: number; advance: number; caret_x: number; ink: string;
+      align: "left" | "center" | "right";
+      left_edge: number; top_edge: number; advance: number; height: number;
+      line_height: number; line_count: number; caret_line: number; caret_x: number; caret_top: number;
+      ink: string;
     };
     const read_layout = (): edit_layout | null =>
       JSON.parse(this.wasm.drawing_text_edit_layout_json()) as edit_layout | null;
@@ -7119,7 +7178,8 @@ export class chart_impl implements chart_api {
     editor.style.padding = "0";
     editor.style.margin = "0";
     editor.style.display = "block";
-    editor.style.whiteSpace = "nowrap";
+    // Preserved spaces and line breaks lay the DOM lines out as the engine's line block does.
+    editor.style.whiteSpace = "pre";
     editor.style.minWidth = `${font_size}px`;
 
     const caret = document.createElement("span");
@@ -7154,6 +7214,8 @@ export class chart_impl implements chart_api {
       editor.style.lineHeight = `${size * 1.2}px`;
       editor.style.minWidth = `${size}px`;
       editor.style.width = `${Math.ceil(current.advance) + 1}px`;
+      editor.style.height = `${current.height}px`;
+      editor.style.textAlign = current.align;
       // A one-device-pixel caret on whole device pixels keeps one thickness wherever it moves; a
       // 1 CSS px bar at a fractional offset would smear across two pixels at some positions.
       // Snapping happens in page space: the chart container itself may sit at a fractional offset.
@@ -7161,19 +7223,18 @@ export class chart_impl implements chart_api {
       const origin = this.container.getBoundingClientRect();
       const snap_x = (value: number) => Math.round((value + origin.left) * dpr) / dpr - origin.left;
       const snap_y = (value: number) => Math.round((value + origin.top) * dpr) / dpr - origin.top;
-      const top = current.anchor_y - size * 0.6;
       // Browser 1 px rule semantics: whole device pixels, rounded down, at least one.
       caret.style.width = `${Math.max(1, Math.floor(dpr)) / dpr}px`;
-      caret.style.height = `${snap_y(top + size * 1.2) - snap_y(top)}px`;
+      caret.style.height = `${snap_y(current.caret_top + current.line_height) - snap_y(current.caret_top)}px`;
       // The wrap itself sits on whole device pixels, so the caret offset inside it is a whole
       // number of device pixels too and layout rounding cannot split the bar across two pixels.
       const wrap_left = snap_x(current.left_edge);
-      const wrap_top = snap_y(top);
+      const wrap_top = snap_y(current.top_edge);
       caret.style.left = `${snap_x(current.caret_x) - wrap_left}px`;
-      caret.style.top = "0";
+      caret.style.top = `${snap_y(current.caret_top) - wrap_top}px`;
       wrap.style.left = `${wrap_left}px`;
       wrap.style.top = `${wrap_top}px`;
-      wrap.style.transformOrigin = `${current.anchor_x - wrap_left}px ${top + size * 0.6 - wrap_top}px`;
+      wrap.style.transformOrigin = `${current.anchor_x - wrap_left}px ${current.anchor_y - wrap_top}px`;
       wrap.style.transform = `rotate(${current.angle}rad)`;
       return true;
     };
@@ -7182,15 +7243,26 @@ export class chart_impl implements chart_api {
     const caret_offset = (text: string) => {
       const selection = window.getSelection();
       if (selection?.anchorNode && editor.contains(selection.anchorNode)) {
-        const prefix = document.createRange();
-        prefix.selectNodeContents(editor);
-        prefix.setEnd(selection.anchorNode, selection.anchorOffset);
-        return Array.from(prefix.toString()).length;
+        const prefix = read_editor_text(editor, { node: selection.anchorNode, offset: selection.anchorOffset });
+        return Array.from(prefix).length;
       }
       return Array.from(text).length;
     };
+    // A text that ends in a line break needs a trailing `<br>` for the DOM to lay out its empty
+    // last line; the reader never counts that placeholder.
+    const keep_last_line = (text: string) => {
+      const placeholder = Array.from(editor.querySelectorAll("br")).find((node) => LAST_LINE_BREAK in node.dataset);
+      const needed = text.endsWith("\n");
+      if (placeholder !== undefined && (!needed || placeholder !== editor.lastChild)) placeholder.remove();
+      if (needed && (placeholder === undefined || placeholder !== editor.lastChild)) {
+        const line_break = document.createElement("br");
+        line_break.dataset[LAST_LINE_BREAK] = "";
+        editor.appendChild(line_break);
+      }
+    };
     const push_live_text = () => {
-      const text = (editor.textContent ?? "").replace(/\s*\n\s*/g, " ");
+      const text = read_editor_text(editor);
+      keep_last_line(text);
       this.wasm.set_drawing_text_edit(text, caret_offset(text));
       this.repaint();
     };
@@ -7200,17 +7272,41 @@ export class chart_impl implements chart_api {
       restart_caret_blink();
     };
     const sync_caret = () => {
-      const text = editor.textContent ?? "";
+      const text = read_editor_text(editor);
       this.wasm.set_drawing_text_edit(text, caret_offset(text));
       position_editor();
       restart_caret_blink();
     };
+    // Line breaks and pasted text enter as plain text nodes, never browser markup, so the
+    // editable surface always reads back as exactly the text the engine holds.
+    const insert_plain_text = (value: string) => {
+      const selection = window.getSelection();
+      if (selection === null || selection.rangeCount === 0) return;
+      const range = selection.getRangeAt(0);
+      if (!editor.contains(range.commonAncestorContainer)) return;
+      range.deleteContents();
+      const node = document.createTextNode(value);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      sync_editor();
+    };
     editor.addEventListener("input", sync_editor);
     editor.addEventListener("keyup", sync_caret);
     editor.addEventListener("pointerup", sync_caret);
+    editor.addEventListener("paste", (e) => {
+      e.preventDefault();
+      const pasted = e.clipboardData?.getData("text/plain") ?? "";
+      if (pasted !== "") insert_plain_text(pasted.replace(/\r\n?/g, "\n"));
+    });
     editor.addEventListener("keydown", (e) => {
       e.stopPropagation();
-      if (e.key === "Enter") {
+      if (e.key === "Enter" && e.shiftKey) {
+        e.preventDefault();
+        insert_plain_text("\n");
+      } else if (e.key === "Enter") {
         e.preventDefault();
         this.close_text_editor(true);
       } else if (e.key === "Escape") {
@@ -7261,7 +7357,7 @@ export class chart_impl implements chart_api {
     wrap?.remove();
     // Commit/cancel semantics (trim, restore, empty standalone removal) are engine-owned so
     // every host shares them; the final DOM value is mirrored first.
-    const text = (editor.textContent ?? "").replace(/\s*\n\s*/g, " ");
+    const text = read_editor_text(editor);
     this.wasm.set_drawing_text_edit(text, Array.from(text).length);
     if (commit) this.wasm.commit_drawing_text_edit();
     else this.wasm.cancel_drawing_text_edit();

@@ -329,8 +329,8 @@ const fn command_shortcut(event: &KeyDownEvent) -> bool {
     (modifiers.control || modifiers.platform) && !modifiers.alt && !event.prefer_character_input
 }
 
-/// Clipboard shortcuts inside the typing session; pasted text is flattened to one line by the
-/// engine. Returns whether the key was a clipboard command.
+/// Clipboard shortcuts inside the typing session; pasted text keeps its line breaks (the engine
+/// normalizes them). Returns whether the key was a clipboard command.
 fn clipboard_key(engine: &mut ChartEngine, event: &KeyDownEvent, cx: &mut App) -> bool {
     if !command_shortcut(event) {
         return false;
@@ -355,13 +355,14 @@ fn clipboard_key(engine: &mut ChartEngine, event: &KeyDownEvent, cx: &mut App) -
 }
 
 /// Route one key into the engine's typing session using the platform's editing conventions:
-/// word motion on Ctrl (Option on macOS) and line ends on Cmd+arrows on macOS.
+/// word motion on Ctrl (Option on macOS) and line ends on Cmd+arrows on macOS. Enter goes to the
+/// engine's Enter rule (Shift+Enter inserts a line break, plain Enter commits).
 pub fn text_edit_key(engine: &mut ChartEngine, event: &KeyDownEvent) {
     let keystroke = &event.keystroke;
     let modifiers = keystroke.modifiers;
     match keystroke.key.as_str() {
         "enter" => {
-            engine.commit_drawing_text_edit();
+            engine.drawing_text_edit_enter(modifiers.shift);
             return;
         }
         "escape" => {
@@ -391,8 +392,10 @@ pub fn text_edit_key(engine: &mut ChartEngine, event: &KeyDownEvent) {
         "right" if word => Some(DrawingTextEditKey::WordRight),
         "left" => Some(DrawingTextEditKey::Left),
         "right" => Some(DrawingTextEditKey::Right),
-        "home" | "up" => Some(DrawingTextEditKey::Home),
-        "end" | "down" => Some(DrawingTextEditKey::End),
+        "home" => Some(DrawingTextEditKey::Home),
+        "end" => Some(DrawingTextEditKey::End),
+        "up" => Some(DrawingTextEditKey::Up),
+        "down" => Some(DrawingTextEditKey::Down),
         _ => None,
     };
     if let Some(key) = key {
@@ -908,5 +911,59 @@ mod key_tests {
             ));
             assert_eq!(chart.drawing(id).is_some(), shift);
         }
+    }
+
+    #[test]
+    fn gpui_shift_enter_breaks_lines_and_arrows_move_between_them() {
+        let mut chart = ChartEngine::new(320.0, 200.0, 1.0);
+        chart.set_text_measure(Some(Box::new(|text, _, _, _, _| {
+            text.chars().count() as f64 * 10.0
+        })));
+        let id = chart
+            .add_drawing(
+                DrawingKind::Text,
+                0,
+                vec![DrawingPoint {
+                    logical: 0.0,
+                    price: 10.0,
+                }],
+                Some(r#"{"text":"abc","text_h_align":"left"}"#),
+            )
+            .unwrap();
+        assert!(chart.begin_drawing_text_edit(id, true));
+        let key = |name: &str, key_char: Option<&str>, shift: bool| KeyDownEvent {
+            keystroke: Keystroke {
+                key: name.into(),
+                modifiers: Modifiers {
+                    shift,
+                    ..Modifiers::default()
+                },
+                key_char: key_char.map(str::to_string),
+            },
+            is_held: false,
+            prefer_character_input: false,
+        };
+        text_edit_key(&mut chart, &key("enter", None, true));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abc\n", 4)));
+        for c in ["d", "e"] {
+            text_edit_key(&mut chart, &key(c, Some(c), false));
+        }
+        // Up keeps the caret's measured x on the line above; Shift+Down extends back down.
+        text_edit_key(&mut chart, &key("up", None, false));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abc\nde", 2)));
+        text_edit_key(&mut chart, &key("down", None, true));
+        assert_eq!(chart.drawing_text_edit_selection(), Some("c\nde"));
+        // Home and End stay on the caret's line.
+        text_edit_key(&mut chart, &key("home", None, false));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abc\nde", 4)));
+        text_edit_key(&mut chart, &key("up", None, false));
+        text_edit_key(&mut chart, &key("end", None, false));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abc\nde", 3)));
+        // Up from the first line goes to the start; plain Enter commits every line.
+        text_edit_key(&mut chart, &key("up", None, false));
+        assert_eq!(chart.drawing_text_edit(), Some((id, "abc\nde", 0)));
+        text_edit_key(&mut chart, &key("enter", None, false));
+        assert_eq!(chart.editing_drawing(), None);
+        assert_eq!(chart.drawing(id).unwrap().text, "abc\nde");
     }
 }

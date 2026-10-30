@@ -6075,6 +6075,11 @@ impl AerisChart {
         let Some(layout) = inner.engine.drawing_text_edit_layout() else {
             return "null".to_string();
         };
+        let align = match layout.align {
+            aeris_charts_engine::DrawingTextHAlign::Left => "left",
+            aeris_charts_engine::DrawingTextHAlign::Center => "center",
+            aeris_charts_engine::DrawingTextHAlign::Right => "right",
+        };
         serde_json::json!({
             "anchor_x": layout.anchor_x,
             "anchor_y": layout.anchor_y,
@@ -6083,9 +6088,16 @@ impl AerisChart {
             "font_family": layout.font_family,
             "font_weight": layout.font_weight,
             "font_italic": layout.font_italic,
+            "align": align,
             "left_edge": layout.left_edge,
+            "top_edge": layout.top_edge,
             "advance": layout.advance,
+            "height": layout.height,
+            "line_height": layout.line_height,
+            "line_count": layout.line_count,
+            "caret_line": layout.caret_line,
             "caret_x": layout.caret_x,
+            "caret_top": layout.caret_top,
             "ink": layout.ink.to_css(),
         })
         .to_string()

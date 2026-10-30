@@ -157,6 +157,18 @@ live drawing becomes the `selected_drawing()` primary). Delete/Backspace and
 reaches each drawing only for the settings its kind lists in `drawing_property_schema`, so one
 toolbar edit restyles a mixed selection. Each group action is one undo step; undoing a removal
 restores the drawings selected, and clones replace the selection.
+
+### Drawing text
+
+Drawing text (the `text` option of standalone Text, notes, comments, callouts, signposts, price
+labels, and line labels) may hold several lines separated by `\n`. Options, imports, typing, and
+paste convert `\r\n` and `\r` to `\n` and other control characters to spaces; text saved before
+multi-line support loads unchanged. In the inline editor, Shift+Enter inserts a line break, Enter
+commits, Escape restores the text from before the edit, Up/Down move the caret to the adjacent line,
+and Home/End move it to the ends of the caret line. Typed text is limited to 256 UTF-8 bytes, and
+commit trims leading and trailing whitespace while keeping inner line breaks. Lines are 1.2em apart,
+each takes the label's horizontal alignment, and the label's box, hit area, and focus border cover
+every line.
 Generated `wasm-bindgen` classes, methods reachable only through implementation objects, telemetry,
 benchmark counters, demo globals, fixtures, and test hooks are internal even when JavaScript can
 inspect them at runtime. `drawings_json()` is an internal inspection shape, not persistence.

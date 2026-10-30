@@ -5,7 +5,8 @@
 //! multiplied by the caller's `scale` (1 for media px, the device ratio for bitmap px).
 
 use super::geometry::arc_segments;
-use super::{Drawing, DrawingKind};
+use super::text_block::LINE_HEIGHT_EM;
+use super::{Drawing, DrawingKind, DrawingTextVAlign};
 use crate::ChartEngine;
 
 /// Shown in an empty annotation's box while its text is being typed.
@@ -29,8 +30,9 @@ pub(crate) struct AnnotationLayout {
     pub(crate) rect: [f64; 4],
     /// Corner radii: left-top, right-top, right-bottom, left-bottom.
     pub(crate) radii: [f64; 4],
-    /// The text run: left edge, vertical center, glyph size, string, and whether it is the
-    /// empty-box placeholder.
+    /// The text block: its left edge, its vertical center (the block is `Middle`-aligned, so
+    /// its lines stack evenly around it), glyph size, string, and whether it is the empty-box
+    /// placeholder.
     pub(crate) text_x: f64,
     pub(crate) text_y: f64,
     pub(crate) size: f64,
@@ -88,21 +90,21 @@ impl ChartEngine {
         let layout = &self.options.get().layout;
         let size = drawing.resolved_text_size(layout.font_size) * scale;
         let (text, placeholder) = self.annotation_text(drawing);
-        let weight = annotation_text_weight(drawing);
-        let advance = self.measure_text_run(
+        let block = self.drawing_text_block(
+            drawing,
             &text,
             size,
+            DrawingTextVAlign::Middle,
             &layout.font_family,
-            weight,
-            drawing.text_italic,
         );
+        let (advance, block_height) = (block.width, block.height());
         let pad_x = if drawing.kind == DrawingKind::Comment {
             COMMENT_PAD_X
         } else {
             PAD_X
         } * scale;
         let width = advance + 2.0 * pad_x;
-        let height = size * 1.2 + 2.0 * PAD_Y * scale;
+        let height = block_height + 2.0 * PAD_Y * scale;
         let radius = BOX_RADIUS * scale;
         let mut connector = None;
         let mut tail = None;
@@ -129,7 +131,9 @@ impl ChartEngine {
             }
             // A speech bubble whose square corner sits on the anchor.
             DrawingKind::Comment => {
-                let round = height / 2.0;
+                // One line's half height: a one-line bubble's ends stay fully round and a taller
+                // bubble keeps the same corners instead of bulging into an ellipse.
+                let round = size * LINE_HEIGHT_EM / 2.0 + PAD_Y * scale;
                 (first.0, first.1 - height, [round, round, round, 0.0])
             }
             // The price tag sits on its anchor (bottom center) above the line.
@@ -271,8 +275,9 @@ fn callout_outline(
     points
 }
 
-/// Price tags read in a semibold weight unless the drawing sets one.
-pub(crate) fn annotation_text_weight(drawing: &Drawing) -> u16 {
+/// A drawing label's font weight: the drawing's own, else semibold for price tags and regular
+/// for every other label.
+pub(crate) fn drawing_text_weight(drawing: &Drawing) -> u16 {
     drawing
         .text_weight
         .unwrap_or(if drawing.kind == DrawingKind::PriceNote {

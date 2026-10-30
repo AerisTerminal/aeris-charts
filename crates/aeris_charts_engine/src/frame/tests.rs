@@ -20674,6 +20674,191 @@ fn native_text_session_paints_a_rotated_caret_that_follows_the_typed_run() {
 }
 
 #[test]
+fn multi_line_labels_paint_one_prim_per_line_on_one_shared_block() {
+    use crate::{DrawingKind, DrawingPoint};
+
+    let mut chart = anchor_chart();
+    chart.set_text_measure(Some(Box::new(|text, _, _, _, _| {
+        text.chars().count() as f64 * 10.0
+    })));
+    let point = |logical: f64, price: f64| DrawingPoint { logical, price };
+    let trend = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![point(0.0, 10.0), point(4.0, 12.5)],
+            Some(
+                r#"{"text":"first\nsecond","text_size":10,"text_v_align":"top","text_h_align":"center"}"#,
+            ),
+        )
+        .unwrap();
+    let text = chart
+        .add_drawing(
+            DrawingKind::Text,
+            0,
+            vec![point(2.0, 11.0)],
+            Some(
+                r##"{"text":"a\nbb\nccc","text_size":10,"text_h_align":"left","text_v_align":"bottom","box_color":"#ff0000"}"##,
+            ),
+        )
+        .unwrap();
+    let price = chart
+        .add_drawing(
+            DrawingKind::PriceLabel,
+            0,
+            vec![point(1.0, 10.5)],
+            Some(r##"{"text":"1\n22","text_size":10,"color":"#00ff00"}"##),
+        )
+        .unwrap();
+    let frame = chart.build_frame();
+    let main = &frame.panes[0].main;
+    let rotated: Vec<_> = main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::RotatedText { x, y, text, .. } => Some((f64::from(*x), f64::from(*y), text)),
+            _ => None,
+        })
+        .collect();
+    let flat: Vec<_> = main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Text { x, y, text, .. } => Some((f64::from(*x), f64::from(*y), text.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        rotated.iter().all(|(_, _, text)| !text.contains('\n'))
+            && flat.iter().all(|(_, _, text)| !text.contains('\n')),
+        "backends never receive a line break"
+    );
+
+    // The rotated label stacks along its normal: a top label's last line holds the one-line
+    // slot and the first sits one 1.2em line box above it.
+    assert_eq!(
+        rotated
+            .iter()
+            .map(|line| line.2.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    let (x, y, angle) = chart.drawing_text_transform(trend).unwrap();
+    assert!((rotated[1].0 - x).abs() < 1e-3 && (rotated[1].1 - y).abs() < 1e-3);
+    assert!((rotated[0].0 - x - 12.0 * angle.sin()).abs() < 1e-3);
+    assert!((rotated[0].1 - y + 12.0 * angle.cos()).abs() < 1e-3);
+
+    // The text tool's lines grow down from its slot and its container wraps all of them.
+    let (tx, ty) = chart.drawing_text_coordinate(text).unwrap();
+    let lines: Vec<_> = flat
+        .iter()
+        .filter(|line| ["a", "bb", "ccc"].contains(&line.2))
+        .collect();
+    assert_eq!(lines.len(), 3);
+    for (index, line) in lines.iter().enumerate() {
+        assert!((line.0 - tx).abs() < 1e-3);
+        assert!((line.1 - (ty + 12.0 * index as f64)).abs() < 1e-3);
+    }
+    let container = main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::Rect { rect, color } if *color == Color::rgb(0xff, 0, 0) => Some(*rect),
+            _ => None,
+        })
+        .expect("text container");
+    assert_eq!((container.w, container.h), (38, 44));
+    assert_eq!(
+        chart
+            .hit_test_drawing(tx + 25.0, ty + 24.0)
+            .map(|hit| hit.id),
+        Some(text),
+        "the third line is part of the label's grab area"
+    );
+
+    // The price label's bubble holds both lines.
+    let bubble = main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::RoundRect { w, h, fill, .. } if *fill == Color::rgb(0, 0xff, 0) => Some((*w, *h)),
+            _ => None,
+        })
+        .expect("price label bubble");
+    assert_eq!(bubble, (32.0, 32.0));
+    assert!(flat.iter().any(|line| line.2 == "1") && flat.iter().any(|line| line.2 == "22"));
+    assert!(chart.drawing(price).is_some());
+}
+
+#[test]
+fn native_text_session_paints_its_caret_and_selection_on_the_caret_line() {
+    use crate::{DrawingKind, DrawingPoint, DrawingTextEditKey};
+
+    let mut chart = anchor_chart();
+    chart.set_text_measure(Some(Box::new(|text, _, _, _, _| {
+        text.chars().count() as f64 * 10.0
+    })));
+    let id = chart
+        .add_drawing(
+            DrawingKind::Text,
+            0,
+            vec![DrawingPoint {
+                logical: 2.0,
+                price: 11.0,
+            }],
+            Some(
+                r##"{"text":"a\nbb\nccc","text_size":10,"text_h_align":"left","text_v_align":"bottom","text_color":"#2468ac"}"##,
+            ),
+        )
+        .unwrap();
+    chart.build_frame();
+    let (x, y) = chart.drawing_text_coordinate(id).unwrap();
+    assert!(chart.begin_drawing_text_edit(id, true));
+    let ink = Color::rgb(0x24, 0x68, 0xac);
+    let caret = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::Rect { rect, color } if *color == ink && rect.w == 1 => Some(*rect),
+                _ => None,
+            })
+            .expect("painted caret")
+    };
+    // The caret ends the third line, one line box tall.
+    let end = caret(&mut chart);
+    assert_eq!(
+        (end.x, end.y, end.h),
+        ((x + 30.0).round() as i32, (y + 18.0).round() as i32, 12)
+    );
+    assert!(chart.drawing_text_edit_key(DrawingTextEditKey::Up, false));
+    let up = caret(&mut chart);
+    assert_eq!(
+        (up.x, up.y),
+        ((x + 20.0).round() as i32, (y + 6.0).round() as i32)
+    );
+
+    // Select-all washes every line (one quad each) as one mesh in the selection color.
+    assert!(chart.drawing_text_edit_select_all());
+    let frame = chart.build_frame();
+    let meshes: Vec<_> = frame.panes[0]
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::MeshFill {
+                point_count, color, ..
+            } if *color == super::drawings::TEXT_SELECTION => Some(*point_count),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(meshes, [18]);
+    assert!(chart.commit_drawing_text_edit());
+    let frame = chart.build_frame();
+    assert!(
+        !frame.panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::MeshFill { color, .. } if *color == super::drawings::TEXT_SELECTION))
+    );
+}
+
+#[test]
 fn middle_trend_label_gap_shrinks_to_the_caret_then_expands_with_text() {
     use crate::{DrawingKind, DrawingPoint};
 
