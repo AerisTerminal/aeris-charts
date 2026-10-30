@@ -357,8 +357,8 @@ impl ChartEngine {
                     crate::DepthEventKind::PulledLiquidity => Color::rgb(0xFF, 0xA7, 0x26),
                     crate::DepthEventKind::SizeCluster => Color::rgb(0x42, 0xA5, 0xF5),
                     crate::DepthEventKind::Sweep => match event.side {
-                        Some(crate::DepthSide::Bid) => DOWN,
-                        Some(crate::DepthSide::Ask) => UP,
+                        Some(crate::DepthSide::Bid) => self.market_colors().down,
+                        Some(crate::DepthSide::Ask) => self.market_colors().up,
                         None => PRIMARY,
                     },
                     crate::DepthEventKind::Mixed => PRIMARY,
@@ -477,7 +477,10 @@ impl ChartEngine {
             return;
         }
         let layout = &self.options.get().layout;
-        let (bullish, bearish) = self.themed_candle_colors();
+        let MarketColors {
+            up: bullish,
+            down: bearish,
+        } = self.market_colors();
         let text_color = Color::parse_css(&layout.text_color).unwrap_or(Color::rgb(215, 219, 228));
         let text_size = layout.font_size * vpr;
         let text_pad = (PROFILE_TEXT_PAD * hpr).round();

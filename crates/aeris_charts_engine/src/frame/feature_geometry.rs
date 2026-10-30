@@ -366,6 +366,7 @@ impl ChartEngine {
             lows.push([x, (scale.price_to_coordinate(*low, base) * vpr) as f32]);
             closes.push([x, (scale.price_to_coordinate(*close, base) * vpr) as f32]);
         }
+        let market = self.market_colors();
         if highs.len() >= 2 {
             let high_first = points.len() as u32;
             points.extend_from_slice(&highs);
@@ -376,7 +377,7 @@ impl ChartEngine {
                 upper_first: high_first,
                 lower_first: close_first,
                 point_count: highs.len() as u32,
-                fill: options.area_top_color,
+                fill: market.follow(options.area_top_color),
             });
             let close_again = points.len() as u32;
             points.extend_from_slice(&closes);
@@ -387,7 +388,7 @@ impl ChartEngine {
                 upper_first: close_again,
                 lower_first: low_first,
                 point_count: lows.len() as u32,
-                fill: options.area_bottom_color,
+                fill: market.follow(options.area_bottom_color),
             });
         }
         push_polyline(
@@ -395,14 +396,14 @@ impl ChartEngine {
             points,
             &lows,
             (options.low_line_width * vpr) as f32,
-            options.low_line_color,
+            market.follow(options.low_line_color),
         );
         push_polyline(
             out,
             points,
             &highs,
             (options.high_line_width * vpr) as f32,
-            options.high_line_color,
+            market.follow(options.high_line_color),
         );
         push_polyline(
             out,

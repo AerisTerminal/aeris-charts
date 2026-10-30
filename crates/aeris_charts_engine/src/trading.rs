@@ -2571,8 +2571,22 @@ impl ChartEngine {
         Ok(())
     }
 
+    /// The trading style as painted: colors left at the market tokens take the current theme's
+    /// up/down pair, so the default buy/sell and profit/risk colors follow a theme switch.
     pub fn trading_style(&self) -> TradingStyle {
-        self.trading_state.style
+        let market = self.market_colors();
+        let mut style = self.trading_state.style;
+        for color in [
+            &mut style.buy,
+            &mut style.sell,
+            &mut style.profit,
+            &mut style.risk,
+            &mut style.take_profit,
+            &mut style.stop_loss,
+        ] {
+            *color = market.follow(*color);
+        }
+        style
     }
 
     pub fn apply_trading_style(&mut self, options: TradingStyleOptions) -> Result<(), ChartError> {

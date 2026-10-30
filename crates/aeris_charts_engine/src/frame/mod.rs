@@ -84,6 +84,7 @@ const GRID: Color = Color::rgb(
     DEFAULT_BORDER_RGB.2,
 );
 const LINE: Color = Color::rgb(0x21, 0x96, 0xf3);
+#[cfg(test)]
 const AREA_LINE: Color = UP;
 /// The canonical area-fill gradient for a stroke color: `AREA_FILL_STRONG_ALPHA` at the series
 /// extreme fading to `AREA_FILL_FAINT_ALPHA` at its base, scaled by the stroke's own alpha. Area,
@@ -96,26 +97,63 @@ pub(crate) fn area_fill_gradient(stroke: Color) -> (Color, Color) {
     };
     (with(AREA_FILL_STRONG_ALPHA), with(AREA_FILL_FAINT_ALPHA))
 }
-const HISTOGRAM: Color = Color::rgba(
-    MARKET_UP_RGB.0,
-    MARKET_UP_RGB.1,
-    MARKET_UP_RGB.2,
-    MARKET_VOLUME_ALPHA,
-);
-pub const VOLUME_UP: Color = Color::rgba(
-    MARKET_UP_RGB.0,
-    MARKET_UP_RGB.1,
-    MARKET_UP_RGB.2,
-    MARKET_VOLUME_ALPHA,
-);
-pub const VOLUME_DOWN: Color = Color::rgba(
-    MARKET_DOWN_RGB.0,
-    MARKET_DOWN_RGB.1,
-    MARKET_DOWN_RGB.2,
-    MARKET_VOLUME_ALPHA,
-);
+#[cfg(test)]
+const HISTOGRAM: Color = VOLUME_UP;
+/// Default-theme volume tints; a chart paints [`MarketColors::volume_up`] of its own theme.
+pub const VOLUME_UP: Color = MarketColors::DEFAULT.volume_up();
+pub const VOLUME_DOWN: Color = MarketColors::DEFAULT.volume_down();
+#[cfg(test)]
 const BASELINE_TOP_LINE: Color = UP;
+#[cfg(test)]
 const BASELINE_BOTTOM_LINE: Color = DOWN;
+
+/// The chart's market up/down pair. The theme owns it through `layout.bullishColor` and
+/// `layout.bearishColor`, so every positive/negative default (candles, volume, histograms,
+/// baselines, positions, trading, profiles) repaints on a theme switch without touching data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MarketColors {
+    pub(crate) up: Color,
+    pub(crate) down: Color,
+}
+
+impl MarketColors {
+    /// The compiled market tokens, which are also the default theme's pair.
+    pub(crate) const DEFAULT: Self = Self { up: UP, down: DOWN };
+
+    pub(crate) const fn volume_up(self) -> Color {
+        Color::rgba(self.up.r(), self.up.g(), self.up.b(), MARKET_VOLUME_ALPHA)
+    }
+
+    pub(crate) const fn volume_down(self) -> Color {
+        Color::rgba(
+            self.down.r(),
+            self.down.g(),
+            self.down.b(),
+            MARKET_VOLUME_ALPHA,
+        )
+    }
+
+    /// Stored option defaults (volume profile, big trades, periodic profiles, quote lines,
+    /// trading style) hold the compiled market tokens. Painting them through this keeps their
+    /// alpha but takes this pair's hue, so those defaults follow the theme like unset slots do.
+    /// Any other explicit color is returned unchanged.
+    pub(crate) fn follow(self, color: Color) -> Color {
+        let rgb = |c: Color| (c.r(), c.g(), c.b());
+        let tint = |token: Color| {
+            let alpha = (u16::from(token.a()) * u16::from(color.a()) + 127) / 255;
+            Color::rgba(token.r(), token.g(), token.b(), alpha as u8)
+        };
+        if self == Self::DEFAULT {
+            color
+        } else if rgb(color) == rgb(UP) {
+            tint(self.up)
+        } else if rgb(color) == rgb(DOWN) {
+            tint(self.down)
+        } else {
+            color
+        }
+    }
+}
 /// Aeris default stroke for line, area, and baseline series (CSS px), matching indicator lines.
 pub(crate) const LINE_WIDTH: f64 = 2.0;
 const CROSSHAIR_COLOR: Color = Color::rgba(
@@ -924,21 +962,28 @@ fn css_color(value: &str, fallback: Color) -> Color {
 /// Resolve a verbatim CSS color slot at render time (the wave-1 pattern): the stored string
 /// parses, an unset slot or an unparseable string falls back to `fallback` (the reference's default —
 /// a user string the renderer cannot parse degrades to the default rather than vanishing).
-/// The stroke color a line-like series actually renders: its explicit color, or for an Area with
-/// none, the Area default hue. Fills, brush defaults, and `options().color` all resolve through it.
-pub(crate) fn series_stroke_color(series: &crate::SeriesEntry) -> Color {
-    let color = verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR);
-    if series.kind == SeriesKind::Area && series.line_color.is_none() {
-        AREA_LINE
-    } else {
-        color
+/// The stroke color a line-like series actually renders: its explicit color, else its market
+/// side's color, else for an Area the Area default hue. Fills, brush defaults, and
+/// `options().color` all resolve through it.
+pub(crate) fn series_stroke_color(series: &crate::SeriesEntry, market: MarketColors) -> Color {
+    if series.line_color.is_some() {
+        return verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR);
+    }
+    match series.market_tone {
+        Some(crate::MarketTone::Up) => market.up,
+        Some(crate::MarketTone::Down) => market.down,
+        None if series.kind == SeriesKind::Area => market.up,
+        None => crate::DEFAULT_LINE_COLOR,
     }
 }
 
 /// The top and bottom area fill colors a series renders: each explicit color, else the
 /// canonical gradient of its own stroke.
-pub(crate) fn area_fill_colors(series: &crate::SeriesEntry) -> (Color, Color) {
-    let (strong, faint) = area_fill_gradient(series_stroke_color(series));
+pub(crate) fn area_fill_colors(
+    series: &crate::SeriesEntry,
+    market: MarketColors,
+) -> (Color, Color) {
+    let (strong, faint) = area_fill_gradient(series_stroke_color(series, market));
     (
         verbatim_color(&series.area_top_color, strong),
         verbatim_color(&series.area_bottom_color, faint),
@@ -947,17 +992,23 @@ pub(crate) fn area_fill_colors(series: &crate::SeriesEntry) -> (Color, Color) {
 
 /// The above- and below-baseline line colors a baseline series renders: each explicit color,
 /// else the market up/down default.
-pub(crate) fn baseline_line_colors(series: &crate::SeriesEntry) -> (Color, Color) {
+pub(crate) fn baseline_line_colors(
+    series: &crate::SeriesEntry,
+    market: MarketColors,
+) -> (Color, Color) {
     (
-        verbatim_color(&series.top_line_color, BASELINE_TOP_LINE),
-        verbatim_color(&series.bottom_line_color, BASELINE_BOTTOM_LINE),
+        verbatim_color(&series.top_line_color, market.up),
+        verbatim_color(&series.bottom_line_color, market.down),
     )
 }
 
 /// Default brushable-area styles for one series, all on the canonical fill strength: selected
 /// ranges in the market up/down hues, and everything outside the selection as the series' own
 /// stroke faded to 20% with its fill derived by the same rule.
-pub(crate) fn area_brush_defaults(series: &crate::SeriesEntry) -> crate::AreaBrushDefaults {
+pub(crate) fn area_brush_defaults(
+    series: &crate::SeriesEntry,
+    market: MarketColors,
+) -> crate::AreaBrushDefaults {
     let line_width = series.line_width.unwrap_or(LINE_WIDTH);
     let style = |line_color: Color| {
         let (top_color, bottom_color) = area_fill_gradient(line_color);
@@ -968,12 +1019,12 @@ pub(crate) fn area_brush_defaults(series: &crate::SeriesEntry) -> crate::AreaBru
             line_width,
         }
     };
-    let stroke = series_stroke_color(series);
+    let stroke = series_stroke_color(series, market);
     let faded_alpha = ((u16::from(stroke.a()) * 51 + 127) / 255) as u8;
     crate::AreaBrushDefaults {
         outside: style(Color::rgba(stroke.r(), stroke.g(), stroke.b(), faded_alpha)),
-        positive: style(UP),
-        negative: style(DOWN),
+        positive: style(market.up),
+        negative: style(market.down),
     }
 }
 
@@ -985,12 +1036,12 @@ pub(crate) fn verbatim_color(value: &Option<String>, fallback: Color) -> Color {
 }
 
 impl ChartEngine {
-    fn themed_candle_colors(&self) -> (Color, Color) {
+    pub(crate) fn market_colors(&self) -> MarketColors {
         let layout = &self.options.get().layout;
-        (
-            Color::parse_css(&layout.bullish_color).unwrap_or(UP),
-            Color::parse_css(&layout.bearish_color).unwrap_or(DOWN),
-        )
+        MarketColors {
+            up: Color::parse_css(&layout.bullish_color).unwrap_or(UP),
+            down: Color::parse_css(&layout.bearish_color).unwrap_or(DOWN),
+        }
     }
 }
 
@@ -1051,19 +1102,23 @@ impl ChartEngine {
             // A line_color still holding the default placeholder resolves to the kind default,
             // exactly like the geometry builders.
             SeriesKind::Line => verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR),
-            SeriesKind::Area => series_stroke_color(series),
+            SeriesKind::Area => series_stroke_color(series, self.market_colors()),
             // The column the bar actually paints, so delta and up/down colors reach the chrome.
             SeriesKind::Histogram => plot
                 .index_at(row)
                 .and_then(|index| self.histogram_column_color_at(series.id, index))
                 .unwrap_or_else(|| {
                     let color = verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR);
-                    if color != LINE { color } else { HISTOGRAM }
+                    if color != LINE {
+                        color
+                    } else {
+                        self.market_colors().volume_up()
+                    }
                 }),
             // reference baseline colorer: top line color at/above the baseline, bottom below it.
             SeriesKind::Baseline => {
                 let close = plot.value_at(row, PlotValueIndex::Close);
-                let (top, bottom) = baseline_line_colors(series);
+                let (top, bottom) = baseline_line_colors(series, self.market_colors());
                 match baseline_price {
                     Some(base) if close < base => bottom,
                     _ => top,
@@ -1071,7 +1126,7 @@ impl ChartEngine {
             }
             // reference bar/candlestick colorer: up when open <= close.
             SeriesKind::Candlestick | SeriesKind::Bar => {
-                let (up, down) = self.themed_candle_colors();
+                let MarketColors { up, down } = self.market_colors();
                 let open = plot.value_at(row, PlotValueIndex::Open);
                 let close = plot.value_at(row, PlotValueIndex::Close);
                 if open <= close {
@@ -1093,7 +1148,7 @@ impl ChartEngine {
                     self.trade_stream(state.trade_stream_id)
                         .and_then(|stream| stream.bars().get(row).map(|bar| (state, bar)))
                 })
-                .map_or(UP, |(state, bar)| {
+                .map_or(self.market_colors().up, |(state, bar)| {
                     if bar.delta >= 0.0 {
                         state.visual.positive_delta_color
                     } else {
@@ -1116,7 +1171,7 @@ impl ChartEngine {
     /// an unpinned part inherits the same transparency and is skipped in turn; if nothing is
     /// visible at all, the body color stands.
     fn candlestick_chrome_color(&self, series: &crate::SeriesEntry, row: usize) -> Color {
-        let (up, down) = self.themed_candle_colors();
+        let MarketColors { up, down } = self.market_colors();
         let plot = self.data.plot(series.id);
         let (open, close) = self
             .heikin_ashi_row(series.id, row)
@@ -1655,7 +1710,7 @@ impl ChartEngine {
         // arbitration are untouched so promotion cannot oscillate hover. The bump is global
         // across panes (filtering per pane preserves each pane's relative order).
         let order = self.effective_series_order();
-        let (theme_up, theme_down) = self.themed_candle_colors();
+        let market = self.market_colors();
         for &id in &order {
             let Some(s) = self.series_entry(id) else {
                 continue;
@@ -1663,18 +1718,12 @@ impl ChartEngine {
             let base_value = visible
                 .and_then(|(from, _)| self.series_base_value(s.id, from))
                 .unwrap_or(0.0);
-            let (fallback_up, fallback_down) =
-                if matches!(s.kind, SeriesKind::Candlestick | SeriesKind::Bar) {
-                    (theme_up, theme_down)
-                } else {
-                    (UP, DOWN)
-                };
-            let up = verbatim_color(&s.up_color, fallback_up);
-            let down = verbatim_color(&s.down_color, fallback_down);
-            let color = series_stroke_color(s);
-            let (area_top, area_bottom) = area_fill_colors(s);
+            let up = verbatim_color(&s.up_color, market.up);
+            let down = verbatim_color(&s.down_color, market.down);
+            let color = series_stroke_color(s, market);
+            let (area_top, area_bottom) = area_fill_colors(s, market);
             let css = |value: &Option<String>| value.as_deref().and_then(Color::parse_css);
-            let (top_line, bottom_line) = baseline_line_colors(s);
+            let (top_line, bottom_line) = baseline_line_colors(s, market);
             let (top_strong, top_faint) = area_fill_gradient(top_line);
             let (bottom_strong, bottom_faint) = area_fill_gradient(bottom_line);
             resolved.push(ResolvedSeries {

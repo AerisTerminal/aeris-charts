@@ -238,6 +238,15 @@ fn trading_result_json(result: Result<(), aeris_charts_engine::ChartError>) -> S
     }
 }
 
+/// Whole UTC seconds as the engine's nanosecond study timestamps; `None` for anything else.
+fn seconds_to_unix_nanos(seconds: f64) -> Option<i64> {
+    const NANOS_PER_SECOND: f64 = 1_000_000_000.0;
+    (seconds.is_finite()
+        && seconds.fract() == 0.0
+        && (seconds * NANOS_PER_SECOND).abs() < i64::MAX as f64)
+        .then(|| seconds as i64 * 1_000_000_000)
+}
+
 fn input_device_from_u8(value: u8) -> InputDevice {
     match value {
         1 => InputDevice::Touch,
@@ -2510,6 +2519,107 @@ impl AerisChart {
     /// outputs) for the host's per-series removal events; empty = nothing removed.
     pub fn remove_series_tracked(&mut self, id: u32) -> Vec<u32> {
         self.inner.borrow_mut().remove_series_tracked(id)
+    }
+
+    /// Install or replace an engine-owned options-volume study from per-bar call and put volume.
+    /// `times` are UTC seconds and NaN leaves a bar empty. Returns an empty string once applied
+    /// (or skipped as stale), else the rejection reason.
+    pub fn set_options_volume(
+        &mut self,
+        study_id: u32,
+        generation: u32,
+        times: &[f64],
+        calls: &[f64],
+        puts: &[f64],
+    ) -> String {
+        let Some(nanos) = times
+            .iter()
+            .map(|&time| seconds_to_unix_nanos(time))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return aeris_charts_engine::ExternalStudyError::UnsupportedTimestampPrecision
+                .to_string();
+        };
+        let present = |values: &[f64]| {
+            values
+                .iter()
+                .map(|&value| (!value.is_nan()).then_some(value))
+                .collect::<Vec<_>>()
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_options_volume(
+                u64::from(study_id),
+                u64::from(generation),
+                &nanos,
+                &present(calls),
+                &present(puts),
+            )
+            .map_or_else(|error| error.to_string(), |_| String::new())
+    }
+
+    /// Append or replace the newest options-volume bar; same result contract as
+    /// `set_options_volume`.
+    pub fn update_options_volume(
+        &mut self,
+        study_id: u32,
+        generation: u32,
+        time: f64,
+        calls: f64,
+        puts: f64,
+    ) -> String {
+        let Some(nanos) = seconds_to_unix_nanos(time) else {
+            return aeris_charts_engine::ExternalStudyError::UnsupportedTimestampPrecision
+                .to_string();
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .update_options_volume(
+                u64::from(study_id),
+                u64::from(generation),
+                nanos,
+                calls,
+                puts,
+            )
+            .map_or_else(|error| error.to_string(), |_| String::new())
+    }
+
+    /// The call and put series ids of a live options-volume study; empty when there is none.
+    pub fn options_volume_series(&self, study_id: u32) -> Vec<u32> {
+        self.inner
+            .borrow()
+            .engine
+            .options_volume_series(u64::from(study_id))
+            .map_or_else(Vec::new, Vec::from)
+    }
+
+    pub fn options_volume_visible(&self, study_id: u32) -> bool {
+        self.inner
+            .borrow()
+            .engine
+            .external_study_visible(u64::from(study_id))
+            .unwrap_or(false)
+    }
+
+    pub fn set_options_volume_visible(&mut self, study_id: u32, visible: bool) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_external_study_visible(u64::from(study_id), visible)
+    }
+
+    /// Remove an options-volume study and its pane; returns every removed series id.
+    pub fn remove_options_volume(&mut self, study_id: u32) -> Vec<u32> {
+        let mut inner = self.inner.borrow_mut();
+        let Some(series) = inner.engine.options_volume_series(u64::from(study_id)) else {
+            return Vec::new();
+        };
+        series
+            .into_iter()
+            .flat_map(|id| inner.remove_series_tracked(id))
+            .collect()
     }
 
     /// JSON lineage of an indicator output series (`{"kind","period","deviation","source",

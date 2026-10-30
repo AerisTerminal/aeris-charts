@@ -305,12 +305,9 @@ impl ChartEngine {
                     let positive = change >= 0.0;
                     delta_top = format!("{}{change:.2}", if positive { "+" } else { "" });
                     delta_bottom = format!("{}{percent:.2}%", if positive { "+" } else { "" });
-                    delta_bg = if positive {
-                        Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 51)
-                    } else {
-                        Color::rgba(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2, 51)
-                    };
-                    delta_text = if positive { UP } else { DOWN };
+                    let market = self.market_colors();
+                    delta_text = if positive { market.up } else { market.down };
+                    delta_bg = Color::rgba(delta_text.r(), delta_text.g(), delta_text.b(), 51);
                     let min_delta = section_width(
                         &[delta_top.clone(), delta_bottom.clone()],
                         &[14.0, 12.0],
@@ -917,6 +914,7 @@ impl ChartEngine {
         let Some(base_value) = self.series_base_value(rs.id, from) else {
             return;
         };
+        let market = self.market_colors();
         for primitive in &series.native_primitives {
             match &primitive.kind {
                 NativeSeriesPrimitiveKind::AnchoredText(_)
@@ -1043,9 +1041,9 @@ impl ChartEngine {
                                     let width = available * row.total_volume / max_volume;
                                     let mut cursor = right - width;
                                     for (volume, color) in [
-                                        (row.bid_volume, state.colors[0]),
-                                        (row.unknown_volume, state.colors[2]),
-                                        (row.ask_volume, state.colors[1]),
+                                        (row.bid_volume, market.follow(state.colors[0])),
+                                        (row.unknown_volume, market.follow(state.colors[2])),
+                                        (row.ask_volume, market.follow(state.colors[1])),
                                     ] {
                                         if volume <= 0.0 {
                                             continue;
@@ -1084,9 +1082,9 @@ impl ChartEngine {
                                             h: h.max(1),
                                         },
                                         color: if row.delta > 0.0 {
-                                            state.colors[1]
+                                            market.follow(state.colors[1])
                                         } else {
-                                            state.colors[0]
+                                            market.follow(state.colors[0])
                                         },
                                     });
                                 }
@@ -1101,18 +1099,18 @@ impl ChartEngine {
                                             h: h.max(1),
                                         },
                                         color: if in_area {
-                                            state.colors[4]
+                                            market.follow(state.colors[4])
                                         } else {
-                                            state.colors[2]
+                                            market.follow(state.colors[2])
                                         },
                                     });
                                 }
                             }
                         }
                         for (price, color) in [
-                            (profile.poc, state.colors[3]),
-                            (profile.value_area_low, state.colors[4]),
-                            (profile.value_area_high, state.colors[4]),
+                            (profile.poc, market.follow(state.colors[3])),
+                            (profile.value_area_low, market.follow(state.colors[4])),
+                            (profile.value_area_high, market.follow(state.colors[4])),
                         ] {
                             if let Some(price) = price {
                                 out.push(Prim::HLine {
@@ -1128,9 +1126,9 @@ impl ChartEngine {
                         }
                         if state.show_developing {
                             for (price, color) in [
-                                (0, state.colors[3]),
-                                (1, state.colors[4]),
-                                (2, state.colors[4]),
+                                (0, market.follow(state.colors[3])),
+                                (1, market.follow(state.colors[4])),
+                                (2, market.follow(state.colors[4])),
                             ] {
                                 let first_point = points.len() as u32;
                                 for value in &profile.developing {
@@ -1202,9 +1200,9 @@ impl ChartEngine {
                                 width: vpr.round().max(1.0) as i32,
                                 style: LineStyle::Solid,
                                 color: if level.kind == crate::NakedProfileLevelKind::Poc {
-                                    state.colors[3]
+                                    market.follow(state.colors[3])
                                 } else {
-                                    state.colors[4]
+                                    market.follow(state.colors[4])
                                 },
                             });
                         }
@@ -1291,11 +1289,11 @@ impl ChartEngine {
                                             .value_area_high
                                             .is_some_and(|high| row.price <= high);
                                 let color = if row.single_print {
-                                    state.colors[2]
+                                    market.follow(state.colors[2])
                                 } else if in_area {
-                                    state.colors[1]
+                                    market.follow(state.colors[1])
                                 } else {
-                                    state.colors[0]
+                                    market.follow(state.colors[0])
                                 };
                                 for &period in &row.periods {
                                     let x = start_x + f64::from(period) * 8.0;
@@ -1343,14 +1341,14 @@ impl ChartEngine {
                                     w: (right - left).max(1),
                                     h: height.max(1),
                                 },
-                                color: state.colors[color_index],
+                                color: market.follow(state.colors[color_index]),
                             });
                             emitted += 1;
                         }
                         for (price, color) in [
-                            (profile.poc, state.colors[3]),
-                            (profile.initial_balance_low, state.colors[4]),
-                            (profile.initial_balance_high, state.colors[4]),
+                            (profile.poc, market.follow(state.colors[3])),
+                            (profile.initial_balance_low, market.follow(state.colors[4])),
+                            (profile.initial_balance_high, market.follow(state.colors[4])),
                         ] {
                             if let Some(price) = price {
                                 out.push(Prim::HLine {
@@ -1381,14 +1379,13 @@ impl ChartEngine {
                     }
                     let right = self.pane_w.max(0.0);
                     let width = right * state.options.width_percent / 100.0;
-                    let up_color =
-                        Color::parse_css(&state.options.up_color).expect("validated up color");
-                    let down_color =
-                        Color::parse_css(&state.options.down_color).expect("validated down color");
-                    let area_up_color = Color::parse_css(&state.options.value_area_up_color)
-                        .expect("validated value-area up color");
-                    let area_down_color = Color::parse_css(&state.options.value_area_down_color)
-                        .expect("validated value-area down color");
+                    let parse = |css: &str| {
+                        market.follow(Color::parse_css(css).expect("validated profile color"))
+                    };
+                    let up_color = parse(&state.options.up_color);
+                    let down_color = parse(&state.options.down_color);
+                    let area_up_color = parse(&state.options.value_area_up_color);
+                    let area_down_color = parse(&state.options.value_area_down_color);
                     let poc_color =
                         Color::parse_css(&state.options.poc_color).expect("validated POC color");
                     for (index, row) in profile.rows.iter().enumerate() {

@@ -17,8 +17,6 @@ const MAX_BARS = 20_000;
 const MAX_PENDING_TRADES = 50_000;
 const TRADE_STREAM_KEY = "DEMO:LIVE_TAPE";
 const DEPTH_STREAM_KEY = "DEMO:LIVE_BOOK";
-const UP_VOLUME = "#08998180";
-const DOWN_VOLUME = "#f7525f80";
 const UINT32 = 2 ** 32;
 
 function concat(parts, Type) {
@@ -43,7 +41,7 @@ function concat_columns(groups) {
 }
 
 function volume_point(bar) {
-  return { time: bar.time, value: bar.volume, color: bar.close >= bar.open ? UP_VOLUME : DOWN_VOLUME };
+  return { time: bar.time, value: bar.volume };
 }
 
 function trim(rows) {

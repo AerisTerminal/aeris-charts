@@ -781,25 +781,8 @@ impl Default for IndicatorChromeOptions {
     }
 }
 
-/// MACD histogram four-state palette: strong when moving away from zero, weak when falling
-/// back toward it (industry-standard). Packed `0xRRGGBBAA`.
-const MACD_UP: u32 = rgb_u32(aeris_charts_core::style::MARKET_UP_RGB, 0xff);
-const MACD_UP_WEAK: u32 = rgb_u32(
-    aeris_charts_core::style::MARKET_UP_RGB,
-    aeris_charts_core::style::MARKET_VOLUME_ALPHA,
-);
-const MACD_DOWN: u32 = rgb_u32(aeris_charts_core::style::MARKET_DOWN_RGB, 0xff);
-const MACD_DOWN_WEAK: u32 = rgb_u32(
-    aeris_charts_core::style::MARKET_DOWN_RGB,
-    aeris_charts_core::style::MARKET_VOLUME_ALPHA,
-);
-
 /// Share of the source pane kept clear above volume drawn over it.
 const VOLUME_OVERLAY_TOP_MARGIN: f64 = 0.8;
-
-const fn rgb_u32(rgb: (u8, u8, u8), alpha: u8) -> u32 {
-    (rgb.0 as u32) << 24 | (rgb.1 as u32) << 16 | (rgb.2 as u32) << 8 | alpha as u32
-}
 
 /// An indicator output series' lineage: which binding it belongs to (kind + params), the
 /// source series it derives from, and which output slot it is (Bollinger: 0 = upper,
@@ -973,14 +956,35 @@ impl ChartEngine {
         {
             return false;
         }
+        let market = self.market_colors();
         let Some(colors) = self
             .data
             .series_data(id)
-            .map(|(_, values)| momentum_histogram_colors(values[3]))
+            .map(|(_, values)| momentum_histogram_colors(values[3], market))
         else {
             return false;
         };
         self.set_series_point_colors(id, Some(colors), None, None)
+    }
+
+    /// Momentum palettes are stored per point, so a market-color change recolors every built-in
+    /// and external momentum histogram from its values.
+    pub(crate) fn refresh_momentum_histogram_colors(&mut self) {
+        let mut ids = self
+            .indicators
+            .iter()
+            .filter_map(|binding| match binding.kind {
+                IndicatorKind::Macd { .. } | IndicatorKind::VolumeOscillator { .. } => {
+                    binding.outputs.get(2).copied()
+                }
+                IndicatorKind::AwesomeOscillator => binding.outputs.first().copied(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        ids.extend(self.external_momentum_histogram_series());
+        for id in ids {
+            self.apply_momentum_histogram_colors(id);
+        }
     }
 
     pub(crate) fn indicator_memory_usage(&self) -> (usize, usize) {
@@ -4212,7 +4216,8 @@ impl ChartEngine {
                             IndicatorKind::AwesomeOscillator
                         ))
                 {
-                    full_histogram_colors = Some(momentum_histogram_colors(&values));
+                    full_histogram_colors =
+                        Some(momentum_histogram_colors(&values, self.market_colors()));
                 }
                 self.data
                     .set_single_data_aligned(output, source, source_from + first, values);
@@ -4250,6 +4255,7 @@ impl ChartEngine {
                 self.data
                     .set_point_colors(histogram_id, [Some(colors), None, None]);
             } else {
+                let market = self.market_colors();
                 let runtime = self.indicators[index].runtime.built_in();
                 let histogram = runtime.output(output_index);
                 let source_from = leading_source + runtime.output_from(output_index);
@@ -4270,7 +4276,7 @@ impl ChartEngine {
                         .and_then(|(_, values)| values[3].get(row).copied())
                 });
                 for (offset, &value) in histogram.iter().enumerate() {
-                    let color = momentum_histogram_color(value, previous);
+                    let color = momentum_histogram_color(value, previous, market);
                     self.data.set_point_color(
                         histogram_id,
                         PointColorChannel::Body,
@@ -4289,12 +4295,12 @@ impl ChartEngine {
     }
 }
 
-fn momentum_histogram_colors(values: &[f64]) -> Vec<u32> {
+fn momentum_histogram_colors(values: &[f64], market: crate::frame::MarketColors) -> Vec<u32> {
     let mut colors = Vec::with_capacity(values.len());
     let mut previous = None;
     for &value in values {
         if value.is_finite() {
-            colors.push(momentum_histogram_color(value, previous));
+            colors.push(momentum_histogram_color(value, previous, market));
             previous = Some(value);
         } else {
             colors.push(aeris_charts_core::model::data_layer::POINT_COLOR_ABSENT);
@@ -4618,15 +4624,26 @@ pub(crate) fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators
     }
 }
 
-fn momentum_histogram_color(value: f64, previous: Option<f64>) -> u32 {
+/// Four-state momentum palette: strong when moving away from zero, weak when falling back toward
+/// it (industry-standard). Packed `0xRRGGBBAA`.
+fn momentum_histogram_color(
+    value: f64,
+    previous: Option<f64>,
+    market: crate::frame::MarketColors,
+) -> u32 {
     let rising = previous.is_none_or(|previous| value >= previous);
-    if value >= 0.0 {
-        if rising { MACD_UP } else { MACD_UP_WEAK }
+    let color = if value >= 0.0 {
+        if rising {
+            market.up.solid()
+        } else {
+            market.volume_up()
+        }
     } else if rising {
-        MACD_DOWN_WEAK
+        market.volume_down()
     } else {
-        MACD_DOWN
-    }
+        market.down.solid()
+    };
+    color.0
 }
 
 /// The auto-generated indicator name behind the (hidden-by-default) name chip — what

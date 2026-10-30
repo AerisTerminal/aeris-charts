@@ -53,6 +53,7 @@ import type {
   trading_style_options, instrument_metadata, working_order, host_overlay_snapshot, host_event_hit,
   visible_logical_range_handler, visible_time_range_handler,
   volume_profile_indicator_api, volume_profile_indicator_options, volume_profile_indicator_snapshot,
+  options_volume_api, options_volume_row,
   big_trades_api, big_trades_options, big_trades_snapshot,
   auction_mark, auction_marker_options, auction_markers_api,
   custom_study_definition, custom_study_fault_event, custom_study_binding_options,
@@ -4014,6 +4015,9 @@ export class chart_impl implements chart_api {
   private detach_gestures: (() => void) | null = null;
   private removed = false;
   private readonly series_by_id = new Map<number, series_impl>();
+  /** Options-volume column series → the removal of their whole study. */
+  private readonly options_volume_removers = new Map<number, () => void>();
+  private next_options_volume_id = 1;
   private readonly general_series_by_id = new Map<number, general_series_impl>();
   private readonly layout_series_by_id = new Map<number, layout_series_api>();
   private readonly layout_change_subscribers_by_id = new Map<number, Set<() => void>>();
@@ -5428,6 +5432,11 @@ export class chart_impl implements chart_api {
     const impl = this.series_by_id.get(series.id);
     // Ignore a foreign handle or one already removed (idempotent, matching reference leniency).
     if (!impl) return;
+    const remove_study = this.options_volume_removers.get(series.id);
+    if (remove_study) {
+      remove_study();
+      return;
+    }
     // Pane indices are captured BEFORE the engine tombstones: a removed series reports no pane,
     // and the removal can cascade to derived indicator outputs living on other panes.
     const pane_of = new Map<number, number>();
@@ -6166,6 +6175,74 @@ export class chart_impl implements chart_api {
         if (this.wasm.remove_native_primitive(id)) this.repaint();
         removed = true;
       },
+    };
+  }
+
+  add_options_volume(rows: readonly options_volume_row[] = []): options_volume_api {
+    const id = this.next_options_volume_id++;
+    let generation = 0;
+    let removed = false;
+    let handles: series_impl[] = [];
+    const live = (): void => {
+      if (removed) throw new AerisChartsError("stale_handle", "options volume has been removed");
+    };
+    const check = (reason: string): void => {
+      if (reason !== "") throw new AerisChartsError("invalid_data", `options volume: ${reason}`);
+    };
+    const remove = (): void => {
+      if (removed) return;
+      removed = true;
+      const pane_of = new Map(handles.map((handle) => [handle.id, this.pane_of_series(handle.id)]));
+      this.wasm.remove_options_volume(id);
+      for (const handle of handles) {
+        this.options_volume_removers.delete(handle.id);
+        handle.mark_removed();
+        this.series_by_id.delete(handle.id);
+        this.emit_series_change(this.series_removed_subs, handle, pane_of.get(handle.id) ?? 0);
+      }
+      this.repaint();
+    };
+    const set_data = (next: readonly options_volume_row[]): void => {
+      live();
+      const times = new Float64Array(next.length);
+      const calls = new Float64Array(next.length);
+      const puts = new Float64Array(next.length);
+      next.forEach((row, index) => {
+        times[index] = row.time;
+        calls[index] = row.calls ?? Number.NaN;
+        puts[index] = row.puts ?? Number.NaN;
+      });
+      check(this.wasm.set_options_volume(id, ++generation, times, calls, puts));
+      if (handles.length === 0) {
+        handles = Array.from(this.wasm.options_volume_series(id), (series_id) => {
+          const handle = new series_impl(series_id, "histogram", this);
+          this.series_by_id.set(series_id, handle);
+          this.options_volume_removers.set(series_id, remove);
+          this.emit_series_change(this.series_added_subs, handle, this.pane_of_series(series_id));
+          return handle;
+        });
+      }
+      this.repaint();
+    };
+    set_data(rows);
+    return {
+      id,
+      set_data,
+      update: (row) => {
+        live();
+        check(this.wasm.update_options_volume(id, ++generation, row.time, row.calls, row.puts));
+        this.repaint();
+      },
+      series: () => {
+        live();
+        return [handles[0]!, handles[1]!];
+      },
+      visible: () => !removed && this.wasm.options_volume_visible(id),
+      set_visible: (visible) => {
+        live();
+        if (this.wasm.set_options_volume_visible(id, visible)) this.repaint();
+      },
+      remove,
     };
   }
 

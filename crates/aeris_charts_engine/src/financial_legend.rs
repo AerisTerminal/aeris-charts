@@ -177,6 +177,7 @@ impl ChartEngine {
         );
 
         let outputs = self.external_study_outputs();
+        let market = self.market_colors();
         let mut emitted_studies = HashSet::new();
         for output in &outputs {
             if !emitted_studies.insert(output.study_id) {
@@ -209,12 +210,9 @@ impl ChartEngine {
                                 .legend_label
                                 .as_ref()
                                 .map_or(value.clone(), |label| format!("{label} {value}")),
-                            color: Some(
-                                series
-                                    .line_color
-                                    .clone()
-                                    .unwrap_or_else(|| crate::DEFAULT_LINE_COLOR.to_css()),
-                            ),
+                            color: Some(series.line_color.clone().unwrap_or_else(|| {
+                                crate::frame::series_stroke_color(series, market).to_css()
+                            })),
                         })
                     })
                     .collect()
@@ -225,7 +223,11 @@ impl ChartEngine {
                 identity: FinancialLegendIdentity::ExternalStudy(output.study_id),
                 first_series_id: first_output.series_id,
                 pane: first_series.pane_index,
-                title: first_series.title.clone(),
+                title: if self.is_options_volume_study(output.study_id) {
+                    crate::OPTIONS_VOLUME_TITLE.to_owned()
+                } else {
+                    first_series.title.clone()
+                },
                 values,
                 tone: FinancialLegendTone::Neutral,
                 visible,

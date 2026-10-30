@@ -333,12 +333,12 @@
     <!-- candle/bar colors: body, wick, and border per direction + part visibility -->
     <div class="group" id="candle_style" data-panel="series" data-caption="Candle style">
       <h2>Candle style</h2>
-      <label>up <input type="color" id="up_color" value="#089981"></label>
-      <label>down <input type="color" id="down_color" value="#f7525f"></label>
-      <label>wick up <input type="color" id="wick_up_color" value="#089981"></label>
-      <label>wick dn <input type="color" id="wick_down_color" value="#f7525f"></label>
-      <label>border up <input type="color" id="border_up_color" value="#089981"></label>
-      <label>border dn <input type="color" id="border_down_color" value="#f7525f"></label>
+      <label>up <input type="color" id="up_color" value="#98c379"></label>
+      <label>down <input type="color" id="down_color" value="#e06c75"></label>
+      <label>wick up <input type="color" id="wick_up_color" value="#98c379"></label>
+      <label>wick dn <input type="color" id="wick_down_color" value="#e06c75"></label>
+      <label>border up <input type="color" id="border_up_color" value="#98c379"></label>
+      <label>border dn <input type="color" id="border_down_color" value="#e06c75"></label>
       <label><input type="checkbox" id="wick_visible" checked> wicks</label>
       <label><input type="checkbox" id="border_visible" checked> borders</label>
       <button id="candle_parts_reset" type="button" title="Reset wick/border colors to follow the body colors">reset parts</button>
@@ -356,7 +356,7 @@
     <!-- area fill -->
     <div class="group" id="area_style" data-panel="series" data-caption="Area style" hidden>
       <h2>Area style</h2>
-      <label>color <input type="color" id="area_top" value="#089981"></label>
+      <label>color <input type="color" id="area_top" value="#98c379"></label>
     </div>
 
     <!-- footprint presentation: engine-owned cell modes and the per-bar summary -->
@@ -983,7 +983,11 @@ window.__data = data;
 
 // volume: single-value histogram on the SAME pane, pinned to the bottom band via the overlay
 // price scale (industry-standard — no separate pane / divider), colored green/red by bar direction.
-const volume_data = volume_fixture(data);
+// Per-bar colors stay only on the reference parity fixture; otherwise histogram_updown paints the
+// theme market colors.
+const volume_data = parity_fixture !== null
+  ? volume_fixture(data)
+  : volume_fixture(data).map(({ time, value }) => ({ time, value }));
 // Live mode replaces the main series' data; every volume mirror then takes the live volumes.
 let live_market = null;
 const current_volume_data = () => live_market?.volume_data() ?? volume_data;

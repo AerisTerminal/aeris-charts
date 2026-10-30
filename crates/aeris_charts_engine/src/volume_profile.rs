@@ -2,12 +2,18 @@
 use crate::frame::{pane_scale, series_scale_target};
 use crate::native_primitives::NativeSeriesPrimitiveKind;
 use crate::{ChartEngine, NativePrimitiveId, SeriesId};
+use aeris_charts_core::style::{MARKET_DOWN_RGB, MARKET_UP_RGB};
 use aeris_charts_indicators::volume_profile::{
     MAX_VOLUME_PROFILE_ROWS, ProfileBar, VolumeProfile, volume_profile,
 };
 use aeris_charts_render::color::Color;
 
 pub const MAX_VOLUME_PROFILE_INDICATORS: usize = 16;
+
+/// A market token as a translucent CSS default; the frame repaints it in the active theme's pair.
+pub(crate) fn market_rgba(rgb: (u8, u8, u8), alpha: f64) -> String {
+    format!("rgba({},{},{},{alpha})", rgb.0, rgb.1, rgb.2)
+}
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -33,10 +39,10 @@ impl Default for VolumeProfileIndicatorOptions {
             visible: true,
             show_poc: true,
             show_value_area: true,
-            up_color: "rgba(8,153,129,0.45)".into(),
-            down_color: "rgba(247,82,95,0.45)".into(),
-            value_area_up_color: "rgba(8,153,129,0.78)".into(),
-            value_area_down_color: "rgba(247,82,95,0.78)".into(),
+            up_color: market_rgba(MARKET_UP_RGB, 0.45),
+            down_color: market_rgba(MARKET_DOWN_RGB, 0.45),
+            value_area_up_color: market_rgba(MARKET_UP_RGB, 0.78),
+            value_area_down_color: market_rgba(MARKET_DOWN_RGB, 0.78),
             poc_color: "#f5a623".into(),
         }
     }

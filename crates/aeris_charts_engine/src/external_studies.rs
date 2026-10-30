@@ -5,8 +5,8 @@
 
 use crate::indicators::{indicator_output_style, output_style_is_valid};
 use crate::{
-    ChartEngine, IndicatorChromeOptions, IndicatorOutputStyle, SeriesId, SeriesKind,
-    SeriesThresholdRegion,
+    ChartEngine, IndicatorChromeOptions, IndicatorOutputStyle, MarketTone, PriceFormatKind,
+    SeriesId, SeriesKind, SeriesThresholdRegion,
 };
 use aeris_charts_core::model::data_validation::{MAX_SAFE_VALUE, validate_timestamp};
 use std::fmt;
@@ -20,6 +20,12 @@ const DEFAULT_EXTERNAL_STUDY_COLORS: [&str; 5] =
 
 /// Hard chart-local bound for host-computed scalar outputs.
 pub const MAX_EXTERNAL_STUDY_OUTPUTS: usize = 256;
+
+/// Legend title of the engine-owned options-volume study.
+pub const OPTIONS_VOLUME_TITLE: &str = "Options Volume";
+const OPTIONS_VOLUME_OUTPUTS: [(&str, MarketTone); 2] =
+    [("Calls", MarketTone::Up), ("Puts", MarketTone::Down)];
+const OPTIONS_VOLUME_PRECISION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ExternalStudyInputRequirements(u8);
@@ -133,6 +139,8 @@ pub(crate) struct ExternalStudyOutputState {
     /// when both are set.
     output_visible: bool,
     study_visible: bool,
+    momentum_histogram: bool,
+    options_volume: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -185,6 +193,31 @@ impl ChartEngine {
         timestamps_unix_nanos: &[i64],
         values: &[Option<f64>],
     ) -> Result<bool, ExternalStudyError> {
+        if self.is_options_volume_study(study_id) {
+            return Err(ExternalStudyError::InstallationRejected);
+        }
+        self.install_output(
+            study_id,
+            output_index,
+            descriptor,
+            generation,
+            timestamps_unix_nanos,
+            values,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)] // the public transaction plus its study-kind flag
+    fn install_output(
+        &mut self,
+        study_id: u64,
+        output_index: usize,
+        descriptor: ExternalStudyOutputDescriptor<'_>,
+        generation: u64,
+        timestamps_unix_nanos: &[i64],
+        values: &[Option<f64>],
+        options_volume: bool,
+    ) -> Result<bool, ExternalStudyError> {
         let key = (study_id, output_index);
         if self
             .external_study_outputs
@@ -228,9 +261,168 @@ impl ChartEngine {
                 input_requirements: descriptor.input_requirements,
                 output_visible,
                 study_visible,
+                momentum_histogram: descriptor.point_style
+                    == ExternalStudyPointStyle::MomentumHistogram,
+                options_volume,
             },
         );
         Ok(true)
+    }
+
+    /// Install or replace the options-volume study `study_id` from host-supplied per-bar call and
+    /// put volume. The engine draws it as one compact separate pane: call columns rise above zero
+    /// in the painted bullish color and put columns fall below it in the bearish color, both
+    /// following theme switches until a host style pins a color. Volumes must be non-negative;
+    /// `None` leaves that bar empty. The study then behaves as any external study for
+    /// visibility, output styles, selection, legend, and removal (`remove_external_studies`).
+    /// Returns `Ok(false)` for a stale `generation`; a rejected push changes nothing.
+    pub fn set_options_volume(
+        &mut self,
+        study_id: u64,
+        generation: u64,
+        timestamps_unix_nanos: &[i64],
+        calls: &[Option<f64>],
+        puts: &[Option<f64>],
+    ) -> Result<bool, ExternalStudyError> {
+        let existing = self.options_volume_series(study_id);
+        if existing.is_none()
+            && self.external_study_visible(study_id).is_some()
+            && !self.is_options_volume_study(study_id)
+        {
+            return Err(ExternalStudyError::InstallationRejected);
+        }
+        if calls.len() != timestamps_unix_nanos.len() || puts.len() != timestamps_unix_nanos.len() {
+            return Err(ExternalStudyError::LengthMismatch);
+        }
+        let calls = calls
+            .iter()
+            .map(|&value| options_volume_value(value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let puts = puts
+            .iter()
+            .map(|&value| options_volume_value(value).map(|value| value.map(|value| -value)))
+            .collect::<Result<Vec<_>, _>>()?;
+        // Timestamps are checked once up front so the second output cannot fail after the first
+        // one changed.
+        prepare_columns(timestamps_unix_nanos, &calls)?;
+        if self
+            .external_study_outputs
+            .get(&(study_id, 0))
+            .is_some_and(|state| state.generation >= generation)
+        {
+            return Ok(false);
+        }
+        if existing.is_none()
+            && self.external_study_outputs.len() + OPTIONS_VOLUME_OUTPUTS.len()
+                > MAX_EXTERNAL_STUDY_OUTPUTS
+        {
+            return Err(ExternalStudyError::CapacityExceeded);
+        }
+        for (output_index, ((title, _), values)) in OPTIONS_VOLUME_OUTPUTS
+            .iter()
+            .zip([&calls, &puts])
+            .enumerate()
+        {
+            if let Err(error) = self.install_output(
+                study_id,
+                output_index,
+                options_volume_descriptor(title),
+                generation,
+                timestamps_unix_nanos,
+                values,
+                true,
+            ) {
+                if existing.is_none() {
+                    self.remove_external_studies(&[study_id]);
+                }
+                return Err(error);
+            }
+        }
+        if existing.is_none()
+            && let Some(series) = self.options_volume_series(study_id)
+        {
+            for (id, (_, tone)) in series.into_iter().zip(OPTIONS_VOLUME_OUTPUTS) {
+                if let Some(entry) = self.series_entry_mut(id) {
+                    entry.market_tone = Some(tone);
+                    entry.line_color = None;
+                    entry.price_format.kind = PriceFormatKind::Volume;
+                    entry.price_format.precision = OPTIONS_VOLUME_PRECISION;
+                    entry.price_format.formatter = None;
+                }
+                self.invalidate_frame_series(id);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Append or replace the newest bar of an options-volume study, the streaming counterpart of
+    /// [`Self::set_options_volume`]. The bar must not be older than the study's newest bar.
+    pub fn update_options_volume(
+        &mut self,
+        study_id: u64,
+        generation: u64,
+        timestamp_unix_nanos: i64,
+        calls: f64,
+        puts: f64,
+    ) -> Result<bool, ExternalStudyError> {
+        let series = self
+            .options_volume_series(study_id)
+            .ok_or(ExternalStudyError::InstallationRejected)?;
+        let (Some(calls), Some(puts)) = (
+            options_volume_value(Some(calls))?,
+            options_volume_value(Some(puts))?,
+        ) else {
+            return Err(ExternalStudyError::InvalidValue);
+        };
+        let columns = prepare_columns(&[timestamp_unix_nanos], &[Some(calls)])?;
+        let time = columns.times[0];
+        if self
+            .external_study_outputs
+            .get(&(study_id, 0))
+            .is_some_and(|state| state.generation >= generation)
+        {
+            return Ok(false);
+        }
+        let newest = self
+            .data
+            .series_data(series[0])
+            .and_then(|(times, _)| times.last().copied());
+        if newest.is_some_and(|newest| newest as f64 > time) {
+            return Err(ExternalStudyError::NonIncreasingTimestamp);
+        }
+        for (id, value) in series.into_iter().zip([calls, -puts]) {
+            if !self.update_series_bar(id, time, [value; 4]) {
+                return Err(ExternalStudyError::InstallationRejected);
+            }
+        }
+        for output_index in 0..OPTIONS_VOLUME_OUTPUTS.len() {
+            if let Some(state) = self
+                .external_study_outputs
+                .get_mut(&(study_id, output_index))
+            {
+                state.generation = generation;
+            }
+        }
+        Ok(true)
+    }
+
+    /// The call and put series of a live options-volume study.
+    #[must_use]
+    pub fn options_volume_series(&self, study_id: u64) -> Option<[SeriesId; 2]> {
+        let series = |output_index| {
+            self.external_study_outputs
+                .get(&(study_id, output_index))
+                .filter(|state| state.options_volume)
+                .map(|state| state.series_id)
+                .filter(|&id| self.series_entry(id).is_some())
+        };
+        Some([series(0)?, series(1)?])
+    }
+
+    pub(crate) fn is_options_volume_study(&self, study_id: u64) -> bool {
+        self.external_study_outputs
+            .iter()
+            .any(|(&(candidate, _), state)| candidate == study_id && state.options_volume)
     }
 
     fn install_new_external_study_series(
@@ -367,6 +559,14 @@ impl ChartEngine {
     /// The whole-study visibility toggle. Outputs hidden through their own style stay hidden
     /// while the study is shown.
     #[must_use]
+    pub(crate) fn external_momentum_histogram_series(&self) -> Vec<SeriesId> {
+        self.external_study_outputs
+            .values()
+            .filter(|state| state.momentum_histogram)
+            .map(|state| state.series_id)
+            .collect()
+    }
+
     pub fn external_study_visible(&self, study_id: u64) -> Option<bool> {
         self.external_study_outputs
             .iter()
@@ -457,7 +657,10 @@ impl ChartEngine {
             .collect::<Vec<_>>();
         for (output_index, series_id) in outputs {
             if let Some(series) = self.series_entry_mut(series_id) {
-                series.line_color = Some(default_output_color(output_index));
+                series.line_color = series
+                    .market_tone
+                    .is_none()
+                    .then(|| default_output_color(output_index));
                 series.line_width = Some(DEFAULT_EXTERNAL_STUDY_LINE_WIDTH);
             }
         }
@@ -606,6 +809,31 @@ fn set_series_data(
         .map_err(|_| ExternalStudyError::InstallationRejected)
 }
 
+fn options_volume_descriptor(title: &str) -> ExternalStudyOutputDescriptor<'_> {
+    ExternalStudyOutputDescriptor {
+        title,
+        legend_label: Some(title),
+        plot: ExternalStudyPlotKind::Histogram,
+        pane: ExternalStudyPaneTarget::Dedicated { group: 0 },
+        scale: ExternalStudyScaleTarget::Primary,
+        settings_available: false,
+        threshold_region: None,
+        point_style: ExternalStudyPointStyle::Uniform,
+        input_requirements: ExternalStudyInputRequirements::NONE,
+    }
+}
+
+/// A host options volume: `None` stays an empty bar; a value must be a finite, non-negative
+/// count within the scalar range.
+fn options_volume_value(value: Option<f64>) -> Result<Option<f64>, ExternalStudyError> {
+    match value {
+        Some(value) if !(value.is_finite() && (0.0..=MAX_SAFE_VALUE).contains(&value)) => {
+            Err(ExternalStudyError::InvalidValue)
+        }
+        value => Ok(value),
+    }
+}
+
 fn default_output_color(output_index: usize) -> String {
     DEFAULT_EXTERNAL_STUDY_COLORS[output_index % DEFAULT_EXTERNAL_STUDY_COLORS.len()].to_owned()
 }
@@ -668,6 +896,149 @@ mod tests {
             input_requirements: ExternalStudyInputRequirements::BARS
                 .with(ExternalStudyInputStream::Trades),
         }
+    }
+
+    #[test]
+    fn options_volume_is_one_compact_pane_of_theme_signed_volume_columns() {
+        use crate::{ChartTheme, FinancialLegendRequest};
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let bars = [1.0, 2.0, 3.0];
+        chart
+            .set_series_data(0, &bars, &bars, &bars, &bars, &bars)
+            .unwrap();
+        let times = [1_000_000_000, 2_000_000_000, 3_000_000_000];
+        assert_eq!(
+            chart.set_options_volume(
+                9,
+                1,
+                &times,
+                &[Some(1500.0), Some(0.0), Some(30.0)],
+                &[Some(1100.0), Some(20.0), Some(5.0)],
+            ),
+            Ok(true)
+        );
+        let [calls, puts] = chart.options_volume_series(9).unwrap();
+        let closes = |chart: &ChartEngine, id| chart.data.series_data(id).unwrap().1[3].to_vec();
+        assert_eq!(closes(&chart, calls), [1500.0, 0.0, 30.0]);
+        assert_eq!(closes(&chart, puts), [-1100.0, -20.0, -5.0]);
+        assert_eq!(chart.panes.len(), 2, "both outputs share one separate pane");
+        assert_eq!(chart.panes[1].stretch_factor, chart.separate_pane_stretch());
+        for (id, title) in [(calls, "Calls"), (puts, "Puts")] {
+            let series = chart.series_entry(id).unwrap();
+            assert_eq!(
+                (series.kind, series.pane_index, series.title.as_str()),
+                (SeriesKind::Histogram, 1, title)
+            );
+            assert_eq!(series.price_format.kind, PriceFormatKind::Volume);
+        }
+
+        let stroke = |chart: &ChartEngine, id| {
+            crate::frame::series_stroke_color(
+                chart.series_entry(id).unwrap(),
+                chart.market_colors(),
+            )
+        };
+        for theme in [ChartTheme::Dark, ChartTheme::Light] {
+            chart.set_theme(theme);
+            let market = chart.market_colors();
+            assert_eq!(
+                (stroke(&chart, calls), stroke(&chart, puts)),
+                (market.up, market.down)
+            );
+        }
+        let legend = chart.financial_legend(FinancialLegendRequest {
+            logical_index: None,
+            primary_title: "BTC",
+            show_primary_ohlc: false,
+            primary_values_series: None,
+            leading_series: &[],
+            trailing_series: &[],
+        });
+        let row = legend
+            .iter()
+            .find(|row| row.identity == crate::FinancialLegendIdentity::ExternalStudy(9))
+            .unwrap();
+        assert_eq!(row.title, OPTIONS_VOLUME_TITLE);
+        let market = chart.market_colors();
+        assert_eq!(
+            row.values
+                .iter()
+                .map(|value| value.color.clone())
+                .collect::<Vec<_>>(),
+            [Some(market.up.to_css()), Some(market.down.to_css())]
+        );
+
+        // A host style pins a color; the style reset hands the side's color back.
+        let pinned = IndicatorOutputStyle {
+            line_color: Some("#123456".into()),
+            ..chart.external_study_output_style(9, 0).unwrap()
+        };
+        assert!(chart.set_external_study_output_style(9, 0, pinned));
+        assert_eq!(stroke(&chart, calls), crate::Color::rgb(0x12, 0x34, 0x56));
+        chart.reset_external_study_styles_to_defaults();
+        assert_eq!(stroke(&chart, calls), chart.market_colors().up);
+
+        assert_eq!(
+            chart.update_options_volume(9, 2, 3_000_000_000, 40.0, 60.0),
+            Ok(true)
+        );
+        assert_eq!(
+            chart.update_options_volume(9, 3, 4_000_000_000, 7.0, 8.0),
+            Ok(true)
+        );
+        assert_eq!(closes(&chart, calls), [1500.0, 0.0, 40.0, 7.0]);
+        assert_eq!(closes(&chart, puts), [-1100.0, -20.0, -60.0, -8.0]);
+        assert_eq!(
+            chart.update_options_volume(9, 3, 5_000_000_000, 1.0, 1.0),
+            Ok(false)
+        );
+        assert_eq!(
+            chart.update_options_volume(9, 4, 2_000_000_000, 1.0, 1.0),
+            Err(ExternalStudyError::NonIncreasingTimestamp)
+        );
+        assert_eq!(
+            chart.update_options_volume(9, 4, 5_000_000_000, -1.0, 1.0),
+            Err(ExternalStudyError::InvalidValue)
+        );
+        assert_eq!(
+            chart.set_options_volume(9, 4, &times, &[Some(1.0); 3], &[Some(-1.0); 3]),
+            Err(ExternalStudyError::InvalidValue)
+        );
+        assert_eq!(
+            closes(&chart, calls).len(),
+            4,
+            "a rejected push changes nothing"
+        );
+        assert_eq!(
+            chart.install_external_study_output(
+                9,
+                2,
+                descriptor("Other", ExternalStudyPaneTarget::Price),
+                9,
+                &times,
+                &[Some(1.0); 3]
+            ),
+            Err(ExternalStudyError::InstallationRejected)
+        );
+        chart
+            .install_external_study_output(
+                7,
+                0,
+                descriptor("Signal", ExternalStudyPaneTarget::Price),
+                1,
+                &times,
+                &[Some(1.0); 3],
+            )
+            .unwrap();
+        assert_eq!(
+            chart.set_options_volume(7, 2, &times, &[Some(1.0); 3], &[Some(1.0); 3]),
+            Err(ExternalStudyError::InstallationRejected),
+            "another study's id is never taken over"
+        );
+
+        assert!(chart.remove_external_studies(&[9]));
+        assert_eq!(chart.options_volume_series(9), None);
+        assert_eq!(chart.panes.len(), 1, "removal releases the pane");
     }
 
     #[test]

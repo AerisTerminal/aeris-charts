@@ -194,7 +194,7 @@ impl ChartEngine {
         {
             return None;
         }
-        let style = &self.trading_state.style;
+        let style = &self.trading_style();
         let light = self.surface_theme() == crate::ChartTheme::Light;
         let (configured, rgb) = match (order.side, light) {
             (OrderSide::Buy, true) => (style.buy_limit, LIGHT_POSITIVE_SUBTLE_RGB),
@@ -716,7 +716,7 @@ impl ChartEngine {
             return (
                 TradingControlSegmentKind::OrderType,
                 "Inactive".to_string(),
-                self.trading_state.style.inactive,
+                self.trading_style().inactive,
             );
         }
         if order.role != OrderRole::Working {
@@ -748,9 +748,9 @@ impl ChartEngine {
             Some(value) => (
                 self.trading_pnl_text(value, position.currency.as_deref()),
                 if value >= 0.0 {
-                    self.trading_state.style.profit
+                    self.trading_style().profit
                 } else {
-                    self.trading_state.style.risk
+                    self.trading_style().risk
                 },
             ),
             None => ("—".to_string(), self.primary_text_color()),
@@ -792,7 +792,7 @@ impl ChartEngine {
     /// Where a marker line begins: the pane's left edge, or with `extend_lines_left` off, the
     /// leftmost control on the line, so the line runs only from its controls to the right edge.
     fn trading_line_start(&self, controls_start: f64) -> f64 {
-        if self.trading_state.style.extend_lines_left {
+        if self.trading_style().extend_lines_left {
             0.0
         } else {
             controls_start
@@ -907,10 +907,10 @@ impl ChartEngine {
 
     fn trading_annotation_color(&self, tone: crate::TradingAnnotationTone) -> Color {
         match tone {
-            crate::TradingAnnotationTone::Neutral => self.trading_state.style.control,
-            crate::TradingAnnotationTone::Info => self.trading_state.style.working_order,
-            crate::TradingAnnotationTone::Warning => self.trading_state.style.pending,
-            crate::TradingAnnotationTone::Danger => self.trading_state.style.risk,
+            crate::TradingAnnotationTone::Neutral => self.trading_style().control,
+            crate::TradingAnnotationTone::Info => self.trading_style().working_order,
+            crate::TradingAnnotationTone::Warning => self.trading_style().pending,
+            crate::TradingAnnotationTone::Danger => self.trading_style().risk,
         }
     }
 
@@ -973,13 +973,13 @@ impl ChartEngine {
                 radii: radius,
                 fill: self.trading_chip_background(),
                 border_width: Self::trading_border_width(vpr) as f32,
-                border_color: self.trading_state.style.control,
+                border_color: self.trading_style().control,
             });
             out.push(Prim::Text {
                 x: ((left + right) / 2.0) as f32,
                 y: text_y as f32,
                 text,
-                color: self.trading_state.style.control,
+                color: self.trading_style().control,
                 size: (font_size * vpr) as f32,
                 family: self.options.get().layout.font_family.clone(),
                 align: TextAlign::Center,
@@ -1110,7 +1110,7 @@ impl ChartEngine {
             (
                 color.solid(),
                 0.0,
-                self.trading_state.style.label,
+                self.trading_style().label,
                 MARKER_REGULAR_WEIGHT,
             )
         } else {
@@ -1167,14 +1167,14 @@ impl ChartEngine {
                 crate::TradingHitKind::StopLossButton,
                 TradingControlSegmentKind::StopLoss,
                 "SL",
-                self.trading_state.style.stop_loss,
+                self.trading_style().stop_loss,
             ),
             (
                 show_take_profit,
                 crate::TradingHitKind::TakeProfitButton,
                 TradingControlSegmentKind::TakeProfit,
                 "TP",
-                self.trading_state.style.take_profit,
+                self.trading_style().take_profit,
             ),
         ] {
             if !visible {
@@ -1267,7 +1267,7 @@ impl ChartEngine {
         let label = if cluster.fill.is_some() {
             color
         } else {
-            self.trading_state.style.label
+            self.trading_style().label
         };
         let left = cluster.start();
         // Snap the marker to whole device pixels once. Every cell edge and the text anchor derive
@@ -1376,8 +1376,8 @@ impl ChartEngine {
 
     pub(crate) fn trading_position_color(&self, side: PositionSide) -> Color {
         match side {
-            PositionSide::Long => self.trading_state.style.buy,
-            PositionSide::Short => self.trading_state.style.sell,
+            PositionSide::Long => self.trading_style().buy,
+            PositionSide::Short => self.trading_style().sell,
         }
     }
 
@@ -1402,9 +1402,9 @@ impl ChartEngine {
             * quantity
             * self.trading_state.instrument.point_value.unwrap_or(1.0);
         let color = if value >= 0.0 {
-            self.trading_state.style.profit
+            self.trading_style().profit
         } else {
-            self.trading_state.style.risk
+            self.trading_style().risk
         };
         Some((
             self.trading_pnl_text(value, position.currency.as_deref()),
@@ -1619,8 +1619,8 @@ impl ChartEngine {
         for mark in &layout.marks {
             let fills = &layout.order[mark.fills.clone()];
             let color = match mark.side {
-                OrderSide::Buy => self.trading_state.style.execution_buy,
-                OrderSide::Sell => self.trading_state.style.execution_sell,
+                OrderSide::Buy => self.trading_style().execution_buy,
+                OrderSide::Sell => self.trading_style().execution_sell,
             };
             let x = (mark.x * hpr).round() + correction;
             let shape = executions[fills[fills.len() - 1]].marker_shape;
@@ -1772,7 +1772,7 @@ impl ChartEngine {
                     crate::ChartTheme::Light => aeris_charts_core::style::LIGHT_PRIMARY_CSS,
                     crate::ChartTheme::Dark => aeris_charts_core::style::DARK_PRIMARY_CSS,
                 })
-                .unwrap_or(self.trading_state.style.control);
+                .unwrap_or(self.trading_style().control);
                 lines.push(Prim::VLine {
                     x: (x * hpr).round() as i32,
                     y0: (pane.top * vpr).round() as i32,
@@ -1822,9 +1822,9 @@ impl ChartEngine {
                         h: (pane.height * vpr).round().max(1.0) as i32,
                     },
                     color: Color::rgba(
-                        self.trading_state.style.pending.r(),
-                        self.trading_state.style.pending.g(),
-                        self.trading_state.style.pending.b(),
+                        self.trading_style().pending.r(),
+                        self.trading_style().pending.g(),
+                        self.trading_style().pending.b(),
                         24,
                     ),
                 });
@@ -1843,9 +1843,9 @@ impl ChartEngine {
                 }
                 last_event_x = x;
                 let color = if event.importance >= 2 {
-                    self.trading_state.style.risk
+                    self.trading_style().risk
                 } else {
-                    self.trading_state.style.control
+                    self.trading_style().control
                 };
                 lines.push(Prim::VLine {
                     x: (x * hpr).round() as i32,
@@ -2020,7 +2020,7 @@ impl ChartEngine {
                                 )
                             });
                     let base_color = trading_order_color(
-                        &self.trading_state.style,
+                        &self.trading_style(),
                         order.kind,
                         order.side,
                         order.role,
@@ -2254,7 +2254,7 @@ impl ChartEngine {
                             price_scale: order.price_scale,
                             trigger_price: order.trailing_trigger_price,
                             display_price,
-                            color: self.trading_state.style.pending,
+                            color: self.trading_style().pending,
                         },
                         hpr,
                         vpr,
@@ -2266,7 +2266,7 @@ impl ChartEngine {
                             price_scale: order.price_scale,
                             trigger_price: order.break_even_trigger_price,
                             display_price,
-                            color: self.trading_state.style.take_profit,
+                            color: self.trading_style().take_profit,
                         },
                         hpr,
                         vpr,
@@ -2287,9 +2287,9 @@ impl ChartEngine {
                 !matches!(preview.source, crate::TradingPreviewSource::Order { .. });
             if creating_protection {
                 let semantic = if preview.role == OrderRole::TakeProfit {
-                    self.trading_state.style.take_profit
+                    self.trading_style().take_profit
                 } else {
-                    self.trading_state.style.stop_loss
+                    self.trading_style().stop_loss
                 };
                 lines.push(Prim::HLine {
                     y: (preview_y * vpr).round() as i32,
@@ -2357,9 +2357,9 @@ impl ChartEngine {
                     let bottom = anchor_y.max(preview_y).min(pane.top + pane.height);
                     if bottom > top {
                         let fill = if preview.role == OrderRole::TakeProfit {
-                            self.trading_state.style.profit
+                            self.trading_style().profit
                         } else {
-                            self.trading_state.style.risk
+                            self.trading_style().risk
                         };
                         regions.push(Prim::Rect {
                             rect: IRect {
@@ -2373,7 +2373,7 @@ impl ChartEngine {
                     }
                 }
                 if (anchor_y - preview_y).abs() > 0.5 {
-                    let connector = self.trading_state.style.position;
+                    let connector = self.trading_style().position;
                     let x = ((self.pane_w - 8.0) * hpr).round() as i32;
                     lines.push(Prim::VLine {
                         x,
@@ -2444,7 +2444,7 @@ impl ChartEngine {
             }
             if member_count >= 2 && bottom - top > 0.5 {
                 let connector_x = ((self.pane_w - 8.0) * hpr).round() as i32;
-                let connector_color = self.trading_state.style.position;
+                let connector_color = self.trading_style().position;
                 lines.push(Prim::VLine {
                     x: connector_x,
                     y0: (top * vpr).round() as i32,
@@ -2551,9 +2551,9 @@ impl ChartEngine {
                 continue;
             };
             let color = match round_trip.outcome {
-                crate::TradingRoundTripOutcome::Profit => self.trading_state.style.profit,
-                crate::TradingRoundTripOutcome::Loss => self.trading_state.style.risk,
-                crate::TradingRoundTripOutcome::Flat => self.trading_state.style.control,
+                crate::TradingRoundTripOutcome::Profit => self.trading_style().profit,
+                crate::TradingRoundTripOutcome::Loss => self.trading_style().risk,
+                crate::TradingRoundTripOutcome::Flat => self.trading_style().control,
             };
             let x0 = (entry_x * hpr).round() as i32;
             let x1 = (exit_x * hpr).round() as i32;

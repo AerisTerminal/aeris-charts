@@ -235,8 +235,11 @@ fn histogram_column_color(
 }
 
 /// The up and down column colors of an up/down histogram: the series' own up/down colors when
-/// set, else the volume tint. `None` for a single-color histogram.
-fn histogram_updown_colors(series: &crate::SeriesEntry) -> Option<(Color, Color)> {
+/// set, else the theme's volume tint. `None` for a single-color histogram.
+fn histogram_updown_colors(
+    series: &crate::SeriesEntry,
+    market: MarketColors,
+) -> Option<(Color, Color)> {
     series.histogram_updown.then(|| {
         let parse = |css: &Option<String>, fallback| {
             css.as_deref()
@@ -244,8 +247,8 @@ fn histogram_updown_colors(series: &crate::SeriesEntry) -> Option<(Color, Color)
                 .unwrap_or(fallback)
         };
         (
-            parse(&series.up_color, VOLUME_UP),
-            parse(&series.down_color, VOLUME_DOWN),
+            parse(&series.up_color, market.volume_up()),
+            parse(&series.down_color, market.volume_down()),
         )
     })
 }
@@ -258,8 +261,12 @@ fn delta_direction(value: f64) -> Option<bool> {
     (!value.is_nan()).then_some(value >= 0.0)
 }
 
-fn histogram_solid_color(stroke: Color) -> Color {
-    if stroke != LINE { stroke } else { HISTOGRAM }
+fn histogram_solid_color(stroke: Color, market: MarketColors) -> Color {
+    if stroke != LINE {
+        stroke
+    } else {
+        market.volume_up()
+    }
 }
 
 fn mix_area_brush_color(low: Color, high: Color, amount: f64) -> Color {
@@ -371,8 +378,9 @@ impl ChartEngine {
         if bottom <= top {
             return;
         }
-        let up_color = verbatim_color(&series.up_color, UP);
-        let down_color = verbatim_color(&series.down_color, DOWN);
+        let market = self.market_colors();
+        let up_color = verbatim_color(&series.up_color, market.up);
+        let down_color = verbatim_color(&series.down_color, market.down);
         let x_for_row = |row: usize| -> Option<i32> {
             let logical = plot.index_at(row)?;
             Some((self.time_scale.index_to_coordinate(logical) * hpr).round() as i32)
@@ -850,11 +858,12 @@ impl ChartEngine {
             .filter(|&row| !plot.is_whitespace_row(row))?;
         let (primary, footprint) = self.volume_direction_sources();
         let delta = self.delta_histogram_colors(series);
+        let market = self.market_colors();
         Some(histogram_column_color(
             self.data
                 .point_colors(id)
                 .and_then(|colors| colors.color(PointColorChannel::Body, row)),
-            delta.or_else(|| histogram_updown_colors(series)),
+            delta.or_else(|| histogram_updown_colors(series, market)),
             || {
                 if delta.is_some() {
                     return delta_direction(plot.value_at(row, PlotValueIndex::Close));
@@ -863,7 +872,7 @@ impl ChartEngine {
                     .and_then(|id| bar_direction(self.data.plot(id), index))
                     .or_else(|| footprint.and_then(|id| bar_direction(self.data.plot(id), index)))
             },
-            histogram_solid_color(series_stroke_color(series)),
+            histogram_solid_color(series_stroke_color(series, market), market),
         ))
     }
 
@@ -874,7 +883,7 @@ impl ChartEngine {
         series: &crate::SeriesEntry,
     ) -> Option<(Color, Color)> {
         series.delta_histogram.then(|| {
-            let (up, down) = self.themed_candle_colors();
+            let MarketColors { up, down } = self.market_colors();
             (
                 verbatim_color(&series.up_color, up),
                 verbatim_color(&series.down_color, down),
@@ -907,7 +916,8 @@ impl ChartEngine {
         // reference HistogramStyleOptions.base (histogram-renderer.ts): columns grow from this price
         // level (default 0).
         let base = scale.price_to_coordinate(rs.base, rs.base_value);
-        let solid = histogram_solid_color(rs.color);
+        let market = self.market_colors();
+        let solid = histogram_solid_color(rs.color, market);
         let (primary, footprint) = self.volume_direction_sources();
         let main = primary.map(|id| self.data.plot(id));
         let presented = footprint.map(|id| self.data.plot(id));
@@ -915,7 +925,10 @@ impl ChartEngine {
         let delta = self
             .series_entry(rs.id)
             .and_then(|series| self.delta_histogram_colors(series));
-        let updown = delta.or_else(|| self.series_entry(rs.id).and_then(histogram_updown_colors));
+        let updown = delta.or_else(|| {
+            self.series_entry(rs.id)
+                .and_then(|series| histogram_updown_colors(series, market))
+        });
         let mut work = conflation::DensityWork::default();
         let visible = visible_histogram_rows_with_work(
             plot,
@@ -1827,15 +1840,16 @@ impl ChartEngine {
             let Some(base_value) = self.series_base_value(series.id, from) else {
                 continue;
             };
+            let market = self.market_colors();
             let sides = [
                 (series.bid, series.bid_color.as_str(), PRIMARY),
-                (series.ask, series.ask_color.as_str(), DOWN),
+                (series.ask, series.ask_color.as_str(), market.down),
             ];
             for (value, css, fallback) in sides {
                 let Some(price) = value else {
                     continue;
                 };
-                let color = Color::parse_css(css).unwrap_or(fallback);
+                let color = Color::parse_css(css).map_or(fallback, |color| market.follow(color));
                 out.push(Prim::HLine {
                     y: (scale.price_to_coordinate(price, base_value) * vpr).round() as i32,
                     x0: 0,
@@ -1883,16 +1897,21 @@ impl ChartEngine {
         let cy = (scale.price_to_coordinate(close, base_value) * vpr) as f32;
         // The pulse takes the series' own resolved stroke color, like the reference's
         // `lastValueData.color`, so a recolored line or area pulses in its own color.
-        let stroke_color = || series_stroke_color(series);
+        let market = self.market_colors();
+        let stroke_color = || series_stroke_color(series, market);
         let base = match series_kind {
             SeriesKind::Line | SeriesKind::Area => stroke_color(),
-            SeriesKind::Histogram => HISTOGRAM,
+            SeriesKind::Histogram => market.volume_up(),
             _ => {
                 let open = self
                     .heikin_ashi_row(series_id, last)
                     .map(|values| values[0])
                     .unwrap_or_else(|| plot.value_at(last, PlotValueIndex::Open));
-                if close >= open { UP } else { DOWN }
+                if close >= open {
+                    market.up
+                } else {
+                    market.down
+                }
             }
         }
         .solid();

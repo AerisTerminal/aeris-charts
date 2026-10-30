@@ -87,8 +87,8 @@ impl Default for PeriodicProfilePresentationOptions {
         Self {
             mode: ProfileDisplayMode::BidAsk,
             width_percent: 35.0,
-            bid_color: "#f7525f".into(),
-            ask_color: "#089981".into(),
+            bid_color: aeris_charts_core::style::MARKET_DOWN_CSS.into(),
+            ask_color: aeris_charts_core::style::MARKET_UP_CSS.into(),
             unknown_color: "#788291".into(),
             poc_color: "#f5a623".into(),
             value_area_color: "#335cff".into(),

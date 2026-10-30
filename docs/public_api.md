@@ -89,7 +89,7 @@ const volume = chart.add_series("histogram", { visible: false });
 volume.set_data(volumeBars); // { time, value }, actual volume in the host's chosen units
 const profile = chart.add_volume_profile(candles, volume, {
   rows: 48, value_area_percent: 70, width_percent: 25,
-  up_color: "rgba(8,153,129,0.45)", down_color: "rgba(247,82,95,0.45)",
+  up_color: "rgba(152,195,121,0.45)", down_color: "rgba(224,108,117,0.45)",
 });
 const distribution = profile.snapshot(); // rows, total_volume, bar_count, poc, value-area bounds
 profile.apply_options({ show_poc: true, show_value_area: true });
@@ -116,6 +116,24 @@ changes recompute bins; color/width changes and pointer movement reuse them. Rem
 invalidates the handle. Profiles are runtime-only distributions, not scalar output series, and are
 not included in V1 state exports; recreate their bindings after restoring the source data.
 The older `create_volume_profile()` helper remains a drawing of caller-supplied bins.
+
+### Options volume
+
+```ts
+const flow = chart.add_options_volume(rows); // [{ time, calls, puts }], non-negative volumes
+flow.update({ time: liveBar.time, calls: 946, puts: 654 }); // append or replace the newest bar
+flow.set_visible(false);
+// flow.remove(); // removes both column series and the pane
+```
+
+The host supplies call and put volume per bar; the engine owns the rest. The study opens one
+compact separate pane, draws calls above zero in the positive color and puts below zero in the
+negative color (both follow theme switches), and formats the axis as volume (`4K`). `null`
+leaves one side of a bar empty; negative or nonfinite volume and bars older than the newest are
+rejected with `invalid_data` and change nothing. `series()` returns the call and put column
+series for styling; deleting either one on the chart removes the whole study. Rust hosts use
+`ChartEngine::set_options_volume` and `update_options_volume` with the external-study generation
+fence, and `remove_external_studies` to remove it.
 
 ### Fixed Range and Anchored Volume Profile drawings
 

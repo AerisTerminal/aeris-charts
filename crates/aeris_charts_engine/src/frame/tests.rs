@@ -15337,7 +15337,7 @@ fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
     chart.set_bid_ask(0, Some(11.0), Some(12.0));
     let primary = aeris_charts_core::style::DEFAULT_PRIMARY_RGB;
     let blue = Color::rgb(primary.0, primary.1, primary.2);
-    let red = Color::rgb(0xf7, 0x52, 0x5f);
+    let red = Color::rgb(0xe0, 0x6c, 0x75);
     assert!(
         !hlines(&mut chart)
             .iter()
@@ -16000,8 +16000,8 @@ fn position_drawings_paint_information_and_entry_target_stop_axis_prices() {
 
     let frame = chart.build_frame();
     let entry = Color::rgb(0x78, 0x7b, 0x86);
-    let reward = Color::rgb(0x08, 0x99, 0x81);
-    let risk = Color::rgb(0xf7, 0x52, 0x5f);
+    let reward = Color::rgb(0x98, 0xc3, 0x79);
+    let risk = Color::rgb(0xe0, 0x6c, 0x75);
     assert!(
         frame.panes[0].main.iter().all(|prim| !matches!(
             prim,
@@ -16264,8 +16264,8 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
 
     // countdown_chart's latest close is 12.5: inside the long reward zone.
     let frame = chart.build_frame();
-    let reward = Color::rgb(0x08, 0x99, 0x81);
-    let risk = Color::rgb(0xf7, 0x52, 0x5f);
+    let reward = Color::rgb(0x98, 0xc3, 0x79);
+    let risk = Color::rgb(0xe0, 0x6c, 0x75);
     let progress_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 96);
     let risk_progress_fill = Color::rgba(risk.r(), risk.g(), risk.b(), 96);
     let progress_rect = frame.panes[0]
@@ -16500,8 +16500,8 @@ fn position_run_stays_pending_until_entry_is_reached() {
     );
 
     let frame = chart.build_frame();
-    let reward = Color::rgb(0x08, 0x99, 0x81);
-    let risk = Color::rgb(0xf7, 0x52, 0x5f);
+    let reward = Color::rgb(0x98, 0xc3, 0x79);
+    let risk = Color::rgb(0xe0, 0x6c, 0x75);
     let reward_progress = Color::rgba(reward.r(), reward.g(), reward.b(), 96);
     let risk_progress = Color::rgba(risk.r(), risk.g(), risk.b(), 96);
     assert!(!frame.panes[0].main.iter().any(|prim| {
@@ -16553,7 +16553,7 @@ fn position_progress_overlay_covers_only_the_traveled_price_slice() {
         .unwrap();
 
     let frame = chart.build_frame();
-    let reward = Color::rgb(0x08, 0x99, 0x81);
+    let reward = Color::rgb(0x98, 0xc3, 0x79);
     let base_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 70);
     let progress_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 96);
     assert!(
@@ -16831,8 +16831,8 @@ fn stop_first_progress_darkens_only_the_traveled_loss_slice() {
         .unwrap();
 
     let frame = chart.build_frame();
-    let reward = Color::rgb(0x08, 0x99, 0x81);
-    let risk = Color::rgb(0xf7, 0x52, 0x5f);
+    let reward = Color::rgb(0x98, 0xc3, 0x79);
+    let risk = Color::rgb(0xe0, 0x6c, 0x75);
     let reward_progress = Color::rgba(reward.r(), reward.g(), reward.b(), 96);
     let risk_base = Color::rgba(risk.r(), risk.g(), risk.b(), 70);
     let risk_progress = Color::rgba(risk.r(), risk.g(), risk.b(), 96);
@@ -22464,7 +22464,7 @@ fn render_cutoff_stops_drawing_rows_without_dropping_series_data() {
 fn position_stats_have_opaque_rounded_borderless_fills() {
     use crate::drawings::{DrawingKind, DrawingPoint};
     for dpr in [1.0, 1.5, 2.0] {
-        for surface in ["#089981", "#f7525f", "#0000ff", "#000000", "#ffffff"] {
+        for surface in ["#98c379", "#e06c75", "#0000ff", "#000000", "#ffffff"] {
             let mut chart = countdown_chart();
             chart.dpr = dpr;
             chart
@@ -22504,7 +22504,7 @@ fn position_stats_have_opaque_rounded_borderless_fills() {
                         border_width,
                         radii,
                         ..
-                    } if fill.r() == 8 || fill.r() == 247 => Some((fill, border_width, radii)),
+                    } if fill.r() == 0x98 || fill.r() == 0xe0 => Some((fill, border_width, radii)),
                     _ => None,
                 })
                 .collect::<Vec<_>>();

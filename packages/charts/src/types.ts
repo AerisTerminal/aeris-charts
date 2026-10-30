@@ -3797,6 +3797,29 @@ export interface volume_profile_indicator_api {
   remove(): void;
 }
 
+/** One bar of host-supplied options flow. `time` is UTC seconds on the price series' bar grid;
+ * volumes are non-negative and `null` leaves that side of the bar empty. */
+export interface options_volume_row {
+  time: number;
+  calls: number | null;
+  puts: number | null;
+}
+/** Engine-owned options-volume study: one compact separate pane where call volume rises above
+ * zero in the bullish color and put volume falls below it in the bearish color, following the
+ * theme. Selecting either column set selects the study; deleting it removes both and the pane. */
+export interface options_volume_api {
+  readonly id: number;
+  /** Replace every bar. */
+  set_data(rows: readonly options_volume_row[]): void;
+  /** Append a bar or replace the newest one; older bars are rejected. */
+  update(row: { time: number; calls: number; puts: number }): void;
+  /** The call and put column series, for styling or reading values back. */
+  series(): readonly [series_api, series_api];
+  visible(): boolean;
+  set_visible(visible: boolean): void;
+  remove(): void;
+}
+
 /** Which orders become bubbles. `auto` keeps orders above a percentile of the recently completed
  * orders (weak 95th, medium 98th, strong 99.5th); `fixed` keeps orders of at least the volume. */
 export type big_trades_filter =
@@ -4146,6 +4169,9 @@ export interface chart_api {
    * nonpositive volume, and invalid price intervals contribute nothing. Source removal
    * removes the indicator. Distribution handles are runtime-only, not V1 scalar bindings. */
   add_volume_profile(source: series_api, volume_source: series_api, options?: Partial<volume_profile_indicator_options>): volume_profile_indicator_api;
+  /** Add an options-volume study (calls above zero, puts below) in its own compact pane, fed
+   * with host-supplied per-bar call and put volume. */
+  add_options_volume(rows?: readonly options_volume_row[]): options_volume_api;
   /** Add a Rust-native weighted moving-average line (linear weights, recent heaviest). */
   add_wma(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add a volume-weighted moving average. `volume_source` is optional and defaults to unit weights. */

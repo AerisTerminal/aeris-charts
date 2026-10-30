@@ -19,7 +19,9 @@ use crate::footprint::{
     FootprintTrade,
 };
 use crate::frame::{pane_scale, series_scale_target};
+use crate::volume_profile::market_rgba;
 use crate::{ChartEngine, NativePrimitiveId, SeriesKind};
+use aeris_charts_core::style::{MARKET_DOWN_CSS, MARKET_DOWN_RGB, MARKET_UP_CSS, MARKET_UP_RGB};
 
 pub const MAX_BIG_TRADES_INDICATORS: usize = 16;
 /// Newest qualifying orders kept per indicator; older bubbles are evicted first.
@@ -121,10 +123,10 @@ impl Default for BigTradesOptions {
             size: BigTradesSize::default(),
             show_volume: true,
             visible: true,
-            buy_color: "rgba(8,153,129,0.35)".into(),
-            sell_color: "rgba(247,82,95,0.35)".into(),
-            buy_border_color: "#089981".into(),
-            sell_border_color: "#f7525f".into(),
+            buy_color: market_rgba(MARKET_UP_RGB, 0.35),
+            sell_color: market_rgba(MARKET_DOWN_RGB, 0.35),
+            buy_border_color: MARKET_UP_CSS.into(),
+            sell_border_color: MARKET_DOWN_CSS.into(),
             text_color: None,
         }
     }
@@ -823,7 +825,10 @@ impl ChartEngine {
             .filter(|indicator| indicator.series_id == series_id && indicator.options.visible)
         {
             let options = &indicator.options;
-            let parse = |color: &str| Color::parse_css(color).expect("validated big-trades color");
+            let market = self.market_colors();
+            let parse = |color: &str| {
+                market.follow(Color::parse_css(color).expect("validated big-trades color"))
+            };
             let (buy_fill, sell_fill) = (parse(&options.buy_color), parse(&options.sell_color));
             let (buy_border, sell_border) = (
                 parse(&options.buy_border_color),

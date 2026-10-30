@@ -1466,7 +1466,11 @@ and React examples from that installed package.
 
 Financial appearance keeps theme provenance typed in the engine. Canvas background, chart text
 (layout and price-axis labels), grid, crosshair, bullish, bearish, wick, and border colors are either
-semantic theme followers or explicit custom colors; theme changes retokenize only followers. A raw
+semantic theme followers or explicit custom colors; theme changes retokenize only followers. Every
+other implicit up/down color (volume and up/down histograms, momentum histograms, area and baseline
+defaults, markers, trading and position chrome, depth, big trades, and volume profiles) resolves from
+the painted bullish/bearish pair at frame time; a stored default equal to a compiled market token
+follows that pair and keeps its alpha. Footprint order-flow buy/sell colors stay separate. A raw
 `applyOptions` color patch for any of these canvas roles pins it the same way until a style reset. Native hosts consume and apply the typed financial appearance transaction
 and must not infer provenance by comparing resolved CSS strings, create dummy engines for defaults,
 or send empty-string color sentinels to clear series overrides.
@@ -1890,6 +1894,13 @@ the rest of chart styling. An output's own visibility is kept separate from the 
 so showing a study never restores a line the host hid. Removing one output series directly releases
 its registry slot; a later push for that output installs it again. Provider sessions and the
 computation of those values remain host-runtime responsibilities.
+Options volume is an engine-owned study on that transaction (`set_options_volume`,
+`update_options_volume`; browser `add_options_volume`). The host supplies only per-bar
+non-negative call and put volume; the engine installs both outputs as one study in one compact
+separate pane, stores puts below zero, formats the axis as volume, and paints calls and puts in the
+painted bullish and bearish colors at frame time until a host style pins a color. The legend row,
+group selection, visibility, and removal are the external-study paths. Generic output pushes cannot
+take over an options-volume study id, and options volume cannot take over a generic study's id.
 Order-flow presentation is likewise installed and removed as one engine transaction. The engine
 owns the shared trade-stream graph, footprint/CVD/delta series and panes, candle-to-footprint
 cutover, retained indicator chrome, an optional big-trades indicator on the primary series, and

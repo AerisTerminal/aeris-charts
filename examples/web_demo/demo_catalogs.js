@@ -310,7 +310,7 @@ function series_features(bars, primary_series, live_source) {
     {
       id: "pretty-histogram", label: "Pretty histogram", detail: "Rounded columns", icon: "chart",
       series_kind: "pretty_histogram", options: { base_price: base, color: "#a459d1", width_percent: 64 },
-      data: () => sampled.map((bar) => ({ time: bar.time, value: bar.close, color: bar.close >= bar.open ? "#089981" : "#f7525f" })),
+      data: () => sampled.map((bar) => ({ time: bar.time, value: bar.close, color: bar.close >= bar.open ? "#98c379" : "#e06c75" })),
     },
     {
       id: "shaded-background", label: "Shaded backdrop", detail: "Per-bar shade field + line", icon: "chart",
@@ -504,34 +504,26 @@ function order_flow_features(chart, bars, live_source, price_series) {
     {
       id: "options-volume", label: "Options volume", detail: "Calls above zero, puts below", icon: "chart",
       activate: () => {
-        const pane = chart.panes().length;
-        const shared = { pane, price_format: { type: "volume", precision: 1 }, countdown_visible: false, price_line_visible: false };
-        const calls = chart.add_series("histogram", { ...shared, title: "Calls", color: "#22c55e" });
-        const puts = chart.add_series("histogram", { ...shared, title: "Puts", color: "#f97316" });
-        const columns = (time) => {
-          const flow = demo_options_volume(time);
-          return [{ time, value: flow.calls }, { time, value: -flow.puts }];
-        };
-        const fill = () => {
-          const times = price_series.data().map((row) => row.time);
-          calls.set_data(times.map((time) => columns(time)[0]));
-          puts.set_data(times.map((time) => columns(time)[1]));
-        };
-        // Live bars append or replace the newest price bar; the flow columns follow it.
+        // The demo only supplies the flow; the engine owns the pane, columns, colors, and axis.
+        const row = (time) => ({ time, ...demo_options_volume(time) });
+        const rows = () => price_series.data().map((bar) => row(bar.time));
+        const options_volume = chart.add_options_volume(rows());
+        // Live bars append or replace the newest price bar; the flow follows it.
         const follow = (scope) => {
-          if (scope === "full") return fill();
-          const last = price_series.data_by_index(Number.MAX_SAFE_INTEGER, -1);
-          if (last === null) return;
-          const [call, put] = columns(last.time);
-          calls.update(call);
-          puts.update(put);
+          try {
+            if (scope === "full") return options_volume.set_data(rows());
+            const last = price_series.data_by_index(Number.MAX_SAFE_INTEGER, -1);
+            if (last !== null) options_volume.update(row(last.time));
+          } catch (error) {
+            // Deleting the study on the chart retires the handle; stop feeding it.
+            if (error?.code !== "stale_handle") throw error;
+            price_series.unsubscribe_data_changed(follow);
+          }
         };
-        fill();
         price_series.subscribe_data_changed(follow);
         return () => {
           price_series.unsubscribe_data_changed(follow);
-          chart.remove_series(puts);
-          chart.remove_series(calls);
+          options_volume.remove();
         };
       },
     },

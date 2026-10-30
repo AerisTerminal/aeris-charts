@@ -242,10 +242,11 @@ impl ChartEngine {
             .series
             .iter()
             .find(|series| series.id == series_id && !series.removed)?;
-        let (area_top, area_bottom) = crate::frame::area_fill_colors(series);
-        let (baseline_top, baseline_bottom) = crate::frame::baseline_line_colors(series);
+        let market = self.market_colors();
+        let (area_top, area_bottom) = crate::frame::area_fill_colors(series, market);
+        let (baseline_top, baseline_bottom) = crate::frame::baseline_line_colors(series, market);
         Some(FinancialSeriesColors {
-            line: crate::frame::series_stroke_color(series).to_css(),
+            line: crate::frame::series_stroke_color(series, market).to_css(),
             area_top: area_top.to_css(),
             area_bottom: area_bottom.to_css(),
             baseline_top: baseline_top.to_css(),
@@ -493,7 +494,7 @@ mod tests {
         assert_eq!(chart.financial_series_colors(0).unwrap(), painted);
         let series = chart.series.iter().find(|series| series.id == 0).unwrap();
         assert!(series.line_color.is_none() && series.area_top_color.is_none());
-        let stroke = crate::frame::series_stroke_color(series);
+        let stroke = crate::frame::series_stroke_color(series, chart.market_colors());
         let (strong, faint) = crate::frame::area_fill_gradient(stroke);
         assert_eq!(painted.line, stroke.to_css());
         assert_eq!(painted.area_top, strong.to_css());

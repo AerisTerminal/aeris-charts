@@ -1625,12 +1625,9 @@ impl ChartEngine {
         };
         let base = self.drawing_scale_base_for(drawing.pane_index, drawing.price_scale);
         let metrics = self.axis_metrics();
-        let reward = Color::parse_css(aeris_charts_core::style::MARKET_UP_CSS)
-            .unwrap_or(Color::rgb(8, 153, 129))
-            .solid();
-        let risk = Color::parse_css(aeris_charts_core::style::MARKET_DOWN_CSS)
-            .unwrap_or(Color::rgb(247, 82, 95))
-            .solid();
+        let market = self.market_colors();
+        let reward = market.up.solid();
+        let risk = market.down.solid();
         let colors = [POSITION_ENTRY, reward, risk];
 
         let left_side = matches!(drawing.price_scale, crate::DrawingPriceScale::Left);
@@ -2194,7 +2191,7 @@ impl ChartEngine {
         }
         for order in &self.trading_state.orders {
             let color = super::trading_geometry::trading_order_color(
-                &self.trading_state.style,
+                &self.trading_style(),
                 order.kind,
                 order.side,
                 order.role,
@@ -2542,9 +2539,16 @@ impl ChartEngine {
                 // coordinate. Their attach groups are offset far from any series id so the
                 // chips never chain into the main cluster (or each other) when adjacent.
                 if series.bid_ask_visible {
+                    let market = self.market_colors();
                     let sides = [
                         ("Bid", series.bid, series.bid_color.as_str(), PRIMARY, 1u32),
-                        ("Ask", series.ask, series.ask_color.as_str(), DOWN, 2u32),
+                        (
+                            "Ask",
+                            series.ask,
+                            series.ask_color.as_str(),
+                            market.down,
+                            2u32,
+                        ),
                     ];
                     for (side, value, css, fallback, side_offset) in sides {
                         let Some(quote) = value else {
@@ -2562,7 +2566,9 @@ impl ChartEngine {
                             scale,
                             scale.price_to_logical_value(quote, base_value),
                         );
-                        let side_color = Color::parse_css(css).unwrap_or(fallback).solid();
+                        let side_color = Color::parse_css(css)
+                            .map_or(fallback, |color| market.follow(color))
+                            .solid();
                         groups[group_index].2.push(LastValueLabel {
                             price_text: Some(quote_text),
                             title: Some(side.to_string()),

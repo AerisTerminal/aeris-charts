@@ -5608,7 +5608,7 @@ fn macd_outputs_are_line_line_histogram_with_four_state_colors() {
     // Every installed histogram row carries one of the four palette colors.
     let rows = chart.data.series_data(ids[2]).unwrap().1[3].len();
     assert!(rows > 0);
-    const PALETTE: [u32; 4] = [0x089981ff, 0x08998180, 0xf7525fff, 0xf7525f80];
+    const PALETTE: [u32; 4] = [0x98c379ff, 0x98c37980, 0xe06c75ff, 0xe06c7580];
     for r in 0..rows {
         let color = chart
             .data
@@ -5968,7 +5968,7 @@ fn generic_momentum_histogram_style_uses_the_canonical_four_state_palette() {
         .set_series_data(histogram, &times, &values, &values, &values, &values)
         .unwrap();
     assert!(chart.apply_momentum_histogram_colors(histogram));
-    const PALETTE: [u32; 4] = [0x089981ff, 0x08998180, 0xf7525fff, 0xf7525f80];
+    const PALETTE: [u32; 4] = [0x98c379ff, 0x98c37980, 0xe06c75ff, 0xe06c7580];
     for row in 0..values.len() {
         let color = chart
             .data
@@ -5994,11 +5994,11 @@ fn generic_momentum_histogram_style_uses_the_canonical_four_state_palette() {
         )
     };
     assert_eq!(color(0), None);
-    assert_eq!(color(1), Some(0x089981ff));
-    assert_eq!(color(2), Some(0x089981ff));
+    assert_eq!(color(1), Some(0x98c379ff));
+    assert_eq!(color(2), Some(0x98c379ff));
     assert_eq!(color(3), None);
-    assert_eq!(color(4), Some(0xf7525f80));
-    assert_eq!(color(5), Some(0xf7525fff));
+    assert_eq!(color(4), Some(0xe06c7580));
+    assert_eq!(color(5), Some(0xe06c75ff));
 }
 
 #[test]
@@ -10500,6 +10500,81 @@ fn unpinned_candles_follow_engine_theme_while_explicit_colors_stay_pinned() {
         chart.series_bar_color(&chart.series[0], 1, None),
         Color::rgb(4, 5, 6)
     );
+}
+
+#[test]
+fn market_defaults_beyond_candles_follow_the_theme_pair() {
+    use aeris_charts_core::model::data_layer::PointColorChannel;
+    use aeris_charts_core::style::{
+        DARK_MARKET_DOWN_RGB, DARK_MARKET_UP_RGB, LIGHT_MARKET_DOWN_RGB, LIGHT_MARKET_UP_RGB,
+    };
+    let rgb = |c: (u8, u8, u8)| Color::rgb(c.0, c.1, c.2);
+    let hue = |c: Color| Color::rgb(c.r(), c.g(), c.b());
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0, 2.0, 3.0, 4.0];
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    let histogram = chart.add_macd(0, 2, 3, 2)[2];
+    let hues = |chart: &ChartEngine| {
+        let rows = chart.data.series_data(histogram).unwrap().1[3].len();
+        (0..rows)
+            .filter_map(|row| {
+                chart
+                    .data
+                    .point_color(histogram, PointColorChannel::Body, row)
+                    .map(|color| hue(Color(color)))
+            })
+            .collect::<std::collections::HashSet<_>>()
+    };
+    let dark = [rgb(DARK_MARKET_UP_RGB), rgb(DARK_MARKET_DOWN_RGB)];
+    let light = [rgb(LIGHT_MARKET_UP_RGB), rgb(LIGHT_MARKET_DOWN_RGB)];
+    assert!(hues(&chart).iter().all(|color| dark.contains(color)));
+
+    chart.set_theme(ChartTheme::Light);
+    assert!(
+        hues(&chart).iter().all(|color| light.contains(color)),
+        "stored momentum colors recolor on a theme switch"
+    );
+    let style = chart.trading_style();
+    assert_eq!((style.buy, style.sell), (light[0], light[1]));
+    assert_eq!((style.profit, style.stop_loss), (light[0], light[1]));
+    let market = chart.market_colors();
+    let translucent_token = Color::rgba(
+        DARK_MARKET_UP_RGB.0,
+        DARK_MARKET_UP_RGB.1,
+        DARK_MARKET_UP_RGB.2,
+        0x80,
+    );
+    assert_eq!(
+        market.follow(translucent_token),
+        Color::rgba(
+            LIGHT_MARKET_UP_RGB.0,
+            LIGHT_MARKET_UP_RGB.1,
+            LIGHT_MARKET_UP_RGB.2,
+            0x80
+        ),
+        "stored defaults keep their alpha and take the theme hue"
+    );
+    assert_eq!(market.follow(Color::rgb(1, 2, 3)), Color::rgb(1, 2, 3));
+    let late = chart.add_macd(0, 2, 3, 2)[2];
+    assert!(
+        chart
+            .data
+            .point_color(late, PointColorChannel::Body, 0)
+            .is_some_and(|color| light.contains(&hue(Color(color))))
+    );
+
+    chart.set_theme(ChartTheme::Dark);
+    assert!(hues(&chart).iter().all(|color| dark.contains(color)));
+    assert_eq!(chart.trading_style().buy, dark[0]);
 }
 
 // --- pane-local price scale geometry (issue #25) ------------------------------------------------

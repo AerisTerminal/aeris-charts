@@ -290,7 +290,7 @@
         { "id": "y", "dimension": "y", "scale": "linear" }
       ],
       "series": [
-        { "kind": "column", "title": "Buy volume", "color": "#089981", "group_id": "flow", "bar_corner_radius": 3, "data": [
+        { "kind": "column", "title": "Buy volume", "color": "#98c379", "group_id": "flow", "bar_corner_radius": 3, "data": [
           { "x": "Mon", "y": 42 }, { "x": "Tue", "y": 38 }, { "x": "Wed", "y": 51 }, { "x": "Thu", "y": 47 }, { "x": "Fri", "y": 55 }
         ] },
         { "kind": "column", "title": "Sell volume", "color": "#f23645", "group_id": "flow", "bar_corner_radius": 3, "data": [
@@ -750,7 +750,7 @@
       "id": "treemap", "title": "Treemap", "category": "layout", "grid": false,
       "horizontal_domain": { "type": "layout" },
       "layout_series": [
-        { "kind": "treemap", "title": "Market cap, daily change", "color": "#089981", "data_labels": true, "data": { "type": "hierarchy", "nodes": [
+        { "kind": "treemap", "title": "Market cap, daily change", "color": "#98c379", "data_labels": true, "data": { "type": "hierarchy", "nodes": [
           { "id": "market", "parent": null, "label": "Market", "value": null },
           { "id": "tech", "parent": "market", "label": "Technology", "value": null },
           { "id": "finance", "parent": "market", "label": "Finance", "value": null },

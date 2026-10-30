@@ -2692,7 +2692,7 @@ impl ChartEngine {
                 }
             }
             DrawingBodyGeometry::Position(position) => {
-                let (reward, risk) = position_colors(drawing);
+                let (reward, risk) = position_colors(drawing, self.market_colors());
                 push_position_zone(out, position.reward_zone(), reward);
                 push_position_zone(out, position.risk_zone(), risk);
 
@@ -3189,7 +3189,7 @@ impl ChartEngine {
             .kind
             .is_annotation()
             .then(|| self.annotation_palette(drawing, stroke));
-        let (profit, loss) = position_colors(drawing);
+        let (profit, loss) = position_colors(drawing, self.market_colors());
         crate::drawing_contract::drawing_property_schema(drawing.kind)
             .properties
             .into_iter()
@@ -3658,8 +3658,7 @@ impl ChartEngine {
             _ => false,
         };
         if negative {
-            Color::parse_css(aeris_charts_core::style::MARKET_DOWN_CSS)
-                .unwrap_or(Color::rgb(247, 82, 95))
+            self.market_colors().down
         } else {
             Color::parse_css(&drawing.color).unwrap_or(PRIMARY)
         }
@@ -4376,7 +4375,7 @@ impl ChartEngine {
         vpr: f64,
         out: &mut Vec<Prim>,
     ) {
-        let (reward, risk) = position_colors(drawing);
+        let (reward, risk) = position_colors(drawing, self.market_colors());
         let ink = drawing.text_color.as_deref().and_then(Color::parse_css);
         let (Some(entry), Some(target), Some(stop)) = (
             drawing.points.first(),
@@ -4588,7 +4587,7 @@ impl ChartEngine {
             let start_x = (start_x * hpr).clamp(position.left, position.right);
             let run_x = (run_x * hpr).clamp(position.left, position.right);
             let run_y = run_y * vpr;
-            let (reward, risk) = position_colors(drawing);
+            let (reward, risk) = position_colors(drawing, self.market_colors());
             let semantic = match run.side {
                 PositionRunSide::Reward => reward,
                 PositionRunSide::Risk => risk,
@@ -5290,25 +5289,14 @@ fn area_fill(drawing: &Drawing, stroke: Color) -> Color {
         ))
 }
 
-/// A position's (profit, stop) colors: the drawing's own, else the market up/down tokens.
-fn position_colors(drawing: &Drawing) -> (Color, Color) {
-    let resolve = |custom: Option<&str>, token: &str, fallback: Color| {
-        custom
-            .and_then(Color::parse_css)
-            .or_else(|| Color::parse_css(token))
-            .unwrap_or(fallback)
+/// A position's (profit, stop) colors: the drawing's own, else the theme's market up/down pair.
+fn position_colors(drawing: &Drawing, market: super::MarketColors) -> (Color, Color) {
+    let resolve = |custom: Option<&str>, fallback: Color| {
+        custom.and_then(Color::parse_css).unwrap_or(fallback)
     };
     (
-        resolve(
-            drawing.position_profit_color.as_deref(),
-            aeris_charts_core::style::MARKET_UP_CSS,
-            Color::rgb(8, 153, 129),
-        ),
-        resolve(
-            drawing.position_loss_color.as_deref(),
-            aeris_charts_core::style::MARKET_DOWN_CSS,
-            Color::rgb(247, 82, 95),
-        ),
+        resolve(drawing.position_profit_color.as_deref(), market.up),
+        resolve(drawing.position_loss_color.as_deref(), market.down),
     )
 }
 

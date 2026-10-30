@@ -110,8 +110,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     primary_foreground: "#ffffff",
     primary_hover: "#338be4",
     border: "#cecece",
-    bullish: "#089981",
-    bearish: "#f7525f",
+    bullish: "#3fb950",
+    bearish: "#f85149",
   });
   expect(light.chart).toEqual({
     background: "#ffffff",
@@ -120,8 +120,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     border: "#cecece",
     crosshair: "#0a0a0a26",
     crosshair_label: "#242424",
-    bullish: "#089981",
-    bearish: "#f7525f",
+    bullish: "#3fb950",
+    bearish: "#f85149",
   });
 
   const dark = await read("dark");
@@ -146,8 +146,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     primary_foreground: "#ffffff",
     primary_hover: "#055db5",
     border: "#2e2e2e",
-    bullish: "#089981",
-    bearish: "#f7525f",
+    bullish: "#98c379",
+    bearish: "#e06c75",
   });
   expect(dark.chart).toEqual({
     background: "#171717",
@@ -156,8 +156,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     border: "#2e2e2e",
     crosshair: "#fafafa1a",
     crosshair_label: "#242424",
-    bullish: "#089981",
-    bearish: "#f7525f",
+    bullish: "#98c379",
+    bearish: "#e06c75",
   });
 });
 
@@ -550,8 +550,13 @@ test("options volume card draws calls above and puts below zero in one sub-pane"
       same_times: [0, 1].every((i) => JSON.stringify(series[i].data().map((row) => row.time)) === JSON.stringify(price_times)),
       axis_label: series[0].price_formatter()(4000),
       share: panes.at(-1).get_stretch_factor() / panes[0].get_stretch_factor(),
+      colors: series.map((s) => s.options().color),
+      market: [window.__chart.options().layout.bullishColor, window.__chart.options().layout.bearishColor],
     };
   });
+  expect(shown.colors, "calls and puts paint the theme's positive and negative colors").toEqual(shown.market);
+  delete shown.colors;
+  delete shown.market;
   expect(shown).toEqual({
     panes: base_panes + 1,
     kinds: ["histogram", "histogram"],
@@ -601,7 +606,7 @@ test("hollow candles are a Series choice backed by the canonical candlestick ser
     kind: window.__main.series_type(),
     up: window.__main.options().up_color,
     down: window.__main.options().down_color,
-  }))).toEqual({ kind: "candlestick", up: "#089981", down: "#f7525f" });
+  }))).toEqual({ kind: "candlestick", up: "#98c379", down: "#e06c75" });
 
   await page.locator('input[name="series"][value="histogram"]').check();
   expect(await page.evaluate(() => window.__main.series_type())).toBe("histogram");

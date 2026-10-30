@@ -140,7 +140,7 @@ pub use external_studies::{
     ExternalStudyError, ExternalStudyInputRequirements, ExternalStudyInputStream,
     ExternalStudyOutputDescriptor, ExternalStudyOutputInfo, ExternalStudyPaneTarget,
     ExternalStudyPlotKind, ExternalStudyPointStyle, ExternalStudyScaleTarget,
-    ExternalStudyThresholdRegion, MAX_EXTERNAL_STUDY_OUTPUTS,
+    ExternalStudyThresholdRegion, MAX_EXTERNAL_STUDY_OUTPUTS, OPTIONS_VOLUME_TITLE,
 };
 pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
@@ -998,6 +998,13 @@ pub(crate) struct AreaBrushState {
     pub ranges: Vec<BrushRange>,
 }
 
+/// The market side an engine-owned output stands for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MarketTone {
+    Up,
+    Down,
+}
+
 pub struct SeriesEntry {
     pub id: SeriesId,
     pub kind: SeriesKind,
@@ -1037,6 +1044,9 @@ pub struct SeriesEntry {
     /// (`up_color`/`down_color`, else the theme's bullish/bearish tokens), columns are half the
     /// bar spacing wide over a zero baseline, and the scale is symmetric around zero.
     pub(crate) delta_histogram: bool,
+    /// Engine-owned outputs that stand for one market side: with no explicit color the series
+    /// paints the painted bullish or bearish color, so it follows theme switches.
+    pub(crate) market_tone: Option<MarketTone>,
     pub price_scale_target: PriceScaleTarget,
     pub pane_index: usize,
     pub line_type: LineType,
@@ -1213,6 +1223,7 @@ impl SeriesEntry {
             threshold_region: None,
             histogram_updown: false,
             delta_histogram: false,
+            market_tone: None,
             price_scale_target: PriceScaleTarget::Right,
             pane_index: 0,
             line_type: LineType::Simple,
@@ -5560,7 +5571,11 @@ impl ChartEngine {
         if let Some(time_zone) = patch.get("timezone").and_then(serde_json::Value::as_str) {
             let _ = self.set_time_zone(time_zone);
         }
+        let market = self.market_colors();
         self.options.apply(&patch);
+        if self.market_colors() != market {
+            self.refresh_momentum_histogram_colors();
+        }
         // Re-derive runtime state that isn't read straight from the store each frame.
         self.crosshair_mode = crosshair_mode_from_u8(self.options.get().crosshair.mode);
         self.route_time_scale_patch(&patch);
@@ -5575,7 +5590,11 @@ impl ChartEngine {
         self.theme = theme;
         let mut patch = chart_theme_patch(theme);
         self.pin_custom_canvas_colors(&mut patch);
+        let market = self.market_colors();
         self.options.apply(&patch);
+        if self.market_colors() != market {
+            self.refresh_momentum_histogram_colors();
+        }
         self.route_price_scale_patch(&patch);
         self.invalidate_frame_all();
     }
@@ -5628,7 +5647,11 @@ impl ChartEngine {
         self.text_color_follows_theme = true;
         self.grid_color_follows_theme = true;
         self.crosshair_color_follows_theme = true;
+        let market = self.market_colors();
         self.options.reset_style_to_defaults(theme);
+        if self.market_colors() != market {
+            self.refresh_momentum_histogram_colors();
+        }
 
         for pane in &mut self.panes {
             for scale in pane.scales_mut() {
