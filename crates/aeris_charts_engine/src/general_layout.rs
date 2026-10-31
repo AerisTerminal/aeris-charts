@@ -11,7 +11,7 @@ use crate::domains::HorizontalDomain;
 use crate::general_axes::GeneralPlotRect;
 use crate::{ChartEngine, ChartError, ErrorCode, PaneId};
 use aeris_charts_render::color::Color;
-use aeris_charts_render::draw_list::{IRect, Prim, TextAlign};
+use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
 
 const MAX_LAYOUT_DATASETS: usize = 64;
 const MAX_LAYOUT_SERIES: usize = 64;
@@ -445,6 +445,14 @@ impl SunburstShape {
         (((self.end - self.start) * 72.0 / std::f64::consts::TAU).ceil() as usize).max(1)
     }
 
+    fn arc_point(self, radius: f64, index: usize) -> (f64, f64) {
+        let angle = self.start + (self.end - self.start) * index as f64 / self.segments() as f64;
+        (
+            self.cx + radius * angle.cos(),
+            self.cy + radius * angle.sin(),
+        )
+    }
+
     fn segment_vertices(self, index: usize) -> [(f64, f64); 4] {
         let count = self.segments() as f64;
         let a0 = self.start + (self.end - self.start) * index as f64 / count;
@@ -502,10 +510,16 @@ fn point_in_triangle(p: (f64, f64), a: (f64, f64), b: (f64, f64), c: (f64, f64))
 struct SankeyCache {
     plot: GeneralPlotRect,
     column_count: usize,
+    /// Horizontal distance between adjacent node columns.
+    column_stride: f64,
     nodes: Vec<TreemapShape>,
+    /// Column of each entry in `nodes`.
+    node_columns: Vec<usize>,
     links: Vec<SankeyLinkShape>,
 }
 
+/// One Sankey link: the Recharts cubic `M x0,y0 C c0,y0 c1,y1 x1,y1` path stroked `thickness`
+/// wide. Frame meshes and hit tests both use the flattened ribbon from [`Self::edge`].
 #[derive(Clone, Copy, Debug)]
 struct SankeyLinkShape {
     row: usize,
@@ -517,21 +531,80 @@ struct SankeyLinkShape {
 }
 
 impl SankeyLinkShape {
-    fn y_at(self, t: f64) -> f64 {
-        let eased = t * t * (3.0 - 2.0 * t);
-        self.y0 + (self.y1 - self.y0) * eased
+    fn controls(self) -> (f64, f64) {
+        let span = self.x1 - self.x0;
+        (
+            self.x0 + span * SANKEY_LINK_CURVATURE,
+            self.x0 + span * (1.0 - SANKEY_LINK_CURVATURE),
+        )
+    }
+
+    fn point(self, t: f64) -> (f64, f64) {
+        let (c0, c1) = self.controls();
+        let u = 1.0 - t;
+        let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+        (
+            a * self.x0 + b * c0 + c * c1 + d * self.x1,
+            (a + b) * self.y0 + (c + d) * self.y1,
+        )
+    }
+
+    /// Bounded flattening: about one segment per 6 px of span, at most
+    /// `SANKEY_LINK_SEGMENTS`.
+    fn segments(self) -> usize {
+        ((self.x1 - self.x0) / 6.0)
+            .ceil()
+            .clamp(4.0, SANKEY_LINK_SEGMENTS as f64) as usize
+    }
+
+    /// Upper and lower ribbon edge at sample `index` of `segments`: the curve offset by half the
+    /// link width along its normal, which is how SVG strokes the Recharts path.
+    fn edge(self, index: usize, segments: usize) -> ((f64, f64), (f64, f64)) {
+        let t = index as f64 / segments as f64;
+        let (x, y) = self.point(t);
+        let (c0, c1) = self.controls();
+        let u = 1.0 - t;
+        let dx =
+            3.0 * u * u * (c0 - self.x0) + 6.0 * u * t * (c1 - c0) + 3.0 * t * t * (self.x1 - c1);
+        let dy = 6.0 * u * t * (self.y1 - self.y0);
+        let length = dx.hypot(dy);
+        let (nx, ny) = if length > 0.0 {
+            (-dy / length, dx / length)
+        } else {
+            (0.0, 1.0)
+        };
+        let half = self.thickness / 2.0;
+        (
+            (x - nx * half, y - ny * half),
+            (x + nx * half, y + ny * half),
+        )
     }
 
     fn contains(self, x: f64, y: f64) -> bool {
-        if x < self.x0 || x >= self.x1 || self.thickness <= 0.0 {
+        if self.thickness <= 0.0 || self.x1 <= self.x0 {
             return false;
         }
-        let scaled = ((x - self.x0) / (self.x1 - self.x0) * 8.0).clamp(0.0, 8.0);
-        let segment = (scaled.floor() as usize).min(7);
-        let fraction = scaled - segment as f64;
-        let center = self.y_at(segment as f64 / 8.0) * (1.0 - fraction)
-            + self.y_at((segment + 1) as f64 / 8.0) * fraction;
-        y >= center - self.thickness / 2.0 && y < center + self.thickness / 2.0
+        let half = self.thickness / 2.0;
+        if x < self.x0 - half
+            || x > self.x1 + half
+            || y < self.y0.min(self.y1) - half
+            || y > self.y0.max(self.y1) + half
+        {
+            return false;
+        }
+        let segments = self.segments();
+        let mut previous = self.edge(0, segments);
+        for index in 1..=segments {
+            let next = self.edge(index, segments);
+            let ((top0, bottom0), (top1, bottom1)) = (previous, next);
+            if point_in_triangle((x, y), top0, top1, bottom1)
+                || point_in_triangle((x, y), top0, bottom1, bottom0)
+            {
+                return true;
+            }
+            previous = next;
+        }
+        false
     }
 }
 
@@ -647,7 +720,6 @@ fn treemap_cache(nodes: &[HierarchyNode], plot: GeneralPlotRect) -> TreemapCache
     layout_treemap_node(
         root,
         plot,
-        false,
         &children,
         &weights,
         &mut cache.shapes,
@@ -656,34 +728,13 @@ fn treemap_cache(nodes: &[HierarchyNode], plot: GeneralPlotRect) -> TreemapCache
     cache
 }
 
-/// Gap between a group's edge and its cells, so groups read as separate blocks.
-const TREEMAP_GROUP_GAP: f64 = 2.0;
-/// Header lane above a group's cells that carries the group label.
-const TREEMAP_GROUP_HEADER: f64 = 16.0;
-/// Gap painted around every cell; the pane background shows through it.
-const TREEMAP_CELL_GAP: f64 = 1.0;
+/// Recharts `Treemap` default `aspectRatio`, the golden ratio `0.5 * (1 + sqrt(5))`.
+const TREEMAP_ASPECT_RATIO: f64 = std::f64::consts::GOLDEN_RATIO;
+/// Recharts' default node `stroke="#fff"` at the SVG default 1 px width.
+const TREEMAP_STROKE: Color = Color(0xFFFF_FFFF);
 const TREEMAP_UP: Color = Color(0x0899_81FF);
 const TREEMAP_DOWN: Color = Color(0xF236_45FF);
 const TREEMAP_FLAT: Color = Color(0x4246_4FFF);
-
-fn treemap_group_has_header(rect: GeneralPlotRect) -> bool {
-    rect.height >= 3.0 * TREEMAP_GROUP_HEADER && rect.width >= 48.0
-}
-
-/// The area a nested group lays its children into: inset by the group gap, below its header.
-fn treemap_group_content(rect: GeneralPlotRect) -> GeneralPlotRect {
-    let top = if treemap_group_has_header(rect) {
-        TREEMAP_GROUP_HEADER
-    } else {
-        TREEMAP_GROUP_GAP
-    };
-    GeneralPlotRect {
-        x: rect.x + TREEMAP_GROUP_GAP,
-        y: rect.y + top,
-        width: (rect.width - 2.0 * TREEMAP_GROUP_GAP).max(0.0),
-        height: (rect.height - top - TREEMAP_GROUP_GAP).max(0.0),
-    }
-}
 
 /// Largest leaf `color_value` magnitude, or `None` when no leaf carries one.
 fn treemap_color_range(nodes: &[HierarchyNode]) -> Option<f64> {
@@ -694,8 +745,9 @@ fn treemap_color_range(nodes: &[HierarchyNode]) -> Option<f64> {
         .reduce(f64::max)
 }
 
-/// A leaf's fill: signed `color_value` shades from the flat color toward up or down by
-/// magnitude; without values the cells vary the series color.
+/// A leaf's fill. By default every cell uses the one series color, like Recharts' flat
+/// `fill`; a leaf's signed `color_value` opts into shading from the flat color toward up or down
+/// by magnitude.
 fn treemap_cell_color(
     base: Color,
     nodes: &[HierarchyNode],
@@ -706,7 +758,7 @@ fn treemap_cell_color(
         color_range,
         nodes.get(row).and_then(|node| node.color_value),
     ) else {
-        return treemap_color(base, row);
+        return base;
     };
     if value == 0.0 || range <= 0.0 {
         return TREEMAP_FLAT;
@@ -780,10 +832,13 @@ fn hierarchy_layout_tree(nodes: &[HierarchyNode]) -> Option<(usize, Vec<Vec<usiz
     Some((root, children, weights))
 }
 
+/// Recharts `squarify` (pinned 3.10.1 `Treemap`, `nodeInset` and `nodeGap` 0): children keep
+/// data order and join the current row while its worst aspect ratio does not grow. A row is laid
+/// along the short side of the remaining rectangle with Recharts' whole-pixel rounding, its last
+/// cell absorbs the rounding remainder, and the final row is flush with the remaining space.
 fn layout_treemap_node(
     node: usize,
     rect: GeneralPlotRect,
-    nested: bool,
     children: &[Vec<usize>],
     weights: &[f64],
     shapes: &mut Vec<TreemapShape>,
@@ -797,111 +852,138 @@ fn layout_treemap_node(
         shapes.push(TreemapShape { row: node, rect });
         return;
     }
-    let rect = if nested {
-        treemap_group_content(rect)
-    } else {
-        rect
-    };
-    if rect.width <= 0.0 || rect.height <= 0.0 {
-        return;
-    }
+    let scale = rect.width * rect.height / weights[node];
+    let area = |child: usize| weights[child] * scale;
     let active: Vec<usize> = children[node]
         .iter()
         .copied()
         .filter(|&child| weights[child] > 0.0)
         .collect();
-    let mut suffix_weights = vec![0.0; active.len() + 1];
-    for index in (0..active.len()).rev() {
-        suffix_weights[index] = suffix_weights[index + 1] + weights[active[index]];
-    }
+    let mut placed: Vec<(usize, GeneralPlotRect)> = Vec::with_capacity(active.len());
+    let mut row: Vec<usize> = Vec::with_capacity(active.len());
+    let mut row_area = 0.0;
+    let mut best = f64::INFINITY;
     let mut remaining = rect;
-    let mut start = 0;
-    while start < active.len() {
-        let short = remaining.width.min(remaining.height);
-        let scale = remaining.width * remaining.height / suffix_weights[start];
-        let mut end = start + 1;
-        let mut sum = weights[active[start]] * scale;
-        let mut min_area = sum;
-        let mut max_area = sum;
-        let worst = |sum: f64, min_area: f64, max_area: f64| {
-            (short * short * max_area / (sum * sum)).max(sum * sum / (short * short * min_area))
-        };
-        while end < active.len() {
-            let next = weights[active[end]] * scale;
-            let candidate = worst(sum + next, min_area.min(next), max_area.max(next));
-            if candidate > worst(sum, min_area, max_area) {
-                break;
-            }
-            sum += next;
-            min_area = min_area.min(next);
-            max_area = max_area.max(next);
-            end += 1;
-        }
-        let final_row = end == active.len();
-        if remaining.width >= remaining.height {
-            let strip = if final_row {
-                remaining.width
-            } else {
-                sum / remaining.height
-            };
-            let mut y = remaining.y;
-            for (position, &child) in active[start..end].iter().enumerate() {
-                let height = if position + 1 == end - start {
-                    remaining.y + remaining.height - y
-                } else {
-                    weights[child] * scale / strip
-                };
-                layout_treemap_node(
-                    child,
-                    GeneralPlotRect {
-                        x: remaining.x,
-                        y,
-                        width: strip,
-                        height,
-                    },
-                    true,
-                    children,
-                    weights,
-                    shapes,
-                    bounds,
-                );
-                y += height;
-            }
-            remaining.x += strip;
-            remaining.width = (rect.x + rect.width - remaining.x).max(0.0);
+    let mut size = remaining.width.min(remaining.height);
+    let mut index = 0;
+    while index < active.len() {
+        let child = active[index];
+        row.push(child);
+        row_area += area(child);
+        let score = treemap_worst_score(&row, row_area, size, &area);
+        if score <= best || row.len() == 1 {
+            index += 1;
+            best = score;
         } else {
-            let strip = if final_row {
-                remaining.height
-            } else {
-                sum / remaining.width
-            };
-            let mut x = remaining.x;
-            for (position, &child) in active[start..end].iter().enumerate() {
-                let width = if position + 1 == end - start {
-                    remaining.x + remaining.width - x
-                } else {
-                    weights[child] * scale / strip
-                };
-                layout_treemap_node(
-                    child,
-                    GeneralPlotRect {
-                        x,
-                        y: remaining.y,
-                        width,
-                        height: strip,
-                    },
-                    true,
-                    children,
-                    weights,
-                    shapes,
-                    bounds,
-                );
-                x += width;
-            }
-            remaining.y += strip;
-            remaining.height = (rect.y + rect.height - remaining.y).max(0.0);
+            row.pop();
+            row_area -= area(child);
+            remaining =
+                treemap_position_row(&row, row_area, size, remaining, false, &area, &mut placed);
+            size = remaining.width.min(remaining.height);
+            row.clear();
+            row_area = 0.0;
+            best = f64::INFINITY;
         }
-        start = end;
+    }
+    if !row.is_empty() {
+        treemap_position_row(&row, row_area, size, remaining, true, &area, &mut placed);
+    }
+    for (child, child_rect) in placed {
+        layout_treemap_node(child, child_rect, children, weights, shapes, bounds);
+    }
+}
+
+/// Recharts `getWorstScore`.
+fn treemap_worst_score(
+    row: &[usize],
+    row_area: f64,
+    size: f64,
+    area: &impl Fn(usize) -> f64,
+) -> f64 {
+    let parent_area = size * size;
+    let row_area = row_area * row_area;
+    if row_area == 0.0 {
+        return f64::INFINITY;
+    }
+    let (min, max) = row
+        .iter()
+        .fold((f64::INFINITY, 0.0_f64), |(min, max), &child| {
+            (min.min(area(child)), max.max(area(child)))
+        });
+    (parent_area * max * TREEMAP_ASPECT_RATIO / row_area)
+        .max(row_area / (parent_area * min * TREEMAP_ASPECT_RATIO))
+}
+
+/// Recharts `position`: a row spans the short side `size` of `rect` and the rest of `rect` is
+/// returned.
+fn treemap_position_row(
+    row: &[usize],
+    row_area: f64,
+    size: f64,
+    rect: GeneralPlotRect,
+    flush: bool,
+    area: &impl Fn(usize) -> f64,
+    placed: &mut Vec<(usize, GeneralPlotRect)>,
+) -> GeneralPlotRect {
+    let horizontal = rect.width <= rect.height;
+    let (along, across) = if horizontal {
+        (rect.width, rect.height)
+    } else {
+        (rect.height, rect.width)
+    };
+    let mut thickness = if size > 0.0 {
+        (row_area / size).round()
+    } else {
+        0.0
+    };
+    if flush || thickness > across {
+        thickness = across;
+    }
+    let start = if horizontal { rect.x } else { rect.y };
+    let end = start + along;
+    let mut cursor = start;
+    for (position, &child) in row.iter().enumerate() {
+        let mut length = if thickness > 0.0 {
+            (area(child) / thickness).round()
+        } else {
+            0.0
+        }
+        .min(end - cursor);
+        if position + 1 == row.len() {
+            length = end - cursor;
+        }
+        placed.push((
+            child,
+            if horizontal {
+                GeneralPlotRect {
+                    x: cursor,
+                    y: rect.y,
+                    width: length,
+                    height: thickness,
+                }
+            } else {
+                GeneralPlotRect {
+                    x: rect.x,
+                    y: cursor,
+                    width: thickness,
+                    height: length,
+                }
+            },
+        ));
+        cursor += length;
+    }
+    if horizontal {
+        GeneralPlotRect {
+            y: rect.y + thickness,
+            height: rect.height - thickness,
+            ..rect
+        }
+    } else {
+        GeneralPlotRect {
+            x: rect.x + thickness,
+            width: rect.width - thickness,
+            ..rect
+        }
     }
 }
 
@@ -929,10 +1011,18 @@ impl LayoutSeriesEntry {
     }
 }
 
-fn treemap_color(base: Color, row: usize) -> Color {
-    let factor = [0.78, 0.9, 1.0, 1.12, 1.24][row % 5];
-    let shade = |channel: u8| (f64::from(channel) * factor).round().clamp(0.0, 255.0) as u8;
-    Color::rgba(shade(base.r()), shade(base.g()), shade(base.b()), base.a())
+/// Recharts `SunburstChart` defaults (pinned 3.10.1 `defaultSunburstChartProps`): a fixed
+/// center hole, a gap between rings, and a white sector stroke as wide as `padding`.
+const SUNBURST_INNER_RADIUS: f64 = 50.0;
+const SUNBURST_RING_PADDING: f64 = 2.0;
+const SUNBURST_STROKE_WIDTH: f64 = 2.0;
+const SUNBURST_STROKE: Color = Color(0xFFFF_FFFF);
+/// Recharts' default sector `textOptions.fontSize` of `.75rem`.
+const SUNBURST_LABEL_SIZE: f64 = 12.0;
+
+/// Recharts sector labels print the node's own `value`; internal nodes without one stay blank.
+fn layout_value_text(value: Option<f64>) -> String {
+    value.map_or_else(String::new, |value| format!("{value}"))
 }
 
 fn sunburst_shapes(nodes: &[HierarchyNode], plot: GeneralPlotRect) -> SunburstCache {
@@ -954,9 +1044,16 @@ fn sunburst_shapes(nodes: &[HierarchyNode], plot: GeneralPlotRect) -> SunburstCa
         }
     }
     assign_depth(root, &children, &mut depths);
-    let max_depth = depths.iter().copied().max().unwrap_or(0).max(1);
-    let radius = plot.width.min(plot.height) / 2.0;
-    let ring = radius / max_depth as f64;
+    // Recharts counts the root as a level although it paints only descendants, so the outer
+    // ring stops one ring short of the outer radius.
+    let levels = depths.iter().copied().max().unwrap_or(0).max(1) + 1;
+    let outer = plot.width.min(plot.height) / 2.0;
+    // The fixed hole would swallow a very small chart; cap it at half the radius.
+    let inner = SUNBURST_INNER_RADIUS.min(outer * 0.5);
+    let ring = (outer - inner) / levels as f64;
+    if ring <= 0.0 {
+        return cache;
+    }
     let center = (plot.x + plot.width / 2.0, plot.y + plot.height / 2.0);
     struct SectorTree<'a> {
         root: usize,
@@ -964,23 +1061,27 @@ fn sunburst_shapes(nodes: &[HierarchyNode], plot: GeneralPlotRect) -> SunburstCa
         weights: &'a [f64],
         depths: &'a [usize],
         center: (f64, f64),
+        inner: f64,
         ring: f64,
     }
     impl SectorTree<'_> {
+        /// `start..end` are Recharts angles: radians counterclockwise from three o'clock.
         fn visit(&self, node: usize, start: f64, end: f64, shapes: &mut Vec<SunburstShape>) {
             if self.weights[node] <= 0.0 || end <= start {
                 return;
             }
             if node != self.root || self.children[node].is_empty() {
                 let depth = self.depths[node].max(1);
+                let inner = self.inner + (depth - 1) as f64 * (self.ring + SUNBURST_RING_PADDING);
+                // Screen Y points down, so a counterclockwise span maps to negated angles.
                 shapes.push(SunburstShape {
                     row: node,
                     cx: self.center.0,
                     cy: self.center.1,
-                    inner: (depth - 1) as f64 * self.ring,
-                    outer: depth as f64 * self.ring,
-                    start,
-                    end,
+                    inner,
+                    outer: inner + self.ring,
+                    start: -end,
+                    end: -start,
                 });
             }
             let mut cursor = start;
@@ -1006,14 +1107,10 @@ fn sunburst_shapes(nodes: &[HierarchyNode], plot: GeneralPlotRect) -> SunburstCa
         weights: &weights,
         depths: &depths,
         center,
+        inner,
         ring,
     }
-    .visit(
-        root,
-        -std::f64::consts::FRAC_PI_2,
-        3.0 * std::f64::consts::FRAC_PI_2,
-        &mut cache.shapes,
-    );
+    .visit(root, 0.0, std::f64::consts::TAU, &mut cache.shapes);
     cache
 }
 
@@ -1032,14 +1129,36 @@ impl LayoutSeriesEntry {
     }
 }
 
+/// Recharts `Sankey` defaults (pinned 3.10.1 `sankeyDefaultProps`).
+const SANKEY_MARGIN: f64 = 5.0;
+const SANKEY_NODE_WIDTH: f64 = 10.0;
+const SANKEY_NODE_PADDING: f64 = 10.0;
+const SANKEY_ITERATIONS: usize = 32;
+const SANKEY_LINK_CURVATURE: f64 = 0.5;
+/// Upper bound of the flattened segments per link ribbon.
+const SANKEY_LINK_SEGMENTS: usize = 24;
+/// Recharts' default node `fill="#0088fe"` with `fillOpacity="0.8"`, kept apart from the link
+/// color.
+const SANKEY_NODE_FILL: Color = Color(0x0088_FECC);
+/// Recharts' default link `strokeOpacity="0.2"`.
+const SANKEY_LINK_ALPHA: u8 = 51;
+
+/// Recharts `computeData` with `align` and `verticalAlign` `justify`, `sort` on: longest-path
+/// columns with sinks pushed to the last column, a shared value-to-pixel ratio, 32 relaxation
+/// passes with collision resolution, link offsets ordered by the far node, and the
+/// skipped-column obstacle pass.
 fn sankey_shapes(nodes: &[FlowNode], links: &[FlowLink], plot: GeneralPlotRect) -> SankeyCache {
     let mut cache = SankeyCache {
         plot,
         column_count: 0,
+        column_stride: 0.0,
         nodes: Vec::new(),
+        node_columns: Vec::new(),
         links: Vec::new(),
     };
-    if nodes.is_empty() || links.is_empty() || plot.width <= 0.0 || plot.height <= 0.0 {
+    let width = plot.width - 2.0 * SANKEY_MARGIN;
+    let height = plot.height - 2.0 * SANKEY_MARGIN;
+    if nodes.is_empty() || links.is_empty() || width <= 0.0 || height <= 0.0 {
         return cache;
     }
     let ids: HashMap<&str, usize> = nodes
@@ -1047,124 +1166,319 @@ fn sankey_shapes(nodes: &[FlowNode], links: &[FlowLink], plot: GeneralPlotRect) 
         .enumerate()
         .map(|(i, node)| (node.id.as_str(), i))
         .collect();
-    let mut outgoing = vec![Vec::new(); nodes.len()];
-    let mut indegree = vec![0usize; nodes.len()];
-    let mut maximum = 0.0_f64;
-    for (index, link) in links.iter().enumerate() {
-        let source = ids[link.source.as_str()];
-        let target = ids[link.target.as_str()];
-        outgoing[source].push((target, index));
-        indegree[target] += 1;
-        maximum = maximum.max(link.value);
-    }
+    let maximum = links.iter().fold(0.0_f64, |max, link| max.max(link.value));
     if maximum == 0.0 {
         return cache;
     }
-    let mut ready = std::collections::VecDeque::new();
-    let mut columns = vec![0usize; nodes.len()];
-    for (index, degree) in indegree.iter().enumerate() {
-        if *degree == 0 {
-            ready.push_back(index);
-        }
+    // Normalizing by the largest link keeps every sum finite near f64::MAX; the shared
+    // value-to-pixel ratio absorbs the scale, so pixel geometry is unchanged.
+    let values: Vec<f64> = links.iter().map(|link| link.value / maximum).collect();
+    let ends: Vec<(usize, usize)> = links
+        .iter()
+        .map(|link| (ids[link.source.as_str()], ids[link.target.as_str()]))
+        .collect();
+    let count = nodes.len();
+    let mut incoming = vec![Vec::new(); count];
+    let mut outgoing = vec![Vec::new(); count];
+    for (index, &(source, target)) in ends.iter().enumerate() {
+        outgoing[source].push(index);
+        incoming[target].push(index);
     }
-    while let Some(index) = ready.pop_front() {
-        let next = columns[index] + 1;
-        for &(target, _) in &outgoing[index] {
-            columns[target] = columns[target].max(next);
-            indegree[target] -= 1;
-            if indegree[target] == 0 {
+    let sum = |links: &[usize]| links.iter().map(|&link| values[link]).sum::<f64>();
+    let node_values: Vec<f64> = (0..count)
+        .map(|node| sum(&incoming[node]).max(sum(&outgoing[node])))
+        .collect();
+
+    let mut depth = vec![0usize; count];
+    let mut pending: Vec<usize> = incoming.iter().map(Vec::len).collect();
+    let mut ready: std::collections::VecDeque<usize> =
+        (0..count).filter(|&node| pending[node] == 0).collect();
+    while let Some(node) = ready.pop_front() {
+        for &link in &outgoing[node] {
+            let target = ends[link].1;
+            depth[target] = depth[target].max(depth[node] + 1);
+            pending[target] -= 1;
+            if pending[target] == 0 {
                 ready.push_back(target);
             }
         }
     }
-    let column_count = columns.iter().copied().max().unwrap_or(0) + 1;
-    cache.column_count = column_count;
-    let mut incoming_weight = vec![0.0; nodes.len()];
-    let mut outgoing_weight = vec![0.0; nodes.len()];
-    for link in links {
-        let value = link.value / maximum;
-        outgoing_weight[ids[link.source.as_str()]] += value;
-        incoming_weight[ids[link.target.as_str()]] += value;
-    }
-    let weights: Vec<f64> = incoming_weight
-        .iter()
-        .zip(&outgoing_weight)
-        .map(|(incoming, outgoing)| incoming.max(*outgoing))
-        .collect();
-    let mut per_column = vec![Vec::new(); column_count];
-    for (index, &column) in columns.iter().enumerate() {
-        if weights[index] > 0.0 {
-            per_column[column].push(index);
-        }
-    }
-    let max_count = per_column.iter().map(Vec::len).max().unwrap_or(0);
-    let gap = (plot.height / (max_count.max(1) * 4) as f64).min(6.0);
-    let max_weight = per_column
-        .iter()
-        .map(|column| column.iter().map(|&index| weights[index]).sum::<f64>())
-        .fold(0.0_f64, f64::max);
-    if max_weight <= 0.0 {
+    let max_depth = depth.iter().copied().max().unwrap_or(0);
+    if max_depth == 0 {
         return cache;
     }
-    let scale = (plot.height - gap * max_count.saturating_sub(1) as f64) / max_weight;
-    let node_width = (plot.width / (column_count.max(1) * 4) as f64).min(18.0);
-    let stride = if column_count > 1 {
-        (plot.width - node_width) / (column_count - 1) as f64
+    for node in 0..count {
+        if outgoing[node].is_empty() {
+            depth[node] = max_depth;
+        }
+    }
+    let stride = (width - SANKEY_NODE_WIDTH) / max_depth as f64;
+    let x: Vec<f64> = depth.iter().map(|&depth| depth as f64 * stride).collect();
+    let mut columns = vec![Vec::new(); max_depth + 1];
+    for node in 0..count {
+        columns[depth[node]].push(node);
+    }
+    let ratio = columns
+        .iter()
+        .filter(|column| !column.is_empty())
+        .map(|column| {
+            let total = column.iter().map(|&node| node_values[node]).sum::<f64>();
+            if total == 0.0 {
+                f64::INFINITY
+            } else {
+                (height - (column.len() - 1) as f64 * SANKEY_NODE_PADDING) / total
+            }
+        })
+        .fold(f64::INFINITY, f64::min);
+    let ratio = if ratio.is_finite() {
+        ratio.max(0.0)
     } else {
         0.0
     };
-    let mut node_rects = vec![None; nodes.len()];
-    for (column_index, column) in per_column.iter().enumerate() {
-        let total_height = column
-            .iter()
-            .map(|&index| weights[index] * scale)
-            .sum::<f64>()
-            + gap * column.len().saturating_sub(1) as f64;
-        let mut y = plot.y + (plot.height - total_height) / 2.0;
-        for &index in column {
-            let height = weights[index] * scale;
-            let rect = GeneralPlotRect {
-                x: plot.x + column_index as f64 * stride,
-                y,
-                width: node_width,
-                height,
-            };
-            node_rects[index] = Some(rect);
-            cache.nodes.push(TreemapShape { row: index, rect });
-            y += height + gap;
+    let dy: Vec<f64> = node_values.iter().map(|value| value * ratio).collect();
+    let link_dy: Vec<f64> = values.iter().map(|value| value * ratio).collect();
+    let mut y = vec![0.0; count];
+    for column in &columns {
+        for (position, &node) in column.iter().enumerate() {
+            y[node] = position as f64;
         }
     }
-    let mut out_offset = vec![0.0; nodes.len()];
-    let mut in_offset = vec![0.0; nodes.len()];
-    for (row, link) in links.iter().enumerate() {
-        let thickness = link.value / maximum * scale;
-        if thickness <= 0.0 {
-            continue;
+
+    sankey_resolve_collisions(&mut columns, &mut y, &dy, height);
+    let mut alpha = 1.0;
+    for _ in 0..SANKEY_ITERATIONS {
+        alpha *= 0.99;
+        for column in columns.iter().rev() {
+            for &node in column {
+                if outgoing[node].is_empty() {
+                    continue;
+                }
+                let total = sum(&outgoing[node]);
+                let center = y[node] + dy[node] / 2.0;
+                let target = if total == 0.0 {
+                    center
+                } else {
+                    outgoing[node]
+                        .iter()
+                        .map(|&link| {
+                            let target = ends[link].1;
+                            (y[target] + dy[target] / 2.0) * values[link]
+                        })
+                        .sum::<f64>()
+                        / total
+                };
+                y[node] += (target - center) * alpha;
+            }
         }
-        let source = ids[link.source.as_str()];
-        let target = ids[link.target.as_str()];
-        let (Some(source_rect), Some(target_rect)) = (node_rects[source], node_rects[target])
-        else {
+        sankey_resolve_collisions(&mut columns, &mut y, &dy, height);
+        for column in &columns {
+            for &node in column {
+                if incoming[node].is_empty() {
+                    continue;
+                }
+                let total = sum(&incoming[node]);
+                let center = y[node] + dy[node] / 2.0;
+                let target = if total == 0.0 {
+                    center
+                } else {
+                    incoming[node]
+                        .iter()
+                        .map(|&link| {
+                            let source = ends[link].0;
+                            (y[source] + dy[source] / 2.0) * values[link]
+                        })
+                        .sum::<f64>()
+                        / total
+                };
+                y[node] += (target - center) * alpha;
+            }
+        }
+        sankey_resolve_collisions(&mut columns, &mut y, &dy, height);
+    }
+
+    let mut source_offset = vec![0.0; links.len()];
+    let mut target_offset = vec![0.0; links.len()];
+    let offsets = |outgoing: &mut [Vec<usize>],
+                   incoming: &mut [Vec<usize>],
+                   y: &[f64],
+                   source_offset: &mut [f64],
+                   target_offset: &mut [f64]| {
+        let by_y = |a: f64, b: f64| a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
+        for node in 0..count {
+            outgoing[node].sort_by(|&a, &b| by_y(y[ends[a].1], y[ends[b].1]));
+            let mut offset = 0.0;
+            for &link in &outgoing[node] {
+                source_offset[link] = offset;
+                offset += link_dy[link];
+            }
+            incoming[node].sort_by(|&a, &b| by_y(y[ends[a].0], y[ends[b].0]));
+            let mut offset = 0.0;
+            for &link in &incoming[node] {
+                target_offset[link] = offset;
+                offset += link_dy[link];
+            }
+        }
+    };
+    offsets(
+        &mut outgoing,
+        &mut incoming,
+        &y,
+        &mut source_offset,
+        &mut target_offset,
+    );
+
+    // Recharts `resolveNodeLinkCollisions`: a node lying wholly inside a link that skips its
+    // column is moved off that link.
+    for (column_index, column) in columns.iter().enumerate() {
+        let Some(&first) = column.first() else {
             continue;
         };
-        let out_pad = (source_rect.height - outgoing_weight[source] * scale) / 2.0;
-        let in_pad = (target_rect.height - incoming_weight[target] * scale) / 2.0;
-        let y0 = source_rect.y + out_pad + out_offset[source] + thickness / 2.0;
-        let y1 = target_rect.y + in_pad + in_offset[target] + thickness / 2.0;
-        out_offset[source] += thickness;
-        in_offset[target] += thickness;
+        let column_x = x[first] + SANKEY_NODE_WIDTH / 2.0;
+        // The column is sorted by y; suffix minima of node bottoms answer "is any node at or
+        // below `top` also above `bottom`" with one binary search.
+        let mut lowest_bottom = vec![f64::INFINITY; column.len() + 1];
+        for position in (0..column.len()).rev() {
+            let node = column[position];
+            lowest_bottom[position] = lowest_bottom[position + 1].min(y[node] + dy[node]);
+        }
+        let mut obstacles: Vec<(f64, f64)> = Vec::new();
+        for (link, &(source, target)) in ends.iter().enumerate() {
+            let (low, high) = (
+                depth[source].min(depth[target]),
+                depth[source].max(depth[target]),
+            );
+            if column_index <= low || column_index >= high {
+                continue;
+            }
+            let source_x = x[source] + SANKEY_NODE_WIDTH;
+            let target_x = x[target];
+            let progress = if target_x == source_x {
+                0.0
+            } else {
+                ((column_x - source_x) / (target_x - source_x)).clamp(0.0, 1.0)
+            };
+            let source_y = y[source] + source_offset[link] + link_dy[link] / 2.0;
+            let target_y = y[target] + target_offset[link] + link_dy[link] / 2.0;
+            let u = 1.0 - progress;
+            let center = (u * u * u + 3.0 * u * u * progress) * source_y
+                + (3.0 * u * progress * progress + progress * progress * progress) * target_y;
+            let top = center - link_dy[link] / 2.0;
+            let start = column.partition_point(|&node| y[node] < top);
+            if lowest_bottom[start] <= top + link_dy[link] {
+                obstacles.push((top, link_dy[link]));
+            }
+        }
+        if obstacles.is_empty() {
+            continue;
+        }
+        let mut items: Vec<(Option<usize>, f64, f64)> = column
+            .iter()
+            .map(|&node| (Some(node), 0.0, 0.0))
+            .chain(obstacles.into_iter().map(|(top, size)| (None, top, size)))
+            .collect();
+        let key =
+            |y: &[f64], item: &(Option<usize>, f64, f64)| item.0.map_or(item.1, |node| y[node]);
+        items.sort_by(|a, b| {
+            key(&y, a)
+                .partial_cmp(&key(&y, b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut next = 0.0_f64;
+        for &(node, top, size) in &items {
+            match node {
+                None => next = next.max(top + size + SANKEY_NODE_PADDING),
+                Some(node) => {
+                    if y[node] < next {
+                        y[node] = next;
+                    }
+                    next = y[node] + dy[node] + SANKEY_NODE_PADDING;
+                }
+            }
+        }
+        items.sort_by(|a, b| {
+            key(&y, a)
+                .partial_cmp(&key(&y, b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut previous = height + SANKEY_NODE_PADDING;
+        for &(node, top, _) in items.iter().rev() {
+            match node {
+                None => previous = previous.min(top - SANKEY_NODE_PADDING),
+                Some(node) => {
+                    let overflow = y[node] + dy[node] + SANKEY_NODE_PADDING - previous;
+                    if overflow > 0.0 {
+                        y[node] -= overflow;
+                    }
+                    previous = y[node];
+                }
+            }
+        }
+    }
+    offsets(
+        &mut outgoing,
+        &mut incoming,
+        &y,
+        &mut source_offset,
+        &mut target_offset,
+    );
+
+    let left = plot.x + SANKEY_MARGIN;
+    let top = plot.y + SANKEY_MARGIN;
+    cache.column_count = max_depth + 1;
+    cache.column_stride = stride;
+    cache.nodes = (0..count)
+        .map(|node| TreemapShape {
+            row: node,
+            rect: GeneralPlotRect {
+                x: left + x[node],
+                y: top + y[node],
+                width: SANKEY_NODE_WIDTH,
+                height: dy[node],
+            },
+        })
+        .collect();
+    cache.node_columns = depth;
+    for (row, &(source, target)) in ends.iter().enumerate() {
+        if link_dy[row] <= 0.0 {
+            continue;
+        }
         cache.links.push(SankeyLinkShape {
             row,
-            x0: source_rect.x + source_rect.width,
-            x1: target_rect.x,
-            y0,
-            y1,
-            thickness,
+            x0: left + x[source] + SANKEY_NODE_WIDTH,
+            x1: left + x[target],
+            y0: top + y[source] + source_offset[row] + link_dy[row] / 2.0,
+            y1: top + y[target] + target_offset[row] + link_dy[row] / 2.0,
+            thickness: link_dy[row],
         });
     }
     cache
 }
 
+/// Recharts `resolveCollisions`: sort each column by y, push overlapping nodes down by the node
+/// padding, then pull the overflowing tail back above the bottom edge.
+fn sankey_resolve_collisions(columns: &mut [Vec<usize>], y: &mut [f64], dy: &[f64], height: f64) {
+    for column in columns {
+        column.sort_by(|&a, &b| y[a].partial_cmp(&y[b]).unwrap_or(std::cmp::Ordering::Equal));
+        let mut next = 0.0;
+        for &node in column.iter() {
+            let shift = next - y[node];
+            if shift > 0.0 {
+                y[node] += shift;
+            }
+            next = y[node] + dy[node] + SANKEY_NODE_PADDING;
+        }
+        let mut limit = height + SANKEY_NODE_PADDING;
+        for &node in column.iter().rev() {
+            let overflow = y[node] + dy[node] + SANKEY_NODE_PADDING - limit;
+            if overflow > 0.0 {
+                y[node] -= overflow;
+                limit = y[node];
+            } else {
+                break;
+            }
+        }
+    }
+}
 impl LayoutSeriesEntry {
     fn with_sankey<R>(
         &self,
@@ -1469,6 +1783,7 @@ impl GeneralLayoutStore {
                         })
                         + series.sankey.borrow().as_ref().map_or(0, |cache| {
                             cache.nodes.capacity() * std::mem::size_of::<TreemapShape>()
+                                + cache.node_columns.capacity() * std::mem::size_of::<usize>()
                                 + cache.links.capacity() * std::mem::size_of::<SankeyLinkShape>()
                         })
                         + series.sunburst.borrow().as_ref().map_or(0, |cache| {
@@ -1645,7 +1960,7 @@ fn cache_reservation(kind: GeneralLayoutSeriesKind, input: &GeneralLayoutInput) 
             2 * nodes.len() * std::mem::size_of::<SunburstShape>()
         }
         (GeneralLayoutSeriesKind::Sankey, GeneralLayoutInput::Flow { nodes, links }) => {
-            2 * nodes.len() * std::mem::size_of::<TreemapShape>()
+            2 * nodes.len() * (std::mem::size_of::<TreemapShape>() + std::mem::size_of::<usize>())
                 + 2 * links.len() * std::mem::size_of::<SankeyLinkShape>()
         }
         _ => 0,
@@ -1678,7 +1993,7 @@ impl ChartEngine {
             x: ((bounds.x + bounds.width * 0.5) * hpr) as f32,
             y: ((bounds.y + bounds.height * 0.5) * vpr) as f32,
             text: label.to_owned(),
-            color: fill.contrast_text_over(Color::rgb(255, 255, 255)),
+            color: fill.contrast_srgb_over(self.chart_surface_color()),
             size: (size * vpr) as f32,
             family: layout.font_family.clone(),
             align: TextAlign::Center,
@@ -1687,45 +2002,73 @@ impl ChartEngine {
         });
         true
     }
-    /// Labels of nested treemap groups, left-aligned in the header lane the layout reserved.
-    fn push_treemap_group_headers(
+    /// Recharts' default treemap cell name: 14 px, 8 px from the left edge, baseline 7 px below
+    /// the middle, painted only in cells larger than 20 px that fit the measured name.
+    fn push_treemap_label(
         &self,
         out: &mut Vec<Prim>,
-        nodes: &[HierarchyNode],
-        bounds: &[Option<GeneralPlotRect>],
+        label: &str,
+        rect: GeneralPlotRect,
+        fill: Color,
         hpr: f64,
         vpr: f64,
     ) {
-        let layout = &self.options.get().layout;
-        let size = layout.font_size.clamp(9.0, 12.0);
-        let color = self.primary_text_color();
-        for (node, rect) in nodes.iter().zip(bounds) {
-            let Some(rect) = rect else {
-                continue;
-            };
-            if node.parent.is_none()
-                || node.value.is_some()
-                || node.label.is_empty()
-                || !treemap_group_has_header(*rect)
-            {
-                continue;
-            }
-            let width = self.measure_text_run(&node.label, size, &layout.font_family, 600, false);
-            if !width.is_finite() || width + 8.0 > rect.width {
-                continue;
-            }
-            out.push(Prim::Text {
-                x: ((rect.x + TREEMAP_GROUP_GAP + 2.0) * hpr) as f32,
-                y: ((rect.y + TREEMAP_GROUP_HEADER * 0.5) * vpr) as f32,
-                text: node.label.clone(),
-                color,
-                size: (size * vpr) as f32,
-                family: layout.font_family.clone(),
-                align: TextAlign::Left,
-                weight: 600,
-                italic: false,
-            });
+        const SIZE: f64 = 14.0;
+        if label.is_empty() || rect.width <= 20.0 || rect.height <= 20.0 || SIZE >= rect.height {
+            return;
         }
+        let layout = &self.options.get().layout;
+        let width = self.measure_text_run(label, SIZE, &layout.font_family, 400, false);
+        if !width.is_finite() || width >= rect.width {
+            return;
+        }
+        out.push(Prim::Text {
+            x: ((rect.x + 8.0) * hpr) as f32,
+            // A 7 px baseline offset puts the 14 px glyph middle about 2 px below the cell middle.
+            y: ((rect.y + rect.height * 0.5 + 2.0) * vpr) as f32,
+            text: label.to_owned(),
+            color: fill.contrast_srgb_over(self.chart_surface_color()),
+            size: (SIZE * vpr) as f32,
+            family: layout.font_family.clone(),
+            align: TextAlign::Left,
+            weight: 400,
+            italic: false,
+        });
+    }
+
+    /// Recharts' sector label: `.75rem` text centered on the sector's middle radius and angle,
+    /// skipped when it does not fit the ring.
+    fn push_sunburst_label(
+        &self,
+        out: &mut Vec<Prim>,
+        label: &str,
+        shape: SunburstShape,
+        fill: Color,
+        hpr: f64,
+        vpr: f64,
+    ) {
+        let radius = (shape.inner + shape.outer) * 0.5;
+        if label.is_empty() || shape.outer - shape.inner < SUNBURST_LABEL_SIZE {
+            return;
+        }
+        let layout = &self.options.get().layout;
+        let width =
+            self.measure_text_run(label, SUNBURST_LABEL_SIZE, &layout.font_family, 400, false);
+        if !width.is_finite() || width + 4.0 > (shape.end - shape.start) * radius {
+            return;
+        }
+        let angle = (shape.start + shape.end) * 0.5;
+        out.push(Prim::Text {
+            x: ((shape.cx + radius * angle.cos()) * hpr) as f32,
+            y: ((shape.cy + radius * angle.sin()) * vpr) as f32,
+            text: label.to_owned(),
+            color: fill.contrast_srgb_over(self.chart_surface_color()),
+            size: (SUNBURST_LABEL_SIZE * vpr) as f32,
+            family: layout.font_family.clone(),
+            align: TextAlign::Center,
+            weight: 400,
+            italic: false,
+        });
     }
 
     pub(crate) fn build_general_layout_series_frame(
@@ -1754,41 +2097,51 @@ impl ChartEngine {
                 (series.options.kind, store.entry(series.options.dataset))
                 && let GeneralLayoutInput::Hierarchy(nodes) = entry.display_input()
             {
+                let stroke_width = (SUNBURST_STROKE_WIDTH * hpr.min(vpr)) as f32;
                 series.with_sunburst(nodes, plot, |cache| {
                     for shape in &cache.shapes {
+                        let segments = shape.segments();
                         let first_point = points.len() as u32;
-                        for segment in 0..shape.segments() {
+                        for segment in 0..segments {
                             let [a, b, c, d] = shape.segment_vertices(segment);
                             points.extend(
                                 [a, b, c, a, c, d]
                                     .map(|(x, y)| [(x * hpr) as f32, (y * vpr) as f32]),
                             );
                         }
-                        let fill = treemap_color(series.color, shape.row);
+                        let fill = series.color;
                         out.push(Prim::MeshFill {
                             first_point,
-                            point_count: (shape.segments() * 6) as u32,
+                            point_count: (segments * 6) as u32,
                             color: fill,
                         });
-                        if series.options.data_labels {
-                            let radius = (shape.inner + shape.outer) * 0.5;
-                            let angle = (shape.start + shape.end) * 0.5;
-                            self.push_general_layout_label(
-                                out,
-                                &nodes[shape.row].label,
-                                GeneralPlotRect {
-                                    x: shape.cx + radius * angle.cos()
-                                        - (shape.end - shape.start) * radius * 0.4,
-                                    y: shape.cy + radius * angle.sin()
-                                        - (shape.outer - shape.inner) * 0.5,
-                                    width: (shape.end - shape.start) * radius * 0.8,
-                                    height: shape.outer - shape.inner,
-                                },
-                                fill,
-                                hpr,
-                                vpr,
-                            );
-                        }
+                        let outline = points.len() as u32;
+                        let to_bitmap = |(x, y): (f64, f64)| [(x * hpr) as f32, (y * vpr) as f32];
+                        points.extend(
+                            (0..=segments)
+                                .map(|index| shape.arc_point(shape.outer, index))
+                                .chain(
+                                    (0..=segments)
+                                        .rev()
+                                        .map(|index| shape.arc_point(shape.inner, index)),
+                                )
+                                .chain(std::iter::once(shape.arc_point(shape.outer, 0)))
+                                .map(to_bitmap),
+                        );
+                        out.push(Prim::Polyline {
+                            first_point: outline,
+                            point_count: points.len() as u32 - outline,
+                            width: stroke_width,
+                            style: LineStyle::Solid,
+                            line_type: LineType::Simple,
+                            color: SUNBURST_STROKE,
+                        });
+                        let label = if series.options.data_labels {
+                            nodes[shape.row].label.clone()
+                        } else {
+                            layout_value_text(nodes[shape.row].value)
+                        };
+                        self.push_sunburst_label(out, &label, *shape, fill, hpr, vpr);
                     }
                 });
             }
@@ -1797,50 +2150,41 @@ impl ChartEngine {
                 && let GeneralLayoutInput::Flow { nodes, links } = entry.display_input()
             {
                 series.with_sankey(nodes, links, plot, |cache| {
+                    let link_color = Color::rgba(
+                        series.color.r(),
+                        series.color.g(),
+                        series.color.b(),
+                        SANKEY_LINK_ALPHA,
+                    );
                     for link in &cache.links {
                         if link.x1 <= link.x0 {
                             continue;
                         }
+                        let segments = link.segments();
                         let first_point = points.len() as u32;
-                        for segment in 0..8 {
-                            let t0 = segment as f64 / 8.0;
-                            let t1 = (segment + 1) as f64 / 8.0;
-                            let x0 = link.x0 + (link.x1 - link.x0) * t0;
-                            let x1 = link.x0 + (link.x1 - link.x0) * t1;
-                            let top0 = link.y_at(t0) - link.thickness / 2.0;
-                            let top1 = link.y_at(t1) - link.thickness / 2.0;
-                            let bottom0 = top0 + link.thickness;
-                            let bottom1 = top1 + link.thickness;
+                        let mut previous = link.edge(0, segments);
+                        for index in 1..=segments {
+                            let next = link.edge(index, segments);
+                            let ((top0, bottom0), (top1, bottom1)) = (previous, next);
                             points.extend(
-                                [
-                                    (x0, top0),
-                                    (x1, top1),
-                                    (x1, bottom1),
-                                    (x0, top0),
-                                    (x1, bottom1),
-                                    (x0, bottom0),
-                                ]
-                                .map(|(x, y)| [(x * hpr) as f32, (y * vpr) as f32]),
+                                [top0, top1, bottom1, top0, bottom1, bottom0]
+                                    .map(|(x, y)| [(x * hpr) as f32, (y * vpr) as f32]),
                             );
+                            previous = next;
                         }
                         out.push(Prim::MeshFill {
                             first_point,
-                            point_count: 48,
-                            color: Color::rgba(
-                                series.color.r(),
-                                series.color.g(),
-                                series.color.b(),
-                                128,
-                            ),
+                            point_count: (segments * 6) as u32,
+                            color: link_color,
                         });
                     }
-                    for node in &cache.nodes {
+                    for (node, &column) in cache.nodes.iter().zip(&cache.node_columns) {
                         let x0 = (node.rect.x * hpr).round() as i32;
                         let y0 = (node.rect.y * vpr).round() as i32;
                         let x1 = ((node.rect.x + node.rect.width) * hpr).round() as i32;
                         let y1 = ((node.rect.y + node.rect.height) * vpr).round() as i32;
                         if x1 > x0 && y1 > y0 {
-                            let fill = treemap_color(series.color, node.row);
+                            let fill = SANKEY_NODE_FILL;
                             out.push(Prim::Rect {
                                 rect: IRect {
                                     x: x0,
@@ -1860,17 +2204,7 @@ impl ChartEngine {
                                     vpr,
                                 )
                             {
-                                let stride = if cache.column_count > 1 {
-                                    (plot.width - node.rect.width) / (cache.column_count - 1) as f64
-                                } else {
-                                    plot.width
-                                };
-                                let column = if stride > 0.0 {
-                                    ((node.rect.x - plot.x) / stride).round() as usize
-                                } else {
-                                    0
-                                };
-                                let gap = (stride - node.rect.width).max(0.0);
+                                let gap = (cache.column_stride - node.rect.width).max(0.0);
                                 let right =
                                     cache.column_count == 1 || column + 1 < cache.column_count;
                                 let label_x = if right {
@@ -1904,15 +2238,32 @@ impl ChartEngine {
                 && let GeneralLayoutInput::Hierarchy(nodes) = entry.display_input()
             {
                 let color_range = treemap_color_range(nodes);
-                let gap_x = (TREEMAP_CELL_GAP * hpr).round().max(1.0) as i32;
-                let gap_y = (TREEMAP_CELL_GAP * vpr).round().max(1.0) as i32;
+                // A centered 1 px SVG stroke on every cell edge: each cell gives up the low half
+                // on its leading edges and the high half on its trailing edges.
+                let stroke_x = hpr.round().max(1.0) as i32;
+                let stroke_y = vpr.round().max(1.0) as i32;
+                let (lead_x, trail_x) = (stroke_x / 2, stroke_x - stroke_x / 2);
+                let (lead_y, trail_y) = (stroke_y / 2, stroke_y - stroke_y / 2);
                 series.with_treemap_cache(nodes, plot, |cache| {
-                    self.push_treemap_group_headers(out, nodes, &cache.bounds, hpr, vpr);
+                    if !cache.shapes.is_empty() {
+                        let x0 = (plot.x * hpr).round() as i32;
+                        let y0 = (plot.y * vpr).round() as i32;
+                        out.push(Prim::Rect {
+                            rect: IRect {
+                                x: x0,
+                                y: y0,
+                                w: ((plot.x + plot.width) * hpr).round() as i32 - x0,
+                                h: ((plot.y + plot.height) * vpr).round() as i32 - y0,
+                            },
+                            color: TREEMAP_STROKE,
+                        });
+                    }
                     for shape in &cache.shapes {
-                        let x0 = (shape.rect.x * hpr).round() as i32 + gap_x;
-                        let y0 = (shape.rect.y * vpr).round() as i32 + gap_y;
-                        let x1 = ((shape.rect.x + shape.rect.width) * hpr).round() as i32 - gap_x;
-                        let y1 = ((shape.rect.y + shape.rect.height) * vpr).round() as i32 - gap_y;
+                        let x0 = (shape.rect.x * hpr).round() as i32 + lead_x;
+                        let y0 = (shape.rect.y * vpr).round() as i32 + lead_y;
+                        let x1 = ((shape.rect.x + shape.rect.width) * hpr).round() as i32 - trail_x;
+                        let y1 =
+                            ((shape.rect.y + shape.rect.height) * vpr).round() as i32 - trail_y;
                         if x1 > x0 && y1 > y0 {
                             let rect = IRect {
                                 x: x0,
@@ -1923,16 +2274,14 @@ impl ChartEngine {
                             let fill =
                                 treemap_cell_color(series.color, nodes, shape.row, color_range);
                             out.push(Prim::Rect { rect, color: fill });
-                            if series.options.data_labels {
-                                self.push_general_layout_label(
-                                    out,
-                                    &nodes[shape.row].label,
-                                    shape.rect,
-                                    fill,
-                                    hpr,
-                                    vpr,
-                                );
-                            }
+                            self.push_treemap_label(
+                                out,
+                                &nodes[shape.row].label,
+                                shape.rect,
+                                fill,
+                                hpr,
+                                vpr,
+                            );
                         }
                     }
                 });
@@ -1972,89 +2321,115 @@ impl ChartEngine {
             }
         }
         if let Some(hit) = store.focused
-            && let Some(series) = store.series.iter().find(|series| {
-                series.id == hit.series && series.pane_id == pane_id && series.options.visible
-            })
-            && let Some(entry) = store.entry(series.options.dataset)
+            && let Some((x, y)) = self.general_layout_hit_anchor(pane_index, hit)
         {
-            let position = match (entry.display_input(), series.options.kind, hit.element) {
-                (
-                    GeneralLayoutInput::Funnel(stages),
-                    GeneralLayoutSeriesKind::Funnel,
-                    GeneralLayoutElement::Stage,
-                ) => funnel_shape_at(stages, entry.display_funnel_max(), plot, hit.row)
-                    .map(|shape| (shape.center_x, (shape.top_y + shape.bottom_y) * 0.5)),
-                (
-                    GeneralLayoutInput::Hierarchy(nodes),
-                    GeneralLayoutSeriesKind::Treemap,
-                    GeneralLayoutElement::Node,
-                ) => series.with_treemap_cache(nodes, plot, |cache| {
-                    cache
-                        .bounds
-                        .get(hit.row)
-                        .copied()
-                        .flatten()
-                        .map(|rect| (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5))
-                }),
-                (
-                    GeneralLayoutInput::Hierarchy(nodes),
-                    GeneralLayoutSeriesKind::Sunburst,
-                    GeneralLayoutElement::Node,
-                ) => series.with_sunburst(nodes, plot, |cache| {
-                    cache
-                        .shapes
-                        .iter()
-                        .find(|shape| shape.row == hit.row)
-                        .map(|shape| {
-                            let radius = (shape.inner + shape.outer) * 0.5;
-                            let angle = (shape.start + shape.end) * 0.5;
-                            (
-                                shape.cx + radius * angle.cos(),
-                                shape.cy + radius * angle.sin(),
-                            )
-                        })
-                        .or_else(|| {
-                            nodes
-                                .get(hit.row)
-                                .filter(|node| node.parent.is_none())
-                                .map(|_| (plot.x + plot.width * 0.5, plot.y + plot.height * 0.5))
-                        })
-                }),
-                (
-                    GeneralLayoutInput::Flow { nodes, links },
-                    GeneralLayoutSeriesKind::Sankey,
-                    element,
-                ) => series.with_sankey(nodes, links, plot, |cache| match element {
-                    GeneralLayoutElement::Node => cache
-                        .nodes
-                        .iter()
-                        .find(|shape| shape.row == hit.row)
-                        .map(|shape| {
-                            (
-                                shape.rect.x + shape.rect.width * 0.5,
-                                shape.rect.y + shape.rect.height * 0.5,
-                            )
-                        }),
-                    GeneralLayoutElement::Link => cache
-                        .links
-                        .iter()
-                        .find(|shape| shape.row == hit.row)
-                        .map(|shape| ((shape.x0 + shape.x1) * 0.5, shape.y_at(0.5))),
-                    GeneralLayoutElement::Stage => None,
-                }),
-                _ => None,
-            };
-            if let Some((x, y)) = position {
-                let ratio = hpr.min(vpr);
+            let ratio = hpr.min(vpr);
+            let (cx, cy) = ((x * hpr) as f32, (y * vpr) as f32);
+            let radius = (store.focus_size * ratio * 0.5) as f32;
+            let transparent = Color::rgba(0, 0, 0, 0);
+            // The ring sits on arbitrary layout fills, so a black band outside a white band
+            // keeps the indicator at least 3:1 against any adjacent color (WCAG 1.4.11).
+            for (offset, stroke) in [(3.0, Color::rgb(0, 0, 0)), (1.0, Color::rgb(255, 255, 255))] {
                 out.push(Prim::Circle {
-                    cx: (x * hpr) as f32,
-                    cy: (y * vpr) as f32,
-                    radius: (store.focus_size * ratio * 0.5) as f32,
-                    fill: Color::rgba(0, 0, 0, 0),
-                    stroke_width: (2.0 * ratio) as f32,
-                    stroke: store.focus_color,
+                    cx,
+                    cy,
+                    radius: radius + (offset * ratio) as f32,
+                    fill: transparent,
+                    stroke_width: (4.0 * ratio) as f32,
+                    stroke,
                 });
             }
+            out.push(Prim::Circle {
+                cx,
+                cy,
+                radius,
+                fill: transparent,
+                stroke_width: (2.0 * ratio) as f32,
+                stroke: store.focus_color,
+            });
+        }
+    }
+
+    /// The center of one visible layout item in `pane_index`, in layout frame coordinates:
+    /// where its keyboard focus ring and keyboard tooltip anchor.
+    pub(crate) fn general_layout_hit_anchor(
+        &self,
+        pane_index: usize,
+        hit: GeneralLayoutHit,
+    ) -> Option<(f64, f64)> {
+        let pane_id = self.pane_stable_id(pane_index)?;
+        let plot = self.general_plot_rect(pane_index)?;
+        let store = self.general_layout_data.as_ref()?;
+        let series = store.series.iter().find(|series| {
+            series.id == hit.series && series.pane_id == pane_id && series.options.visible
+        })?;
+        let entry = store.entry(series.options.dataset)?;
+        match (entry.display_input(), series.options.kind, hit.element) {
+            (
+                GeneralLayoutInput::Funnel(stages),
+                GeneralLayoutSeriesKind::Funnel,
+                GeneralLayoutElement::Stage,
+            ) => funnel_shape_at(stages, entry.display_funnel_max(), plot, hit.row)
+                .map(|shape| (shape.center_x, (shape.top_y + shape.bottom_y) * 0.5)),
+            (
+                GeneralLayoutInput::Hierarchy(nodes),
+                GeneralLayoutSeriesKind::Treemap,
+                GeneralLayoutElement::Node,
+            ) => series.with_treemap_cache(nodes, plot, |cache| {
+                cache
+                    .bounds
+                    .get(hit.row)
+                    .copied()
+                    .flatten()
+                    .map(|rect| (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5))
+            }),
+            (
+                GeneralLayoutInput::Hierarchy(nodes),
+                GeneralLayoutSeriesKind::Sunburst,
+                GeneralLayoutElement::Node,
+            ) => series.with_sunburst(nodes, plot, |cache| {
+                cache
+                    .shapes
+                    .iter()
+                    .find(|shape| shape.row == hit.row)
+                    .map(|shape| {
+                        let radius = (shape.inner + shape.outer) * 0.5;
+                        let angle = (shape.start + shape.end) * 0.5;
+                        (
+                            shape.cx + radius * angle.cos(),
+                            shape.cy + radius * angle.sin(),
+                        )
+                    })
+                    .or_else(|| {
+                        nodes
+                            .get(hit.row)
+                            .filter(|node| node.parent.is_none())
+                            .map(|_| (plot.x + plot.width * 0.5, plot.y + plot.height * 0.5))
+                    })
+            }),
+            (
+                GeneralLayoutInput::Flow { nodes, links },
+                GeneralLayoutSeriesKind::Sankey,
+                element,
+            ) => series.with_sankey(nodes, links, plot, |cache| match element {
+                GeneralLayoutElement::Node => cache
+                    .nodes
+                    .iter()
+                    .find(|shape| shape.row == hit.row)
+                    .map(|shape| {
+                        (
+                            shape.rect.x + shape.rect.width * 0.5,
+                            shape.rect.y + shape.rect.height * 0.5,
+                        )
+                    }),
+                GeneralLayoutElement::Link => cache
+                    .links
+                    .iter()
+                    .find(|shape| shape.row == hit.row)
+                    .map(|shape| shape.point(0.5)),
+                GeneralLayoutElement::Stage => None,
+            }),
+            _ => None,
         }
     }
 
@@ -2243,6 +2618,7 @@ impl ChartEngine {
     }
 
     pub fn clear_general_layout_accessibility_focus(&mut self) {
+        self.reset_focus_tooltip_dismissal();
         if let Some(store) = self.general_layout_data.as_mut()
             && store.focused.take().is_some()
         {
@@ -2279,13 +2655,13 @@ impl ChartEngine {
         entry.semantic_values.get(index).copied()
     }
 
-    /// Tooltip parts of the hovered layout item in `pane_index`: item label, series title,
-    /// semantic value, and the item's painted color.
-    pub(crate) fn general_layout_hover_tooltip(
+    /// Tooltip parts of one layout item in `pane_index`: item label, series title, semantic
+    /// value, and the item's painted color.
+    pub(crate) fn general_layout_item_tooltip(
         &self,
         pane_index: usize,
+        hit: GeneralLayoutHit,
     ) -> Option<(String, String, Option<f64>, Color)> {
-        let hit = self.general_layout_hovered_hit()?;
         let store = self.general_layout_data.as_ref()?;
         let series = store.series.iter().find(|series| series.id == hit.series)?;
         if self.pane_index_for_id(series.pane_id) != Some(pane_index) {
@@ -2301,13 +2677,12 @@ impl ChartEngine {
                 if series.options.kind == GeneralLayoutSeriesKind::Treemap {
                     treemap_cell_color(series.color, nodes, hit.row, treemap_color_range(nodes))
                 } else {
-                    treemap_color(series.color, hit.row)
+                    series.color
                 },
             ),
-            (GeneralLayoutInput::Flow { nodes, .. }, GeneralLayoutElement::Node) => (
-                nodes.get(hit.row)?.label.clone(),
-                treemap_color(series.color, hit.row),
-            ),
+            (GeneralLayoutInput::Flow { nodes, .. }, GeneralLayoutElement::Node) => {
+                (nodes.get(hit.row)?.label.clone(), SANKEY_NODE_FILL)
+            }
             (GeneralLayoutInput::Flow { nodes, links }, GeneralLayoutElement::Link) => {
                 let link = links.get(hit.row)?;
                 let name = |id: &str| {
@@ -2919,7 +3294,8 @@ mod tests {
                 .iter()
                 .filter(|prim| matches!(prim, Prim::Rect { .. }))
                 .count(),
-            3
+            4,
+            "white stroke backdrop plus three cells"
         );
         let plot = chart.general_plot_rect(0).unwrap();
         let shapes = treemap_shapes(&hierarchy(&[3.0, 2.0, 1.0]), plot);
@@ -2948,7 +3324,8 @@ mod tests {
                 .iter()
                 .filter(|prim| matches!(prim, Prim::Rect { .. }))
                 .count(),
-            1
+            2,
+            "white stroke backdrop plus the one weighted cell"
         );
         assert_eq!(
             chart.general_layout_hit_test(0, plot.x + plot.width / 2.0, plot.y + plot.height / 2.0),
@@ -2961,7 +3338,7 @@ mod tests {
     }
 
     #[test]
-    fn sankey_columns_ribbons_and_hits_share_geometry() {
+    fn sankey_columns_curved_ribbons_and_hits_share_geometry() {
         let mut chart = chart();
         let nodes = ["a", "b", "c"]
             .map(|id| FlowNode {
@@ -3024,13 +3401,7 @@ mod tests {
             frame.panes[0]
                 .main
                 .iter()
-                .filter(|prim| matches!(
-                    prim,
-                    Prim::MeshFill {
-                        point_count: 48,
-                        ..
-                    }
-                ))
+                .filter(|prim| matches!(prim, Prim::MeshFill { .. }))
                 .count(),
             2
         );
@@ -3047,8 +3418,8 @@ mod tests {
             );
         }
         for shape in &shapes.links {
-            let x = (shape.x0 + shape.x1) / 2.0;
-            let y = shape.y_at(0.5);
+            // A quarter of the way along, the curve is far from the straight chord.
+            let (x, y) = shape.point(0.25);
             assert_eq!(
                 chart.general_layout_hit_test(0, x, y),
                 Some(GeneralLayoutHit {
@@ -3072,13 +3443,7 @@ mod tests {
             frame.panes[0]
                 .main
                 .iter()
-                .filter(|prim| matches!(
-                    prim,
-                    Prim::MeshFill {
-                        point_count: 48,
-                        ..
-                    }
-                ))
+                .filter(|prim| matches!(prim, Prim::MeshFill { .. }))
                 .count(),
             1
         );
@@ -3152,33 +3517,54 @@ mod tests {
     }
 
     #[test]
-    fn treemap_cells_shade_by_signed_change_and_keep_a_visible_gap() {
-        let mut chart = chart();
+    fn treemap_cells_default_to_one_flat_fill_and_color_value_opts_into_shading() {
+        let rects = |nodes: Vec<HierarchyNode>| {
+            let mut chart = chart();
+            let dataset = chart
+                .create_general_layout_dataset(GeneralLayoutInput::Hierarchy(nodes))
+                .unwrap();
+            let mut options =
+                GeneralLayoutSeriesOptions::new(0, dataset, GeneralLayoutSeriesKind::Treemap);
+            options.color = "#4c8bf5".into();
+            chart.add_general_layout_series(options).unwrap();
+            chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+            chart.build_frame().panes[0]
+                .main
+                .iter()
+                .filter_map(|prim| match prim {
+                    Prim::Rect { rect, color } => Some((*rect, *color)),
+                    _ => None,
+                })
+                .collect::<Vec<(IRect, Color)>>()
+        };
+        let flat = rects(hierarchy(&[3.0, 2.0, 1.0]));
+        assert_eq!(flat.len(), 4);
+        assert_eq!(
+            flat[0].1, TREEMAP_STROKE,
+            "white stroke backdrop comes first"
+        );
+        let series = Color::parse_css("#4c8bf5").unwrap();
+        assert!(
+            flat[1..].iter().all(|(_, color)| *color == series),
+            "Recharts paints every cell with the one flat fill: {flat:?}"
+        );
+        for (index, (a, _)) in flat[1..].iter().enumerate() {
+            for (b, _) in flat[1..].iter().skip(index + 1) {
+                let gap_x = (b.x - (a.x + a.w)).max(a.x - (b.x + b.w));
+                let gap_y = (b.y - (a.y + a.h)).max(a.y - (b.y + b.h));
+                assert!(
+                    gap_x == 1 || gap_y == 1,
+                    "1 px stroke between {a:?} and {b:?}"
+                );
+            }
+        }
+
         let mut nodes = hierarchy(&[3.0, 2.0, 1.0]);
         for (node, change) in nodes.iter_mut().skip(1).zip([2.0, -1.0, 0.0]) {
             node.color_value = Some(change);
         }
-        let dataset = chart
-            .create_general_layout_dataset(GeneralLayoutInput::Hierarchy(nodes))
-            .unwrap();
-        chart
-            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
-                0,
-                dataset,
-                GeneralLayoutSeriesKind::Treemap,
-            ))
-            .unwrap();
-        chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
-        let cells: Vec<(IRect, Color)> = chart.build_frame().panes[0]
-            .main
-            .iter()
-            .filter_map(|prim| match prim {
-                Prim::Rect { rect, color } => Some((*rect, *color)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(cells.len(), 3);
-        let colors: Vec<Color> = cells.iter().map(|(_, color)| *color).collect();
+        let colors: Vec<Color> = rects(nodes)[1..].iter().map(|(_, color)| *color).collect();
+        assert_eq!(colors.len(), 3);
         assert!(
             colors.contains(&TREEMAP_UP),
             "largest gain is full up color"
@@ -3192,15 +3578,265 @@ mod tests {
             partial_loss.r() > partial_loss.g(),
             "losses shade toward down"
         );
-        for (index, (a, _)) in cells.iter().enumerate() {
-            for (b, _) in cells.iter().skip(index + 1) {
-                let gap_x = (b.x - (a.x + a.w)).max(a.x - (b.x + b.w));
-                let gap_y = (b.y - (a.y + a.h)).max(a.y - (b.y + b.h));
-                assert!(gap_x >= 2 || gap_y >= 2, "cells {a:?} and {b:?} touch");
-            }
-        }
     }
 
+    #[test]
+    fn treemap_squarify_matches_recharts_rectangles() {
+        // Expected cells follow pinned Recharts 3.10.1 `squarify` by hand: golden-ratio worst
+        // score, rows along the short side, whole-pixel rounding, remainder to the last cell.
+        let plot = GeneralPlotRect {
+            x: 11.0,
+            y: 7.0,
+            width: 600.0,
+            height: 400.0,
+        };
+        let shapes = treemap_shapes(&hierarchy(&[6.0, 6.0, 4.0, 3.0, 2.0, 2.0, 1.0]), plot);
+        let cells: Vec<(usize, [f64; 4])> = shapes
+            .iter()
+            .map(|shape| {
+                (
+                    shape.row,
+                    [
+                        shape.rect.x - plot.x,
+                        shape.rect.y - plot.y,
+                        shape.rect.width,
+                        shape.rect.height,
+                    ],
+                )
+            })
+            .collect();
+        assert_eq!(
+            cells,
+            vec![
+                (1, [0.0, 0.0, 300.0, 200.0]),
+                (2, [0.0, 200.0, 300.0, 200.0]),
+                (3, [300.0, 0.0, 172.0, 233.0]),
+                (4, [472.0, 0.0, 128.0, 233.0]),
+                (5, [300.0, 233.0, 240.0, 83.0]),
+                (6, [300.0, 316.0, 240.0, 84.0]),
+                (7, [540.0, 233.0, 60.0, 167.0]),
+            ]
+        );
+    }
+
+    #[test]
+    fn sankey_link_hit_follows_the_curve_not_the_chord() {
+        let link = SankeyLinkShape {
+            row: 0,
+            x0: 0.0,
+            x1: 100.0,
+            y0: 0.0,
+            y1: 100.0,
+            thickness: 10.0,
+        };
+        // Recharts' control points sit at the horizontal midpoint, so the curve leaves and
+        // enters each node horizontally.
+        let (x, y) = link.point(0.25);
+        assert!((x - 29.6875).abs() < 1e-9 && (y - 15.625).abs() < 1e-9);
+        assert!(link.contains(x, y));
+        assert!(link.contains(x, y + 4.0));
+        assert!(
+            !link.contains(x, x),
+            "the straight chord is outside the ribbon"
+        );
+        assert!(link.contains(1.0, 4.0) && !link.contains(1.0, 6.0));
+        assert!(link.contains(99.0, 96.0) && !link.contains(99.0, 94.0));
+        assert!(link.segments() <= SANKEY_LINK_SEGMENTS);
+    }
+
+    #[test]
+    fn sankey_nodes_use_their_own_fill_and_links_the_translucent_series_stroke() {
+        let mut chart = chart();
+        let nodes = ["a", "b", "c"]
+            .map(|id| FlowNode {
+                id: id.into(),
+                label: id.into(),
+            })
+            .to_vec();
+        let links = vec![
+            FlowLink {
+                source: "a".into(),
+                target: "b".into(),
+                value: 3.0,
+            },
+            FlowLink {
+                source: "a".into(),
+                target: "c".into(),
+                value: 1.0,
+            },
+        ];
+        let dataset = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Flow {
+                nodes: nodes.clone(),
+                links: links.clone(),
+            })
+            .unwrap();
+        let mut options =
+            GeneralLayoutSeriesOptions::new(0, dataset, GeneralLayoutSeriesKind::Sankey);
+        options.color = "#8b6df6".into();
+        chart.add_general_layout_series(options).unwrap();
+        chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+        let frame = chart.build_frame();
+        let main = &frame.panes[0].main;
+        let node_fills: Vec<Color> = main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Rect { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(node_fills, vec![SANKEY_NODE_FILL; 3]);
+        let link_fills: Vec<Color> = main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::MeshFill { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(link_fills, vec![Color::rgba(0x8b, 0x6d, 0xf6, 51); 2]);
+
+        let plot = chart.general_plot_rect(0).unwrap();
+        let cache = sankey_shapes(&nodes, &links, plot);
+        // Recharts defaults: 5 px margin, 10 px nodes, 10 px padding, and the sink column
+        // justified to the right edge.
+        let rect = |row: usize| cache.nodes[row].rect;
+        assert_eq!(rect(0).x, plot.x + SANKEY_MARGIN);
+        assert_eq!(rect(0).width, SANKEY_NODE_WIDTH);
+        assert!((rect(1).x + rect(1).width - (plot.x + plot.width - SANKEY_MARGIN)).abs() < 1e-9);
+        assert!((rect(2).x - rect(1).x).abs() < 1e-9);
+        let (upper, lower) = if rect(1).y < rect(2).y {
+            (rect(1), rect(2))
+        } else {
+            (rect(2), rect(1))
+        };
+        assert!(lower.y - (upper.y + upper.height) >= SANKEY_NODE_PADDING - 1e-9);
+        let total = plot.height - 2.0 * SANKEY_MARGIN;
+        assert!((rect(0).height - (total - SANKEY_NODE_PADDING)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sunburst_keeps_a_recharts_hole_and_paints_value_labels() {
+        let mut chart = chart();
+        let nodes = vec![
+            HierarchyNode {
+                id: "root".into(),
+                parent: None,
+                label: "Root".into(),
+                value: None,
+                color_value: None,
+            },
+            HierarchyNode {
+                id: "a".into(),
+                parent: Some("root".into()),
+                label: "A".into(),
+                value: None,
+                color_value: None,
+            },
+            HierarchyNode {
+                id: "b".into(),
+                parent: Some("root".into()),
+                label: "B".into(),
+                value: Some(2.0),
+                color_value: None,
+            },
+            HierarchyNode {
+                id: "a1".into(),
+                parent: Some("a".into()),
+                label: "A1".into(),
+                value: Some(3.0),
+                color_value: None,
+            },
+            HierarchyNode {
+                id: "a2".into(),
+                parent: Some("a".into()),
+                label: "A2".into(),
+                value: Some(1.0),
+                color_value: None,
+            },
+        ];
+        let dataset = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Hierarchy(nodes.clone()))
+            .unwrap();
+        let mut options =
+            GeneralLayoutSeriesOptions::new(0, dataset, GeneralLayoutSeriesKind::Sunburst);
+        options.color = "#28b7a4".into();
+        let series = chart.add_general_layout_series(options).unwrap();
+        chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+        let plot = chart.general_plot_rect(0).unwrap();
+        let shapes = sunburst_shapes(&nodes, plot).shapes;
+        let (cx, cy) = (plot.x + plot.width / 2.0, plot.y + plot.height / 2.0);
+        let outer = plot.width.min(plot.height) / 2.0;
+        // Recharts counts the root as one of three levels, so each ring is a third of the
+        // space outside the 50 px hole, with 2 px between rings.
+        let ring = (outer - SUNBURST_INNER_RADIUS) / 3.0;
+        let a = shapes.iter().find(|shape| shape.row == 1).unwrap();
+        let a1 = shapes.iter().find(|shape| shape.row == 3).unwrap();
+        assert!((a.inner - SUNBURST_INNER_RADIUS).abs() < 1e-9);
+        assert!((a.outer - a.inner - ring).abs() < 1e-9);
+        assert!((a1.inner - (a.outer + SUNBURST_RING_PADDING)).abs() < 1e-9);
+        assert_eq!(
+            chart.general_layout_hit_test(0, cx, cy),
+            None,
+            "center hole"
+        );
+        assert_eq!(
+            chart.general_layout_hit_test(0, cx, cy - SUNBURST_INNER_RADIUS + 5.0),
+            None
+        );
+        assert_eq!(
+            chart.general_layout_hit_test(0, cx + a.outer + 1.0, cy - 1.0),
+            None,
+            "ring padding"
+        );
+        let hit = |x: f64, y: f64| chart.general_layout_hit_test(0, x, y).map(|hit| hit.row);
+        let middle = SUNBURST_INNER_RADIUS + ring / 2.0;
+        // The first child starts at three o'clock and runs counterclockwise: A owns the top
+        // two thirds of the turn and B the remaining lower right third.
+        assert_eq!(hit(cx, cy - middle), Some(1));
+        assert_eq!(hit(cx - middle, cy), Some(1));
+        assert_eq!(hit(cx + 1.0, cy + middle), Some(2));
+        assert_eq!(
+            chart.general_layout_hit_test(0, cx, cy - middle),
+            Some(GeneralLayoutHit {
+                series,
+                element: GeneralLayoutElement::Node,
+                row: 1
+            })
+        );
+        let frame = chart.build_frame();
+        let main = &frame.panes[0].main;
+        let mut labels: Vec<&str> = main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        labels.sort_unstable();
+        assert_eq!(
+            labels,
+            vec!["1", "2", "3"],
+            "leaf values; A has no own value"
+        );
+        let fill = Color::parse_css("#28b7a4").unwrap();
+        assert!(
+            main.iter()
+                .filter_map(|prim| match prim {
+                    Prim::MeshFill { color, .. } => Some(*color),
+                    _ => None,
+                })
+                .all(|color| color == fill)
+        );
+        assert_eq!(
+            main.iter()
+                .filter(|prim| matches!(
+                    prim,
+                    Prim::Polyline { color, .. } if *color == SUNBURST_STROKE
+                ))
+                .count(),
+            4
+        );
+    }
     #[test]
     fn sunburst_rings_preserve_parent_order_and_exact_hits() {
         let mut chart = chart();

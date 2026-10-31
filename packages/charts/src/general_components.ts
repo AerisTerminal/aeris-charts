@@ -36,6 +36,8 @@ export interface general_brush_controls_options {
   }>;
 }
 
+let brush_status_id = 0;
+
 /** Keyboard and touch controls for the engine's semantic brush and pointer gesture. */
 export function create_general_brush_controls(
   chart: chart_api,
@@ -51,12 +53,15 @@ export function create_general_brush_controls(
   if (options.locale !== undefined) root.lang = options.locale;
   root.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:4px";
   const status = document.createElement("output");
+  status.id = `aeris_charts-brush-status-${++brush_status_id}`;
   status.setAttribute("aria-live", "polite");
   status.style.cssText = "min-width:8ch;max-width:100%;padding:0 4px;overflow-wrap:anywhere";
   const button = (label: string, action: () => void): HTMLButtonElement => {
     const element = document.createElement("button");
     element.type = "button";
     element.textContent = label;
+    // Focusing a nudge button reads the current range, not only the later live update.
+    element.setAttribute("aria-describedby", status.id);
     element.style.cssText = "min-height:28px;padding:2px 6px;border:1px solid currentColor;border-radius:4px;background:transparent;color:inherit;cursor:pointer";
     element.addEventListener("click", action);
     root.appendChild(element);
@@ -122,6 +127,20 @@ function pane_index(pane: number | pane_api | undefined): number | undefined {
   return typeof pane === "number" ? pane : pane?.pane_index();
 }
 
+/**
+ * Dimming of a hidden entry, shared with the engine legend. Hidden entries remain operable toggles,
+ * so default theme text keeps WCAG AA 4.5:1 at this opacity on both theme surfaces.
+ */
+const HIDDEN_LEGEND_OPACITY = "0.56";
+
+/**
+ * Recharts `Legend` default `itemSorter="value"`, shared with the engine legend: JavaScript string
+ * order (case-sensitive UTF-16 code units), applied with a stable sort.
+ */
+function legend_name_order(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /** Accessible default legend. Its buttons toggle engine visibility by stable series identity. */
 export function create_general_legend(
   chart: chart_api,
@@ -146,6 +165,7 @@ export function create_general_legend(
     const series = new Map(chart.general_series_order(pane).map((item) => [item.id, item]));
     const snapshot = chart.general_legend_snapshot(pane);
     root.replaceChildren();
+    const entries: [string, HTMLElement][] = [];
     for (const item of snapshot.items) {
       const handle = series.get(item.series);
       if (handle === undefined) continue;
@@ -158,7 +178,7 @@ export function create_general_legend(
       button.setAttribute("aria-label", options.format_action?.(item.visible, item.title)
         ?? `${item.visible ? "Hide" : "Show"} ${item.title}`);
       button.style.cssText = "display:inline-flex;align-items:center;gap:6px;min-height:20px;padding:0 2px;border:0;border-radius:2px;background:transparent;color:inherit;font:inherit;line-height:16px;cursor:pointer";
-      button.style.opacity = item.visible ? "1" : "0.55";
+      button.style.opacity = item.visible ? "1" : HIDDEN_LEGEND_OPACITY;
       const swatch = document.createElement("span");
       swatch.setAttribute("aria-hidden", "true");
       swatch.style.cssText = "display:inline-block;flex:none;width:4px;height:12px;border-radius:2px;background:currentColor";
@@ -175,8 +195,8 @@ export function create_general_legend(
         const slices = document.createElement("div");
         slices.setAttribute("role", "list");
         slices.setAttribute("aria-label", `${item.title || item.kind} slices`);
-        slices.style.cssText = "display:flex;flex-wrap:wrap;gap:4px 8px;padding:0 4px;max-height:120px;max-width:100%;overflow:auto;opacity:" + (item.visible ? "1" : "0.55");
-        for (const slice of item.slices) {
+        slices.style.cssText = "display:flex;flex-wrap:wrap;gap:4px 8px;padding:0 4px;max-height:120px;max-width:100%;overflow:auto;opacity:" + (item.visible ? "1" : HIDDEN_LEGEND_OPACITY);
+        for (const slice of [...item.slices].sort((a, b) => legend_name_order(a.label, b.label))) {
           const entry = document.createElement("span");
           entry.setAttribute("role", "listitem");
           entry.style.cssText = "display:inline-flex;align-items:center;gap:4px;white-space:nowrap";
@@ -195,7 +215,7 @@ export function create_general_legend(
         }
         group.appendChild(slices);
       }
-      root.appendChild(group);
+      entries.push([item.title, group]);
     }
     for (const handle of chart.layout_series(pane)) {
       const item = handle.options();
@@ -208,7 +228,7 @@ export function create_general_legend(
       button.setAttribute("aria-label", options.format_action?.(visible, title)
         ?? `${visible ? "Hide" : "Show"} ${title}`);
       button.style.cssText = "display:inline-flex;align-items:center;gap:6px;min-height:20px;padding:0 2px;border:0;border-radius:2px;background:transparent;color:inherit;font:inherit;line-height:16px;cursor:pointer";
-      button.style.opacity = visible ? "1" : "0.55";
+      button.style.opacity = visible ? "1" : HIDDEN_LEGEND_OPACITY;
       const swatch = document.createElement("span");
       swatch.setAttribute("aria-hidden", "true");
       swatch.style.cssText = `display:inline-block;flex:none;width:4px;height:12px;border-radius:2px;background:${item.color ?? "#4682b4"}`;
@@ -216,8 +236,10 @@ export function create_general_legend(
       label.textContent = options.format_layout_title?.(title, handle) ?? title;
       button.append(swatch, label);
       button.addEventListener("click", () => { handle.set_visible(!handle.options().visible); refresh(); });
-      root.appendChild(button);
+      entries.push([title, button]);
     }
+    entries.sort((a, b) => legend_name_order(a[0], b[0]));
+    root.append(...entries.map(([, node]) => node));
     if (focused_series !== undefined) {
       for (const button of root.querySelectorAll<HTMLButtonElement>("button")) {
         if (button.dataset.series === focused_series) {

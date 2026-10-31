@@ -18,7 +18,7 @@
     "warning": "#ff6900",
     "muted": "#fafafa",
     "raised": "#f0f0f0",
-    "muted_foreground": "#717171",
+    "muted_foreground": "#6b6b6b",
     "accent": "#f3f3f3",
     "active": "#f3f3f3",
     "border": "#cecece",
@@ -40,7 +40,7 @@
     "popover_border": "#cecece",
     "popover_highlight": "#ffffff",
     "popover_highlight_alpha": 204,
-    "popover_muted_foreground": "#717171",
+    "popover_muted_foreground": "#6b6b6b",
     "crosshair_line": "#0a0a0a",
     "crosshair_line_alpha": 38
   },

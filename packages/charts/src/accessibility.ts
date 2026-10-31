@@ -119,7 +119,7 @@ export interface accessibility_options {
 }
 
 interface resolved_accessibility_options {
-  chart_title: string | ((pane_index: number) => string);
+  chart_title?: string | ((pane_index: number) => string);
   show_focus_indicator: boolean;
   focus_indicator_color: string;
   focus_indicator_size: number;
@@ -175,7 +175,7 @@ const default_messages: accessibility_messages = {
 
 function resolve_options(options: accessibility_options): resolved_accessibility_options {
   return {
-    chart_title: options.chart_title ?? "Interactive financial chart",
+    chart_title: options.chart_title,
     show_focus_indicator: options.show_focus_indicator ?? true,
     focus_indicator_color: options.focus_indicator_color ?? "#2962FF",
     focus_indicator_size: Math.max(4, Math.min(128, options.focus_indicator_size ?? 14)),
@@ -556,8 +556,13 @@ class PaneAccessibility {
     for (const position of trading.positions) {
       if (position.pane_index === this.pane_index) add(`position:${position.id}`, `Position ${position.id} at ${position.average_price}`);
     }
-    add("price-axis", `Pane ${this.pane_index + 1} price axis`);
-    if (this.pane_index === this.controller.chart.panes().length - 1) add("time-axis", "Time axis");
+    // Price and time axis targets drive the financial time scale; general, polar, and layout panes
+    // have no such axis, so a target there would be a focusable control that does nothing.
+    if (this.controller.financial_pane(this.pane_index)) add("price-axis", `Pane ${this.pane_index + 1} price axis`);
+    const panes = this.controller.chart.panes();
+    if (this.pane_index === panes.length - 1 && panes.some((_, index) => this.controller.financial_pane(index))) {
+      add("time-axis", "Time axis");
+    }
     if (this.pane_index < this.controller.chart.panes().length - 1) add("separator", `Separator after pane ${this.pane_index + 1}`);
     if (focused !== undefined) {
       this.targets.querySelector<HTMLElement>(`[data-a11y-target="${CSS.escape(focused)}"]`)?.focus();
@@ -897,7 +902,9 @@ class PaneAccessibility {
     if (this.controller.options.price_formatter !== undefined) return this.controller.options.price_formatter(value);
     const chart_formatter = this.controller.localization().price_formatter;
     if (chart_formatter !== undefined) return chart_formatter(value);
-    try { return is_financial_series(series) ? series.price_formatter()(value) : String(value); }
+    // General and layout values can carry binary summation noise (14890.000000000002); 15
+    // significant digits is the largest precision every double round-trips exactly.
+    try { return is_financial_series(series) ? series.price_formatter()(value) : String(Number(value.toPrecision(15))); }
     catch { return String(value); }
   }
 
@@ -1129,9 +1136,10 @@ class PaneAccessibility {
   }
 
   private pane_label(): string {
-    const title = typeof this.controller.options.chart_title === "function"
-      ? this.controller.options.chart_title(this.pane_index)
-      : this.controller.options.chart_title;
+    const configured = this.controller.options.chart_title;
+    const title = typeof configured === "function"
+      ? configured(this.pane_index)
+      : configured ?? (this.controller.financial_pane(this.pane_index) ? "Interactive financial chart" : "Interactive chart");
     return this.controller.options.messages.pane_label(
       title, this.series.length, this.active_series() === undefined ? null : this.series_label(this.active_series(), this.series_index),
     );
@@ -1320,6 +1328,11 @@ class AccessibilityController implements accessibility_handle {
 
   locale(): string | undefined {
     return this.localization().locale || undefined;
+  }
+
+  financial_pane(pane_index: number): boolean {
+    return (this.chart as chart_api & { pane_is_financial_time(pane_index: number): boolean })
+      .pane_is_financial_time(pane_index);
   }
 
   set_active(pane: PaneAccessibility): void {

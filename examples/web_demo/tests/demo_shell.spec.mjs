@@ -92,7 +92,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   expect(light.css).toEqual({
     surface: "#ffffff",
     text_default: "#0a0a0a",
-    text_secondary: "#0a0a0a94",
+    text_secondary: "#0a0a0a9a",
     text_muted: "#0a0a0a40",
     primary: "#006edd",
     primary_hover_matches: true,
@@ -105,7 +105,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   expect(light.palette).toMatchObject({
     background: "#ffffff",
     foreground: "#0a0a0a",
-    muted_foreground: "#717171",
+    muted_foreground: "#6b6b6b",
     primary: "#006edd",
     primary_foreground: "#ffffff",
     primary_hover: "#338be4",
@@ -116,7 +116,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   expect(light.chart).toEqual({
     background: "#ffffff",
     text: "#0a0a0a",
-    muted_text: "#717171",
+    muted_text: "#6b6b6b",
     border: "#cecece",
     crosshair: "#0a0a0a26",
     crosshair_label: "#242424",

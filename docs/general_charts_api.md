@@ -17,9 +17,15 @@ coordinates, and temporal epoch-millisecond X with numeric Y coordinates. Polar 
 implemented. Funnel, treemap, Sankey and sunburst have a public layout-pane API, validated inputs,
 shared-frame geometry and exact hits. Their interaction, persistence, accessibility and transition
 contracts shipped in G7; full competitor and manual parity evidence remains G8 work.
-Treemap leaves may carry a signed `color_value` (for example a daily percent change): when any leaf has one, cells shade from a neutral gray toward green for gains and
-red for losses by magnitude relative to the largest change. Nested groups are inset with a label header
-when they have room, and every cell keeps a 1 CSS px gap so the pane background separates it.
+Defaults follow pinned Recharts 3.10.1. Treemap uses Recharts squarify tiling, one flat series
+fill with a 1 CSS px white stroke, and 14 px cell names where they fit. Treemap leaves may carry a
+signed `color_value` (for example a daily percent change) as an opt-in: when any leaf has one,
+cells shade from a neutral gray toward green for gains and red for losses by magnitude relative to
+the largest change. Sankey uses Recharts' layout defaults (5 px margin, 10 px nodes and padding,
+32 iterations, justified columns), curved links with `linkCurvature` 0.5 in the series color at
+0.2 opacity, and nodes in Recharts' `#0088fe` at 0.8 opacity. Sunburst keeps Recharts' 50 px
+center hole, 2 px ring gaps, counterclockwise sectors from three o'clock, a flat series fill with
+a 2 px white outline, and per-sector value text; `data_labels` shows node names instead.
 
 React `GeneralPane` supports keyed arrays and direct axis, series, reference, label, legend,
 tooltip, and brush declarations. `MappedGeneralSeries` maps typed application rows before the
@@ -43,11 +49,17 @@ X datum or category band, like Recharts' axis tooltip: the chart paints a cursor
 `vertLine` style (a horizontal line for horizontal bars), an active dot on each line and area at that datum,
 and a popover tooltip with the date or category header and one colored row per shared item. Other panes
 describe the item under the pointer. `chart.apply_options({ generalTooltip: { visible: false } })` hides the
-tooltip; `crosshair.vertLine.visible` controls the cursor. The tooltip is part of the ordered frame, so it
-matches across Canvas2D, WebGPU, GPUI and native rendering.
+tooltip; `crosshair.vertLine.visible` controls the cursor. Like Recharts, the tooltip sits 10 px from the
+anchor, flips to the other side when it would cross the plot edge, and stays inside the chart surface; it
+paints above axis labels and the legend. Keyboard focus on a general row or layout item shows the same
+tooltip at the focused datum or mark until the pointer hovers, Escape dismisses it, or focus leaves.
+Crosshair-free exports omit it. The tooltip is part of the ordered frame, so it matches across Canvas2D,
+WebGPU, GPUI and native rendering.
 
 `chart.apply_options({ generalLegend: { visible: true } })` (or the same option in `create_chart`) adds an
 engine-drawn legend below the plot by default: a rounded color pill and title per series (per layout series in a layout pane).
+Entries follow Recharts' default `itemSorter="value"`: a stable sort by name in JavaScript string order
+(case-sensitive), which `create_general_legend` also applies. `general_legend_snapshot` keeps engine order.
 Horizontal positions wrap into at most three rows with a "+N more" entry when they do not fit. Clicking an entry toggles that
 series' visibility and notifies `subscribe_general_legend_change`; hidden series stay listed dimmed. Like the
 tooltip, it is part of the ordered frame and matches across every backend, including GPUI hosts, which enable it
@@ -456,14 +468,26 @@ interface polar_series_options {
   title?: string;
   color?: string;
   polar?: {
-    start_angle?: number;
-    end_angle?: number;
-    inner_radius?: number;
-    outer_radius?: number;
-    pad_angle?: number;
+    /** Radians, Recharts convention: 0 at three o'clock, positive counter-clockwise. */
+    start_angle?: number; // default 0
+    end_angle?: number; // default 2π; below start_angle sweeps clockwise
+    inner_radius?: number; // default 0, fraction of the polar plot radius
+    outer_radius?: number; // default 0.8 for pie and radial_bar (Recharts 80%), 1 for polar_area
+    pad_angle?: number; // default 0
   };
 }
 ```
+
+Polar defaults follow pinned Recharts 3.10.1. A `pie` starts its first slice at three o'clock and
+sweeps counter-clockwise (`Pie startAngle=0 endAngle=360`); `start_angle: Math.PI, end_angle: 0`
+is the Recharts `startAngle={180} endAngle={0}` top half. A `radial_bar` follows
+`RadialBarChart`: each angular category owns one concentric ring of the inner..outer band, in
+category order from the inside out (reversed by the angle axis `reverse`), each ring inset by the
+default 10% `barCategoryGap`, and its value sweeps the ring from `start_angle` toward `end_angle`
+by its fraction of the radius-axis domain, from zero or the domain bound nearest zero. Radial bars
+have no background track (Recharts `background={false}`) and ignore `pad_angle`. Polar-area
+sectors stay on the angular axis category spokes, which start at twelve o'clock and advance
+clockwise; their sweep scales and offsets that layout.
 
 These shapes summarize the common public `general_series_options` fields; kind-specific validation
 still applies. Use `null` for a missing row value. Line, scatter, bubble, box-plot, error-bar,

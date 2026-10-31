@@ -857,7 +857,15 @@ fn pie_and_donut_share_sector_frame_and_exact_hit_geometry() {
         solid_slices.push(slice);
     });
     assert_eq!(solid_slices.len(), 2);
-    assert!(solid_slices[0].sector.contains(cx, cy));
+    // The center inverts to twelve o'clock, which a default Recharts sweep from three o'clock
+    // reaches inside exactly one solid slice.
+    assert_eq!(
+        solid_slices
+            .iter()
+            .filter(|slice| slice.sector.contains(cx, cy))
+            .count(),
+        1
+    );
 
     for (start, end, inner, pad) in [
         (0.0, std::f64::consts::TAU, 0.0, 0.0),
@@ -965,7 +973,12 @@ fn pie_and_donut_share_sector_frame_and_exact_hit_geometry() {
         extreme_slices.push(slice);
     });
     assert_eq!(extreme_slices.len(), 2);
-    assert!((extreme_slices[0].sector.mid_angle() - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+    // Two equal halves from three o'clock counter-clockwise: the first is centered at twelve.
+    let mid = extreme_slices[0]
+        .sector
+        .mid_angle()
+        .rem_euclid(std::f64::consts::TAU);
+    assert!(mid.min(std::f64::consts::TAU - mid) < 1e-12);
 
     let zeros = chart
         .create_general_xy_dataset(GeneralXyInput::Category {
@@ -1216,7 +1229,9 @@ fn pie_value_transition_uses_fixed_clock_for_frame_hits_and_interruption() {
         let mut sweep = None;
         chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |item| {
             if item.row == 0 {
-                sweep = Some(item.sector.mid_angle() * 2.0);
+                // Default pies start at three o'clock (plot angle pi/2) and sweep
+                // counter-clockwise, so the first slice's mid angle lies half its sweep before it.
+                sweep = Some((std::f64::consts::FRAC_PI_2 - item.sector.mid_angle()) * 2.0);
             }
         });
         sweep.unwrap()
@@ -3617,7 +3632,12 @@ fn pie_row_reorder_moves_slices_with_the_fixed_clock() {
                     "a".into(),
                 )))
             {
-                angle = Some(slice.sector.mid_angle());
+                // Compare Recharts-convention angles, which advance continuously around the
+                // default counter-clockwise sweep instead of wrapping at twelve o'clock.
+                angle = Some(
+                    (std::f64::consts::FRAC_PI_2 - slice.sector.mid_angle())
+                        .rem_euclid(std::f64::consts::TAU),
+                );
             }
         });
         angle.unwrap()
@@ -3965,7 +3985,14 @@ fn polar_value_families_share_fixed_clock_geometry_and_exact_hits() {
                 chart.general_series(series).unwrap(),
                 |sector| {
                     if sector.row == 0 {
-                        let (_, normalized) = sector.sector.radial_bounds();
+                        // Radial bars map value to their counter-clockwise arc from three
+                        // o'clock (half a turn at the midpoint); polar area maps it to radius.
+                        let normalized = if kind == GeneralSeriesKind::RadialBar {
+                            (std::f64::consts::FRAC_PI_2 - sector.sector.mid_angle())
+                                / std::f64::consts::PI
+                        } else {
+                            sector.sector.radial_bounds().1
+                        };
                         geometry = Some((
                             normalized,
                             sector
@@ -6230,7 +6257,12 @@ fn reference_regions_use_plot_edges_through_axis_zoom_and_mixed_layout() {
     )
     .unwrap();
     let reference = chart.add_general_reference(options).unwrap();
-    let color = Color::parse_css("#2468ac").unwrap();
+    // Recharts ReferenceArea paints its fill at fillOpacity 0.5.
+    let region_fill = |css: &str| {
+        let fill = Color::parse_css(css).unwrap();
+        Color::rgba(fill.r(), fill.g(), fill.b(), 128)
+    };
+    let color = region_fill("#2468ac");
     let check = |chart: &mut ChartEngine, pane: usize| {
         chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
         let frame = chart.build_frame();
@@ -6276,9 +6308,7 @@ fn reference_regions_use_plot_edges_through_axis_zoom_and_mixed_layout() {
         .main
         .iter()
         .find_map(|prim| match prim {
-            Prim::Rect { rect, color } if *color == Color::parse_css("#7b438f").unwrap() => {
-                Some(*rect)
-            }
+            Prim::Rect { rect, color } if *color == region_fill("#7b438f") => Some(*rect),
             _ => None,
         })
         .expect("full-width reference region");
@@ -6300,9 +6330,7 @@ fn reference_regions_use_plot_edges_through_axis_zoom_and_mixed_layout() {
             .main
             .iter()
             .find_map(|prim| match prim {
-                Prim::Rect { rect, color: fill } if *fill == Color::parse_css(color).unwrap() => {
-                    Some(*rect)
-                }
+                Prim::Rect { rect, color: fill } if *fill == region_fill(color) => Some(*rect),
                 _ => None,
             })
             .expect("one-sided reference region");
@@ -6465,8 +6493,9 @@ fn general_references_render_all_kinds_and_extend_domains_only_when_requested() 
     let region_position = main
         .iter()
         .position(|primitive| {
+            // Recharts ReferenceArea fillOpacity 0.5 halves the supplied 0.25 alpha.
             matches!(primitive, Prim::Rect { color, .. }
-                if *color == Color::parse_css("rgba(10,20,30,0.25)").unwrap())
+                if *color == Color::rgba(10, 20, 30, 32))
         })
         .unwrap();
     let series_position = main
@@ -6754,11 +6783,20 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
     assert_eq!(chart.general_accessibility_focused_hit(), Some(hit.clone()));
     let focused_frame = chart.build_frame();
     assert!(
-        focused_frame.panes[pane]
+        focused_frame.panes[pane].main.iter().any(|primitive| {
+            matches!(primitive, Prim::RectFrame { color, border: 2, .. } if *color == PRIMARY)
+        }),
+        "keyboard focus draws the opaque emphasized ring, not the translucent hover ring"
+    );
+    chart.clear_general_accessibility_focus();
+    assert!(
+        !chart.build_frame().panes[pane]
             .main
             .iter()
-            .any(|primitive| matches!(primitive, Prim::RectFrame { border: 1, .. }))
+            .any(|primitive| matches!(primitive, Prim::RectFrame { color, border: 2, .. } if *color == PRIMARY)),
+        "the emphasized ring belongs to focus, not to pointer hover"
     );
+    assert!(chart.set_general_accessibility_focus(series, 0));
     assert!(chart.select_general_hovered());
     assert_eq!(chart.general_selected_hit(), Some(hit.clone()));
     let selected_frame = chart.build_frame();
@@ -23110,4 +23148,485 @@ fn sub_pixel_pans_translate_series_geometry_by_whole_device_pixels() {
         }
         assert!(shifts.contains(&0.0) && shifts.iter().any(|shift| *shift != 0.0));
     }
+}
+
+/// Text primitives in `prims` checked against the fill painted beneath their anchor (the topmost
+/// earlier opaque-or-translucent fill containing it, composited over the chart surface), or the
+/// surface itself. Returns how many labels sat on a fill and every label below `threshold`.
+fn text_contrast_audit(
+    prims: &[Prim],
+    points: &[[f32; 2]],
+    surface: Color,
+    threshold: f64,
+) -> (usize, Vec<String>) {
+    let cross = |o: [f32; 2], u: [f32; 2], v: [f32; 2]| {
+        (u[0] - o[0]) * (v[1] - o[1]) - (u[1] - o[1]) * (v[0] - o[0])
+    };
+    let in_triangle = |p: [f32; 2], t: &[[f32; 2]]| {
+        let (d1, d2, d3) = (
+            cross(t[0], t[1], p),
+            cross(t[1], t[2], p),
+            cross(t[2], t[0], p),
+        );
+        !((d1 < 0.0 || d2 < 0.0 || d3 < 0.0) && (d1 > 0.0 || d2 > 0.0 || d3 > 0.0))
+    };
+    let mut on_fill = 0;
+    let mut failures = Vec::new();
+    for (index, prim) in prims.iter().enumerate() {
+        let Prim::Text {
+            x, y, text, color, ..
+        } = prim
+        else {
+            continue;
+        };
+        let (px, py) = (*x, *y);
+        let fill = prims[..index].iter().rev().find_map(|fill| match fill {
+            Prim::Rect { rect, color }
+                if color.a() > 0
+                    && px > rect.x as f32
+                    && px < (rect.x + rect.w) as f32
+                    && py > rect.y as f32
+                    && py < (rect.y + rect.h) as f32 =>
+            {
+                Some(*color)
+            }
+            Prim::RoundRect {
+                x, y, w, h, fill, ..
+            } if fill.a() > 0 && px > *x && px < x + w && py > *y && py < y + h => Some(*fill),
+            Prim::MeshFill {
+                first_point,
+                point_count,
+                color,
+            } if color.a() > 0 => {
+                let start = *first_point as usize;
+                points[start..start + *point_count as usize]
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .any(|triangle| in_triangle([px, py], &triangle[..]))
+                    .then_some(*color)
+            }
+            _ => None,
+        });
+        let backdrop = fill.map_or(surface, |fill| fill.composite_over(surface));
+        on_fill += usize::from(fill.is_some());
+        let ratio = color.composite_over(backdrop).contrast_ratio(backdrop);
+        if ratio < threshold {
+            failures.push(format!(
+                "{text:?}: {} on {} is {ratio:.2}:1",
+                color.to_css(),
+                backdrop.to_hex()
+            ));
+        }
+    }
+    (on_fill, failures)
+}
+
+#[test]
+fn general_labels_legend_and_focus_keep_wcag_contrast_in_both_themes() {
+    for theme in [crate::ChartTheme::Light, crate::ChartTheme::Dark] {
+        let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+        chart.set_theme(theme);
+        chart
+            .apply_options(r#"{"generalLegend":{"visible":true}}"#)
+            .unwrap();
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Category {
+                    scale: CategoryScaleType::Band,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Band,
+            ))
+            .unwrap();
+        let mut y = GeneralAxisOptions::new("y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+        // The tallest bar reaches the plot top, so its label falls back inside the fill.
+        y.domain = GeneralAxisDomain::Numeric([0.0, 80.0]);
+        chart.add_general_axis(y).unwrap();
+        let mut series = Vec::new();
+        for (title, color) in [("Revenue", "#4c8bf5"), ("Cost", "#e4a11b")] {
+            let dataset = chart
+                .create_general_xy_dataset(GeneralXyInput::Category {
+                    ids: None,
+                    categories: vec!["A".into(), "B".into(), "C".into()],
+                    category_indices: vec![0, 1, 2],
+                    y: vec![10.0, 40.0, 80.0],
+                    y_valid: None,
+                })
+                .unwrap();
+            let mut options = GeneralSeriesOptions::column(pane, dataset, "x", "y");
+            options.title = title.into();
+            options.color = Some(color.into());
+            options.data_labels = true;
+            series.push(chart.add_general_series(options).unwrap());
+        }
+        // A hidden entry stays an operable legend toggle, so its dimmed text keeps 4.5:1.
+        assert!(chart.set_general_series_visible(series[1], false));
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let surface = chart.chart_surface_color();
+        let frame = chart.build_frame();
+        let layers = &frame.panes[pane];
+        let (on_fill, failures) = text_contrast_audit(&layers.main, &layers.points, surface, 4.5);
+        assert!(failures.is_empty(), "{theme:?}: {failures:?}");
+        assert!(
+            on_fill >= 1,
+            "{theme:?}: the clipped label must land inside its bar"
+        );
+        let texts: Vec<_> = layers
+            .main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Text { text, color, .. } => Some((text.as_str(), *color)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|(text, color)| *text == "Cost" && color.a() < u8::MAX),
+            "{theme:?}: the hidden legend entry must be audited dimmed: {texts:?}"
+        );
+
+        // Keyboard focus draws the opaque emphasized ring, which keeps 3:1 on the surface; the
+        // translucent 1 px hover ring does not and must never be the only focus cue.
+        assert!(chart.set_general_accessibility_focus(series[0], 0));
+        let frame = chart.build_frame();
+        let ring = frame.panes[pane]
+            .main
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::RectFrame { color, border, .. } if *border >= 2 => Some(*color),
+                _ => None,
+            })
+            .expect("focused bar ring");
+        assert_eq!(ring, PRIMARY);
+        let ratio = ring.composite_over(surface).contrast_ratio(surface);
+        assert!(ratio >= 3.0, "{theme:?}: focus ring {ratio:.2}:1");
+    }
+}
+
+#[test]
+fn layout_labels_and_focus_rings_keep_wcag_contrast_on_their_fills() {
+    use crate::{
+        FlowLink, FlowNode, FunnelStage, GeneralLayoutElement, GeneralLayoutHit,
+        GeneralLayoutInput, GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, HierarchyNode,
+    };
+    let node =
+        |id: &str, parent: Option<&str>, value: Option<f64>, change: Option<f64>| HierarchyNode {
+            id: id.into(),
+            parent: parent.map(Into::into),
+            label: id.to_uppercase(),
+            value,
+            color_value: change,
+        };
+    let hierarchy = vec![
+        node("root", None, None, None),
+        node("up", Some("root"), Some(40.0), Some(2.0)),
+        node("flat", Some("root"), Some(30.0), Some(0.2)),
+        node("down", Some("root"), Some(30.0), Some(-1.5)),
+    ];
+    let cases = [
+        (
+            GeneralLayoutSeriesKind::Funnel,
+            "#4c8bf5",
+            GeneralLayoutInput::Funnel(
+                [("visit", 100.0), ("cart", 60.0), ("buy", 30.0)]
+                    .map(|(id, value)| FunnelStage {
+                        id: id.into(),
+                        label: id.to_uppercase(),
+                        value,
+                    })
+                    .to_vec(),
+            ),
+            GeneralLayoutElement::Stage,
+        ),
+        (
+            GeneralLayoutSeriesKind::Treemap,
+            "#089981",
+            GeneralLayoutInput::Hierarchy(hierarchy.clone()),
+            GeneralLayoutElement::Node,
+        ),
+        (
+            GeneralLayoutSeriesKind::Sunburst,
+            "#e4a11b",
+            GeneralLayoutInput::Hierarchy(hierarchy),
+            GeneralLayoutElement::Node,
+        ),
+        (
+            GeneralLayoutSeriesKind::Sankey,
+            "#8b6df6",
+            GeneralLayoutInput::Flow {
+                nodes: ["a", "b"]
+                    .map(|id| FlowNode {
+                        id: id.into(),
+                        label: id.to_uppercase(),
+                    })
+                    .to_vec(),
+                links: vec![FlowLink {
+                    source: "a".into(),
+                    target: "b".into(),
+                    value: 4.0,
+                }],
+            },
+            GeneralLayoutElement::Node,
+        ),
+    ];
+    for theme in [crate::ChartTheme::Light, crate::ChartTheme::Dark] {
+        for (kind, color, input, element) in &cases {
+            let mut chart =
+                ChartEngine::new_with_initial_domain(480.0, 360.0, 1.0, HorizontalDomain::Layout)
+                    .unwrap();
+            chart.set_theme(theme);
+            let dataset = chart.create_general_layout_dataset(input.clone()).unwrap();
+            let mut options = GeneralLayoutSeriesOptions::new(0, dataset, *kind);
+            options.color = (*color).into();
+            options.data_labels = true;
+            let series = chart.add_general_layout_series(options).unwrap();
+            chart.recompute_layout_with_measure(
+                true,
+                |text, _| text.len() as f64 * 7.0,
+                |_, _| 0.0,
+            );
+            let surface = chart.chart_surface_color();
+            let frame = chart.build_frame();
+            let layers = &frame.panes[0];
+            let (on_fill, failures) =
+                text_contrast_audit(&layers.main, &layers.points, surface, 4.5);
+            assert!(failures.is_empty(), "{theme:?} {kind:?}: {failures:?}");
+            assert!(
+                on_fill >= 1,
+                "{theme:?} {kind:?}: no label was painted on a fill"
+            );
+
+            let hit = GeneralLayoutHit {
+                series,
+                element: *element,
+                row: 1,
+            };
+            assert!(chart.set_general_layout_accessibility_focus(hit, "#2962ff", 14.0));
+            let frame = chart.build_frame();
+            let strokes: Vec<_> = frame.panes[0]
+                .main
+                .iter()
+                .filter_map(|prim| match prim {
+                    Prim::Circle { stroke, .. } => Some(*stroke),
+                    _ => None,
+                })
+                .collect();
+            // Black and white bands around the host color: one of them reaches at least 4.58:1
+            // against any opaque fill the ring sits on.
+            assert!(
+                strokes.contains(&Color::rgb(0, 0, 0))
+                    && strokes.contains(&Color::rgb(255, 255, 255))
+                    && strokes.contains(&Color::rgb(0x29, 0x62, 0xff)),
+                "{theme:?} {kind:?}: focus ring bands {strokes:?}"
+            );
+        }
+    }
+}
+
+fn polar_value_test_chart(
+    kind: GeneralSeriesKind,
+    values: Vec<f64>,
+    reverse_angle: bool,
+    radius_domain: Option<[f64; 2]>,
+) -> (ChartEngine, crate::GeneralSeriesId) {
+    let mut chart =
+        ChartEngine::new_with_initial_domain(400.0, 400.0, 1.0, HorizontalDomain::Polar).unwrap();
+    let mut angle = GeneralAxisOptions::new(
+        "angle",
+        0,
+        AxisDimension::Angle,
+        GeneralScaleType::AngularCategory,
+    );
+    angle.visible = false;
+    angle.reverse = reverse_angle;
+    chart.add_general_axis(angle).unwrap();
+    let mut radius = GeneralAxisOptions::new(
+        "radius",
+        0,
+        AxisDimension::Radius,
+        GeneralScaleType::RadialLinear,
+    );
+    radius.visible = false;
+    if let Some(domain) = radius_domain {
+        radius.domain = GeneralAxisDomain::Numeric(domain);
+    }
+    chart.add_general_axis(radius).unwrap();
+    let categories = ["A", "B", "C", "D"][..values.len()]
+        .iter()
+        .map(|category| (*category).to_owned())
+        .collect();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories,
+            category_indices: (0..values.len() as u32).collect(),
+            y: values,
+            y_valid: None,
+        })
+        .unwrap();
+    let options = match kind {
+        GeneralSeriesKind::Pie => GeneralSeriesOptions::pie(0, dataset, "angle", "radius"),
+        GeneralSeriesKind::RadialBar => {
+            GeneralSeriesOptions::radial_bar(0, dataset, "angle", "radius")
+        }
+        _ => unreachable!(),
+    };
+    let series = chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    (chart, series)
+}
+
+/// Screen point at a Recharts polar angle in degrees (zero at three o'clock, counter-clockwise
+/// positive) and a fraction of the polar plot radius, derived from screen axes only.
+fn recharts_polar_point(chart: &ChartEngine, degrees: f64, radius: f64) -> (f64, f64) {
+    let plot = chart.general_polar_plot(0).unwrap();
+    let (cx, cy) = plot.center();
+    let angle = degrees.to_radians();
+    (
+        cx + angle.cos() * radius * plot.outer_radius(),
+        cy - angle.sin() * radius * plot.outer_radius(),
+    )
+}
+
+fn polar_hit_row(chart: &ChartEngine, degrees: f64, radius: f64) -> Option<usize> {
+    let (x, y) = recharts_polar_point(chart, degrees, radius);
+    chart
+        .general_hit_test(0, x, y, crate::GeneralHitMode::Exact)
+        .map(|hit| hit.row)
+}
+
+#[test]
+fn pie_defaults_start_at_three_oclock_and_sweep_counter_clockwise() {
+    // Recharts Pie/PieChart default startAngle=0, endAngle=360: quarter, quarter, half.
+    let (mut chart, series) =
+        polar_value_test_chart(GeneralSeriesKind::Pie, vec![1.0, 1.0, 2.0], false, None);
+    for (degrees, row) in [
+        (1.0, 0),
+        (45.0, 0),
+        (89.0, 0),
+        (91.0, 1),
+        (135.0, 1),
+        (179.0, 1),
+        (181.0, 2),
+        (270.0, 2),
+        (359.0, 2),
+    ] {
+        assert_eq!(polar_hit_row(&chart, degrees, 0.5), Some(row), "{degrees}");
+    }
+    assert_eq!(polar_hit_row(&chart, 45.0, 0.79), Some(0));
+    assert_eq!(
+        polar_hit_row(&chart, 45.0, 0.81),
+        None,
+        "default outer radius is Recharts' 80%"
+    );
+    let mut slices = Vec::new();
+    chart.visit_general_pie_slices(chart.general_series(series).unwrap(), |slice| {
+        slices.push(slice)
+    });
+    let (cx, cy) = slices[0].sector.plot().center();
+    let (mx, my) = slices[0]
+        .sector
+        .plot()
+        .point(slices[0].sector.mid_angle(), 0.5)
+        .unwrap();
+    assert!(
+        mx > cx && my < cy,
+        "first slice lies in the upper-right quadrant"
+    );
+
+    // Explicit Recharts semantics: startAngle=180, endAngle=0 is a clockwise top half.
+    let dataset = chart.general_series(series).unwrap().dataset();
+    let mut options = GeneralSeriesOptions::pie(0, dataset, "angle", "radius");
+    options.polar.start_angle = std::f64::consts::PI;
+    options.polar.end_angle = 0.0;
+    chart
+        .update_general_series_options(series, options)
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+    for (degrees, row) in [
+        (179.0, Some(0)),
+        (136.0, Some(0)),
+        (134.0, Some(1)),
+        (89.0, Some(2)),
+        (1.0, Some(2)),
+        (270.0, None),
+    ] {
+        assert_eq!(polar_hit_row(&chart, degrees, 0.5), row, "half {degrees}");
+    }
+}
+
+#[test]
+fn radial_bar_defaults_draw_one_ring_per_category_with_value_arcs() {
+    // Recharts RadialBarChart default: categories own concentric bands from the inner radius
+    // outward with a 10% barCategoryGap, and values sweep counter-clockwise from three o'clock.
+    let (chart, series) = polar_value_test_chart(
+        GeneralSeriesKind::RadialBar,
+        vec![25.0, 50.0, 100.0],
+        false,
+        Some([0.0, 100.0]),
+    );
+    let mut rings = Vec::new();
+    chart.visit_general_polar_value_sectors(chart.general_series(series).unwrap(), |item| {
+        rings.push((item.row, item.sector.radial_bounds()))
+    });
+    assert_eq!(rings.len(), 3);
+    // Recharts' default outerRadius is 80% of the polar radius with innerRadius 0.
+    let band = 0.8 / 3.0;
+    for (index, (row, (inner, outer))) in rings.iter().enumerate() {
+        assert_eq!(*row, index);
+        assert!(
+            (inner - (index as f64 + 0.1) * band).abs() < 1e-12,
+            "{index}"
+        );
+        assert!(
+            (outer - (index as f64 + 0.9) * band).abs() < 1e-12,
+            "{index}"
+        );
+    }
+    let ring = |index: f64| (index + 0.5) * band;
+    for (degrees, index, row) in [
+        (1.0, 0.0, Some(0)),
+        (89.0, 0.0, Some(0)),
+        (91.0, 0.0, None),
+        (179.0, 1.0, Some(1)),
+        (181.0, 1.0, None),
+        (270.0, 2.0, Some(2)),
+        (359.0, 2.0, Some(2)),
+    ] {
+        assert_eq!(
+            polar_hit_row(&chart, degrees, ring(index)),
+            row,
+            "{degrees} ring {index}"
+        );
+    }
+    // The 10% category gap between rings is not ink.
+    assert_eq!(polar_hit_row(&chart, 10.0, band), None);
+    assert_eq!(polar_hit_row(&chart, 10.0, 0.85), None);
+
+    // A reversed angle axis reverses ring order, so the first category is outermost.
+    let (reversed, series) = polar_value_test_chart(
+        GeneralSeriesKind::RadialBar,
+        vec![25.0, 50.0, 100.0],
+        true,
+        Some([0.0, 100.0]),
+    );
+    let mut first = None;
+    reversed.visit_general_polar_value_sectors(reversed.general_series(series).unwrap(), |item| {
+        if item.row == 0 {
+            first = Some(item.sector.radial_bounds());
+        }
+    });
+    let (inner, outer) = first.unwrap();
+    assert!((inner - 2.1 * band).abs() < 1e-12 && (outer - 2.9 * band).abs() < 1e-12);
+    assert_eq!(polar_hit_row(&reversed, 45.0, ring(2.0)), Some(0));
+    assert_eq!(polar_hit_row(&reversed, 45.0, ring(0.0)), Some(2));
 }

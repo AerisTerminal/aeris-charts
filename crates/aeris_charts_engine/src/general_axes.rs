@@ -2636,6 +2636,16 @@ impl ChartEngine {
             return None;
         }
         let (series_id, row) = self.general_hovered_key()?;
+        self.general_row_index_coordinate(pane_index, series_id, row)
+    }
+
+    /// One row's index-axis dimension and coordinate in `pane_index`, in the cursor's space.
+    pub(crate) fn general_row_index_coordinate(
+        &self,
+        pane_index: usize,
+        series_id: crate::GeneralSeriesId,
+        row: usize,
+    ) -> Option<(AxisDimension, f64)> {
         let series = self.general_series(series_id)?;
         if self.pane_index_for_id(series.pane_id()) != Some(pane_index) {
             return None;

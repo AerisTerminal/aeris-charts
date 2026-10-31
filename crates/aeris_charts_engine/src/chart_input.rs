@@ -526,6 +526,16 @@ pub(crate) struct InputController {
     frame_dirty: bool,
     /// Input changed pane geometry (a separator drag) since the last prepared frame.
     layout_dirty: bool,
+    /// The keyboard-focused datum whose tooltip Escape dismissed (WCAG 1.4.13). Moving focus
+    /// to another datum or clearing focus shows the tooltip again.
+    dismissed_focus_tooltip: Option<FocusTooltipKey>,
+}
+
+/// The keyboard-focused datum a focus tooltip describes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum FocusTooltipKey {
+    General(crate::GeneralSeriesId, usize),
+    Layout(crate::GeneralLayoutHit),
 }
 
 impl InputController {
@@ -1731,6 +1741,8 @@ impl ChartEngine {
                     self.push_input_event(ChartInputEvent::GeneralBrushChanged);
                     cancelled = true;
                 }
+                // Dismissing a keyboard focus tooltip, like dropping hover, is not consumed.
+                self.dismiss_focus_tooltip();
                 // Escape always drops hover so crosshair subscribers hear the cursor leave, but
                 // hover alone is not consumed: the host's own Escape handling still runs.
                 self.clear_pointer_hover();
@@ -1921,6 +1933,33 @@ impl ChartEngine {
             self.refresh_input_cursor();
         }
         handled
+    }
+
+    /// The keyboard-focused general datum or layout item, if any.
+    pub(crate) fn focus_tooltip_key(&self) -> Option<FocusTooltipKey> {
+        self.general_accessibility_focused_hit()
+            .map(|hit| FocusTooltipKey::General(hit.series, hit.row))
+            .or_else(|| {
+                self.general_layout_accessibility_focused_hit()
+                    .map(FocusTooltipKey::Layout)
+            })
+    }
+
+    pub(crate) fn focus_tooltip_dismissed(&self, key: FocusTooltipKey) -> bool {
+        self.input.dismissed_focus_tooltip == Some(key)
+    }
+
+    /// Forget an Escape dismissal once keyboard focus leaves the chart data.
+    pub(crate) fn reset_focus_tooltip_dismissal(&mut self) {
+        self.input.dismissed_focus_tooltip = None;
+    }
+
+    fn dismiss_focus_tooltip(&mut self) {
+        let key = self.focus_tooltip_key();
+        if key.is_some() && self.input.dismissed_focus_tooltip != key {
+            self.input.dismissed_focus_tooltip = key;
+            self.invalidate_frame_overlay();
+        }
     }
 
     // --- internals ---

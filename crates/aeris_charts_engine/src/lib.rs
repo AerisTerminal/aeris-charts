@@ -5153,6 +5153,24 @@ impl ChartEngine {
         }
     }
 
+    /// CSS-pixel `(left, bottom)` insets of the bottom pane's content corner, where hosts anchor
+    /// corner chrome such as the attribution logo. A general bottom pane reports its plot corner,
+    /// inside its left axis and above its bottom axis strip and legend; a financial one reports
+    /// the left price scale width and the time-axis height.
+    pub fn content_corner_insets(&self) -> (f64, f64) {
+        if let Some(last) = self.panes.len().checked_sub(1)
+            && !self.pane_uses_financial_time(last)
+            && let Some(plot) = self.general_plot_rect(last)
+        {
+            return (plot.x, (self.css_height - plot.y - plot.height).max(0.0));
+        }
+        (
+            self.price_scale_axis_width(0, PriceScaleTarget::Left)
+                .unwrap_or(0.0),
+            self.time_axis_height(),
+        )
+    }
+
     /// Set/clear the hovered pane separator (reference pane-separator.ts hover handle). Mirrored
     /// into the next axis frame; hosts repaint to show the band.
     pub fn set_separator_hover(&mut self, index: Option<usize>) {

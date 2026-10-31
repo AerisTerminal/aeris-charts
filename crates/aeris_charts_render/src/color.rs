@@ -108,10 +108,8 @@ impl Color {
         }
     }
 
-    /// Choose opaque black or white by the larger WCAG contrast ratio against this RGB.
-    /// sRGB channels are linearized before relative luminance is computed. Callers resolve
-    /// alpha against the painted surface first; this method treats RGB as opaque.
-    pub fn contrast_srgb(&self) -> Color {
+    /// WCAG 2 relative luminance of this RGB (alpha ignored), from linearized sRGB channels.
+    pub fn relative_luminance(&self) -> f64 {
         let linear = |channel: u8| {
             let srgb = channel as f64 / 255.0;
             if srgb <= 0.04045 {
@@ -120,10 +118,36 @@ impl Color {
                 ((srgb + 0.055) / 1.055).powf(2.4)
             }
         };
-        let luminance =
-            0.2126 * linear(self.r()) + 0.7152 * linear(self.g()) + 0.0722 * linear(self.b());
+        0.2126 * linear(self.r()) + 0.7152 * linear(self.g()) + 0.0722 * linear(self.b())
+    }
+
+    /// WCAG 2 contrast ratio (1..=21) between two opaque RGB colors; alpha is ignored, so
+    /// callers composite translucent colors over their painted surface first.
+    pub fn contrast_ratio(&self, other: Color) -> f64 {
+        let (a, b) = (self.relative_luminance(), other.relative_luminance());
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// This color source-over an opaque surface, as the opaque color a viewer sees.
+    pub fn composite_over(&self, surface: Color) -> Color {
+        let alpha = self.a() as u32;
+        let inverse = u8::MAX as u32 - alpha;
+        let blend = |foreground: u8, background: u8| {
+            ((foreground as u32 * alpha + background as u32 * inverse + 127) / 255) as u8
+        };
+        Color::rgb(
+            blend(self.r(), surface.r()),
+            blend(self.g(), surface.g()),
+            blend(self.b(), surface.b()),
+        )
+    }
+
+    /// Choose opaque black or white by the larger WCAG contrast ratio against this RGB.
+    /// sRGB channels are linearized before relative luminance is computed. Callers resolve
+    /// alpha against the painted surface first; this method treats RGB as opaque.
+    pub fn contrast_srgb(&self) -> Color {
         // (L+.05)/.05 >= 1.05/(L+.05) exactly when L >= sqrt(.0525)-.05.
-        if luminance >= 0.179128784747792 {
+        if self.relative_luminance() >= 0.179128784747792 {
             Color::rgb(0, 0, 0)
         } else {
             Color::rgb(255, 255, 255)
@@ -136,17 +160,14 @@ impl Color {
         if self.a() == u8::MAX {
             return self.contrast_text();
         }
-        let alpha = self.a() as u32;
-        let inverse = u8::MAX as u32 - alpha;
-        let blend = |foreground: u8, background: u8| {
-            ((foreground as u32 * alpha + background as u32 * inverse + 127) / 255) as u8
-        };
-        Color::rgb(
-            blend(self.r(), surface.r()),
-            blend(self.g(), surface.g()),
-            blend(self.b(), surface.b()),
-        )
-        .contrast_text()
+        self.composite_over(surface).contrast_text()
+    }
+
+    /// WCAG black-or-white text for a label painted on this fill after compositing it over an
+    /// opaque surface. Either choice reaches at least 4.58:1, so labels on arbitrary fills
+    /// always meet the AA normal-text threshold.
+    pub fn contrast_srgb_over(&self, surface: Color) -> Color {
+        self.composite_over(surface).contrast_srgb()
     }
 
     /// Same hue at full opacity: RGB preserved, alpha forced to 0xFF. Used for the last-value
@@ -341,6 +362,47 @@ mod tests {
         ] {
             assert_eq!(color.contrast_srgb(), expected);
         }
+    }
+
+    #[test]
+    fn wcag_contrast_ratio_matches_reference_values() {
+        let black = Color::rgb(0, 0, 0);
+        let white = Color::rgb(255, 255, 255);
+        assert!((black.contrast_ratio(white) - 21.0).abs() < 1e-9);
+        assert!((white.contrast_ratio(white) - 1.0).abs() < 1e-12);
+        // #767676 is the lightest gray that reaches 4.5:1 on white.
+        let gray = Color::rgb(0x76, 0x76, 0x76);
+        assert!(gray.contrast_ratio(white) >= 4.5);
+        assert!(Color::rgb(0x77, 0x77, 0x77).contrast_ratio(white) < 4.5);
+        assert_eq!(gray.contrast_ratio(white), white.contrast_ratio(gray));
+    }
+
+    #[test]
+    fn srgb_label_ink_over_any_fill_reaches_aa() {
+        let surfaces = [Color::rgb(0xff, 0xff, 0xff), Color::rgb(0x17, 0x17, 0x17)];
+        for surface in surfaces {
+            for r in (0..=255).step_by(17) {
+                for g in (0..=255).step_by(17) {
+                    for b in (0..=255).step_by(51) {
+                        for a in [0x40, 0x80, 0xff] {
+                            let fill = Color::rgba(r as u8, g as u8, b as u8, a);
+                            let ink = fill.contrast_srgb_over(surface);
+                            let ratio = ink.contrast_ratio(fill.composite_over(surface));
+                            assert!(
+                                ratio >= 4.58,
+                                "{} over {}: {ratio}",
+                                fill.to_css(),
+                                surface.to_hex()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // The reference luminance rule picks white on this catalog blue (3.32:1); WCAG picks black.
+        let blue = Color::rgb(0x4c, 0x8b, 0xf5);
+        assert_eq!(blue.contrast_text(), Color::rgb(255, 255, 255));
+        assert_eq!(blue.contrast_srgb_over(surfaces[1]), Color::rgb(0, 0, 0));
     }
 
     #[test]

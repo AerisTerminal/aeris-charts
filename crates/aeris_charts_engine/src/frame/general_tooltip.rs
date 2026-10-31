@@ -1,11 +1,18 @@
-//! General-pane hover feedback: the index-axis cursor line under the marks and the hover
-//! tooltip above them. Both are ordered-frame primitives, so every executor paints them alike.
+//! General-pane tooltip feedback: the index-axis cursor line under the marks and the tooltip
+//! popover above every chart layer. Both are ordered-frame primitives, so every executor
+//! paints them alike.
+//!
+//! Pointer hover wins over keyboard focus, like Recharts `combineTooltipInteractionState`:
+//! a focused datum shows its tooltip only while the pointer activates nothing.
 
 use super::*;
-use crate::{AxisDimension, GeneralTooltipSnapshot};
+use crate::chart_input::FocusTooltipKey;
+use crate::general_axes::general_kind_uses_axis_hover;
+use crate::{AxisDimension, GeneralLayoutHit, GeneralSeriesKind, GeneralTooltipSnapshot};
 
-/// Gap between the pointer and the tooltip box; the box flips to the other side at an edge.
-const POINTER_OFFSET: f64 = 12.0;
+/// Recharts `Tooltip` default `offset`: the gap between the anchor and the box. The box flips
+/// to the other side of the anchor when it would cross the plot end.
+const ANCHOR_OFFSET: f64 = 10.0;
 const MIN_WIDTH: f64 = 156.0;
 const PADDING_X: f64 = 10.0;
 const PADDING_Y: f64 = 7.0;
@@ -26,6 +33,13 @@ struct TooltipRow {
 struct TooltipContent {
     header: String,
     rows: Vec<TooltipRow>,
+}
+
+/// One tooltip to paint: its pane, its anchor (pane-local X, chart Y), and its rows.
+struct TooltipSource {
+    pane_index: usize,
+    anchor: (f64, f64),
+    content: TooltipContent,
 }
 
 fn opaque(color: Color) -> Color {
@@ -69,9 +83,23 @@ fn tooltip_detail(item: &GeneralTooltipSnapshot) -> String {
     parts.join(" · ")
 }
 
+/// Recharts `getTooltipTranslateByAxis` without `allowEscapeViewBox`: place the box after the
+/// anchor, flip it before the anchor when it would cross the plot end, and never start before
+/// the plot start. The box may then cover axis strips, which paint below it. Unlike Recharts'
+/// HTML portal, a canvas cannot paint past the chart, so the box finally stays on the surface.
+fn translate(anchor: f64, size: f64, start: f64, end: f64, surface: f64) -> f64 {
+    let positive = anchor + ANCHOR_OFFSET;
+    let placed = if positive + size > end {
+        (anchor - ANCHOR_OFFSET - size).max(start)
+    } else {
+        positive.max(start)
+    };
+    placed.min(surface - size).max(0.0)
+}
+
 impl ChartEngine {
-    /// The index-axis cursor of an axis-mode general hover: one line across the plot at the
-    /// active datum (band center for bars), styled by \`crosshair.vertLine\`.
+    /// The index-axis cursor of an axis-mode general hover or keyboard focus: one line across
+    /// the plot at the active datum (band center for bars), styled by `crosshair.vertLine`.
     pub(super) fn build_general_axis_cursor_frame(
         &self,
         pane_index: usize,
@@ -89,7 +117,8 @@ impl ChartEngine {
             return;
         }
         let (Some((dimension, coordinate)), Some(plot)) = (
-            self.general_axis_hover_cursor(pane_index),
+            self.general_axis_hover_cursor(pane_index)
+                .or_else(|| self.general_focus_cursor(pane_index)),
             self.general_plot_rect(pane_index),
         ) else {
             return;
@@ -116,6 +145,33 @@ impl ChartEngine {
         }
     }
 
+    /// Whether the pointer activates a general datum or layout item; it then owns the tooltip.
+    fn general_pointer_hover_active(&self) -> bool {
+        self.general_hovered_key().is_some() || self.general_layout_hovered_hit().is_some()
+    }
+
+    /// The keyboard-focused datum's undismissed tooltip key, while the pointer activates nothing.
+    fn general_focus_key(&self) -> Option<FocusTooltipKey> {
+        if self.general_pointer_hover_active() {
+            return None;
+        }
+        self.focus_tooltip_key()
+            .filter(|key| !self.focus_tooltip_dismissed(*key))
+    }
+
+    /// The cursor of a keyboard-focused datum in an axis-mode pane, like the Recharts keyboard
+    /// cursor on the active tick.
+    fn general_focus_cursor(&self, pane_index: usize) -> Option<(AxisDimension, f64)> {
+        let FocusTooltipKey::General(series_id, row) = self.general_focus_key()? else {
+            return None;
+        };
+        self.general_axis_hover_dimension(pane_index)?;
+        if !general_kind_uses_axis_hover(self.general_series(series_id)?.kind()) {
+            return None;
+        }
+        self.general_row_index_coordinate(pane_index, series_id, row)
+    }
+
     fn general_tooltip_header(&self, series: crate::GeneralSeriesId, row: usize) -> Option<String> {
         let dataset = self.general_dataset(self.general_series(series)?.dataset())?;
         let seconds = dataset.temporal_x_epoch_ms()?.get(row)?.div_euclid(1_000);
@@ -138,33 +194,41 @@ impl ChartEngine {
         })
     }
 
-    fn general_tooltip_content(&self, pane_index: usize) -> Option<TooltipContent> {
-        if let Some((series_id, row)) = self.general_hovered_key()
-            && let Some(series) = self.general_series(series_id)
-            && self.pane_index_for_id(series.pane_id()) == Some(pane_index)
-        {
-            let axis = self.general_hover_is_axis();
-            let items = if axis {
-                self.general_shared_tooltip_snapshot(series_id, row)?.items
-            } else {
-                vec![self.general_tooltip_snapshot(series_id, row)?]
-            };
-            let first = items.first()?;
-            let header = self
-                .general_tooltip_header(series_id, row)
-                .or_else(|| (!axis).then(|| first.label.clone()).flatten())
-                .unwrap_or_else(|| first.x_label.clone());
-            let rows = items
-                .iter()
-                .map(|item| TooltipRow {
-                    color: Some(item.color),
-                    name: item.title.clone(),
-                    value: tooltip_detail(item),
-                })
-                .collect();
-            return Some(TooltipContent { header, rows });
-        }
-        let (label, title, value, color) = self.general_layout_hover_tooltip(pane_index)?;
+    /// One general datum's rows: every series sharing its index datum when `axis`, else the
+    /// datum alone.
+    fn general_series_tooltip_content(
+        &self,
+        series_id: crate::GeneralSeriesId,
+        row: usize,
+        axis: bool,
+    ) -> Option<TooltipContent> {
+        let items = if axis {
+            self.general_shared_tooltip_snapshot(series_id, row)?.items
+        } else {
+            vec![self.general_tooltip_snapshot(series_id, row)?]
+        };
+        let first = items.first()?;
+        let header = self
+            .general_tooltip_header(series_id, row)
+            .or_else(|| (!axis).then(|| first.label.clone()).flatten())
+            .unwrap_or_else(|| first.x_label.clone());
+        let rows = items
+            .iter()
+            .map(|item| TooltipRow {
+                color: Some(item.color),
+                name: item.title.clone(),
+                value: tooltip_detail(item),
+            })
+            .collect();
+        Some(TooltipContent { header, rows })
+    }
+
+    fn general_layout_tooltip_content(
+        &self,
+        pane_index: usize,
+        hit: GeneralLayoutHit,
+    ) -> Option<TooltipContent> {
+        let (label, title, value, color) = self.general_layout_item_tooltip(pane_index, hit)?;
         Some(TooltipContent {
             header: label,
             rows: vec![TooltipRow {
@@ -175,39 +239,199 @@ impl ChartEngine {
         })
     }
 
-    /// The general hover tooltip: one single-tone popover box (bold heading, muted names,
-    /// right-aligned values) with one color bar per row, placed beside the pointer and flipped
-    /// to stay inside the pane.
-    pub(super) fn build_general_tooltip_frame(
-        &self,
-        pane_index: usize,
-        hpr: f64,
-        vpr: f64,
-        out: &mut Vec<Prim>,
-    ) {
-        if !self.options.get().general_tooltip.visible
-            || self.pane_uses_financial_time(pane_index)
-            || self.crosshair_suppressed_by_interaction()
+    fn general_pointer_tooltip(&self) -> Option<TooltipSource> {
+        let (x, y) = self.clamped_crosshair()?;
+        let pane_index = self.pane_at_y(y)?;
+        if self.pane_uses_financial_time(pane_index) {
+            return None;
+        }
+        let content = if let Some((series_id, row)) = self.general_hovered_key()
+            && let Some(series) = self.general_series(series_id)
+            && self.pane_index_for_id(series.pane_id()) == Some(pane_index)
+        {
+            self.general_series_tooltip_content(series_id, row, self.general_hover_is_axis())?
+        } else {
+            self.general_layout_tooltip_content(pane_index, self.general_layout_hovered_hit()?)?
+        };
+        Some(TooltipSource {
+            pane_index,
+            anchor: (x, y),
+            content,
+        })
+    }
+
+    /// The keyboard tooltip. Axis-mode panes anchor on the active tick across the middle of the
+    /// plot (Recharts `combineCoordinateForDefaultIndex`); item panes anchor on the mark.
+    fn general_focus_tooltip(&self) -> Option<TooltipSource> {
+        match self.general_focus_key()? {
+            FocusTooltipKey::General(series_id, row) => {
+                let series = self.general_series(series_id)?;
+                if !series.visible() {
+                    return None;
+                }
+                let pane_index = self.pane_index_for_id(series.pane_id())?;
+                if self.pane_uses_financial_time(pane_index) {
+                    return None;
+                }
+                let plot = self.general_plot_rect(pane_index)?;
+                let middle = (plot.width * 0.5, plot.y + plot.height * 0.5);
+                let axis = self.general_axis_hover_dimension(pane_index).is_some()
+                    && general_kind_uses_axis_hover(series.kind());
+                let anchor = if axis {
+                    match self.general_row_index_coordinate(pane_index, series_id, row) {
+                        Some((AxisDimension::Y, y)) => Some((middle.0, y)),
+                        Some((_, x)) => Some((x, middle.1)),
+                        None => None,
+                    }
+                } else {
+                    self.general_mark_anchor(series, row)
+                };
+                Some(TooltipSource {
+                    pane_index,
+                    anchor: anchor.unwrap_or(middle),
+                    content: self.general_series_tooltip_content(series_id, row, axis)?,
+                })
+            }
+            FocusTooltipKey::Layout(hit) => {
+                let (pane_index, anchor) = (0..self.panes.len()).find_map(|pane_index| {
+                    Some((pane_index, self.general_layout_hit_anchor(pane_index, hit)?))
+                })?;
+                Some(TooltipSource {
+                    pane_index,
+                    anchor,
+                    content: self.general_layout_tooltip_content(pane_index, hit)?,
+                })
+            }
+        }
+    }
+
+    /// The painted center of one row's mark (pane-local X, chart Y), where an item tooltip
+    /// anchors like the Recharts per-graphic `tooltipPosition`.
+    fn general_mark_anchor(&self, series: &crate::GeneralSeries, row: usize) -> Option<(f64, f64)> {
+        let mut found = None;
+        let rect = |left: f64, right: f64, top: f64, bottom: f64| {
+            ((left + right) * 0.5, (top + bottom) * 0.5)
+        };
+        let sector = |sector: aeris_charts_core::scale::general_scale::PolarSector| {
+            sector.plot().point(sector.mid_angle(), sector.mid_radius())
+        };
+        match series.kind() {
+            GeneralSeriesKind::Column => self.visit_general_columns(series, |bar| {
+                if bar.row == row {
+                    found.get_or_insert(rect(bar.left, bar.right, bar.top, bar.bottom));
+                }
+            }),
+            GeneralSeriesKind::Histogram => self.visit_general_histogram_bins(series, |bar| {
+                if bar.row == row {
+                    found.get_or_insert(rect(bar.left, bar.right, bar.top, bar.bottom));
+                }
+            }),
+            GeneralSeriesKind::HorizontalBar => {
+                self.visit_general_horizontal_bars(series, |bar| {
+                    if bar.row == row {
+                        found.get_or_insert(rect(bar.left, bar.right, bar.top, bar.bottom));
+                    }
+                });
+            }
+            GeneralSeriesKind::RangeBar => self.visit_general_range_bars(series, |bar| {
+                if bar.row == row {
+                    found.get_or_insert(rect(bar.left, bar.right, bar.top, bar.bottom));
+                }
+            }),
+            GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
+                self.visit_general_stacked_area_points(series, |point| {
+                    if point.row == row {
+                        found.get_or_insert((point.x, point.high_y));
+                    }
+                });
+                if found.is_none() {
+                    self.visit_general_path_points(series, |point| {
+                        if point.row == row {
+                            found.get_or_insert((point.x, point.y));
+                        }
+                    });
+                }
+            }
+            GeneralSeriesKind::RangeArea => self.visit_general_range_points(series, |point| {
+                if point.row == row {
+                    found.get_or_insert((point.x, point.high_y));
+                }
+            }),
+            GeneralSeriesKind::ErrorBar => self.visit_general_error_bars(series, |bar| {
+                if bar.row == row {
+                    found.get_or_insert((bar.x, bar.y));
+                }
+            }),
+            GeneralSeriesKind::BoxPlot => self.visit_general_box_plots(series, |plot| {
+                if plot.row == row {
+                    found.get_or_insert((plot.center_x, plot.median_y));
+                }
+            }),
+            GeneralSeriesKind::HeatmapGrid => self.visit_general_heatmap_cells(series, |cell| {
+                if cell.row == row {
+                    found.get_or_insert(rect(cell.left, cell.right, cell.top, cell.bottom));
+                }
+            }),
+            GeneralSeriesKind::Scatter | GeneralSeriesKind::Bubble => {
+                self.visit_general_scatter_points(series, |point| {
+                    if point.row == row {
+                        found.get_or_insert((point.x, point.y));
+                    }
+                });
+            }
+            GeneralSeriesKind::Pie => self.visit_general_pie_slices(series, |slice| {
+                if slice.row == row && found.is_none() {
+                    found = sector(slice.sector);
+                }
+            }),
+            GeneralSeriesKind::PolarArea | GeneralSeriesKind::RadialBar => {
+                self.visit_general_polar_value_sectors(series, |slice| {
+                    if slice.row == row && found.is_none() {
+                        found = sector(slice.sector);
+                    }
+                });
+            }
+            GeneralSeriesKind::Radar => {
+                self.with_general_radar_polygon(series, |polygon, rows, _| {
+                    found = rows
+                        .iter()
+                        .position(|vertex_row| *vertex_row == Some(row))
+                        .and_then(|vertex| polygon.vertex(vertex));
+                });
+            }
+        }
+        found
+    }
+
+    /// The general tooltip: one single-tone popover box (bold heading, muted names,
+    /// right-aligned values) with one color bar per row. It paints last in the unscissored
+    /// axis layer, in chart device pixels, so axis labels and outside legends stay below it.
+    pub(crate) fn build_general_tooltip_axis(&self, dpr: f64, out: &mut Vec<Prim>) {
+        if !self.options.get().general_tooltip.visible || self.crosshair_suppressed_by_interaction()
         {
             return;
         }
-        let Some((pointer_x, pointer_y)) = self.clamped_crosshair() else {
+        let Some(TooltipSource {
+            pane_index,
+            anchor,
+            mut content,
+        }) = self
+            .general_pointer_tooltip()
+            .or_else(|| self.general_focus_tooltip())
+        else {
             return;
         };
-        if self.pane_at_y(pointer_y) != Some(pane_index) {
-            return;
-        }
-        let Some(mut content) = self.general_tooltip_content(pane_index) else {
+        let Some(plot) = self.general_plot_rect(pane_index) else {
             return;
         };
-        let pane = &self.panes[pane_index];
+        let (hpr, vpr) = (dpr, dpr);
         let layout = &self.options.get().layout;
         let family = layout.font_family.as_str();
         let size = layout.font_size.max(1.0);
         let line = size + 4.0;
         let chrome = 2.0 + PADDING_Y * 2.0 + line + HEADER_GAP;
-        // Keep the box inside the pane: rows that do not fit collapse into a final count row.
-        let fit = ((pane.height - chrome + ROW_GAP) / (line + ROW_GAP))
+        // Keep the box on the chart: rows that do not fit collapse into a final count row.
+        let fit = ((self.css_height - chrome + ROW_GAP) / (line + ROW_GAP))
             .floor()
             .max(1.0) as usize;
         if content.rows.len() > fit {
@@ -245,19 +469,23 @@ impl ChartEngine {
         let rows = content.rows.len() as f64;
         let height = (chrome + rows * line + (rows - 1.0).max(0.0) * ROW_GAP).ceil();
 
-        let pane_bottom = pane.top + pane.height;
-        let mut left = pointer_x + POINTER_OFFSET;
-        if left + width > self.pane_w {
-            left = pointer_x - POINTER_OFFSET - width;
-        }
-        let left = left.clamp(0.0, (self.pane_w - width).max(0.0)).round();
-        let mut top = pointer_y + POINTER_OFFSET;
-        if top + height > pane_bottom {
-            top = pointer_y - POINTER_OFFSET - height;
-        }
-        let top = top
-            .clamp(pane.top, (pane_bottom - height).max(pane.top))
-            .round();
+        // Plot X is pane-local; the axis layer is chart space.
+        let left = translate(
+            self.pane_left + anchor.0,
+            width,
+            self.pane_left,
+            self.pane_left + plot.width,
+            self.css_width,
+        )
+        .round();
+        let top = translate(
+            anchor.1,
+            height,
+            plot.y,
+            plot.y + plot.height,
+            self.css_height,
+        )
+        .round();
 
         let popover = self.popover_tokens();
         let device = DeviceBox::snap(left, top, width, height, hpr, vpr);
@@ -337,7 +565,6 @@ impl ChartEngine {
         out.push(popover.highlight_prim((device.x, device.y, device.w, device.h), radius, border));
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,6 +585,10 @@ mod tests {
     }
 
     fn category_chart(line: bool) -> ChartEngine {
+        category_chart_sized(line, 400.0)
+    }
+
+    fn category_chart_sized(line: bool, height: f64) -> ChartEngine {
         let scale = if line {
             CategoryScaleType::Point
         } else {
@@ -365,7 +596,7 @@ mod tests {
         };
         let mut chart = ChartEngine::new_with_initial_domain(
             640.0,
-            400.0,
+            height,
             1.0,
             HorizontalDomain::Category { scale },
         )
@@ -407,10 +638,26 @@ mod tests {
         chart
     }
 
-    fn overlay(chart: &mut ChartEngine) -> Vec<Prim> {
-        let frame = chart.build_frame();
-        let segments = chart.frame_pane_segments(0).unwrap();
-        frame.panes[0].main[segments.trading_end..segments.overlay_end].to_vec()
+    /// The live axis layer, whose tail is the general tooltip.
+    fn axis_layer(chart: &mut ChartEngine) -> Vec<Prim> {
+        chart.build_frame();
+        let axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let mut prims = Vec::new();
+        chart.build_axis_primitives_into(&axis, &mut prims);
+        prims
+    }
+
+    fn tooltip_start(prims: &[Prim]) -> Option<usize> {
+        prims.iter().position(|prim| {
+            matches!(prim, Prim::RoundRect { w, radii, .. }
+                if radii[3] > 0.0 && f64::from(*w) >= MIN_WIDTH)
+        })
+    }
+
+    /// The tooltip primitives, or nothing when no tooltip paints.
+    fn tooltip_prims(chart: &mut ChartEngine) -> Vec<Prim> {
+        let prims = axis_layer(chart);
+        tooltip_start(&prims).map_or_else(Vec::new, |start| prims[start..].to_vec())
     }
 
     fn texts(prims: &[Prim]) -> Vec<String> {
@@ -467,7 +714,7 @@ mod tests {
             "axis hover draws no horizontal line and no hover ring"
         );
 
-        let tooltip = overlay(&mut chart);
+        let tooltip = tooltip_prims(&mut chart);
         let labels = texts(&tooltip);
         for expected in ["B", "Revenue", "2", "Cost", "5"] {
             assert!(
@@ -503,16 +750,15 @@ mod tests {
         let edge = plot.width - 2.0;
         chart.input_pointer_move(at(edge, plot.y + plot.height - 4.0), false);
         assert_eq!(chart.general_hovered_hit().unwrap().row, 3);
-        let (x, y, w, h) = tooltip_box(&overlay(&mut chart));
+        let (x, y, w, h) = tooltip_box(&tooltip_prims(&mut chart));
         assert!(f64::from(x + w) <= edge + chart.pane_left);
         assert!(f64::from(y + h) <= plot.y + plot.height);
 
         chart
             .apply_options(r#"{"generalTooltip":{"visible":false}}"#)
             .unwrap();
+        assert!(tooltip_prims(&mut chart).is_empty());
         let frame = chart.build_frame();
-        let segments = chart.frame_pane_segments(0).unwrap();
-        assert!(texts(&frame.panes[0].main[segments.trading_end..segments.overlay_end]).is_empty());
         assert!(
             matches!(
                 frame.panes[0].main[frame.panes[0].plot_range[0]],
@@ -531,6 +777,242 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tooltip_flips_inside_the_plot_when_it_fits() {
+        let mut chart = category_chart(true);
+        let plot = chart.general_plot_rect(0).unwrap();
+        let mut pointer_y = plot.y + 2.0;
+        while pointer_y < plot.y + plot.height - 1.0 {
+            chart.input_pointer_move(at(plot.width * 0.375, pointer_y), false);
+            let (_, y, _, h) = tooltip_box(&tooltip_prims(&mut chart));
+            assert!(
+                f64::from(y) >= plot.y - 0.5 && f64::from(y + h) <= plot.y + plot.height + 0.5,
+                "pointer y {pointer_y}: box {y}..{} leaves plot {}..{}",
+                y + h,
+                plot.y,
+                plot.y + plot.height
+            );
+            pointer_y += 3.0;
+        }
+    }
+
+    #[test]
+    fn tooltip_paints_above_axis_labels_when_it_covers_the_axis_strip() {
+        // A plot shorter than the box: Recharts keeps the box at the plot top and lets it run
+        // over the X axis below, so the axis must paint under it.
+        let mut chart = category_chart_sized(true, 90.0);
+        let plot = chart.general_plot_rect(0).unwrap();
+        chart.input_pointer_move(at(plot.width * 0.375, plot.y + plot.height - 2.0), false);
+        let frame = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        assert!(
+            tooltip_start(&frame.panes[0].main[segments.trading_end..segments.overlay_end])
+                .is_none(),
+            "no pane layer paints the tooltip"
+        );
+        let layer = axis_layer(&mut chart);
+        let start = tooltip_start(&layer).expect("the tooltip paints in the axis layer");
+        let last_tick = layer
+            .iter()
+            .rposition(|prim| matches!(prim, Prim::Text { text, .. } if text == "D"))
+            .expect("the X-axis tick label D");
+        assert!(
+            last_tick < start,
+            "axis tick labels paint before the tooltip"
+        );
+        let (_, y, _, h) = tooltip_box(&layer[start..]);
+        assert!(
+            (f64::from(y) - plot.y).abs() <= 0.5,
+            "the box starts at the plot top"
+        );
+        assert!(
+            f64::from(y + h) > plot.y + plot.height,
+            "the box {y}+{h} reaches into the axis strip below plot {plot:?}"
+        );
+        assert!(f64::from(y + h) <= chart.css_height + 0.5);
+    }
+
+    #[test]
+    fn crosshair_free_exports_omit_the_tooltip() {
+        let mut chart = category_chart(false);
+        let plot = chart.general_plot_rect(0).unwrap();
+        chart.input_pointer_move(at(plot.width * 0.375, plot.y + 4.0), false);
+        for include_crosshair in [false, true] {
+            let export = chart.capture_export_frame(
+                crate::ExportFrameRequest {
+                    width: 640.0,
+                    height: 400.0,
+                    dpr: 2.0,
+                    include_crosshair,
+                },
+                |text, _| text.len() as f64 * 7.0,
+                |_, _| 0.0,
+            );
+            assert_eq!(
+                tooltip_start(&export.axis_primitives).is_some(),
+                include_crosshair
+            );
+        }
+    }
+
+    #[test]
+    fn keyboard_focus_shows_the_tooltip_until_pointer_hover_escape_or_blur() {
+        let mut chart = category_chart(false);
+        let plot = chart.general_plot_rect(0).unwrap();
+        let revenue = chart.general_series_iter().next().unwrap().id();
+        assert!(tooltip_prims(&mut chart).is_empty());
+        assert!(chart.set_general_accessibility_focus(revenue, 1));
+        let focused = tooltip_prims(&mut chart);
+        let labels = texts(&focused);
+        for expected in ["B", "Revenue", "2", "Cost", "5"] {
+            assert!(
+                labels.iter().any(|text| text == expected),
+                "{expected}: {labels:?}"
+            );
+        }
+        // Recharts anchors a keyboard tooltip on the active tick, centered across the plot.
+        let (_, cursor) = chart.general_row_index_coordinate(0, revenue, 1).unwrap();
+        let (x, y, _, _) = tooltip_box(&focused);
+        assert!((f64::from(x) - (chart.pane_left + cursor + ANCHOR_OFFSET)).abs() <= 1.0);
+        assert!((f64::from(y) - (plot.y + plot.height * 0.5 + ANCHOR_OFFSET)).abs() <= 1.0);
+        let left = chart.pane_left.round() as i32;
+        let frame = chart.build_frame();
+        assert!(
+            matches!(frame.panes[0].main[frame.panes[0].plot_range[0]],
+                Prim::VLine { x, .. } if x == cursor.round() as i32 + left),
+            "the focused band shows the axis cursor"
+        );
+
+        // Pointer hover wins while it activates a datum.
+        chart.input_pointer_move(at(plot.width * 0.875, plot.y + 4.0), false);
+        let hovered = texts(&tooltip_prims(&mut chart));
+        assert!(hovered.iter().any(|text| text == "D"));
+        assert!(!hovered.iter().any(|text| text == "B"));
+        chart.input_pointer_leave();
+        assert!(
+            texts(&tooltip_prims(&mut chart))
+                .iter()
+                .any(|text| text == "B")
+        );
+
+        // Escape dismisses the tooltip and cursor but keeps keyboard focus.
+        chart.input_key_down(
+            crate::ChartKey::Escape,
+            crate::InputModifiers::default(),
+            false,
+            0.0,
+        );
+        assert!(tooltip_prims(&mut chart).is_empty());
+        assert!(chart.general_accessibility_focused_hit().is_some());
+        assert!(
+            !chart.build_frame().panes[0]
+                .main
+                .iter()
+                .any(|prim| matches!(prim, Prim::VLine { .. }))
+        );
+        assert!(chart.set_general_accessibility_focus(revenue, 2));
+        assert!(
+            texts(&tooltip_prims(&mut chart))
+                .iter()
+                .any(|text| text == "C")
+        );
+
+        // Blur clears focus and its tooltip; focusing again shows it even after an Escape.
+        chart.input_key_down(
+            crate::ChartKey::Escape,
+            crate::InputModifiers::default(),
+            false,
+            0.0,
+        );
+        chart.clear_general_accessibility_focus();
+        assert!(tooltip_prims(&mut chart).is_empty());
+        assert!(chart.set_general_accessibility_focus(revenue, 2));
+        assert!(
+            texts(&tooltip_prims(&mut chart))
+                .iter()
+                .any(|text| text == "C")
+        );
+    }
+
+    #[test]
+    fn keyboard_focus_tooltip_anchors_on_item_marks_and_layout_items() {
+        let mut chart = ChartEngine::new_with_initial_domain(
+            640.0,
+            400.0,
+            1.0,
+            HorizontalDomain::Continuous {
+                scale: crate::ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+        for (id, dimension) in [("x", AxisDimension::X), ("y", AxisDimension::Y)] {
+            let mut axis = GeneralAxisOptions::new(id, 0, dimension, GeneralScaleType::Linear);
+            axis.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+            chart.add_general_axis(axis).unwrap();
+        }
+        let dataset = chart
+            .create_general_xy_dataset(GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![2.0, 6.0],
+                y: vec![3.0, 7.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let mut scatter = GeneralSeriesOptions::scatter(0, dataset, "x", "y");
+        scatter.title = "Points".into();
+        let series = chart.add_general_series(scatter).unwrap();
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let mut mark = None;
+        chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+            if point.row == 1 {
+                mark = Some((point.x, point.y));
+            }
+        });
+        let (mark_x, mark_y) = mark.unwrap();
+        assert!(chart.set_general_accessibility_focus(series, 1));
+        let prims = tooltip_prims(&mut chart);
+        assert!(texts(&prims).iter().any(|text| text == "Points"));
+        let (x, y, _, _) = tooltip_box(&prims);
+        assert!((f64::from(x) - (chart.pane_left + mark_x + ANCHOR_OFFSET)).abs() <= 1.0);
+        assert!((f64::from(y) - (mark_y + ANCHOR_OFFSET)).abs() <= 1.0);
+
+        let mut layout =
+            ChartEngine::new_with_initial_domain(400.0, 300.0, 1.0, HorizontalDomain::Layout)
+                .unwrap();
+        let dataset = layout
+            .create_general_layout_dataset(crate::GeneralLayoutInput::Funnel(
+                [("top", "Top", 10.0), ("bottom", "Bottom", 5.0)]
+                    .map(|(id, label, value)| crate::FunnelStage {
+                        id: id.into(),
+                        label: label.into(),
+                        value,
+                    })
+                    .to_vec(),
+            ))
+            .unwrap();
+        let funnel = layout
+            .add_general_layout_series(crate::GeneralLayoutSeriesOptions::new(
+                0,
+                dataset,
+                crate::GeneralLayoutSeriesKind::Funnel,
+            ))
+            .unwrap();
+        layout.recompute_layout_with_measure(true, |_, _| 14.0, |_, _| 0.0);
+        let hit = GeneralLayoutHit {
+            series: funnel,
+            element: crate::GeneralLayoutElement::Stage,
+            row: 1,
+        };
+        assert!(layout.set_general_layout_accessibility_focus(hit, "#2962ff", 14.0));
+        let prims = tooltip_prims(&mut layout);
+        assert!(texts(&prims).iter().any(|text| text == "Bottom"));
+        let (anchor_x, anchor_y) = layout.general_layout_hit_anchor(0, hit).unwrap();
+        let (x, y, _, _) = tooltip_box(&prims);
+        assert!((f64::from(x) - (layout.pane_left + anchor_x + ANCHOR_OFFSET)).abs() <= 1.0);
+        assert!((f64::from(y) - (anchor_y + ANCHOR_OFFSET)).abs() <= 1.0);
+        layout.clear_general_layout_accessibility_focus();
+        assert!(tooltip_prims(&mut layout).is_empty());
+    }
     #[test]
     fn axis_hover_click_selects_only_the_mark_under_the_pointer() {
         let mut chart = category_chart(false);
@@ -587,7 +1069,11 @@ mod tests {
         }
         assert_eq!(target.general_hovered_hit().unwrap().row, 2);
         assert!(target.general_axis_hover_cursor(0).is_some());
-        assert!(texts(&overlay(&mut target)).iter().any(|text| text == "C"));
+        assert!(
+            texts(&tooltip_prims(&mut target))
+                .iter()
+                .any(|text| text == "C")
+        );
         assert!(
             target.take_sync_events().is_empty(),
             "a linked hover does not echo"

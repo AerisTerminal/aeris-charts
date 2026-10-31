@@ -411,5 +411,10 @@ impl ChartEngine {
         for pane_index in 0..self.panes.len() {
             self.build_general_legend_axis(pane_index, dpr, output);
         }
+        // The general tooltip is a popover above every chart layer: tick labels, axis titles and
+        // outside legends never paint over it on any backend.
+        if axis_frame.general_tooltip {
+            self.build_general_tooltip_axis(dpr, output);
+        }
     }
 }

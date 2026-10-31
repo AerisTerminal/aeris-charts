@@ -40,18 +40,26 @@ import {
 } from "recharts";
 import matrix from "./fixtures/g1/recharts_3_10_1/matrix.json";
 
+// Optional review overrides: `w`/`h` resize every 350x185 panel and `labels=long` swaps the
+// month names for long Unicode labels. Without them the pinned fixture is unchanged.
+const params = new URLSearchParams(location.search);
+const panel_size = (key: string, fallback: number) => {
+  const value = Number(params.get(key));
+  return Number.isFinite(value) && value >= 80 && value <= 1600 ? value : fallback;
+};
+const long_labels = ["January revenue — 一月", "Février Ünïcödé ✓", "März 北京 Übersicht", "Abril — نيسان"];
 const rows = [
   { name: "Jan", value: 12, alternate: 8, size: 90 },
   { name: "Feb", value: 18, alternate: 11, size: 140 },
   { name: "Mar", value: 14, alternate: 16, size: 110 },
   { name: "Apr", value: 24, alternate: 19, size: 180 },
-];
+].map((row, index) => params.get("labels") === "long" ? { ...row, name: long_labels[index] } : row);
 
 const flow = {
   nodes: [{ name: "Visit" }, { name: "Trial" }, { name: "Paid" }],
   links: [{ source: 0, target: 1, value: 18 }, { source: 1, target: 2, value: 11 }],
 };
-const panel = { width: 350, height: 185 };
+const panel = { width: panel_size("w", 350), height: panel_size("h", 185) };
 
 function Evidence({ api, children }: { api: string; children: React.ReactNode }) {
   return <div data-reference-api={api}>{children}</div>;
@@ -364,7 +372,7 @@ function ReferenceScene({ id }: { id: string }) {
     </>;
   }
   if (id === "hierarchy-flow") {
-    const tree = [{ name: "All", value: 44, children: rows }];
+    const tree = [{ name: "All", value: rows.reduce((sum, row) => sum + row.value, 0), children: rows }];
 
     return <>
       <Evidence api="FunnelChart Funnel">
@@ -374,10 +382,10 @@ function ReferenceScene({ id }: { id: string }) {
         <Treemap {...panel} data={tree} dataKey="value" nameKey="name" fill="#4c8bf5" />
       </Evidence>
       <Evidence api="Sankey">
-        <Sankey width={350} height={185} data={flow} node={{ fill: "#4c8bf5" }} link={{ stroke: "#8b6df6" }} />
+        <Sankey {...panel} data={flow} node={{ fill: "#4c8bf5" }} link={{ stroke: "#8b6df6" }} />
       </Evidence>
       <Evidence api="SunburstChart">
-        <SunburstChart width={350} height={185} data={tree[0]} dataKey="value" nameKey="name" fill="#28b7a4" />
+        <SunburstChart {...panel} data={tree[0]} dataKey="value" nameKey="name" fill="#28b7a4" />
       </Evidence>
     </>;
   }
@@ -465,7 +473,7 @@ function ReferenceScene({ id }: { id: string }) {
   if (id === "accessibility-localization") {
     return <>
       <Evidence api="Sankey title desc focus">
-        <Sankey width={350} height={185} data={flow} title="Flow comparison" desc="Value moving from source to destination" node={{ fill: "#4c8bf5" }} link={{ stroke: "#8b6df6" }} />
+        <Sankey {...panel} data={flow} title="Flow comparison" desc="Value moving from source to destination" node={{ fill: "#4c8bf5" }} link={{ stroke: "#8b6df6" }} />
       </Evidence>
       <Evidence api="accessibilityLayer host formatters">
         <LineChart {...panel} data={rows.map((row) => ({ ...row, value: row.value * 100 }))} accessibilityLayer>

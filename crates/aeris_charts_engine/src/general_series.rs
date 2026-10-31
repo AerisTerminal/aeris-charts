@@ -159,7 +159,18 @@ pub enum GeneralSeriesKind {
     PolarArea,
 }
 
+/// Recharts `PolarChart` default `outerRadius="80%"` of the polar plot radius.
+const RECHARTS_POLAR_OUTER_RADIUS: f64 = 0.8;
+
 /// Shared polar sector sweep and radial bounds. A positive inner radius makes a pie a donut.
+///
+/// Pie and radial-bar angles follow the Recharts polar convention in radians: zero points to
+/// three o'clock and positive angles advance counter-clockwise on screen, so the default
+/// `0..TAU` sweep matches Recharts `startAngle=0`/`endAngle=360`. An end angle below the start
+/// sweeps clockwise. Polar-area sectors stay on the angular axis' category spokes, which start at
+/// twelve o'clock and advance clockwise; their sweep scales and offsets that spoke layout.
+/// `GeneralSeriesOptions::pie` and `radial_bar` default the outer radius to Recharts' 80%; polar
+/// area keeps the full radius so its sectors stay aligned with the radial axis rings.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct GeneralPolarOptions {
@@ -813,6 +824,7 @@ impl GeneralSeriesOptions {
         let mut options = Self::xy_area(pane, dataset, angle_axis_id, radius_axis_id);
         options.kind = GeneralSeriesKind::Pie;
         options.fill_opacity = 1.0;
+        options.polar.outer_radius = RECHARTS_POLAR_OUTER_RADIUS;
         options
     }
 
@@ -847,6 +859,7 @@ impl GeneralSeriesOptions {
     ) -> Self {
         let mut options = Self::polar_area(pane, dataset, angle_axis_id, radius_axis_id);
         options.kind = GeneralSeriesKind::RadialBar;
+        options.polar.outer_radius = RECHARTS_POLAR_OUTER_RADIUS;
         options
     }
 }
@@ -927,6 +940,10 @@ struct GeneralPolarCategoryContext {
     radar_shape_angles: Option<Arc<[(f64, f64)]>>,
     radar_marker_rows: Option<Vec<Option<usize>>>,
     radius_scale: NumericAxisScale,
+    /// Radial-bar baseline as a value-axis fraction (Recharts `getBaseValueOfBar`).
+    radial_base: f64,
+    /// Radial-bar rings run outward in reverse category order.
+    ring_reverse: bool,
     rows: Vec<Option<usize>>,
     radar_radii: Option<Vec<f64>>,
 }
@@ -1056,17 +1073,24 @@ fn same_polar_angle(a: f64, b: f64) -> bool {
     delta.min(std::f64::consts::TAU - delta) < 1e-12
 }
 
+/// Maps a Recharts polar angle (zero at three o'clock, counter-clockwise positive) to the
+/// `PolarPlot` convention (zero at twelve o'clock, clockwise positive).
+fn recharts_plot_angle(angle: f64) -> f64 {
+    std::f64::consts::FRAC_PI_2 - angle
+}
+
 impl GeneralPieSlice {
     fn geometry(
         self,
         plot: PolarPlot,
         options: GeneralPolarOptions,
     ) -> Option<GeneralPolarSectorGeometry> {
-        let pad = options.pad_angle.min(self.to - self.from);
+        let span = self.to - self.from;
+        let pad = options.pad_angle.min(span.abs()).copysign(span);
         let sector = PolarSector::new(
             plot,
-            self.from + pad / 2.0,
-            self.to - self.from - pad,
+            recharts_plot_angle(self.from + pad / 2.0),
+            pad - span,
             options.inner_radius,
             options.outer_radius,
         )
@@ -1082,8 +1106,9 @@ impl GeneralPieSlice {
 struct GeneralPieContext {
     scene_generation: u64,
     plot: PolarPlot,
+    /// Recharts-convention start angle and signed sweep; slices advance monotonically from it.
     start: f64,
-    end: f64,
+    sweep: f64,
     slices: Vec<GeneralPieSlice>,
 }
 
@@ -1094,6 +1119,9 @@ fn polar_value_sector(
     index: usize,
     sweep_fraction: f64,
 ) -> Option<GeneralPolarSectorGeometry> {
+    if series.kind == GeneralSeriesKind::RadialBar {
+        return radial_bar_sector(context, dataset, series, index);
+    }
     let row = context.rows.get(index).copied().flatten()?;
     if !dataset.y_is_valid(row) || dataset.y()[row] <= 0.0 {
         return None;
@@ -1131,6 +1159,71 @@ fn polar_value_sector(
     )
     .ok()?;
     Some(GeneralPolarSectorGeometry { row, sector })
+}
+
+/// Recharts `RadialBarChart` geometry: each category owns one concentric ring of the
+/// inner..outer band and its value sweeps the ring along the polar angle from the baseline.
+/// While categories move, `sector_bounds` holds the sampled normalized ring slots instead.
+fn radial_bar_sector(
+    context: &GeneralPolarCategoryContext,
+    dataset: &crate::general_data::GeneralDataset,
+    series: &GeneralSeries,
+    index: usize,
+) -> Option<GeneralPolarSectorGeometry> {
+    let row = context.rows.get(index).copied().flatten()?;
+    if !dataset.y_is_valid(row) || dataset.y()[row] <= 0.0 {
+        return None;
+    }
+    let options = series.polar;
+    let value = context
+        .radius_scale
+        .coordinate(dataset.y()[row])?
+        .clamp(0.0, 1.0);
+    let count = context.rows.len() as f64;
+    let (first, second) = context
+        .sector_bounds
+        .as_ref()
+        .and_then(|bounds| bounds.get(index).copied())
+        .unwrap_or_else(|| {
+            let slot = if context.ring_reverse {
+                context.rows.len() - 1 - index
+            } else {
+                index
+            } as f64;
+            (slot / count, (slot + 1.0) / count)
+        });
+    // Recharts' default barCategoryGap of 10% insets each ring by a tenth of its band.
+    let gap = (second - first) * 0.1;
+    let band = options.outer_radius - options.inner_radius;
+    let inner = (options.inner_radius + band * (first + gap)).max(0.0);
+    let outer = (options.inner_radius + band * (second - gap)).min(1.0);
+    let sweep = options.end_angle - options.start_angle;
+    let from = options.start_angle + sweep * context.radial_base;
+    let to = options.start_angle + sweep * value;
+    let sector = PolarSector::new(
+        context.plot,
+        recharts_plot_angle(from),
+        from - to,
+        inner,
+        outer,
+    )
+    .ok()?;
+    Some(GeneralPolarSectorGeometry { row, sector })
+}
+
+/// Converts sampled angular-category bounds (normalized by one turn, as category motion stores
+/// them) to a normalized radial-bar ring slot. Forward angular slots are centered on their
+/// spoke and unwrapped past one turn; reversed slots advance negatively from zero.
+fn radial_bar_ring_slot(bounds: (f64, f64), reverse: bool) -> (f64, f64) {
+    let center = (bounds.0 + bounds.1) / 2.0;
+    let width = (bounds.1 - bounds.0).abs();
+    if reverse {
+        let position = -center;
+        (1.0 - position - width, 1.0 - position)
+    } else {
+        let position = center - 1.0;
+        (position, position + width)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -6808,8 +6901,8 @@ impl ChartEngine {
         let last_positive = last_positive?;
         let options = series.polar;
         let full_sweep = options.end_angle - options.start_angle;
-        let start_angle = options.start_angle.rem_euclid(std::f64::consts::TAU);
-        let end_angle = start_angle + full_sweep;
+        let start_angle = options.start_angle;
+        let end_angle = options.end_angle;
         let mut accumulated = 0.0;
         let mut slices = Vec::with_capacity(dataset.len());
         let transition = self
@@ -6831,7 +6924,7 @@ impl ChartEngine {
             let to = if row == last_positive {
                 end_angle
             } else {
-                (start_angle + full_sweep * accumulated).min(end_angle)
+                start_angle + full_sweep * accumulated.min(1.0)
             };
             let (from, to) = motion
                 .and_then(|motion| motion.get(row).copied().flatten())
@@ -6852,7 +6945,7 @@ impl ChartEngine {
             scene_generation: self.frame_invalidation.scene_generation(),
             plot: polar_plot,
             start: start_angle,
-            end: end_angle,
+            sweep: full_sweep,
             slices,
         })
     }
@@ -6896,14 +6989,15 @@ impl ChartEngine {
                 });
             }
             let (angle, _) = context.plot.invert(x, y)?;
-            let unwrapped =
-                context.start + (angle - context.start).rem_euclid(std::f64::consts::TAU);
-            if unwrapped >= context.end {
+            let advance = ((recharts_plot_angle(angle) - context.start) * context.sweep.signum())
+                .rem_euclid(std::f64::consts::TAU);
+            if advance >= context.sweep.abs() {
                 return None;
             }
+            let fraction = advance / context.sweep.abs();
             let index = context
                 .slices
-                .partition_point(|slice| slice.from <= unwrapped)
+                .partition_point(|slice| (slice.from - context.start) / context.sweep <= fraction)
                 .checked_sub(1)?;
             let slice = context.slices[index];
             let geometry = slice.geometry(context.plot, series.polar)?;
@@ -7000,6 +7094,36 @@ impl ChartEngine {
                     .collect::<Option<Vec<_>>>()
             })
             .flatten();
+        let sector_bounds = if series.kind == GeneralSeriesKind::RadialBar {
+            sector_bounds.map(|bounds| {
+                bounds
+                    .into_iter()
+                    .map(|(first, second)| {
+                        radial_bar_ring_slot(
+                            (
+                                first / std::f64::consts::TAU,
+                                second / std::f64::consts::TAU,
+                            ),
+                            angle_axis.reverse(),
+                        )
+                    })
+                    .collect()
+            })
+        } else {
+            sector_bounds
+        };
+        let (low, high) = (domain[0].min(domain[1]), domain[0].max(domain[1]));
+        let base_value = if low <= 0.0 && high >= 0.0 {
+            0.0
+        } else if high < 0.0 {
+            high
+        } else {
+            low
+        };
+        let radial_base = radius_scale
+            .coordinate(base_value)
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
         let mut radar_radii = if series.kind == GeneralSeriesKind::Radar {
             let mut radii = vec![0.0; rows.len()];
             for (index, row) in rows.iter().enumerate() {
@@ -7105,6 +7229,8 @@ impl ChartEngine {
             radar_shape_angles,
             radar_marker_rows,
             radius_scale,
+            radial_base,
+            ring_reverse: angle_axis.reverse(),
             rows,
             radar_radii,
         })
@@ -7214,6 +7340,24 @@ impl ChartEngine {
                     let geometry = polar_value_sector(context, dataset, series, index, fraction)?;
                     geometry.sector.contains(x, y).then_some(geometry.row)
                 });
+            }
+            if series.kind == GeneralSeriesKind::RadialBar {
+                let (_, radius) = context.plot.invert(x, y)?;
+                let band = series.polar.outer_radius - series.polar.inner_radius;
+                let slot = ((radius - series.polar.inner_radius) / band
+                    * context.rows.len() as f64)
+                    .floor();
+                if !(0.0..context.rows.len() as f64).contains(&slot) {
+                    return None;
+                }
+                let slot = slot as usize;
+                let index = if context.ring_reverse {
+                    context.rows.len() - 1 - slot
+                } else {
+                    slot
+                };
+                let geometry = radial_bar_sector(context, dataset, series, index)?;
+                return geometry.sector.contains(x, y).then_some(geometry.row);
             }
             let (angle, _) = context.plot.invert(x, y)?;
             let count = context.angles.count();
@@ -8595,6 +8739,7 @@ impl ChartEngine {
 
     #[doc(hidden)]
     pub fn clear_general_accessibility_focus(&mut self) {
+        self.reset_focus_tooltip_dismissal();
         let changed = self
             .general_series
             .as_mut()
@@ -8613,21 +8758,25 @@ impl ChartEngine {
             .map(GeneralInteractionTarget::hit)
     }
 
+    /// `(hovered, emphasized, slot)` for one row's interaction ring. Selection and keyboard
+    /// focus are emphasized: the opaque 2 px primary ring that keeps 3:1 against the chart
+    /// surface, unlike the translucent 1 px hover ring. `slot` keeps the hover (0), selection
+    /// (1) and focus (2) rings apart so a focused row stays visible beside a selected one.
     pub(crate) fn general_row_interaction(
         &self,
         series: GeneralSeriesId,
         row: usize,
-    ) -> (bool, bool) {
+    ) -> (bool, bool, usize) {
         let Some(registry) = self.general_series.as_ref() else {
-            return (false, false);
+            return (false, false, 0);
         };
         let matches =
             |target: &GeneralInteractionTarget| target.series == series && target.row == row;
-        (
-            (!registry.hover_axis && registry.hovered.as_ref().is_some_and(matches))
-                || registry.accessibility_focused.as_ref().is_some_and(matches),
-            registry.selected.as_ref().is_some_and(matches),
-        )
+        let hovered = !registry.hover_axis && registry.hovered.as_ref().is_some_and(matches);
+        let selected = registry.selected.as_ref().is_some_and(matches);
+        let focused = registry.accessibility_focused.as_ref().is_some_and(matches);
+        let slot = if focused { 2 } else { usize::from(selected) };
+        (hovered, selected || focused, slot)
     }
 
     pub(crate) fn reconcile_general_interaction_for_dataset(
@@ -11120,16 +11269,16 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
         ]
         .iter()
         .all(|value| value.is_finite())
-            || sweep <= 0.0
-            || sweep > std::f64::consts::TAU
+            || sweep == 0.0
+            || sweep.abs() > std::f64::consts::TAU
             || polar.inner_radius < 0.0
             || polar.outer_radius > 1.0
             || polar.inner_radius >= polar.outer_radius
             || polar.pad_angle < 0.0
-            || polar.pad_angle >= sweep
+            || polar.pad_angle >= sweep.abs()
         {
             return Err(invalid(
-                "polar sector bounds require a finite positive sweep of at most one turn, 0 <= inner < outer <= 1, and 0 <= pad < sweep",
+                "polar sector bounds require a finite nonzero sweep of at most one turn, 0 <= inner < outer <= 1, and 0 <= pad < |sweep|",
             ));
         }
     } else if options.polar != GeneralPolarOptions::default() {

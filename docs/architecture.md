@@ -86,7 +86,12 @@ ticks may override generated labels. Browser Canvas2D/WebGPU pixel fixtures and 
 window capture cover polar fills; other scale and platform captures retain their separate gates.
 The public `pie` series binds a category/value dataset to a polar pane's angular and radial axes;
 a positive inner radius makes it a donut without a separate series kind. `GeneralPolarOptions`
-defines its sweep, inner/outer radius, and angular padding;
+defines its sweep, inner/outer radius, and angular padding. Pie and radial-bar angles use the
+pinned Recharts 3.10.1 polar convention (radians, zero at three o'clock, positive
+counter-clockwise; `PolarUtils.polarToCartesian`), converted to the `PolarPlot` convention only
+when building a `PolarSector`. Defaults match Recharts `Pie`/`RadialBarChart`: a `0..2π` sweep
+and an outer radius of 80% of the polar radius; an end below the start sweeps clockwise. The
+browser boundary fills omitted polar fields from the series kind's defaults. Pie
 valid positive rows normalize by their maximum before summing, so finite input cannot overflow the
 total. Zero and missing rows do not emit slices. The engine uses `PolarSector` for both exact hits
 and shared-frame `MeshFill` lowering. One ordered mesh groups each sector's triangles so
@@ -102,10 +107,15 @@ that fan geometry between frame fill and exact hits. The frame emits a single `M
 optional row markers through the existing primitive and point pool contract. Radar transitions
 sample fixed spokes or a bounded union of source and target spokes as described below.
 Polar area and radial bar use the same category order, radial view, sector tessellation, and
-exact-hit visitor. Radial bars map value linearly to outer radius. Polar area maps value to
-annular area by interpolating squared radii before taking the square root. Both accept the
-bounded sweep, inner/outer radius, and angular padding in `GeneralPolarOptions`; zero or missing
-values emit no sector. Reverse angular axes reverse sector order. The engine owns selection and
+exact-hit visitor. Polar area keeps sectors on the angular axis spokes (twelve o'clock,
+clockwise) and maps value to annular area by interpolating squared radii before taking the square
+root; its sweep scales and offsets that spoke layout. Radial bars follow Recharts
+`RadialBar` in `layout="radial"`: each category owns one concentric ring of the inner..outer band
+in category order from the inside out, inset by the default 10% `barCategoryGap`, and its value
+sweeps the ring from the Recharts `getBaseValueOfBar` baseline along the configured angles in
+proportion to the radius-axis domain. They have no background track and ignore angular padding.
+An at-rest radial-bar hit resolves the ring from the pointer radius and tests one sector. Zero or
+missing values emit no sector. Reverse angular axes reverse sector or ring order. The engine owns selection and
 keyboard navigation for all four families, and the shared transition clock drives their sectors.
 The financial coordinate path does not dispatch through them.
 G7 reserves an axis-free `HorizontalDomain::Layout` pane for hierarchy and flow families. It
@@ -151,22 +161,35 @@ the same ordered `MeshFill` stream as other general geometry: each stage's trape
 its value to the next stage, with the final stage tapering to zero. A cached dataset maximum
 normalizes width without summing potentially huge finite values; exact hits compute the row from
 the pointer's vertical position in constant work, then test the same interpolated trapezoid edge.
-Treemap series derive normalized leaf weights, preserve sibling order through a bounded squarified
-partition, and emit snapped rectangles in that ordered frame. A per-series cache keyed by the plot
-rectangle keeps frame construction and exact leaf hits on identical `f64` geometry and is cleared
-atomically when the hierarchy changes. Zero-weight leaves emit no mark. Nested groups inset their
-children below a label header, cells paint inside a 1 CSS px gap, and a leaf's signed
-`color_value` shades it between fixed neutral, up and down colors by magnitude.
-Sankey series assign DAG columns by longest path, preserve input order within each column, and
-scale node heights and ordered link ribbons from normalized finite link values. The per-series
-plot-keyed cache supplies the same node rectangles and eight-segment ribbon paths to frame and
-exact node/link hits; a dataset replacement clears it. Nodes paint over ribbons in the ordered
-frame.
-Sunburst series use the same hierarchy weights and sibling order as treemap, placing the root's
-children on the inner ring and deeper descendants on successive rings. Each cached `f64` sector
-is tessellated into bounded shared-frame triangles, and its hit test checks those same triangles;
-zero-weight subtrees emit no sectors. Plot changes rebuild the cache, and data replacement clears
-it alongside the treemap and Sankey caches.
+Hierarchy and flow defaults follow pinned Recharts 3.10.1 `Treemap`, `Sankey` and
+`SunburstChart`. Treemap series derive normalized leaf weights and run Recharts `squarify`
+(golden-ratio worst score, data-order rows along the short side, whole-pixel rounding with the
+remainder on each row's last cell, a flush final row, no inset or gap) over the plot rectangle.
+A per-series cache keyed by the plot rectangle keeps frame construction, exact leaf hits and
+focus positions on identical `f64` geometry and is cleared atomically when the hierarchy changes.
+Zero-weight leaves emit no mark. The frame paints one white backdrop and every leaf in the
+series' flat fill, inset so a centered 1 CSS px white stroke separates cells, plus Recharts' 14 px
+left-aligned name where it fits. A leaf's signed `color_value` remains an opt-in that shades it
+between fixed neutral, up and down colors by magnitude.
+Sankey series run Recharts `computeData` with its defaults: a 5 CSS px margin, 10 px nodes and
+padding, longest-path columns with sinks justified to the last column, a shared value-to-pixel
+ratio from normalized finite link values, 32 relaxation passes with collision resolution, link
+offsets ordered by the far node's position, and the skipped-column obstacle pass. Links are the
+Recharts cubic path with `linkCurvature` 0.5, stroked as wide as their value; the engine
+flattens each into at most 24 segments offset along the curve normal, and the frame mesh and
+exact link hits test those same triangles, so every executor inherits the curve through
+`MeshFill`. Nodes use Recharts' own `#0088fe` fill at 0.8 opacity, links the series color at
+0.2 opacity, and nodes paint over links. The per-series plot-keyed cache holds the node
+rectangles, node columns and link curves; a dataset replacement clears it.
+Sunburst series use the same hierarchy weights and sibling order as treemap. Like Recharts, the
+root is a 50 CSS px center hole (capped at half the radius on very small plots), the root counts
+as one ring level so rings stop one ring short of the outer radius, rings are 2 px apart, the
+first child starts at three o'clock and runs counterclockwise, every sector uses the flat series
+fill with a 2 px white outline, and each sector shows its own data value in 12 px text where it
+fits (`data_labels` switches the text to node names). Each cached `f64` sector is tessellated
+into bounded shared-frame triangles, and its hit test checks those same triangles, so the hole
+and ring gaps never hit; zero-weight subtrees emit no sectors. Plot changes rebuild the cache,
+and data replacement clears it alongside the treemap and Sankey caches.
 The layout pane blocks financial series and cannot be removed while a layout series is bound.
 V2 state stores layout datasets and series in input order with dataset references, preserving
 shared input identity and styles. Restore validates the complete layout graph in the staged
@@ -184,9 +207,10 @@ Each layout series exposes a bounded 512-item accessibility page of semantic sta
 and link labels and values; hierarchy totals and Sankey node totals derive once from validated
 input into a dataset-owned value cache counted against the store limit. Hover hit JSON and
 accessibility pages read the same cached values.
-Opt-in layout labels use engine-measured layout typography and ordered-frame text. Funnel,
-treemap and sunburst labels appear only when they fit their mark; Sankey nodes first try
-the node rectangle, then the adjacent column gap. Every backend receives the same text run.
+Layout labels use engine-measured typography and ordered-frame text. Treemap names and sunburst
+values are Recharts defaults and always paint where they fit; funnel and Sankey labels and
+sunburst names are opt-in through `data_labels`. Sankey nodes first try the node rectangle,
+then the adjacent column gap. Every backend receives the same text run.
 Compatible layout value updates reuse the general chart's fixed monotonic clock, duration,
 reduced-motion policy, and browser animation scheduler. The dataset retains its canonical
 target while a bounded prior/presentation pair interpolates funnel stage weights, hierarchy
@@ -316,7 +340,8 @@ same bounded dataset transition. The ordered frame and exact-hit path sample tho
 the engine clock, including an interrupted reorder; overlapping moving slices hit in their
 paint order. Outside a reorder, pie hits keep the cached angular binary search.
 Automatic angular category axes use the same normalized source and target motion for spokes,
-polar-area sectors and radial-bar sectors. Matched rows that change category retain their sampled
+polar-area sectors and radial-bar rings; radial bars convert each sampled angular slot to its
+normalized ring slot. Matched rows that change category retain their sampled
 angular source as well. Moving sectors use their shared frame geometry for exact hits; static
 sector hits keep their indexed path. A same-count radar reorder morphs radial values on fixed
 spokes, sampling current radii on interruption. When the category count changes, radar forms a
@@ -864,7 +889,10 @@ set the selection through `selected_depth_profile`/`select_depth_profile`; Delet
 depth profiles because their lifecycle is host-owned. Depth heatmaps are never hovered or
 selected: pointer input over them reaches whatever lies beneath and keeps the pane cursor.
 Keyboard focus targets exposed by the browser accessibility layer (price axis, time axis, pane
-separator, drawing) route through `input_target_key_down` with a `ChartFocusTarget`. The engine
+separator, drawing) route through `input_target_key_down` with a `ChartFocusTarget`. Price-axis
+targets exist only on panes whose engine-reported horizontal domain is the financial time scale,
+and the time-axis target only when at least one such pane exists; general, polar, and layout panes
+expose no inert axis controls and default to an "Interactive chart" name. The engine
 owns their bindings: price-axis Home/ArrowUp/ArrowDown, time-axis Home/ArrowLeft/ArrowRight,
 separator Home/ArrowUp/ArrowDown, and the keyboard drawing edit session (Enter opens or commits,
 arrows nudge, Tab cycles anchors, Escape restores the start, Delete removes). A committed
@@ -969,10 +997,16 @@ exact item hover. The engine stores that anchor as the hovered row with an axis 
 item hover ring in axis mode, and keeps primary click on the exact hit, so selection still needs a
 mark under the pointer. The frame paints the index-axis cursor (the crosshair `vertLine` style, a
 horizontal rule for horizontal bars) in its own segment beneath the general marks, a background-ringed
-active dot on every line/area series sharing the anchor datum, and, in the overlay, a tooltip in the
+active dot on every line/area series sharing the anchor datum, and a tooltip in the
 popover style on one surface tone: a bold date or category heading, then one row per shared item with
-its identity color bar, muted title, and right-aligned value, truncated with "+N more" to fit the pane
-and flipped away from the pane edges. Because the tooltip is ordered-frame text and shapes, Canvas2D,
+its identity color bar, muted title, and right-aligned value, truncated with "+N more" to fit the pane.
+The tooltip is the last segment of the unscissored axis layer, after axis chrome and legends, so it
+covers axis labels like Recharts' wrapper; transient-free exports (`include_crosshair: false`) omit it.
+Placement mirrors Recharts `getTooltipTranslateByAxis`: a 10 px offset from the anchor, flipped
+before the plot end, held at the plot start, then clamped to the chart surface. Pointer hover wins;
+otherwise accessibility focus on a general row or layout item anchors the tooltip at the focused
+category tick (axis mode) or mark, until Escape dismisses it in the input controller or focus
+clears. Because the tooltip is ordered-frame text and shapes, Canvas2D,
 WebGPU, GPUI, and native executors paint it identically. `generalTooltip.visible` (default `true`,
 preserved by `reset_style_to_defaults`) turns off the tooltip only; the cursor follows crosshair
 visibility.
@@ -983,7 +1017,8 @@ positions place the same measured entries over the general plot without consumin
 height. Outside left/right positions reserve a bounded width beyond the axes; inside left/right
 stack the entries over the plot. A custom `{x,y}` position accepts finite CSS-pixel numbers or percentage strings: `x` is measured across the full chart width from its left edge, `y` within the general pane from its top. It anchors the legend's lower-right corner, reserves no plot space, paints in the unscissored axis layer, and ignores `offset`. A bounded nonnegative `offset` provides separation
 at the selected edge. Each entry has one rounded series-color pill and title per series,
-or per layout series in a layout pane.
+or per layout series in a layout pane, stably sorted by name in JavaScript string order (Recharts'
+default `itemSorter="value"`); the DOM legend applies the same order.
 `general_legend.rs` measures entries with the host text metrics. Horizontal positions
 center or edge-align up to three wrapped rows capped at 30% of pane height; side
 positions stack at most 16 entries in a bounded quarter-width strip, elide long titles,
@@ -995,13 +1030,23 @@ unscissored axis layer after axis chrome; the engine input controller owns their
 arbitration over the axis region. Custom coordinates may cross pane bounds, so
 their hits are checked in axis-layer paint order across panes. In-pane legends are emitted as ordered segments after
 the plot scissor, so every executor receives the same geometry. Hidden series stay listed
-at reduced opacity. The input controller resolves a primary click on an entry before chart hits,
+at 0.56 opacity, the lowest that keeps the muted title at WCAG AA 4.5:1 on the light and dark
+surfaces; the DOM legend uses the same opacity. The input controller resolves a primary click on an entry before chart hits,
 toggles that series' visibility, and reports `GeneralLegendChanged` so browser handles refresh;
 hovering an entry shows the pointer cursor. Touch presses use the controller's 44 CSS-pixel
 control profile around each entry; the nearest painted entry wins overlapping expanded bounds,
 while a painted `+N more` summary stays inert and mouse hits keep their original precision.
 Series markers in this legend, the engine tooltip and
 the DOM legend/tooltip share one rounded 4 CSS px pill (`series_marker_prim`).
+
+General text and focus contrast is resolved in the frame with the WCAG relative-luminance ratio
+(`Color::contrast_ratio`). A data label inside a column, histogram, or horizontal bar uses black or
+white, whichever contrasts more with the bar fill composited over the chart surface; labels outside
+a mark keep the theme text color. Layout labels (pie, treemap, sunburst, funnel, sankey) choose
+their ink the same way against their fill. Pointer hover keeps the translucent 1 px ring, while
+selection and keyboard focus draw the opaque 2 px primary ring in separate interaction slots, so a
+focused row stays at least 3:1 against the surface beside a selected one. Layout focus draws the
+host focus color inside a white band and a black band, so it reaches 3:1 against any adjacent fill.
 
 General horizontal axes reserve a strip derived from the chart text metrics and add a
 separate row for an axis title. Layout and frame construction use that same strip,
@@ -1441,7 +1486,7 @@ The browser boundary. It exposes the engine through `wasm-bindgen`, decodes type
 
 The browser boundary translates data and platform events and serializes engine-owned value snapshots. It must not become a second chart engine.
 
-It also owns the runtime license notice (`license.rs`): `license_notice(licensed)` prints one console notice per module instance unless the caller holds a commercial license key. The package calls it from `create_chart` (which also serves the grid) and `create_offscreen_chart` with the `licenseKey` chart option, which is package-level and never reaches the engine. Without a key, `create_chart` also adds the Aeris Terminal attribution logo: a package-owned DOM link (not an engine primitive, like other host branding) placed after the canvases in the bottom-left corner of the bottom pane, offset from the left price axis and time axis on each repaint, with the light- or dark-theme logo following the selected theme. It sits outside the input overlay, so the engine controller never sees its pointer events, and it is absent from image export, GPUI, native, and worker charts. The notice text, and the provenance comment in the shared `SOURCE_OVER_WGSL` shader source of `aeris_charts_render_wgpu`, are legal notices required by NOTICE; `npm run test:pack` verifies that both survive in the release `.wasm`.
+It also owns the runtime license notice (`license.rs`): `license_notice(licensed)` prints one console notice per module instance unless the caller holds a commercial license key. The package calls it from `create_chart` (which also serves the grid) and `create_offscreen_chart` with the `licenseKey` chart option, which is package-level and never reaches the engine. Without a key, `create_chart` also adds the Aeris Terminal attribution logo: a package-owned DOM link (not an engine primitive, like other host branding) placed after the canvases in the bottom-left corner of the bottom pane, offset on each repaint from the engine's `content_corner_insets()` (the left price axis and time axis of a financial bottom pane, or the plot corner inside the general axes and bottom legend of a general one), with the light- or dark-theme logo following the selected theme. It sits outside the input overlay, so the engine controller never sees its pointer events, and it is absent from image export, GPUI, native, and worker charts. The notice text, and the provenance comment in the shared `SOURCE_OVER_WGSL` shader source of `aeris_charts_render_wgpu`, are legal notices required by NOTICE; `npm run test:pack` verifies that both survive in the release `.wasm`.
 
 ### `aeris_charts_native`
 
@@ -1455,7 +1500,7 @@ Browser accessibility is chart-owned, enabled by default, and represented by one
 
 Auto-size keeps `ResizeObserver`'s exact device-pixel path. A resolution media-query watcher plus orientation/fullscreen fallbacks re-run sizing when DPR changes without a CSS-bounds change; resize reprojects semantic state and does not create new object identities. While auto-size is active, manual `resize` calls are ignored. Disabling it disconnects the engine-owned observer and returns authority to manual sizing; re-enabling immediately adopts the current container. Hidden or detached containers retain the last usable size and adopt their new bounds when revealed. While auto-size is active the canvases fill their container (`100%` by `100%`) and are never moved or resized by script: the browser snaps each canvas onto the device-pixel grid itself and displays a backing store equal to the canvas's own device-pixel content box one to one. The engine therefore observes the overlay canvas, not the container, and sizes every backing store to that canvas's reported `devicePixelContentBoxSize`, so 1px rules stay one device pixel at 90%, 110%, 125%, 133%, 150%, and 175% scaling, at fractional layout positions, and inside scroll containers. Script placement (a sub-pixel translate or a CSS box pinned to `bitmap / devicePixelRatio`) defeats that snapping and makes the compositor resample the whole chart. A ratio-only change that never reaches the observer runs `refresh_auto_size`, which keeps the last observed device box when the CSS size and ratio still match it and otherwise uses `round(css × ratio)`. Disabling auto-size pins the canvases at the CSS size they last rendered. Manual sizing sets the CSS box and `round(css × ratio)` backing store directly. `device_pixel_sharpness.spec.mjs` launches Chromium at real forced device scale factors and fails when the composited screenshot blends chart pixels. The engine ratio is the device width over the CSS width; the CSS height is kept when it rounds onto the observed device height and is otherwise replaced by device height over that ratio, so the engine's `round(media × ratio)` always lands exactly on the canvas backing store and the WebGPU surface is never stretched by a one-pixel height mismatch at fractional ratios. Engines without `devicePixelContentBoxSize` (WebKit) size the backing store to `round(css × ratio)`. Pointer input and every public media coordinate stay relative to the container.
 
-The package also ships `aeris_charts.css` as the portable host design system. Its complete brand token contract remains intact even when a token is currently consumed only by Terminal or the website, including the trade (buy/sell) and order-book tokens; Charts consumes the applicable surface, border, text, status, control, interaction, icon, action, focus, radius, and market roles without renaming them. Text has three base roles, `--text-default`, `--text-secondary`, and `--text-muted`; the light secondary gray keeps WCAG AA 4.5:1 contrast on every light surface. Host chrome uses the system UI font stack and may use `color-mix`. The published package does not include a webfont. Native CPU text selects installed faces for the requested family, weight, and italic style; the native golden scene masks its text region for the exact bitmap comparison and separately requires visible glyph ink across system fonts. Backend-facing roles — the primary surface for chart panes, the raised surface for footprint cell tiles, default text for axes, border for axis rules and pane separators, canonical border width, muted text, separator interaction, focus/primary interaction, positive/negative market semantics, and shared radii — have deterministic opaque-sRGB projections in `crates/aeris_charts_core/style_tokens.json`; translucent CSS roles are projected by compositing them over their theme's `--surface` (popover borders over `--surface-popover`). Two roles keep an explicit alpha byte instead because they paint over content rather than over a known surface: the popover highlight edge and each theme's crosshair line (the translucent dark `--border` `#fafafa1a` in the dark theme, which lands on `#2e2e2e` over the dark surface, and `#0a0a0a26` in the light theme); crosshair lines ship dashed. `aeris_charts_core` owns and compiles that file into the defaults used by every engine and backend. Axis borders and visible pane separators both project the engine's 1 CSS px border width onto the device-pixel grid; host DOM chrome draws the same fixed 1 px borders, and the CSS `--border-width: 1px` token states that same canonical width; the separator hover target stays independently expanded for interaction. The TypeScript package imports the same source at build time for host theming and workspace divider projection. The core crate therefore remains independently packageable without reaching into a browser-package directory, and the tokens resolve before frame construction rather than through demo or renderer overrides. Canonical engine grid lines retain their dashed style and border color but ship disabled; hosts and deterministic parity fixtures may opt either family in explicitly. A `v*` tag matching the package version publishes the verified artifact to the public npm registry with provenance, through npm trusted publishing from `publish.yml`.
+The package also ships `aeris_charts.css` as the portable host design system. Its complete brand token contract remains intact even when a token is currently consumed only by Terminal or the website, including the trade (buy/sell) and order-book tokens; Charts consumes the applicable surface, border, text, status, control, interaction, icon, action, focus, radius, and market roles without renaming them. Text has three base roles, `--text-default`, `--text-secondary`, and `--text-muted`; the light secondary gray (`#0a0a0a9a`, projected to `#6b6b6b`) keeps WCAG AA 4.5:1 contrast on every light chart surface: the surface and popover (5.33:1), the muted surface (5.11:1), the accent `#f3f3f3` (4.80:1) and the raised footprint tile `#f0f0f0` (4.68:1). `--text-interactive` and `--icon` stay in step with it. Host chrome uses the system UI font stack and may use `color-mix`. The published package does not include a webfont. Native CPU text selects installed faces for the requested family, weight, and italic style; the native golden scene masks its text region for the exact bitmap comparison and separately requires visible glyph ink across system fonts. Backend-facing roles — the primary surface for chart panes, the raised surface for footprint cell tiles, default text for axes, border for axis rules and pane separators, canonical border width, muted text, separator interaction, focus/primary interaction, positive/negative market semantics, and shared radii — have deterministic opaque-sRGB projections in `crates/aeris_charts_core/style_tokens.json`; translucent CSS roles are projected by compositing them over their theme's `--surface` (popover borders over `--surface-popover`). Two roles keep an explicit alpha byte instead because they paint over content rather than over a known surface: the popover highlight edge and each theme's crosshair line (the translucent dark `--border` `#fafafa1a` in the dark theme, which lands on `#2e2e2e` over the dark surface, and `#0a0a0a26` in the light theme); crosshair lines ship dashed. `aeris_charts_core` owns and compiles that file into the defaults used by every engine and backend. Axis borders and visible pane separators both project the engine's 1 CSS px border width onto the device-pixel grid; host DOM chrome draws the same fixed 1 px borders, and the CSS `--border-width: 1px` token states that same canonical width; the separator hover target stays independently expanded for interaction. The TypeScript package imports the same source at build time for host theming and workspace divider projection. The core crate therefore remains independently packageable without reaching into a browser-package directory, and the tokens resolve before frame construction rather than through demo or renderer overrides. Canonical engine grid lines retain their dashed style and border color but ship disabled; hosts and deterministic parity fixtures may opt either family in explicitly. A `v*` tag matching the package version publishes the verified artifact to the public npm registry with provenance, through npm trusted publishing from `publish.yml`.
 
 The package preserves its complete `snake_case` surface and adds camel-case aliases for the common JavaScript chart/series/scale lifecycle without creating parallel state or handles. Financial and general series use the same chart object and ordered frame. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. Typed update batches transfer their sanitized owned columns to the engine's batch entry point; the browser wrapper never loops through the single-row engine API. The published artifact exports the optimized WASM asset explicitly and the generated glue also resolves that sibling asset by `import.meta.url`; source-tree `pkg/`, crate, benchmark, and demo paths are not runtime dependencies. `examples/web_demo` remains an integration and parity test host, while `examples/all_in_one` contains consumer-facing framework-neutral and React compositions.
 

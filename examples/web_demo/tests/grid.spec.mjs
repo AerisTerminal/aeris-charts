@@ -238,7 +238,7 @@ test("portable design tokens and disabled controls match the brand contract", as
   const light = await tokens();
   expect(Object.values(light).every(Boolean)).toBe(true);
   expect(light).toMatchObject({
-    surface: "#ffffff", border: "#0a0a0a33", "text-default": "#0a0a0a", "text-secondary": "#0a0a0a94",
+    surface: "#ffffff", border: "#0a0a0a33", "text-default": "#0a0a0a", "text-secondary": "#0a0a0a9a",
     "text-muted": "#0a0a0a40", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
     "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
     "button-fill": "#0a0a0af2", "radius-compact": "6px", "radius-medium": "14px",

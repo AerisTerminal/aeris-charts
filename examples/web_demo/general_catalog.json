@@ -689,7 +689,7 @@
         { "id": "y", "dimension": "radius", "scale": "radial_linear", "visible": false }
       ],
       "series": [
-        { "kind": "pie", "title": "Seats", "polar": { "start_angle": -1.5707963267948966, "end_angle": 1.5707963267948966, "inner_radius": 0.5, "pad_angle": 0.02 }, "data": [
+        { "kind": "pie", "title": "Seats", "polar": { "start_angle": 3.141592653589793, "end_angle": 0, "inner_radius": 0.5, "pad_angle": 0.02 }, "data": [
           { "x": "Blue", "y": 182 }, { "x": "Green", "y": 64 }, { "x": "Amber", "y": 41 }, { "x": "Red", "y": 163 }
         ] }
       ]

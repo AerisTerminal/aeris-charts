@@ -887,6 +887,9 @@ pub struct AxisFrame {
     /// Index (into `separators`) of the hovered pane separator, if any — the host paints the
     /// `layout.panes.separatorHoverColor` band over it (reference pane-separator.ts).
     pub separator_hover: Option<usize>,
+    /// Whether the transient general tooltip paints last in this layer. Live frames and exports
+    /// that include the crosshair set it; width negotiation and crosshair-free exports do not.
+    pub general_tooltip: bool,
 }
 
 /// One price-axis tick stub (reference price-axis-widget.ts `_drawTickMarks`).
@@ -2337,7 +2340,6 @@ impl ChartEngine {
                     &mut cache.overlay.prims,
                 );
                 self.build_native_delta_tooltip_frame(pi, hpr, vpr, &mut cache.overlay.prims);
-                self.build_general_tooltip_frame(pi, hpr, vpr, &mut cache.overlay.prims);
                 if let Some((from, _)) = visible {
                     self.build_selection_anchors_frame(
                         pi,

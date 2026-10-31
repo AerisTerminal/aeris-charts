@@ -4005,6 +4005,12 @@ impl AerisChart {
         self.inner.borrow().general_series_ids(pane)
     }
 
+    /// Whether the pane's horizontal domain is the financial time scale, which owns the price-axis
+    /// and time-axis keyboard targets. Unknown panes are not financial.
+    pub fn pane_is_financial_time(&self, pane: usize) -> bool {
+        self.inner.borrow().pane_is_financial_time(pane)
+    }
+
     /// General-series paint and legend order (bottom first). `pane < 0` selects every pane.
     pub fn general_series_order_json(&self, pane: i32) -> String {
         self.inner.borrow().general_series_order_json(pane)
@@ -6553,6 +6559,11 @@ impl AerisChart {
     }
     pub fn time_scale_height(&self) -> f64 {
         self.inner.borrow().time_scale_height()
+    }
+    /// `[left, bottom]` CSS-pixel insets of the bottom pane's content corner.
+    pub fn content_corner_insets(&self) -> Vec<f64> {
+        let (left, bottom) = self.inner.borrow().engine.content_corner_insets();
+        vec![left, bottom]
     }
     pub fn price_scale_width(&self, pane: usize, target: u32) -> f64 {
         self.inner.borrow().price_scale_width(pane, target)

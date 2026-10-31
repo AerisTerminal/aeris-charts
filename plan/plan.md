@@ -1112,6 +1112,8 @@ required for competitive closure.
 - [x] Recheck upstream scope; record and assess new upstream features explicitly.
 - [x] Maintainer decision on mixed-sign expand stacks: copy Recharts exactly.
 - [x] G8 automation batch full gate green; committed and pushed.
+- [x] Agent-run contrast, accessibility-tree and screenshot reviews, with the Recharts default
+      alignment chosen by the maintainer (recorded below).
 
 #### Manual phase-closure evidence
 
@@ -1133,6 +1135,50 @@ These items need a person, hardware or a controlled runner. R8 closes, and matri
    family budgets (p95 input/frame, steady allocation, retained memory, cold startup, disposal)
    from it.
 6. Manual touch and keyboard pass on a real touchscreen for legend, brush and selection.
+
+Recorded 2026-10-31 (Windows 11, Chromium/Canvas2D at DPR 1 unless noted). These are automated
+and agent-reviewed evidence; items 1 and 3 still need a person's sign-off before R8 closes.
+
+- **Item 1, automated part.** `g8_accessibility_audit.spec.mjs` reads the real Chromium
+  accessibility tree and live-region text for a grouped-column, pie/radar, Sankey/treemap and
+  mixed financial/general chart, and runs an axe-core WCAG 2.1 A/AA scan on each. Four defects
+  were fixed: non-financial panes were named "Interactive financial chart"; general, polar and
+  layout panes exposed price/time-axis buttons that do nothing (the engine now reports
+  `pane_is_financial_time`); values were spoken with float noise; brush buttons did not describe
+  the current range. Still manual: listening with NVDA/JAWS/VoiceOver, a visible marker for the
+  focused hidden axis/separator button, and spoken feedback for zoom keys.
+- **Item 2, done.** A core test checks every theme text and focus token on every chart surface,
+  engine tests scan rendered labels, legends and focus rings, and `g8_contrast.spec.mjs` reads
+  browser-computed colours for the DOM legend, tooltip and focus outline in both themes. Fixes:
+  layout and in-bar data labels pick black or white by WCAG contrast against their fill (white
+  on amber was 2.1:1); general keyboard focus is a solid 2 px primary ring (was 1.7–2.0:1);
+  layout focus rings add black/white bands so they reach 3:1 on any fill; hidden legend entries
+  dim to 0.56 opacity in both the engine and DOM legend (0.45/0.55 failed); and, by maintainer
+  decision, the light `--text-secondary`, `--text-interactive` and `--icon` design-system tokens
+  move from `#0a0a0a94` to `#0a0a0a9a` (projected `#717171` → `#6b6b6b`), so secondary text now
+  passes on the accent (4.80:1) and raised tile (4.68:1) tones as well. Borders are decorative
+  and were not judged.
+- **Item 3, agent review done.** `g8_screenshot_review.spec.mjs` (opt-in with
+  `AERIS_G8_SCREENSHOTS=1`) captures Aeris/Recharts pairs for all 17 matrix rows at default,
+  small, large and long/Unicode-label sizes plus dark, hover and focus states into the ignored
+  `target/g8_screenshots/`. Defects fixed from the review: the tooltip could sit under axis
+  labels (it is now the last primitive of the axis layer in every executor, and placement follows
+  Recharts `getTooltipTranslateByAxis`), and the attribution mark covered the first general tick
+  labels (`content_corner_insets`). By maintainer decision these defaults now copy Recharts:
+  keyboard focus shows the tooltip (pointer hover wins, Escape dismisses); reference areas are
+  `#ccc` at 0.5 opacity; legend entries sort by name (`itemSorter="value"`); pies start at
+  3 o'clock and sweep counter-clockwise with an 80% outer radius; radial bars draw one ring per
+  category with value-length arcs; treemaps use the Recharts squarify port with one flat fill;
+  Sankey uses the Recharts layout with curved 0.5-curvature links and separate node fill; and
+  sunbursts keep a 50 px hole with value labels. The reference sunburst root now sums its
+  children (it was 44 for 68). Remaining recorded differences: radial-bar automatic domains round
+  up (24 → 25, so the largest arc stops near 345°), layout charts sit inside the shared plot
+  margins, the attribution mark can sit over the tooltip, and no custom `itemSorter` or click
+  tooltip trigger. A person still needs to sign off the image sets.
+- **Item 5, blocked.** The self-hosted `official-win-gpu-01` runner is offline: every
+  `benchmark-release` run since v0.13.9 has queued and been cancelled after 24 hours, and the
+  v0.14.4–v0.14.7 runs are still queued. No new run was dispatched.
+- Items 4 and 6 need hardware and remain open.
 
 **Exit:** every required matrix row is verified or has a maintainer-approved, clearly documented
 semantic alternative that satisfies the user task. No required family remains demand-deferred.

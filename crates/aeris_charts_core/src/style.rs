@@ -33,8 +33,9 @@ mod tests {
         assert_eq!(LIGHT_FOREGROUND_CSS, "#0a0a0a");
         assert_eq!(LIGHT_MUTED_CSS, "#fafafa");
         assert_eq!(LIGHT_RAISED_CSS, "#f0f0f0");
-        // `--text-secondary` (#0a0a0a94) over white; passes 4.5:1 on every light surface.
-        assert_eq!(LIGHT_MUTED_FOREGROUND_CSS, "#717171");
+        // `--text-secondary` (#0a0a0a9a) over white; passes 4.5:1 on every light surface,
+        // including the accent and raised footprint tones.
+        assert_eq!(LIGHT_MUTED_FOREGROUND_CSS, "#6b6b6b");
         assert_eq!(LIGHT_PRIMARY_CSS, "#006edd");
         assert_eq!(LIGHT_PRIMARY_FOREGROUND_CSS, "#ffffff");
         assert_eq!(LIGHT_PRIMARY_HOVER_CSS, "#338be4");
@@ -130,6 +131,101 @@ mod tests {
         assert_eq!(DEFAULT_FOREGROUND_CSS, DARK_FOREGROUND_CSS);
         assert_eq!(DEFAULT_MUTED_CSS, DARK_MUTED_CSS);
         assert_eq!(DEFAULT_SEPARATOR_HOVER_CSS, DARK_SEPARATOR_HOVER_CSS);
+    }
+
+    /// WCAG 2 relative luminance of an opaque sRGB color.
+    fn relative_luminance((r, g, b): (u8, u8, u8)) -> f64 {
+        let linear = |channel: u8| {
+            let srgb = f64::from(channel) / 255.0;
+            if srgb <= 0.04045 {
+                srgb / 12.92
+            } else {
+                ((srgb + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+
+    fn contrast_ratio(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
+        let (a, b) = (relative_luminance(a), relative_luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// Every text and focus role a general or financial chart paints on a theme surface keeps its
+    /// WCAG 2.2 AA ratio: 4.5:1 for normal-size text (1.4.3) and 3:1 for the focus/selection ring
+    /// (1.4.11). Surfaces are the chart pane (`--surface`), `--surface-secondary`, and the
+    /// tooltip popover; text alone also sits on the hover/accent tone (drawing note placeholders)
+    /// and the raised footprint tile. Content fills are covered where labels pick black or white
+    /// per fill.
+    #[test]
+    fn theme_text_and_focus_tokens_meet_wcag_aa_on_every_chart_surface() {
+        const TEXT: f64 = 4.5;
+        const NON_TEXT: f64 = 3.0;
+        let themes = [
+            (
+                "light",
+                [
+                    LIGHT_SURFACE_RGB,
+                    LIGHT_MUTED_RGB,
+                    LIGHT_POPOVER_SURFACE_RGB,
+                ],
+                [LIGHT_ACCENT_RGB, LIGHT_RAISED_RGB],
+                LIGHT_FOREGROUND_RGB,
+                LIGHT_MUTED_FOREGROUND_RGB,
+                LIGHT_POPOVER_SURFACE_RGB,
+                LIGHT_POPOVER_MUTED_FOREGROUND_RGB,
+                LIGHT_PRIMARY_RGB,
+                LIGHT_PRIMARY_FOREGROUND_RGB,
+            ),
+            (
+                "dark",
+                [DARK_SURFACE_RGB, DARK_MUTED_RGB, DARK_POPOVER_SURFACE_RGB],
+                [DARK_ACCENT_RGB, DARK_RAISED_RGB],
+                DARK_FOREGROUND_RGB,
+                DARK_MUTED_FOREGROUND_RGB,
+                DARK_POPOVER_SURFACE_RGB,
+                DARK_POPOVER_MUTED_FOREGROUND_RGB,
+                DARK_PRIMARY_RGB,
+                DARK_PRIMARY_FOREGROUND_RGB,
+            ),
+        ];
+        for (
+            theme,
+            surfaces,
+            text_tones,
+            foreground,
+            muted,
+            popover,
+            popover_muted,
+            primary,
+            on_primary,
+        ) in themes
+        {
+            let mut pairs = Vec::new();
+            for tone in text_tones {
+                pairs.push(("default text on a tone", foreground, tone, TEXT));
+                pairs.push(("secondary text on a tone", muted, tone, TEXT));
+            }
+            for surface in surfaces {
+                pairs.push((
+                    "default text (axes, legend, labels)",
+                    foreground,
+                    surface,
+                    TEXT,
+                ));
+                pairs.push(("secondary text", muted, surface, TEXT));
+                pairs.push(("focus and selection ring", primary, surface, NON_TEXT));
+            }
+            pairs.push(("tooltip secondary text", popover_muted, popover, TEXT));
+            pairs.push(("primary-foreground text", on_primary, primary, TEXT));
+            for (role, fg, bg, threshold) in pairs {
+                let ratio = contrast_ratio(fg, bg);
+                assert!(
+                    ratio >= threshold,
+                    "{theme} {role}: {fg:?} on {bg:?} is {ratio:.2}:1, below {threshold}:1"
+                );
+            }
+        }
     }
 
     /// Floating-layer tokens: `--surface-popover`, `--border-popover` composited over it,

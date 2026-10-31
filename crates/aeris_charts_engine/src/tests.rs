@@ -11795,3 +11795,73 @@ mod session_study_regressions {
         }
     }
 }
+
+#[test]
+fn content_corner_insets_follow_the_general_plot_and_the_financial_scales() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        400.0,
+        300.0,
+        1.0,
+        HorizontalDomain::Category {
+            scale: CategoryScaleType::Point,
+        },
+    )
+    .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            0,
+            AxisDimension::X,
+            GeneralScaleType::Point,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            0,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: ["A", "B", "C"].map(str::to_owned).to_vec(),
+            category_indices: vec![0, 1, 2],
+            y: vec![1200.0, 1800.0, 2400.0],
+            y_valid: None,
+        })
+        .unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::xy_line(0, dataset, "x", "y"))
+        .unwrap();
+    let measure = |text: &str, _: bool| text.len() as f64 * 7.0;
+    chart.recompute_layout_with_measure(true, measure, |_, _| 0.0);
+    let plot = chart.general_plot_rect(0).unwrap();
+    let (left, bottom) = chart.content_corner_insets();
+    assert!(
+        left > 0.0,
+        "the corner sits right of the left Y-axis labels"
+    );
+    assert_eq!(left, plot.x);
+    assert!(bottom > 0.0, "the corner sits above the X-axis strip");
+    assert_eq!(bottom, 300.0 - plot.y - plot.height);
+
+    chart
+        .apply_options(r#"{"generalLegend":{"visible":true}}"#)
+        .unwrap();
+    chart.recompute_layout_with_measure(true, measure, |_, _| 0.0);
+    let (_, with_legend) = chart.content_corner_insets();
+    assert!(with_legend > bottom, "a bottom legend raises the corner");
+
+    let financial = ChartEngine::new(800.0, 500.0, 1.0);
+    assert_eq!(
+        financial.content_corner_insets(),
+        (
+            financial
+                .price_scale_axis_width(0, PriceScaleTarget::Left)
+                .unwrap_or(0.0),
+            financial.time_axis_height(),
+        )
+    );
+}

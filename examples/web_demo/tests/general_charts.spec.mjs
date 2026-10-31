@@ -1465,7 +1465,9 @@ test("polar legend shows bounded slice labels and paint colors after data change
       const first = {
         snapshot: chart.general_legend_snapshot(0).items[0].slices,
         labels: [...host.querySelectorAll('[role="listitem"]')].map((node) => node.textContent),
-        red: host.querySelector('[role="listitem"] [aria-hidden="true"]')?.style.backgroundColor,
+        red: [...host.querySelectorAll('[role="listitem"]')]
+          .find((node) => node.textContent.startsWith("Named A"))
+          ?.querySelector('[aria-hidden="true"]')?.style.backgroundColor,
       };
       pie.set_data([{ id: "a", x: "A", y: 0 }, { id: "b", x: "B", y: 2 }]);
       const second = {
@@ -1481,7 +1483,8 @@ test("polar legend shows bounded slice labels and paint colors after data change
   });
   expect(result.first.snapshot.map((slice) => slice.label)).toEqual(["Named A", "B"]);
   expect(result.first.snapshot.map((slice) => slice.color)).toEqual(["#ff0000", "#48ae91"]);
-  expect(result.first.labels).toEqual(["Named A: 3", "B: 1"]);
+  // The DOM list follows Recharts' default Legend itemSorter="value"; the snapshot keeps engine order.
+  expect(result.first.labels).toEqual(["B: 1", "Named A: 3"]);
   expect(result.first.red).toBe("rgb(255, 0, 0)");
   expect(result.second.snapshot.map((slice) => slice.label)).toEqual(["B"]);
   expect(result.second.labels).toEqual(["B: 2"]);
@@ -1635,12 +1638,13 @@ test("pie row reorder moves slice hits and Canvas2D pixels", async ({ page }) =>
     pie.set_data([rows.a, rows.b, rows.c]);
     const geometry = chart.panes()[0].get_geometry();
     const radius = Math.min(geometry.width, geometry.height) * 0.24;
+    // Recharts angles: 0 at three o'clock, increasing counter-clockwise.
     const hit = (degrees) => {
       const angle = degrees * Math.PI / 180;
       return chart.general_hit_test(
         0,
-        geometry.width / 2 + Math.sin(angle) * radius,
-        geometry.top + geometry.height / 2 - Math.cos(angle) * radius,
+        geometry.width / 2 + Math.cos(angle) * radius,
+        geometry.top + geometry.height / 2 - Math.sin(angle) * radius,
       )?.row_id ?? null;
     };
     const start = hit(60);
@@ -1688,35 +1692,54 @@ test("polar category row motion moves radial-bar hits and Canvas2D pixels", asyn
     const row = (x) => [{ id: "moving", x, y: 3 }];
     bars.set_data(row("A"));
     const geometry = chart.panes()[0].get_geometry();
-    const radius = Math.min(geometry.width, geometry.height) * 0.24;
-    const hit = (degrees) => {
+    const cx = geometry.width / 2;
+    const cy = geometry.top + geometry.height / 2;
+    const ray = (degrees, radius) => {
+      // Recharts polar angles: zero at three o'clock, counter-clockwise positive.
       const angle = degrees * Math.PI / 180;
-      const x = geometry.width / 2 + Math.sin(angle) * radius;
-      const y = geometry.top + geometry.height / 2 - Math.cos(angle) * radius;
-      return chart.general_hit_test(0, x, y)?.row_id ?? null;
+      return chart.general_hit_test(0, cx + Math.cos(angle) * radius, cy - Math.sin(angle) * radius)?.row_id ?? null;
     };
-    const start = hit(0);
+    // Each category owns one concentric ring; the mean hit radius on a ray locates the row's ring.
+    const ring = (degrees) => {
+      let sum = 0;
+      let count = 0;
+      for (let radius = 0; radius < Math.min(geometry.width, geometry.height) / 2; radius += 1) {
+        if (ray(degrees, radius) === "moving") {
+          sum += radius;
+          count += 1;
+        }
+      }
+      return count ? sum / count : null;
+    };
+    const start = ring(45);
     const before = chart.take_screenshot().toDataURL();
     chart.set_general_transition_duration(200);
     bars.set_data(row("C"));
     const started = performance.now();
     const active = chart.wasm.wants_animation();
-    const initial = hit(0);
+    const initial = ring(45);
     chart.wasm.set_animation_time(started + 100);
-    const middle = hit(120);
+    const middle = ring(180);
     const during = chart.take_screenshot().toDataURL();
     chart.wasm.set_animation_time(started + 200);
-    const end = hit(240);
+    const end = ring(260);
+    // A value of 3 on a 0..4 domain sweeps 270 degrees, so 315 degrees on its ring is empty.
+    const beyond = ray(315, end);
     const after = chart.take_screenshot().toDataURL();
     const idle = !chart.wasm.wants_animation();
     chart.remove();
     host.remove();
-    return { start, initial, middle, end, active, idle, changed_mid: before !== during, changed_end: during !== after };
+    return {
+      start, initial, middle, end, beyond, active, idle,
+      changed_mid: before !== during, changed_end: during !== after,
+    };
   });
-  expect(result).toEqual({
-    start: "moving", initial: "moving", middle: "moving", end: "moving",
-    active: true, idle: true, changed_mid: true, changed_end: true,
-  });
+  expect(result.start).not.toBeNull();
+  expect(result.initial).toBeCloseTo(result.start, 5);
+  expect(result.middle).toBeGreaterThan(result.start + 10);
+  expect(result.end).toBeGreaterThan(result.middle + 10);
+  expect(result.beyond).toBeNull();
+  expect(result).toMatchObject({ active: true, idle: true, changed_mid: true, changed_end: true });
 });
 
 test("radar category reorder keeps a filled hit region while values morph", async ({ page }) => {
@@ -2969,7 +2992,7 @@ test("React legend and tooltip keep their DOM across new inline formatters and s
     const fixture = await import("/dist/react_phase3_fixture.js");
     return fixture.mountReactFormatterFixture();
   });
-  expect(mounted.legend_text).toEqual(["T0:Sales", "T0:Margin"]);
+  expect(mounted.legend_text).toEqual(["T0:Margin", "T0:Sales"]);
   const retained = {
     same_legend: true, legend_connected: true, legend_count: 1,
     same_tooltip: true, tooltip_connected: true, tooltip_count: 1, series_ready: 2,
@@ -2978,8 +3001,8 @@ test("React legend and tooltip keep their DOM across new inline formatters and s
     const observed = await page.evaluate((value) => window.__reactFormatters.rerender(value), generation);
     expect(observed).toEqual({
       ...retained,
-      legend_text: [`T${generation}:Sales`, `T${generation}:Margin`],
-      legend_actions: [`A${generation} hide Sales`, `A${generation} hide Margin`],
+      legend_text: [`T${generation}:Margin`, `T${generation}:Sales`],
+      legend_actions: [`A${generation} hide Margin`, `A${generation} hide Sales`],
     });
   }
   const point = await page.evaluate(() => window.__reactFormatters.point());

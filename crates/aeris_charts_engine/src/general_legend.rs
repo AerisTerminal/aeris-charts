@@ -21,8 +21,10 @@ const MAX_SIDE_ROWS: usize = 16;
 const MAX_SIDE_SHARE: f64 = 0.25;
 /// The legend never takes more than this share of its pane; rows past it fold into "+N more".
 const MAX_PANE_SHARE: f64 = 0.3;
-/// Opacity of a hidden series' entry, matching the browser legend's dimmed buttons.
-const HIDDEN_OPACITY: f64 = 0.45;
+/// Opacity of a hidden series' entry, matching the browser legend's dimmed buttons. A hidden
+/// entry is still an operable toggle, so its faded theme text keeps WCAG AA 4.5:1 on both theme
+/// surfaces; 0.56 is the lowest opacity that does so on the light surface.
+const HIDDEN_OPACITY: f64 = 0.56;
 /// Extra pointer slack around an entry so the gap between marker and text is never a dead zone.
 const HIT_SLACK: f64 = 4.0;
 
@@ -286,6 +288,9 @@ impl ChartEngine {
         if items.is_empty() {
             return None;
         }
+        // Recharts `Legend` default `itemSorter="value"`: a stable sort by the displayed name in
+        // JavaScript string order (case-sensitive UTF-16 code units).
+        items.sort_by(|a, b| a.1.encode_utf16().cmp(b.1.encode_utf16()));
 
         let size = self.axis_metrics().axis;
         let family = self.options.get().layout.font_family.clone();
@@ -1251,5 +1256,40 @@ mod tests {
             })
             .unwrap();
         assert_eq!(chart.general_legend_target_at_for_touch(x, y, true), None);
+    }
+    #[test]
+    fn entries_follow_the_recharts_default_value_sort() {
+        let mut chart = chart(&[
+            ("beta", "#336699"),
+            ("Zeta", "#cc6633"),
+            ("alpha", "#339966"),
+            ("Beta", "#993366"),
+        ]);
+        chart
+            .apply_options(r#"{"generalLegend":{"visible":true}}"#)
+            .unwrap();
+        let _ = chart.build_frame();
+        let labels = chart
+            .with_general_legend(0, |legend, _| {
+                legend
+                    .entries
+                    .iter()
+                    .map(|entry| entry.label.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap();
+        // JavaScript string order: uppercase code units sort before lowercase ones.
+        assert_eq!(labels, ["Beta", "Zeta", "alpha", "beta"]);
+        let snapshot: Vec<_> = chart
+            .general_legend_snapshot(Some(0))
+            .items
+            .into_iter()
+            .map(|item| item.title)
+            .collect();
+        assert_eq!(
+            snapshot,
+            ["beta", "Zeta", "alpha", "Beta"],
+            "the semantic snapshot keeps registration order"
+        );
     }
 }

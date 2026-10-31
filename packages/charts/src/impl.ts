@@ -4516,12 +4516,13 @@ export class chart_impl implements chart_api {
     if (logo) logo.src = this.selected_theme === "dark" ? logo_dark_theme : logo_light_theme;
   }
 
-  /** Track the left price axis and time axis so the logo stays inside the pane corner. */
+  /** Track the engine's bottom content corner so the logo never covers axis labels. */
   private place_attribution(): void {
     const link = this.attribution;
     if (link === null) return;
-    const left = this.wasm.price_scale_width(0, 1) + ATTRIBUTION_INSET_PX;
-    const bottom = this.wasm.time_scale_height() + ATTRIBUTION_INSET_PX;
+    const [corner_left = 0, corner_bottom = 0] = this.wasm.content_corner_insets();
+    const left = corner_left + ATTRIBUTION_INSET_PX;
+    const bottom = corner_bottom + ATTRIBUTION_INSET_PX;
     if (left !== this.attribution_left) {
       this.attribution_left = left;
       link.style.left = `${left}px`;
@@ -8325,6 +8326,10 @@ export class chart_impl implements chart_api {
 
   general_selected_hit(): general_series_hit | null {
     return JSON.parse(this.wasm.general_selected_hit_json()) as general_series_hit | null;
+  }
+
+  pane_is_financial_time(pane_index: number): boolean {
+    return this.wasm.pane_is_financial_time(pane_index);
   }
 
   general_accessibility_focused_hit(): general_series_hit | null {

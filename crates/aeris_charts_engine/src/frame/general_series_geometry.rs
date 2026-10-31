@@ -15,7 +15,9 @@ use super::PRIMARY;
 const GENERAL_HOVER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
 const GENERAL_BRUSH: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x28);
 const GENERAL_BRUSH_EDGE: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x8F);
-const GENERAL_REFERENCE_REGION: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x20);
+/// Recharts `ReferenceArea` defaults: `fill="#ccc"` painted at `fillOpacity={0.5}`.
+const GENERAL_REFERENCE_REGION: Color = Color::rgb(0xcc, 0xcc, 0xcc);
+const GENERAL_REFERENCE_REGION_OPACITY: f64 = 0.5;
 const GENERAL_REFERENCE_MARK: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0xCC);
 const MAX_GENERAL_DATA_LABELS_PER_PANE: usize = 512;
 const MAX_GENERAL_DATA_LABEL_ATTEMPTS_PER_PANE: usize = 4_096;
@@ -122,6 +124,34 @@ fn push_general_bar_fill(
     }
 }
 
+/// Black or white ink for a data label painted inside a bar: the larger worst-case WCAG contrast
+/// against every color the bar paints (both gradient stops when it has one), composited over the
+/// chart surface. The theme text color is only guaranteed against the surface itself.
+fn bar_label_ink(
+    series_color: Color,
+    row_color: Option<Color>,
+    gradient: Option<Gradient>,
+    surface: Color,
+) -> Color {
+    let fills = match gradient.filter(|_| row_color.is_none()) {
+        Some(gradient) => [gradient.top, gradient.bottom],
+        None => [row_color.unwrap_or(series_color); 2],
+    }
+    .map(|fill| fill.composite_over(surface));
+    let worst = |ink: Color| {
+        fills
+            .iter()
+            .map(|fill| ink.contrast_ratio(*fill))
+            .fold(f64::INFINITY, f64::min)
+    };
+    let (black, white) = (Color::rgb(0, 0, 0), Color::rgb(255, 255, 255));
+    if worst(black) >= worst(white) {
+        black
+    } else {
+        white
+    }
+}
+
 /// The active dot of an axis-mode hover, drawn like the financial crosshair marker: a 4 px disc
 /// inside a 2 px ring of the chart background. `x`/`y` are device px.
 fn push_general_active_dot(
@@ -208,7 +238,7 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
     ) -> Vec<Prim> {
-        let mut interaction = [None, None];
+        let mut interaction = [None, None, None];
         let Some(pane_id) = self.pane_stable_id(pane_index) else {
             return Vec::new();
         };
@@ -224,6 +254,7 @@ impl ChartEngine {
         let layout = &self.options.get().layout;
         let label_size = layout.font_size.max(1.0);
         let label_color = self.primary_text_color();
+        let surface = self.chart_surface_color();
         let mut occupied_labels: Vec<[f64; 4]> = Vec::new();
         let mut leader_primitives = Vec::new();
         let mut label_primitives = Vec::new();
@@ -294,83 +325,96 @@ impl ChartEngine {
             };
             // Histogram rows are engine bins, not dataset rows.
             let histogram = self.general_histogram_bins(series);
-            let mut push_label = |row: usize,
-                                  x: f64,
-                                  above: f64,
-                                  below: f64,
-                                  width_limit: f64,
-                                  outside_side: Option<f64>| {
-                if !series.data_labels()
-                    || occupied_labels.len() >= MAX_GENERAL_DATA_LABELS_PER_PANE
-                    || label_attempts >= MAX_GENERAL_DATA_LABEL_ATTEMPTS_PER_PANE
-                {
-                    return None;
-                }
-                label_attempts += 1;
-                let text = if let Some(bins) = histogram.as_deref() {
-                    bins.height(row)?.to_string()
-                } else {
-                    dataset
-                        .row_label(row)
-                        .map(str::to_owned)
-                        .or_else(|| {
-                            if !matches!(
-                                series.kind(),
-                                GeneralSeriesKind::Pie
-                                    | GeneralSeriesKind::Radar
-                                    | GeneralSeriesKind::PolarArea
-                                    | GeneralSeriesKind::RadialBar
-                            ) {
-                                return None;
+            let mut push_label =
+                |row: usize,
+                 x: f64,
+                 above: f64,
+                 below: f64,
+                 width_limit: f64,
+                 outside_side: Option<f64>,
+                 fill: Option<(Color, [f64; 4])>| {
+                    if !series.data_labels()
+                        || occupied_labels.len() >= MAX_GENERAL_DATA_LABELS_PER_PANE
+                        || label_attempts >= MAX_GENERAL_DATA_LABEL_ATTEMPTS_PER_PANE
+                    {
+                        return None;
+                    }
+                    label_attempts += 1;
+                    let text = if let Some(bins) = histogram.as_deref() {
+                        bins.height(row)?.to_string()
+                    } else {
+                        dataset
+                            .row_label(row)
+                            .map(str::to_owned)
+                            .or_else(|| {
+                                if !matches!(
+                                    series.kind(),
+                                    GeneralSeriesKind::Pie
+                                        | GeneralSeriesKind::Radar
+                                        | GeneralSeriesKind::PolarArea
+                                        | GeneralSeriesKind::RadialBar
+                                ) {
+                                    return None;
+                                }
+                                let category =
+                                    usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
+                                dataset.categories()?.get(category).cloned()
+                            })
+                            .unwrap_or_else(|| dataset.y()[row].to_string())
+                    };
+                    let width =
+                        self.measure_text_run(&text, label_size, &layout.font_family, 400, false);
+                    if !width.is_finite() || width <= 0.0 || width > width_limit {
+                        return None;
+                    }
+                    let x = x + outside_side.unwrap_or(0.0) * (width * 0.5 + 6.0);
+                    let left = x - width * 0.5;
+                    let right = x + width * 0.5;
+                    if left < 2.0 || right > plot.width - 2.0 {
+                        return None;
+                    }
+                    for y in [above, below] {
+                        let top = y - label_size * 0.55;
+                        let bottom = y + label_size * 0.55;
+                        if top < plot.y + 2.0 || bottom > plot.y + plot.height - 2.0 {
+                            continue;
+                        }
+                        let rect = [left, top, right, bottom];
+                        if occupied_labels.iter().any(|other| {
+                            rect[0] < other[2] + 2.0
+                                && rect[2] > other[0] - 2.0
+                                && rect[1] < other[3] + 2.0
+                                && rect[3] > other[1] - 2.0
+                        }) {
+                            continue;
+                        }
+                        occupied_labels.push(rect);
+                        let color = match fill {
+                            Some((ink, [fill_left, fill_top, fill_right, fill_bottom]))
+                                if x > fill_left
+                                    && x < fill_right
+                                    && y > fill_top
+                                    && y < fill_bottom =>
+                            {
+                                ink
                             }
-                            let category =
-                                usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
-                            dataset.categories()?.get(category).cloned()
-                        })
-                        .unwrap_or_else(|| dataset.y()[row].to_string())
+                            _ => label_color,
+                        };
+                        label_primitives.push(Prim::Text {
+                            x: (x * hpr) as f32,
+                            y: (y * vpr) as f32,
+                            text,
+                            color,
+                            size: (label_size * vpr) as f32,
+                            family: layout.font_family.clone(),
+                            align: TextAlign::Center,
+                            weight: 400,
+                            italic: false,
+                        });
+                        return Some((x, width, y));
+                    }
+                    None
                 };
-                let width =
-                    self.measure_text_run(&text, label_size, &layout.font_family, 400, false);
-                if !width.is_finite() || width <= 0.0 || width > width_limit {
-                    return None;
-                }
-                let x = x + outside_side.unwrap_or(0.0) * (width * 0.5 + 6.0);
-                let left = x - width * 0.5;
-                let right = x + width * 0.5;
-                if left < 2.0 || right > plot.width - 2.0 {
-                    return None;
-                }
-                for y in [above, below] {
-                    let top = y - label_size * 0.55;
-                    let bottom = y + label_size * 0.55;
-                    if top < plot.y + 2.0 || bottom > plot.y + plot.height - 2.0 {
-                        continue;
-                    }
-                    let rect = [left, top, right, bottom];
-                    if occupied_labels.iter().any(|other| {
-                        rect[0] < other[2] + 2.0
-                            && rect[2] > other[0] - 2.0
-                            && rect[1] < other[3] + 2.0
-                            && rect[3] > other[1] - 2.0
-                    }) {
-                        continue;
-                    }
-                    occupied_labels.push(rect);
-                    label_primitives.push(Prim::Text {
-                        x: (x * hpr) as f32,
-                        y: (y * vpr) as f32,
-                        text,
-                        color: label_color,
-                        size: (label_size * vpr) as f32,
-                        family: layout.font_family.clone(),
-                        align: TextAlign::Center,
-                        weight: 400,
-                        italic: false,
-                    });
-                    return Some((x, width, y));
-                }
-                None
-            };
             let fill_gradient = general_fill_gradient(series);
             match series.kind() {
                 GeneralSeriesKind::Pie
@@ -419,6 +463,7 @@ impl ChartEngine {
                                             elbow.1,
                                             plot.width - 4.0,
                                             Some(side),
+                                            None,
                                         ) {
                                             let tail_x = label_x - side * (width * 0.5 + 2.0);
                                             let first_point = points.len() as u32;
@@ -444,10 +489,10 @@ impl ChartEngine {
                                         }
                                     }
                                 }
-                                let (hovered, selected) =
+                                let (hovered, selected, slot) =
                                     self.general_row_interaction(series.id(), geometry.row);
                                 if hovered || selected {
-                                    interaction[usize::from(selected)] = Some(Prim::Circle {
+                                    interaction[slot] = Some(Prim::Circle {
                                         cx: (x * hpr) as f32,
                                         cy: (y * vpr) as f32,
                                         radius: (if selected { 5.0 } else { 4.0 }) * vpr as f32,
@@ -503,7 +548,7 @@ impl ChartEngine {
                             if !dataset.y_is_valid(*row) {
                                 continue;
                             }
-                            push_label(*row, x, y, y, plot.width - 4.0, None);
+                            push_label(*row, x, y, y, plot.width - 4.0, None, None);
                             if series.point_markers() {
                                 push_general_point_symbol(
                                     &mut markers,
@@ -626,6 +671,7 @@ impl ChartEngine {
                                 geometry.low_y.max(geometry.high_y) + label_size * 0.65 + 4.0,
                                 plot.width - 4.0,
                                 None,
+                                None,
                             );
                             if dot_rows.contains(&(series.id(), geometry.row)) {
                                 push_general_active_dot(
@@ -637,11 +683,11 @@ impl ChartEngine {
                                     vpr,
                                 );
                             }
-                            let (hovered, selected) =
+                            let (hovered, selected, slot) =
                                 self.general_row_interaction(series.id(), geometry.row);
                             if hovered || selected {
                                 let stroke = if selected { PRIMARY } else { GENERAL_HOVER };
-                                interaction[usize::from(selected)] = Some(Prim::Circle {
+                                interaction[slot] = Some(Prim::Circle {
                                     cx: (geometry.x * hpr) as f32,
                                     cy: (geometry.high_y * vpr) as f32,
                                     radius: ((if selected { 5.0 } else { 4.0 }) * vpr) as f32,
@@ -723,6 +769,7 @@ impl ChartEngine {
                             geometry.y + label_size * 0.65 + 4.0,
                             plot.width - 4.0,
                             None,
+                            None,
                         );
                         if dot_rows.contains(&(series.id(), geometry.row)) {
                             push_general_active_dot(
@@ -734,11 +781,11 @@ impl ChartEngine {
                                 vpr,
                             );
                         }
-                        let (hovered, selected) =
+                        let (hovered, selected, slot) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
                             let stroke = if selected { PRIMARY } else { GENERAL_HOVER };
-                            interaction[usize::from(selected)] = Some(Prim::Circle {
+                            interaction[slot] = Some(Prim::Circle {
                                 cx: (geometry.x * hpr) as f32,
                                 cy: (geometry.y * vpr) as f32,
                                 radius: ((if selected { 5.0 } else { 4.0 }) * vpr) as f32,
@@ -778,10 +825,10 @@ impl ChartEngine {
                             dataset.row_color(geometry.row),
                             fill_gradient,
                         );
-                        let (hovered, selected) =
+                        let (hovered, selected, slot) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
-                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                            interaction[slot] = Some(Prim::RectFrame {
                                 rect: IRect {
                                     x: left,
                                     y: top,
@@ -882,6 +929,7 @@ impl ChartEngine {
                             geometry.low_y + label_size * 0.65 + 4.0,
                             plot.width - 4.0,
                             None,
+                            None,
                         );
                         if dot_rows.contains(&(series.id(), geometry.row)) {
                             for y in [geometry.low_y, geometry.high_y] {
@@ -895,11 +943,11 @@ impl ChartEngine {
                                 );
                             }
                         }
-                        let (hovered, selected) =
+                        let (hovered, selected, slot) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
                             let stroke = if selected { PRIMARY } else { GENERAL_HOVER };
-                            interaction[usize::from(selected)] = Some(Prim::Circle {
+                            interaction[slot] = Some(Prim::Circle {
                                 cx: (geometry.x * hpr) as f32,
                                 cy: (((geometry.low_y + geometry.high_y) * 0.5) * vpr) as f32,
                                 radius: ((if selected { 5.0 } else { 4.0 }) * vpr) as f32,
@@ -995,11 +1043,12 @@ impl ChartEngine {
                             bottom + label_size * 0.65 + 4.0,
                             plot.width - 4.0,
                             None,
+                            None,
                         );
-                        let (hovered, selected) =
+                        let (hovered, selected, slot) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
-                            interaction[usize::from(selected)] = Some(Prim::Circle {
+                            interaction[slot] = Some(Prim::Circle {
                                 cx: (geometry.x * hpr) as f32,
                                 cy: (geometry.y * vpr) as f32,
                                 radius: ((geometry.cap_half_size
@@ -1042,6 +1091,12 @@ impl ChartEngine {
                             fill_gradient,
                         );
                         let (outside, inside) = column_label_rows(geometry, label_size);
+                        let ink = bar_label_ink(
+                            color,
+                            dataset.row_color(geometry.row),
+                            fill_gradient,
+                            surface,
+                        );
                         push_label(
                             geometry.row,
                             (geometry.left + geometry.right) * 0.5,
@@ -1049,11 +1104,15 @@ impl ChartEngine {
                             inside,
                             geometry.right - geometry.left - 4.0,
                             None,
+                            Some((
+                                ink,
+                                [geometry.left, geometry.top, geometry.right, geometry.bottom],
+                            )),
                         );
-                        let (hovered, selected) =
+                        let (hovered, selected, slot) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
-                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                            interaction[slot] = Some(Prim::RectFrame {
                                 rect: IRect {
                                     x: left,
                                     y: top,
@@ -1092,6 +1151,7 @@ impl ChartEngine {
                         let radii = general_bar_radii(series, geometry, hpr, vpr, false);
                         push_general_bar_fill(out, rect, radii, color, None, fill_gradient);
                         let (outside, inside) = column_label_rows(geometry, label_size);
+                        let ink = bar_label_ink(color, None, fill_gradient, surface);
                         push_label(
                             geometry.row,
                             (geometry.left + geometry.right) * 0.5,
@@ -1099,11 +1159,15 @@ impl ChartEngine {
                             inside,
                             geometry.right - geometry.left - 4.0,
                             None,
+                            Some((
+                                ink,
+                                [geometry.left, geometry.top, geometry.right, geometry.bottom],
+                            )),
                         );
-                        let (hovered, selected) =
+                        let (hovered, selected, slot) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
-                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                            interaction[slot] = Some(Prim::RectFrame {
                                 rect,
                                 border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
                                     .round()
@@ -1147,6 +1211,15 @@ impl ChartEngine {
                         // segment continues label their middle.
                         let center_y = (geometry.top + geometry.bottom) * 0.5;
                         let bar_width = geometry.right - geometry.left;
+                        let fill = Some((
+                            bar_label_ink(
+                                color,
+                                dataset.row_color(geometry.row),
+                                fill_gradient,
+                                surface,
+                            ),
+                            [geometry.left, geometry.top, geometry.right, geometry.bottom],
+                        ));
                         if geometry.exposed_end {
                             let (end_x, side) = if geometry.end_at_min {
                                 (geometry.left, -1.0)
@@ -1160,6 +1233,7 @@ impl ChartEngine {
                                 center_y,
                                 plot.width - 4.0,
                                 Some(side),
+                                fill,
                             );
                             if outside.is_none() {
                                 push_label(
@@ -1169,6 +1243,7 @@ impl ChartEngine {
                                     center_y,
                                     bar_width - 12.0,
                                     Some(-side),
+                                    fill,
                                 );
                             }
                         } else {
@@ -1179,12 +1254,13 @@ impl ChartEngine {
                                 center_y,
                                 bar_width - 4.0,
                                 None,
+                                fill,
                             );
                         }
-                        let (hovered, selected) =
+                        let (hovered, selected, slot) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
-                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                            interaction[slot] = Some(Prim::RectFrame {
                                 rect: IRect {
                                     x: left,
                                     y: top,
@@ -1289,11 +1365,12 @@ impl ChartEngine {
                             geometry.min_y.max(geometry.max_y) + label_size * 0.65 + 4.0,
                             geometry.right - geometry.left - 4.0,
                             None,
+                            None,
                         );
-                        let (hovered, selected) =
+                        let (hovered, selected, slot) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
-                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                            interaction[slot] = Some(Prim::RectFrame {
                                 rect: IRect {
                                     x: left,
                                     y: (geometry.min_y.min(geometry.max_y) * vpr).round() as i32,
@@ -1379,11 +1456,12 @@ impl ChartEngine {
                             geometry.bottom + label_size * 0.65,
                             geometry.right - geometry.left - 4.0,
                             None,
+                            None,
                         );
-                        let (hovered, selected) =
+                        let (hovered, selected, slot) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
-                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                            interaction[slot] = Some(Prim::RectFrame {
                                 rect: IRect {
                                     x: left,
                                     y: top,
@@ -1425,12 +1503,13 @@ impl ChartEngine {
                             geometry.y + geometry.radius + label_size * 0.65 + 2.0,
                             plot.width - 4.0,
                             None,
+                            None,
                         );
-                        let (hovered, selected) =
+                        let (hovered, selected, slot) =
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
                             let stroke = if selected { PRIMARY } else { GENERAL_HOVER };
-                            interaction[usize::from(selected)] = Some(Prim::Circle {
+                            interaction[slot] = Some(Prim::Circle {
                                 cx: (geometry.x * hpr) as f32,
                                 cy: (geometry.y * vpr) as f32,
                                 radius: ((geometry.radius + if selected { 3.0 } else { 2.0 }) * vpr)
@@ -1525,10 +1604,21 @@ impl ChartEngine {
                     w: right - left,
                     h: bottom - top,
                 },
-                color: fill_color
-                    .as_deref()
-                    .and_then(Color::parse_css)
-                    .unwrap_or(GENERAL_REFERENCE_REGION),
+                color: {
+                    let fill = fill_color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(GENERAL_REFERENCE_REGION);
+                    // Like SVG fill-opacity, the region opacity multiplies the fill's own alpha.
+                    Color::rgba(
+                        fill.r(),
+                        fill.g(),
+                        fill.b(),
+                        opacity_alpha(
+                            f64::from(fill.a()) / 255.0 * GENERAL_REFERENCE_REGION_OPACITY,
+                        ),
+                    )
+                },
             });
         }
     }

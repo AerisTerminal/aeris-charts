@@ -183,6 +183,7 @@ A Recharts `<ReferenceArea x1="Feb" x2="Mar" />` spans the plot height when Y bo
 omitted. An Aeris `region` binds explicit X and Y axes and accepts any nonempty set
 of `x_from`, `x_to`, `y_from`, and `y_to`. Omitted endpoints use the corresponding
 plot edge, so an X-only band follows Y zoom and a Y-only band follows X zoom.
+Like Recharts, regions paint beneath series with fill `#ccc` by default and every fill at 0.5 opacity.
 `ReferenceLine y={16}` maps to a Y-axis `line` with `value: 16`.
 Both references enter Aeris frame exports; row `label` values or `data_labels: true` keep
 numeric labels portable across backends.
@@ -248,9 +249,14 @@ share.set_data([
 ```
 
 Recharts radii can be pixels or percentages; Aeris `inner_radius` and `outer_radius` are
-fractions of its measured polar plot radius. Preserve a stable row `id` for updates and
-translate `Cell` fill overrides to row `color`. The same row shape and axes work for
+fractions of its measured polar plot radius. Angles use the Recharts convention in radians, so
+the default pie starts at three o'clock and sweeps counter-clockwise like `<Pie>`; convert
+`startAngle`/`endAngle` degrees with `degrees * Math.PI / 180`. Preserve a stable row `id` for
+updates and translate `Cell` fill overrides to row `color`. The same row shape and axes work for
 `radar`, `polar_area`, and `radial_bar`, with each family's own series options and layout.
+A Recharts `<RadialBarChart innerRadius="20%" outerRadius="90%"><RadialBar dataKey="value" />`
+maps to `radial_bar` with `polar: { inner_radius: 0.2, outer_radius: 0.9 }`: each category
+draws one concentric ring from the inside out and its value sets the arc length.
 The runnable [polar.mjs](../examples/all_in_one/polar.mjs) recipe also enables the portable
 engine legend and data labels.
 
@@ -290,6 +296,10 @@ The runnable [flow.mjs](../examples/all_in_one/flow.mjs) recipe bundles this pat
 installed package. `funnel` uses `{ type: "funnel", stages }`; `treemap` and `sunburst`
 use `{ type: "hierarchy", nodes }` with stable `id` and `parent` references. Built-in
 labels, exact hits, keyboard focus, and frame exports use the same engine geometry.
+Treemap, Sankey and sunburst defaults match Recharts' default tiling, curved links, node and
+link colors, sunburst hole and value labels, so an unstyled Recharts chart needs no extra
+options. A Recharts `node={{ fill }}` override has no Aeris option yet: Sankey nodes keep
+Recharts' default node fill while `color` sets the link color.
 Custom Recharts SVG node/link components remain host-only presentation and need a
 portable data/style mapping to appear in exported or native charts.
 

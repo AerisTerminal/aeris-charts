@@ -338,7 +338,7 @@ fn recalculate_overlapping(
 }
 
 impl ChartEngine {
-    fn chart_surface_color(&self) -> Color {
+    pub(crate) fn chart_surface_color(&self) -> Color {
         let fallback = aeris_charts_core::style::DEFAULT_SURFACE_RGB;
         Color::parse_css(&self.options.get().layout.background.color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
@@ -641,6 +641,7 @@ impl ChartEngine {
         self.retained_frame.initialized = true;
         let mut out = AxisFrame {
             separator_hover: self.separator_hover,
+            general_tooltip: include_transient,
             ..AxisFrame::default()
         };
         // Time-axis ticks may legitimately extend beyond the last canonical data row when the

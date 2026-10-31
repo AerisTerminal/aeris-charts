@@ -504,7 +504,12 @@ export interface general_series_options {
   connect_missing?: boolean;
   /** Area fill opacity from 0 through 1 (default `72 / 255`). */
   fill_opacity?: number;
-  /** Polar sector sweep and normalized radii. Omitted fields use a full clockwise turn. */
+  /**
+   * Polar sector sweep and normalized radii. Pie and radial-bar angles are radians in the
+   * Recharts convention: zero at three o'clock, positive counter-clockwise, so the default
+   * `0`..`2π` matches Recharts `startAngle=0`/`endAngle=360`. An end below the start sweeps
+   * clockwise. Polar-area sweeps scale its twelve o'clock, clockwise category spokes.
+   */
   polar?: {
     start_angle?: number;
     end_angle?: number;

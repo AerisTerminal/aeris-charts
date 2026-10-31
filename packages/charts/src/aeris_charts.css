@@ -34,7 +34,7 @@
 
   /* Text */
   --text-default: #0a0a0a;
-  --text-secondary: #0a0a0a94;
+  --text-secondary: #0a0a0a9a;
   --text-muted: #0a0a0a40;
   --text-positive: var(--positive);
   --text-negative: var(--negative);
@@ -44,7 +44,7 @@
      step with --icon / --icon-active: normal text = normal icon colour,
      hover/active text = active icon colour. They are separate tokens on
      purpose, never point one at the other. */
-  --text-interactive: #0a0a0a94;
+  --text-interactive: #0a0a0a9a;
   --text-hover: #0a0a0a;
   --text-active: #0a0a0a;
 
@@ -54,7 +54,7 @@
   --disabled-bg: #0a0a0a0d;
 
   /* Icons — normal and hovered/pressed/selected */
-  --icon: #0a0a0a94;
+  --icon: #0a0a0a9a;
   --icon-active: #0a0a0a;
 
   /* Status — gains / losses, success / failure. Shared with the main platform. */

@@ -52,3 +52,42 @@ test("attribution logo links to Aeris Terminal, follows the theme, and hides for
   expect(result.removed).toBe(true);
   expect(result.licensed_link).toBe(true);
 });
+
+test("attribution logo sits inside the general plot corner, clear of axis labels", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const api = await import("/dist/aeris_charts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:relative;width:350px;height:185px";
+    document.body.append(host);
+    const chart = await api.create_chart(host, {
+      backend: "canvas2d", autoSize: false,
+      initialPane: { horizontal_domain: { type: "category", scale: "point" } },
+    });
+    chart.resize(350, 185, 1);
+    chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "point" });
+    chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear" });
+    chart.add_series("xy_line", { pane: 0, x_axis_id: "x", y_axis_id: "y" }).set_data([
+      { x: "Jan", y: 1200 }, { x: "Feb", y: 1800 }, { x: "Mar", y: 2400 },
+    ]);
+    chart.render();
+    const measure = () => {
+      const link = host.querySelector("a").getBoundingClientRect();
+      const box = host.getBoundingClientRect();
+      return { left_gap: link.left - box.left, bottom_gap: box.bottom - link.bottom };
+    };
+    const plain = measure();
+    const plot_left = chart.panes()[0].get_geometry().left;
+    chart.apply_options({ generalLegend: { visible: true } });
+    chart.render();
+    const with_legend = measure();
+    chart.remove();
+    host.remove();
+    return { plain, with_legend, plot_left };
+  });
+  expect(result.plot_left).toBeGreaterThan(20);
+  expect(result.plain.left_gap).toBeCloseTo(result.plot_left + 8, 0);
+  // Above the X-axis tick strip, not over the bottom-left tick labels.
+  expect(result.plain.bottom_gap).toBeGreaterThan(8 + 15);
+  expect(result.with_legend.bottom_gap).toBeGreaterThan(result.plain.bottom_gap + 10);
+});

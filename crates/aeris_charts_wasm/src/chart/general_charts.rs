@@ -191,6 +191,30 @@ fn axis_options_from_input(input: AxisInput) -> Result<GeneralAxisOptions, Strin
     Ok(options)
 }
 
+/// Omitted polar fields keep the series kind's engine default, so a pie or radial bar that
+/// sets only `inner_radius` still uses the Recharts default outer radius.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct PolarInput {
+    start_angle: Option<f64>,
+    end_angle: Option<f64>,
+    inner_radius: Option<f64>,
+    outer_radius: Option<f64>,
+    pad_angle: Option<f64>,
+}
+
+impl PolarInput {
+    fn apply(self, defaults: GeneralPolarOptions) -> GeneralPolarOptions {
+        GeneralPolarOptions {
+            start_angle: self.start_angle.unwrap_or(defaults.start_angle),
+            end_angle: self.end_angle.unwrap_or(defaults.end_angle),
+            inner_radius: self.inner_radius.unwrap_or(defaults.inner_radius),
+            outer_radius: self.outer_radius.unwrap_or(defaults.outer_radius),
+            pad_angle: self.pad_angle.unwrap_or(defaults.pad_angle),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct SeriesInput {
     pane: usize,
@@ -219,7 +243,7 @@ struct SeriesInput {
     #[serde(default)]
     fill_opacity: Option<f64>,
     #[serde(default)]
-    polar: GeneralPolarOptions,
+    polar: PolarInput,
     #[serde(default)]
     fill_gradient: Option<[String; 2]>,
     #[serde(default)]
@@ -793,7 +817,7 @@ fn series_options_from_input(
             DEFAULT_GENERAL_FILL_OPACITY
         }
     });
-    options.polar = input.polar;
+    options.polar = input.polar.apply(options.polar);
     options.fill_gradient = input.fill_gradient;
     options.baseline_value = input.baseline_value;
     options.baseline_policy = match input.baseline_policy.as_deref().unwrap_or("zero") {
@@ -1714,6 +1738,13 @@ impl ChartInner {
 
     pub fn remove_general_reference(&mut self, id: u32) -> bool {
         GeneralReferenceId::from_raw(id).is_some_and(|id| self.engine.remove_general_reference(id))
+    }
+
+    pub fn pane_is_financial_time(&self, pane: usize) -> bool {
+        matches!(
+            self.engine.pane_horizontal_domain(pane),
+            Some(HorizontalDomain::FinancialTime)
+        )
     }
 
     pub fn general_series_ids(&self, pane: usize) -> Vec<u32> {
