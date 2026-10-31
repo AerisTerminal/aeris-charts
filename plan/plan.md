@@ -24,7 +24,7 @@ with its commit, and update the status table in the same commit. A phase or matr
 
 ## Status at a glance
 
-Updated 2026-10-20. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
+Updated 2026-10-31. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
 expansion completed on 2026-10-06; general-chart batches have resumed in dependency order.
 
 | Batch | Phase | Scope | Status | Done so far | Next |
@@ -36,7 +36,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G5 | R5 | React and framework-neutral authoring | **Complete** | Keyed declarations and mapped rows; atomic shared composition; controlled brush; first-pane ownership; lifecycle, SSR, packed-consumer and browser evidence | G6; manual assistive-technology review remains pending |
 | G6 | R6 | Polar families and transitions | **Complete** | `f64` polar geometry and axes; pie/donut, radar, polar-area and radial-bar paths; single-fill ordered polar mesh; bounded cached hits, slice legends, shared-frame leader labels, pointer and keyboard selection; WASM/TS bindings; opt-in fixed-clock value and numeric/temporal X updates, Cartesian and angular category-axis and matched-row category movement, identity-matched entry and exit rows, missing/valid Y, error-bound and bubble-size motion, pie row-order motion, fixed-spoke and changing-count radar morphs, compatible optional-channel changes, collapsed error-bound entry, persisted duration and browser scheduling; polar and Cartesian family fixed-clock frame/hit fixtures, GPUI/Canvas2D structural fill, bounded Canvas2D/WebGPU pixels, and measured 1.25× GPUI/native polar window parity; strict release performance, six package-size limits, and 735 portable browser tests passed | G7; manual assistive-technology and broader device-scale image evidence remain pending |
 | G7 | R7 | Hierarchy and flow families | **Complete** | Axis-free `layout` pane topology is available in engine, WASM, and TypeScript; lazy typed stage/tree/flow store validates IDs, values, cycles, depth and bounded retained capacity; funnel, treemap, Sankey and sunburst emit shared ordered-frame geometry with direct or cached exact hits; focused financial-isolation, persistence, atomic-store and geometry fixtures pass; V2 layout data/series round-trip and public restored-series handles, pointer hover/click/Escape and focused-key selection, bounded accessibility snapshots integrated with browser keyboard navigation and announcements, shared-frame visual focus, shared-dataset update fanout, built-in pointer tooltip and toggling legend, opt-in shared-frame labels, atomic live presentation patches, and fixed-clock compatible value transitions are implemented with focused engine/browser evidence; four-family Canvas2D/WebGPU interior pixels and GPUI/Canvas2D structural focus/mark parity pass | G8; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence remain for parity closure |
-| G8 | R8 | Parity closure and release readiness | **In progress** | Pinned Recharts 3.10.1 horizontal-bar default and positive/mixed-sign/expanded/positive-only/cumulative/silhouette/wiggle stack pairs pass in Chromium/Firefox/WebKit; a current G2 public browser recheck passes 34 cases with two expected non-Chromium CDP skips. Upstream scope recheck plus focused legend placement, touch, X-axis automatic sizing, responsive resize/reveal/aspect/zero-size/DPR, references/labels, Cell colors/rounded bars, French grouped ticks, polar and four-family hierarchy/flow geometry pairs, plus Sankey accessibility fixtures recorded below; the last full G8 defaults run passed 115 browser cases with 8 expected non-Chromium WebGPU/CDP skips, followed by 15 focused brush, path-family and composition passes. Shared and combined financial/Cartesian/polar/layout WebGPU loss fallback pass in Chromium; combined charts retain pre-update image identity. Mixed V2 restore and cleanup pass in three browsers; native four-family image export matches the live frame; full matrix and manual evidence remain open | Complete matrix evidence, documentation and export/recovery work; then full gate and phase closure |
+| G8 | R8 | Parity closure and release readiness | **Automated work complete; manual evidence pending** | Every matrix row has pinned Recharts 3.10.1 and Aeris public-path pairs in Chromium/Firefox/WebKit; percent stacks now copy Recharts `expand` exactly by maintainer decision; all 46 catalog examples keep byte-identical exports across live WebGPU loss, accept post-loss updates and restore; general-only, mixed and financial-only browser workloads plus general/mixed lifecycles are measured locally beside native Targets F–I; the migration guide maps every matrix row | Maintainer-run manual evidence in **Manual phase-closure evidence**, then mark matrix rows Verified and close R8 |
 
 Notes:
 
@@ -47,8 +47,9 @@ Notes:
   The scales/axes and responsive-layout matrix rows are Verified. Other rows remain Partial
   because they include later-phase behavior.
 
-Seven of eight delivery batches are complete. G8 is in progress. Batch completion
-does not imply full parity-matrix verification.
+Seven of eight delivery batches are complete. G8's automated work is complete; its phase
+closure waits on the manual evidence listed under R8. Batch completion does not imply full
+parity-matrix verification.
 
 ## How work is delivered
 
@@ -790,6 +791,60 @@ Firefox and WebKit had cancelled a tap before `touchend` when both event IDs mat
 Fourteen focused legend tests, warning-denying engine Clippy, and real touchscreen taps through
 the public browser host in Chromium, Firefox and WebKit pass. Wider touch/keyboard parity remains open.
 
+The 2026-10-31 G8 automation batch closes the remaining automatable R8 items.
+
+By maintainer decision, `stack_mode: "percent"` now reproduces Recharts 3.10.1
+`stackOffset="expand"` exactly instead of normalizing positive and negative totals separately.
+Each value divides by its position's signed stack total (a zero total keeps raw values, as in d3),
+every value stacks on one running boundary, exposed ends follow the last nonzero member, and the
+automatic value domain is fixed to `0..1`. Mixed-sign positions therefore overshoot and clip:
+in the pinned fixture the A/B base bars fill the plot and their top segments paint nothing, in
+both libraries. All-negative positions now stack upward to one. The change is shared by
+columns, horizontal bars and stacked areas in `general_series.rs`, so every executor, hit test,
+label and export inherits it. A new engine regression
+(`percent_stacks_follow_recharts_expand_for_mixed_signs`) and the rewritten public pair
+(`Aeris mixed-sign percent clips overshooting bars like the pinned expand`) pass in Chromium,
+Firefox and WebKit beside the pinned Recharts fixture. The earlier advice to keep the
+independent-sign policy was presented and declined. The migration guide now recommends
+`stack_mode: "normal"` when mixed-sign shares must stay readable.
+
+Family-wide recovery evidence now covers live data. A new Chromium fixture installs each of the
+46 catalog examples (all 20 general, polar and layout kinds) on WebGPU, exports it, forces that
+chart's device loss, and requires a byte-identical Canvas2D export. A post-loss visibility update
+must repaint, and showing the series again must restore the pre-loss image exactly. All 46 pass
+with no page errors, and every host has zero canvases after removal. The existing pre-install loss,
+V2 restore and per-backend export audits still pass.
+
+The browser benchmark gains steady-state and lifecycle evidence for general charts. The
+`general-dashboard-100k` (v3) and `mixed-financial-general-120k` (v2) scenarios now sample 30
+warmed unchanged repaints after startup. New `general-lifecycle-20-cycles` and
+`mixed-lifecycle-20-cycles` scenarios repeat create/load/destroy of a 10K-row general-only
+chart and a 10K general plus 2K financial chart. Local Windows/Chromium/WebGPU diagnostics on
+2026-10-31 (not controlled-runner claims):
+
+| Workload | Startup p50 | Install frame CPU p50 | Steady repaint CPU p95 | Steady allocations / upload | Peak repaint upload |
+| --- | ---: | ---: | ---: | --- | ---: |
+| Financial-only `historical-candlestick-100k` | 6.82 ms `set_data_typed` | 1.46 ms | n/a | n/a | n/a |
+| General-only `general-dashboard-100k` | 164.65 ms | 45.67 ms | 0.23 ms | 0 / 0 bytes over 150 repaints | 46,682,112 bytes |
+| Mixed `mixed-financial-general-120k` | 283.69 ms | 42.10 ms | 0.24 ms | 0 / 0 bytes over 150 repaints | 46,760,912 bytes |
+
+Both general startup/upload values pass the policy-v7 ceilings (2,000 ms and 100,663,296 bytes).
+The general and mixed lifecycles keep WASM linear memory flat at 16,646,144 bytes across all 20
+cycles. Their whole-page retained deltas of 4.09 MB and 4.13 MB match the financial
+`lifecycle-50-cycles` delta of 4.16 MB (JS heap deltas about 420 KB in all three). That points
+to one-time warm-up growth rather than per-cycle retention. The dense ~45 ms data-install
+frame remains a known limit; it is not a 16 ms claim.
+
+The migration guide's mapping table now also covers horizontal (`layout="vertical"`), grouped
+and range bars, `barSize`/`barGap`, log/symlog scales, axis `domain`/`reversed`/`tickCount`/
+`label`, `yAxisId`, `CartesianGrid` and `syncId`, so every matrix row has a reviewed path.
+
+The batch gate passed: fmt, workspace and wasm32 clippy, workspace tests, GPUI pixel parity,
+the package lint/build/typecheck/pack/API/SSR/release gates, and `perf_gate` (Target F
+1.57/1.51 ms, G 1.37/1.95 ms at 5.53 MiB, H 0.88 ms at 5.68 MiB, I 9.57/2.69 ms at 6.88 MiB).
+The complete Playwright suite passed 1,051 tests with 47 platform skips. One earlier run hit a
+transient Chromium `ERR_NO_BUFFER_SPACE` network error in a drawings test that passed on rerun.
+
 ## Known gaps
 
 Remaining source-confirmed gaps from the 2026-09-23 review and the 2026-10-18 post-G7 changes. R3–R7 closed the earlier Cartesian,
@@ -798,7 +853,7 @@ Earlier test counts and timings are historical observations in Git history, not 
 
 | Gap | Evidence | Required correction | Phase |
 | --- | --- | --- | --- |
-| Parity evidence | Automated layout-family contracts and cross-backend fixtures pass; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence are still due | Collect phase-closure evidence and record any differences against the pinned competitor | R8 |
+| Parity evidence | Every matrix row has automated pinned/Aeris pairs; manual assistive-technology, competitor screenshot, calibrated GPUI window and official-runner benchmark evidence are still due | Maintainer collects the items in **Manual phase-closure evidence** | R8 |
 | G2 evidence after default changes | `867029a` changed automatic domains, vertical category order, general-only gutters and plot clipping after the G2 rows were verified; 34 current public browser cases and focused engine regressions pass, with two expected CDP-only skips | Complete calibrated viewport/theme screenshots and investigate any recurrence of the one WebKit zero-size page error in the final gate | R8 |
 | Pinned legend placement | Recharts 3.10.0 added legend `position`/`offset`; Aeris has shared top/bottom lanes, outside side gutters, inside side and center/corner insets with bounded offsets and engine hit coordinates; custom-coordinate placement now has chart-width/pane-height pixel or percent coordinates, lower-right anchoring, engine hits, Chromium/Firefox/WebKit canvas input, Canvas2D/WebGPU image-export pixels and GPUI/Canvas2D axis-layer stream parity at 1×, 1.5× and 2× DPR; calibrated GPUI window pixels remain open | Complete the legend/tooltip parity row and calibrated GPUI image evidence | R8 |
 
@@ -1047,13 +1102,37 @@ required for competitive closure.
 
 **Batch:** G8. **Depends on:** R0–R7. **Status:** in progress.
 
-- [ ] Run the complete matrix against the pinned competitor.
-- [ ] Demonstrate financial-only, general-only and combined workloads.
-- [ ] Finish documentation and customization/migration examples.
-- [ ] Export, backend fallback and device-recovery evidence.
+- [ ] Run the complete matrix against the pinned competitor. Automated pairs exist for every
+      row; the manual comparisons below remain.
+- [x] Demonstrate financial-only, general-only and combined workloads (local browser and native
+      evidence above; official-runner results remain manual).
+- [x] Finish documentation and customization/migration examples.
+- [x] Export, backend fallback and device-recovery evidence.
 - [x] Clean-install evidence.
 - [x] Recheck upstream scope; record and assess new upstream features explicitly.
-- [ ] G8 full gate green; release evidence committed and pushed.
+- [x] Maintainer decision on mixed-sign expand stacks: copy Recharts exactly.
+- [x] G8 automation batch full gate green; committed and pushed.
+
+#### Manual phase-closure evidence
+
+These items need a person, hardware or a controlled runner. R8 closes, and matrix rows move to
+**Verified**, only after each one is recorded here with its date, environment and result.
+
+1. Screen-reader session (NVDA or JAWS on Windows, VoiceOver on macOS) over a Cartesian, polar,
+   layout and mixed chart: focus entry, series/row navigation, announcements, legend and brush
+   controls, and the Sankey title/description.
+2. Contrast review of light and dark themes for axis text, legend, tooltip, data labels and focus
+   rings.
+3. Side-by-side screenshot review against the pinned Recharts reference
+   (`/g1_recharts_reference.html`) for each matrix row, in small and large containers, light and
+   dark themes, long/Unicode labels, overflow and active (hover/focus/selected) states.
+4. Calibrated GPUI window captures at DPR 1.5 and 2 (this machine is 1.25) with
+   `npm run test:gpui-webgpu` on a runner whose canonical WebGPU hash matches.
+5. Official-runner `node benchmarks/benchmark.mjs release` on a clean checkout with
+   `AERIS_CHARTS_BENCH_ENV_CLASS=official-benchmark-runner`, then record a baseline and add
+   family budgets (p95 input/frame, steady allocation, retained memory, cold startup, disposal)
+   from it.
+6. Manual touch and keyboard pass on a real touchscreen for legend, brush and selection.
 
 **Exit:** every required matrix row is verified or has a maintainer-approved, clearly documented
 semantic alternative that satisfies the user task. No required family remains demand-deferred.
@@ -1072,7 +1151,7 @@ platform capabilities beyond the competitor's browser rendering model.
 | --- | --- | --- | --- |
 | Standalone and composed charts | Partial | General-only, financial-only and mixed panes; compatible overlays, explicit axes, deterministic ordering and lifecycle | R1, R3 |
 | Line, area, range and scatter/bubble | Partial (items 1–8 delivered; range bars are tracked below) | Linear/step/curved interpolation, gap/connection policy, baselines, symbols, active marks, fills/strokes and error bounds | R3 |
-| Bars and stacks | Partial (range bars delivered) | Both orientations, groups, sizing/gaps, corners, per-item styling, mixed signs, range bars, stack order and required offset modes | R3 |
+| Bars and stacks | Partial (range bars delivered; percent copies Recharts expand exactly by maintainer decision) | Both orientations, groups, sizing/gaps, corners, per-item styling, mixed signs, range bars, stack order and required offset modes | R3 |
 | Box plots and heatmaps | Partial | Preserve existing extra families; complete color domains, legends, missing values and interaction | R3 |
 | Scales and axes | Verified (G2, 2026-10-10); defaults revised in `867029a`, recheck in R8 | Numeric/log/symlog, temporal, category/point, reversed/multiple axes, explicit/auto domains, ticks, formatting, overflow and grid policy | R2 |
 | Pie/donut, radar, radial bar, polar area | Partial | Polar layout, start/end angles, inner/outer radii, padding, labels/leaders, angular/radial axes and interactions | R6 |
@@ -1085,7 +1164,7 @@ platform capabilities beyond the competitor's browser rendering model.
 | Customization | Partial | Per-item styles, symbols, gradients, dash patterns, label/tooltip formatting, bounded custom marks and explicit host-only content boundaries | R3–R5 |
 | Animation | Partial for general transitions | Enter/update/exit and interruption with stable identities, bounded retained state, shared timing semantics and reduced motion | R6 |
 | Accessibility/localization | Partial | Keyboard operation of every family/control, meaningful bounded snapshots, focus retention, announcements, contrast, locale and text measurement | Every phase |
-| Persistence, export and recovery | Partial (mixed V2 restore in three browsers; native mixed frame export; Chromium WebGPU loss fixtures) | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
+| Persistence, export and recovery | Partial (all 46 catalog examples export, restore and survive live WebGPU loss with byte-identical images; native mixed frame export; manual review pending) | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
 | Packaging and migration | Partial | Packed-consumer examples, framework-neutral and React guides, discoverable API, reproducible competitor comparisons | R0, R5, R8 |
 
 ## Scope and parity rules

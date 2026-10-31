@@ -248,19 +248,38 @@ async function stop_frame_recording() {
   return { ...Object.fromEntries(Object.entries(record).filter(([, value]) => Array.isArray(value)).map(([key, value]) => [key, key === "long_task_ms" ? value : value.slice(2)])), duration_ms: performance.now() - record.started, stats: live[0].chart.frame_stats() };
 }
 
-async function prepare_lifecycle(points, seed) {
+// `general` selects the five-series general workload (with `financial_points` candles in a
+// separate pane when positive) instead of one candlestick series.
+function lifecycle_create(fixture) {
+  if (fixture.general === null) return create(fixture.points, fixture.seed, {}, fixture.columns);
+  return create_general(fixture.columns, fixture.financial_columns);
+}
+
+function lifecycle_settle(entry) {
+  // General-only charts have no time scale to fit.
+  if (entry.financial_series === null) return;
+  entry.chart.time_scale().fit_content();
+}
+
+async function prepare_lifecycle(points, seed, general = null) {
   reset();
-  lifecycle_fixture = { points, seed, columns: generate_ohlcv(points, seed) };
-  const warmup = await create(points, seed, {}, lifecycle_fixture.columns);
-  warmup.chart.time_scale().fit_content();
+  lifecycle_fixture = general === null
+    ? { points, seed, general, columns: generate_ohlcv(points, seed) }
+    : { points, seed, general, columns: general_columns(points),
+      financial_columns: general.financial_points > 0 ? generate_ohlcv(general.financial_points, seed) : null };
+  const warmup = await lifecycle_create(lifecycle_fixture);
+  lifecycle_settle(warmup);
   warmup.chart.render();
   await next_frame();
   remove_entry(warmup);
 }
 
-async function lifecycle(points, seed, cycles) {
+async function lifecycle(points, seed, cycles, general = null) {
   reset();
-  if (lifecycle_fixture?.points !== points || lifecycle_fixture?.seed !== seed) throw new Error("lifecycle warm-up fixture is missing");
+  if (lifecycle_fixture?.points !== points || lifecycle_fixture?.seed !== seed ||
+      JSON.stringify(lifecycle_fixture?.general) !== JSON.stringify(general)) {
+    throw new Error("lifecycle warm-up fixture is missing");
+  }
   const baseline = await memory_snapshot(null);
   const wasm_samples = [];
   let peak_page_bytes = baseline.page_bytes;
@@ -268,9 +287,9 @@ async function lifecycle(points, seed, cycles) {
   const page_sample_target = cycles <= 10 ? 1 : Math.min(10, Math.ceil(cycles / 10));
   const page_sample_stride = Math.ceil(cycles / page_sample_target);
   for (let cycle = 0; cycle < cycles; cycle += 1) {
-    const entry = await create(points, seed, {}, lifecycle_fixture.columns);
+    const entry = await lifecycle_create(lifecycle_fixture);
     backend ??= entry.chart.backend();
-    entry.chart.time_scale().fit_content();
+    lifecycle_settle(entry);
     entry.chart.render();
     await next_frame();
     wasm_samples.push(entry.chart.frame_stats().memory_bytes);
@@ -341,10 +360,7 @@ async function multi_series(points, seed, series_counts, pane_counts) {
   return { rows, backend: live[0]?.chart.backend() ?? null };
 }
 
-async function general_dashboard(points, financial_points = 0, seed = 0x02f6e2b1) {
-  reset();
-  const api = await load_package();
-  const container = host();
+function general_columns(points) {
   const rows_per_series = Math.max(1, Math.floor(points / 5));
   const x = new Float64Array(rows_per_series);
   const y = new Float64Array(rows_per_series);
@@ -360,65 +376,97 @@ async function general_dashboard(points, financial_points = 0, seed = 0x02f6e2b1
     high[index] = yv + 4;
     size[index] = 4 + (index % 25);
   }
+  return { rows_per_series, x, y, low, high, size };
+}
 
-  const financial_columns = financial_points > 0
-    ? generate_ohlcv(financial_points, seed)
-    : null;
+// Builds the five-series general workload, optionally beside a financial pane. `after_step` runs
+// after every synchronous public construction or data-install call that repaints.
+async function create_general(columns, financial_columns, after_step = () => {}) {
+  const api = await load_package();
+  const container = host();
   const general_domain = { type: "continuous", scale: "linear" };
-  const started = performance.now();
   const chart = await api.create_chart(container, financial_columns === null
     ? { autoSize: true, initialPane: { horizontal_domain: general_domain } }
     : { autoSize: true });
-  const upload = { gpu_buffer_allocations: 0, gpu_write_calls: 0, gpu_uploaded_bytes: 0, gpu_uploaded_total_bytes: 0 };
-  const capture = () => {
-    const frame = chart.frame_stats();
-    upload.gpu_buffer_allocations += frame.gpu_buffer_allocations;
-    upload.gpu_write_calls += frame.gpu_write_calls;
-    upload.gpu_uploaded_bytes = Math.max(upload.gpu_uploaded_bytes, frame.gpu_uploaded_bytes);
-    upload.gpu_uploaded_total_bytes += frame.gpu_uploaded_bytes;
-    return frame;
-  };
-  capture();
+  after_step(chart);
   let financial_series = null;
   if (financial_columns !== null) {
     financial_series = chart.add_series("candlestick");
-    capture();
+    after_step(chart);
     financial_series.set_data_typed(financial_columns);
-    capture();
+    after_step(chart);
   }
   const pane = financial_columns === null ? chart.panes()[0] : chart.add_pane({
     preserve_empty: true,
     horizontal_domain: general_domain,
   });
-  if (financial_columns !== null) capture();
+  if (financial_columns !== null) after_step(chart);
   chart.add_axis({ id: "bench-general-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
-  capture();
+  after_step(chart);
   chart.add_axis({ id: "bench-general-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
-  capture();
+  after_step(chart);
   const common = { pane: pane.pane_index(), x_axis_id: "bench-general-x", y_axis_id: "bench-general-y" };
   const line = chart.add_series("xy_line", common);
-  capture();
+  after_step(chart);
   const area = chart.add_series("xy_area", common);
-  capture();
+  after_step(chart);
   const range = chart.add_series("range_area", common);
-  capture();
+  after_step(chart);
   const scatter = chart.add_series("scatter", common);
-  capture();
+  after_step(chart);
   const bubble = chart.add_series("bubble", common);
-  capture();
+  after_step(chart);
+  const { x, y, low, high, size } = columns;
   line.set_data_typed({ x, y });
-  capture();
+  after_step(chart);
   area.set_data_typed({ x, y });
-  capture();
+  after_step(chart);
   range.set_data_typed({ x, low, high });
-  capture();
+  after_step(chart);
   scatter.set_data_typed({ x, y });
-  capture();
+  after_step(chart);
   bubble.set_data_typed({ x, y, size });
-  const stats = capture();
+  after_step(chart);
+  const entry = { chart, series: line, container, columns: null, financial_series };
+  live.push(entry);
+  return entry;
+}
+
+const GENERAL_STEADY_REPAINTS = 30;
+
+async function general_dashboard(points, financial_points = 0, seed = 0x02f6e2b1) {
+  reset();
+  await load_package();
+  const columns = general_columns(points);
+  const financial_columns = financial_points > 0
+    ? generate_ohlcv(financial_points, seed)
+    : null;
+  const upload = { gpu_buffer_allocations: 0, gpu_write_calls: 0, gpu_uploaded_bytes: 0, gpu_uploaded_total_bytes: 0 };
+  let stats = null;
+  const capture = (chart) => {
+    const frame = chart.frame_stats();
+    upload.gpu_buffer_allocations += frame.gpu_buffer_allocations;
+    upload.gpu_write_calls += frame.gpu_write_calls;
+    upload.gpu_uploaded_bytes = Math.max(upload.gpu_uploaded_bytes, frame.gpu_uploaded_bytes);
+    upload.gpu_uploaded_total_bytes += frame.gpu_uploaded_bytes;
+    stats = frame;
+  };
+  const started = performance.now();
+  const entry = await create_general(columns, financial_columns, capture);
   await next_frame();
   const startup_ms = performance.now() - started;
-  live.push({ chart, series: line, container, columns: null });
+  const { chart, financial_series } = entry;
+  // Warmed repaints of the unchanged installed workload: retained-frame CPU and steady-state
+  // GPU allocation, measured after startup so the startup metrics keep their methodology.
+  const steady = { frame_cpu_ms: [], gpu_buffer_allocations: [], gpu_uploaded_bytes: [] };
+  for (let index = 0; index < GENERAL_STEADY_REPAINTS; index += 1) {
+    chart.render();
+    const frame = chart.frame_stats();
+    steady.frame_cpu_ms.push(frame.cpu_ms);
+    steady.gpu_buffer_allocations.push(frame.gpu_buffer_allocations);
+    steady.gpu_uploaded_bytes.push(frame.gpu_uploaded_bytes);
+    await next_frame();
+  }
   return {
     startup_ms,
     frame_cpu_ms: stats.cpu_ms,
@@ -427,8 +475,9 @@ async function general_dashboard(points, financial_points = 0, seed = 0x02f6e2b1
     gpu_write_calls: upload.gpu_write_calls,
     gpu_uploaded_bytes: upload.gpu_uploaded_bytes,
     gpu_uploaded_total_bytes: upload.gpu_uploaded_total_bytes,
+    steady,
     backend: chart.backend(),
-    rows_per_series,
+    rows_per_series: columns.rows_per_series,
     series_count: 5 + (financial_series === null ? 0 : 1),
     pane_count: chart.panes().length,
     financial_points,

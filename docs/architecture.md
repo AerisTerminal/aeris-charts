@@ -394,8 +394,8 @@ category band scale to Y; category Y autoscale is engine-owned and the numeric X
 autoscale. Bar layout options carry bounded `group_id`/`stack_id` state without creating renderer-specific
 primitives. Visible members of one group subdivide each category band, while one stack consumes one group
 slot. Normal stacks accumulate positive and negative values independently from zero and contribute their
-summed category extents to the oriented numeric-axis autoscale; percent stacks normalize each category independently to `+1` and
-`-1`. Horizontal stacks apply the same rules on numeric X; vertical stacks apply them on numeric Y.
+summed category extents to the oriented numeric-axis autoscale; percent stacks follow d3/Recharts `expand`: each
+value divides by its position's signed total, all values share one running boundary, and the automatic domain is `0..1`. Horizontal stacks apply the same rules on numeric X; vertical stacks apply them on numeric Y.
 Positive-only stacks retain negative source rows but omit their marks and domain contribution.
 Cumulative stacks add signed values onto the preceding boundary in series order; numeric autoscale
 includes every intermediate prefix, and only the final nonzero bar mark in each category receives
@@ -552,7 +552,9 @@ general rows plus 20k financial candles. General-only startup through the next r
 2,000 ms p50 ceiling and its largest single synchronous construction or data-install WebGPU vertex
 upload has a 96 MiB p50 ceiling; the release workflow evaluates these through the same versioned
 `budgets.json` policy as artifact-size ceilings. The benchmark also records cumulative uploads across
-those repaints.
+those repaints, then samples 30 warmed unchanged repaints for steady-state frame CPU, allocation, and
+upload. Separate general-only and mixed lifecycle scenarios repeat create/load/destroy cycles and record
+WASM linear memory and whole-page retention, as the financial lifecycle scenarios do.
 Dataset replacement remains atomic against every bound series and cannot change a bound path/scatter/bubble
 X kind or drop a bound bubble size or range low channel. Canvas2D, retained
 WebGPU, GPUI, and the native tiny-skia rasterizer consume the same frame contract; grouped/stacked columns

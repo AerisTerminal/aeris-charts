@@ -221,6 +221,9 @@ pub enum GeneralStackMode {
     Silhouette,
     /// Shift a cumulative stack baseline to reduce weighted vertical movement.
     Wiggle,
+    /// Divide each value by its position's signed stack total, stack every value on one
+    /// running boundary, and fix the automatic value domain to 0..1 (d3/Recharts `expand`).
+    /// Mixed-sign positions can overshoot that domain and are clipped like the reference.
     Percent,
     /// Stack positive values from zero and suppress negative marks.
     Positive,
@@ -3556,7 +3559,10 @@ impl ChartEngine {
             .then(|| vec![(0.0_f64, 0.0_f64); axis_categories.len()]);
         let mut stack_last = (matches!(
             series.stack_mode,
-            GeneralStackMode::Cumulative | GeneralStackMode::Silhouette | GeneralStackMode::Wiggle
+            GeneralStackMode::Cumulative
+                | GeneralStackMode::Silhouette
+                | GeneralStackMode::Wiggle
+                | GeneralStackMode::Percent
         ))
         .then(|| vec![None; axis_categories.len()]);
         if series.stack_id.is_some()
@@ -3571,7 +3577,7 @@ impl ChartEngine {
                         sibling,
                         &axis_lookup,
                         |axis_index, row, value| {
-                            if value >= 0.0 {
+                            if value >= 0.0 || series.stack_mode == GeneralStackMode::Percent {
                                 totals[axis_index].0 += value;
                             } else {
                                 totals[axis_index].1 += -value;
@@ -3603,6 +3609,7 @@ impl ChartEngine {
                             GeneralStackMode::Cumulative
                                 | GeneralStackMode::Silhouette
                                 | GeneralStackMode::Wiggle
+                                | GeneralStackMode::Percent
                         )
                     {
                         base[axis_index].0 += value;
@@ -3615,11 +3622,9 @@ impl ChartEngine {
                 && let (Some(base), Some(totals)) = (stack_base.as_mut(), stack_totals.as_ref())
             {
                 for (base, total) in base.iter_mut().zip(totals) {
-                    if total.0 > 0.0 {
+                    // A position whose values sum to zero keeps its raw values, as in d3.
+                    if total.0 != 0.0 {
                         base.0 /= total.0;
-                    }
-                    if total.1 > 0.0 {
-                        base.1 /= total.1;
                     }
                 }
             }
@@ -3683,15 +3688,13 @@ impl ChartEngine {
             }
             let (from_value, to_value) = if series.stack_id.is_some() {
                 let normalized_value = match stack_totals.as_ref() {
-                    Some(totals)
-                        if series.stack_mode == GeneralStackMode::Percent && raw_value >= 0.0 =>
-                    {
-                        let total = totals[axis_index].0;
-                        if total > 0.0 { raw_value / total } else { 0.0 }
-                    }
                     Some(totals) if series.stack_mode == GeneralStackMode::Percent => {
-                        let total = totals[axis_index].1;
-                        if total > 0.0 { raw_value / total } else { 0.0 }
+                        let total = totals[axis_index].0;
+                        if total != 0.0 {
+                            raw_value / total
+                        } else {
+                            raw_value
+                        }
                     }
                     _ => raw_value,
                 };
@@ -3704,6 +3707,7 @@ impl ChartEngine {
                         GeneralStackMode::Cumulative
                             | GeneralStackMode::Silhouette
                             | GeneralStackMode::Wiggle
+                            | GeneralStackMode::Percent
                     ) {
                     &mut stack_base[axis_index].0
                 } else {
@@ -3739,6 +3743,7 @@ impl ChartEngine {
                     GeneralStackMode::Cumulative
                         | GeneralStackMode::Silhouette
                         | GeneralStackMode::Wiggle
+                        | GeneralStackMode::Percent
                 ) {
                     stack_last.as_ref().and_then(|last| last[axis_index]) == Some((series.id, row))
                 } else {
@@ -4016,7 +4021,10 @@ impl ChartEngine {
             .then(|| vec![(0.0_f64, 0.0_f64); axis_categories.len()]);
         let mut stack_last = (matches!(
             series.stack_mode,
-            GeneralStackMode::Cumulative | GeneralStackMode::Silhouette | GeneralStackMode::Wiggle
+            GeneralStackMode::Cumulative
+                | GeneralStackMode::Silhouette
+                | GeneralStackMode::Wiggle
+                | GeneralStackMode::Percent
         ))
         .then(|| vec![None; axis_categories.len()]);
         if series.stack_id.is_some()
@@ -4031,7 +4039,7 @@ impl ChartEngine {
                         sibling,
                         &axis_lookup,
                         |axis_index, row, value| {
-                            if value >= 0.0 {
+                            if value >= 0.0 || series.stack_mode == GeneralStackMode::Percent {
                                 totals[axis_index].0 += value;
                             } else {
                                 totals[axis_index].1 += -value;
@@ -4061,6 +4069,7 @@ impl ChartEngine {
                             GeneralStackMode::Cumulative
                                 | GeneralStackMode::Silhouette
                                 | GeneralStackMode::Wiggle
+                                | GeneralStackMode::Percent
                         )
                     {
                         base[axis_index].0 += value;
@@ -4073,11 +4082,9 @@ impl ChartEngine {
                 && let (Some(base), Some(totals)) = (stack_base.as_mut(), stack_totals.as_ref())
             {
                 for (base, total) in base.iter_mut().zip(totals) {
-                    if total.0 > 0.0 {
+                    // A position whose values sum to zero keeps its raw values, as in d3.
+                    if total.0 != 0.0 {
                         base.0 /= total.0;
-                    }
-                    if total.1 > 0.0 {
-                        base.1 /= total.1;
                     }
                 }
             }
@@ -4144,15 +4151,13 @@ impl ChartEngine {
             }
             let (from_value, to_value) = if series.stack_id.is_some() {
                 let normalized_value = match stack_totals.as_ref() {
-                    Some(totals)
-                        if series.stack_mode == GeneralStackMode::Percent && raw_value >= 0.0 =>
-                    {
-                        let total = totals[axis_index].0;
-                        if total > 0.0 { raw_value / total } else { 0.0 }
-                    }
                     Some(totals) if series.stack_mode == GeneralStackMode::Percent => {
-                        let total = totals[axis_index].1;
-                        if total > 0.0 { raw_value / total } else { 0.0 }
+                        let total = totals[axis_index].0;
+                        if total != 0.0 {
+                            raw_value / total
+                        } else {
+                            raw_value
+                        }
                     }
                     _ => raw_value,
                 };
@@ -4165,6 +4170,7 @@ impl ChartEngine {
                         GeneralStackMode::Cumulative
                             | GeneralStackMode::Silhouette
                             | GeneralStackMode::Wiggle
+                            | GeneralStackMode::Percent
                     ) {
                     &mut stack_base[axis_index].0
                 } else {
@@ -4200,6 +4206,7 @@ impl ChartEngine {
                     GeneralStackMode::Cumulative
                         | GeneralStackMode::Silhouette
                         | GeneralStackMode::Wiggle
+                        | GeneralStackMode::Percent
                 ) {
                     stack_last.as_ref().and_then(|last| last[axis_index]) == Some((series.id, row))
                 } else {
@@ -4617,12 +4624,8 @@ impl ChartEngine {
                             extend_numeric_pair(&mut bounds, negative);
                         }
                         GeneralStackMode::Percent => {
-                            if positive > 0.0 {
-                                extend_numeric_pair(&mut bounds, 1.0);
-                            }
-                            if negative < 0.0 {
-                                extend_numeric_pair(&mut bounds, -1.0);
-                            }
+                            extend_numeric_pair(&mut bounds, 0.0);
+                            extend_numeric_pair(&mut bounds, 1.0);
                         }
                         GeneralStackMode::Positive => extend_numeric_pair(&mut bounds, positive),
                         GeneralStackMode::Cumulative => {}
@@ -4731,12 +4734,8 @@ impl ChartEngine {
                             extend_numeric_pair(&mut bounds, negative);
                         }
                         GeneralStackMode::Percent => {
-                            if positive > 0.0 {
-                                extend_numeric_pair(&mut bounds, 1.0);
-                            }
-                            if negative < 0.0 {
-                                extend_numeric_pair(&mut bounds, -1.0);
-                            }
+                            extend_numeric_pair(&mut bounds, 0.0);
+                            extend_numeric_pair(&mut bounds, 1.0);
                         }
                         GeneralStackMode::Positive => extend_numeric_pair(&mut bounds, positive),
                         GeneralStackMode::Cumulative => {}
@@ -4845,12 +4844,8 @@ impl ChartEngine {
                         }
                     }
                     GeneralStackMode::Percent => {
-                        if positive > 0.0 {
-                            extend_numeric_pair(&mut bounds, 1.0);
-                        }
-                        if negative > 0.0 {
-                            extend_numeric_pair(&mut bounds, -1.0);
-                        }
+                        extend_numeric_pair(&mut bounds, 0.0);
+                        extend_numeric_pair(&mut bounds, 1.0);
                     }
                     GeneralStackMode::Positive => {
                         if positive > 0.0 {
@@ -4921,7 +4916,12 @@ impl ChartEngine {
             {
                 accumulate_area_values(self, sibling, |x, value| {
                     let total = totals.entry(x).or_default();
-                    if value >= 0.0 || series.stack_mode == GeneralStackMode::Silhouette {
+                    if value >= 0.0
+                        || matches!(
+                            series.stack_mode,
+                            GeneralStackMode::Silhouette | GeneralStackMode::Percent
+                        )
+                    {
                         total.0 += value;
                     } else {
                         total.1 += -value;
@@ -4947,6 +4947,7 @@ impl ChartEngine {
                         GeneralStackMode::Cumulative
                             | GeneralStackMode::Silhouette
                             | GeneralStackMode::Wiggle
+                            | GeneralStackMode::Percent
                     )
                 {
                     entry.0 += value;
@@ -4960,11 +4961,8 @@ impl ChartEngine {
         {
             for (x, base) in &mut base {
                 let total = totals.get(x).copied().unwrap_or_default();
-                if total.0 > 0.0 {
+                if total.0 != 0.0 {
                     base.0 /= total.0;
-                }
-                if total.1 > 0.0 {
-                    base.1 /= total.1;
                 }
             }
         }
@@ -4989,10 +4987,8 @@ impl ChartEngine {
                 } else {
                     match totals.as_ref().and_then(|values| values.get(&x_key)) {
                         _ if series.stack_mode != GeneralStackMode::Percent => raw_value,
-                        Some(total) if raw_value >= 0.0 && total.0 > 0.0 => raw_value / total.0,
-                        Some(total) if raw_value < 0.0 && total.1 > 0.0 => raw_value / total.1,
-                        Some(_) => 0.0,
-                        None => raw_value,
+                        Some(total) if total.0 != 0.0 => raw_value / total.0,
+                        _ => raw_value,
                     }
                 };
             let stack_base = base.get(&x_key).copied().unwrap_or_default();
@@ -5004,7 +5000,12 @@ impl ChartEngine {
                         .as_ref()
                         .and_then(|values| values.get(&x_key))
                         .map_or(0.0, |total| total.0 * 0.5)
-            } else if raw_value >= 0.0 || series.stack_mode == GeneralStackMode::Cumulative {
+            } else if raw_value >= 0.0
+                || matches!(
+                    series.stack_mode,
+                    GeneralStackMode::Cumulative | GeneralStackMode::Percent
+                )
+            {
                 stack_base.0
             } else {
                 stack_base.1
@@ -9229,12 +9230,7 @@ fn bar_end_exposed(
     } else {
         negative_magnitude
     };
-    let target = if series.stack_mode == GeneralStackMode::Percent {
-        1.0
-    } else {
-        magnitude
-    };
-    target > 0.0 && end_value.abs() >= target - target.max(1.0) * 1e-12
+    magnitude > 0.0 && end_value.abs() >= magnitude - magnitude.max(1.0) * 1e-12
 }
 
 fn bar_thickness_bounds(

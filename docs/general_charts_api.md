@@ -308,7 +308,9 @@ to a numeric Y axis; horizontal bars reuse the same category/value rows with a n
 Grouped bars subdivide the category band; matching stacked bars occupy one group slot. Stacked areas align members by exact X identity across
 numeric, temporal, and category domains and fill between the preceding cumulative boundary and the new
 cumulative boundary. `stack_mode: "normal"` uses independent positive/negative accumulation around zero,
-while `stack_mode: "percent"` normalizes positive and negative totals independently to `+1`/`-1`.
+while `stack_mode: "percent"` follows d3/Recharts `expand`: each value is divided by its position's
+signed total (a zero total keeps raw values), all values stack on one running boundary, and the
+automatic value domain is fixed to `0..1`. Mixed-sign positions can overshoot that domain and are clipped.
 `stack_mode: "positive"` stacks values above zero and suppresses negative marks; their source
 rows remain available to data queries. Every nondefault mode requires a stack ID.
 `stack_mode: "cumulative"` adds signed values onto the preceding boundary in series order, so

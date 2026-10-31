@@ -31,6 +31,10 @@ async function collect_cdp(session) {
   return { task_duration_seconds: values.TaskDuration ?? null, js_heap_used_bytes: heap.usedSize ?? null };
 }
 
+function lifecycle_general(scenario) {
+  return scenario.kind === "general_lifecycle" ? { financial_points: scenario.financial_points ?? 0 } : null;
+}
+
 function scalar(name, value, unit, direction, visibility, methodology) {
   return { [name]: metric([value], unit, direction, visibility, methodology) };
 }
@@ -39,13 +43,16 @@ function samples(name, values, unit, direction, visibility, methodology, availab
   return { [name]: metric(values, unit, direction, visibility, methodology, availability) };
 }
 
+const general_kinds = new Set(["general_dashboard", "general_lifecycle"]);
+
 function scenario_dataset(scenario) {
-  const mixed = scenario.kind === "general_dashboard" && (scenario.financial_points ?? 0) > 0;
+  const general = general_kinds.has(scenario.kind);
+  const mixed = general && (scenario.financial_points ?? 0) > 0;
   const dataset = dataset_metadata((scenario.points ?? 0) + (mixed ? scenario.financial_points : 0), seed, {
-    series_count: scenario.kind === "general_dashboard" ? (mixed ? 6 : 5) : scenario.series_counts?.at(-1) ?? 1,
-    pane_count: scenario.kind === "general_dashboard" ? (mixed ? 2 : 1) : scenario.pane_counts?.at(-1) ?? 1,
+    series_count: general ? (mixed ? 6 : 5) : scenario.series_counts?.at(-1) ?? 1,
+    pane_count: general ? (mixed ? 2 : 1) : scenario.pane_counts?.at(-1) ?? 1,
   });
-  if (scenario.kind === "general_dashboard") {
+  if (general) {
     dataset.data_type = mixed ? "deterministic_general_cartesian_and_ohlcv" : "deterministic_general_cartesian";
     dataset.configuration = { general_points: scenario.points, financial_points: scenario.financial_points ?? 0 };
   }
@@ -133,8 +140,8 @@ async function run_page_scenario(page, scenario) {
       ...samples("ring_overruns", rows.map((row) => row.ring_overruns), "count", "lower_is_better", "internal", "Ring overrun counter per measured run; expected zero because this scenario uses explicit public updates."),
     } };
   }
-  if (scenario.kind === "lifecycle") {
-    const result = await page.evaluate((input) => globalThis.__Aeris_bench.lifecycle(input.points, input.seed, input.cycles), { ...scenario, seed });
+  if (scenario.kind === "lifecycle" || scenario.kind === "general_lifecycle") {
+    const result = await page.evaluate((input) => globalThis.__Aeris_bench.lifecycle(input.points, input.seed, input.cycles, input.general), { ...scenario, seed, general: lifecycle_general(scenario) });
     const metrics = {
       ...samples("wasm_linear_memory_bytes", result.wasm_linear_memory_samples, "bytes", "lower_is_better", "internal", "Global WASM linear memory after each loaded chart; linear memory does not shrink and is not chart-attributable RAM."),
       ...scalar("loaded_page_memory_probe_count", result.loaded_page_memory_sample_count, "count", "informational", "internal", "Configured evenly spaced whole-page memory probes while charts are loaded; initial and final probes are additional."),
@@ -223,6 +230,9 @@ async function run_page_scenario(page, scenario) {
         ...samples("gpu_write_calls", rows.map((row) => row.gpu_write_calls), "count", "lower_is_better", "internal", "WebGPU queue buffer writes summed over every synchronous construction and data-install repaint."),
         ...samples("gpu_uploaded_bytes", rows.map((row) => row.gpu_uploaded_bytes), "bytes", "lower_is_better", "internal", "Peak WebGPU vertex bytes uploaded by one construction or data-install repaint."),
         ...samples("gpu_uploaded_total_bytes", rows.map((row) => row.gpu_uploaded_total_bytes), "bytes", "lower_is_better", "internal", "Total WebGPU vertex bytes uploaded over synchronous construction and data-install repaints."),
+        ...samples("steady_repaint_frame_cpu_ms", rows.flatMap((row) => row.steady.frame_cpu_ms), "ms", "lower_is_better", "public_candidate", "Engine/frame CPU of each warmed public render request of the unchanged installed workload, pooled over measured runs."),
+        ...samples("steady_repaint_gpu_buffer_allocations", rows.flatMap((row) => row.steady.gpu_buffer_allocations), "count", "lower_is_better", "internal", "WebGPU vertex-buffer allocations per warmed unchanged repaint; steady state should allocate nothing."),
+        ...samples("steady_repaint_gpu_uploaded_bytes", rows.flatMap((row) => row.steady.gpu_uploaded_bytes), "bytes", "lower_is_better", "internal", "WebGPU vertex bytes uploaded per warmed unchanged repaint."),
       },
     };
   }
@@ -361,8 +371,8 @@ export async function run_browser_scenarios(scenarios) {
           const session = await context.newCDPSession(page);
           await session.send("Performance.enable");
           await session.send("HeapProfiler.collectGarbage");
-          if (scenario.kind === "lifecycle") {
-            await page.evaluate((input) => globalThis.__Aeris_bench.prepare_lifecycle(input.points, input.seed), { ...scenario, seed });
+          if (scenario.kind === "lifecycle" || scenario.kind === "general_lifecycle") {
+            await page.evaluate((input) => globalThis.__Aeris_bench.prepare_lifecycle(input.points, input.seed, input.general), { ...scenario, seed, general: lifecycle_general(scenario) });
             await session.send("HeapProfiler.collectGarbage");
           }
           const before = await collect_cdp(session);
@@ -371,7 +381,7 @@ export async function run_browser_scenarios(scenarios) {
           const after = await collect_cdp(session);
           cpu_seconds = before.task_duration_seconds === null || after.task_duration_seconds === null || ["multi_chart", "multi_series"].includes(scenario.kind) ? null : after.task_duration_seconds - before.task_duration_seconds;
           js_heap_used_bytes = after.js_heap_used_bytes;
-          if (scenario.kind === "lifecycle" && before.js_heap_used_bytes !== null && after.js_heap_used_bytes !== null) {
+          if ((scenario.kind === "lifecycle" || scenario.kind === "general_lifecycle") && before.js_heap_used_bytes !== null && after.js_heap_used_bytes !== null) {
             Object.assign(result.metrics, scalar("browser_js_heap_retained_delta_bytes", after.js_heap_used_bytes - before.js_heap_used_bytes, "bytes", "lower_is_better", "public_candidate", "Chromium whole-page JS heap after minus before repeated lifecycle cycles; both samples follow DevTools forced GC."));
             result.forced_gc = true;
           }

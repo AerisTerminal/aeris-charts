@@ -2289,7 +2289,7 @@ test("pinned mixed-sign expand clips overshooting bars and omits top segments", 
   expect(Math.abs(base[3].top - top[1].bottom)).toBeLessThan(0.1);
 });
 
-test("Aeris mixed-sign percent keeps every positive and negative segment visible", async ({ page }) => {
+test("Aeris mixed-sign percent clips overshooting bars like the pinned expand", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
     const { create_chart } = await import("/dist/aeris_charts_financial.js");
@@ -2344,16 +2344,18 @@ test("Aeris mixed-sign percent keeps every positive and negative segment visible
   });
   expect(result.panes).toBe(1);
   expect(result.state).toEqual(["Percent", "Percent"]);
+  // The signed-total division pushes A and B past the fixed 0..1 domain: their base bars fill
+  // the plot and their top segments paint nothing, matching the pinned reference.
   expect(result.visible.map(({ key }) => key).sort()).toEqual([
-    "base:A", "base:B", "base:C", "base:D",
-    "top:A", "top:B", "top:C", "top:D",
+    "base:A", "base:B", "base:C", "base:D", "top:C", "top:D",
   ]);
   const get = (key) => result.visible.find((mark) => mark.key === key);
-  const zero = get("base:A").max_y;
-  expect(Math.abs(zero - get("top:A").min_y)).toBeLessThanOrEqual(2);
-  expect(Math.abs(zero - get("base:B").min_y)).toBeLessThanOrEqual(2);
-  expect(Math.abs(zero - get("top:B").max_y)).toBeLessThanOrEqual(2);
-  expect(Math.abs(get("base:C").max_y - get("top:C").min_y)).toBeLessThanOrEqual(2);
+  expect(Math.abs(get("base:A").min_y - get("base:B").min_y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(get("base:A").max_y - get("base:B").max_y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(get("base:A").max_y - get("base:C").max_y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(get("base:C").min_y - get("top:C").max_y)).toBeLessThanOrEqual(2);
+  expect(Math.abs(get("base:D").min_y - get("top:D").max_y)).toBeLessThanOrEqual(2);
+  expect(Math.abs(get("top:C").min_y - get("base:A").min_y)).toBeLessThanOrEqual(2);
   for (const mark of result.visible) {
     if (mark.key.startsWith("base:")) expect(mark.color[2]).toBeGreaterThan(mark.color[0]);
     else expect(mark.color[1]).toBeGreaterThan(mark.color[0]);
@@ -3484,14 +3486,16 @@ test("Aeris preformatted French ticks enter the portable frame without changing 
   expect(result.panes).toBe(1);
 });
 
-async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = false) {
+async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = false,
+  loseAfterInstall = false) {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
-  return page.evaluate(async ({ requestedBackend, onlyId, loseWebGpu }) => {
+  return page.evaluate(async ({ requestedBackend, onlyId, loseWebGpu, loseAfterInstall }) => {
     const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const settle = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     // Charts created after a loss get a recreated shared device, so each chart under test loses
     // its own device to exercise the Canvas2D fallback path.
-    const lose_device = (target, label) => {
-      if (!loseWebGpu) return;
+    const lose_device = (target, label, force = false) => {
+      if (!loseWebGpu && !force) return;
       if (target.backend() !== "webgpu") throw new Error(`${label} did not start on WebGPU`);
       target.wasm.simulate_device_loss_for_test();
       target.render();
@@ -3521,14 +3525,16 @@ async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = 
         for (const axis of example.axes ?? []) chart.add_axis({ ...axis, pane: 0 });
         chart.render();
         const empty = chart.take_screenshot().toDataURL("image/png");
+        const handles = [];
         for (const { kind, data, ...options } of example.series ?? []) {
           const series = chart.add_series(kind, {
             x_axis_id: "x", y_axis_id: "y", ...options, pane: 0,
           });
           series.set_data(data);
+          handles.push(series);
         }
         for (const { kind, data, ...options } of example.layout_series ?? []) {
-          chart.add_layout_series(kind, { ...options, pane: 0 }, data);
+          handles.push(chart.add_layout_series(kind, { ...options, pane: 0 }, data));
         }
         for (const reference of example.references ?? []) {
           chart.add_general_reference({ ...reference, pane: 0 });
@@ -3543,6 +3549,23 @@ async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = 
         const image = chart.take_screenshot();
         const imageUrl = image.toDataURL("image/png");
         const changed = imageUrl !== empty;
+        let recovery = null;
+        if (loseAfterInstall) {
+          lose_device(chart, `${example.id} live`, true);
+          chart.render();
+          await settle();
+          const lostSame = chart.take_screenshot().toDataURL("image/png") === imageUrl;
+          const last = handles[handles.length - 1];
+          last.set_visible(false);
+          chart.render();
+          await settle();
+          const hiddenChanged = chart.take_screenshot().toDataURL("image/png") !== imageUrl;
+          last.set_visible(true);
+          chart.render();
+          await settle();
+          const shownSame = chart.take_screenshot().toDataURL("image/png") === imageUrl;
+          recovery = { lostSame, hiddenChanged, shownSame, backend: chart.backend() };
+        }
         const restoreHost = document.createElement("div");
         restoreHost.style.cssText = host.style.cssText;
         document.body.appendChild(restoreHost);
@@ -3573,7 +3596,7 @@ async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = 
           restoredCanvases = restoreHost.querySelectorAll("canvas").length;
           restoreHost.remove();
         }
-        results.push({ id: example.id, backend: chart.backend(), changed, restoredSame, restoredStateSame,
+        results.push({ id: example.id, backend: chart.backend(), changed, recovery, restoredSame, restoredStateSame,
           restoredCanvases, width: image.width, height: image.height,
           kinds: [...(example.series ?? []), ...(example.layout_series ?? [])]
             .map((series) => series.kind) });
@@ -3585,7 +3608,7 @@ async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = 
       results[results.length - 1].remainingCanvases = remainingCanvases;
     }
     return results;
-  }, { requestedBackend: backend, onlyId, loseWebGpu });
+  }, { requestedBackend: backend, onlyId, loseWebGpu, loseAfterInstall });
 }
 
 for (const backend of ["canvas2d", "webgpu"]) {
@@ -3613,6 +3636,24 @@ for (const backend of ["canvas2d", "webgpu"]) {
   });
 }
 
+
+test("all catalog families keep their live image and accept updates across WebGPU loss", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "WebGPU test adapter is configured in Chromium");
+  test.setTimeout(180_000);
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const results = await audit_catalog_exports(page, "webgpu", null, false, true);
+  expect(errors).toEqual([]);
+  expect(results).toHaveLength(46);
+  const failed = (key) => results.filter((entry) => !entry.recovery?.[key]).map((entry) => entry.id);
+  expect(failed("lostSame"), "export before and after loss must be byte-identical").toEqual([]);
+  expect(failed("hiddenChanged"), "a post-loss visibility update must repaint").toEqual([]);
+  expect(failed("shownSame"), "re-showing the series must restore the pre-loss image").toEqual([]);
+  for (const entry of results) {
+    expect(entry, entry.id).toMatchObject({ backend: "canvas2d", changed: true,
+      recovery: { backend: "canvas2d" }, remainingCanvases: 0, restoredCanvases: 0 });
+  }
+});
 
 test("all catalog families restore and dispose after WebGPU device loss", async ({ page, browserName }) => {
   test.skip(browserName !== "chromium", "WebGPU test adapter is configured in Chromium");

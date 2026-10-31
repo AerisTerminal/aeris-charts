@@ -8222,7 +8222,7 @@ fn percent_stacked_columns_normalize_each_category_and_validate_stack_contract()
     );
     assert_eq!(
         chart.general_axis_effective_domain("percent-y"),
-        Some(GeneralAxisDomain::Numeric([-1.0, 1.0]))
+        Some(GeneralAxisDomain::Numeric([0.0, 1.0]))
     );
 
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
@@ -8235,10 +8235,11 @@ fn percent_stacked_columns_normalize_each_category_and_validate_stack_contract()
         second_geometry.push(geometry)
     });
     assert!((second_geometry[0].bottom - first_geometry[0].top).abs() < 1e-9);
-    assert!((second_geometry[1].top - first_geometry[1].bottom).abs() < 1e-9);
+    // An all-negative category divides by its negative total, so its shares stack upward.
+    assert!((second_geometry[1].bottom - first_geometry[1].top).abs() < 1e-9);
     let plot = chart.general_plot_rect(pane).unwrap();
     assert!((second_geometry[0].top - plot.y).abs() < 1e-9);
-    assert!((second_geometry[1].bottom - (plot.y + plot.height)).abs() < 1e-9);
+    assert!((second_geometry[1].top - plot.y).abs() < 1e-9);
 
     let mut incompatible = GeneralSeriesOptions::column(pane, dataset_b, "percent-x", "percent-y");
     incompatible.group_id = Some("other".into());
@@ -8248,6 +8249,89 @@ fn percent_stacked_columns_normalize_each_category_and_validate_stack_contract()
         chart.add_general_series(incompatible).is_ok(),
         "the same stack label in a different group is a distinct stack"
     );
+}
+
+#[test]
+fn percent_stacks_follow_recharts_expand_for_mixed_signs() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "expand-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "expand-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let names: Vec<String> = ["A", "B", "C", "D"].into_iter().map(Into::into).collect();
+    let mut add = |values: Vec<f64>| {
+        let dataset = chart
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: None,
+                categories: names.clone(),
+                category_indices: vec![0, 1, 2, 3],
+                y: values,
+                y_valid: None,
+            })
+            .unwrap();
+        let mut options = GeneralSeriesOptions::column(pane, dataset, "expand-x", "expand-y");
+        options.stack_id = Some("s".into());
+        options.stack_mode = GeneralStackMode::Percent;
+        chart.add_general_series(options).unwrap()
+    };
+    let base = add(vec![12.0, -18.0, -14.0, 24.0]);
+    let top = add(vec![-8.0, 11.0, -16.0, 19.0]);
+    assert_eq!(
+        chart.general_axis_effective_domain("expand-y"),
+        Some(GeneralAxisDomain::Numeric([0.0, 1.0]))
+    );
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let plot = chart.general_plot_rect(pane).unwrap();
+    let plot_bottom = plot.y + plot.height;
+    let mut base_geometry = Vec::new();
+    chart.visit_general_columns(chart.general_series(base).unwrap(), |geometry| {
+        base_geometry.push(geometry)
+    });
+    let mut top_geometry = Vec::new();
+    chart.visit_general_columns(chart.general_series(top).unwrap(), |geometry| {
+        top_geometry.push(geometry)
+    });
+    // A (12/4 = 3) and B (-18/-7) overshoot the fixed domain: their base bars fill the plot and
+    // their top segments lie entirely above it, so they paint nothing.
+    assert_eq!(
+        base_geometry.iter().map(|g| g.row).collect::<Vec<_>>(),
+        [0, 1, 2, 3]
+    );
+    assert_eq!(
+        top_geometry.iter().map(|g| g.row).collect::<Vec<_>>(),
+        [2, 3]
+    );
+    for geometry in &base_geometry[..2] {
+        assert!((geometry.top - plot.y).abs() < 1e-9);
+        assert!((geometry.bottom - plot_bottom).abs() < 1e-9);
+    }
+    // C (-14, -16) divides by its negative total and stacks upward to exactly one.
+    let c_share = 14.0 / 30.0;
+    assert!((base_geometry[2].top - (plot_bottom - plot.height * c_share)).abs() < 1e-9);
+    assert!((top_geometry[0].bottom - base_geometry[2].top).abs() < 1e-9);
+    assert!((top_geometry[0].top - plot.y).abs() < 1e-9);
+    assert!((top_geometry[1].bottom - base_geometry[3].top).abs() < 1e-9);
+    assert!(top_geometry.iter().all(|g| g.exposed_end));
 }
 
 #[test]
@@ -8611,7 +8695,7 @@ fn horizontal_bar_groups_split_band_and_percent_stacks_normalize() {
     let b = chart.add_general_series(b).unwrap();
     assert_eq!(
         chart.general_axis_effective_domain("percent-bar-x"),
-        Some(GeneralAxisDomain::Numeric([-1.0, 1.0]))
+        Some(GeneralAxisDomain::Numeric([0.0, 1.0]))
     );
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
     let mut a_geometry = Vec::new();
@@ -8624,9 +8708,9 @@ fn horizontal_bar_groups_split_band_and_percent_stacks_normalize() {
     });
     let plot = chart.general_plot_rect(percent_pane).unwrap();
     assert!((b_geometry[0].right - plot.width).abs() < 1e-9);
-    assert!(b_geometry[1].left.abs() < 1e-9);
+    assert!((b_geometry[1].right - plot.width).abs() < 1e-9);
     assert!((b_geometry[0].left - a_geometry[0].right).abs() < 1e-9);
-    assert!((b_geometry[1].right - a_geometry[1].left).abs() < 1e-9);
+    assert!((b_geometry[1].left - a_geometry[1].right).abs() < 1e-9);
 }
 
 #[test]
@@ -10412,7 +10496,7 @@ fn xy_area_stacks_by_x_identity_with_normal_and_percent_geometry() {
     let b = chart.add_general_series(b).unwrap();
     assert_eq!(
         chart.general_axis_effective_domain("percent-area-y"),
-        Some(GeneralAxisDomain::Numeric([-1.0, 1.0]))
+        Some(GeneralAxisDomain::Numeric([0.0, 1.0]))
     );
     let mut incompatible =
         GeneralSeriesOptions::xy_area(percent_pane, dataset_b, "percent-area-x", "percent-area-y");

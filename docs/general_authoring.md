@@ -154,16 +154,24 @@ are available through `create_general_legend`, `create_general_tooltip`, and
 | `Cell fill` on each `Bar` and a rounded positive top | Row `color` on each `column` and `bar_corner_radius` on the series; Aeris rounds the exposed end of negative bars too |
 | `Legend` / `Tooltip` / range selection UI | `GeneralLegend` / `GeneralTooltip` / `GeneralBrushControls` |
 | `Bar` series sharing a `stackId` with `stackOffset="sign"` | `column` or `horizontal_bar` series sharing `stack_id`, with `stack_mode: "normal"` to separate positive and negative totals at zero |
-| Positive `Bar` stacks with `stackOffset="expand"` | Shared `stack_id` and `stack_mode: "percent"`; segment shares sum to 1 in each category |
+| `Bar` stacks with `stackOffset="expand"` | Shared `stack_id` and `stack_mode: "percent"`; each value is divided by its category's signed total over a fixed `0..1` axis |
 | `Bar` stacks with `stackOffset="positive"` | Shared `stack_id` and `stack_mode: "positive"`; negative source rows remain queryable but have no painted segment |
 | `Bar` stacks with `stackOffset="none"` | Shared `stack_id` and `stack_mode: "cumulative"`; signed values accumulate in series order and can overlap earlier marks |
 | `Bar` stacks with `stackOffset="silhouette"` or `"wiggle"` | Shared `stack_id` and the matching `stack_mode`; both retain the ordered baseline transformation |
+| `BarChart layout="vertical"` | `horizontal_bar` series on a numeric X axis and a band Y axis; the first category is at the top |
+| Several `Bar` series without `stackId` | `column` or `horizontal_bar` series sharing one `group_id`; members subdivide each category band |
+| `barSize` / `barGap` | Series `bar_max_width` and `bar_gap` in CSS pixels |
+| `Bar` with a `[low, high]` `dataKey` | `range_bar` rows `{ id, x, low, high }` on a category X axis |
+| `XAxis`/`YAxis` `scale="log"` or `"symlog"` | Axis `scale: "log"` or `"symlog"` (and the matching pane domain for X) |
+| Axis `domain`, `reversed`, `tickCount`, `label` | Axis `domain`, `reverse`, `tick_count`, and `title` |
+| `yAxisId` on series and axes | Distinct axis `id` values; each series names its `x_axis_id` and `y_axis_id` |
+| `CartesianGrid` | Chart `grid: { vertLines, horzLines }` with per-axis `grid_visible`; rules use the resolved ticks |
+| `syncId` across charts | `take_sync_events()` and `apply_external_sync_event()` through a host coordinator (see linked charts above) |
 
-For mixed-sign data, Recharts `stackOffset="expand"` divides by each category's signed total.
-In the pinned reference fixture this clips two base bars to the plot and omits their top
-segments. Aeris `stack_mode: "percent"` normalizes positive and negative totals separately,
-keeping every positive and negative segment visible. Review this intentional behavior change
-when migrating a mixed-sign expanded stack; positive-only totals use the same proportions.
+Aeris `stack_mode: "percent"` reproduces Recharts `stackOffset="expand"` for mixed-sign data too.
+A category whose values have opposite signs divides by a small signed total, so its segments can
+exceed the `0..1` axis and are clipped; in the pinned fixture two base bars fill the plot and their
+top segments disappear. Prefer `stack_mode: "normal"` when mixed-sign shares must stay readable.
 
 For an animated Recharts line, call `chart.set_general_transition_duration(400)` after creating
 the Aeris chart, then update the retained series handle. Aeris uses one fixed transition clock
