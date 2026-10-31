@@ -9,7 +9,7 @@
     {
       "path": "builtin_plugins.d.ts",
       "bytes": 3890,
-      "sha256": "85ae133cb200f8de6b3c6ae8fb81fffc4ae0b7e4835b661356b2be506446f0ad"
+      "sha256": "ebad686d5252b75fe28ceb13485ff222af023a38f0d83339815a4dfe60870404"
     },
     {
       "path": "canvas_plugins.d.ts",
@@ -73,8 +73,8 @@
     },
     {
       "path": "types.d.ts",
-      "bytes": 212467,
-      "sha256": "01cfa333052a512caad0a4ee2cc075c78fe7898ef2cd240bd4532e76389161f0"
+      "bytes": 212544,
+      "sha256": "3e0a5e0e17ab99e93724d302b445df2b27e44a4eb831c8aab1d1592e54a5313e"
     }
   ]
 }

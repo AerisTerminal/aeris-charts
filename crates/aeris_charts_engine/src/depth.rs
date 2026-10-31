@@ -178,9 +178,11 @@ pub struct DepthProfileOptions {
     pub levels_per_side: usize,
     /// Length (CSS px) of the largest drawn level; every other bar scales against it.
     pub max_width: f64,
-    /// Bar colors; `None` follows the chart's bullish (bid) and bearish (ask) colors.
+    /// Bar colors; `None` follows the painted surface's `--book-bid-fill` (bid) and
+    /// `--book-ask-fill` (ask) tokens.
     pub bid_rgba: Option<[u8; 4]>,
     pub ask_rgba: Option<[u8; 4]>,
+    /// Multiplies the bar color's alpha.
     pub opacity: f32,
     /// Prints each level's size inside its bar when the row is tall enough for the text.
     pub show_sizes: bool,
@@ -194,7 +196,7 @@ impl Default for DepthProfileOptions {
             max_width: 120.0,
             bid_rgba: None,
             ask_rgba: None,
-            opacity: 0.5,
+            opacity: 1.0,
             show_sizes: true,
         }
     }
@@ -2835,6 +2837,66 @@ mod tests {
                 .iter()
                 .all(|&(_, _, _, color)| color != bid && color != ask)
         );
+    }
+
+    #[test]
+    fn depth_profile_defaults_follow_the_order_book_tokens() {
+        use aeris_charts_core::style::{
+            DARK_BOOK_ASK_RGB, DARK_BOOK_BID_RGB, DARK_BOOK_FILL_ALPHA, DARK_BOOK_FILL_TEXT_RGB,
+            LIGHT_BOOK_ASK_RGB, LIGHT_BOOK_BID_RGB, LIGHT_BOOK_FILL_ALPHA,
+            LIGHT_BOOK_FILL_TEXT_RGB,
+        };
+        use aeris_charts_render::color::Color;
+        use aeris_charts_render::draw_list::Prim;
+        let (mut chart, stream) = profile_chart();
+        chart
+            .add_depth_profile(stream, DepthProfileOptions::default())
+            .unwrap();
+        for (theme, bid, ask, alpha, ink) in [
+            (
+                crate::ChartTheme::Dark,
+                DARK_BOOK_BID_RGB,
+                DARK_BOOK_ASK_RGB,
+                DARK_BOOK_FILL_ALPHA,
+                DARK_BOOK_FILL_TEXT_RGB,
+            ),
+            (
+                crate::ChartTheme::Light,
+                LIGHT_BOOK_BID_RGB,
+                LIGHT_BOOK_ASK_RGB,
+                LIGHT_BOOK_FILL_ALPHA,
+                LIGHT_BOOK_FILL_TEXT_RGB,
+            ),
+        ] {
+            chart.set_theme(theme);
+            let mut direct = Vec::new();
+            chart.build_depth_profile_frame(0, 600, 1.0, 1.0, &mut direct);
+            let bid = Color::rgba(bid.0, bid.1, bid.2, alpha);
+            let ask = Color::rgba(ask.0, ask.1, ask.2, alpha);
+            let fills = direct
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::Rect { color, .. } => Some(*color),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            // Asks above bids, two levels each.
+            assert_eq!(fills, vec![ask, ask, bid, bid], "{theme:?} book fills");
+            let texts = direct
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::Text { color, .. } => Some(*color),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(texts.len(), 4);
+            assert!(
+                texts
+                    .iter()
+                    .all(|&color| color == Color::rgb(ink.0, ink.1, ink.2)),
+                "{theme:?} sizes print in --book-fill-text"
+            );
+        }
     }
 
     #[test]

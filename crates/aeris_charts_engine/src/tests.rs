@@ -5608,7 +5608,7 @@ fn macd_outputs_are_line_line_histogram_with_four_state_colors() {
     // Every installed histogram row carries one of the four palette colors.
     let rows = chart.data.series_data(ids[2]).unwrap().1[3].len();
     assert!(rows > 0);
-    const PALETTE: [u32; 4] = [0x98c379ff, 0x98c37980, 0xe06c75ff, 0xe06c7580];
+    const PALETTE: [u32; 4] = [0x089981ff, 0x08998180, 0xf7525fff, 0xf7525f80];
     for r in 0..rows {
         let color = chart
             .data
@@ -5968,7 +5968,7 @@ fn generic_momentum_histogram_style_uses_the_canonical_four_state_palette() {
         .set_series_data(histogram, &times, &values, &values, &values, &values)
         .unwrap();
     assert!(chart.apply_momentum_histogram_colors(histogram));
-    const PALETTE: [u32; 4] = [0x98c379ff, 0x98c37980, 0xe06c75ff, 0xe06c7580];
+    const PALETTE: [u32; 4] = [0x089981ff, 0x08998180, 0xf7525fff, 0xf7525f80];
     for row in 0..values.len() {
         let color = chart
             .data
@@ -5994,11 +5994,11 @@ fn generic_momentum_histogram_style_uses_the_canonical_four_state_palette() {
         )
     };
     assert_eq!(color(0), None);
-    assert_eq!(color(1), Some(0x98c379ff));
-    assert_eq!(color(2), Some(0x98c379ff));
+    assert_eq!(color(1), Some(0x089981ff));
+    assert_eq!(color(2), Some(0x089981ff));
     assert_eq!(color(3), None);
-    assert_eq!(color(4), Some(0xe06c7580));
-    assert_eq!(color(5), Some(0xe06c75ff));
+    assert_eq!(color(4), Some(0xf7525f80));
+    assert_eq!(color(5), Some(0xf7525fff));
 }
 
 #[test]

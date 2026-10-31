@@ -127,6 +127,9 @@ fn main() {
             ("negative_subtle", "NEGATIVE_SUBTLE"),
             ("buy_subtle", "BUY_SUBTLE"),
             ("sell_subtle", "SELL_SUBTLE"),
+            ("book_bid", "BOOK_BID"),
+            ("book_ask", "BOOK_ASK"),
+            ("book_fill_text", "BOOK_FILL_TEXT"),
             ("popover_surface", "POPOVER_SURFACE"),
             ("popover_border", "POPOVER_BORDER"),
             ("popover_highlight", "POPOVER_HIGHLIGHT"),
@@ -143,6 +146,12 @@ fn main() {
         let highlight_alpha = required_u8(&tokens, &[theme, "popover_highlight_alpha"]);
         output.push_str(&format!(
             "pub const {prefix}_POPOVER_HIGHLIGHT_ALPHA: u8 = 0x{highlight_alpha:02x};\n"
+        ));
+        // `--book-*-fill` mixes its hue into the surface; painting the hue at that mix's alpha gives
+        // the same color over the surface and keeps candles behind the order book visible.
+        let book_alpha = required_u8(&tokens, &[theme, "book_fill_alpha"]);
+        output.push_str(&format!(
+            "pub const {prefix}_BOOK_FILL_ALPHA: u8 = 0x{book_alpha:02x};\n"
         ));
     }
     // Crosshair lines keep their CSS alpha: they cross series geometry, so an opaque projection

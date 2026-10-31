@@ -110,8 +110,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     primary_foreground: "#ffffff",
     primary_hover: "#338be4",
     border: "#cecece",
-    bullish: "#3fb950",
-    bearish: "#f85149",
+    bullish: "#089981",
+    bearish: "#f7525f",
   });
   expect(light.chart).toEqual({
     background: "#ffffff",
@@ -120,8 +120,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     border: "#cecece",
     crosshair: "#0a0a0a26",
     crosshair_label: "#242424",
-    bullish: "#3fb950",
-    bearish: "#f85149",
+    bullish: "#089981",
+    bearish: "#f7525f",
   });
 
   const dark = await read("dark");
@@ -146,8 +146,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     primary_foreground: "#ffffff",
     primary_hover: "#055db5",
     border: "#2e2e2e",
-    bullish: "#98c379",
-    bearish: "#e06c75",
+    bullish: "#089981",
+    bearish: "#f7525f",
   });
   expect(dark.chart).toEqual({
     background: "#171717",
@@ -156,8 +156,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     border: "#2e2e2e",
     crosshair: "#fafafa1a",
     crosshair_label: "#242424",
-    bullish: "#98c379",
-    bearish: "#e06c75",
+    bullish: "#089981",
+    bearish: "#f7525f",
   });
 });
 
@@ -606,7 +606,7 @@ test("hollow candles are a Series choice backed by the canonical candlestick ser
     kind: window.__main.series_type(),
     up: window.__main.options().up_color,
     down: window.__main.options().down_color,
-  }))).toEqual({ kind: "candlestick", up: "#98c379", down: "#e06c75" });
+  }))).toEqual({ kind: "candlestick", up: "#089981", down: "#f7525f" });
 
   await page.locator('input[name="series"][value="histogram"]').check();
   expect(await page.evaluate(() => window.__main.series_type())).toBe("histogram");

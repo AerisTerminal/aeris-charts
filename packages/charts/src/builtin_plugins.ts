@@ -49,7 +49,7 @@ export interface series_markers_handle {
  * @example
  * ```js
  * const markers = create_series_markers(series, [
- *   { time: 1556880900, position: "aboveBar", shape: "arrowDown", color: "#e06c75", text: "SELL" },
+ *   { time: 1556880900, position: "aboveBar", shape: "arrowDown", color: "#f7525f", text: "SELL" },
  * ]);
  * markers.set_markers([]); // remove all markers
  * markers.detach();

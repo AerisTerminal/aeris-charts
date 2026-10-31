@@ -310,7 +310,7 @@ function series_features(bars, primary_series, live_source) {
     {
       id: "pretty-histogram", label: "Pretty histogram", detail: "Rounded columns", icon: "chart",
       series_kind: "pretty_histogram", options: { base_price: base, color: "#a459d1", width_percent: 64 },
-      data: () => sampled.map((bar) => ({ time: bar.time, value: bar.close, color: bar.close >= bar.open ? "#98c379" : "#e06c75" })),
+      data: () => sampled.map((bar) => ({ time: bar.time, value: bar.close, color: bar.close >= bar.open ? "#089981" : "#f7525f" })),
     },
     {
       id: "shaded-background", label: "Shaded backdrop", detail: "Per-bar shade field + line", icon: "chart",

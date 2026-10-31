@@ -15337,7 +15337,7 @@ fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
     chart.set_bid_ask(0, Some(11.0), Some(12.0));
     let primary = aeris_charts_core::style::DEFAULT_PRIMARY_RGB;
     let blue = Color::rgb(primary.0, primary.1, primary.2);
-    let red = Color::rgb(0xe0, 0x6c, 0x75);
+    let red = Color::rgb(0xf7, 0x52, 0x5f);
     assert!(
         !hlines(&mut chart)
             .iter()

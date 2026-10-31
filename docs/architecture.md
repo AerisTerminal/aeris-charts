@@ -1492,13 +1492,14 @@ Financial appearance keeps theme provenance typed in the engine. Canvas backgrou
 (layout and price-axis labels), grid, crosshair, bullish, bearish, wick, and border colors are either
 semantic theme followers or explicit custom colors; theme changes retokenize only followers. Every
 other implicit market up/down color (volume and up/down histograms, momentum histograms, area and
-baseline defaults, markers, depth, big trades, and volume profiles) resolves from the painted
-bullish/bearish pair at frame time; a stored default equal to a compiled market token follows that
+baseline defaults, markers, depth sweep markers, big trades, and volume profiles) resolves from the
+painted bullish/bearish pair at frame time; a stored default equal to a compiled market token follows that
 pair and keeps its alpha. Trading chrome and position tools never take that pair: order lines and
 markers use the trade tokens (buy and take-profit `--primary`, sell and stop-loss `--negative`,
 resting limits `--buy-subtle` / `--sell-subtle` of the painted surface), and PnL plus position
-profit/stop use the platform gain/loss pair `--positive` / `--negative`. Footprint order-flow
-buy/sell colors stay separate. A raw
+profit/stop use the platform gain/loss pair `--positive` / `--negative`. Depth profile bars
+default to the painted theme's `--book-bid-fill` / `--book-ask-fill` hue at the token's mix alpha
+and print sizes in `--book-fill-text`. Footprint order-flow buy/sell colors stay separate. A raw
 `applyOptions` color patch for any of these canvas roles pins it the same way until a style reset. Native hosts consume and apply the typed financial appearance transaction
 and must not infer provenance by comparing resolved CSS strings, create dummy engines for defaults,
 or send empty-string color sentinels to clear series overrides.

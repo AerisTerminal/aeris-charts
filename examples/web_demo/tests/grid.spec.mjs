@@ -165,8 +165,8 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     border_control: "#2e2e2e",
     crosshair_control: "#fafafa",
     crosshair_label_control: "#242424",
-    bullish: "#98c379",
-    bearish: "#e06c75",
+    bullish: "#089981",
+    bearish: "#f7525f",
   });
 
   await page.click('#tool_rail [data-panel-target="appearance"]');
@@ -184,8 +184,8 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     border_control: "#cecece",
     crosshair_control: "#0a0a0a",
     crosshair_label_control: "#242424",
-    bullish: "#3fb950",
-    bearish: "#f85149",
+    bullish: "#089981",
+    bearish: "#f7525f",
   });
 });
 
@@ -227,7 +227,7 @@ test("portable design tokens and disabled controls match the brand contract", as
     "border-secondary": "#fafafa26", "hover-bg": "#fafafa13", "active-bg": "#fafafa26",
     "border-width": "1px", "text-default": "#fafafa", "text-secondary": "#fafafa8c", "text-muted": "#fafafa40",
     "text-hover": "#fafafa", "icon-active": "#fafafa", "sell-active": "#fb838c", "book-fill-text": "#ffffff", "warning-hover": "#ff7b1f", "warning-foreground": "#ffffff", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
-    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#98c379", bearish: "#e06c75",
+    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
     "button-fill": "#fafafad9", "radius-compact": "6px", "radius-medium": "14px",
     "positive-subtle": "#193c37", "negative-subtle": "#532b2e", "danger-hover": "#f96a75",
     "danger-disabled": "#6b3135", "danger-disabled-foreground": "#d0646c",
@@ -240,7 +240,7 @@ test("portable design tokens and disabled controls match the brand contract", as
   expect(light).toMatchObject({
     surface: "#ffffff", border: "#0a0a0a33", "text-default": "#0a0a0a", "text-secondary": "#0a0a0a94",
     "text-muted": "#0a0a0a40", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
-    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#3fb950", bearish: "#f85149",
+    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
     "button-fill": "#0a0a0af2", "radius-compact": "6px", "radius-medium": "14px",
     "positive-subtle": "#dcf5f0", "negative-subtle": "#ffe2e2", "danger-hover": "#e5404d",
     "border-width": "1px", "warning-hover": "#e05c00", "warning-foreground": "#ffffff",
@@ -401,13 +401,13 @@ test("the toolbar's series type and style act on the ACTIVE cell, not always the
   expect(await type_of(0), "primary cell untouched").toBe("candlestick");
   // The area fill style group appears for the area-typed active chart.
   await expect(page.locator("#area_style")).toBeVisible();
-  await expect(page.locator("#area_top")).toHaveValue("#98c379");
+  await expect(page.locator("#area_top")).toHaveValue("#089981");
   expect(await page.evaluate(() => {
     const options = window.__grid.cells()[1].chart.__seed_series.options();
     return [options.color, options.area_top_color, options.area_bottom_color];
     // The toolbar sets the series color; the engine derives the fill at the canonical strength, so
     // no opaque explicit fill is written.
-  })).toEqual(["#98c379", "", ""]);
+  })).toEqual(["#089981", "", ""]);
 
   // The toolbar tracks the active cell: back on the primary, its type is selected again and
   // changes land there instead.
@@ -857,7 +857,7 @@ test("workspace state composes chart persistence V1 and restores stable ownershi
     first.cells()[0].set_host_chart_identity("BTC-USD");
     second.set_host_chart_identity("ETH-USD");
     third.set_host_chart_identity("SOL-USD");
-    first.cells()[0].chart.add_drawing("horizontal_line", [{ logical: 6, price: 106 }], { color: "#e06c75" });
+    first.cells()[0].chart.add_drawing("horizontal_line", [{ logical: 6, price: 106 }], { color: "#f7525f" });
     second.chart.add_drawing("trend_line", [
       { logical: 4, price: 104 }, { logical: 12, price: 112 },
     ], { style: "dashed", width: 4 });

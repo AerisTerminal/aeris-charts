@@ -126,14 +126,14 @@ impl Capture {
                         840,
                         marker_pos::ABOVE,
                         marker_shape::ARROW_DOWN,
-                        "#e06c75",
+                        "#f7525f",
                         "SELL",
                     ),
                     marker(
                         880,
                         marker_pos::BELOW,
                         marker_shape::ARROW_UP,
-                        "#98c379",
+                        "#089981",
                         "BUY",
                     ),
                     marker(

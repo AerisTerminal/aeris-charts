@@ -465,6 +465,35 @@ impl ChartEngine {
         }
     }
 
+    /// The painted surface's `--book-bid-fill`, `--book-ask-fill`, and the `--book-fill-text`
+    /// printed over them.
+    fn order_book_colors(&self) -> (Color, Color, Color) {
+        use aeris_charts_core::style::{
+            DARK_BOOK_ASK_RGB, DARK_BOOK_BID_RGB, DARK_BOOK_FILL_ALPHA, DARK_BOOK_FILL_TEXT_RGB,
+            LIGHT_BOOK_ASK_RGB, LIGHT_BOOK_BID_RGB, LIGHT_BOOK_FILL_ALPHA,
+            LIGHT_BOOK_FILL_TEXT_RGB,
+        };
+        let (bid, ask, alpha, text) = match self.surface_theme() {
+            crate::ChartTheme::Light => (
+                LIGHT_BOOK_BID_RGB,
+                LIGHT_BOOK_ASK_RGB,
+                LIGHT_BOOK_FILL_ALPHA,
+                LIGHT_BOOK_FILL_TEXT_RGB,
+            ),
+            crate::ChartTheme::Dark => (
+                DARK_BOOK_BID_RGB,
+                DARK_BOOK_ASK_RGB,
+                DARK_BOOK_FILL_ALPHA,
+                DARK_BOOK_FILL_TEXT_RGB,
+            ),
+        };
+        (
+            Color::rgba(bid.0, bid.1, bid.2, alpha),
+            Color::rgba(ask.0, ask.1, ask.2, alpha),
+            Color::rgb(text.0, text.1, text.2),
+        )
+    }
+
     pub(crate) fn build_depth_profile_frame(
         &self,
         pane_index: usize,
@@ -477,18 +506,14 @@ impl ChartEngine {
             return;
         }
         let layout = &self.options.get().layout;
-        let MarketColors {
-            up: bullish,
-            down: bearish,
-        } = self.market_colors();
-        let text_color = Color::parse_css(&layout.text_color).unwrap_or(Color::rgb(215, 219, 228));
+        let (book_bid, book_ask, text_color) = self.order_book_colors();
         let text_size = layout.font_size * vpr;
         let text_pad = (PROFILE_TEXT_PAD * hpr).round();
         for id in self.depth_profile_ids(pane_index) {
             let profile = &self.depth_profiles[&id];
             let options = profile.options;
-            let bid = profile_color(options.bid_rgba, bullish, options.opacity);
-            let ask = profile_color(options.ask_rgba, bearish, options.opacity);
+            let bid = profile_color(options.bid_rgba, book_bid, options.opacity);
+            let ask = profile_color(options.ask_rgba, book_ask, options.opacity);
             self.for_each_depth_profile_bar(profile, pane_w_px, hpr, vpr, |bar| {
                 output.push(Prim::Rect {
                     rect: bar.rect,

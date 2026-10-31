@@ -88,11 +88,11 @@ mod tests {
         assert_eq!(DEFAULT_CROSSHAIR_CSS, DARK_CROSSHAIR_LINE_CSS);
         assert_eq!(DEFAULT_CROSSHAIR_ALPHA, DARK_CROSSHAIR_LINE_ALPHA);
         assert_eq!(DARK_SEPARATOR_HOVER_CSS, DARK_ACCENT_CSS);
-        // Chart `--bullish` / `--bearish`, separate from the platform gain/loss pair.
-        assert_eq!(LIGHT_MARKET_UP_CSS, "#3fb950");
-        assert_eq!(LIGHT_MARKET_DOWN_CSS, "#f85149");
-        assert_eq!(DARK_MARKET_UP_CSS, "#98c379");
-        assert_eq!(DARK_MARKET_DOWN_CSS, "#e06c75");
+        // Chart `--bullish` / `--bearish` follow the platform gain/loss pair.
+        assert_eq!(LIGHT_MARKET_UP_CSS, "#089981");
+        assert_eq!(LIGHT_MARKET_DOWN_CSS, "#f7525f");
+        assert_eq!(DARK_MARKET_UP_CSS, "#089981");
+        assert_eq!(DARK_MARKET_DOWN_CSS, "#f7525f");
         assert_eq!(LIGHT_POSITIVE_CSS, "#089981");
         assert_eq!(LIGHT_NEGATIVE_CSS, "#f7525f");
         assert_eq!(DARK_POSITIVE_CSS, LIGHT_POSITIVE_CSS);
@@ -107,6 +107,16 @@ mod tests {
         assert_eq!(LIGHT_SELL_SUBTLE_CSS, "#feeaec");
         assert_eq!(DARK_BUY_SUBTLE_CSS, "#13273b");
         assert_eq!(DARK_SELL_SUBTLE_CSS, "#3f2224");
+        // `--book-bid-fill` / `--book-ask-fill`: primary and #ff2f5e mixed 40% over the light
+        // surface and 35% over the dark surface; `--book-fill-text` is drawn on top of a fill.
+        assert_eq!(LIGHT_BOOK_BID_CSS, LIGHT_PRIMARY_CSS);
+        assert_eq!(DARK_BOOK_BID_CSS, DARK_PRIMARY_CSS);
+        assert_eq!(LIGHT_BOOK_ASK_CSS, "#ff2f5e");
+        assert_eq!(DARK_BOOK_ASK_CSS, "#ff2f5e");
+        assert_eq!(LIGHT_BOOK_FILL_ALPHA, 102);
+        assert_eq!(DARK_BOOK_FILL_ALPHA, 89);
+        assert_eq!(LIGHT_BOOK_FILL_TEXT_CSS, "#000000");
+        assert_eq!(DARK_BOOK_FILL_TEXT_CSS, "#ffffff");
         // Stored option defaults hold the theme-independent pair and the engine repaints it in the
         // active theme's pair, so it must be the default theme's pair.
         assert_eq!(MARKET_UP_CSS, DEFAULT_MARKET_UP_CSS);

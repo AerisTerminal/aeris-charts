@@ -54,8 +54,11 @@ so the book stays readable at any zoom and rows start on round prices. A merged 
 holds both sides splits its height, asks above bids. It
 reads the canonical (or replay-projected) book at frame time, so it keeps no copy of the levels and
 every depth mutation reaches it through the same scene invalidation as the heatmap. Bars paint in
-pane chrome above series and below price lines; bid and ask colors default to the chart's bullish
-and bearish colors, and a level's size prints inside its bar only when the row fits the text.
+pane chrome above series and below price lines; bid and ask colors default to the painted theme's
+`--book-bid-fill` and `--book-ask-fill` tokens (their hue at the token's mix alpha, so the bar matches
+the token over the surface and candles behind it stay visible), `opacity` (default 1) multiplies
+the bar alpha, and a level's size prints inside its bar in `--book-fill-text` only when the row fits
+the text.
 `set_depth_profile_options` restyles a profile in place (levels, width, colors, opacity, sizes)
 under the same validation as `add_depth_profile`. Profiles are capped per chart and removed with
 their stream.

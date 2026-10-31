@@ -912,9 +912,10 @@ export interface depth_profile_options {
   levels_per_side: number;
   /** Length (CSS px) of the largest drawn level. */
   max_width: number;
-  /** `null` follows the chart's bullish (bid) and bearish (ask) colors. */
+  /** `null` follows the painted theme's `--book-bid-fill` (bid) and `--book-ask-fill` (ask). */
   bid_rgba: readonly [number, number, number, number] | null;
   ask_rgba: readonly [number, number, number, number] | null;
+  /** Multiplies the bar color's alpha. Default 1. */
   opacity: number;
   show_sizes: boolean;
 }
