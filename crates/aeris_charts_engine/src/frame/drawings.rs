@@ -2692,7 +2692,7 @@ impl ChartEngine {
                 }
             }
             DrawingBodyGeometry::Position(position) => {
-                let (reward, risk) = position_colors(drawing, self.market_colors());
+                let (reward, risk) = position_colors(drawing, self.gain_loss_colors());
                 push_position_zone(out, position.reward_zone(), reward);
                 push_position_zone(out, position.risk_zone(), risk);
 
@@ -3189,7 +3189,7 @@ impl ChartEngine {
             .kind
             .is_annotation()
             .then(|| self.annotation_palette(drawing, stroke));
-        let (profit, loss) = position_colors(drawing, self.market_colors());
+        let (profit, loss) = position_colors(drawing, self.gain_loss_colors());
         crate::drawing_contract::drawing_property_schema(drawing.kind)
             .properties
             .into_iter()
@@ -4375,7 +4375,7 @@ impl ChartEngine {
         vpr: f64,
         out: &mut Vec<Prim>,
     ) {
-        let (reward, risk) = position_colors(drawing, self.market_colors());
+        let (reward, risk) = position_colors(drawing, self.gain_loss_colors());
         let ink = drawing.text_color.as_deref().and_then(Color::parse_css);
         let (Some(entry), Some(target), Some(stop)) = (
             drawing.points.first(),
@@ -4587,7 +4587,7 @@ impl ChartEngine {
             let start_x = (start_x * hpr).clamp(position.left, position.right);
             let run_x = (run_x * hpr).clamp(position.left, position.right);
             let run_y = run_y * vpr;
-            let (reward, risk) = position_colors(drawing, self.market_colors());
+            let (reward, risk) = position_colors(drawing, self.gain_loss_colors());
             let semantic = match run.side {
                 PositionRunSide::Reward => reward,
                 PositionRunSide::Risk => risk,
@@ -5289,14 +5289,14 @@ fn area_fill(drawing: &Drawing, stroke: Color) -> Color {
         ))
 }
 
-/// A position's (profit, stop) colors: the drawing's own, else the theme's market up/down pair.
-fn position_colors(drawing: &Drawing, market: super::MarketColors) -> (Color, Color) {
+/// A position's (profit, stop) colors: the drawing's own, else the platform gain/loss pair.
+fn position_colors(drawing: &Drawing, (gain, loss): (Color, Color)) -> (Color, Color) {
     let resolve = |custom: Option<&str>, fallback: Color| {
         custom.and_then(Color::parse_css).unwrap_or(fallback)
     };
     (
-        resolve(drawing.position_profit_color.as_deref(), market.up),
-        resolve(drawing.position_loss_color.as_deref(), market.down),
+        resolve(drawing.position_profit_color.as_deref(), gain),
+        resolve(drawing.position_loss_color.as_deref(), loss),
     )
 }
 

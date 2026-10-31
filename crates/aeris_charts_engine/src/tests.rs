@@ -10544,8 +10544,19 @@ fn market_defaults_beyond_candles_follow_the_theme_pair() {
         "stored momentum colors recolor on a theme switch"
     );
     let style = chart.trading_style();
-    assert_eq!((style.buy, style.sell), (light[0], light[1]));
-    assert_eq!((style.profit, style.stop_loss), (light[0], light[1]));
+    let primary = rgb(aeris_charts_core::style::DEFAULT_PRIMARY_RGB);
+    let gain = rgb(aeris_charts_core::style::LIGHT_POSITIVE_RGB);
+    let loss = rgb(aeris_charts_core::style::LIGHT_NEGATIVE_RGB);
+    assert_eq!(
+        (style.buy, style.sell, style.take_profit),
+        (primary, loss, primary),
+        "trading chrome keeps the blue/red trade tokens instead of the chart pair"
+    );
+    assert_eq!(
+        (style.profit, style.risk, style.stop_loss),
+        (gain, loss, loss)
+    );
+    assert_eq!(chart.gain_loss_colors(), (gain, loss));
     let market = chart.market_colors();
     let translucent_token = Color::rgba(
         DARK_MARKET_UP_RGB.0,
@@ -10574,7 +10585,12 @@ fn market_defaults_beyond_candles_follow_the_theme_pair() {
 
     chart.set_theme(ChartTheme::Dark);
     assert!(hues(&chart).iter().all(|color| dark.contains(color)));
-    assert_eq!(chart.trading_style().buy, dark[0]);
+    assert_eq!(
+        chart.trading_style(),
+        style,
+        "trading chrome ignores the theme pair"
+    );
+    assert_eq!(chart.gain_loss_colors(), (gain, loss));
 }
 
 // --- pane-local price scale geometry (issue #25) ------------------------------------------------

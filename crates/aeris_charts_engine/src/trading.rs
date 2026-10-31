@@ -13,7 +13,7 @@ use crate::{
     PANELESS, PriceScaleTarget,
 };
 use aeris_charts_core::style::{
-    DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB, MARKET_WARNING_RGB,
+    DEFAULT_NEGATIVE_RGB, DEFAULT_POSITIVE_RGB, DEFAULT_PRIMARY_RGB, MARKET_WARNING_RGB,
 };
 use aeris_charts_render::color::Color;
 
@@ -388,7 +388,7 @@ pub struct TradingStyle {
     pub buy: Color,
     pub sell: Color,
     /// Marker and line color of a resting buy or sell limit (including stop-limit). `None`
-    /// follows the painted surface's `--positive-subtle` / `--negative-subtle` token.
+    /// follows the painted surface's `--buy-subtle` / `--sell-subtle` token.
     /// Text and hollow axis tags keep the strong `buy` / `sell` color.
     pub buy_limit: Option<Color>,
     pub sell_limit: Option<Color>,
@@ -416,8 +416,16 @@ impl Default for TradingStyle {
             DEFAULT_PRIMARY_RGB.1,
             DEFAULT_PRIMARY_RGB.2,
         );
-        let positive = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
-        let negative = Color::rgb(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2);
+        let positive = Color::rgb(
+            DEFAULT_POSITIVE_RGB.0,
+            DEFAULT_POSITIVE_RGB.1,
+            DEFAULT_POSITIVE_RGB.2,
+        );
+        let negative = Color::rgb(
+            DEFAULT_NEGATIVE_RGB.0,
+            DEFAULT_NEGATIVE_RGB.1,
+            DEFAULT_NEGATIVE_RGB.2,
+        );
         let warning = Color::rgb(
             MARKET_WARNING_RGB.0,
             MARKET_WARNING_RGB.1,
@@ -426,9 +434,10 @@ impl Default for TradingStyle {
         Self {
             position: primary,
             working_order: primary,
-            // Lines and their markers read by direction in the market tokens: buy/long in
-            // `--positive`, sell/short and stop-loss in `--negative`, take-profit in `--primary`.
-            buy: positive,
+            // Lines and their markers read by direction in the trade tokens, never the chart's
+            // bullish/bearish pair: buy/long and take-profit in `--buy` (`--primary`), sell/short
+            // and stop-loss in `--sell` (`--negative`). PnL keeps `--positive` / `--negative`.
+            buy: primary,
             sell: negative,
             buy_limit: None,
             sell_limit: None,
@@ -2571,22 +2580,10 @@ impl ChartEngine {
         Ok(())
     }
 
-    /// The trading style as painted: colors left at the market tokens take the current theme's
-    /// up/down pair, so the default buy/sell and profit/risk colors follow a theme switch.
+    /// The trading style as painted. Trading chrome uses the platform trade and gain/loss
+    /// tokens, which do not change with the chart's bullish/bearish theme pair.
     pub fn trading_style(&self) -> TradingStyle {
-        let market = self.market_colors();
-        let mut style = self.trading_state.style;
-        for color in [
-            &mut style.buy,
-            &mut style.sell,
-            &mut style.profit,
-            &mut style.risk,
-            &mut style.take_profit,
-            &mut style.stop_loss,
-        ] {
-            *color = market.follow(*color);
-        }
-        style
+        self.trading_state.style
     }
 
     pub fn apply_trading_style(&mut self, options: TradingStyleOptions) -> Result<(), ChartError> {
@@ -5400,7 +5397,7 @@ mod tests {
 
     #[test]
     fn order_colors_preserve_limit_side_and_protection_semantics() {
-        use aeris_charts_core::style::{DARK_NEGATIVE_SUBTLE_RGB, DARK_POSITIVE_SUBTLE_RGB};
+        use aeris_charts_core::style::{DARK_BUY_SUBTLE_RGB, DARK_SELL_SUBTLE_RGB};
         let subtle = |rgb: (u8, u8, u8)| Color::rgb(rgb.0, rgb.1, rgb.2);
         let mut chart = chart_with_market();
         let mut sell_limit = order("sell-limit", OrderRole::Working, 103.0);
@@ -5444,8 +5441,8 @@ mod tests {
         let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
         let style = chart.trading_style();
         for (price, expected) in [
-            (103.0, subtle(DARK_NEGATIVE_SUBTLE_RGB)),
-            (100.5, subtle(DARK_POSITIVE_SUBTLE_RGB)),
+            (103.0, subtle(DARK_SELL_SUBTLE_RGB)),
+            (100.5, subtle(DARK_BUY_SUBTLE_RGB)),
             (101.5, style.sell),
             (99.0, style.sell),
             (104.0, style.take_profit),
@@ -5488,15 +5485,14 @@ mod tests {
     #[test]
     fn resting_limits_use_subtle_lines_and_markers_but_stop_style_axis_tags() {
         use aeris_charts_core::style::{
-            DARK_NEGATIVE_SUBTLE_RGB, DARK_POSITIVE_SUBTLE_RGB, LIGHT_POSITIVE_SUBTLE_RGB,
-            MARKET_UP_RGB,
+            DARK_BUY_SUBTLE_RGB, DARK_SELL_SUBTLE_RGB, DEFAULT_PRIMARY_RGB, LIGHT_BUY_SUBTLE_RGB,
         };
         let rgb = |c: (u8, u8, u8)| Color::rgb(c.0, c.1, c.2);
         let mut chart = chart_with_market();
         assert_eq!(
             chart.trading_style().buy,
-            rgb(MARKET_UP_RGB),
-            "buy is --positive"
+            rgb(DEFAULT_PRIMARY_RGB),
+            "buy is --buy (--primary)"
         );
         let ordinary = |name: &str, side: OrderSide, kind: OrderKind, price: f64| {
             let mut order = order(name, OrderRole::Working, price);
@@ -5567,18 +5563,18 @@ mod tests {
         };
         assert_eq!(
             marker(&mut chart, 100.5, "Buy Limit"),
-            (rgb(DARK_POSITIVE_SUBTLE_RGB), style.buy, style.buy),
-            "buy limit quantity and middle text use the same --positive token"
+            (rgb(DARK_BUY_SUBTLE_RGB), style.buy, style.buy),
+            "buy limit quantity and middle text use the same --buy token"
         );
         assert_eq!(
             marker(&mut chart, 99.25, "Sell Limit"),
-            (rgb(DARK_NEGATIVE_SUBTLE_RGB), style.sell, style.sell),
-            "sell limit quantity and middle text use the same --negative token"
+            (rgb(DARK_SELL_SUBTLE_RGB), style.sell, style.sell),
+            "sell limit quantity and middle text use the same --sell token"
         );
         assert_eq!(
             marker(&mut chart, 103.0, "Sell Stop Limit"),
-            (rgb(DARK_NEGATIVE_SUBTLE_RGB), style.sell, style.sell),
-            "sell stop-limit quantity and middle text use the same --negative token"
+            (rgb(DARK_SELL_SUBTLE_RGB), style.sell, style.sell),
+            "sell stop-limit quantity and middle text use the same --sell token"
         );
         assert_eq!(
             marker(&mut chart, 101.5, "Buy Stop"),
@@ -5590,8 +5586,8 @@ mod tests {
         let segments = chart.frame_pane_segments(0).unwrap();
         let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
         for (price, color) in [
-            (100.5, rgb(DARK_POSITIVE_SUBTLE_RGB)),
-            (103.0, rgb(DARK_NEGATIVE_SUBTLE_RGB)),
+            (100.5, rgb(DARK_BUY_SUBTLE_RGB)),
+            (103.0, rgb(DARK_SELL_SUBTLE_RGB)),
         ] {
             let y = chart
                 .trading_price_coordinate(0, TradingPriceScale::Right, price)
@@ -5643,7 +5639,7 @@ mod tests {
         chart.set_theme(crate::ChartTheme::Light);
         assert_eq!(
             marker(&mut chart, 100.5, "Buy Limit").0,
-            rgb(LIGHT_POSITIVE_SUBTLE_RGB),
+            rgb(LIGHT_BUY_SUBTLE_RGB),
             "the subtle fill follows the painted theme"
         );
     }

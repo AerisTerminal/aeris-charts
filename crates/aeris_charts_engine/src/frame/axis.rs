@@ -1625,9 +1625,7 @@ impl ChartEngine {
         };
         let base = self.drawing_scale_base_for(drawing.pane_index, drawing.price_scale);
         let metrics = self.axis_metrics();
-        let market = self.market_colors();
-        let reward = market.up.solid();
-        let risk = market.down.solid();
+        let (reward, risk) = self.gain_loss_colors();
         let colors = [POSITION_ENTRY, reward, risk];
 
         let left_side = matches!(drawing.price_scale, crate::DrawingPriceScale::Left);

@@ -88,14 +88,25 @@ mod tests {
         assert_eq!(DEFAULT_CROSSHAIR_CSS, DARK_CROSSHAIR_LINE_CSS);
         assert_eq!(DEFAULT_CROSSHAIR_ALPHA, DARK_CROSSHAIR_LINE_ALPHA);
         assert_eq!(DARK_SEPARATOR_HOVER_CSS, DARK_ACCENT_CSS);
+        // Chart `--bullish` / `--bearish`, separate from the platform gain/loss pair.
         assert_eq!(LIGHT_MARKET_UP_CSS, "#3fb950");
         assert_eq!(LIGHT_MARKET_DOWN_CSS, "#f85149");
-        assert_eq!(LIGHT_POSITIVE_SUBTLE_CSS, "#e8f7ea");
-        assert_eq!(LIGHT_NEGATIVE_SUBTLE_CSS, "#fee1e0");
         assert_eq!(DARK_MARKET_UP_CSS, "#98c379");
         assert_eq!(DARK_MARKET_DOWN_CSS, "#e06c75");
-        assert_eq!(DARK_POSITIVE_SUBTLE_CSS, "#3c4933");
-        assert_eq!(DARK_NEGATIVE_SUBTLE_CSS, "#533133");
+        assert_eq!(LIGHT_POSITIVE_CSS, "#089981");
+        assert_eq!(LIGHT_NEGATIVE_CSS, "#f7525f");
+        assert_eq!(DARK_POSITIVE_CSS, LIGHT_POSITIVE_CSS);
+        assert_eq!(DARK_NEGATIVE_CSS, LIGHT_NEGATIVE_CSS);
+        assert_eq!(LIGHT_POSITIVE_SUBTLE_CSS, "#dcf5f0");
+        assert_eq!(LIGHT_NEGATIVE_SUBTLE_CSS, "#ffe2e2");
+        assert_eq!(DARK_POSITIVE_SUBTLE_CSS, "#193c37");
+        assert_eq!(DARK_NEGATIVE_SUBTLE_CSS, "#532b2e");
+        // `--buy-subtle` / `--sell-subtle`: `--buy` (primary) and `--sell` mixed 12% over the
+        // light surface and 18% over the dark surface.
+        assert_eq!(LIGHT_BUY_SUBTLE_CSS, "#e0eefb");
+        assert_eq!(LIGHT_SELL_SUBTLE_CSS, "#feeaec");
+        assert_eq!(DARK_BUY_SUBTLE_CSS, "#13273b");
+        assert_eq!(DARK_SELL_SUBTLE_CSS, "#3f2224");
         // Stored option defaults hold the theme-independent pair and the engine repaints it in the
         // active theme's pair, so it must be the default theme's pair.
         assert_eq!(MARKET_UP_CSS, DEFAULT_MARKET_UP_CSS);

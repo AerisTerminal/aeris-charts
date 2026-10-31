@@ -228,10 +228,10 @@ semantic follow states such as unpinned series colors and price-scale text. Wate
 visibility, scale modes/ranges/margins/layout constraints, viewport zoom/scroll, and indicator/data
 semantics survive the reset; only their engine-owned visual styling is restored.
 
-Default mouse-wheel zoom changes bar spacing by 15% per 100 px notch, exponentially, so a notch in
-and a notch out cancel and smaller trackpad deltas stay proportional. A coalesced fast spin applies
-up to five notches from one event instead of being capped at one. Horizontal wheel and trackpad
-deltas pan one pixel per wheel pixel. Ordinary wheel zoom keeps the right edge pinned,
+Default mouse-wheel zoom changes bar spacing by 10% per saturated notch (smaller trackpad deltas
+stay proportional), and one event applies at most one notch, so a fast spin stays controlled.
+Horizontal wheel and trackpad deltas pan 80 px per notch. Dragging a price axis scales its range at
+0.8 of the reference rate. Ordinary wheel zoom keeps the right edge pinned,
 because `right_bar_stays_on_scroll` defaults to `true`: the gap after the latest bar stays constant
 while history compresses or expands. Ctrl/Cmd + wheel, macOS trackpad pinch (delivered as Ctrl +
 wheel), and touch pinch zoom around the pointer instead. Setting `right_bar_stays_on_scroll: false`

@@ -2,8 +2,8 @@ use super::*;
 use crate::Pane;
 use crate::trading::{OrderRole, OrderSide, OrderStatus, PositionSide, TradingGroupVisualState};
 use aeris_charts_core::style::{
-    DARK_NEGATIVE_SUBTLE_RGB, DARK_POSITIVE_SUBTLE_RGB, LIGHT_NEGATIVE_SUBTLE_RGB,
-    LIGHT_POSITIVE_SUBTLE_RGB, RADIUS_SMALL,
+    DARK_BUY_SUBTLE_RGB, DARK_SELL_SUBTLE_RGB, LIGHT_BUY_SUBTLE_RGB, LIGHT_SELL_SUBTLE_RGB,
+    RADIUS_SMALL,
 };
 
 #[derive(Clone, Copy)]
@@ -197,10 +197,10 @@ impl ChartEngine {
         let style = &self.trading_style();
         let light = self.surface_theme() == crate::ChartTheme::Light;
         let (configured, rgb) = match (order.side, light) {
-            (OrderSide::Buy, true) => (style.buy_limit, LIGHT_POSITIVE_SUBTLE_RGB),
-            (OrderSide::Buy, false) => (style.buy_limit, DARK_POSITIVE_SUBTLE_RGB),
-            (OrderSide::Sell, true) => (style.sell_limit, LIGHT_NEGATIVE_SUBTLE_RGB),
-            (OrderSide::Sell, false) => (style.sell_limit, DARK_NEGATIVE_SUBTLE_RGB),
+            (OrderSide::Buy, true) => (style.buy_limit, LIGHT_BUY_SUBTLE_RGB),
+            (OrderSide::Buy, false) => (style.buy_limit, DARK_BUY_SUBTLE_RGB),
+            (OrderSide::Sell, true) => (style.sell_limit, LIGHT_SELL_SUBTLE_RGB),
+            (OrderSide::Sell, false) => (style.sell_limit, DARK_SELL_SUBTLE_RGB),
         };
         Some(configured.unwrap_or(Color::rgb(rgb.0, rgb.1, rgb.2)))
     }

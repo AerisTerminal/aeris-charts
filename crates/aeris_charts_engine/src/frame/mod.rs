@@ -108,8 +108,9 @@ const BASELINE_TOP_LINE: Color = UP;
 const BASELINE_BOTTOM_LINE: Color = DOWN;
 
 /// The chart's market up/down pair. The theme owns it through `layout.bullishColor` and
-/// `layout.bearishColor`, so every positive/negative default (candles, volume, histograms,
-/// baselines, positions, trading, profiles) repaints on a theme switch without touching data.
+/// `layout.bearishColor`, so every market up/down default (candles, volume, histograms,
+/// baselines, depth, big trades, profiles) repaints on a theme switch without touching data.
+/// Trading chrome and position profit/stop use the platform tokens instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MarketColors {
     pub(crate) up: Color,
@@ -133,8 +134,8 @@ impl MarketColors {
         )
     }
 
-    /// Stored option defaults (volume profile, big trades, periodic profiles, quote lines,
-    /// trading style) hold the compiled market tokens. Painting them through this keeps their
+    /// Stored option defaults (volume profile, big trades, periodic profiles, quote lines) hold
+    /// the compiled market tokens. Painting them through this keeps their
     /// alpha but takes this pair's hue, so those defaults follow the theme like unset slots do.
     /// Any other explicit color is returned unchanged.
     pub(crate) fn follow(self, color: Color) -> Color {
@@ -1041,6 +1042,19 @@ impl ChartEngine {
         MarketColors {
             up: Color::parse_css(&layout.bullish_color).unwrap_or(UP),
             down: Color::parse_css(&layout.bearish_color).unwrap_or(DOWN),
+        }
+    }
+
+    /// The platform gain/loss pair (`--positive` / `--negative`) of the painted surface, used
+    /// for position profit/stop so it never takes the chart's bullish/bearish colors.
+    pub(crate) fn gain_loss_colors(&self) -> (Color, Color) {
+        use aeris_charts_core::style::{
+            DARK_NEGATIVE_RGB, DARK_POSITIVE_RGB, LIGHT_NEGATIVE_RGB, LIGHT_POSITIVE_RGB,
+        };
+        let rgb = |c: (u8, u8, u8)| Color::rgb(c.0, c.1, c.2);
+        match self.surface_theme() {
+            crate::ChartTheme::Light => (rgb(LIGHT_POSITIVE_RGB), rgb(LIGHT_NEGATIVE_RGB)),
+            crate::ChartTheme::Dark => (rgb(DARK_POSITIVE_RGB), rgb(DARK_NEGATIVE_RGB)),
         }
     }
 }

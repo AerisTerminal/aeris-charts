@@ -5135,27 +5135,23 @@ mod tests {
             modifiers,
             ..WheelSample::default()
         };
-        // Plain wheel: 15% ratio steps with the right offset in bars (the gap after the latest
-        // bar) unchanged, wherever the pointer is.
+        // Plain wheel: exact 10% steps with the right offset in bars (the gap after the latest bar)
+        // unchanged, wherever the pointer is.
         let spacing = chart.bar_spacing();
         let offset = chart.time_scale.right_offset();
         assert!(chart.input_wheel(wheel(-1.0, InputModifiers::default())));
-        assert!((chart.bar_spacing() - spacing / 1.15).abs() < 1e-9);
+        assert!((chart.bar_spacing() - spacing * 0.9).abs() < 1e-9);
         assert_eq!(chart.time_scale.right_offset(), offset);
-        assert!(chart.input_wheel(wheel(1.0, InputModifiers::default())));
-        assert!((chart.bar_spacing() - spacing).abs() < 1e-9);
 
-        // A coalesced fast spin applies every notch, matching the same notches sent one by one.
+        // A coalesced fast spin moves exactly one notch.
         let mut stepped = self::chart();
-        for _ in 0..3 {
-            assert!(stepped.input_wheel(wheel(1.0, InputModifiers::default())));
-        }
+        assert!(stepped.input_wheel(wheel(1.0, InputModifiers::default())));
         let mut coalesced = self::chart();
         assert!(coalesced.input_wheel(wheel(3.0, InputModifiers::default())));
         assert!((coalesced.bar_spacing() - stepped.bar_spacing()).abs() < 1e-9);
-        assert!(coalesced.bar_spacing() > spacing * 1.5);
+        assert!((coalesced.bar_spacing() - spacing * 1.1).abs() < 1e-9);
 
-        // Horizontal wheel pan moves one pixel per normalized wheel pixel.
+        // Horizontal wheel pan moves 80 px per normalized wheel notch.
         let mut panned = self::chart();
         let before = panned.time_scale.right_offset();
         assert!(panned.input_wheel(WheelSample {
@@ -5166,7 +5162,7 @@ mod tests {
         }));
         let moved_px = (panned.time_scale.right_offset() - before) * panned.bar_spacing();
         assert!(
-            (moved_px + 50.0).abs() < 1e-9,
+            (moved_px + 40.0).abs() < 1e-9,
             "wheel pan moved {moved_px} px"
         );
 

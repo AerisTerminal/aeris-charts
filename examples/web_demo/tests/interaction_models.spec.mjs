@@ -142,7 +142,7 @@ test("interaction models run engine-side with canonical behavior", async ({ page
   console.log("wheel zoom in:", z0.toFixed(4), "->", z1.toFixed(4));
   expect(z1).toBeGreaterThan(z0 * 1.04);
 
-  // 6) wheel scroll (deltaX): offset moves by 120px/spacing bars.
+  // 6) wheel scroll (deltaX): offset moves by 80px/spacing bars per notch.
   await page.evaluate(() => window.__chart.apply_options({ wheel_behavior: "pan" }));
   const w0 = (await state(page)).offset;
   await page.mouse.wheel(120, 0);

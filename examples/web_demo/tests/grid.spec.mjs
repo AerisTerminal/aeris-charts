@@ -226,10 +226,10 @@ test("portable design tokens and disabled controls match the brand contract", as
     surface: "#171717", "surface-secondary": "#fafafa0f", "surface-popover": "#262626", border: "#fafafa1a",
     "border-secondary": "#fafafa26", "hover-bg": "#fafafa13", "active-bg": "#fafafa26",
     "border-width": "1px", "text-default": "#fafafa", "text-secondary": "#fafafa8c", "text-muted": "#fafafa40",
-    "text-hover": "#fafafa", "icon-active": "#fafafa", "sell-active": "#fb838c", "book-fill-text": "#ffffff", "warning-hover": "#ff7b1f", "warning-foreground": "#ffffff", "text-positive": "#98c379", "text-negative": "#e06c75", primary: "#006edd",
-    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#98c379", negative: "#e06c75", bullish: "#98c379", bearish: "#e06c75",
+    "text-hover": "#fafafa", "icon-active": "#fafafa", "sell-active": "#fb838c", "book-fill-text": "#ffffff", "warning-hover": "#ff7b1f", "warning-foreground": "#ffffff", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
+    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#98c379", bearish: "#e06c75",
     "button-fill": "#fafafad9", "radius-compact": "6px", "radius-medium": "14px",
-    "positive-subtle": "#3c4933", "negative-subtle": "#533133", "danger-hover": "#f96a75",
+    "positive-subtle": "#193c37", "negative-subtle": "#532b2e", "danger-hover": "#f96a75",
     "danger-disabled": "#6b3135", "danger-disabled-foreground": "#d0646c",
   });
 
@@ -239,10 +239,10 @@ test("portable design tokens and disabled controls match the brand contract", as
   expect(Object.values(light).every(Boolean)).toBe(true);
   expect(light).toMatchObject({
     surface: "#ffffff", border: "#0a0a0a33", "text-default": "#0a0a0a", "text-secondary": "#0a0a0a94",
-    "text-muted": "#0a0a0a40", "text-positive": "#3fb950", "text-negative": "#f85149", primary: "#006edd",
-    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#3fb950", negative: "#f85149", bullish: "#3fb950", bearish: "#f85149",
+    "text-muted": "#0a0a0a40", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
+    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#3fb950", bearish: "#f85149",
     "button-fill": "#0a0a0af2", "radius-compact": "6px", "radius-medium": "14px",
-    "positive-subtle": "#e8f7ea", "negative-subtle": "#fee1e0", "danger-hover": "#e5404d",
+    "positive-subtle": "#dcf5f0", "negative-subtle": "#ffe2e2", "danger-hover": "#e5404d",
     "border-width": "1px", "warning-hover": "#e05c00", "warning-foreground": "#ffffff",
     "border-secondary": "#0a0a0a1a", "hover-bg": "#0a0a0a0d", "active-bg": "#0a0a0a0d",
     "sell-active": "#c9303c", "book-fill-text": "#000000",
@@ -857,7 +857,7 @@ test("workspace state composes chart persistence V1 and restores stable ownershi
     first.cells()[0].set_host_chart_identity("BTC-USD");
     second.set_host_chart_identity("ETH-USD");
     third.set_host_chart_identity("SOL-USD");
-    first.cells()[0].chart.add_drawing("horizontal_line", [{ logical: 6, price: 106 }], { color: "#ff0000" });
+    first.cells()[0].chart.add_drawing("horizontal_line", [{ logical: 6, price: 106 }], { color: "#e06c75" });
     second.chart.add_drawing("trend_line", [
       { logical: 4, price: 104 }, { logical: 12, price: 112 },
     ], { style: "dashed", width: 4 });

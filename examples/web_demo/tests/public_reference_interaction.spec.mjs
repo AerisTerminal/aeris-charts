@@ -100,13 +100,7 @@ async function dispatch_wheel_pair(page, trace, axis = false) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
 }
 
-// Aeris keeps the reference's wheel delta normalization and axis routing but is deliberately more
-// responsive: zoom is 1.15x per normalized notch (exponential, up to 5 notches per event) where the
-// reference adds 10% and saturates at one notch, and pan is 100 px per notch instead of 80 px.
-// The reference ratio 1 + n/10 recovers the normalized notch count n of an unsaturated trace.
-const aeris_zoom_ratio = (notches) => 1.15 ** Math.max(-5, Math.min(5, notches));
-
-test("normalized wheel traces keep reference routing with Aeris wheel sensitivity", async ({ page, browserName }) => {
+test("normalized wheel traces retain behavior learned from the public reference fixture", async ({ page, browserName }) => {
   test.skip(browserName !== "chromium", "synthetic line/page WheelEvent scaling differs across browser test drivers");
   await open_pair(page);
   for (const trace of [
@@ -122,14 +116,11 @@ test("normalized wheel traces keep reference routing with Aeris wheel sensitivit
     const before = await states(page);
     await dispatch_wheel_pair(page, trace);
     const after = await states(page);
-    const reference_ratio = after.reference.spacing / before.reference.spacing;
-    // One page unit is 1.2 notches, which the reference saturates to one.
-    const notches = trace.deltaMode === 2 ? -trace.deltaY * 1.2 : 10 * (reference_ratio - 1);
     expect(after.Aeris.spacing / before.Aeris.spacing, JSON.stringify(trace))
-      .toBeCloseTo(aeris_zoom_ratio(notches), 8);
+      .toBeCloseTo(after.reference.spacing / before.reference.spacing, 8);
     if (trace.deltaY === 0) {
       expect(after.Aeris.offset - before.Aeris.offset, JSON.stringify(trace))
-        .toBeCloseTo((after.reference.offset - before.reference.offset) * 100 / 80, 6);
+        .toBeCloseTo(after.reference.offset - before.reference.offset, 6);
     } else if (trace.deltaX === 0) {
       expect(after.Aeris.logical - before.Aeris.logical, JSON.stringify(trace)).toBe(0);
       expect(after.reference.logical - before.reference.logical, JSON.stringify(trace)).toBe(0);
@@ -140,9 +131,8 @@ test("normalized wheel traces keep reference routing with Aeris wheel sensitivit
   const before_axis = await states(page);
   await dispatch_wheel_pair(page, { deltaX: 0, deltaY: -24, deltaMode: 0 }, true);
   const after_axis = await states(page);
-  const axis_notches = 10 * (after_axis.reference.spacing / before_axis.reference.spacing - 1);
   expect(after_axis.Aeris.spacing / before_axis.Aeris.spacing)
-    .toBeCloseTo(aeris_zoom_ratio(axis_notches), 8);
+    .toBeCloseTo(after_axis.reference.spacing / before_axis.reference.spacing, 8);
 });
 
 test("pane drag slop and click/double-click callback counts match the oracle", async ({ page, browserName }) => {

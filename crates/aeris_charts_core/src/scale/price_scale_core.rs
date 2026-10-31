@@ -571,6 +571,10 @@ impl PriceScaleCore {
 
     // --- axis-drag scale ---
 
+    /// Price-axis drag zooms at 0.8 of the reference rate: the reference coefficient is raised to
+    /// this power, so the curve and direction stay the same while a drag feels heavier.
+    const DRAG_SCALE_SENSITIVITY: f64 = 0.8;
+
     pub fn start_scale(&mut self, x: f64) {
         if self.is_percentage() || self.is_indexed_to_100() {
             return;
@@ -600,8 +604,9 @@ impl PriceScaleCore {
 
         let x = (self.height - (x - self.pane_offset)).max(0.0);
 
-        let mut scale_coeff =
-            (scale_start_point + (self.height - 1.0) * 0.2) / (x + (self.height - 1.0) * 0.2);
+        let mut scale_coeff = ((scale_start_point + (self.height - 1.0) * 0.2)
+            / (x + (self.height - 1.0) * 0.2))
+            .powf(Self::DRAG_SCALE_SENSITIVITY);
         // Set together with `scale_start_point` in `start_scale`; bail if the pair desynced.
         let Some(mut new_price_range) = self.price_range_snapshot else {
             return;
@@ -976,8 +981,8 @@ mod tests {
         s.set_auto_scale(false);
         s.start_scale(150.0); // start point (inverted): 50
         s.scale_to(100.0); // x' = 100
-        // coeff = (50 + 199*0.2) / (100 + 199*0.2) = 89.8 / 139.8
-        let coeff: f64 = 89.8 / 139.8;
+        // coeff = ((50 + 199*0.2) / (100 + 199*0.2))^0.8 = (89.8 / 139.8)^0.8
+        let coeff: f64 = (89.8f64 / 139.8).powf(0.8);
         let r = s.price_range().unwrap();
         let expected_half = 50.0 * coeff;
         assert!((r.min_value() - (50.0 - expected_half)).abs() < 1e-9);

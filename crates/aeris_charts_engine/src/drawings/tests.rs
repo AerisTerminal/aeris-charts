@@ -8366,7 +8366,7 @@ fn idle_position_progress_keeps_its_drawing_z_order() {
     chart.set_selected_drawing(None);
 
     let frame = chart.build_frame();
-    let reward = Color::rgb(0x98, 0xc3, 0x79);
+    let reward = Color::rgb(0x08, 0x99, 0x81);
     let progress_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 96);
     let progress_index = frame.panes[0]
         .main

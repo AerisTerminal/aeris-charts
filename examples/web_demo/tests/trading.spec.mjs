@@ -253,19 +253,19 @@ test("trading lines use dedicated hits and render semantic colors through the sh
 
   const url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
   const image = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
-  // Primary blue appears only in trading chrome (the take-profit order).
+  // Primary blue appears only in trading chrome (buy and take-profit orders).
   expect(count_near(image, [0, 110, 221]), "take-profit pixels").toBeGreaterThan(100);
   // The resting limit uses the subtle token in the marker, not the axis label.
-  expect(count_near(image, [0x3c, 0x49, 0x33], 4), "--positive-subtle buy limit").toBeGreaterThan(100);
-  // Stop-loss red is shared with bearish candles, so read it from the stop line's own row: the
-  // rule spans the pane, which candles crossing that row cannot fake.
+  expect(count_near(image, [0x13, 0x27, 0x3b], 4), "--buy-subtle buy limit").toBeGreaterThan(100);
+  // Read the stop-loss red from the stop line's own row: the rule spans the pane, which red
+  // candles crossing that row cannot fake.
   const pane_px = Math.round(probe.chart_width * probe.dpr);
   const row_negative = (row) => {
     let count = 0;
     for (let x = 0; x < pane_px; x += 1) {
       const offset = (row * image.width + x) * 4;
-      if (Math.abs(image.data[offset] - 224) <= 12 && Math.abs(image.data[offset + 1] - 108) <= 12
-        && Math.abs(image.data[offset + 2] - 117) <= 12) count += 1;
+      if (Math.abs(image.data[offset] - 247) <= 12 && Math.abs(image.data[offset + 1] - 82) <= 12
+        && Math.abs(image.data[offset + 2] - 95) <= 12) count += 1;
     }
     return count;
   };
@@ -301,8 +301,8 @@ for (const [backend, theme] of [["canvas2d", "light"], ["webgpu", "dark"]]) {
     const url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
     const image = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
     const colors = theme === "light"
-      ? [[232, 247, 234], [63, 185, 80], [248, 81, 73], [254, 225, 224]]
-      : [[60, 73, 51], [152, 195, 121], [224, 108, 117], [83, 49, 51]];
+      ? [[224, 238, 251], [0, 110, 221], [247, 82, 95], [254, 234, 236]]
+      : [[19, 39, 59], [0, 110, 221], [247, 82, 95], [63, 34, 36]];
     for (const [index, { id, y }] of probe.rows.entries()) {
       expect(y, `${id} must be visible`).toBeGreaterThan(5);
       expect(y).toBeLessThan(image.height / probe.dpr - 5);
