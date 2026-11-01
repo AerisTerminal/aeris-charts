@@ -698,11 +698,12 @@ impl ChartEngine {
         self.format_trading_quantity(signed_quantity)
     }
 
-    fn trading_side_label(side: OrderSide) -> &'static str {
+    fn trading_side_label(&self, side: OrderSide) -> &'static str {
         match side {
-            OrderSide::Buy => "Buy",
-            OrderSide::Sell => "Sell",
+            OrderSide::Buy => crate::text::BUY,
+            OrderSide::Sell => crate::text::SELL,
         }
+        .text(self.language)
     }
 
     /// The value cell of an order: a working order names itself, a protection order reports the
@@ -715,7 +716,7 @@ impl ChartEngine {
         if order.status == OrderStatus::Inactive {
             return (
                 TradingControlSegmentKind::OrderType,
-                "Inactive".to_string(),
+                crate::text::INACTIVE.text(self.language).to_string(),
                 self.trading_style().inactive,
             );
         }
@@ -726,15 +727,16 @@ impl ChartEngine {
             return (TradingControlSegmentKind::Pnl, text, color);
         }
         let kind = match order.kind {
-            crate::OrderKind::Market => "Market",
-            crate::OrderKind::Limit => "Limit",
-            crate::OrderKind::Stop => "Stop",
-            crate::OrderKind::StopLimit => "Stop Limit",
-        };
+            crate::OrderKind::Market => crate::text::MARKET,
+            crate::OrderKind::Limit => crate::text::LIMIT,
+            crate::OrderKind::Stop => crate::text::STOP_ORDER,
+            crate::OrderKind::StopLimit => crate::text::STOP_LIMIT,
+        }
+        .text(self.language);
         let text = if self.trading_order_preview(order).is_some() {
             kind.to_string()
         } else {
-            format!("{} {kind}", Self::trading_side_label(order.side))
+            format!("{} {kind}", self.trading_side_label(order.side))
         };
         (
             TradingControlSegmentKind::OrderType,
@@ -786,7 +788,7 @@ impl ChartEngine {
 
     /// Width of the side tag a dragged order shows ahead of its other controls.
     pub(crate) fn trading_drag_tag_width(&self, side: OrderSide) -> f64 {
-        self.trading_quantity_width(Self::trading_side_label(side))
+        self.trading_quantity_width(self.trading_side_label(side))
     }
 
     /// Where a marker line begins: the pane's left edge, or with `extend_lines_left` off, the
@@ -1695,9 +1697,10 @@ impl ChartEngine {
         }
 
         let side = match mark.side {
-            OrderSide::Buy => "Buy",
-            OrderSide::Sell => "Sell",
-        };
+            OrderSide::Buy => crate::text::BUY,
+            OrderSide::Sell => crate::text::SELL,
+        }
+        .text(self.language);
         let text = if fills.len() == 1 {
             let fill = &executions[fills[0]];
             format!(
@@ -1707,14 +1710,15 @@ impl ChartEngine {
             )
         } else {
             format!(
-                "{side} {} @ {} avg · {} fills",
+                "{side} {} @ {} {} · {}",
                 self.format_trading_quantity(quantity),
                 self.format_trading_price(
                     pane_index,
                     executions[fills[0]].price_scale,
                     notional / quantity
                 ),
-                fills.len()
+                crate::text::AVG_PRICE.text(self.language),
+                crate::text::fills_count(self.language, fills.len())
             )
         };
         let height = Self::trading_tooltip_height(self.options.get().layout.font_size);
@@ -1786,7 +1790,7 @@ impl ChartEngine {
                 lines.push(Prim::Text {
                     x: (x * hpr) as f32,
                     y: ((pane.top + 12.0) * vpr) as f32,
-                    text: "Replay".to_string(),
+                    text: crate::text::REPLAY.text(self.language).to_string(),
                     color,
                     size: (self.options.get().layout.font_size * vpr) as f32,
                     family: self.options.get().layout.font_family.clone(),
@@ -1981,7 +1985,7 @@ impl ChartEngine {
                             .is_some_and(|hit| hit.kind == crate::TradingHitKind::CancelButton)
                     {
                         tooltip = Some(TradingTooltip {
-                            text: "Close position".to_string(),
+                            text: crate::text::CLOSE_POSITION.text(self.language).to_string(),
                             layout: TradingChipLayout {
                                 x: cluster.start() + cluster.width()
                                     - self.trading_close_width() / 2.0,
@@ -2089,7 +2093,7 @@ impl ChartEngine {
                             lines,
                             TradingControlSegment {
                                 kind: TradingControlSegmentKind::Quantity,
-                                text: Self::trading_side_label(order.side),
+                                text: self.trading_side_label(order.side),
                                 width,
                                 color: base_color,
                                 filled: true,
@@ -2191,13 +2195,25 @@ impl ChartEngine {
                         {
                             None
                         }
-                        (OrderRole::TakeProfit, _) => Some("Cancel take profit".to_string()),
-                        (OrderRole::StopLoss, _) => Some("Cancel stop loss".to_string()),
-                        (OrderRole::Working, OrderStatus::PartiallyFilled) => Some(format!(
-                            "Cancel remaining {}",
-                            self.format_trading_quantity(remaining)
-                        )),
-                        (OrderRole::Working, _) => Some("Cancel order".to_string()),
+                        (OrderRole::TakeProfit, _) => Some(
+                            crate::text::CANCEL_TAKE_PROFIT
+                                .text(self.language)
+                                .to_string(),
+                        ),
+                        (OrderRole::StopLoss, _) => Some(
+                            crate::text::CANCEL_STOP_LOSS
+                                .text(self.language)
+                                .to_string(),
+                        ),
+                        (OrderRole::Working, OrderStatus::PartiallyFilled) => {
+                            Some(crate::text::cancel_remaining(
+                                self.language,
+                                &self.format_trading_quantity(remaining),
+                            ))
+                        }
+                        (OrderRole::Working, _) => {
+                            Some(crate::text::CANCEL_ORDER.text(self.language).to_string())
+                        }
                     };
                     if let Some(text) = cancel_label.filter(|_| {
                         self.trading_state.tooltip_armed
@@ -2229,8 +2245,10 @@ impl ChartEngine {
                             style: LineStyle::Dotted,
                             color,
                         });
-                        let trigger =
-                            format!("Trigger {}", self.format_trading_quantity(remaining));
+                        let trigger = crate::text::trigger_quantity(
+                            self.language,
+                            &self.format_trading_quantity(remaining),
+                        );
                         self.push_trading_segment(
                             lines,
                             TradingControlSegment {
@@ -2591,5 +2609,29 @@ impl ChartEngine {
         if let Some(tooltip) = tooltip {
             self.push_trading_tooltip(lines, &tooltip.text, pane, tooltip.layout);
         }
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+
+    #[test]
+    fn trading_labels_follow_the_chart_language() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        assert_eq!(chart.trading_side_label(OrderSide::Buy), "Buy");
+        assert_eq!(chart.trading_side_label(OrderSide::Sell), "Sell");
+        chart.set_language(crate::ChartLanguage::Russian);
+        assert_eq!(chart.trading_side_label(OrderSide::Buy), "Покупка");
+        assert_eq!(chart.trading_side_label(OrderSide::Sell), "Продажа");
+        assert_eq!(
+            crate::text::CLOSE_POSITION.text(chart.language()),
+            "Закрыть позицию"
+        );
+        assert_eq!(crate::text::REPLAY.text(chart.language()), "Повтор");
+        assert_eq!(
+            crate::text::cancel_remaining(chart.language(), "0.25"),
+            "Отменить оставшиеся 0.25"
+        );
     }
 }

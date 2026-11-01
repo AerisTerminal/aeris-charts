@@ -2389,6 +2389,7 @@ class series_impl implements series_api {
       volume_source: raw.volume_source === null ? null : this.chart.series_handle(raw.volume_source),
       style: raw.style,
       output_name: raw.output_name,
+      output_label: raw.output_label,
       output_index: raw.output_index,
       output_count: raw.output_count,
     };

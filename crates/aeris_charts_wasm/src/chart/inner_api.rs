@@ -2279,11 +2279,15 @@ impl ChartInner {
         self.engine.set_date_format(pattern);
     }
 
-    /// reference `localization.locale` (default the browser language): regenerate the engine's
-    /// month-name tables (12 short + 12 long) from `Intl.DateTimeFormat` so the date-format
-    /// `MMM`/`MMMM` tokens and the month tick labels localize. An invalid/unsupported tag
-    /// warns and keeps the current tables.
+    /// reference `localization.locale` (default the browser language): switch the engine's display
+    /// language from the BCP 47 tag (`ru`, `ru-RU`, … select Russian; anything else selects
+    /// English), then regenerate the engine's month-name tables (12 short + 12 long) from
+    /// `Intl.DateTimeFormat` so the date-format `MMM`/`MMMM` tokens and the month tick labels
+    /// follow the exact browser locale. An invalid/unsupported tag still switches the engine
+    /// language, then warns and keeps the language's built-in month tables.
     pub fn set_locale(&mut self, locale: &str) {
+        self.engine
+            .set_language(aeris_charts_engine::ChartLanguage::from_tag(locale));
         let Some((short, long)) = locale_month_names(locale) else {
             web_sys::console::warn_1(
                 &format!("aeris_charts: set_locale ignored unsupported locale {locale:?}").into(),

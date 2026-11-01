@@ -1274,7 +1274,6 @@ pub const TEXT_TOOL_DEFAULT_SIZE: f64 = 14.0;
 /// hit area and the hover/focus borders all use this box so selection, hovering, and typing
 /// mode land on exactly the same outline.
 pub(crate) const TEXT_CHROME_PAD: f64 = TEXT_PAD + 2.0;
-pub(crate) const LINE_TEXT_PLACEHOLDER: &str = "+ Add text";
 
 fn default_gann_level(value: f64) -> crate::DrawingLevel {
     crate::DrawingLevel {
@@ -4122,7 +4121,7 @@ impl ChartEngine {
             let block = if drawing.kind.has_line_text() && drawing.text.is_empty() {
                 self.drawing_text_block(
                     drawing,
-                    LINE_TEXT_PLACEHOLDER,
+                    crate::text::line_text_placeholder(self.language),
                     size,
                     drawing.text_v_align,
                     font_family,
@@ -5073,6 +5072,7 @@ impl ChartEngine {
         Some(
             serde_json::to_string(&crate::drawing_contract::drawing_property_schema(
                 self.drawing(id)?.kind,
+                self.language,
             ))
             .unwrap_or_default(),
         )
@@ -5476,11 +5476,12 @@ impl ChartEngine {
             let names = match supported.iter().position(|(known, _)| *known == kind) {
                 Some(slot) => &supported[slot].1,
                 None => {
-                    let names = crate::drawing_contract::drawing_property_schema(kind)
-                        .properties
-                        .into_iter()
-                        .map(|property| property.name)
-                        .collect();
+                    let names =
+                        crate::drawing_contract::drawing_property_schema(kind, self.language)
+                            .properties
+                            .into_iter()
+                            .map(|property| property.name)
+                            .collect();
                     supported.push((kind, names));
                     &supported[supported.len() - 1].1
                 }
@@ -5787,7 +5788,7 @@ impl ChartEngine {
                 let family = &self.options.get().layout.font_family;
                 self.drawing_text_block(
                     drawing,
-                    LINE_TEXT_PLACEHOLDER,
+                    crate::text::line_text_placeholder(self.language),
                     run.size,
                     run.v_align,
                     family,

@@ -2865,6 +2865,8 @@ impl ChartEngine {
             staged_initial_domain,
         )?;
         staged.next_pane_id = self.next_pane_id;
+        // Restored indicator titles must come in this chart's language, not the staged default.
+        staged.language = self.language;
         let mut result = staged.install_validated_state(validated)?;
         for (pane, domain) in staged.panes.iter_mut().zip(domains) {
             pane.general_horizontal_domain = staged.general_horizontal_domains.register(domain)?;

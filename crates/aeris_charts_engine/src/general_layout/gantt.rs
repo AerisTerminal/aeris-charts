@@ -453,13 +453,13 @@ impl ChartEngine {
     /// Schedule text of one task: its span and completion, or its milestone date.
     pub(super) fn gantt_task_detail(&self, task: &GanttTask) -> String {
         if task.milestone() {
-            format!("Milestone {}", self.gantt_date(task.start))
+            crate::text::gantt_milestone(self.language, &self.gantt_date(task.start))
         } else {
-            format!(
-                "{} – {} · {}% complete",
-                self.gantt_date(task.start),
-                self.gantt_date(task.end),
-                (task.progress * 100.0).round()
+            crate::text::gantt_task_span(
+                self.language,
+                &self.gantt_date(task.start),
+                &self.gantt_date(task.end),
+                (task.progress * 100.0).round(),
             )
         }
     }

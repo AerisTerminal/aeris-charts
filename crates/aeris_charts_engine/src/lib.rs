@@ -37,8 +37,11 @@ mod hit_test;
 mod host_layout;
 mod indicators;
 mod interaction;
+#[cfg(test)]
+mod language_tests;
 mod native_primitives;
 mod synthetic_bars;
+mod text;
 mod volume_profile;
 pub use volume_profile::{
     MAX_VOLUME_PROFILE_INDICATORS, VolumeProfileIndicatorOptions, VolumeProfileIndicatorSnapshot,
@@ -143,7 +146,7 @@ pub use external_studies::{
     ExternalStudyError, ExternalStudyInputRequirements, ExternalStudyInputStream,
     ExternalStudyOutputDescriptor, ExternalStudyOutputInfo, ExternalStudyPaneTarget,
     ExternalStudyPlotKind, ExternalStudyPointStyle, ExternalStudyScaleTarget,
-    ExternalStudyThresholdRegion, MAX_EXTERNAL_STUDY_OUTPUTS, OPTIONS_VOLUME_TITLE,
+    ExternalStudyThresholdRegion, MAX_EXTERNAL_STUDY_OUTPUTS,
 };
 pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
@@ -226,7 +229,7 @@ pub use indicators::{
     INDICATOR_SCHEMA_REVISION, IndicatorBindingInfo, IndicatorChromeOptions, IndicatorInputSource,
     IndicatorKind, IndicatorOutputDescriptor, IndicatorOutputStyle, IndicatorPane,
     IndicatorParameterDescriptor, IndicatorParameterType, IndicatorSchema, PreviousPeriod,
-    StudyCalendarPolicy,
+    StudyCalendarPolicy, indicator_output_label,
 };
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use interaction::{
@@ -293,6 +296,7 @@ pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout};
 use aeris_charts_core::TimePointIndex;
 use aeris_charts_core::format::price_formatter::PriceFormatter;
 use aeris_charts_core::format::time_formatter::{DEFAULT_DATE_FORMAT, MonthNames};
+pub use aeris_charts_core::language::ChartLanguage;
 use aeris_charts_core::model::data_layer::{
     DataLayer, DataLayerMemoryUsage, MergedTimeMapping, PointColorChannel, SeriesId, SeriesIdError,
 };
@@ -2085,9 +2089,13 @@ pub struct ChartEngine {
     synced_first_time: Option<i64>,
     /// reference `localization.dateFormat` (default `dd MMM \'yy`): drives the crosshair time label.
     pub date_format: String,
+    /// The display language of every engine-generated text (drawing and indicator labels,
+    /// trading overlay, measure and countdown text, legend fallbacks). English is the default.
+    pub(crate) language: ChartLanguage,
     /// Per-locale month-name tables (reference `localization.locale`) used by the date-format
-    /// `MMM`/`MMMM` tokens and the month tick labels. Hosts inject locale-derived names (the
-    /// wasm host builds them from `Intl.DateTimeFormat`); the headless default is English.
+    /// `MMM`/`MMMM` tokens and the month tick labels. `set_language` installs the
+    /// language's built-in tables; hosts may then inject locale-derived names (the wasm host
+    /// builds them from `Intl.DateTimeFormat`).
     pub month_names: MonthNames,
     /// Series ids in stable order, bottom to top (topmost LAST — the reference's z-order, pane.ts
     /// `orderedSources`/`setSeriesOrder`). Live series only: removed slots leave the list.
@@ -2356,6 +2364,7 @@ impl ChartEngine {
             synced_last_time: None,
             synced_first_time: None,
             date_format: DEFAULT_DATE_FORMAT.to_string(),
+            language: ChartLanguage::default(),
             month_names: MonthNames::default(),
             series_order,
             series_order_explicit: false,
@@ -3341,10 +3350,97 @@ impl ChartEngine {
     /// Inject per-locale month-name tables (reference `localization.locale`): the 12 short and 12
     /// long month names used by the date-format `MMM`/`MMMM` tokens and the month tick
     /// labels. The engine stays headless — hosts derive the names (the wasm host uses
-    /// `Intl.DateTimeFormat`); the default is English.
+    /// `Intl.DateTimeFormat`); the default is the chart language's built-in table.
     pub fn set_month_names(&mut self, short: [String; 12], long: [String; 12]) {
         self.month_names = MonthNames { short, long };
         self.invalidate_frame_scene();
+    }
+
+    /// The chart's display language. English is the default.
+    pub fn language(&self) -> ChartLanguage {
+        self.language
+    }
+
+    /// Set the display language of every engine-generated text: drawing and indicator titles and
+    /// settings labels, the trading overlay, measure and countdown text, legend fallbacks, and
+    /// the built-in month-name tables (installed here; a host can still override them through
+    /// [`Self::set_month_names`]). A no-op when unchanged. Host-supplied strings — series titles
+    /// set through options, drawing text, category labels — are never translated, and an
+    /// indicator title the host overrode survives the switch.
+    pub fn set_language(&mut self, language: ChartLanguage) {
+        if self.language == language {
+            return;
+        }
+        let previous = self.language;
+        self.language = language;
+        self.month_names = MonthNames::of(language);
+        self.retitle_language_owned_series(previous);
+        // Label widths change with the language, so host-measured drawing text and trading
+        // chips must be measured again.
+        self.invalidate_text_measurements();
+        self.invalidate_frame_all();
+    }
+
+    /// Re-title the series whose title the engine generated in the previous language: indicator
+    /// outputs (a host override through the series `title` option survives), and the
+    /// engine-owned options-volume and delta-histogram series.
+    fn retitle_language_owned_series(&mut self, previous: ChartLanguage) {
+        let language = self.language;
+        let mut retitle: Vec<(SeriesId, String)> = Vec::new();
+        for binding in &self.indicators {
+            for (index, &id) in binding.outputs.iter().enumerate() {
+                if let Some(entry) = self.series_entry(id)
+                    && entry.title
+                        == indicators::indicator_output_title(&binding.kind, index, previous)
+                {
+                    retitle.push((
+                        id,
+                        indicators::indicator_output_title(&binding.kind, index, language),
+                    ));
+                }
+            }
+        }
+        for dependent in self.trade_dependents.values().flatten() {
+            if dependent.kind != footprint::TradeStudyKind::DeltaHistogram {
+                continue;
+            }
+            if let Some(entry) = self.series_entry(dependent.series_id)
+                && entry.title == text::DELTA.text(previous)
+            {
+                retitle.push((dependent.series_id, text::DELTA.text(language).to_string()));
+            }
+        }
+        let mut studies: Vec<u64> = self
+            .external_study_outputs
+            .iter()
+            .filter(|(_, state)| state.options_volume)
+            .map(|(&(study_id, _), _)| study_id)
+            .collect();
+        studies.sort_unstable();
+        studies.dedup();
+        for study_id in studies {
+            let Some(series) = self.options_volume_series(study_id) else {
+                continue;
+            };
+            for (index, id) in series.into_iter().enumerate() {
+                let phrase = [text::CALLS, text::PUTS][index];
+                if let Some(entry) = self.series_entry(id)
+                    && entry.title == phrase.text(previous)
+                {
+                    retitle.push((id, phrase.text(language).to_string()));
+                }
+                if let Some(state) = self.external_study_outputs.get_mut(&(study_id, index))
+                    && state.legend_label.as_deref() == Some(phrase.text(previous))
+                {
+                    state.legend_label = Some(phrase.text(language).to_string());
+                }
+            }
+        }
+        for (id, title) in retitle {
+            if let Some(entry) = self.series_entry_mut(id) {
+                entry.title = title;
+            }
+        }
     }
 
     /// Add a series to the headless chart. The returned id is stable for the instance lifetime.

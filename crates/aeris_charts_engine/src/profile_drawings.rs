@@ -1024,8 +1024,10 @@ mod tests {
 
     #[test]
     fn schema_exposes_profile_settings() {
-        let schema =
-            crate::drawing_contract::drawing_property_schema(DrawingKind::FixedRangeVolumeProfile);
+        let schema = crate::drawing_contract::drawing_property_schema(
+            DrawingKind::FixedRangeVolumeProfile,
+            crate::ChartLanguage::English,
+        );
         for name in [
             "profile_rows",
             "profile_value_area_percent",

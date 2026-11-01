@@ -32,8 +32,6 @@ const TEXT_SIZE: f64 = 12.0;
 const LABEL_GAP: f64 = 6.0;
 const RIGHT_PADDING: f64 = 8.0;
 const MIN_CELL: f64 = 2.0;
-/// ECharts' English `dayLabel` name map.
-const DEFAULT_DAY_LABELS: [&str; 7] = ["S", "M", "T", "W", "T", "F", "S"];
 
 /// One calendar value. `date` is any instant inside its UTC day, in epoch milliseconds.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -311,12 +309,13 @@ fn color_scale(base: Color, input: &CalendarInput) -> (Color, Color) {
     (low, high)
 }
 
-fn day_labels(input: &CalendarInput) -> [&str; 7] {
+fn day_labels(language: crate::ChartLanguage, input: &CalendarInput) -> [&str; 7] {
+    let defaults = crate::text::default_day_labels(language);
     std::array::from_fn(|index| {
         input
             .day_labels
             .get(index)
-            .map_or(DEFAULT_DAY_LABELS[index], String::as_str)
+            .map_or(defaults[index], String::as_str)
     })
 }
 
@@ -324,7 +323,7 @@ impl ChartEngine {
     /// Left gutter: wide enough for the weekday labels and for the year label above them.
     fn calendar_left(&self, input: &CalendarInput, range: CalendarRange) -> f64 {
         let family = &self.options.get().layout.font_family;
-        let days = day_labels(input)
+        let days = day_labels(self.language, input)
             .iter()
             .map(|label| self.measure_text_run(label, TEXT_SIZE, family, 400, false))
             .fold(0.0_f64, f64::max);
@@ -479,7 +478,7 @@ impl ChartEngine {
         let extent = value_extent(values);
         let frame_width = hpr.min(vpr).round().max(1.0) as i32;
         let line_width = hpr.min(vpr) as f32;
-        let labels = day_labels(input);
+        let labels = day_labels(self.language, input);
         let cell = geometry.cell;
         for index in 0..geometry.range.years {
             let year = geometry.range.first_year + index as i64;

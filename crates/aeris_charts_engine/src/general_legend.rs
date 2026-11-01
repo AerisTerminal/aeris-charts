@@ -260,7 +260,7 @@ impl ChartEngine {
         for item in self.general_legend_snapshot(Some(pane_index)).items {
             if item.slices.is_empty() {
                 let title = if item.title.is_empty() {
-                    format!("Series {}", items.len() + 1)
+                    crate::text::series_fallback(self.language, items.len() + 1)
                 } else {
                     item.title
                 };
@@ -370,7 +370,7 @@ impl ChartEngine {
             }
             if hidden > 0 {
                 let label = fit_legend_label(
-                    &format!("+{} more", hidden + 1),
+                    &crate::text::more_rows(self.language, hidden + 1),
                     side_limit - 2.0 * SIDE_MARGIN,
                     measure,
                 );
@@ -445,7 +445,7 @@ impl ChartEngine {
         }
         let hidden = items.len() - placed;
         if hidden > 0 {
-            let label = format!("+{hidden} more");
+            let label = crate::text::more_rows(self.language, hidden);
             let width = measure(&label);
             let last = rows.len() - 1;
             let used = |row: &[LegendEntry]| row.last().map_or(0.0, |entry| entry.x + entry.width);

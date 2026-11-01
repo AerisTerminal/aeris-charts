@@ -33,6 +33,25 @@ const MONTHS_LONG: [&str; 12] = [
     "December",
 ];
 
+const MONTHS_SHORT_RU: [&str; 12] = [
+    "Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек",
+];
+
+const MONTHS_LONG_RU: [&str; 12] = [
+    "Январь",
+    "Февраль",
+    "Март",
+    "Апрель",
+    "Май",
+    "Июнь",
+    "Июль",
+    "Август",
+    "Сентябрь",
+    "Октябрь",
+    "Ноябрь",
+    "Декабрь",
+];
+
 /// the reference's default `localization.dateFormat` (chart-options-defaults.ts:36).
 pub const DEFAULT_DATE_FORMAT: &str = "dd MMM 'yy";
 
@@ -53,6 +72,22 @@ impl MonthNames {
             long: MONTHS_LONG.map(String::from),
         }
     }
+
+    /// The built-in Russian tables.
+    pub fn russian() -> Self {
+        Self {
+            short: MONTHS_SHORT_RU.map(String::from),
+            long: MONTHS_LONG_RU.map(String::from),
+        }
+    }
+
+    /// The built-in tables of a display language.
+    pub fn of(language: crate::language::ChartLanguage) -> Self {
+        match language {
+            crate::language::ChartLanguage::English => Self::english(),
+            crate::language::ChartLanguage::Russian => Self::russian(),
+        }
+    }
 }
 
 impl Default for MonthNames {
@@ -65,6 +100,15 @@ impl Default for MonthNames {
 pub fn english_months() -> &'static MonthNames {
     static ENGLISH: LazyLock<MonthNames> = LazyLock::new(MonthNames::english);
     &ENGLISH
+}
+
+/// The shared tables of a display language (each allocated once).
+pub fn language_months(language: crate::language::ChartLanguage) -> &'static MonthNames {
+    static RUSSIAN: LazyLock<MonthNames> = LazyLock::new(MonthNames::russian);
+    match language {
+        crate::language::ChartLanguage::English => english_months(),
+        crate::language::ChartLanguage::Russian => &RUSSIAN,
+    }
 }
 
 /// Port of `TickMarkType`.

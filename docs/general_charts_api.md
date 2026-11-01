@@ -49,7 +49,8 @@ reference rows and open differences). Each uses an axis-free layout pane and
   same input lands in the same cell in every host time zone. The chart covers whole UTC years
   (at most ten), one block of week columns and weekday rows per year, with `week_start` 0
   (Sunday) through 6 in the first row and seven host-supplied `day_labels` beginning with Sunday
-  (English initials by default). Month names come from the chart's localized month names. Values
+  (falling back to the chart language's one-letter labels). Month names come from the chart's
+  localized month names. Values
   shade linearly from `low_color` to `high_color` (default the series color from 20% to full
   opacity) with an in-canvas continuous legend. Days without a value draw an empty cell and have
   no hit. Accessibility items are every day of the covered years, labelled like `29 February
@@ -310,8 +311,9 @@ Validation is structural and atomic:
   precedence, so multiple axes do not darken shared coordinates. A rule that would sit beside a
   visible axis line on the plot edge is omitted; the axis line marks that edge.
 - Temporal axes select a bounded UTC interval from milliseconds through calendar years. Intraday,
-  day, month, and year labels use injected locale month names and the same shared `AxisFrame` as
-  numeric and category axes; hosts do not run a parallel date-axis layout.
+  day, month, and year labels use the chart language's month names (or host-injected locale month
+  names) and the same shared `AxisFrame` as numeric and category axes; hosts do not run a
+  parallel date-axis layout.
 
 The supported API exposes `chart.add_axis(options)`, `chart.axis(id)`,
 `chart.axes(pane?)`, and `chart.remove_axis(id)`. Removing a populated axis is rejected. A series

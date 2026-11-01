@@ -1563,7 +1563,8 @@ fn rectangle_middle_line_is_off_by_default_and_follows_the_border_when_enabled()
     assert_eq!(kind_options["middle_line_visible"], true);
     assert_eq!(kind_options["middle_line_width"], 3.0);
     assert_eq!(kind_options["middle_line_style"], "dotted");
-    let schema = crate::drawing_property_schema(DrawingKind::Rectangle);
+    let schema =
+        crate::drawing_property_schema(DrawingKind::Rectangle, crate::ChartLanguage::English);
     for name in [
         "middle_line_visible",
         "middle_line_color",
@@ -8409,7 +8410,7 @@ fn all_kinds() -> impl Iterator<Item = DrawingKind> {
 fn every_schema_property_is_a_live_option_that_accepts_its_default() {
     use crate::DrawingPropertyGroup as Group;
     for kind in all_kinds() {
-        let schema = crate::drawing_property_schema(kind);
+        let schema = crate::drawing_property_schema(kind, crate::ChartLanguage::English);
         assert_eq!(schema.revision, crate::DRAWING_CONTRACT_REVISION);
         let mut drawing = Drawing::new(0, kind, 0, Vec::new());
         let options = drawing.options_json();
@@ -8458,7 +8459,7 @@ fn every_schema_property_is_a_live_option_that_accepts_its_default() {
 #[test]
 fn schema_lists_only_what_each_kind_paints() {
     let names = |kind| {
-        crate::drawing_property_schema(kind)
+        crate::drawing_property_schema(kind, crate::ChartLanguage::English)
             .properties
             .into_iter()
             .map(|property| property.name)
@@ -8481,7 +8482,8 @@ fn schema_lists_only_what_each_kind_paints() {
     }
     assert!(!trend.iter().any(|property| property == "fill_enabled"));
 
-    let long = crate::drawing_property_schema(DrawingKind::LongPosition);
+    let long =
+        crate::drawing_property_schema(DrawingKind::LongPosition, crate::ChartLanguage::English);
     let toolbar = long
         .properties
         .iter()
@@ -8517,7 +8519,7 @@ fn schema_lists_only_what_each_kind_paints() {
     }
     assert!(!fib.iter().any(|property| property == "text_color"));
     assert!(
-        crate::drawing_property_schema(DrawingKind::Brush)
+        crate::drawing_property_schema(DrawingKind::Brush, crate::ChartLanguage::English)
             .anchors
             .is_empty()
     );
@@ -9080,10 +9082,13 @@ fn a_selection_style_patch_reaches_only_drawings_that_have_each_setting() {
     let text = add_text(&mut chart);
     let before = chart.drawings().to_vec();
     let has = |id: DrawingId, chart: &ChartEngine, name: &str| {
-        crate::drawing_contract::drawing_property_schema(chart.drawing(id).unwrap().kind)
-            .properties
-            .iter()
-            .any(|property| property.name == name)
+        crate::drawing_contract::drawing_property_schema(
+            chart.drawing(id).unwrap().kind,
+            crate::ChartLanguage::English,
+        )
+        .properties
+        .iter()
+        .any(|property| property.name == name)
     };
     assert!(has(trend, &chart, "extend_right"));
     assert!(!has(text, &chart, "width"));

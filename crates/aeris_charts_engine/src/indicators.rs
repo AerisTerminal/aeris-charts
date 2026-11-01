@@ -803,6 +803,9 @@ pub struct IndicatorInfo {
     /// Current engine-owned presentation state for this output.
     pub style: IndicatorOutputStyle,
     pub output_name: Cow<'static, str>,
+    /// The output's display label in the chart's [`ChartLanguage`] (see
+    /// [`indicator_output_label`]), recomputed on every query.
+    pub output_label: Cow<'static, str>,
     pub output_index: usize,
     pub output_count: usize,
 }
@@ -1975,6 +1978,35 @@ impl ChartEngine {
                             },
                         ),
                     };
+                    let output_name = if let IndicatorKind::Custom {
+                        ref type_id,
+                        ref version,
+                        ..
+                    } = binding.kind
+                    {
+                        Cow::Owned(
+                            self.custom_studies
+                                .get(type_id)
+                                .filter(|d| d.definition.version == *version)
+                                .and_then(|d| d.definition.outputs.get(output_index))
+                                .map_or_else(
+                                    || format!("Output {}", output_index + 1),
+                                    |o| o.name.clone(),
+                                ),
+                        )
+                    } else {
+                        Cow::Borrowed(indicator_output_name(&binding.kind, output_index))
+                    };
+                    // A custom study's output names are the host's own words in every language.
+                    let output_label = if matches!(binding.kind, IndicatorKind::Custom { .. }) {
+                        output_name.clone()
+                    } else {
+                        Cow::Owned(indicator_output_label(
+                            &binding.kind,
+                            output_index,
+                            self.language,
+                        ))
+                    };
                     IndicatorInfo {
                         binding_id: binding.outputs[0],
                         kind: if let IndicatorKind::Custom { ref type_id, .. } = binding.kind {
@@ -1992,25 +2024,8 @@ impl ChartEngine {
                             .series_entry(binding.outputs[output_index])
                             .map(indicator_output_style)
                             .unwrap_or_default(),
-                        output_name: if let IndicatorKind::Custom {
-                            ref type_id,
-                            ref version,
-                            ..
-                        } = binding.kind
-                        {
-                            Cow::Owned(
-                                self.custom_studies
-                                    .get(type_id)
-                                    .filter(|d| d.definition.version == *version)
-                                    .and_then(|d| d.definition.outputs.get(output_index))
-                                    .map_or_else(
-                                        || format!("Output {}", output_index + 1),
-                                        |o| o.name.clone(),
-                                    ),
-                            )
-                        } else {
-                            Cow::Borrowed(indicator_output_name(&binding.kind, output_index))
-                        },
+                        output_name,
+                        output_label,
                         output_index,
                         output_count: binding.outputs.len(),
                     }
@@ -3718,7 +3733,7 @@ impl ChartEngine {
                 s.title_visible = self.indicator_chrome.name_labels_visible;
                 s.last_value_visible = self.indicator_chrome.value_labels_visible;
                 s.price_line_visible = self.indicator_chrome.price_lines_visible;
-                s.title = indicator_output_title(&kind, output_index);
+                s.title = indicator_output_title(&kind, output_index, self.language);
                 s.line_width = Some(indicator_default_line_width(&kind, output_index));
                 if matches!(
                     kind,
@@ -4665,18 +4680,63 @@ fn momentum_histogram_color(
 /// The auto-generated indicator name behind the (hidden-by-default) name chip — what
 /// the public reference shows in its indicator legend ("SMA 20", "MACD 12 26 9"). Platforms can read it
 /// via the series options or override it with their own `title`.
-fn indicator_title(kind: &IndicatorKind) -> String {
-    let params = |d: f64| {
-        if d.fract() == 0.0 {
-            format!("{}", d as i64)
-        } else {
-            format!("{d}")
-        }
-    };
+fn indicator_period_word(period: PreviousPeriod, language: ChartLanguage) -> &'static str {
+    match (language, period) {
+        (ChartLanguage::English, PreviousPeriod::Day) => "Day",
+        (ChartLanguage::English, PreviousPeriod::Week) => "Week",
+        (ChartLanguage::English, PreviousPeriod::Month) => "Month",
+        // The genitive the "levels of the previous …" title needs.
+        (ChartLanguage::Russian, PreviousPeriod::Day) => "дня",
+        (ChartLanguage::Russian, PreviousPeriod::Week) => "недели",
+        (ChartLanguage::Russian, PreviousPeriod::Month) => "месяца",
+    }
+}
+
+fn indicator_pivot_word(
+    variant: aeris_charts_indicators::PivotKind,
+    language: ChartLanguage,
+) -> &'static str {
+    use aeris_charts_indicators::PivotKind;
+    match (language, variant) {
+        (ChartLanguage::English, PivotKind::Standard) => "Standard",
+        (ChartLanguage::English, PivotKind::Fibonacci) => "Fibonacci",
+        (ChartLanguage::English, PivotKind::Camarilla) => "Camarilla",
+        (ChartLanguage::English, PivotKind::Woodie) => "Woodie",
+        (ChartLanguage::English, PivotKind::DeMark) => "DeMark",
+        (ChartLanguage::Russian, PivotKind::Standard) => "стандартные",
+        (ChartLanguage::Russian, PivotKind::Fibonacci) => "Фибоначчи",
+        (ChartLanguage::Russian, PivotKind::Camarilla) => "Камарилья",
+        (ChartLanguage::Russian, PivotKind::Woodie) => "Вуди",
+        (ChartLanguage::Russian, PivotKind::DeMark) => "ДеМарк",
+    }
+}
+
+/// An indicator parameter in its compact title form (`2`, `1.5`).
+fn indicator_title_param(d: f64) -> String {
+    if d.fract() == 0.0 {
+        format!("{}", d as i64)
+    } else {
+        format!("{d}")
+    }
+}
+
+/// The auto-generated indicator name in the chart's display language.
+pub(crate) fn indicator_title(kind: &IndicatorKind, language: ChartLanguage) -> String {
+    match language {
+        ChartLanguage::English => indicator_title_english(kind),
+        ChartLanguage::Russian => indicator_title_russian(kind),
+    }
+}
+
+fn indicator_title_english(kind: &IndicatorKind) -> String {
+    let params = indicator_title_param;
     match kind {
         IndicatorKind::SwingPoints { left, right } => format!("Swing Points {left} {right}"),
         IndicatorKind::SessionLevels { .. } => "Session Levels".into(),
-        IndicatorKind::PreviousPeriodLevels { period, .. } => format!("Previous {period:?} Levels"),
+        IndicatorKind::PreviousPeriodLevels { period, .. } => format!(
+            "Previous {} Levels",
+            indicator_period_word(*period, ChartLanguage::English)
+        ),
         IndicatorKind::OpeningRange {
             duration_seconds, ..
         } => format!("Opening Range {duration_seconds}s"),
@@ -4701,7 +4761,10 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Momentum { period } => format!("Momentum {period}"),
         IndicatorKind::RateOfChange { period } => format!("ROC {period}"),
         IndicatorKind::Donchian { period } => format!("Donchian {period}"),
-        IndicatorKind::PivotPoints { variant } => format!("Pivot Points {variant:?}"),
+        IndicatorKind::PivotPoints { variant } => format!(
+            "Pivot Points {}",
+            indicator_pivot_word(*variant, ChartLanguage::English)
+        ),
         IndicatorKind::ZigZag { deviation_percent } => {
             format!("ZigZag {deviation_percent}%")
         }
@@ -4810,22 +4873,234 @@ fn indicator_title(kind: &IndicatorKind) -> String {
     }
 }
 
-fn indicator_output_title(kind: &IndicatorKind, output_index: usize) -> String {
+fn indicator_title_russian(kind: &IndicatorKind) -> String {
+    let params = indicator_title_param;
     match kind {
-        IndicatorKind::Aroon { period } => {
-            format!("Aroon {} {period}", ["Up", "Down"][output_index])
+        IndicatorKind::SwingPoints { left, right } => format!("Свинг-точки {left} {right}"),
+        IndicatorKind::SessionLevels { .. } => "Уровни сессии".into(),
+        IndicatorKind::PreviousPeriodLevels { period, .. } => format!(
+            "Уровни предыдущего {}",
+            indicator_period_word(*period, ChartLanguage::Russian)
+        ),
+        IndicatorKind::OpeningRange {
+            duration_seconds, ..
+        } => format!("Диапазон открытия {duration_seconds}с"),
+        IndicatorKind::Aroon { period } => format!("Арун {period}"),
+        IndicatorKind::AwesomeOscillator => "Чудесный осциллятор".to_string(),
+        IndicatorKind::Dpo { period } => format!("DPO {period}"),
+        IndicatorKind::ChandeMomentum { period } => format!("CMO {period}"),
+        IndicatorKind::Sma { period } => format!("SMA {period}"),
+        IndicatorKind::Ema { period } => format!("EMA {period}"),
+        IndicatorKind::Dema { period } => format!("DEMA {period}"),
+        IndicatorKind::Tema { period } => format!("TEMA {period}"),
+        IndicatorKind::Smma { period } => format!("SMMA {period}"),
+        IndicatorKind::Hma { period } => format!("HMA {period}"),
+        IndicatorKind::Vwma { period } => format!("VWMA {period}"),
+        IndicatorKind::StandardDeviation { period } => {
+            format!("Стандартное отклонение {period}")
         }
+        IndicatorKind::Cci { period } => format!("CCI {period}"),
+        IndicatorKind::WilliamsR { period } => format!("Williams %R {period}"),
+        IndicatorKind::StochasticRsi {
+            rsi_period,
+            stochastic_period,
+        } => format!("Стохастик RSI {rsi_period} {stochastic_period}"),
+        IndicatorKind::Momentum { period } => format!("Моментум {period}"),
+        IndicatorKind::RateOfChange { period } => format!("ROC {period}"),
+        IndicatorKind::Donchian { period } => format!("Канал Дончиана {period}"),
+        IndicatorKind::PivotPoints { variant } => format!(
+            "Точки пивот: {}",
+            indicator_pivot_word(*variant, ChartLanguage::Russian)
+        ),
+        IndicatorKind::ZigZag { deviation_percent } => {
+            format!("Зигзаг {deviation_percent}%")
+        }
+        IndicatorKind::Keltner { period, multiplier } => {
+            format!("Каналы Кельтнера {period} {}", params(*multiplier))
+        }
+        IndicatorKind::AdxDmi { period } => format!("ADX/DMI {period}"),
+        IndicatorKind::ParabolicSar => "Параболик SAR".to_string(),
+        IndicatorKind::SuperTrend { period, multiplier } => {
+            format!("Супертренд {period} {}", params(*multiplier))
+        }
+        IndicatorKind::Ichimoku => "Ишимоку".to_string(),
+        IndicatorKind::Bollinger { period, deviation } => {
+            format!("Полосы Боллинджера {period} {}", params(*deviation))
+        }
+        IndicatorKind::BollingerMetrics { period, deviation } => {
+            format!("Метрики Боллинджера {period} {}", params(*deviation))
+        }
+        IndicatorKind::Envelopes {
+            period,
+            percent,
+            exponential,
+        } => format!(
+            "Конверты {} {period} {}%",
+            if *exponential { "EMA" } else { "SMA" },
+            params(*percent)
+        ),
+        IndicatorKind::Alma {
+            period,
+            offset,
+            sigma,
+        } => format!("ALMA {period} {} {}", params(*offset), params(*sigma)),
+        IndicatorKind::Rsi { period } => format!("RSI {period}"),
+        IndicatorKind::Macd { fast, slow, signal } => format!("MACD {fast} {slow} {signal}"),
+        IndicatorKind::Stochastic { k_period, d_period } => {
+            format!("Стохастик {k_period} {d_period}")
+        }
+        IndicatorKind::Atr { period } => format!("ATR {period}"),
+        IndicatorKind::Vwap => "VWAP".to_string(),
+        IndicatorKind::Obv => "OBV".to_string(),
+        IndicatorKind::AccumulationDistribution => "Накопление/распределение".to_string(),
+        IndicatorKind::PriceVolumeTrend => "PVT".to_string(),
+        IndicatorKind::ChaikinOscillator { fast, slow } => {
+            format!("Осциллятор Чайкина {fast} {slow}")
+        }
+        IndicatorKind::Klinger { fast, slow, signal } => {
+            format!("Осциллятор Клингера {fast} {slow} {signal}")
+        }
+        IndicatorKind::Kama { period, fast, slow } => format!("KAMA {period} {fast} {slow}"),
+        IndicatorKind::McGinley { period } => format!("Макгинли {period}"),
+        IndicatorKind::LinearRegression { period, deviation } => {
+            format!("Линейная регрессия {period} {}", params(*deviation))
+        }
+        IndicatorKind::Choppiness { period } => format!("Переменчивость {period}"),
+        IndicatorKind::AtrBands { period, multiplier } => {
+            format!("Полосы ATR {period} {}", params(*multiplier))
+        }
+        IndicatorKind::RelativeVolume { period } => format!("Относительный объём {period}"),
+        IndicatorKind::VolumeOscillator { fast, slow, signal } => {
+            format!("Осциллятор объёма {fast} {slow} {signal}")
+        }
+        IndicatorKind::ElderForce { period } => format!("Индекс силы Элдера {period}"),
+        IndicatorKind::EaseOfMovement { period, divisor } => {
+            format!("Лёгкость движения {period} {}", params(*divisor))
+        }
+        IndicatorKind::HistoricalVolatility {
+            period,
+            annualization,
+        } => format!(
+            "Историческая волатильность {period} {}",
+            params(*annualization)
+        ),
+        IndicatorKind::Trix { period, signal } => format!("TRIX {period} {signal}"),
+        IndicatorKind::Kst {
+            roc,
+            smoothing,
+            signal,
+        } => format!(
+            "KST {} {} {} {} / {} {} {} {} / {signal}",
+            roc[0], roc[1], roc[2], roc[3], smoothing[0], smoothing[1], smoothing[2], smoothing[3]
+        ),
+        IndicatorKind::Tsi {
+            long,
+            short,
+            signal,
+        } => format!("TSI {long} {short} {signal}"),
+        IndicatorKind::MassIndex {
+            ema_period,
+            sum_period,
+        } => format!("Индекс массы {ema_period} {sum_period}"),
+        IndicatorKind::Vortex { period } => format!("Вортекс {period}"),
+        IndicatorKind::CoppockCurve {
+            long,
+            short,
+            smoothing,
+        } => format!("Кривая Коппока {long} {short} {smoothing}"),
+        IndicatorKind::FisherTransform { period } => format!("Преобразование Фишера {period}"),
+        IndicatorKind::UltimateOscillator {
+            short,
+            medium,
+            long,
+        } => format!("Окончательный осциллятор {short} {medium} {long}"),
+        IndicatorKind::Cmf { period } => format!("CMF {period}"),
+        IndicatorKind::Mfi { period } => format!("MFI {period}"),
+        IndicatorKind::Volume { .. } => "Объём".to_string(),
+        IndicatorKind::VwapBands { .. } => "Полосы VWAP".to_string(),
+        IndicatorKind::Wma { period } => format!("WMA {period}"),
+        IndicatorKind::Custom { type_id, .. } => type_id.clone(),
+    }
+}
+
+/// The title an indicator output series receives at bind time, in the chart's display language.
+pub(crate) fn indicator_output_title(
+    kind: &IndicatorKind,
+    output_index: usize,
+    language: ChartLanguage,
+) -> String {
+    match kind {
+        IndicatorKind::Aroon { period } => match language {
+            ChartLanguage::English => {
+                format!("Aroon {} {period}", ["Up", "Down"][output_index])
+            }
+            ChartLanguage::Russian => {
+                format!("{} {period}", ["Арун вверх", "Арун вниз"][output_index])
+            }
+        },
         IndicatorKind::Volume {
             period,
             exponential,
         } if output_index == 1 => {
-            format!(
-                "Volume {} {period}",
-                if *exponential { "EMA" } else { "SMA" }
-            )
+            let average = if *exponential { "EMA" } else { "SMA" };
+            match language {
+                ChartLanguage::English => format!("Volume {average} {period}"),
+                ChartLanguage::Russian => format!("Объём {average} {period}"),
+            }
         }
-        _ => indicator_title(kind),
+        _ => indicator_title(kind, language),
     }
+}
+
+/// The localized display label of one output (`"Upper"`/`"Верхняя"`, `"Signal"`/`"Сигнал"`),
+/// for legends and host chrome in the chart's display language. This is a presentation string:
+/// the stable schema identifier stays [`IndicatorOutputDescriptor::name`]. Acronyms and
+/// single-output labels are language-neutral and pass through.
+pub fn indicator_output_label(
+    kind: &IndicatorKind,
+    output_index: usize,
+    language: ChartLanguage,
+) -> String {
+    if language == ChartLanguage::English {
+        return indicator_output_name(kind, output_index).to_string();
+    }
+    let label = match kind {
+        IndicatorKind::SwingPoints { .. } => ["Свинг-хай", "Свинг-лоу"][output_index],
+        IndicatorKind::SessionLevels { .. } => ["Максимум", "Минимум"][output_index],
+        IndicatorKind::PreviousPeriodLevels { .. } => {
+            ["Максимум", "Минимум", "Закрытие"][output_index]
+        }
+        IndicatorKind::OpeningRange { .. } => ["Максимум", "Минимум", "Середина"][output_index],
+        IndicatorKind::Aroon { .. } => ["Арун вверх", "Арун вниз"][output_index],
+        IndicatorKind::Donchian { .. }
+        | IndicatorKind::Keltner { .. }
+        | IndicatorKind::Bollinger { .. }
+        | IndicatorKind::Envelopes { .. }
+        | IndicatorKind::AtrBands { .. } => ["Верхняя", "Базис", "Нижняя"][output_index],
+        IndicatorKind::PivotPoints { .. } => ["Пивот", "R1", "S1", "R2", "S2"][output_index],
+        IndicatorKind::Ichimoku => [
+            "Конверсионная",
+            "Базовая",
+            "Опережающая A",
+            "Опережающая B",
+            "Запаздывающая",
+        ][output_index],
+        IndicatorKind::BollingerMetrics { .. } => ["%B", "Ширина полос"][output_index],
+        IndicatorKind::Macd { .. } => ["MACD", "Сигнал", "Гистограмма"][output_index],
+        IndicatorKind::Klinger { .. } => ["Клингер", "Сигнал"][output_index],
+        IndicatorKind::LinearRegression { .. } => ["Кривая", "Верхняя", "Нижняя"][output_index],
+        IndicatorKind::VolumeOscillator { .. } => ["PVO", "Сигнал", "Гистограмма"][output_index],
+        IndicatorKind::Trix { .. } => ["TRIX", "Сигнал"][output_index],
+        IndicatorKind::Kst { .. } => ["KST", "Сигнал"][output_index],
+        IndicatorKind::Tsi { .. } => ["TSI", "Сигнал"][output_index],
+        IndicatorKind::FisherTransform { .. } => ["Фишер", "Триггер"][output_index],
+        IndicatorKind::Volume { .. } => ["Объём", "MA"][output_index],
+        IndicatorKind::VwapBands { .. } => {
+            ["Базис", "СКО верх", "СКО низ", "% верх", "% низ"][output_index]
+        }
+        _ => return indicator_output_name(kind, output_index).to_string(),
+    };
+    label.to_string()
 }
 
 pub(crate) fn indicator_output_style(series: &SeriesEntry) -> IndicatorOutputStyle {

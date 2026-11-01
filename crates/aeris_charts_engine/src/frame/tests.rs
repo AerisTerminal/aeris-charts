@@ -18867,7 +18867,7 @@ fn countdown_interval_is_the_median_of_recent_deltas() {
 
 #[test]
 fn countdown_format_covers_all_three_ranges() {
-    use super::axis::format_countdown_remaining as fmt;
+    let fmt = |remaining: f64| crate::text::countdown(crate::ChartLanguage::English, remaining);
     // < 1h: zero-padded mm:ss (floored to whole seconds, clamped at zero).
     assert_eq!(fmt(50.0), "00:50");
     assert_eq!(fmt(59.9), "00:59");

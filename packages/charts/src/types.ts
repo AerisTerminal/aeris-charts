@@ -1593,6 +1593,9 @@ export interface indicator_info {
   style: indicator_output_style;
   /** Stable display name for this output, preserving binding output order. */
   output_name: string;
+  /** Display label in the chart's current language (set_locale / localization.locale);
+   *  identical to output_name for custom studies, whose names are the host's own words. */
+  output_label: string;
   /** Bollinger: 0 = upper, 1 = middle, 2 = lower. MACD: 0 = line, 1 = signal, 2 = histogram.
    *  Stochastic: 0 = %K, 1 = %D.
    *  Single-output indicators: 0. */
@@ -1763,7 +1766,10 @@ export interface crosshair_line_options {
 export interface localization_options {
   /**
    * Current locale used to format dates. Uses the browser's language settings by default
-   * (reference `localization.locale`, default `navigator.language`).
+   * (reference `localization.locale`, default `navigator.language`). A Russian BCP 47 tag
+   * (`ru`, `ru-RU`, …) also switches every engine-generated text — indicator titles, drawing
+   * settings labels, the trading overlay, measure text — to Russian; any other tag selects
+   * English.
    */
   locale?: string;
   /**

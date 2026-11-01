@@ -752,6 +752,8 @@ For previous-period levels, valid rows are the only observed period data. A whol
 
 The headless owner of chart behavior and mutable chart state. It owns series, panes, scales, workspace layout, drawings, hit testing, interaction models, indicator bindings, price lines, and frame construction.
 
+The engine also owns every chart-generated display text through one `ChartLanguage` (`aeris_charts_core::language`, English by default, `set_language` switches Russian): indicator titles and output labels, drawing settings-schema labels and anchor names, the trading overlay, measure and countdown text, legend fallbacks (O/H/L/C labels, "Series n", collapsed-row counts), placeholders, and the built-in month-name tables. All of it resolves from the engine's `text.rs` catalog, so host-supplied strings (series titles, drawing text, category labels) are never translated and an indicator title the host overrode survives a language switch. Persisted identifiers — series kinds, drawing property names, enum values, output names — stay English in every language; only presentation strings follow the language. State restore generates indicator titles in the target chart's current language, and a language switch re-measures text and invalidates every frame.
+
 Volume-profile indicators bind an OHLC price series to a separate scalar volume series by exact timestamp. The engine owns at most 16 distribution handles, their options and bounded bin caches in native primitive state. Before frame construction (or an explicit snapshot read), it refreshes only profiles whose source generations, visible source-row interval, bin parameters or minimum price move changed. Removing either dependency removes the handle. Shared frame geometry stacks bullish and bearish volume within each row, anchors every row flush to the source pane's right edge, uses stronger row colors for the value area, and draws only the solid POC marker without extending autoscale; every executor consumes those same ordered primitives. These price distributions have no synthetic time-series output and are runtime-only, outside V1 scalar-indicator workspace persistence. Hosts recreate them after restoring data.
 
 The B7 profile query path reads either the canonical classified tape or OHLCV candles through the
@@ -1553,7 +1555,7 @@ The WebGPU executor. It owns quad, triangle, textured-label, atlas, blend, multi
 
 ### `aeris_charts_wasm`
 
-The browser boundary. It exposes the engine through `wasm-bindgen`, decodes typed input, selects WebGPU or Canvas2D policy, executes browser frames, handles shared ring input, text measurement, workspace APIs, and browser telemetry.
+The browser boundary. It exposes the engine through `wasm-bindgen`, decodes typed input, selects WebGPU or Canvas2D policy, executes browser frames, handles shared ring input, text measurement, workspace APIs, and browser telemetry. Its `set_locale` first switches the engine's display language from the BCP 47 tag (Russian for `ru*` tags, English otherwise), then injects the locale's exact `Intl.DateTimeFormat` month-name tables on top of the language's built-in ones.
 
 The browser boundary translates data and platform events and serializes engine-owned value snapshots. It must not become a second chart engine.
 

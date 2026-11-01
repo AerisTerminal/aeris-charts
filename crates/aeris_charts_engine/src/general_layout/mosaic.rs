@@ -234,11 +234,11 @@ impl ChartEngine {
                 element: GeneralLayoutElement::Cell,
                 row,
                 id: format!("{}/{}", cell.column, cell.segment),
-                label: format!(
-                    "{}, {}, {:.1}% of column",
-                    cell.column,
-                    cell.segment,
-                    layout.share(row) * 100.0
+                label: crate::text::mosaic_cell(
+                    self.language,
+                    &cell.column,
+                    &cell.segment,
+                    layout.share(row) * 100.0,
                 ),
                 value: Some(cell.value),
                 selected: selected

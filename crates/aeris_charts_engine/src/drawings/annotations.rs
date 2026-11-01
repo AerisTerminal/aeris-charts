@@ -9,8 +9,6 @@ use super::text_block::LINE_HEIGHT_EM;
 use super::{Drawing, DrawingKind, DrawingTextVAlign};
 use crate::ChartEngine;
 
-/// Shown in an empty annotation's box while its text is being typed.
-pub(crate) const ANNOTATION_PLACEHOLDER: &str = "Add text";
 /// Box padding around the text run.
 const PAD_X: f64 = 10.0;
 const PAD_Y: f64 = 6.0;
@@ -61,7 +59,7 @@ impl AnnotationLayout {
 impl ChartEngine {
     /// The annotation's text and whether it is the placeholder: a price note shows its custom
     /// text or the first anchor's formatted price; the other kinds show their text or, while
-    /// empty, [`ANNOTATION_PLACEHOLDER`].
+    /// empty, the text catalog's annotation placeholder in the chart's language.
     pub(crate) fn annotation_text(&self, drawing: &Drawing) -> (String, bool) {
         if !drawing.text.is_empty() {
             return (drawing.display_text().to_string(), false);
@@ -70,7 +68,10 @@ impl ChartEngine {
             let price = drawing.points.first().map_or(0.0, |point| point.price);
             return (self.format_drawing_price(drawing, price), false);
         }
-        (ANNOTATION_PLACEHOLDER.to_string(), true)
+        (
+            crate::text::annotation_placeholder(self.language).to_string(),
+            true,
+        )
     }
 
     /// The annotation's box, text, and connector for anchors `px` (semantic order, in the same

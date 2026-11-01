@@ -6,6 +6,7 @@
 //! bounded and deterministic so a host cannot turn a drawing patch into unbounded work.
 
 use crate::{DrawingKind, DrawingPoint, DrawingPriceScale};
+use aeris_charts_core::language::ChartLanguage;
 
 pub const DRAWING_CONTRACT_REVISION: u32 = 2;
 pub const MAX_DRAWING_NAME_BYTES: usize = 256;
@@ -580,9 +581,11 @@ impl DrawingPropertyDescriptor {
 }
 
 /// Appends descriptors whose defaults come from the kind's factory options, so the schema can
-/// never disagree with what a new drawing actually stores.
+/// never disagree with what a new drawing actually stores. Labels are resolved from the text
+/// catalog in the requested language; `name` stays the persisted snake_case identifier.
 struct SchemaBuilder {
     defaults: serde_json::Value,
+    language: ChartLanguage,
     properties: Vec<DrawingPropertyDescriptor>,
 }
 
@@ -591,13 +594,13 @@ impl SchemaBuilder {
         &mut self,
         group: DrawingPropertyGroup,
         name: &str,
-        label: &str,
+        label: crate::text::Phrase,
         property_type: DrawingPropertyType,
     ) -> &mut DrawingPropertyDescriptor {
         let index = self.properties.len();
         self.properties.push(DrawingPropertyDescriptor {
             name: name.to_string(),
-            label: label.to_string(),
+            label: label.text(self.language).to_string(),
             group,
             toolbar: false,
             property_type,
@@ -616,238 +619,286 @@ impl SchemaBuilder {
 
 /// The complete editor description of one built-in kind: only properties that change what the
 /// kind paints, in display order, with their settings group and toolbar placement. It is data,
-/// so one host panel and one toolbar serve every tool without a per-tool switch.
-pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
+/// so one host panel and one toolbar serve every tool without a per-tool switch. Labels come in
+/// the requested [`ChartLanguage`]; property `name`s, enum values and groups stay the persisted
+/// English identifiers in every language.
+pub fn drawing_property_schema(
+    kind: DrawingKind,
+    language: ChartLanguage,
+) -> DrawingPropertySchema {
+    use crate::text::drawing_labels as label;
     use DrawingPropertyGroup::{Coordinates, General, Inputs, Style, Text, Visibility};
     use DrawingPropertyType::{Boolean, Color, Enum, Integer, IntervalSet, Labels, Levels, Number};
     let defaults = crate::drawings::Drawing::new(0, kind, 0, Vec::new());
     let mut schema = SchemaBuilder {
         defaults: defaults.options_json(),
+        language,
         properties: Vec::new(),
     };
     let s = &mut schema;
     let position = matches!(kind, DrawingKind::LongPosition | DrawingKind::ShortPosition);
 
     if position {
-        s.add(Inputs, "position_account_size", "Account size", Number)
+        s.add(Inputs, "position_account_size", label::ACCOUNT_SIZE, Number)
             .bounded(0.01, 1e15);
-        s.add(Inputs, "position_risk_percent", "Risk %", Number)
+        s.add(Inputs, "position_risk_percent", label::RISK_PERCENT, Number)
             .bounded(0.0, 100.0);
     }
     if kind == DrawingKind::RegressionTrend {
-        s.add(Inputs, "regression_deviations", "Deviation", Number)
+        s.add(Inputs, "regression_deviations", label::DEVIATION, Number)
             .bounded(0.0, 10.0);
     }
     if kind.is_volume_profile() {
-        s.add(Inputs, "profile_rows", "Rows", Integer)
+        s.add(Inputs, "profile_rows", label::ROWS, Integer)
             .bounded(1.0, crate::MAX_PROFILE_ROWS as f64);
-        s.add(Inputs, "profile_value_area_percent", "Value area %", Number)
-            .bounded(1.0, 100.0);
+        s.add(
+            Inputs,
+            "profile_value_area_percent",
+            label::VALUE_AREA_PERCENT,
+            Number,
+        )
+        .bounded(1.0, 100.0);
     }
 
     if has_stroke_color(kind) {
-        s.add(Style, "color", "Line", Color).on_toolbar();
+        s.add(Style, "color", label::LINE, Color).on_toolbar();
     }
     if has_line_width(kind) {
-        s.add(Style, "width", "Width", Number)
+        s.add(Style, "width", label::WIDTH, Number)
             .bounded(1.0, crate::drawings::MAX_DRAWING_WIDTH)
             .on_toolbar();
     }
     if has_line_style(kind) {
-        s.add(Style, "style", "Line style", Enum)
+        s.add(Style, "style", label::LINE_STYLE, Enum)
             .choices(LINE_STYLES)
             .on_toolbar();
     }
     if has_line_caps(kind) {
-        s.add(Style, "stroke_start", "Line start", Enum)
+        s.add(Style, "stroke_start", label::LINE_START, Enum)
             .choices(LINE_CAPS);
-        s.add(Style, "stroke_end", "Line end", Enum)
+        s.add(Style, "stroke_end", label::LINE_END, Enum)
             .choices(LINE_CAPS);
     }
     if has_extend(kind) {
-        s.add(Style, "extend_left", "Extend left", Boolean);
-        s.add(Style, "extend_right", "Extend right", Boolean);
+        s.add(Style, "extend_left", label::EXTEND_LEFT, Boolean);
+        s.add(Style, "extend_right", label::EXTEND_RIGHT, Boolean);
     }
     if kind.is_straight_line() {
-        s.add(Style, "middle_point_visible", "Middle point", Boolean);
-        s.add(Style, "price_labels_visible", "Price labels", Boolean);
+        s.add(Style, "middle_point_visible", label::MIDDLE_POINT, Boolean);
+        s.add(Style, "price_labels_visible", label::PRICE_LABELS, Boolean);
     }
     if kind.has_stats_card() {
-        s.add(Style, "labels", "Stats", Labels)
+        s.add(Style, "labels", label::STATS, Labels)
             .choices(STAT_METRICS);
-        s.add(Style, "stats_position", "Stats position", Enum)
+        s.add(Style, "stats_position", label::STATS_POSITION, Enum)
             .choices(H_ALIGNS);
-        s.add(Style, "stats_always_visible", "Always show stats", Boolean);
-    }
-    if position {
-        s.add(Style, "position_profit_color", "Profit", Color)
-            .on_toolbar();
-        s.add(Style, "position_loss_color", "Stop", Color)
-            .on_toolbar();
-    }
-    if kind == DrawingKind::FixedRangeVolumeProfile {
         s.add(
             Style,
-            "profile_fit_prices",
-            "Fit box to traded range",
+            "stats_always_visible",
+            label::ALWAYS_SHOW_STATS,
             Boolean,
         );
     }
-    if kind.is_volume_profile() {
-        s.add(Style, "profile_width_percent", "Width %", Number)
-            .bounded(1.0, 100.0);
-        s.add(Style, "profile_value_area_color", "Value area", Color)
+    if position {
+        s.add(Style, "position_profit_color", label::PROFIT, Color)
             .on_toolbar();
-        s.add(Style, "profile_volume_color", "Volume", Color);
-        s.add(Style, "profile_delta_visible", "Delta profile", Boolean);
-        s.add(Style, "profile_positive_color", "Positive delta", Color);
-        s.add(Style, "profile_negative_color", "Negative delta", Color);
-        s.add(Style, "profile_poc_visible", "Point of control", Boolean);
-        s.add(Style, "profile_poc_color", "POC color", Color)
+        s.add(Style, "position_loss_color", label::STOP, Color)
+            .on_toolbar();
+    }
+    if kind == DrawingKind::FixedRangeVolumeProfile {
+        s.add(Style, "profile_fit_prices", label::FIT_BOX, Boolean);
+    }
+    if kind.is_volume_profile() {
+        s.add(Style, "profile_width_percent", label::WIDTH_PERCENT, Number)
+            .bounded(1.0, 100.0);
+        s.add(Style, "profile_value_area_color", label::VALUE_AREA, Color)
+            .on_toolbar();
+        s.add(Style, "profile_volume_color", label::VOLUME, Color);
+        s.add(
+            Style,
+            "profile_delta_visible",
+            label::DELTA_PROFILE,
+            Boolean,
+        );
+        s.add(
+            Style,
+            "profile_positive_color",
+            label::POSITIVE_DELTA,
+            Color,
+        );
+        s.add(
+            Style,
+            "profile_negative_color",
+            label::NEGATIVE_DELTA,
+            Color,
+        );
+        s.add(
+            Style,
+            "profile_poc_visible",
+            label::POINT_OF_CONTROL,
+            Boolean,
+        );
+        s.add(Style, "profile_poc_color", label::POC_COLOR, Color)
             .on_toolbar();
         s.add(
             Style,
             "profile_value_area_lines_visible",
-            "Value area lines",
+            label::VALUE_AREA_LINES,
             Boolean,
         );
-        s.add(Style, "extend_right", "Extend levels right", Boolean);
-        s.add(Style, "price_labels_visible", "Price labels", Boolean);
+        s.add(Style, "extend_right", label::EXTEND_LEVELS_RIGHT, Boolean);
+        s.add(Style, "price_labels_visible", label::PRICE_LABELS, Boolean);
     }
     if kind == DrawingKind::Rectangle {
-        s.add(Style, "border_visible", "Border", Boolean);
-        s.add(Style, "middle_line_visible", "Middle line", Boolean);
-        s.add(Style, "middle_line_color", "Middle line color", Color);
-        s.add(Style, "middle_line_width", "Middle line width", Number)
+        s.add(Style, "border_visible", label::BORDER, Boolean);
+        s.add(Style, "middle_line_visible", label::MIDDLE_LINE, Boolean);
+        s.add(Style, "middle_line_color", label::MIDDLE_LINE_COLOR, Color);
+        s.add(Style, "middle_line_width", label::MIDDLE_LINE_WIDTH, Number)
             .bounded(1.0, crate::drawings::MAX_DRAWING_WIDTH);
-        s.add(Style, "middle_line_style", "Middle line style", Enum)
+        s.add(Style, "middle_line_style", label::MIDDLE_LINE_STYLE, Enum)
             .choices(LINE_STYLES);
     }
     if has_area_fill(kind) {
-        s.add(Style, "fill_enabled", "Background", Boolean);
-        s.add(Style, "fill_color", "Background color", Color)
+        s.add(Style, "fill_enabled", label::BACKGROUND, Boolean);
+        s.add(Style, "fill_color", label::BACKGROUND_COLOR, Color)
             .on_toolbar();
     } else if kind.has_levels() {
-        s.add(Style, "fill_enabled", "Background", Boolean);
+        s.add(Style, "fill_enabled", label::BACKGROUND, Boolean);
     }
     if kind == DrawingKind::Rectangle {
-        s.add(Style, "show_labels", "Price and time labels", Boolean);
-        s.add(Style, "axis_bands_visible", "Axis highlight", Boolean);
-        s.add(Style, "label_color", "Label background", Color);
-        s.add(Style, "label_text_color", "Label text", Color);
+        s.add(Style, "show_labels", label::PRICE_AND_TIME_LABELS, Boolean);
+        s.add(Style, "axis_bands_visible", label::AXIS_HIGHLIGHT, Boolean);
+        s.add(Style, "label_color", label::LABEL_BACKGROUND, Color);
+        s.add(Style, "label_text_color", label::LABEL_TEXT, Color);
     }
     if matches!(
         kind,
         DrawingKind::HorizontalLine | DrawingKind::HorizontalRay
     ) {
-        s.add(Style, "label_text_color", "Price label text", Color);
+        s.add(Style, "label_text_color", label::PRICE_LABEL_TEXT, Color);
     }
     if kind.has_levels() {
         if kind == DrawingKind::FibonacciRetracement {
-            s.add(Style, "level_trend_line", "Trend line", Boolean);
+            s.add(Style, "level_trend_line", label::TREND_LINE, Boolean);
         }
-        s.add(Style, "levels", "Levels", Levels);
+        s.add(Style, "levels", label::LEVELS, Levels);
         if matches!(kind, DrawingKind::GannSquare | DrawingKind::GannSquareFixed) {
-            s.add(Style, "gann_fans", "Fans", Levels);
-            s.add(Style, "gann_arcs", "Arcs", Levels);
+            s.add(Style, "gann_fans", label::FANS, Levels);
+            s.add(Style, "gann_arcs", label::ARCS, Levels);
         }
-        s.add(Style, "level_reverse", "Reverse", Boolean);
-        s.add(Style, "level_show_prices", "Prices", Boolean);
-        s.add(Style, "level_show_values", "Values", Boolean);
-        s.add(Style, "level_show_percents", "Percents", Boolean);
+        s.add(Style, "level_reverse", label::REVERSE, Boolean);
+        s.add(Style, "level_show_prices", label::PRICES, Boolean);
+        s.add(Style, "level_show_values", label::VALUES, Boolean);
+        s.add(Style, "level_show_percents", label::PERCENTS, Boolean);
         if kind.supports_log_levels() {
-            s.add(
-                Style,
-                "level_log_scale",
-                "Fib levels based on log scale",
-                Boolean,
-            );
+            s.add(Style, "level_log_scale", label::FIB_LOG_SCALE, Boolean);
         }
-        s.add(Style, "level_label_align", "Labels", Enum)
+        s.add(Style, "level_label_align", label::LABELS, Enum)
             .choices(H_ALIGNS);
         if matches!(
             kind,
             DrawingKind::FibonacciRetracement | DrawingKind::FibonacciExtension
         ) {
-            s.add(Style, "level_label_v_align", "Labels vertical", Enum)
+            s.add(Style, "level_label_v_align", label::LABELS_VERTICAL, Enum)
                 .choices(V_ALIGNS);
         }
     }
     if kind.is_elliott() {
-        s.add(Style, "wave_degree", "Degree", Enum)
+        s.add(Style, "wave_degree", label::DEGREE, Enum)
             .choices(WAVE_DEGREES);
     }
     if kind.has_icon_size() {
-        s.add(Style, "icon_size", "Size", Number).bounded(
+        s.add(Style, "icon_size", label::SIZE, Number).bounded(
             crate::drawings::MIN_DRAWING_ICON_DISPLAY_SIZE,
             crate::drawings::MAX_DRAWING_ICON_DISPLAY_SIZE,
         );
     }
     if kind == DrawingKind::BarsPattern {
-        s.add(Style, "bars_pattern_mode", "Mode", Enum).choices(&[
-            "bars",
-            "line_open",
-            "line_high",
-            "line_low",
-            "line_close",
-        ]);
-        s.add(Style, "bars_pattern_mirror_x", "Flip horizontally", Boolean);
-        s.add(Style, "bars_pattern_mirror_y", "Flip vertically", Boolean);
+        s.add(Style, "bars_pattern_mode", label::MODE, Enum)
+            .choices(&["bars", "line_open", "line_high", "line_low", "line_close"]);
+        s.add(
+            Style,
+            "bars_pattern_mirror_x",
+            label::FLIP_HORIZONTALLY,
+            Boolean,
+        );
+        s.add(
+            Style,
+            "bars_pattern_mirror_y",
+            label::FLIP_VERTICALLY,
+            Boolean,
+        );
     }
 
     let text = text_support(kind);
     if !matches!(text, TextSupport::None | TextSupport::Font) {
-        s.add(Text, "text_color", "Text color", Color).on_toolbar();
+        s.add(Text, "text_color", label::TEXT_COLOR, Color)
+            .on_toolbar();
     }
     if !matches!(text, TextSupport::None | TextSupport::Color) {
-        s.add(Text, "text_size", "Font size", Number)
+        s.add(Text, "text_size", label::FONT_SIZE, Number)
             .bounded(6.0, 96.0);
-        s.add(Text, "text_bold", "Bold", Boolean);
-        s.add(Text, "text_italic", "Italic", Boolean);
+        s.add(Text, "text_bold", label::BOLD, Boolean);
+        s.add(Text, "text_italic", label::ITALIC, Boolean);
     }
     if matches!(
         text,
         TextSupport::Content | TextSupport::Aligned | TextSupport::Boxed
     ) {
-        s.add(Text, "text", "Text", DrawingPropertyType::String);
+        s.add(Text, "text", label::TEXT, DrawingPropertyType::String);
     }
     if matches!(text, TextSupport::Aligned | TextSupport::Boxed) {
-        s.add(Text, "text_v_align", "Vertical alignment", Enum)
+        s.add(Text, "text_v_align", label::VERTICAL_ALIGNMENT, Enum)
             .choices(V_ALIGNS);
-        s.add(Text, "text_h_align", "Horizontal alignment", Enum)
+        s.add(Text, "text_h_align", label::HORIZONTAL_ALIGNMENT, Enum)
             .choices(H_ALIGNS);
     }
     if text == TextSupport::Boxed || kind.is_annotation() {
-        s.add(Text, "box_color", "Background", Color);
-        s.add(Text, "box_border_color", "Border", Color);
+        s.add(Text, "box_color", label::BACKGROUND, Color);
+        s.add(Text, "box_border_color", label::BORDER, Color);
         if kind != DrawingKind::Callout {
-            s.add(Text, "box_border_width", "Border width", Number)
+            s.add(Text, "box_border_width", label::BORDER_WIDTH, Number)
                 .bounded(1.0, 8.0);
         }
     }
 
     if kind == DrawingKind::AnchoredText {
-        s.add(Coordinates, "screen_x", "Horizontal position", Number)
+        s.add(Coordinates, "screen_x", label::HORIZONTAL_POSITION, Number)
             .bounded(0.0, 1.0);
-        s.add(Coordinates, "screen_y", "Vertical position", Number)
+        s.add(Coordinates, "screen_y", label::VERTICAL_POSITION, Number)
             .bounded(0.0, 1.0);
     }
-    s.add(Visibility, "interval_visibility", "Intervals", IntervalSet);
+    s.add(
+        Visibility,
+        "interval_visibility",
+        label::INTERVALS,
+        IntervalSet,
+    );
 
-    s.add(General, "name", "Name", DrawingPropertyType::String);
-    s.add(General, "visible", "Visible", Boolean);
-    s.add(General, "locked", "Locked", Boolean);
-    s.add(General, "group_id", "Group", DrawingPropertyType::String);
-    s.add(General, "z_order", "Order", Integer);
-    s.add(General, "magnet", "Magnet", Enum)
+    s.add(General, "name", label::NAME, DrawingPropertyType::String);
+    s.add(General, "visible", label::VISIBLE, Boolean);
+    s.add(General, "locked", label::LOCKED, Boolean);
+    s.add(
+        General,
+        "group_id",
+        label::GROUP,
+        DrawingPropertyType::String,
+    );
+    s.add(General, "z_order", label::ORDER, Integer);
+    s.add(General, "magnet", label::MAGNET, Enum)
         .choices(&["off", "weak", "strong"]);
-    s.add(General, "price_scale_id", "Price scale", Enum)
+    s.add(General, "price_scale_id", label::PRICE_SCALE, Enum)
         .choices(&["left", "right", "overlay"]);
     if kind == DrawingKind::RegressionTrend {
-        s.add(General, "regression_source_id", "Source", Integer);
+        s.add(General, "regression_source_id", label::SOURCE, Integer);
     }
     if kind == DrawingKind::IconStamp {
-        s.add(General, "icon_name", "Icon", DrawingPropertyType::String);
+        s.add(
+            General,
+            "icon_name",
+            label::ICON,
+            DrawingPropertyType::String,
+        );
     }
 
     let anchors = kind
@@ -857,13 +908,7 @@ pub fn drawing_property_schema(kind: DrawingKind) -> DrawingPropertySchema {
         .enumerate()
         .map(|(index, (price, time))| DrawingAnchorDescriptor {
             index,
-            label: match (kind, index) {
-                (DrawingKind::LongPosition | DrawingKind::ShortPosition, 0) => "Entry".to_string(),
-                (DrawingKind::LongPosition | DrawingKind::ShortPosition, 1) => "Target".to_string(),
-                (DrawingKind::LongPosition | DrawingKind::ShortPosition, _) => "Stop".to_string(),
-                _ if kind.anchor_count() == 1 => "Point".to_string(),
-                _ => format!("Point {}", index + 1),
-            },
+            label: crate::text::anchor_label(language, kind, index),
             price,
             time,
         })

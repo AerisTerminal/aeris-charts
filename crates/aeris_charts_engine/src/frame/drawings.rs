@@ -19,11 +19,12 @@ use super::{POSITION_ENTRY, PRIMARY};
 use crate::ChartEngine;
 use crate::drawings::{
     Drawing, DrawingBodyGeometry, DrawingGeometryOptions, DrawingHandleMode, DrawingId,
-    DrawingKind, DrawingPoint, DrawingTextHAlign, LINE_TEXT_PLACEHOLDER, MEASURE_LABEL_GAP,
-    MeasureAxes, MeasureGeometry, PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD,
-    TextBlock, TextRun, arc_segments, arrow_marker_icon, builtin_icon, drawing_text_weight,
-    ellipse_segments, gann_arc_segments, path_arrow_points, resolve_drawing_geometry,
+    DrawingKind, DrawingPoint, DrawingTextHAlign, MEASURE_LABEL_GAP, MeasureAxes, MeasureGeometry,
+    PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD, TextBlock, TextRun, arc_segments,
+    arrow_marker_icon, builtin_icon, drawing_text_weight, ellipse_segments, gann_arc_segments,
+    path_arrow_points, resolve_drawing_geometry,
 };
+use crate::text as catalog;
 use aeris_charts_core::model::plot_list::PlotValueIndex;
 
 /// Drawing handles (`push_handle`): a theme-derived fill inside a primary-token border, round or
@@ -400,7 +401,8 @@ impl ChartEngine {
         if !drawing.text.is_empty() {
             return Some((drawing.display_text(), false));
         }
-        (self.line_text_prompt() == Some(drawing.id)).then_some((LINE_TEXT_PLACEHOLDER, true))
+        (self.line_text_prompt() == Some(drawing.id))
+            .then_some((catalog::line_text_placeholder(self.language), true))
     }
 
     /// Width source for the middle-line cutout. Selection reserves the full prompt; once editing
@@ -412,7 +414,8 @@ impl ChartEngine {
         if !drawing.text.is_empty() {
             return Some(drawing.display_text());
         }
-        (self.line_text_prompt() == Some(drawing.id)).then_some(LINE_TEXT_PLACEHOLDER)
+        (self.line_text_prompt() == Some(drawing.id))
+            .then_some(catalog::line_text_placeholder(self.language))
     }
 
     /// The stretch of a line's stroke `a→b` (bitmap px) that its middle-aligned label covers,
@@ -2794,7 +2797,10 @@ impl ChartEngine {
                         line_points.iter().zip(labels.iter()).enumerate()
                     {
                         let text = if drawing.kind.is_elliott() {
-                            format!("{label} ({})", drawing.wave_degree)
+                            format!(
+                                "{label} ({})",
+                                catalog::wave_degree(self.language, &drawing.wave_degree)
+                            )
                         } else {
                             (*label).to_string()
                         };
@@ -3190,7 +3196,7 @@ impl ChartEngine {
             .is_annotation()
             .then(|| self.annotation_palette(drawing, stroke));
         let (profit, loss) = position_colors(drawing, self.gain_loss_colors());
-        crate::drawing_contract::drawing_property_schema(drawing.kind)
+        crate::drawing_contract::drawing_property_schema(drawing.kind, self.language)
             .properties
             .into_iter()
             .filter(|property| {
@@ -3553,20 +3559,21 @@ impl ChartEngine {
                         .points
                         .get(1)
                         .map(|value| {
-                            format!(
-                                "{} bars",
-                                (value.logical - drawing.points[0].logical).abs().round() as i64
-                            )
+                            let count =
+                                (value.logical - drawing.points[0].logical).abs().round() as i64;
+                            catalog::bars_count(self.language, &count.to_string(), count)
                         })
                         .unwrap_or_default(),
-                    crate::DrawingLabelMetric::DateTimeRange => "range".to_string(),
+                    crate::DrawingLabelMetric::DateTimeRange => {
+                        catalog::RANGE.text(self.language).to_string()
+                    }
                     crate::DrawingLabelMetric::Duration => drawing
                         .points
                         .get(1)
                         .map(|value| {
-                            format!(
-                                "{:.2} bars",
-                                (value.logical - drawing.points[0].logical).abs()
+                            catalog::bars_fraction(
+                                self.language,
+                                (value.logical - drawing.points[0].logical).abs(),
                             )
                         })
                         .unwrap_or_default(),
@@ -3686,8 +3693,12 @@ impl ChartEngine {
         if axes.date() {
             let bars = signed_stat(stats.bars as f64, 0);
             lines.push(match stats.seconds {
-                Some(seconds) => format!("{bars} bars, {}", format_measure_duration(seconds)),
-                None => format!("{bars} bars"),
+                Some(seconds) => format!(
+                    "{}, {}",
+                    catalog::bars_count(self.language, &bars, stats.bars),
+                    catalog::measure_duration(self.language, seconds)
+                ),
+                None => catalog::bars_count(self.language, &bars, stats.bars),
             });
         }
         lines
@@ -3829,12 +3840,19 @@ impl ChartEngine {
 
         let mut time = String::new();
         if let Some(custom) = Self::visible_label(drawing, Metric::BarCount) {
-            time = custom.unwrap_or_else(|| format!("{} bars", signed_stat(stats.bars as f64, 0)));
+            time = custom.unwrap_or_else(|| {
+                let formatted = signed_stat(stats.bars as f64, 0);
+                catalog::bars_count(self.language, &formatted, stats.bars)
+            });
         }
         let duration = Self::visible_label(drawing, Metric::Duration)
             .or_else(|| Self::visible_label(drawing, Metric::DateTimeRange));
         if let Some(custom) = duration
-            && let Some(elapsed) = custom.or_else(|| stats.seconds.map(format_measure_duration))
+            && let Some(elapsed) = custom.or_else(|| {
+                stats
+                    .seconds
+                    .map(|seconds| catalog::measure_duration(self.language, seconds))
+            })
         {
             time = if time.is_empty() {
                 elapsed
@@ -3845,7 +3863,7 @@ impl ChartEngine {
         if let Some(custom) = Self::visible_label(drawing, Metric::Distance) {
             let distance = custom.unwrap_or_else(|| {
                 let css = ((b.0 - a.0) / hpr).hypot((b.1 - a.1) / vpr);
-                format!("distance: {} px", css.round() as i64)
+                catalog::distance_px(self.language, css.round() as i64)
             });
             time = if time.is_empty() {
                 distance
@@ -4425,17 +4443,19 @@ impl ChartEngine {
         let target_amount =
             drawing.position_account_size + reward_distance * quantity * point_value;
         let stop_amount = drawing.position_account_size - risk_distance * quantity * point_value;
-        let target_text = format!(
-            "Target: {} ({reward_percent:.3}%) {}, Amount: {}",
-            format_price(reward_distance),
-            ticks(reward_distance),
-            position_stat_number(target_amount, 2),
+        let target_text = catalog::position_target_line(
+            self.language,
+            &format_price(reward_distance),
+            reward_percent,
+            &ticks(reward_distance),
+            &position_stat_number(target_amount, 2),
         );
-        let stop_text = format!(
-            "Stop: {} ({risk_percent:.3}%) {}, Amount: {}",
-            format_price(risk_distance),
-            ticks(risk_distance),
-            position_stat_number(stop_amount, 2),
+        let stop_text = catalog::position_stop_line(
+            self.language,
+            &format_price(risk_distance),
+            risk_percent,
+            &ticks(risk_distance),
+            &position_stat_number(stop_amount, 2),
         );
         let run = self.position_run_progress(drawing);
         // Unfilled/historical/future drawings still show the right-edge or latest close.
@@ -4456,20 +4476,16 @@ impl ChartEngine {
             -1.0
         };
         let pnl = current.map(|price| (price - entry.price) * direction);
-        let status = if run.is_some_and(|run| run.closed) {
-            "Closed"
-        } else {
-            "Open"
-        };
         let middle = [
-            format!(
-                "{status} P&L: {}, Qty: {}",
-                pnl.map_or_else(|| "—".to_string(), format_price),
-                position_stat_number(quantity, quantity_precision)
+            catalog::position_pnl_line(
+                self.language,
+                run.is_some_and(|run| run.closed),
+                &pnl.map_or_else(|| "—".to_string(), format_price),
+                &position_stat_number(quantity, quantity_precision),
             ),
-            format!(
-                "Risk/reward ratio: {}",
-                position_stat_number(reward_distance / risk_distance, 2)
+            catalog::risk_reward_line(
+                self.language,
+                &position_stat_number(reward_distance / risk_distance, 2),
             ),
         ];
         let center_x = (position.left + position.right) / 2.0;
@@ -5201,49 +5217,22 @@ fn signed_stat(value: f64, precision: usize) -> String {
     }
 }
 
-/// Elapsed time as its two most significant non-zero units (`1d 4h`, `45m`, `30s`).
-fn format_measure_duration(seconds: i64) -> String {
-    let magnitude = seconds.unsigned_abs();
-    let parts = [
-        (magnitude / 86_400, "d"),
-        (magnitude % 86_400 / 3_600, "h"),
-        (magnitude % 3_600 / 60, "m"),
-        (magnitude % 60, "s"),
-    ];
-    let mut text = String::new();
-    if seconds < 0 {
-        text.push(aeris_charts_core::format::price_formatter::MINUS_SIGN);
-    }
-    let mut written = 0;
-    for (value, unit) in parts {
-        if value == 0 || written == 2 {
-            continue;
-        }
-        if written == 1 {
-            text.push(' ');
-        }
-        text.push_str(&format!("{value}{unit}"));
-        written += 1;
-    }
-    if written == 0 {
-        return "0s".to_string();
-    }
-    text
-}
-
 #[cfg(test)]
 mod measure_format_tests {
-    use super::{format_measure_duration, signed_stat};
+    use super::signed_stat;
+    use crate::ChartLanguage;
+    use crate::text::measure_duration;
 
     #[test]
     fn durations_show_the_two_most_significant_units_with_a_typographic_sign() {
-        assert_eq!(format_measure_duration(0), "0s");
-        assert_eq!(format_measure_duration(45), "45s");
-        assert_eq!(format_measure_duration(2_700), "45m");
-        assert_eq!(format_measure_duration(9_000), "2h 30m");
-        assert_eq!(format_measure_duration(90_061), "1d 1h");
-        assert_eq!(format_measure_duration(86_400 * 3 + 120), "3d 2m");
-        assert_eq!(format_measure_duration(-3_600), "\u{2212}1h");
+        let english = ChartLanguage::English;
+        assert_eq!(measure_duration(english, 0), "0s");
+        assert_eq!(measure_duration(english, 45), "45s");
+        assert_eq!(measure_duration(english, 2_700), "45m");
+        assert_eq!(measure_duration(english, 9_000), "2h 30m");
+        assert_eq!(measure_duration(english, 90_061), "1d 1h");
+        assert_eq!(measure_duration(english, 86_400 * 3 + 120), "3d 2m");
+        assert_eq!(measure_duration(english, -3_600), "\u{2212}1h");
     }
 
     #[test]

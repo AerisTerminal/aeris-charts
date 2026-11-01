@@ -120,29 +120,6 @@ pub(crate) fn median_bar_interval(times: &[i64]) -> Option<f64> {
     })
 }
 
-/// the public reference countdown format by remaining magnitude: `mm:ss` zero-padded below an hour,
-/// `hh:mm:ss` below a day, `"Xd Xh"` at a day and beyond.
-pub(crate) fn format_countdown_remaining(remaining: f64) -> String {
-    let secs = remaining.max(0.0).floor() as u64;
-    if secs < 3600 {
-        format!("{:02}:{:02}", secs / 60, secs % 60)
-    } else if secs < 86400 {
-        format!(
-            "{:02}:{:02}:{:02}",
-            secs / 3600,
-            secs % 3600 / 60,
-            secs % 60
-        )
-    } else {
-        let days = secs / 86400;
-        if days > 9999 {
-            "9999d+".to_string()
-        } else {
-            format!("{}d {}h", days, secs % 86400 / 3600)
-        }
-    }
-}
-
 fn countdown_layout_key(remaining: f64) -> usize {
     let secs = remaining.max(0.0).floor() as u64;
     if secs < 3600 {
@@ -1271,7 +1248,7 @@ impl ChartEngine {
                 };
                 let text = format_date_pattern_with_time_zone(
                     time,
-                    "M/d/yyyy",
+                    crate::text::bar_month_tag_pattern(self.language),
                     &self.month_names,
                     self.time_zone,
                 );
@@ -2540,9 +2517,15 @@ impl ChartEngine {
                 if series.bid_ask_visible {
                     let market = self.market_colors();
                     let sides = [
-                        ("Bid", series.bid, series.bid_color.as_str(), PRIMARY, 1u32),
                         (
-                            "Ask",
+                            crate::text::BID.text(self.language),
+                            series.bid,
+                            series.bid_color.as_str(),
+                            PRIMARY,
+                            1u32,
+                        ),
+                        (
+                            crate::text::ASK.text(self.language),
                             series.ask,
                             series.ask_color.as_str(),
                             market.down,
@@ -2954,7 +2937,7 @@ impl ChartEngine {
 
     pub(crate) fn series_countdown_text(&self, id: SeriesId) -> Option<String> {
         let remaining = self.series_countdown_remaining_at(id, self.now_override?)?;
-        Some(format_countdown_remaining(remaining))
+        Some(crate::text::countdown(self.language, remaining))
     }
 
     pub(super) fn append_crosshair_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)

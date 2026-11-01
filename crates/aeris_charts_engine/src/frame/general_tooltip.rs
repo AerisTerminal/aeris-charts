@@ -58,7 +58,7 @@ fn format_value(value: f64) -> String {
 
 /// The value text of one tooltip row; the browser `create_general_tooltip` default formats the
 /// same fields in the same order.
-fn tooltip_detail(item: &GeneralTooltipSnapshot) -> String {
+fn tooltip_detail(item: &GeneralTooltipSnapshot, language: crate::ChartLanguage) -> String {
     let optional = |value: Option<f64>| value.map_or_else(|| "—".to_owned(), format_value);
     let mut parts = Vec::new();
     if let Some(value) = item.value {
@@ -75,44 +75,72 @@ fn tooltip_detail(item: &GeneralTooltipSnapshot) -> String {
         ));
     }
     if let Some(size) = item.size {
-        parts.push(format!("size {}", format_value(size)));
+        parts.push(format!(
+            "{} {}",
+            crate::text::TOOLTIP_SIZE.text(language),
+            format_value(size)
+        ));
     }
     if let Some(label) = &item.y_label {
         parts.push(label.clone());
     }
     match item.detail {
-        Some(GeneralRowDetail::Waterfall { mark, start, end }) => match mark {
-            GeneralWaterfallMark::Increase | GeneralWaterfallMark::Decrease => parts.push(format!(
-                "{} {} → {}",
-                mark.name(),
-                format_value(start),
-                format_value(end)
-            )),
-            GeneralWaterfallMark::Subtotal | GeneralWaterfallMark::Total => {
-                parts.push(mark.name().to_owned());
+        Some(GeneralRowDetail::Waterfall { mark, start, end }) => {
+            let name = crate::text::waterfall_mark(language, mark);
+            match mark {
+                GeneralWaterfallMark::Increase | GeneralWaterfallMark::Decrease => {
+                    parts.push(format!(
+                        "{name} {} → {}",
+                        format_value(start),
+                        format_value(end)
+                    ));
+                }
+                GeneralWaterfallMark::Subtotal | GeneralWaterfallMark::Total => {
+                    parts.push(name.to_owned());
+                }
             }
-        },
+        }
         Some(GeneralRowDetail::Bullet {
             target,
             comparative,
             bands,
         }) => {
             if let Some(target) = target {
-                parts.push(format!("target {}", format_value(target)));
+                parts.push(format!(
+                    "{} {}",
+                    crate::text::TOOLTIP_TARGET.text(language),
+                    format_value(target)
+                ));
             }
             if let Some(comparative) = comparative {
-                parts.push(format!("comparative {}", format_value(comparative)));
+                parts.push(format!(
+                    "{} {}",
+                    crate::text::TOOLTIP_COMPARATIVE.text(language),
+                    format_value(comparative)
+                ));
             }
             let bands: Vec<String> = bands.into_iter().flatten().map(format_value).collect();
             if !bands.is_empty() {
-                parts.push(format!("bands {}", bands.join(" / ")));
+                parts.push(format!(
+                    "{} {}",
+                    crate::text::TOOLTIP_BANDS.text(language),
+                    bands.join(" / ")
+                ));
             }
         }
-        Some(GeneralRowDetail::Rank(rank)) => parts.push(format!("rank {rank}")),
+        Some(GeneralRowDetail::Rank(rank)) => {
+            parts.push(format!(
+                "{} {rank}",
+                crate::text::TOOLTIP_RANK.text(language)
+            ));
+        }
         None => {}
     }
     if parts.is_empty() {
-        return item.label.clone().unwrap_or_else(|| "No value".to_owned());
+        return item
+            .label
+            .clone()
+            .unwrap_or_else(|| crate::text::NO_VALUE.text(language).to_owned());
     }
     parts.join(" · ")
 }
@@ -251,7 +279,7 @@ impl ChartEngine {
             .map(|item| TooltipRow {
                 color: Some(item.color),
                 name: item.title.clone(),
-                value: tooltip_detail(item),
+                value: tooltip_detail(item, self.language),
             })
             .collect();
         Some(TooltipContent { header, rows })
@@ -273,7 +301,7 @@ impl ChartEngine {
             (Some(value), Some(detail)) => format!("{} {detail}", format_value(value)),
             (Some(value), None) => format_value(value),
             (None, Some(detail)) => detail,
-            (None, None) => "No value".to_owned(),
+            (None, None) => crate::text::NO_VALUE.text(self.language).to_owned(),
         };
         Some(TooltipContent {
             header: label,
@@ -497,7 +525,7 @@ impl ChartEngine {
             content.rows.truncate(fit - 1);
             content.rows.push(TooltipRow {
                 color: None,
-                name: format!("+{hidden} more"),
+                name: crate::text::more_rows(self.language, hidden),
                 value: String::new(),
             });
         }

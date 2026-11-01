@@ -21,10 +21,10 @@ const DEFAULT_EXTERNAL_STUDY_COLORS: [&str; 5] =
 /// Hard chart-local bound for host-computed scalar outputs.
 pub const MAX_EXTERNAL_STUDY_OUTPUTS: usize = 256;
 
-/// Legend title of the engine-owned options-volume study.
-pub const OPTIONS_VOLUME_TITLE: &str = "Options Volume";
-const OPTIONS_VOLUME_OUTPUTS: [(&str, MarketTone); 2] =
-    [("Calls", MarketTone::Up), ("Puts", MarketTone::Down)];
+const OPTIONS_VOLUME_OUTPUTS: [(crate::text::Phrase, MarketTone); 2] = [
+    (crate::text::CALLS, MarketTone::Up),
+    (crate::text::PUTS, MarketTone::Down),
+];
 const OPTIONS_VOLUME_PRECISION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -132,7 +132,7 @@ pub(crate) struct ExternalStudyOutputState {
     pub(crate) series_id: SeriesId,
     generation: u64,
     settings_available: bool,
-    legend_label: Option<String>,
+    pub(crate) legend_label: Option<String>,
     input_requirements: ExternalStudyInputRequirements,
     /// The output's own visibility from its style, kept apart from the whole-study toggle so
     /// showing the study again never brings back a line the host hid. The series paints only
@@ -140,7 +140,7 @@ pub(crate) struct ExternalStudyOutputState {
     output_visible: bool,
     study_visible: bool,
     momentum_histogram: bool,
-    options_volume: bool,
+    pub(crate) options_volume: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -318,6 +318,7 @@ impl ChartEngine {
         {
             return Err(ExternalStudyError::CapacityExceeded);
         }
+        let language = self.language;
         for (output_index, ((title, _), values)) in OPTIONS_VOLUME_OUTPUTS
             .iter()
             .zip([&calls, &puts])
@@ -326,7 +327,7 @@ impl ChartEngine {
             if let Err(error) = self.install_output(
                 study_id,
                 output_index,
-                options_volume_descriptor(title),
+                options_volume_descriptor(language, *title),
                 generation,
                 timestamps_unix_nanos,
                 values,
@@ -809,7 +810,11 @@ fn set_series_data(
         .map_err(|_| ExternalStudyError::InstallationRejected)
 }
 
-fn options_volume_descriptor(title: &str) -> ExternalStudyOutputDescriptor<'_> {
+fn options_volume_descriptor(
+    language: crate::ChartLanguage,
+    title: crate::text::Phrase,
+) -> ExternalStudyOutputDescriptor<'static> {
+    let title = title.text(language);
     ExternalStudyOutputDescriptor {
         title,
         legend_label: Some(title),
@@ -958,7 +963,10 @@ mod tests {
             .iter()
             .find(|row| row.identity == crate::FinancialLegendIdentity::ExternalStudy(9))
             .unwrap();
-        assert_eq!(row.title, OPTIONS_VOLUME_TITLE);
+        assert_eq!(
+            row.title,
+            crate::text::OPTIONS_VOLUME.text(crate::ChartLanguage::English)
+        );
         let market = chart.market_colors();
         assert_eq!(
             row.values

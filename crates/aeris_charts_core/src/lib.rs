@@ -9,6 +9,7 @@
 
 pub mod format;
 pub mod helpers;
+pub mod language;
 pub mod model;
 pub mod options;
 pub mod scale;

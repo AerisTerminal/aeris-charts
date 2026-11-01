@@ -79,7 +79,7 @@ impl ChartEngine {
                 pane: primary.pane_index,
                 title: if request.primary_title.is_empty() {
                     if primary.title.is_empty() {
-                        "Asset".to_string()
+                        crate::text::ASSET.text(self.language).to_string()
                     } else {
                         primary.title.clone()
                     }
@@ -87,7 +87,7 @@ impl ChartEngine {
                     request.primary_title.to_string()
                 },
                 values: if primary.visible && request.show_primary_ohlc {
-                    snapshot.map_or_else(Vec::new, ohlc_values)
+                    snapshot.map_or_else(Vec::new, |snapshot| ohlc_values(self.language, snapshot))
                 } else {
                     Vec::new()
                 },
@@ -138,7 +138,7 @@ impl ChartEngine {
                             let unlabeled = output.kind == "volume";
                             Some(FinancialLegendValue {
                                 text: if output.output_count > 1 && !unlabeled {
-                                    format!("{} {value}", output.output_name)
+                                    format!("{} {value}", output.output_label)
                                 } else {
                                     value
                                 },
@@ -224,7 +224,7 @@ impl ChartEngine {
                 first_series_id: first_output.series_id,
                 pane: first_series.pane_index,
                 title: if self.is_options_volume_study(output.study_id) {
-                    crate::OPTIONS_VOLUME_TITLE.to_owned()
+                    crate::text::OPTIONS_VOLUME.text(self.language).to_owned()
                 } else {
                     first_series.title.clone()
                 },
@@ -308,12 +308,16 @@ fn snapshot_value(snapshots: &[SeriesValueSnapshot], series_id: SeriesId) -> Opt
         .cloned()
 }
 
-fn ohlc_values(snapshot: &SeriesValueSnapshot) -> Vec<FinancialLegendValue> {
+fn ohlc_values(
+    language: aeris_charts_core::language::ChartLanguage,
+    snapshot: &SeriesValueSnapshot,
+) -> Vec<FinancialLegendValue> {
+    let [open, high, low, close] = crate::text::ohlc_labels(language);
     [
-        ("O", &snapshot.formatted_open),
-        ("H", &snapshot.formatted_high),
-        ("L", &snapshot.formatted_low),
-        ("C", &snapshot.formatted_close),
+        (open, &snapshot.formatted_open),
+        (high, &snapshot.formatted_high),
+        (low, &snapshot.formatted_low),
+        (close, &snapshot.formatted_close),
     ]
     .into_iter()
     .map(|(label, value)| FinancialLegendValue {

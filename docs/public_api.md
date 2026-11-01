@@ -172,7 +172,9 @@ POC lines, and optional price-axis tags (`price_labels_visible`, default false).
 `profile_delta_visible`, `profile_poc_visible`, `profile_value_area_lines_visible`, and the
 `profile_{value_area,volume,positive,negative,poc}_color` palette (reads report the painted color;
 patching `""` restores the default). `drawing_property_schema(drawing)` lists these with labels,
-groups and bounds, so a host settings dialog can render them without per-tool code.
+groups and bounds, so a host settings dialog can render them without per-tool code. Labels and
+anchor names come in the chart's display language (`localization.locale` in the browser package);
+property names and enum values stay the persisted English identifiers in every language.
 Invalid values reject the whole patch. These options persist in V1 state under `volume_profile`.
 Candle-sourced delta is a close-versus-open estimate, not aggressor flow.
 
