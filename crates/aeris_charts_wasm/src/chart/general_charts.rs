@@ -1,18 +1,19 @@
 //! Thin browser boundary for engine-owned general charts.
 
 use aeris_charts_engine::{
-    AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
-    DEFAULT_GENERAL_FILL_OPACITY, FlowLink, FlowNode, FunnelStage, GeneralAreaBaseline,
-    GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralBrushEndpoint,
-    GeneralBrushRange, GeneralBrushSnapshot, GeneralDatasetId, GeneralHistogramNormalization,
-    GeneralHistogramOptions, GeneralHitMode, GeneralInterpolation, GeneralLayoutElement,
-    GeneralLayoutInput, GeneralLayoutSeriesId, GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions,
-    GeneralLineStyle, GeneralPaneComposition, GeneralPaneProposal, GeneralPaneReferenceComposition,
-    GeneralPaneSeriesComposition, GeneralPointSymbol, GeneralPolarOptions, GeneralReferenceId,
-    GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId,
+    AxisDimension, AxisPosition, CalendarInput, CategoryScaleType, ChartError, ContinuousScaleType,
+    DEFAULT_GENERAL_FILL_OPACITY, FlowLink, FlowNode, FunnelStage, GanttTask, GeneralAreaBaseline,
+    GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralBarMark, GeneralBrushEndpoint,
+    GeneralBrushRange, GeneralBrushSnapshot, GeneralDatasetId, GeneralEndLabels,
+    GeneralHistogramNormalization, GeneralHistogramOptions, GeneralHitMode, GeneralInterpolation,
+    GeneralLayoutElement, GeneralLayoutInput, GeneralLayoutSeriesId, GeneralLayoutSeriesKind,
+    GeneralLayoutSeriesOptions, GeneralLineStyle, GeneralPaneComposition, GeneralPaneProposal,
+    GeneralPaneReferenceComposition, GeneralPaneSeriesComposition, GeneralPointSymbol,
+    GeneralPolarOptions, GeneralRankTies, GeneralReferenceId, GeneralReferenceOptions,
+    GeneralRowDetail, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId,
     GeneralSeriesKind, GeneralSeriesOptions, GeneralSeriesProposal, GeneralStackMode,
-    GeneralTooltipSnapshot, GeneralXyInput, HierarchyNode, HorizontalDomain,
-    MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    GeneralTooltipSnapshot, GeneralWaterfallOptions, GeneralWaterfallStep, GeneralXyInput,
+    HierarchyNode, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS, MosaicCell,
 };
 use js_sys::{Float64Array, Uint8Array, Uint32Array};
 use serde::Deserialize;
@@ -40,6 +41,15 @@ enum LayoutInput {
         nodes: Vec<FlowNode>,
         links: Vec<FlowLink>,
     },
+    Gantt {
+        tasks: Vec<GanttTask>,
+        #[serde(default)]
+        now: Option<f64>,
+    },
+    Calendar(CalendarInput),
+    Mosaic {
+        cells: Vec<MosaicCell>,
+    },
 }
 
 impl From<LayoutInput> for GeneralLayoutInput {
@@ -48,6 +58,9 @@ impl From<LayoutInput> for GeneralLayoutInput {
             LayoutInput::Funnel { stages } => Self::Funnel(stages),
             LayoutInput::Hierarchy { nodes } => Self::Hierarchy(nodes),
             LayoutInput::Flow { nodes, links } => Self::Flow { nodes, links },
+            LayoutInput::Gantt { tasks, now } => Self::Gantt { tasks, now },
+            LayoutInput::Calendar(calendar) => Self::Calendar(calendar),
+            LayoutInput::Mosaic { cells } => Self::Mosaic(cells),
         }
     }
 }
@@ -78,6 +91,21 @@ fn layout_kind(kind: &str) -> Option<GeneralLayoutSeriesKind> {
         "treemap" => Some(GeneralLayoutSeriesKind::Treemap),
         "sankey" => Some(GeneralLayoutSeriesKind::Sankey),
         "sunburst" => Some(GeneralLayoutSeriesKind::Sunburst),
+        "gantt" => Some(GeneralLayoutSeriesKind::Gantt),
+        "calendar_heatmap" => Some(GeneralLayoutSeriesKind::CalendarHeatmap),
+        "marimekko" => Some(GeneralLayoutSeriesKind::Marimekko),
+        _ => None,
+    }
+}
+
+pub(super) fn layout_element(name: &str) -> Option<GeneralLayoutElement> {
+    match name {
+        "stage" => Some(GeneralLayoutElement::Stage),
+        "node" => Some(GeneralLayoutElement::Node),
+        "link" => Some(GeneralLayoutElement::Link),
+        "task" => Some(GeneralLayoutElement::Task),
+        "day" => Some(GeneralLayoutElement::Day),
+        "cell" => Some(GeneralLayoutElement::Cell),
         _ => None,
     }
 }
@@ -276,6 +304,14 @@ struct SeriesInput {
     stack_mode: Option<String>,
     #[serde(default)]
     histogram: HistogramInput,
+    #[serde(default)]
+    bar_mark: Option<String>,
+    #[serde(default)]
+    waterfall: GeneralWaterfallOptions,
+    #[serde(default)]
+    end_labels: Option<String>,
+    #[serde(default)]
+    rank: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -376,6 +412,13 @@ struct PackedColumnsInput {
     labels: Option<Vec<Option<String>>>,
     colors: Option<Vec<Option<String>>>,
     symbols: Option<Vec<Option<String>>>,
+    steps: Option<Vec<u8>>,
+    target: Option<Vec<f64>>,
+    target_valid: Option<Vec<u8>>,
+    comparative: Option<Vec<f64>>,
+    comparative_valid: Option<Vec<u8>>,
+    bands: Option<Vec<f64>>,
+    bands_valid: Option<Vec<u8>>,
 }
 
 #[derive(Deserialize)]
@@ -460,6 +503,8 @@ fn proposal_series(input: SeriesProposalInput) -> Result<GeneralSeriesProposal, 
         "error_bar" => GeneralSeriesKind::ErrorBar,
         "box_plot" => GeneralSeriesKind::BoxPlot,
         "heatmap_grid" => GeneralSeriesKind::HeatmapGrid,
+        "waterfall" => GeneralSeriesKind::Waterfall,
+        "bullet" => GeneralSeriesKind::Bullet,
         _ => return Err(input_error("unsupported general series kind")),
     };
     let mut columns = input.columns;
@@ -519,6 +564,62 @@ fn proposal_series(input: SeriesProposalInput) -> Result<GeneralSeriesProposal, 
             max: columns.max.take().ok_or_else(|| missing("box max"))?,
             max_valid: columns.max_valid.take(),
         },
+        GeneralSeriesKind::Waterfall => GeneralXyInput::WaterfallCategory {
+            ids,
+            categories: columns
+                .categories
+                .take()
+                .ok_or_else(|| missing("category"))?,
+            category_indices: columns
+                .category_indices
+                .take()
+                .ok_or_else(|| missing("category index"))?,
+            values: columns.y.take().ok_or_else(|| missing("waterfall value"))?,
+            values_valid: columns.y_valid.take(),
+            steps: waterfall_steps(
+                &columns
+                    .steps
+                    .take()
+                    .ok_or_else(|| missing("waterfall step"))?,
+            )?,
+        },
+        GeneralSeriesKind::Bullet => {
+            let category_indices = columns
+                .category_indices
+                .take()
+                .ok_or_else(|| missing("category index"))?;
+            let rows = category_indices.len();
+            let (comparative, comparative_valid) = match columns.comparative.take() {
+                Some(values) => (values, columns.comparative_valid.take()),
+                None => (vec![0.0; rows], Some(vec![0; rows])),
+            };
+            let (bands, bands_valid) = match columns.bands.take() {
+                Some(bands) => split_bullet_bands(bands, columns.bands_valid.take())?,
+                None => (
+                    std::array::from_fn(|_| vec![0.0; rows]),
+                    std::array::from_fn(|_| Some(vec![0; rows])),
+                ),
+            };
+            GeneralXyInput::BulletCategory {
+                ids,
+                categories: columns
+                    .categories
+                    .take()
+                    .ok_or_else(|| missing("category"))?,
+                category_indices,
+                measure: columns.y.take().ok_or_else(|| missing("bullet measure"))?,
+                measure_valid: columns.y_valid.take(),
+                target: columns
+                    .target
+                    .take()
+                    .ok_or_else(|| missing("bullet target"))?,
+                target_valid: columns.target_valid.take(),
+                comparative,
+                comparative_valid,
+                bands,
+                bands_valid,
+            }
+        }
         GeneralSeriesKind::HeatmapGrid => {
             if let (Some(x_categories), Some(x_category_indices)) = (
                 columns.x_categories.take(),
@@ -694,6 +795,101 @@ fn proposal_series(input: SeriesProposalInput) -> Result<GeneralSeriesProposal, 
     })
 }
 
+fn waterfall_steps(codes: &[u8]) -> Result<Vec<GeneralWaterfallStep>, String> {
+    codes
+        .iter()
+        .map(|code| match code {
+            0 => Ok(GeneralWaterfallStep::Relative),
+            1 => Ok(GeneralWaterfallStep::Subtotal),
+            2 => Ok(GeneralWaterfallStep::Total),
+            _ => Err(input_error(
+                "general waterfall step codes must be 0 (relative), 1 (subtotal), or 2 (total)",
+            )),
+        })
+        .collect()
+}
+
+type BulletBands = ([Vec<f64>; 3], [Option<Vec<u8>>; 3]);
+
+/// Splits band-major packed bullet thresholds: every band-1 row, then band 2, then band 3.
+fn split_bullet_bands(bands: Vec<f64>, valid: Option<Vec<u8>>) -> Result<BulletBands, String> {
+    if !bands.len().is_multiple_of(3)
+        || valid
+            .as_ref()
+            .is_some_and(|valid| valid.len() != bands.len())
+    {
+        return Err(input_error(
+            "general bullet bands must hold three equal band-major columns",
+        ));
+    }
+    let rows = bands.len() / 3;
+    let column = |band: usize| bands[band * rows..(band + 1) * rows].to_vec();
+    let column_valid = |band: usize| {
+        valid
+            .as_ref()
+            .map(|valid| valid[band * rows..(band + 1) * rows].to_vec())
+    };
+    Ok((
+        std::array::from_fn(column),
+        std::array::from_fn(column_valid),
+    ))
+}
+
+fn invalid_option(message: &str) -> ChartError {
+    ChartError::new(aeris_charts_engine::ErrorCode::InvalidOptions, message)
+}
+
+fn bar_mark(value: Option<&str>) -> Result<GeneralBarMark, ChartError> {
+    match value.unwrap_or("bar") {
+        "bar" => Ok(GeneralBarMark::Bar),
+        "lollipop" => Ok(GeneralBarMark::Lollipop),
+        "dumbbell" => Ok(GeneralBarMark::Dumbbell),
+        _ => Err(invalid_option(
+            "general series bar_mark must be bar, lollipop, or dumbbell",
+        )),
+    }
+}
+
+fn end_labels(value: Option<&str>) -> Result<GeneralEndLabels, ChartError> {
+    match value.unwrap_or("none") {
+        "none" => Ok(GeneralEndLabels::None),
+        "start" => Ok(GeneralEndLabels::Start),
+        "end" => Ok(GeneralEndLabels::End),
+        "both" => Ok(GeneralEndLabels::Both),
+        _ => Err(invalid_option(
+            "general series end_labels must be none, start, end, or both",
+        )),
+    }
+}
+
+fn rank_ties(value: Option<&str>) -> Result<Option<GeneralRankTies>, ChartError> {
+    match value {
+        None => Ok(None),
+        Some("dense") => Ok(Some(GeneralRankTies::Dense)),
+        Some("competition") => Ok(Some(GeneralRankTies::Competition)),
+        Some(_) => Err(invalid_option(
+            "general series rank must be dense, competition, or null",
+        )),
+    }
+}
+
+fn row_detail_value(detail: Option<GeneralRowDetail>) -> Value {
+    match detail {
+        None => Value::Null,
+        Some(GeneralRowDetail::Waterfall { mark, start, end }) => {
+            json!({ "type": "waterfall", "mark": mark.name(), "start": start, "end": end })
+        }
+        Some(GeneralRowDetail::Bullet {
+            target,
+            comparative,
+            bands,
+        }) => json!({
+            "type": "bullet", "target": target, "comparative": comparative, "bands": bands,
+        }),
+        Some(GeneralRowDetail::Rank(rank)) => json!({ "type": "rank", "rank": rank }),
+    }
+}
+
 fn line_style(value: Option<&str>) -> Result<GeneralLineStyle, ChartError> {
     match value.unwrap_or("solid") {
         "solid" => Ok(GeneralLineStyle::Solid),
@@ -796,6 +992,12 @@ fn series_options_from_input(
         GeneralSeriesKind::RadialBar => {
             GeneralSeriesOptions::radial_bar(input.pane, dataset, input.x_axis_id, input.y_axis_id)
         }
+        GeneralSeriesKind::Waterfall => {
+            GeneralSeriesOptions::waterfall(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        GeneralSeriesKind::Bullet => {
+            GeneralSeriesOptions::bullet(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
     };
     options.visible = input.visible;
     options.title = input.title;
@@ -857,6 +1059,10 @@ fn series_options_from_input(
         }
     };
     options.histogram = histogram_options(input.histogram)?;
+    options.bar_mark = bar_mark(input.bar_mark.as_deref())?;
+    options.waterfall = input.waterfall;
+    options.end_labels = end_labels(input.end_labels.as_deref())?;
+    options.rank = rank_ties(input.rank.as_deref())?;
     Ok(options)
 }
 
@@ -911,6 +1117,8 @@ fn series_kind_name(kind: GeneralSeriesKind) -> &'static str {
         GeneralSeriesKind::Radar => "radar",
         GeneralSeriesKind::PolarArea => "polar_area",
         GeneralSeriesKind::RadialBar => "radial_bar",
+        GeneralSeriesKind::Waterfall => "waterfall",
+        GeneralSeriesKind::Bullet => "bullet",
     }
 }
 
@@ -1126,6 +1334,7 @@ fn general_tooltip_value(snapshot: GeneralTooltipSnapshot) -> Value {
         "x_low": snapshot.x_low, "x_high": snapshot.x_high,
         "q1": snapshot.q1, "q3": snapshot.q3,
         "size": snapshot.size, "title": snapshot.title, "color": snapshot.color.to_css(),
+        "detail": row_detail_value(snapshot.detail),
     })
 }
 
@@ -1311,6 +1520,9 @@ impl ChartInner {
                         GeneralLayoutSeriesKind::Treemap => "treemap",
                         GeneralLayoutSeriesKind::Sankey => "sankey",
                         GeneralLayoutSeriesKind::Sunburst => "sunburst",
+                        GeneralLayoutSeriesKind::Gantt => "gantt",
+                        GeneralLayoutSeriesKind::CalendarHeatmap => "calendar_heatmap",
+                        GeneralLayoutSeriesKind::Marimekko => "marimekko",
                     },
                 }))
             })
@@ -1335,11 +1547,8 @@ impl ChartInner {
         let Some(series) = GeneralLayoutSeriesId::from_raw(series) else {
             return false;
         };
-        let element = match element {
-            "stage" => GeneralLayoutElement::Stage,
-            "node" => GeneralLayoutElement::Node,
-            "link" => GeneralLayoutElement::Link,
-            _ => return false,
+        let Some(element) = layout_element(element) else {
+            return false;
         };
         self.engine.set_general_layout_accessibility_focus(
             aeris_charts_engine::GeneralLayoutHit {
@@ -1363,6 +1572,10 @@ impl ChartInner {
         let Some(input) = self.engine.general_layout_dataset(options.dataset) else {
             return Value::Null;
         };
+        if let Some((id, label)) = self.engine.general_layout_item_identity(hit) {
+            let value = self.engine.general_layout_hit_value(hit);
+            return json!({ "series": hit.series.get(), "element": hit.element, "row": hit.row, "id": id, "label": label, "value": value, "title": options.title });
+        }
         let (id, label) = match (input, hit.element) {
             (GeneralLayoutInput::Funnel(stages), GeneralLayoutElement::Stage) => {
                 let Some(row) = stages.get(hit.row) else {
@@ -1391,7 +1604,7 @@ impl ChartInner {
             _ => return Value::Null,
         };
         let value = self.engine.general_layout_hit_value(hit);
-        json!({ "series": hit.series.get(), "element": match hit.element { GeneralLayoutElement::Stage => "stage", GeneralLayoutElement::Node => "node", GeneralLayoutElement::Link => "link" }, "row": hit.row, "id": id, "label": label, "value": value, "title": options.title })
+        json!({ "series": hit.series.get(), "element": hit.element, "row": hit.row, "id": id, "label": label, "value": value, "title": options.title })
     }
 
     pub fn set_general_transition_duration_result_json(&mut self, duration_ms: f64) -> String {
@@ -1863,6 +2076,22 @@ impl ChartInner {
                 GeneralStackMode::Positive => "positive",
             },
             "histogram": histogram_options_value(series.histogram()),
+            "bar_mark": match series.bar_mark() {
+                GeneralBarMark::Bar => "bar",
+                GeneralBarMark::Lollipop => "lollipop",
+                GeneralBarMark::Dumbbell => "dumbbell",
+            },
+            "waterfall": series.waterfall(),
+            "end_labels": match series.end_labels() {
+                GeneralEndLabels::None => "none",
+                GeneralEndLabels::Start => "start",
+                GeneralEndLabels::End => "end",
+                GeneralEndLabels::Both => "both",
+            },
+            "rank": series.rank().map(|ties| match ties {
+                GeneralRankTies::Dense => "dense",
+                GeneralRankTies::Competition => "competition",
+            }),
         })
         .to_string()
     }
@@ -2058,6 +2287,33 @@ impl ChartInner {
                     q3_valid: None,
                     max: Vec::new(),
                     max_valid: None,
+                },
+            ),
+            "waterfall" => (
+                GeneralSeriesKind::Waterfall,
+                GeneralXyInput::WaterfallCategory {
+                    ids: None,
+                    categories: Vec::new(),
+                    category_indices: Vec::new(),
+                    values: Vec::new(),
+                    values_valid: None,
+                    steps: Vec::new(),
+                },
+            ),
+            "bullet" => (
+                GeneralSeriesKind::Bullet,
+                GeneralXyInput::BulletCategory {
+                    ids: None,
+                    categories: Vec::new(),
+                    category_indices: Vec::new(),
+                    measure: Vec::new(),
+                    measure_valid: None,
+                    target: Vec::new(),
+                    target_valid: None,
+                    comparative: Vec::new(),
+                    comparative_valid: None,
+                    bands: Default::default(),
+                    bands_valid: Default::default(),
                 },
             ),
             "heatmap_grid" => {
@@ -2869,6 +3125,109 @@ impl ChartInner {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_waterfall_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        metadata_json: &str,
+        category_indices: &Uint32Array,
+        values: &Float64Array,
+        values_valid: Option<Uint8Array>,
+        steps: &Uint8Array,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let metadata = match parse_json::<CategoryDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let steps = match waterfall_steps(&steps.to_vec()) {
+            Ok(steps) => steps,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::WaterfallCategory {
+            ids,
+            categories: metadata.categories,
+            category_indices: category_indices.to_vec(),
+            values: values.to_vec(),
+            values_valid: values_valid.map(|values| values.to_vec()),
+            steps,
+        };
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_bullet_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        metadata_json: &str,
+        category_indices: &Uint32Array,
+        measure: &Float64Array,
+        measure_valid: Option<Uint8Array>,
+        target: &Float64Array,
+        target_valid: Option<Uint8Array>,
+        comparative: &Float64Array,
+        comparative_valid: Option<Uint8Array>,
+        bands: &Float64Array,
+        bands_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let metadata = match parse_json::<CategoryDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let (bands, bands_valid) =
+            match split_bullet_bands(bands.to_vec(), bands_valid.map(|valid| valid.to_vec())) {
+                Ok(split) => split,
+                Err(error) => return error,
+            };
+        let input = GeneralXyInput::BulletCategory {
+            ids,
+            categories: metadata.categories,
+            category_indices: category_indices.to_vec(),
+            measure: measure.to_vec(),
+            measure_valid: measure_valid.map(|values| values.to_vec()),
+            target: target.to_vec(),
+            target_valid: target_valid.map(|values| values.to_vec()),
+            comparative: comparative.to_vec(),
+            comparative_valid: comparative_valid.map(|values| values.to_vec()),
+            bands,
+            bands_valid,
+        };
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
     pub fn upsert_general_numeric_data_typed(
         &mut self,
         dataset: u32,
@@ -3571,6 +3930,111 @@ impl ChartInner {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_waterfall_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        category_indices: &Uint32Array,
+        values: &Float64Array,
+        values_valid: Option<Uint8Array>,
+        steps: &Uint8Array,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let update = match parse_json::<CategoryUpdateInput>(update_json) {
+            Ok(update) => update,
+            Err(error) => return error,
+        };
+        let steps = match waterfall_steps(&steps.to_vec()) {
+            Ok(steps) => steps,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::WaterfallCategory {
+            ids,
+            categories: update.categories,
+            category_indices: category_indices.to_vec(),
+            values: values.to_vec(),
+            values_valid: values_valid.map(|values| values.to_vec()),
+            steps,
+        };
+        match self.engine.upsert_general_xy_dataset_styled(
+            dataset,
+            input,
+            update.labels,
+            update.colors,
+            update.symbols,
+            (update.max_rows > 0).then_some(update.max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_bullet_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        category_indices: &Uint32Array,
+        measure: &Float64Array,
+        measure_valid: Option<Uint8Array>,
+        target: &Float64Array,
+        target_valid: Option<Uint8Array>,
+        comparative: &Float64Array,
+        comparative_valid: Option<Uint8Array>,
+        bands: &Float64Array,
+        bands_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let update = match parse_json::<CategoryUpdateInput>(update_json) {
+            Ok(update) => update,
+            Err(error) => return error,
+        };
+        let (bands, bands_valid) =
+            match split_bullet_bands(bands.to_vec(), bands_valid.map(|valid| valid.to_vec())) {
+                Ok(split) => split,
+                Err(error) => return error,
+            };
+        let input = GeneralXyInput::BulletCategory {
+            ids,
+            categories: update.categories,
+            category_indices: category_indices.to_vec(),
+            measure: measure.to_vec(),
+            measure_valid: measure_valid.map(|values| values.to_vec()),
+            target: target.to_vec(),
+            target_valid: target_valid.map(|values| values.to_vec()),
+            comparative: comparative.to_vec(),
+            comparative_valid: comparative_valid.map(|values| values.to_vec()),
+            bands,
+            bands_valid,
+        };
+        match self.engine.upsert_general_xy_dataset_styled(
+            dataset,
+            input,
+            update.labels,
+            update.colors,
+            update.symbols,
+            (update.max_rows > 0).then_some(update.max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
     pub fn remove_general_series(&mut self, series: u32, dataset: u32) -> bool {
         let (Some(series), Some(dataset)) = (
             GeneralSeriesId::from_raw(series),
@@ -3723,6 +4187,7 @@ impl ChartInner {
                 "q1": item.q1,
                 "q3": item.q3,
                 "size": item.size,
+                "detail": row_detail_value(item.detail),
             })).collect::<Vec<_>>(),
         })
         .to_string()

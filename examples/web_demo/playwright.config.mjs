@@ -2,6 +2,23 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = Number.parseInt(process.env.AERIS_CHARTS_TEST_PORT ?? "4174", 10);
 const portable_browser = process.env.AERIS_CHARTS_PORTABLE_BROWSER === "1";
+// A second server answers the shared bundle path with the complete build (see test_server.mjs).
+const complete_port = Number.parseInt(process.env.AERIS_CHARTS_COMPLETE_TEST_PORT ?? String(port + 1), 10);
+const chromium_webgpu = {
+  channel: "chromium",
+  launchOptions: {
+    args: [
+      "--enable-unsafe-webgpu",
+      "--enable-unsafe-swiftshader",
+      "--use-webgpu-adapter=swiftshader",
+      "--enable-dawn-features=allow_unsafe_apis",
+      "--disable-dawn-features=use_dxc",
+      "--enable-webgpu-developer-features",
+      "--use-gpu-in-tests",
+      "--enable-accelerated-2d-canvas",
+    ],
+  },
+};
 
 export default defineConfig({
   testDir: "./tests",
@@ -37,39 +54,42 @@ export default defineConfig({
         ? /(engine_bench|gpui_webgpu_matrix|perf_gate)\.spec\.mjs/
         : undefined,
       grepInvert: portable_browser ? /@machine/ : undefined,
-      use: {
-        channel: "chromium",
-        launchOptions: {
-          args: [
-            "--enable-unsafe-webgpu",
-            "--enable-unsafe-swiftshader",
-            "--use-webgpu-adapter=swiftshader",
-            "--enable-dawn-features=allow_unsafe_apis",
-            "--disable-dawn-features=use_dxc",
-            "--enable-webgpu-developer-features",
-            "--use-gpu-in-tests",
-            "--enable-accelerated-2d-canvas",
-          ],
-        },
-      },
+      use: chromium_webgpu,
+    },
+    {
+      // The complete build (`@aeristerminal/aeris-charts/complete`) runs a representative slice of
+      // the shared suite: families both builds contain must behave identically in it.
+      name: "chromium-complete",
+      testMatch: /[\\/](build_variant|general_charts|g8_defaults|accessibility|license_attribution)\.spec\.mjs$/,
+      grepInvert: portable_browser ? /@machine/ : undefined,
+      use: { ...chromium_webgpu, baseURL: `http://127.0.0.1:${complete_port}` },
     },
     {
       // Firefox and WebKit have no headless WebGPU here, so they run only the Canvas2D-fallback
       // smoke — confirming the library loads and renders on those engines.
       name: "firefox",
       use: { ...devices["Desktop Firefox"] },
-      testMatch: /(cross_browser|financial_compatibility|general_charts|g1_foundations|g8_defaults|unified_interaction_accessibility|public_reference_interaction)\.spec\.mjs/,
+      testMatch: /(cross_browser|financial_compatibility|general_charts|g1_foundations|g8_defaults|unified_interaction_accessibility|public_reference_interaction|g9_timeline_calendar|g9_business)\.spec\.mjs/,
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
-      testMatch: /(cross_browser|financial_compatibility|general_charts|g1_foundations|g8_defaults|unified_interaction_accessibility|public_reference_interaction)\.spec\.mjs/,
+      testMatch: /(cross_browser|financial_compatibility|general_charts|g1_foundations|g8_defaults|unified_interaction_accessibility|public_reference_interaction|g9_timeline_calendar|g9_business)\.spec\.mjs/,
     },
   ],
-  webServer: {
-    command: "node test_server.mjs",
-    url: `http://127.0.0.1:${port}`,
-    reuseExistingServer: !process.env.CI,
-    timeout: 30_000,
-  },
+  webServer: [
+    {
+      command: "node test_server.mjs",
+      url: `http://127.0.0.1:${port}`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+    {
+      command: "node test_server.mjs",
+      url: `http://127.0.0.1:${complete_port}`,
+      env: { ...process.env, AERIS_CHARTS_TEST_PORT: String(complete_port), AERIS_CHARTS_BUILD: "complete" },
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+  ],
 });

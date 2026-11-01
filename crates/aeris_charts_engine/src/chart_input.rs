@@ -1545,6 +1545,19 @@ impl ChartEngine {
         let scroll = matches!(intent, WheelIntent::Pan | WheelIntent::PanAndZoom)
             && pan_delta != 0.0
             && options.wheel_scroll;
+        // A bounded Gantt row viewport under the pointer scrolls before any time-scale policy.
+        if sample.delta_y != 0.0
+            && let Some(pane) = self.pane_at_y(sample.y)
+            && self.scroll_general_layout_rows(pane, sample.x, sample.y, sample.delta_y)
+        {
+            self.stop_input_motion();
+            self.input.pointer = Some((sample.x, sample.y));
+            self.input.modifiers = sample.modifiers;
+            self.input.frame_dirty = true;
+            self.refresh_pointer_hover(sample.x, sample.y, sample.timestamp_ms);
+            self.refresh_input_cursor();
+            return true;
+        }
         if !zoom && !scroll {
             return false;
         }

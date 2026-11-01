@@ -423,11 +423,13 @@ class PaneAccessibility {
     const selected_drawing = this.controller.chart.selected_drawing();
     if (selected_drawing !== null && this.handle_drawing_key(event, selected_drawing)) return;
     if (this.series.length === 0) return;
+    // Grid layouts (calendar weeks) move by column horizontally and by item vertically.
+    const stride = this.layout_grid_stride();
     switch (event.key) {
-      case "ArrowRight": this.move_point(1); break;
-      case "ArrowLeft": this.move_point(-1); break;
-      case "ArrowUp": this.move_series(-1); break;
-      case "ArrowDown": this.move_series(1); break;
+      case "ArrowRight": this.move_point(stride ?? 1); break;
+      case "ArrowLeft": this.move_point(-(stride ?? 1)); break;
+      case "ArrowUp": if (stride === undefined) this.move_series(-1); else this.move_point(-1); break;
+      case "ArrowDown": if (stride === undefined) this.move_series(1); else this.move_point(1); break;
       case "PageUp": this.move_point(this.controller.options.page_step); break;
       case "PageDown": this.move_point(-this.controller.options.page_step); break;
       case "Home": if (this.point_count() > 0) this.set_point(0); break;
@@ -729,6 +731,14 @@ class PaneAccessibility {
     return snapshot.items[index - snapshot.offset];
   }
 
+  private layout_grid_stride(): number | undefined {
+    const series = this.active_series();
+    if (!is_layout_series(series)) return undefined;
+    const snapshot = this.layout_snapshot?.series === series.id
+      ? this.layout_snapshot : series.accessibility_snapshot(0, 0);
+    return snapshot.grid_stride;
+  }
+
   private move_point(delta: number): void {
     const count = this.point_count();
     if (count === 0) return;
@@ -983,6 +993,20 @@ class PaneAccessibility {
       if (series.kind === "heatmap_grid" && item.y_label !== null) {
         const heatmap = `${item.y_label}, ${this.format_value(item.value, series)}`;
         values = item.label === null ? heatmap : `${item.label}, ${heatmap}`;
+      }
+      const detail = item.detail;
+      if (detail?.type === "waterfall") {
+        const step = detail.mark === "subtotal" || detail.mark === "total"
+          ? `${detail.mark} ${this.format_value(detail.end, series)}`
+          : `${detail.mark} ${this.format_value(Math.abs(detail.end - detail.start), series)}, ${this.format_value(detail.start, series)} to ${this.format_value(detail.end, series)}`;
+        values = item.label === null ? step : `${item.label}, ${step}`;
+      } else if (detail?.type === "bullet") {
+        if (detail.target !== null) values = `${values}, target ${this.format_value(detail.target, series)}`;
+        if (detail.comparative !== null) values = `${values}, comparative ${this.format_value(detail.comparative, series)}`;
+        const bands = detail.bands.filter((band): band is number => band !== null);
+        if (bands.length > 0) values = `${values}, bands ${bands.map((band) => this.format_value(band, series)).join(" / ")}`;
+      } else if (detail?.type === "rank") {
+        values = `rank ${detail.rank}, ${values}`;
       }
       return this.controller.options.describe_point?.(description)
         ?? this.controller.options.messages.point(

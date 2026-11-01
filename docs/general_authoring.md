@@ -303,6 +303,80 @@ Recharts' default node fill while `color` sets the link color.
 Custom Recharts SVG node/link components remain host-only presentation and need a
 portable data/style mapping to appear in exported or native charts.
 
+### Migrating ECharts Gantt, calendar and Marimekko charts
+
+ECharts has no Gantt or Marimekko series; applications build them from `custom` series.
+Aeris replaces that rendering code with typed layout inputs on an axis-free layout pane:
+
+| ECharts authoring concept | Aeris equivalent |
+| --- | --- |
+| `custom` series `renderItem` task bars on a `time` X axis and `category` Y axis | `add_layout_series("gantt", options, { type: "gantt", tasks })` with `{ id, label, start, end }` tasks in UTC epoch milliseconds |
+| Progress overlay rectangle in `renderItem` | Task `progress` in `[0, 1]` |
+| Zero-length task drawn as a diamond | Task with `end == start` |
+| Dependency polylines drawn in `renderItem` | Task `dependencies: [predecessorId]` (finish-to-start) |
+| `markLine` at `Date.now()` | Host-supplied `now`; update it with `set_data` |
+| `dataZoom` on the category Y axis for long task lists | Built-in bounded row viewport: wheel and keyboard focus scroll rows |
+| `calendar` coordinate system with `heatmap` series | `add_layout_series("calendar_heatmap", options, { type: "calendar", days })` |
+| `calendar.range` | Inferred: every whole UTC year that contains a day (up to ten) |
+| `calendar.dayLabel.firstDay` | `week_start` (0 = Sunday ... 6 = Saturday) |
+| `calendar.dayLabel.nameMap` | `day_labels`, seven names beginning with Sunday |
+| `visualMap` continuous `inRange.color` | `low_color` and `high_color` |
+| `[dateString, value]` heatmap rows | `{ date, value }` with `date` as epoch milliseconds inside the UTC day |
+| `custom` series variable-width stacked rectangles | `add_layout_series("marimekko", options, { type: "mosaic", cells })` with `{ column, segment, value }` cells |
+| Series-name legend for mosaic segments | Built-in in-canvas segment legend |
+
+```ts
+const plan = chart.add_layout_series("gantt", { pane: 0, title: "Release plan" }, {
+  type: "gantt",
+  now: Date.UTC(2026, 0, 21),
+  tasks: [
+    { id: "scope", label: "Scope", start: Date.UTC(2026, 0, 5), end: Date.UTC(2026, 0, 9),
+      progress: 1, group: "Plan" },
+    { id: "build", label: "Build", start: Date.UTC(2026, 0, 9), end: Date.UTC(2026, 0, 23),
+      progress: 0.4, group: "Plan", dependencies: ["scope"] },
+    { id: "ship", label: "Ship", start: Date.UTC(2026, 0, 23), end: Date.UTC(2026, 0, 23),
+      dependencies: ["build"] },
+  ],
+});
+```
+
+ECharts interprets calendar date strings in the browser's local time zone; Aeris always uses UTC
+days, so convert local dates with `Date.UTC(year, monthIndex, day)` before passing them. Custom
+`renderItem` shapes beyond bars, progress, milestones and finish-to-start arrows have no Aeris
+equivalent yet.
+
+### Migrating ECharts waterfall, bullet, lollipop, dumbbell, slope and bump charts
+
+ECharts builds these from stacked bars, `custom` series, extra scatter series and host-computed
+values. Aeris takes the business data directly and computes the derived geometry in the engine:
+
+| ECharts authoring concept | Aeris equivalent |
+| --- | --- |
+| Transparent placeholder `bar` stacked under the visible step `bar`, with host-computed running totals | `add_series("waterfall", options)` with `{ x, y }` signed steps; the engine keeps the running total |
+| Subtotal or total bar whose value the host sums | Row `step: "subtotal"` or `step: "total"` with `y: null` |
+| Per-item `itemStyle.color` by sign | `waterfall: { increase_color, decrease_color, subtotal_color, total_color }` |
+| `markLine` or custom polylines between steps | Built-in connectors (`waterfall.connectors`, default on) |
+| `custom` series painting bands, measure and target rectangles | `add_series("bullet", options)` with `{ x, y, target, comparative?, bands? }` rows |
+| 2 px `bar` stem plus a `scatter` head | `column` or `horizontal_bar` with `bar_mark: "lollipop"`, `point_radius` |
+| Transparent stacked base, 2 px connector `bar` and two `scatter` series | `range_bar` with `bar_mark: "dumbbell"` and `{ x, low, high }` rows |
+| First/last point `label` plus `labelLayout: { moveOverlap: "shiftY" }` | `xy_line` with `end_labels: "both"` (or `"start"`, `"end"`) |
+| Host-computed ranks on a `yAxis: { inverse: true }` value axis | `xy_line` with raw values and `rank: "dense"` or `"competition"`; the rank axis is top-down by default |
+| `xAxis.boundaryGap: false` with room for end labels | Point X axis with `band_padding_outer` sized for the labels |
+
+```ts
+chart.add_axis({ id: "x", pane: 0, dimension: "x", scale: "band" });
+chart.add_axis({ id: "y", pane: 0, dimension: "y", scale: "linear" });
+const bridge = chart.add_series("waterfall", {
+  pane: 0, x_axis_id: "x", y_axis_id: "y", title: "Profit bridge", data_labels: true,
+});
+bridge.set_data([
+  { x: "Revenue", y: 420 }, { x: "COGS", y: -170 }, { x: "Gross", y: null, step: "subtotal" },
+  { x: "Opex", y: -120 }, { x: "Net", y: null, step: "total" },
+]);
+```
+
+The tooltip and accessibility snapshots of these rows carry `detail` with the running totals,
+bullet target and bands, or rank, so a host formatter does not recompute them.
 ### Migrating legend and tooltip content
 
 A Recharts `Legend` or `Tooltip` formatter runs in React's DOM. Use the package's DOM components

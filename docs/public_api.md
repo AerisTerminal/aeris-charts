@@ -4,7 +4,11 @@
 
 The supported product is the pre-1.0 browser package `@aeristerminal/aeris-charts`. Its framework-neutral
 root ESM entry point, optional `./react` adapter, `./wasm` asset, and `./design.css` stylesheet are the
-supported npm export paths. React is an optional peer dependency and is not loaded by root consumers.
+supported npm export paths. The complete build adds `./complete`, `./complete/react`, and
+`./complete/wasm` with the same declarations; it contains every standard family unchanged plus
+families gated behind the engine's `complete` feature. `build_variant()` reports the loaded build,
+and creating a complete-only family through the standard build throws `complete_build_required`.
+React is an optional peer dependency and is not loaded by root consumers.
 The supported root surface is:
 
 - chart creation and initialization;

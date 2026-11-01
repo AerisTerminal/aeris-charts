@@ -12,7 +12,8 @@ export type AerisChartsErrorCode =
   | "persistence_version_error"
   | "extension_error"
   | "renderer_platform_error"
-  | "resource_limit";
+  | "resource_limit"
+  | "complete_build_required";
 
 /** Public error thrown for predictable chart, handle, validation, persistence, and platform failures. */
 export class AerisChartsError extends Error {

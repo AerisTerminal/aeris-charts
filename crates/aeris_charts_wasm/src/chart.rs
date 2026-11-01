@@ -4498,6 +4498,65 @@ impl AerisChart {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn set_general_waterfall_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        metadata_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        values: &Float64Array,
+        values_valid: Option<js_sys::Uint8Array>,
+        steps: &js_sys::Uint8Array,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_waterfall_category_data_typed(
+                dataset,
+                ids_json,
+                metadata_json,
+                category_indices,
+                values,
+                values_valid,
+                steps,
+            )
+    }
+
+    /// `bands` packs every band-1 threshold, then band 2, then band 3 (length three times rows).
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_bullet_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        metadata_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        measure: &Float64Array,
+        measure_valid: Option<js_sys::Uint8Array>,
+        target: &Float64Array,
+        target_valid: Option<js_sys::Uint8Array>,
+        comparative: &Float64Array,
+        comparative_valid: Option<js_sys::Uint8Array>,
+        bands: &Float64Array,
+        bands_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_bullet_category_data_typed(
+                dataset,
+                ids_json,
+                metadata_json,
+                category_indices,
+                measure,
+                measure_valid,
+                target,
+                target_valid,
+                comparative,
+                comparative_valid,
+                bands,
+                bands_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn set_general_box_category_data_typed(
         &mut self,
         dataset: u32,
@@ -4884,6 +4943,64 @@ impl AerisChart {
                 y_low_valid,
                 y_high,
                 y_high_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_waterfall_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        values: &Float64Array,
+        values_valid: Option<js_sys::Uint8Array>,
+        steps: &js_sys::Uint8Array,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_waterfall_category_data_typed(
+                dataset,
+                ids_json,
+                update_json,
+                category_indices,
+                values,
+                values_valid,
+                steps,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_bullet_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        measure: &Float64Array,
+        measure_valid: Option<js_sys::Uint8Array>,
+        target: &Float64Array,
+        target_valid: Option<js_sys::Uint8Array>,
+        comparative: &Float64Array,
+        comparative_valid: Option<js_sys::Uint8Array>,
+        bands: &Float64Array,
+        bands_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_bullet_category_data_typed(
+                dataset,
+                ids_json,
+                update_json,
+                category_indices,
+                measure,
+                measure_valid,
+                target,
+                target_valid,
+                comparative,
+                comparative_valid,
+                bands,
+                bands_valid,
             )
     }
 
@@ -5651,11 +5768,8 @@ impl AerisChart {
             else {
                 return false;
             };
-            let element = match element {
-                "stage" => aeris_charts_engine::GeneralLayoutElement::Stage,
-                "node" => aeris_charts_engine::GeneralLayoutElement::Node,
-                "link" => aeris_charts_engine::GeneralLayoutElement::Link,
-                _ => return false,
+            let Some(element) = general_charts::layout_element(element) else {
+                return false;
             };
             let Ok(row) = row.parse::<usize>() else {
                 return false;

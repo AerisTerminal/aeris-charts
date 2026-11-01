@@ -245,6 +245,14 @@ struct SeriesV2 {
     stack_mode: crate::GeneralStackMode,
     #[serde(default)]
     histogram: crate::GeneralHistogramOptions,
+    #[serde(default)]
+    bar_mark: crate::GeneralBarMark,
+    #[serde(default)]
+    waterfall: crate::GeneralWaterfallOptions,
+    #[serde(default)]
+    end_labels: crate::GeneralEndLabels,
+    #[serde(default)]
+    rank: Option<crate::GeneralRankTies>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1334,7 +1342,9 @@ impl ChartEngine {
                 });
                 let heatmap_y_numeric = dataset.heatmap_y_numeric().map(ToOwned::to_owned);
                 debug_assert!(
-                    low.is_none() || size.is_none(),
+                    dataset.x_kind() == crate::GeneralXKind::Category
+                        || low.is_none()
+                        || size.is_none(),
                     "range and bubble channels are mutually exclusive"
                 );
                 let input = match dataset.x_kind() {
@@ -1464,6 +1474,45 @@ impl ChartEngine {
                                 .to_vec(),
                             value: y,
                             value_valid: y_valid,
+                        }
+                    }
+                    // Only bullet category data carries a size channel with band thresholds,
+                    // and only waterfall category data carries one without them.
+                    crate::GeneralXKind::Category if size.is_some() && x_low.is_some() => {
+                        crate::GeneralXyInput::BulletCategory {
+                            ids,
+                            categories: dataset.categories().unwrap_or_default().to_vec(),
+                            category_indices: dataset
+                                .category_indices()
+                                .unwrap_or_default()
+                                .to_vec(),
+                            measure: y,
+                            measure_valid: y_valid,
+                            target: high.expect("bullet target channel"),
+                            target_valid: high_valid,
+                            comparative: low.expect("bullet comparative channel"),
+                            comparative_valid: low_valid,
+                            bands: [
+                                x_low.expect("bullet first band channel"),
+                                x_high.expect("bullet second band channel"),
+                                size.expect("bullet third band channel"),
+                            ],
+                            bands_valid: [x_low_valid, x_high_valid, size_valid],
+                        }
+                    }
+                    crate::GeneralXKind::Category if size.is_some() => {
+                        crate::GeneralXyInput::WaterfallCategory {
+                            ids,
+                            categories: dataset.categories().unwrap_or_default().to_vec(),
+                            category_indices: dataset
+                                .category_indices()
+                                .unwrap_or_default()
+                                .to_vec(),
+                            values: y,
+                            values_valid: y_valid,
+                            steps: (0..dataset.len())
+                                .map(|row| dataset.waterfall_step(row))
+                                .collect(),
                         }
                     }
                     crate::GeneralXKind::Category
@@ -1602,6 +1651,10 @@ impl ChartEngine {
                     stack_id: series.stack_id().map(str::to_string),
                     stack_mode: series.stack_mode(),
                     histogram: series.histogram(),
+                    bar_mark: series.bar_mark(),
+                    waterfall: series.waterfall().clone(),
+                    end_labels: series.end_labels(),
+                    rank: series.rank(),
                 })
             })
             .collect::<Result<Vec<_>, ChartError>>()?;
@@ -2834,6 +2887,10 @@ impl ChartEngine {
                 stack_id: series.stack_id,
                 stack_mode: series.stack_mode,
                 histogram: series.histogram,
+                bar_mark: series.bar_mark,
+                waterfall: series.waterfall,
+                end_labels: series.end_labels,
+                rank: series.rank,
             })?;
         }
         let mut layout_datasets = HashMap::new();
@@ -4830,6 +4887,93 @@ mod tests {
             crate::HorizontalDomain::Layout,
         )
         .unwrap();
+        let before = fresh.export_state_json().unwrap();
+        assert!(fresh.import_state_json(&invalid.to_string()).is_err());
+        assert_eq!(fresh.export_state_json().unwrap(), before);
+    }
+
+    #[test]
+    fn timeline_calendar_and_mosaic_layouts_round_trip_and_reject_invalid_import_atomically() {
+        let layout_chart = || {
+            ChartEngine::new_with_initial_domain(400.0, 300.0, 1.0, crate::HorizontalDomain::Layout)
+                .unwrap()
+        };
+        let mut source = layout_chart();
+        let task = |id: &str, start: f64, end: f64, dependencies: &[&str]| crate::GanttTask {
+            id: id.into(),
+            label: id.to_uppercase(),
+            start,
+            end,
+            progress: 0.25,
+            group: Some("Build".into()),
+            dependencies: dependencies.iter().map(|id| (*id).to_owned()).collect(),
+        };
+        let inputs = [
+            (
+                crate::GeneralLayoutInput::Gantt {
+                    tasks: vec![
+                        task("a", 0.0, 86_400_000.0, &[]),
+                        task("b", 86_400_000.0, 86_400_000.0, &["a"]),
+                    ],
+                    now: Some(43_200_000.0),
+                },
+                crate::GeneralLayoutSeriesKind::Gantt,
+            ),
+            (
+                crate::GeneralLayoutInput::Calendar(crate::CalendarInput {
+                    days: vec![crate::CalendarDay {
+                        date: 1_709_164_800_000.0,
+                        value: -2.5,
+                    }],
+                    week_start: 1,
+                    day_labels: ["D", "L", "M", "M", "J", "V", "S"]
+                        .map(str::to_owned)
+                        .to_vec(),
+                    low_color: Some("#ffffff".into()),
+                    high_color: Some("#003366".into()),
+                }),
+                crate::GeneralLayoutSeriesKind::CalendarHeatmap,
+            ),
+            (
+                crate::GeneralLayoutInput::Mosaic(vec![
+                    crate::MosaicCell {
+                        column: "A".into(),
+                        segment: "x".into(),
+                        value: 3.0,
+                    },
+                    crate::MosaicCell {
+                        column: "B".into(),
+                        segment: "y".into(),
+                        value: 0.0,
+                    },
+                ]),
+                crate::GeneralLayoutSeriesKind::Marimekko,
+            ),
+        ];
+        for (input, kind) in &inputs {
+            let dataset = source.create_general_layout_dataset(input.clone()).unwrap();
+            source
+                .add_general_layout_series(crate::GeneralLayoutSeriesOptions::new(
+                    0, dataset, *kind,
+                ))
+                .unwrap();
+        }
+        let document = source.export_state_json().unwrap();
+        let mut target = layout_chart();
+        target.import_state_json(&document).unwrap();
+        let ids = target.general_layout_series_ids();
+        assert_eq!(ids.len(), inputs.len());
+        for (id, (input, kind)) in ids.iter().zip(&inputs) {
+            let options = target.general_layout_series_options(*id).unwrap();
+            assert_eq!(options.kind, *kind);
+            assert_eq!(target.general_layout_dataset(options.dataset), Some(input));
+        }
+        assert_eq!(target.export_state_json().unwrap(), document);
+
+        let mut invalid: serde_json::Value = serde_json::from_str(&document).unwrap();
+        invalid["layout_datasets"][0]["input"]["Gantt"]["tasks"][0]["dependencies"] =
+            serde_json::json!(["b"]);
+        let mut fresh = layout_chart();
         let before = fresh.export_state_json().unwrap();
         assert!(fresh.import_state_json(&invalid.to_string()).is_err());
         assert_eq!(fresh.export_state_json().unwrap(), before);

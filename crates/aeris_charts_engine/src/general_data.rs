@@ -214,12 +214,71 @@ pub enum GeneralXyInput {
         value: Vec<f64>,
         value_valid: Option<Vec<u8>>,
     },
+    /// Waterfall steps: one value per category row plus the step role of that row.
+    ///
+    /// Relative rows add their value to the running total. Subtotal and total rows ignore their
+    /// value (it may be missing) and draw the running total from zero.
+    WaterfallCategory {
+        ids: Option<Vec<GeneralRowId>>,
+        categories: Vec<String>,
+        category_indices: Vec<u32>,
+        values: Vec<f64>,
+        values_valid: Option<Vec<u8>>,
+        steps: Vec<GeneralWaterfallStep>,
+    },
+    /// Bullet rows: one measure per category with a target, an optional comparative measure, and
+    /// up to three ascending qualitative band thresholds. Each band spans from the previous
+    /// threshold (or zero) to its own threshold.
+    BulletCategory {
+        ids: Option<Vec<GeneralRowId>>,
+        categories: Vec<String>,
+        category_indices: Vec<u32>,
+        measure: Vec<f64>,
+        measure_valid: Option<Vec<u8>>,
+        target: Vec<f64>,
+        target_valid: Option<Vec<u8>>,
+        comparative: Vec<f64>,
+        comparative_valid: Option<Vec<u8>>,
+        bands: [Vec<f64>; 3],
+        bands_valid: [Option<Vec<u8>>; 3],
+    },
     /// One-dimensional samples for distribution series such as histograms.
     Values {
         ids: Option<Vec<GeneralRowId>>,
         values: Vec<f64>,
         values_valid: Option<Vec<u8>>,
     },
+}
+
+/// Role of one waterfall row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralWaterfallStep {
+    /// Adds the row value to the running total; positive values increase, negative decrease.
+    #[default]
+    Relative,
+    /// Shows the running total from zero and keeps accumulating after it.
+    Subtotal,
+    /// Shows the running total from zero, painted with the total color.
+    Total,
+}
+
+impl GeneralWaterfallStep {
+    fn code(self) -> f64 {
+        match self {
+            Self::Relative => 0.0,
+            Self::Subtotal => 1.0,
+            Self::Total => 2.0,
+        }
+    }
+
+    pub(crate) fn from_code(code: f64) -> Self {
+        // Transitions blend the stored codes, so the nearest role wins mid-animation.
+        match code.round() as i64 {
+            1 => Self::Subtotal,
+            2 => Self::Total,
+            _ => Self::Relative,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -478,6 +537,32 @@ impl GeneralDataset {
                 .size_valid
                 .as_ref()
                 .is_none_or(|validity| validity[index] != 0)
+    }
+
+    /// The step role of a waterfall row, stored in the size channel of waterfall datasets.
+    pub(crate) fn waterfall_step(&self, index: usize) -> GeneralWaterfallStep {
+        self.size
+            .as_ref()
+            .and_then(|codes| codes.get(index))
+            .map_or(GeneralWaterfallStep::Relative, |code| {
+                GeneralWaterfallStep::from_code(*code)
+            })
+    }
+
+    /// The valid ascending band thresholds of a bullet row, stored in the X-low, X-high, and
+    /// size channels of bullet datasets.
+    pub(crate) fn bullet_bands(&self, index: usize) -> [Option<f64>; 3] {
+        [
+            self.x_low_is_valid(index)
+                .then(|| self.x_low.as_ref().map(|values| values[index]))
+                .flatten(),
+            self.x_high_is_valid(index)
+                .then(|| self.x_high.as_ref().map(|values| values[index]))
+                .flatten(),
+            self.size_is_valid(index)
+                .then(|| self.size.as_ref().map(|values| values[index]))
+                .flatten(),
+        ]
     }
 
     pub fn low(&self) -> Option<&[f64]> {
@@ -1255,6 +1340,8 @@ impl GeneralXyInput {
             | Self::RangeCategory { .. }
             | Self::ErrorCategory { .. }
             | Self::BoxCategory { .. }
+            | Self::WaterfallCategory { .. }
+            | Self::BulletCategory { .. }
             | Self::HeatmapCategoryCategory { .. } => GeneralXKind::Category,
             Self::Values { .. } => GeneralXKind::Values,
         }
@@ -1281,6 +1368,8 @@ impl GeneralXyInput {
             | Self::Temporal { y, .. }
             | Self::Category { y, .. } => y,
             Self::BoxCategory { median, .. } => median,
+            Self::WaterfallCategory { values, .. } => values,
+            Self::BulletCategory { measure, .. } => measure,
             Self::HeatmapCategoryCategory { value, .. }
             | Self::HeatmapNumericNumeric { value, .. }
             | Self::HeatmapTemporalNumeric { value, .. }
@@ -1301,6 +1390,8 @@ impl GeneralXyInput {
             | Self::Temporal { y_valid, .. }
             | Self::Category { y_valid, .. } => y_valid.as_deref(),
             Self::BoxCategory { median_valid, .. } => median_valid.as_deref(),
+            Self::WaterfallCategory { values_valid, .. } => values_valid.as_deref(),
+            Self::BulletCategory { measure_valid, .. } => measure_valid.as_deref(),
             Self::HeatmapCategoryCategory { value_valid, .. }
             | Self::HeatmapNumericNumeric { value_valid, .. }
             | Self::HeatmapTemporalNumeric { value_valid, .. }
@@ -1330,6 +1421,7 @@ impl GeneralXyInput {
             | Self::ErrorCategory { y_low: low, .. }
             | Self::ErrorTemporal { y_low: low, .. } => Some(low),
             Self::BoxCategory { min, .. } => Some(min),
+            Self::BulletCategory { comparative, .. } => Some(comparative),
             _ => None,
         }
     }
@@ -1340,6 +1432,7 @@ impl GeneralXyInput {
             | Self::ErrorCategory { y_high, .. }
             | Self::ErrorTemporal { y_high, .. } => Some(y_high),
             Self::BoxCategory { max, .. } => Some(max),
+            Self::BulletCategory { target, .. } => Some(target),
             _ => None,
         }
     }
@@ -1349,6 +1442,7 @@ impl GeneralXyInput {
             Self::ErrorNumeric { x_low, .. } => Some(x_low),
             Self::ErrorTemporal { x_low_epoch_ms, .. } => Some(x_low_epoch_ms),
             Self::BoxCategory { q1, .. } => Some(q1),
+            Self::BulletCategory { bands, .. } => Some(&bands[0]),
             _ => None,
         }
     }
@@ -1360,6 +1454,7 @@ impl GeneralXyInput {
                 x_high_epoch_ms, ..
             } => Some(x_high_epoch_ms),
             Self::BoxCategory { q3, .. } => Some(q3),
+            Self::BulletCategory { bands, .. } => Some(&bands[1]),
             _ => None,
         }
     }
@@ -1887,6 +1982,118 @@ impl GeneralXyInput {
                     heatmap_y_category_indices: None,
                 })
             }
+            Self::WaterfallCategory {
+                ids,
+                categories,
+                category_indices,
+                values,
+                values_valid,
+                steps,
+            } => {
+                validate_row_count(category_indices.len())?;
+                validate_common(
+                    category_indices.len(),
+                    ids.as_deref(),
+                    &values,
+                    values_valid.as_deref(),
+                )?;
+                validate_categories(&categories, &category_indices)?;
+                if steps.len() != category_indices.len() {
+                    return Err(invalid_data(
+                        "general waterfall steps and category columns must have equal lengths",
+                    ));
+                }
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Category {
+                        categories,
+                        indices: category_indices,
+                    },
+                    y: values,
+                    y_valid: normalize_validity(values_valid),
+                    low: None,
+                    low_valid: None,
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
+                    size: Some(steps.iter().map(|step| step.code()).collect()),
+                    size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
+                })
+            }
+            Self::BulletCategory {
+                ids,
+                categories,
+                category_indices,
+                measure,
+                measure_valid,
+                target,
+                target_valid,
+                comparative,
+                comparative_valid,
+                bands,
+                bands_valid,
+            } => {
+                let rows = category_indices.len();
+                validate_row_count(rows)?;
+                validate_common(rows, ids.as_deref(), &measure, measure_valid.as_deref())?;
+                validate_categories(&categories, &category_indices)?;
+                let [band_1, band_2, band_3] = bands;
+                let [band_1_valid, band_2_valid, band_3_valid] = bands_valid;
+                for (values, validity, name) in [
+                    (&target, target_valid.as_deref(), "target"),
+                    (&comparative, comparative_valid.as_deref(), "comparative"),
+                    (&band_1, band_1_valid.as_deref(), "band"),
+                    (&band_2, band_2_valid.as_deref(), "band"),
+                    (&band_3, band_3_valid.as_deref(), "band"),
+                ] {
+                    validate_bullet_channel(rows, values, validity, name)?;
+                }
+                for row in 0..rows {
+                    let mut previous = f64::NEG_INFINITY;
+                    for (values, validity) in [
+                        (&band_1, band_1_valid.as_deref()),
+                        (&band_2, band_2_valid.as_deref()),
+                        (&band_3, band_3_valid.as_deref()),
+                    ] {
+                        if validity.is_none_or(|validity| validity[row] != 0) {
+                            if values[row] < previous {
+                                return Err(invalid_data(
+                                    "general bullet band thresholds must be ascending",
+                                ));
+                            }
+                            previous = values[row];
+                        }
+                    }
+                }
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Category {
+                        categories,
+                        indices: category_indices,
+                    },
+                    y: measure,
+                    y_valid: normalize_validity(measure_valid),
+                    low: Some(comparative),
+                    low_valid: normalize_validity(comparative_valid),
+                    high: Some(target),
+                    high_valid: normalize_validity(target_valid),
+                    x_low: Some(band_1),
+                    x_low_valid: normalize_validity(band_1_valid),
+                    x_high: Some(band_2),
+                    x_high_valid: normalize_validity(band_2_valid),
+                    size: Some(band_3),
+                    size_valid: normalize_validity(band_3_valid),
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
+                })
+            }
             Self::HeatmapCategoryCategory {
                 ids,
                 x_categories,
@@ -2149,6 +2356,27 @@ fn validate_error_bound_channel(
                 "general error-bar {name} validity values must be 0 or 1"
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_bullet_channel(
+    row_count: usize,
+    values: &[f64],
+    validity: Option<&[u8]>,
+    name: &str,
+) -> Result<(), ChartError> {
+    if values.len() != row_count || validity.is_some_and(|validity| validity.len() != row_count) {
+        return Err(invalid_data(format!(
+            "general bullet {name} and category columns must have equal lengths"
+        )));
+    }
+    if values.iter().any(|value| !value.is_finite())
+        || validity.is_some_and(|validity| validity.iter().any(|value| !matches!(*value, 0 | 1)))
+    {
+        return Err(invalid_data(format!(
+            "general bullet {name} values must be finite with 0/1 validity; use the validity column for missing values"
+        )));
     }
     Ok(())
 }

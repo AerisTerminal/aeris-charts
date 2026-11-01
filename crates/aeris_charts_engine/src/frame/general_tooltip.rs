@@ -8,7 +8,10 @@
 use super::*;
 use crate::chart_input::FocusTooltipKey;
 use crate::general_axes::general_kind_uses_axis_hover;
-use crate::{AxisDimension, GeneralLayoutHit, GeneralSeriesKind, GeneralTooltipSnapshot};
+use crate::{
+    AxisDimension, GeneralLayoutHit, GeneralRowDetail, GeneralSeriesKind, GeneralTooltipSnapshot,
+    GeneralWaterfallMark,
+};
 
 /// Recharts `Tooltip` default `offset`: the gap between the anchor and the box. The box flips
 /// to the other side of the anchor when it would cross the plot end.
@@ -76,6 +79,37 @@ fn tooltip_detail(item: &GeneralTooltipSnapshot) -> String {
     }
     if let Some(label) = &item.y_label {
         parts.push(label.clone());
+    }
+    match item.detail {
+        Some(GeneralRowDetail::Waterfall { mark, start, end }) => match mark {
+            GeneralWaterfallMark::Increase | GeneralWaterfallMark::Decrease => parts.push(format!(
+                "{} {} → {}",
+                mark.name(),
+                format_value(start),
+                format_value(end)
+            )),
+            GeneralWaterfallMark::Subtotal | GeneralWaterfallMark::Total => {
+                parts.push(mark.name().to_owned());
+            }
+        },
+        Some(GeneralRowDetail::Bullet {
+            target,
+            comparative,
+            bands,
+        }) => {
+            if let Some(target) = target {
+                parts.push(format!("target {}", format_value(target)));
+            }
+            if let Some(comparative) = comparative {
+                parts.push(format!("comparative {}", format_value(comparative)));
+            }
+            let bands: Vec<String> = bands.into_iter().flatten().map(format_value).collect();
+            if !bands.is_empty() {
+                parts.push(format!("bands {}", bands.join(" / ")));
+            }
+        }
+        Some(GeneralRowDetail::Rank(rank)) => parts.push(format!("rank {rank}")),
+        None => {}
     }
     if parts.is_empty() {
         return item.label.clone().unwrap_or_else(|| "No value".to_owned());
@@ -228,13 +262,25 @@ impl ChartEngine {
         pane_index: usize,
         hit: GeneralLayoutHit,
     ) -> Option<TooltipContent> {
-        let (label, title, value, color) = self.general_layout_item_tooltip(pane_index, hit)?;
+        let crate::general_layout::LayoutItemTooltip {
+            label,
+            title,
+            value,
+            color,
+            detail,
+        } = self.general_layout_item_tooltip(pane_index, hit)?;
+        let value = match (value, detail) {
+            (Some(value), Some(detail)) => format!("{} {detail}", format_value(value)),
+            (Some(value), None) => format_value(value),
+            (None, Some(detail)) => detail,
+            (None, None) => "No value".to_owned(),
+        };
         Some(TooltipContent {
             header: label,
             rows: vec![TooltipRow {
                 color: Some(opaque(color)),
                 name: title,
-                value: value.map_or_else(|| "No value".to_owned(), format_value),
+                value,
             }],
         })
     }
@@ -335,6 +381,18 @@ impl ChartEngine {
             }
             GeneralSeriesKind::RangeBar => self.visit_general_range_bars(series, |bar| {
                 if bar.row == row {
+                    found.get_or_insert(rect(bar.left, bar.right, bar.top, bar.bottom));
+                }
+            }),
+            GeneralSeriesKind::Waterfall => self.visit_general_waterfall_bars(series, |bar| {
+                let bar = bar.bar;
+                if bar.row == row {
+                    found.get_or_insert(rect(bar.left, bar.right, bar.top, bar.bottom));
+                }
+            }),
+            GeneralSeriesKind::Bullet => self.visit_general_bullets(series, |bullet| {
+                if bullet.row == row {
+                    let bar = bullet.measure.unwrap_or(bullet.slot);
                     found.get_or_insert(rect(bar.left, bar.right, bar.top, bar.bottom));
                 }
             }),

@@ -1019,7 +1019,7 @@ impl ChartEngine {
         {
             let range = match axis.dimension {
                 AxisDimension::X => {
-                    if axis.range_reversed() {
+                    if self.general_axis_range_reversed(axis) {
                         (plot.width, 0.0)
                     } else {
                         (0.0, plot.width)
@@ -1027,7 +1027,7 @@ impl ChartEngine {
                 }
                 AxisDimension::Y => {
                     let bottom = plot.y + plot.height;
-                    if axis.range_reversed() {
+                    if self.general_axis_range_reversed(axis) {
                         (plot.y, bottom)
                     } else {
                         (bottom, plot.y)
@@ -1373,7 +1373,7 @@ impl ChartEngine {
                     AxisDimension::X => {
                         let from = plot.x;
                         let to = plot.x + plot.width;
-                        if axis.range_reversed() {
+                        if self.general_axis_range_reversed(axis) {
                             (to, from)
                         } else {
                             (from, to)
@@ -1382,7 +1382,7 @@ impl ChartEngine {
                     AxisDimension::Y => {
                         let from = plot.y + plot.height;
                         let to = plot.y;
-                        if axis.range_reversed() {
+                        if self.general_axis_range_reversed(axis) {
                             (to, from)
                         } else {
                             (from, to)
@@ -1523,6 +1523,19 @@ impl ChartEngine {
         (self.css_width - financial - 1.0).max(0.0) * 0.45
     }
 
+    /// Whether an axis maps its domain from the end of the plot range. An axis carrying ranked
+    /// xy_line series (bump charts) flips its default so rank 1 sits at the top; `reverse` then
+    /// restores the ascending direction.
+    pub(crate) fn general_axis_range_reversed(&self, axis: &GeneralAxis) -> bool {
+        let ranked = axis.dimension == AxisDimension::Y
+            && self.general_series_iter().any(|series| {
+                series.rank().is_some()
+                    && series.pane_id() == axis.pane_id
+                    && series.y_axis_id() == axis.id
+            });
+        axis.range_reversed() != ranked
+    }
+
     pub(crate) fn effective_general_axis_domain(
         &self,
         axis: &GeneralAxis,
@@ -1586,6 +1599,8 @@ impl ChartEngine {
                                         series.kind(),
                                         GeneralSeriesKind::HorizontalBar
                                             | GeneralSeriesKind::HeatmapGrid
+                                            | GeneralSeriesKind::Waterfall
+                                            | GeneralSeriesKind::Bullet
                                     )
                             }
                             AxisDimension::Radius => false,
@@ -1925,6 +1940,8 @@ impl ChartEngine {
                 // An X axis that only carries histograms spans exactly the outer bin edges.
                 let mut exact_histogram_x = axis.dimension == AxisDimension::X;
                 let mut histogram_count = 0;
+                let mut ranked = 0usize;
+                let mut unranked = 0usize;
                 for series in self.general_series_iter().filter(|series| {
                     series.visible()
                         && series.pane_id() == axis.pane_id
@@ -1934,6 +1951,11 @@ impl ChartEngine {
                             series.y_axis_id() == axis.id
                         }
                 }) {
+                    if axis.dimension == AxisDimension::Y && series.rank().is_some() {
+                        ranked += 1;
+                        continue;
+                    }
+                    unranked += 1;
                     if series.kind() == GeneralSeriesKind::Histogram {
                         histogram_count += 1;
                         let Some(bins) = self.general_histogram_bins(series) else {
@@ -1981,6 +2003,10 @@ impl ChartEngine {
                             exact_histogram_x = false;
                         }
                     }
+                }
+                // A rank axis spans every rank with half a rank of margin and no zero baseline.
+                if ranked > 0 && unranked == 0 {
+                    return Some(GeneralAxisDomain::Numeric([0.5, ranked as f64 + 0.5]));
                 }
                 if exact_histogram_x && histogram_count > 0 {
                     return bounds.and_then(|(low, high)| {
@@ -2443,7 +2469,8 @@ impl ChartEngine {
         {
             return None;
         }
-        let x = if series.kind() == GeneralSeriesKind::HorizontalBar {
+        let horizontal = self.general_series_horizontal(series);
+        let x = if horizontal {
             dataset
                 .y_is_valid(row)
                 .then(|| GeneralAxisSyncValue::Numeric {
@@ -2452,7 +2479,7 @@ impl ChartEngine {
         } else {
             general_index_sync_value(dataset, row)
         }?;
-        let y = if series.kind() == GeneralSeriesKind::HorizontalBar {
+        let y = if horizontal {
             general_index_sync_value(dataset, row)
         } else if series.kind() == GeneralSeriesKind::HeatmapGrid {
             if let Some(values) = dataset.heatmap_y_numeric() {
@@ -2541,7 +2568,9 @@ impl ChartEngine {
             let Some(axis) = self.general_index_axis(series, dimension) else {
                 continue;
             };
-            let Some((from, to)) = general_sync_axis_range(axis, &plot) else {
+            let Some((from, to)) =
+                general_sync_axis_range(axis, self.general_axis_range_reversed(axis), &plot)
+            else {
                 continue;
             };
             let Some(domain) = self.effective_general_axis_domain(axis) else {
@@ -2713,7 +2742,8 @@ impl ChartEngine {
         value: &GeneralAxisSyncValue,
         plot: &GeneralPlotRect,
     ) -> Option<f64> {
-        let (from, to) = general_sync_axis_range(axis, plot)?;
+        let (from, to) =
+            general_sync_axis_range(axis, self.general_axis_range_reversed(axis), plot)?;
         let coordinate = match (self.effective_general_axis_domain(axis)?, value) {
             (GeneralAxisDomain::Numeric(bounds), GeneralAxisSyncValue::Numeric { value }) => {
                 NumericAxisScale::new(axis.scale, bounds, from, to)?.coordinate(*value)?
@@ -2776,16 +2806,20 @@ fn general_index_sync_value(dataset: &GeneralDataset, row: usize) -> Option<Gene
     })
 }
 
-fn general_sync_axis_range(axis: &GeneralAxis, plot: &GeneralPlotRect) -> Option<(f64, f64)> {
+fn general_sync_axis_range(
+    axis: &GeneralAxis,
+    reversed: bool,
+    plot: &GeneralPlotRect,
+) -> Option<(f64, f64)> {
     match axis.dimension {
-        AxisDimension::X => Some(if axis.range_reversed() {
+        AxisDimension::X => Some(if reversed {
             (plot.width, 0.0)
         } else {
             (0.0, plot.width)
         }),
         AxisDimension::Y => {
             let bottom = plot.y + plot.height;
-            Some(if axis.range_reversed() {
+            Some(if reversed {
                 (plot.y, bottom)
             } else {
                 (bottom, plot.y)
@@ -3270,6 +3304,17 @@ fn temporal_tick_entries(
             })
             .collect();
     }
+    automatic_temporal_ticks(domain, target, month_names, time_zone)
+}
+
+/// Calendar-aligned automatic ticks and labels for a temporal domain in epoch milliseconds.
+pub(crate) fn automatic_temporal_ticks(
+    domain: [i64; 2],
+    target: usize,
+    month_names: &MonthNames,
+    time_zone: ChartTimeZone,
+) -> Vec<(i64, String)> {
+    let interval = temporal_tick_interval(domain, target);
     temporal_tick_values(domain, interval, time_zone)
         .into_iter()
         .map(|value| {
@@ -3317,7 +3362,7 @@ fn temporal_domain_from_f64(from: f64, to: f64) -> Option<[i64; 2]> {
 }
 
 fn temporal_tick_interval(domain: [i64; 2], target: usize) -> TemporalTickInterval {
-    const FIXED: [i64; 22] = [
+    const FIXED: [i64; 23] = [
         1,
         5,
         10,
@@ -3339,6 +3384,7 @@ fn temporal_tick_interval(domain: [i64; 2], target: usize) -> TemporalTickInterv
         43_200_000,
         86_400_000,
         172_800_000,
+        604_800_000,
         1_209_600_000,
     ];
     let span = domain[1] - domain[0];
@@ -3569,6 +3615,40 @@ fn scan_general_series_numeric_bounds(
 ) -> (Option<(f64, f64)>, bool) {
     let mut bounds: Option<(f64, f64)> = None;
     let mut include_zero = false;
+    // Only the value axis of a waterfall or bullet is numeric, in either orientation.
+    if series.kind() == crate::GeneralSeriesKind::Waterfall {
+        for (start, end, _) in crate::general_series::general_waterfall_rows(dataset)
+            .into_iter()
+            .flatten()
+        {
+            extend_numeric_bounds(&mut bounds, start);
+            extend_numeric_bounds(&mut bounds, end);
+        }
+        return (bounds, true);
+    }
+    if series.kind() == crate::GeneralSeriesKind::Bullet {
+        for row in 0..dataset.len() {
+            let channels = [
+                dataset.y_is_valid(row).then(|| dataset.y()[row]),
+                dataset
+                    .high_is_valid(row)
+                    .then(|| dataset.high().map(|values| values[row]))
+                    .flatten(),
+                dataset
+                    .low_is_valid(row)
+                    .then(|| dataset.low().map(|values| values[row]))
+                    .flatten(),
+            ];
+            for value in channels
+                .into_iter()
+                .chain(dataset.bullet_bands(row))
+                .flatten()
+            {
+                extend_numeric_bounds(&mut bounds, value);
+            }
+        }
+        return (bounds, true);
+    }
     if axis.dimension == AxisDimension::Y
         || (axis.dimension == AxisDimension::Radius
             && matches!(
@@ -5254,6 +5334,24 @@ mod tests {
         assert!(matches!(leave[0].kind, ChartSyncEventKind::ClearCrosshair));
         assert!(target.apply_external_sync_envelope(&leave[0]));
         assert!(target.crosshair.is_none());
+    }
+
+    #[test]
+    fn month_long_temporal_spans_step_by_week_between_two_days_and_two_weeks() {
+        const DAY: i64 = 86_400_000;
+        let start = 1_717_200_000_000;
+        assert_eq!(
+            temporal_tick_interval([start, start + 35 * DAY], 6),
+            TemporalTickInterval::Fixed(7 * DAY)
+        );
+        assert_eq!(
+            temporal_tick_interval([start, start + 70 * DAY], 6),
+            TemporalTickInterval::Fixed(14 * DAY)
+        );
+        assert_eq!(
+            temporal_tick_interval([start, start + 10 * DAY], 6),
+            TemporalTickInterval::Fixed(2 * DAY)
+        );
     }
 
     #[test]

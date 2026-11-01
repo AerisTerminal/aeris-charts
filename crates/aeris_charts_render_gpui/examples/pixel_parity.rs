@@ -328,10 +328,10 @@ impl Harness {
         ] {
             let (px, py) = ((x * dpr).round() as usize, (y * dpr).round() as usize);
             let offset = (py * polar.width as usize + px) * 4;
-            for channel in 0..3 {
+            for (channel, expected) in expected.iter().enumerate() {
                 assert_eq!(
                     native.data()[offset + channel],
-                    expected[channel],
+                    *expected,
                     "native polar interior at {x},{y}"
                 );
                 assert!(

@@ -35,9 +35,13 @@ const generatedAllowed = [
   // Source maps retain a JSON name-table entry for a reviewed local coordinate variable.
   new RegExp(`["']${retired}["'](?=\\s*[,}\\]])`, "gi"),
 ];
-const generated = ["packages/charts/pkg", "packages/charts/dist", "examples/web_demo/pkg", "examples/web_demo/dist"];
-// This private fixture bundles pinned third-party Recharts/React code and is never package output.
-const generated_content_exempt = new Set(["examples/web_demo/dist/g1_recharts_reference.js"]);
+const generated = ["packages/charts/pkg", "packages/charts/pkg_complete", "packages/charts/dist", "examples/web_demo/pkg", "examples/web_demo/dist"];
+// These private fixtures bundle pinned third-party Recharts/React and ECharts code and are never
+// package output.
+const generated_content_exempt = new Set([
+  "examples/web_demo/dist/g1_recharts_reference.js",
+  "examples/web_demo/dist/echarts_reference.js",
+]);
 // Compliance text is copied verbatim from third parties and is not an owned namespace surface.
 const content_exempt_prefixes = ["third_party_licenses/"];
 const content_exempt_names = new Set(["LICENSE"]);

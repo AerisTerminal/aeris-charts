@@ -3,11 +3,14 @@ use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim, TextAlign};
 
 use crate::general_axes::NumericAxisScale;
-use crate::general_series::{GeneralColumnGeometry, general_bar_radii, general_polar_fill_color};
+use crate::general_series::{
+    GeneralColumnGeometry, general_bar_radii, general_bar_stem, general_polar_fill_color,
+    general_waterfall_rows,
+};
 use crate::{
-    AxisDimension, ChartEngine, DEFAULT_LINE_COLOR, GeneralAxisDomain, GeneralPointSymbol,
-    GeneralReferenceOptions, GeneralReferenceValue, GeneralScaleType, GeneralSeries,
-    GeneralSeriesKind,
+    AxisDimension, ChartEngine, DEFAULT_LINE_COLOR, GeneralAxisDomain, GeneralBarMark,
+    GeneralEndLabels, GeneralPointSymbol, GeneralReferenceOptions, GeneralReferenceValue,
+    GeneralScaleType, GeneralSeries, GeneralSeriesKind, GeneralWaterfallMark,
 };
 
 use super::PRIMARY;
@@ -74,7 +77,7 @@ fn general_fill_gradient(series: &GeneralSeries) -> Option<Gradient> {
     })
 }
 
-fn interpolate_color(low: Color, high: Color, intensity: f64) -> Color {
+pub(crate) fn interpolate_color(low: Color, high: Color, intensity: f64) -> Color {
     let t = intensity.clamp(0.0, 1.0);
     let channel = |from: u8, to: u8| (from as f64 + (to as f64 - from as f64) * t).round() as u8;
     Color::rgba(
@@ -229,6 +232,67 @@ fn push_general_point_symbol(
     }
 }
 
+/// A lollipop or dumbbell: a centered stem through the bar slot with a marker on its value end,
+/// or on both ends for a dumbbell. Coordinates are CSS px.
+#[allow(clippy::too_many_arguments)]
+fn push_general_stem_mark(
+    out: &mut Vec<Prim>,
+    points: &mut Vec<[f32; 2]>,
+    series: &GeneralSeries,
+    symbol: GeneralPointSymbol,
+    geometry: GeneralColumnGeometry,
+    horizontal: bool,
+    color: Color,
+    hpr: f64,
+    vpr: f64,
+) {
+    let [base, end] = general_bar_stem(geometry, horizontal);
+    let first_point = points.len() as u32;
+    points.extend([
+        [(base.0 * hpr) as f32, (base.1 * vpr) as f32],
+        [(end.0 * hpr) as f32, (end.1 * vpr) as f32],
+    ]);
+    out.push(Prim::Polyline {
+        first_point,
+        point_count: 2,
+        width: (series.line_width() * vpr) as f32,
+        style: series.line_style().render_style(),
+        line_type: LineType::Simple,
+        color,
+    });
+    let radius = series.point_radius() * vpr;
+    if series.bar_mark() == GeneralBarMark::Dumbbell {
+        push_general_point_symbol(out, symbol, base.0 * hpr, base.1 * vpr, radius, color);
+    }
+    push_general_point_symbol(out, symbol, end.0 * hpr, end.1 * vpr, radius, color);
+}
+
+/// Spread end labels on one side of a pane so neighbors keep `gap` between their centers while
+/// staying inside `top..=bottom`; `centers` must be sorted.
+fn spread_end_labels(centers: &mut [f64], gap: f64, top: f64, bottom: f64) {
+    for index in 0..centers.len() {
+        let floor = if index == 0 {
+            top
+        } else {
+            centers[index - 1] + gap
+        };
+        centers[index] = centers[index].max(floor);
+    }
+    let mut ceiling = bottom;
+    for center in centers.iter_mut().rev() {
+        *center = center.min(ceiling);
+        ceiling = *center - gap;
+    }
+}
+
+struct EndLabelRequest {
+    end: bool,
+    x: f64,
+    y: f64,
+    text: String,
+    color: Color,
+}
+
 impl ChartEngine {
     pub(super) fn build_general_series_frame(
         &self,
@@ -259,6 +323,7 @@ impl ChartEngine {
         let mut leader_primitives = Vec::new();
         let mut label_primitives = Vec::new();
         let mut label_attempts = 0;
+        let mut end_labels: Vec<EndLabelRequest> = Vec::new();
         self.push_general_reference_regions(pane_id, plot, hpr, vpr, out);
         if let Some((dimension, from, to)) = self.general_brush_axis_bounds(pane_index) {
             match dimension {
@@ -325,6 +390,8 @@ impl ChartEngine {
             };
             // Histogram rows are engine bins, not dataset rows.
             let histogram = self.general_histogram_bins(series);
+            let waterfall_rows = (series.kind() == GeneralSeriesKind::Waterfall)
+                .then(|| general_waterfall_rows(dataset));
             let mut push_label =
                 |row: usize,
                  x: f64,
@@ -359,6 +426,16 @@ impl ChartEngine {
                                 let category =
                                     usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
                                 dataset.categories()?.get(category).cloned()
+                            })
+                            .or_else(|| {
+                                // Subtotal and total bars label the running total they show.
+                                let (_, end, mark) =
+                                    waterfall_rows.as_deref()?.get(row).copied().flatten()?;
+                                matches!(
+                                    mark,
+                                    GeneralWaterfallMark::Subtotal | GeneralWaterfallMark::Total
+                                )
+                                .then(|| end.to_string())
                             })
                             .unwrap_or_else(|| dataset.y()[row].to_string())
                     };
@@ -706,6 +783,8 @@ impl ChartEngine {
                         .flatten();
                     let mut run = Vec::<[f32; 2]>::new();
                     let mut markers = Vec::new();
+                    let mut first_point = None;
+                    let mut last_point = None;
                     let mut flush_run = |run: &mut Vec<[f32; 2]>| {
                         if run.len() >= 2 {
                             let first_point = points.len() as u32;
@@ -749,6 +828,8 @@ impl ChartEngine {
                         if geometry.starts_new_run {
                             flush_run(&mut run);
                         }
+                        first_point.get_or_insert(geometry);
+                        last_point = Some(geometry);
                         run.push([(geometry.x * hpr) as f32, (geometry.y * vpr) as f32]);
                         if series.point_markers() {
                             push_general_point_symbol(
@@ -797,6 +878,41 @@ impl ChartEngine {
                     });
                     flush_run(&mut run);
                     out.append(&mut markers);
+                    let reach = if series.point_markers() {
+                        series.point_radius() + 6.0
+                    } else {
+                        6.0
+                    };
+                    let label = |point: crate::general_series::GeneralLinePointGeometry,
+                                 end: bool| {
+                        let value = dataset.y()[point.row].to_string();
+                        let text = match (series.title().is_empty(), end) {
+                            (true, _) => value,
+                            (false, false) => format!("{} {value}", series.title()),
+                            (false, true) => format!("{value} {}", series.title()),
+                        };
+                        EndLabelRequest {
+                            end,
+                            x: point.x + if end { reach } else { -reach },
+                            y: point.y,
+                            text,
+                            color,
+                        }
+                    };
+                    if matches!(
+                        series.end_labels(),
+                        GeneralEndLabels::Start | GeneralEndLabels::Both
+                    ) && let Some(point) = first_point
+                    {
+                        end_labels.push(label(point, false));
+                    }
+                    if matches!(
+                        series.end_labels(),
+                        GeneralEndLabels::End | GeneralEndLabels::Both
+                    ) && let Some(point) = last_point
+                    {
+                        end_labels.push(label(point, true));
+                    }
                 }
                 GeneralSeriesKind::RangeBar => {
                     let color = series
@@ -804,6 +920,45 @@ impl ChartEngine {
                         .and_then(Color::parse_css)
                         .unwrap_or(DEFAULT_LINE_COLOR);
                     self.visit_general_range_bars(series, |geometry| {
+                        if series.bar_mark() == GeneralBarMark::Dumbbell {
+                            let row_color = dataset.row_color(geometry.row).unwrap_or(color);
+                            push_general_stem_mark(
+                                out,
+                                points,
+                                series,
+                                dataset
+                                    .row_symbol(geometry.row)
+                                    .unwrap_or(series.point_symbol()),
+                                geometry,
+                                false,
+                                row_color,
+                                hpr,
+                                vpr,
+                            );
+                            let (hovered, selected, slot) =
+                                self.general_row_interaction(series.id(), geometry.row);
+                            if hovered || selected {
+                                let reach = series.point_radius() + 2.0;
+                                let center = (geometry.left + geometry.right) * 0.5;
+                                let left = ((center - reach) * hpr).round() as i32;
+                                let top = ((geometry.top - reach) * vpr).round() as i32;
+                                interaction[slot] = Some(Prim::RectFrame {
+                                    rect: IRect {
+                                        x: left,
+                                        y: top,
+                                        w: (((center + reach) * hpr).round() as i32 - left).max(1),
+                                        h: (((geometry.bottom + reach) * vpr).round() as i32 - top)
+                                            .max(1),
+                                    },
+                                    border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
+                                        .round()
+                                        .max(1.0)
+                                        as i32,
+                                    color: if selected { PRIMARY } else { GENERAL_HOVER },
+                                });
+                            }
+                            return;
+                        }
                         let left = (geometry.left * hpr).round() as i32;
                         let right = (geometry.right * hpr).round() as i32;
                         let top = (geometry.top * vpr).round() as i32;
@@ -1067,6 +1222,53 @@ impl ChartEngine {
                         .and_then(Color::parse_css)
                         .unwrap_or(DEFAULT_LINE_COLOR);
                     self.visit_general_columns(series, |geometry| {
+                        if series.bar_mark() == GeneralBarMark::Lollipop {
+                            let row_color = dataset.row_color(geometry.row).unwrap_or(color);
+                            push_general_stem_mark(
+                                out,
+                                points,
+                                series,
+                                dataset
+                                    .row_symbol(geometry.row)
+                                    .unwrap_or(series.point_symbol()),
+                                geometry,
+                                false,
+                                row_color,
+                                hpr,
+                                vpr,
+                            );
+                            let [_, (x, y)] = general_bar_stem(geometry, false);
+                            let reach = series.point_radius() + label_size * 0.65 + 3.0;
+                            let label_y = if geometry.end_at_min {
+                                y - reach
+                            } else {
+                                y + reach
+                            };
+                            push_label(
+                                geometry.row,
+                                x,
+                                label_y,
+                                label_y,
+                                plot.width - 4.0,
+                                None,
+                                None,
+                            );
+                            let (hovered, selected, slot) =
+                                self.general_row_interaction(series.id(), geometry.row);
+                            if hovered || selected {
+                                interaction[slot] = Some(Prim::Circle {
+                                    cx: (x * hpr) as f32,
+                                    cy: (y * vpr) as f32,
+                                    radius: ((series.point_radius()
+                                        + if selected { 3.0 } else { 2.0 })
+                                        * vpr) as f32,
+                                    fill: Color::rgba(0, 0, 0, 0),
+                                    stroke_width: (if selected { 2.0 } else { 1.0 }) * vpr as f32,
+                                    stroke: if selected { PRIMARY } else { GENERAL_HOVER },
+                                });
+                            }
+                            return;
+                        }
                         let left = (geometry.left * hpr).round() as i32;
                         let right = (geometry.right * hpr).round() as i32;
                         let top = (geometry.top * vpr).round() as i32;
@@ -1183,6 +1385,48 @@ impl ChartEngine {
                         .and_then(Color::parse_css)
                         .unwrap_or(DEFAULT_LINE_COLOR);
                     self.visit_general_horizontal_bars(series, |geometry| {
+                        if series.bar_mark() == GeneralBarMark::Lollipop {
+                            let row_color = dataset.row_color(geometry.row).unwrap_or(color);
+                            push_general_stem_mark(
+                                out,
+                                points,
+                                series,
+                                dataset
+                                    .row_symbol(geometry.row)
+                                    .unwrap_or(series.point_symbol()),
+                                geometry,
+                                true,
+                                row_color,
+                                hpr,
+                                vpr,
+                            );
+                            let [_, (x, y)] = general_bar_stem(geometry, true);
+                            let side = if geometry.end_at_min { -1.0 } else { 1.0 };
+                            push_label(
+                                geometry.row,
+                                x + side * series.point_radius(),
+                                y,
+                                y,
+                                plot.width - 4.0,
+                                Some(side),
+                                None,
+                            );
+                            let (hovered, selected, slot) =
+                                self.general_row_interaction(series.id(), geometry.row);
+                            if hovered || selected {
+                                interaction[slot] = Some(Prim::Circle {
+                                    cx: (x * hpr) as f32,
+                                    cy: (y * vpr) as f32,
+                                    radius: ((series.point_radius()
+                                        + if selected { 3.0 } else { 2.0 })
+                                        * vpr) as f32,
+                                    fill: Color::rgba(0, 0, 0, 0),
+                                    stroke_width: (if selected { 2.0 } else { 1.0 }) * vpr as f32,
+                                    stroke: if selected { PRIMARY } else { GENERAL_HOVER },
+                                });
+                            }
+                            return;
+                        }
                         let left = (geometry.left * hpr).round() as i32;
                         let right = (geometry.right * hpr).round() as i32;
                         let top = (geometry.top * vpr).round() as i32;
@@ -1267,6 +1511,217 @@ impl ChartEngine {
                                     w: width,
                                     h: height,
                                 },
+                                border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
+                                    .round()
+                                    .max(1.0) as i32,
+                                color: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
+                    });
+                }
+                GeneralSeriesKind::Waterfall => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    let options = series.waterfall();
+                    let pick = |css: Option<&str>, fallback: Color| {
+                        css.and_then(Color::parse_css).unwrap_or(fallback)
+                    };
+                    let total = pick(options.total_color.as_deref(), color);
+                    let subtotal = pick(options.subtotal_color.as_deref(), total);
+                    let increase = pick(options.increase_color.as_deref(), super::UP);
+                    let decrease = pick(options.decrease_color.as_deref(), super::DOWN);
+                    let connector = Color::rgba(
+                        label_color.r(),
+                        label_color.g(),
+                        label_color.b(),
+                        (f64::from(label_color.a()) * 0.45).round() as u8,
+                    );
+                    let connector_width = hpr.min(vpr).round().max(1.0) as i32;
+                    self.visit_general_waterfall_bars(series, |geometry| {
+                        let bar = geometry.bar;
+                        if options.connectors
+                            && let Some((from, to, level)) = geometry.connector
+                        {
+                            out.push(if geometry.horizontal {
+                                Prim::VLine {
+                                    x: (level * hpr).round() as i32,
+                                    y0: (from * vpr).round() as i32,
+                                    y1: (to * vpr).round() as i32,
+                                    width: connector_width,
+                                    style: LineStyle::Solid,
+                                    color: connector,
+                                }
+                            } else {
+                                Prim::HLine {
+                                    y: (level * vpr).round() as i32,
+                                    x0: (from * hpr).round() as i32,
+                                    x1: (to * hpr).round() as i32,
+                                    width: connector_width,
+                                    style: LineStyle::Solid,
+                                    color: connector,
+                                }
+                            });
+                        }
+                        let fill = match geometry.mark {
+                            GeneralWaterfallMark::Increase => increase,
+                            GeneralWaterfallMark::Decrease => decrease,
+                            GeneralWaterfallMark::Subtotal => subtotal,
+                            GeneralWaterfallMark::Total => total,
+                        };
+                        let row_color = dataset.row_color(bar.row);
+                        let left = (bar.left * hpr).round() as i32;
+                        let top = (bar.top * vpr).round() as i32;
+                        let rect = IRect {
+                            x: left,
+                            y: top,
+                            w: ((bar.right * hpr).round() as i32 - left).max(1),
+                            h: ((bar.bottom * vpr).round() as i32 - top).max(1),
+                        };
+                        push_general_bar_fill(out, rect, None, fill, row_color, None);
+                        let ink = Some((
+                            bar_label_ink(fill, row_color, None, surface),
+                            [bar.left, bar.top, bar.right, bar.bottom],
+                        ));
+                        if geometry.horizontal {
+                            let center_y = (bar.top + bar.bottom) * 0.5;
+                            let (end_x, side) = if bar.end_at_min {
+                                (bar.left, -1.0)
+                            } else {
+                                (bar.right, 1.0)
+                            };
+                            if push_label(
+                                bar.row,
+                                end_x,
+                                center_y,
+                                center_y,
+                                plot.width - 4.0,
+                                Some(side),
+                                ink,
+                            )
+                            .is_none()
+                            {
+                                push_label(
+                                    bar.row,
+                                    end_x,
+                                    center_y,
+                                    center_y,
+                                    bar.right - bar.left - 12.0,
+                                    Some(-side),
+                                    ink,
+                                );
+                            }
+                        } else {
+                            let (outside, inside) = column_label_rows(bar, label_size);
+                            push_label(
+                                bar.row,
+                                (bar.left + bar.right) * 0.5,
+                                outside,
+                                inside,
+                                bar.right - bar.left - 4.0,
+                                None,
+                                ink,
+                            );
+                        }
+                        let (hovered, selected, slot) =
+                            self.general_row_interaction(series.id(), bar.row);
+                        if hovered || selected {
+                            interaction[slot] = Some(Prim::RectFrame {
+                                rect,
+                                border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
+                                    .round()
+                                    .max(1.0) as i32,
+                                color: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
+                    });
+                }
+                GeneralSeriesKind::Bullet => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    // Qualitative bands darken toward zero, as in Stephen Few's bullet graph,
+                    // from the theme text color so they read on light and dark surfaces.
+                    let bands = [0.30, 0.20, 0.11].map(|alpha| {
+                        Color::rgba(
+                            label_color.r(),
+                            label_color.g(),
+                            label_color.b(),
+                            opacity_alpha(alpha),
+                        )
+                        .composite_over(surface)
+                    });
+                    let comparative =
+                        Color::rgba(color.r(), color.g(), color.b(), 0x80).composite_over(bands[0]);
+                    let snap = |bar: GeneralColumnGeometry| {
+                        let left = (bar.left * hpr).round() as i32;
+                        let top = (bar.top * vpr).round() as i32;
+                        IRect {
+                            x: left,
+                            y: top,
+                            w: ((bar.right * hpr).round() as i32 - left).max(1),
+                            h: ((bar.bottom * vpr).round() as i32 - top).max(1),
+                        }
+                    };
+                    self.visit_general_bullets(series, |bullet| {
+                        for (band, band_color) in bullet.bands.iter().zip(bands) {
+                            if let Some(band) = band {
+                                out.push(Prim::Rect {
+                                    rect: snap(*band),
+                                    color: band_color,
+                                });
+                            }
+                        }
+                        let measure_color = dataset.row_color(bullet.row).unwrap_or(color);
+                        for (bar, fill) in [
+                            (bullet.comparative, comparative),
+                            (bullet.measure, measure_color),
+                            (bullet.target, label_color),
+                        ] {
+                            if let Some(bar) = bar {
+                                out.push(Prim::Rect {
+                                    rect: snap(bar),
+                                    color: fill,
+                                });
+                            }
+                        }
+                        if let Some(measure) = bullet.measure {
+                            if bullet.horizontal {
+                                let center_y = (measure.top + measure.bottom) * 0.5;
+                                let (end_x, side) = if measure.end_at_min {
+                                    (measure.left, -1.0)
+                                } else {
+                                    (measure.right, 1.0)
+                                };
+                                push_label(
+                                    bullet.row,
+                                    end_x,
+                                    center_y,
+                                    center_y,
+                                    plot.width - 4.0,
+                                    Some(side),
+                                    None,
+                                );
+                            } else {
+                                let (outside, _) = column_label_rows(measure, label_size);
+                                push_label(
+                                    bullet.row,
+                                    (measure.left + measure.right) * 0.5,
+                                    outside,
+                                    outside,
+                                    plot.width - 4.0,
+                                    None,
+                                    None,
+                                );
+                            }
+                        }
+                        let (hovered, selected, slot) =
+                            self.general_row_interaction(series.id(), bullet.row);
+                        if hovered || selected {
+                            interaction[slot] = Some(Prim::RectFrame {
+                                rect: snap(bullet.slot),
                                 border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
                                     .round()
                                     .max(1.0) as i32,
@@ -1526,6 +1981,36 @@ impl ChartEngine {
         self.push_general_reference_marks(pane_id, plot, hpr, vpr, out);
         out.extend(leader_primitives);
         out.extend(label_primitives);
+        for end in [false, true] {
+            let mut side: Vec<&EndLabelRequest> =
+                end_labels.iter().filter(|label| label.end == end).collect();
+            side.sort_by(|a, b| a.y.total_cmp(&b.y));
+            let mut centers: Vec<f64> = side.iter().map(|label| label.y).collect();
+            let half = label_size * 0.6;
+            spread_end_labels(
+                &mut centers,
+                label_size * 1.25,
+                plot.y + half,
+                plot.y + plot.height - half,
+            );
+            for (label, y) in side.into_iter().zip(centers) {
+                out.push(Prim::Text {
+                    x: (label.x * hpr) as f32,
+                    y: (y * vpr) as f32,
+                    text: label.text.clone(),
+                    color: label.color,
+                    size: (label_size * vpr) as f32,
+                    family: layout.font_family.clone(),
+                    align: if end {
+                        TextAlign::Left
+                    } else {
+                        TextAlign::Right
+                    },
+                    weight: 400,
+                    italic: false,
+                });
+            }
+        }
         active_dots.extend(interaction.into_iter().flatten());
         active_dots
     }
@@ -1721,7 +2206,7 @@ impl ChartEngine {
         let domain = self.effective_general_axis_domain(axis)?;
         let (from, to, low, high) = match axis.dimension() {
             AxisDimension::X => {
-                let range = if axis.range_reversed() {
+                let range = if self.general_axis_range_reversed(axis) {
                     (plot.width, 0.0)
                 } else {
                     (0.0, plot.width)
@@ -1730,7 +2215,7 @@ impl ChartEngine {
             }
             AxisDimension::Y => {
                 let bottom = plot.y + plot.height;
-                let range = if axis.range_reversed() {
+                let range = if self.general_axis_range_reversed(axis) {
                     (plot.y, bottom)
                 } else {
                     (bottom, plot.y)

@@ -198,6 +198,52 @@
       ]
     },
     {
+      "id": "slope_chart", "title": "Slope chart with end labels", "category": "trend",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point", "band_padding_outer": 1 },
+        { "id": "y", "dimension": "y", "scale": "linear", "zero_line": false }
+      ],
+      "series": [
+        { "kind": "xy_line", "title": "Search", "color": "#4c8bf5", "point_markers": true, "end_labels": "both", "data": [
+          { "x": "2024", "y": 48 }, { "x": "2025", "y": 61 }
+        ] },
+        { "kind": "xy_line", "title": "Social", "color": "#28b7a4", "point_markers": true, "end_labels": "both", "data": [
+          { "x": "2024", "y": 44 }, { "x": "2025", "y": 39 }
+        ] },
+        { "kind": "xy_line", "title": "Email", "color": "#e4a11b", "point_markers": true, "end_labels": "both", "data": [
+          { "x": "2024", "y": 31 }, { "x": "2025", "y": 42 }
+        ] },
+        { "kind": "xy_line", "title": "Direct", "color": "#e46f61", "point_markers": true, "end_labels": "both", "data": [
+          { "x": "2024", "y": 29 }, { "x": "2025", "y": 24 }
+        ] }
+      ]
+    },
+    {
+      "id": "bump_chart", "title": "Bump chart of ranks", "category": "trend",
+      "horizontal_domain": { "type": "category", "scale": "point" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "point", "band_padding_outer": 0.3 },
+        { "id": "y", "dimension": "y", "scale": "linear", "ticks": [
+          { "type": "numeric", "value": 1 }, { "type": "numeric", "value": 2 }, { "type": "numeric", "value": 3 }, { "type": "numeric", "value": 4 }
+        ], "zero_line": false }
+      ],
+      "series": [
+        { "kind": "xy_line", "title": "Aeris", "color": "#4c8bf5", "point_markers": true, "point_radius": 5, "rank": "dense", "data": [
+          { "x": "Q1", "y": 18 }, { "x": "Q2", "y": 24 }, { "x": "Q3", "y": 31 }, { "x": "Q4", "y": 36 }, { "x": "Q5", "y": 41 }
+        ] },
+        { "kind": "xy_line", "title": "Nimbus", "color": "#28b7a4", "point_markers": true, "point_radius": 5, "rank": "dense", "data": [
+          { "x": "Q1", "y": 26 }, { "x": "Q2", "y": 27 }, { "x": "Q3", "y": 25 }, { "x": "Q4", "y": 29 }, { "x": "Q5", "y": 33 }
+        ] },
+        { "kind": "xy_line", "title": "Vector", "color": "#e4a11b", "point_markers": true, "point_radius": 5, "rank": "dense", "data": [
+          { "x": "Q1", "y": 31 }, { "x": "Q2", "y": 22 }, { "x": "Q3", "y": 28 }, { "x": "Q4", "y": 24 }, { "x": "Q5", "y": 21 }
+        ] },
+        { "kind": "xy_line", "title": "Orbit", "color": "#e46f61", "point_markers": true, "point_radius": 5, "rank": "dense", "data": [
+          { "x": "Q1", "y": 12 }, { "x": "Q2", "y": 15 }, { "x": "Q3", "y": 19 }, { "x": "Q4", "y": 17 }, { "x": "Q5", "y": 26 }
+        ] }
+      ]
+    },
+    {
       "id": "channel_columns", "title": "Columns with labels and rounded corners", "category": "bar",
       "horizontal_domain": { "type": "category", "scale": "band" },
       "axes": [
@@ -341,6 +387,79 @@
         { "kind": "range_bar", "title": "Delivery weeks", "color": "#e4a11b", "data": [
           { "x": "Core", "low": 4, "high": 9 }, { "x": "Growth", "low": 7, "high": 13 },
           { "x": "Platform", "low": 3, "high": 8 }, { "x": "Data", "low": 9, "high": 16 }
+        ] }
+      ]
+    },
+    {
+      "id": "profit_waterfall", "title": "Waterfall with subtotal and total", "category": "bar",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "waterfall", "title": "Profit bridge", "color": "#4c8bf5", "data_labels": true, "data": [
+          { "x": "Revenue", "y": 420 }, { "x": "COGS", "y": -170 }, { "x": "Gross", "y": null, "step": "subtotal" },
+          { "x": "Opex", "y": -120 }, { "x": "Other", "y": 24 }, { "x": "Tax", "y": -38 }, { "x": "Net", "y": null, "step": "total" }
+        ] }
+      ]
+    },
+    {
+      "id": "cash_bridge", "title": "Horizontal waterfall", "category": "bar",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear" },
+        { "id": "y", "dimension": "y", "scale": "band" }
+      ],
+      "series": [
+        { "kind": "waterfall", "title": "Cash", "color": "#8b6df6",
+          "waterfall": { "increase_color": "#28b7a4", "decrease_color": "#e46f61" }, "data": [
+          { "x": "Opening", "y": 120 }, { "x": "Operations", "y": 64 }, { "x": "Capex", "y": -48 },
+          { "x": "Financing", "y": -22 }, { "x": "Closing", "y": null, "step": "total" }
+        ] }
+      ]
+    },
+    {
+      "id": "kpi_bullets", "title": "Bullet charts", "category": "bar",
+      "horizontal_domain": { "type": "continuous", "scale": "linear" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "linear", "domain": [0, 100] },
+        { "id": "y", "dimension": "y", "scale": "band" }
+      ],
+      "series": [
+        { "kind": "bullet", "title": "Attainment %", "color": "#4c8bf5", "data": [
+          { "x": "Revenue", "y": 82, "target": 90, "comparative": 74, "bands": [60, 85, 100] },
+          { "x": "Profit", "y": 64, "target": 70, "comparative": 58, "bands": [50, 75, 100] },
+          { "x": "Orders", "y": 91, "target": 85, "bands": [55, 80, 100] },
+          { "x": "Retention", "y": 72, "target": 80, "comparative": 76, "bands": [65, 85, 100] }
+        ] }
+      ]
+    },
+    {
+      "id": "lollipop", "title": "Lollipop", "category": "bar",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "column", "title": "Net promoter score", "color": "#28b7a4", "bar_mark": "lollipop", "point_radius": 6, "data_labels": true, "data": [
+          { "x": "Search", "y": 42 }, { "x": "Billing", "y": 18 }, { "x": "Exports", "y": -6 },
+          { "x": "Alerts", "y": 31 }, { "x": "Sharing", "y": 24 }, { "x": "Mobile", "y": 12 }
+        ] }
+      ]
+    },
+    {
+      "id": "dumbbell", "title": "Dumbbell", "category": "bar",
+      "horizontal_domain": { "type": "category", "scale": "band" },
+      "axes": [
+        { "id": "x", "dimension": "x", "scale": "band" },
+        { "id": "y", "dimension": "y", "scale": "linear" }
+      ],
+      "series": [
+        { "kind": "range_bar", "title": "Life expectancy 1990 to 2020", "color": "#e4a11b", "bar_mark": "dumbbell", "point_radius": 6, "data": [
+          { "x": "Brazil", "low": 66, "high": 76 }, { "x": "China", "low": 69, "high": 78 },
+          { "x": "India", "low": 58, "high": 70 }, { "x": "Nigeria", "low": 46, "high": 55 }, { "x": "Peru", "low": 66, "high": 77 }
         ] }
       ]
     },
@@ -803,6 +922,87 @@
           { "id": "advisory", "parent": "service", "label": "Advisory", "value": 10 },
           { "id": "license", "parent": "other", "label": "Licensing", "value": 8 },
           { "id": "partner", "parent": "other", "label": "Partners", "value": 6 }
+        ] } }
+      ]
+    },
+    {
+      "id": "gantt", "title": "Gantt schedule", "category": "layout", "grid": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "gantt", "title": "Release plan", "color": "#5470c6", "data": { "type": "gantt", "now": 1768953600000, "tasks": [
+          { "id": "scope", "label": "Scope", "group": "Plan", "start": 1767571200000, "end": 1767916800000, "progress": 1 },
+          { "id": "design", "label": "Design", "group": "Plan", "start": 1767916800000, "end": 1768521600000, "progress": 0.6, "dependencies": ["scope"] },
+          { "id": "signoff", "label": "Sign-off", "group": "Plan", "start": 1768521600000, "end": 1768521600000, "dependencies": ["design"] },
+          { "id": "backend", "label": "Backend", "group": "Build", "start": 1768521600000, "end": 1769731200000, "progress": 0.3, "dependencies": ["signoff"] },
+          { "id": "frontend", "label": "Frontend", "group": "Build", "start": 1768780800000, "end": 1769990400000, "progress": 0.1, "dependencies": ["signoff"] },
+          { "id": "qa", "label": "QA", "group": "Build", "start": 1769990400000, "end": 1770595200000, "dependencies": ["backend", "frontend"] },
+          { "id": "launch", "label": "Launch", "start": 1770681600000, "end": 1770681600000, "dependencies": ["qa"] }
+        ] } }
+      ]
+    },
+    {
+      "id": "calendar_heatmap", "title": "Calendar heatmap", "category": "layout", "grid": false,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "calendar_heatmap", "title": "Daily commits", "color": "#3fbe95", "data": { "type": "calendar", "week_start": 1, "days": [
+          {"date":1735689600000,"value":40},{"date":1735776000000,"value":57},{"date":1735862400000,"value":52},{"date":1735948800000,"value":69},{"date":1736035200000,"value":63},{"date":1736121600000,"value":57},{"date":1736208000000,"value":74},{"date":1736294400000,"value":67},
+          {"date":1736380800000,"value":83},{"date":1736467200000,"value":76},{"date":1736553600000,"value":69},{"date":1736640000000,"value":84},{"date":1736726400000,"value":76},{"date":1736812800000,"value":91},{"date":1736899200000,"value":82},{"date":1736985600000,"value":73},
+          {"date":1737072000000,"value":86},{"date":1737158400000,"value":76},{"date":1737244800000,"value":89},{"date":1737331200000,"value":79},{"date":1737417600000,"value":68},{"date":1737504000000,"value":80},{"date":1737590400000,"value":68},{"date":1737676800000,"value":57},
+          {"date":1737763200000,"value":68},{"date":1737849600000,"value":56},{"date":1737936000000,"value":67},{"date":1738022400000,"value":54},{"date":1738108800000,"value":42},{"date":1738195200000,"value":53},{"date":1738281600000,"value":40},{"date":1738368000000,"value":51},
+          {"date":1738454400000,"value":39},{"date":1738540800000,"value":27},{"date":1738627200000,"value":38},{"date":1738713600000,"value":27},{"date":1738800000000,"value":38},{"date":1738886400000,"value":27},{"date":1738972800000,"value":17},{"date":1739059200000,"value":29},
+          {"date":1739145600000,"value":19},{"date":1739232000000,"value":32},{"date":1739318400000,"value":23},{"date":1739404800000,"value":14},{"date":1739491200000,"value":28},{"date":1739577600000,"value":20},{"date":1739664000000,"value":12},{"date":1739750400000,"value":28},
+          {"date":1739836800000,"value":21},{"date":1739923200000,"value":37},{"date":1740009600000,"value":30},{"date":1740096000000,"value":24},{"date":1740182400000,"value":40},{"date":1740268800000,"value":34},{"date":1740355200000,"value":52},{"date":1740441600000,"value":46},
+          {"date":1740528000000,"value":40},{"date":1740614400000,"value":58},{"date":1740700800000,"value":52},{"date":1740787200000,"value":69},{"date":1740873600000,"value":63},{"date":1740960000000,"value":57},{"date":1741046400000,"value":74},{"date":1741132800000,"value":68},
+          {"date":1741219200000,"value":84},{"date":1741305600000,"value":77},{"date":1741392000000,"value":70},{"date":1741478400000,"value":86},{"date":1741564800000,"value":78},{"date":1741651200000,"value":69},{"date":1741737600000,"value":84},{"date":1741824000000,"value":75},
+          {"date":1741910400000,"value":89},{"date":1741996800000,"value":79},{"date":1742083200000,"value":69},{"date":1742169600000,"value":82},{"date":1742256000000,"value":71},{"date":1742342400000,"value":83},{"date":1742428800000,"value":72},{"date":1742515200000,"value":60},
+          {"date":1742601600000,"value":71},{"date":1742688000000,"value":59},{"date":1742774400000,"value":70},{"date":1742860800000,"value":58},{"date":1742947200000,"value":46},{"date":1743033600000,"value":56},{"date":1743120000000,"value":44},{"date":1743206400000,"value":55},
+          {"date":1743292800000,"value":43},{"date":1743379200000,"value":31},{"date":1743465600000,"value":42},{"date":1743552000000,"value":30},{"date":1743638400000,"value":19},{"date":1743724800000,"value":30},{"date":1743811200000,"value":19},{"date":1743897600000,"value":32},
+          {"date":1743984000000,"value":22},{"date":1744070400000,"value":12},{"date":1744156800000,"value":25},{"date":1744243200000,"value":16},{"date":1744329600000,"value":30},{"date":1744416000000,"value":22},{"date":1744502400000,"value":14},{"date":1744588800000,"value":29},
+          {"date":1744675200000,"value":22},{"date":1744761600000,"value":38},{"date":1744848000000,"value":31},{"date":1744934400000,"value":24},{"date":1745020800000,"value":41},{"date":1745107200000,"value":35},{"date":1745193600000,"value":52},{"date":1745280000000,"value":46},
+          {"date":1745366400000,"value":40},{"date":1745452800000,"value":58},{"date":1745539200000,"value":52},{"date":1745625600000,"value":46},{"date":1745712000000,"value":64},{"date":1745798400000,"value":58},{"date":1745884800000,"value":75},{"date":1745971200000,"value":68},
+          {"date":1746057600000,"value":62},{"date":1746144000000,"value":78},{"date":1746230400000,"value":71},{"date":1746316800000,"value":87},{"date":1746403200000,"value":79},{"date":1746489600000,"value":71},{"date":1746576000000,"value":86},{"date":1746662400000,"value":77},
+          {"date":1746748800000,"value":91},{"date":1746835200000,"value":81},{"date":1746921600000,"value":72},{"date":1747008000000,"value":84},{"date":1747094400000,"value":74},{"date":1747180800000,"value":86},{"date":1747267200000,"value":75},{"date":1747353600000,"value":64},
+          {"date":1747440000000,"value":75},{"date":1747526400000,"value":63},{"date":1747612800000,"value":51},{"date":1747699200000,"value":62},{"date":1747785600000,"value":50},{"date":1747872000000,"value":60},{"date":1747958400000,"value":48},{"date":1748044800000,"value":36},
+          {"date":1748131200000,"value":46},{"date":1748217600000,"value":34},{"date":1748304000000,"value":45},{"date":1748390400000,"value":33},{"date":1748476800000,"value":22},{"date":1748563200000,"value":34},{"date":1748649600000,"value":22},{"date":1748736000000,"value":35},
+          {"date":1748822400000,"value":24},{"date":1748908800000,"value":14},{"date":1748995200000,"value":27},{"date":1749081600000,"value":18},{"date":1749168000000,"value":32},{"date":1749254400000,"value":23},{"date":1749340800000,"value":15},{"date":1749427200000,"value":30},
+          {"date":1749513600000,"value":23},{"date":1749600000000,"value":15},{"date":1749686400000,"value":31},{"date":1749772800000,"value":25},{"date":1749859200000,"value":41},{"date":1749945600000,"value":35},{"date":1750032000000,"value":29},{"date":1750118400000,"value":46},
+          {"date":1750204800000,"value":41},{"date":1750291200000,"value":58},{"date":1750377600000,"value":52},{"date":1750464000000,"value":46},{"date":1750550400000,"value":64},{"date":1750636800000,"value":58},{"date":1750723200000,"value":75},{"date":1750809600000,"value":69},
+          {"date":1750896000000,"value":62},{"date":1750982400000,"value":79},{"date":1751068800000,"value":72},{"date":1751155200000,"value":88},{"date":1751241600000,"value":80},{"date":1751328000000,"value":73},{"date":1751414400000,"value":87},{"date":1751500800000,"value":79},
+          {"date":1751587200000,"value":70},{"date":1751673600000,"value":84},{"date":1751760000000,"value":74},{"date":1751846400000,"value":87},{"date":1751932800000,"value":77},{"date":1752019200000,"value":66},{"date":1752105600000,"value":78},{"date":1752192000000,"value":67},
+          {"date":1752278400000,"value":78},{"date":1752364800000,"value":67},{"date":1752451200000,"value":55},{"date":1752537600000,"value":66},{"date":1752624000000,"value":53},{"date":1752710400000,"value":64},{"date":1752796800000,"value":52},{"date":1752883200000,"value":39},
+          {"date":1752969600000,"value":50},{"date":1753056000000,"value":38},{"date":1753142400000,"value":49},{"date":1753228800000,"value":37},{"date":1753315200000,"value":25},{"date":1753401600000,"value":37},{"date":1753488000000,"value":26},{"date":1753574400000,"value":15},
+          {"date":1753660800000,"value":27},{"date":1753747200000,"value":17},{"date":1753833600000,"value":30},{"date":1753920000000,"value":20},{"date":1754006400000,"value":11},{"date":1754092800000,"value":25},{"date":1754179200000,"value":17},{"date":1754265600000,"value":32},
+          {"date":1754352000000,"value":24},{"date":1754438400000,"value":16},{"date":1754524800000,"value":32},{"date":1754611200000,"value":25},{"date":1754697600000,"value":42},{"date":1754784000000,"value":36},{"date":1754870400000,"value":30},{"date":1754956800000,"value":47},
+          {"date":1755043200000,"value":41},{"date":1755129600000,"value":58},{"date":1755216000000,"value":52},{"date":1755302400000,"value":47},{"date":1755388800000,"value":64},{"date":1755475200000,"value":58},{"date":1755561600000,"value":52},{"date":1755648000000,"value":69},
+          {"date":1755734400000,"value":63},{"date":1755820800000,"value":80},{"date":1755907200000,"value":73},{"date":1755993600000,"value":66},{"date":1756080000000,"value":82},{"date":1756166400000,"value":74},{"date":1756252800000,"value":89},{"date":1756339200000,"value":81},
+          {"date":1756425600000,"value":72},{"date":1756512000000,"value":86},{"date":1756598400000,"value":76},{"date":1756684800000,"value":90},{"date":1756771200000,"value":80},{"date":1756857600000,"value":69},{"date":1756944000000,"value":81},{"date":1757030400000,"value":70},
+          {"date":1757116800000,"value":82},{"date":1757203200000,"value":70},{"date":1757289600000,"value":58},{"date":1757376000000,"value":69},{"date":1757462400000,"value":57},{"date":1757548800000,"value":45},{"date":1757635200000,"value":56},{"date":1757721600000,"value":43},
+          {"date":1757808000000,"value":54},{"date":1757894400000,"value":42},{"date":1757980800000,"value":30},{"date":1758067200000,"value":41},{"date":1758153600000,"value":29},{"date":1758240000000,"value":40},{"date":1758326400000,"value":29},{"date":1758412800000,"value":18},
+          {"date":1758499200000,"value":30},{"date":1758585600000,"value":19},{"date":1758672000000,"value":32},{"date":1758758400000,"value":22},{"date":1758844800000,"value":13},{"date":1758931200000,"value":27},{"date":1759017600000,"value":18},{"date":1759104000000,"value":33},
+          {"date":1759190400000,"value":25},{"date":1759276800000,"value":18},{"date":1759363200000,"value":33},{"date":1759449600000,"value":26},{"date":1759536000000,"value":20},{"date":1759622400000,"value":36},{"date":1759708800000,"value":30},{"date":1759795200000,"value":47},
+          {"date":1759881600000,"value":41},{"date":1759968000000,"value":35},{"date":1760054400000,"value":53},{"date":1760140800000,"value":47},{"date":1760227200000,"value":64},{"date":1760313600000,"value":58},{"date":1760400000000,"value":53},{"date":1760486400000,"value":70},
+          {"date":1760572800000,"value":64},{"date":1760659200000,"value":80},{"date":1760745600000,"value":74},{"date":1760832000000,"value":67},{"date":1760918400000,"value":83},{"date":1761004800000,"value":75},{"date":1761091200000,"value":90},{"date":1761177600000,"value":82},
+          {"date":1761264000000,"value":74},{"date":1761350400000,"value":88},{"date":1761436800000,"value":79},{"date":1761523200000,"value":69},{"date":1761609600000,"value":82},{"date":1761696000000,"value":72},{"date":1761782400000,"value":84},{"date":1761868800000,"value":73},
+          {"date":1761955200000,"value":62},{"date":1762041600000,"value":74},{"date":1762128000000,"value":62},{"date":1762214400000,"value":73},{"date":1762300800000,"value":61},{"date":1762387200000,"value":49},{"date":1762473600000,"value":59},{"date":1762560000000,"value":47},
+          {"date":1762646400000,"value":58},{"date":1762732800000,"value":45},{"date":1762819200000,"value":33},{"date":1762905600000,"value":44},{"date":1762992000000,"value":32},{"date":1763078400000,"value":43},{"date":1763164800000,"value":32},{"date":1763251200000,"value":21},
+          {"date":1763337600000,"value":33},{"date":1763424000000,"value":22},{"date":1763510400000,"value":12},{"date":1763596800000,"value":25},{"date":1763683200000,"value":15},{"date":1763769600000,"value":29},{"date":1763856000000,"value":20},{"date":1763942400000,"value":12},
+          {"date":1764028800000,"value":26},{"date":1764115200000,"value":19},{"date":1764201600000,"value":34},{"date":1764288000000,"value":27},{"date":1764374400000,"value":20},{"date":1764460800000,"value":37},{"date":1764547200000,"value":30},{"date":1764633600000,"value":47},
+          {"date":1764720000000,"value":41},{"date":1764806400000,"value":35},{"date":1764892800000,"value":53},{"date":1764979200000,"value":47},{"date":1765065600000,"value":64},{"date":1765152000000,"value":59},{"date":1765238400000,"value":53},{"date":1765324800000,"value":70},
+          {"date":1765411200000,"value":64},{"date":1765497600000,"value":58},{"date":1765584000000,"value":74},{"date":1765670400000,"value":68},{"date":1765756800000,"value":84},{"date":1765843200000,"value":76},{"date":1765929600000,"value":69},{"date":1766016000000,"value":84},
+          {"date":1766102400000,"value":76},{"date":1766188800000,"value":90},{"date":1766275200000,"value":81},{"date":1766361600000,"value":72},{"date":1766448000000,"value":85},{"date":1766534400000,"value":75},{"date":1766620800000,"value":87},{"date":1766707200000,"value":76},
+          {"date":1766793600000,"value":65},{"date":1766880000000,"value":77},{"date":1766966400000,"value":65},{"date":1767052800000,"value":77},{"date":1767139200000,"value":65}
+        ] } }
+      ]
+    },
+    {
+      "id": "marimekko", "title": "Marimekko", "category": "layout", "grid": false,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "marimekko", "title": "Assets by region", "color": "#5070dd", "data": { "type": "mosaic", "cells": [
+          { "column": "North America", "segment": "Equities", "value": 52 }, { "column": "North America", "segment": "Bonds", "value": 31 }, { "column": "North America", "segment": "Cash", "value": 9 },
+          { "column": "Europe", "segment": "Equities", "value": 28 }, { "column": "Europe", "segment": "Bonds", "value": 30 }, { "column": "Europe", "segment": "Cash", "value": 7 },
+          { "column": "Asia", "segment": "Equities", "value": 34 }, { "column": "Asia", "segment": "Bonds", "value": 12 }, { "column": "Asia", "segment": "Cash", "value": 6 },
+          { "column": "Latin America", "segment": "Equities", "value": 9 }, { "column": "Latin America", "segment": "Bonds", "value": 6 }, { "column": "Latin America", "segment": "Cash", "value": 3 }
         ] } }
       ]
     }

@@ -6,6 +6,7 @@
 node_modules/
 dist/
 pkg/
+pkg_complete/
 playwright-report/
 test-results/
 /benchmarks/results/

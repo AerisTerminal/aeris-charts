@@ -38,7 +38,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G6 | R6 | Polar families and transitions | **Complete** | `f64` polar geometry and axes; pie/donut, radar, polar-area and radial-bar paths; single-fill ordered polar mesh; bounded cached hits, slice legends, shared-frame leader labels, pointer and keyboard selection; WASM/TS bindings; opt-in fixed-clock value and numeric/temporal X updates, Cartesian and angular category-axis and matched-row category movement, identity-matched entry and exit rows, missing/valid Y, error-bound and bubble-size motion, pie row-order motion, fixed-spoke and changing-count radar morphs, compatible optional-channel changes, collapsed error-bound entry, persisted duration and browser scheduling; polar and Cartesian family fixed-clock frame/hit fixtures, GPUI/Canvas2D structural fill, bounded Canvas2D/WebGPU pixels, and measured 1.25× GPUI/native polar window parity; strict release performance, six package-size limits, and 735 portable browser tests passed | G7; manual assistive-technology and broader device-scale image evidence remain pending |
 | G7 | R7 | Hierarchy and flow families | **Complete** | Axis-free `layout` pane topology is available in engine, WASM, and TypeScript; lazy typed stage/tree/flow store validates IDs, values, cycles, depth and bounded retained capacity; funnel, treemap, Sankey and sunburst emit shared ordered-frame geometry with direct or cached exact hits; focused financial-isolation, persistence, atomic-store and geometry fixtures pass; V2 layout data/series round-trip and public restored-series handles, pointer hover/click/Escape and focused-key selection, bounded accessibility snapshots integrated with browser keyboard navigation and announcements, shared-frame visual focus, shared-dataset update fanout, built-in pointer tooltip and toggling legend, opt-in shared-frame labels, atomic live presentation patches, and fixed-clock compatible value transitions are implemented with focused engine/browser evidence; four-family Canvas2D/WebGPU interior pixels and GPUI/Canvas2D structural focus/mark parity pass | G8; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence remain for parity closure |
 | G8 | R8 | Parity closure and release readiness | **Automated work complete; manual evidence pending** | Every matrix row has pinned Recharts 3.10.1 and Aeris public-path pairs in Chromium/Firefox/WebKit; percent stacks now copy Recharts `expand` exactly by maintainer decision; all 46 catalog examples keep byte-identical exports across live WebGPU loss, accept post-loss updates and restore; general-only, mixed and financial-only browser workloads plus general/mixed lifecycles are measured locally beside native Targets F–I; the migration guide maps every matrix row | Maintainer-run manual evidence in **Manual phase-closure evidence**, then mark matrix rows Verified and close R8 |
-| G9 | R9 | Two builds and business/comparison charts | **Planned** | — | Two-build packaging, ECharts reference, waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt, calendar heatmap, marimekko |
+| G9 | R9 | Two builds and business/comparison charts | **Complete** | Standard and complete builds with typed missing-family error and dual gates; pinned ECharts 6.1.0 reference; waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt, calendar heatmap and Marimekko with reference pairs in three browsers | G10; calibrated visual review at R9 closure |
 | G10 | R10 | Financial chart styles | **Planned** | Visible-range volume profiles already exist | Heikin-Ashi, derived-sequence foundation, Renko, Kagi, Point & Figure, Line Break |
 | G11 | R11 | Statistics (complete build) | **Planned** | — | Shared statistics, violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix |
 | G12 | R12 | Relationships and hierarchy (complete build) | **Planned** | — | Gauge, graph store, chord, network, tree/dendrogram, circle packing, icicle, Venn, word cloud |
@@ -853,6 +853,55 @@ the package lint/build/typecheck/pack/API/SSR/release gates, and `perf_gate` (Ta
 The complete Playwright suite passed 1,051 tests with 47 platform skips. One earlier run hit a
 transient Chromium `ERR_NO_BUFFER_SPACE` network error in a drawings test that passed on rerun.
 
+### G9 — Two builds and business/comparison charts (2026-11-01)
+
+**Two builds.** One `complete` Cargo feature on `aeris_charts_engine` and `aeris_charts_wasm`
+selects the build; `ChartEngine::build_includes_complete_families()` reports it. The package
+builds both WASM variants with identical wasm-pack/wasm-opt arguments and ships four entries:
+the root and `/react` (standard), and `/complete` and `/complete/react`, from the same
+TypeScript sources. `build_variant()` reports the loaded build. Creation of any family listed in
+`complete_only_families` throws `complete_build_required` naming the `/complete` entry before the
+engine is touched (empty until G11). Pack smoke installs and initializes both builds and bundles
+all six consumer examples against each. API, namespace, release-gate, SSR and build-variant
+guards cover both. CI adds complete-feature clippy and workspace tests, and Playwright adds a
+`chromium-complete` project over the shared general, defaults, accessibility and attribution
+specs. Budget policy v8 keeps the standard JavaScript/WASM ceilings and adds equal complete
+ceilings. The tarball and unpacked ceilings grow by the measured second build (3,980,000 and
+12,330,000 bytes); the seven families below add about 41 KB brotli to each WASM, so the
+tarball ceiling moves to 4,100,000 bytes against a measured 4,004,414.
+
+**Business and comparison families** on the standard build, each through engine, WASM,
+TypeScript, persistence, legend, tooltip, accessibility and catalog paths:
+
+| Family | API | Reference pair |
+| --- | --- | --- |
+| Waterfall | new `waterfall` kind (relative/subtotal/total steps, running base, connectors, both orientations) | ECharts placeholder stack |
+| Bullet | new `bullet` kind (up to three bands, measure, target, comparative, both orientations) | ECharts bar + markers |
+| Lollipop / dumbbell | `bar_mark: "lollipop"` on column/horizontal bar; `bar_mark: "dumbbell"` on range bar | ECharts bar + scatter |
+| Slope / bump | `end_labels` and `rank: "dense" \| "competition"` on `xy_line` | ECharts line |
+| Gantt | `gantt` layout kind: tasks, progress, milestones, finish-to-start arrows, host-supplied now line, groups, engine-owned row scroll | ECharts custom series |
+| Calendar heatmap | `calendar_heatmap` layout kind: whole UTC years, week start, locale labels, color scale, day/week keyboard grid | ECharts calendar + heatmap |
+| Marimekko | `marimekko` layout kind: width by column total, height by share, in-canvas segment legend | ECharts custom series |
+
+New kinds were added only where the row contract differs; the other presentations are options
+on existing kinds. Pinned ECharts 6.1.0 rows live in
+`examples/web_demo/fixtures/echarts_6_1_0/matrix.json` with one reference module per row under
+`examples/web_demo/echarts_reference/rows/`. `g9_business.spec.mjs` and
+`g9_timeline_calendar.spec.mjs` compare geometry with the reference in Chromium, Firefox and
+WebKit. Automatic temporal ticks gain a 7-day step between the 2-day and 14-day steps, so
+month-long spans are no longer labelled with two ticks.
+
+Known limits: end labels are not clipped; waterfall and bullet do not stack, group or round
+corners; bullets take at most three bands; Gantt has finish-to-start dependencies only and no
+drag editing; calendar colour scales are continuous only; Marimekko segments cannot be toggled
+from the legend. Calibrated visual review is part of R9 closure.
+
+Gate evidence: `cargo fmt`, workspace and WASM clippy and workspace tests on both feature sets,
+GPUI clippy, tests and pixel parity, `perf_gate`, the package gates (lint, build, typecheck, API,
+namespace, release-gate, build-variant, SSR and pack smoke for both builds) and size budgets all
+pass. Playwright: 1,274 passed and 64 skipped in the full run. The 26 Chromium failures in that
+run were Windows `ERR_NO_BUFFER_SPACE` socket exhaustion and load timeouts; all 26 pass on rerun.
+
 ## Known gaps
 
 Remaining source-confirmed gaps from the 2026-09-23 review and the 2026-10-18 post-G7 changes. R3–R7 closed the earlier Cartesian,
@@ -1242,27 +1291,27 @@ Every phase also has the standing exit rules of R6/R7. The exit criteria cover:
 
 ### R9 — Two builds and business/comparison charts (group A)
 
-**Batch:** G9. **Depends on:** R8 automated work. **Status:** planned.
+**Batch:** G9. **Depends on:** R8 automated work. **Status:** complete (closure review pending).
 
-- [ ] Two-build packaging. Add the `complete` feature, the `/complete` and `/complete/react`
+- [x] Two-build packaging. Add the `complete` feature, the `/complete` and `/complete/react`
       exports, and pack, size, API and SSR gates for both builds. Add Playwright projects that run
       the shared suite on both builds, and the typed error for a missing family.
-- [ ] Pinned ECharts 6.1.0 (and ECharts GL) reference page beside the Recharts page, with license
+- [x] Pinned ECharts 6.1.0 (and ECharts GL) reference page beside the Recharts page, with license
       checks.
-- [ ] Waterfall: increase, decrease, subtotal and total bars from one value column, running base,
+- [x] Waterfall: increase, decrease, subtotal and total bars from one value column, running base,
       connector lines, per-kind colors, both orientations and labels.
-- [ ] Bullet: qualitative bands, measure bar, target marker and comparative measure, both
+- [x] Bullet: qualitative bands, measure bar, target marker and comparative measure, both
       orientations, with multiple bullets per pane.
-- [ ] Lollipop and dumbbell: stem plus marker, and two-endpoint range with marker ends, on category
+- [x] Lollipop and dumbbell: stem plus marker, and two-endpoint range with marker ends, on category
       or numeric axes.
-- [ ] Slope and bump: two-period slope lines with end labels, and a rank transform with a
+- [x] Slope and bump: two-period slope lines with end labels, and a rank transform with a
       declared tie policy for bump lines.
-- [ ] Gantt/timeline: temporal x-range bars on category rows with progress, milestones, dependency
+- [x] Gantt/timeline: temporal x-range bars on category rows with progress, milestones, dependency
       arrows, a current-time line, row grouping and bounded row counts.
-- [ ] Calendar heatmap: a calendar coordinate layout (year/month grid, week start, locale, UTC
+- [x] Calendar heatmap: a calendar coordinate layout (year/month grid, week start, locale, UTC
       policy) with a color scale and legend.
-- [ ] Marimekko/mosaic: variable-width 100% stacked columns from two categorical dimensions.
-- [ ] G9 full gate green on both builds; batch committed and pushed.
+- [x] Marimekko/mosaic: variable-width 100% stacked columns from two categorical dimensions.
+- [x] G9 full gate green on both builds; batch committed and pushed.
 
 **Exit:** each family meets the standing exit rules on the standard build, with ECharts reference
 pairs. Both builds pass every gate. The standard build stays within its existing size ceilings,
@@ -1397,8 +1446,8 @@ platform capabilities beyond the competitor's browser rendering model.
 | Accessibility/localization | Partial | Keyboard operation of every family/control, meaningful bounded snapshots, focus retention, announcements, contrast, locale and text measurement | Every phase |
 | Persistence, export and recovery | Partial (all 46 catalog examples export, restore and survive live WebGPU loss with byte-identical images; native mixed frame export; manual review pending) | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
 | Packaging and migration | Partial | Packed-consumer examples, framework-neutral and React guides, discoverable API, reproducible competitor comparisons | R0, R5, R8 |
-| Two builds (standard and complete) | Open | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
-| Business and comparison charts | Open | Waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt/timeline, calendar heatmap and marimekko on the standard build | R9 |
+| Two builds (standard and complete) | Partial (G9 delivered; first complete-only family arrives in G11) | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
+| Business and comparison charts | Partial (G9 delivered with ECharts pairs; visual review pending) | Waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt/timeline, calendar heatmap and marimekko on the standard build | R9 |
 | Financial chart styles | Open | Heikin-Ashi, Renko, Kagi, Point & Figure and Line Break with bounded live updates and declared drawing/indicator policies | R10 |
 | Statistical distributions | Open | Violin, density, ridgeline, strip/beeswarm, dot plot, ECDF and Q-Q from shared engine statistics | R11 |
 | 2D density and multivariate | Open | Hexbin, contour/2D density, parallel coordinates and scatter-plot matrix | R11 |

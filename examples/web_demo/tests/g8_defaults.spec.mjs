@@ -3621,11 +3621,12 @@ for (const backend of ["canvas2d", "webgpu"]) {
     const results = await audit_catalog_exports(page, backend);
     await page.waitForTimeout(50);
     expect(errors).toEqual([]);
-    expect(results).toHaveLength(46);
+    expect(results).toHaveLength(56);
     expect(new Set(results.flatMap((entry) => entry.kinds))).toEqual(new Set([
       "xy_line", "xy_area", "range_area", "range_bar", "error_bar", "column",
       "histogram", "horizontal_bar", "box_plot", "heatmap_grid", "scatter", "bubble",
       "pie", "radar", "polar_area", "radial_bar", "funnel", "treemap", "sankey", "sunburst",
+      "gantt", "calendar_heatmap", "marimekko", "waterfall", "bullet",
     ]));
     expect(results.filter((entry) => !entry.restoredSame).map((entry) => entry.id)).toEqual([]);
     for (const entry of results) {
@@ -3644,7 +3645,7 @@ test("all catalog families keep their live image and accept updates across WebGP
   page.on("pageerror", (error) => errors.push(error.message));
   const results = await audit_catalog_exports(page, "webgpu", null, false, true);
   expect(errors).toEqual([]);
-  expect(results).toHaveLength(46);
+  expect(results).toHaveLength(56);
   const failed = (key) => results.filter((entry) => !entry.recovery?.[key]).map((entry) => entry.id);
   expect(failed("lostSame"), "export before and after loss must be byte-identical").toEqual([]);
   expect(failed("hiddenChanged"), "a post-loss visibility update must repaint").toEqual([]);
@@ -3662,7 +3663,7 @@ test("all catalog families restore and dispose after WebGPU device loss", async 
   page.on("pageerror", (error) => errors.push(error.message));
   const results = await audit_catalog_exports(page, "webgpu", null, true);
   expect(errors).toEqual([]);
-  expect(results).toHaveLength(46);
+  expect(results).toHaveLength(56);
   expect(results.filter((entry) => !entry.restoredSame || !entry.restoredStateSame).map((entry) => entry.id)).toEqual([]);
   for (const entry of results) {
     expect(entry, entry.id).toMatchObject({ backend: "canvas2d", changed: true,

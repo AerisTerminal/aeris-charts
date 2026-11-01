@@ -54,6 +54,22 @@ registry configuration or token is needed:
 npm install @aeristerminal/aeris-charts
 ```
 
+The package contains two builds with the same API. The standard build is the root entry and
+`/react`. The complete build adds chart families whose size does not fit the standard build's
+budget; import it from `/complete` or `/complete/react` instead:
+
+```ts
+import { createChart, buildVariant } from "@aeristerminal/aeris-charts/complete";
+// React: import { AerisChart } from "@aeristerminal/aeris-charts/complete/react";
+
+const chart = await createChart(container, { autoSize: true });
+console.log(buildVariant()); // "complete"
+```
+
+Families that both builds contain behave identically. Creating a complete-only family through the
+standard build throws an `AerisChartsError` with code `complete_build_required` that names the
+`/complete` entry. Use one build per page, because each build loads its own WebAssembly module.
+
 Version tags publish automatically, with npm provenance, when the tag matches
 `packages/charts/package.json` exactly
 (for example, package version `0.9.0` is released from tag `v0.9.0`).

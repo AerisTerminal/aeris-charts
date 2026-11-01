@@ -30,6 +30,7 @@ export * from "./accessibility.js";
 export * from "./offscreen.js";
 export * from "./shortcuts.js";
 export * from "./grid.js";
+export { build_variant, buildVariant, type chart_build_variant } from "./build_variant.js";
 import { chart_impl } from "./impl.js";
 import { announce_license, ensure_init, has_license_key, restore_chart_host, snapshot_chart_host } from "./impl.js";
 import { AerisChartsError } from "./errors.js";

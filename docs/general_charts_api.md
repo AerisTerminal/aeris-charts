@@ -5,7 +5,8 @@
 This document records the shipped general-chart API and its stable domain contracts. The current
 package implements the Cartesian families: category columns and horizontal bars, category-band box plots, category/category plus
 numeric/numeric and temporal/numeric heatmap grids, numeric XY scatter/bubble marks, numeric/temporal/category error bars,
-and `xy_line`, `xy_area`, `range_area`, grouped/stacked bar, and stacked-area slices. Domain-aware panes, explicit axes, object and
+and `xy_line`, `xy_area`, `range_area`, grouped/stacked bar, and stacked-area slices, plus
+`waterfall` and `bullet` charts, lollipop and dumbbell bar marks, and slope and bump line options. Domain-aware panes, explicit axes, object and
 typed bulk replacement/update, bounded retention, row labels, snapshots, hit testing, accessibility,
 and V2 persistence are public for these implemented kinds/options. `xy_line`, `xy_area`, and `range_area` support continuous numeric,
 temporal epoch-millisecond, and category band/point X domains. `error_bar` supports numeric and temporal X
@@ -26,6 +27,41 @@ the largest change. Sankey uses Recharts' layout defaults (5 px margin, 10 px no
 0.2 opacity, and nodes in Recharts' `#0088fe` at 0.8 opacity. Sunburst keeps Recharts' 50 px
 center hole, 2 px ring gaps, counterclockwise sectors from three o'clock, a flat series fill with
 a 2 px white outline, and per-sector value text; `data_labels` shows node names instead.
+
+Gantt, calendar heatmap and Marimekko are standard-build layout families whose defaults follow
+pinned Apache ECharts 6.1.0 (`examples/web_demo/fixtures/echarts_6_1_0/matrix.json` records the
+reference rows and open differences). Each uses an axis-free layout pane and
+`add_layout_series(kind, options, data)`:
+
+- `gantt` takes `{ type: "gantt", tasks, now? }`. A task is `{ id, label, start, end, progress?,
+  group?, dependencies? }` with UTC epoch-millisecond times and `end >= start`; `end == start`
+  draws a milestone diamond. `progress` in `[0, 1]` fills the completed part of the bar.
+  Contiguous tasks sharing `group` get one header row. `dependencies` lists finish-to-start
+  predecessor IDs (acyclic, at most 32 per task) drawn as orthogonal arrows. `now` is an optional
+  host-supplied instant drawn as a dashed ECharts `markLine`-red rule; the engine never reads a
+  clock, so the host updates `now` with `set_data` when its notion of the current time changes.
+  Rows that do not fit the pane scroll inside the engine: the wheel over the timeline moves whole
+  rows (at either end the wheel follows the normal wheel policy), keyboard focus scrolls the focused task into
+  view, and only visible rows are painted and hit-tested. The scroll offset is view state and is
+  not persisted.
+- `calendar_heatmap` takes `{ type: "calendar", days, week_start?, day_labels?, low_color?,
+  high_color? }`. Each day is `{ date, value }`; `date` is any instant inside its UTC day, so the
+  same input lands in the same cell in every host time zone. The chart covers whole UTC years
+  (at most ten), one block of week columns and weekday rows per year, with `week_start` 0
+  (Sunday) through 6 in the first row and seven host-supplied `day_labels` beginning with Sunday
+  (English initials by default). Month names come from the chart's localized month names. Values
+  shade linearly from `low_color` to `high_color` (default the series color from 20% to full
+  opacity) with an in-canvas continuous legend. Days without a value draw an empty cell and have
+  no hit. Accessibility items are every day of the covered years, labelled like `29 February
+  2024`; Left/Right move one week and Up/Down one day.
+- `marimekko` takes `{ type: "mosaic", cells }` with `{ column, segment, value }` cells, unique per
+  column and segment and non-negative. Column widths are proportional to column totals and
+  segment heights to their share of the column, both in first-appearance order. The first segment
+  uses the series color and later segments continue through the ECharts default palette; an
+  in-canvas legend lists every segment, and column names label the baseline where they fit.
+
+Hits return `element: "task"`, `"day"` or `"cell"` with the task ID, `YYYY-MM-DD` date or
+`column/segment` ID. Value updates of these families apply immediately without a transition.
 
 React `GeneralPane` supports keyed arrays and direct axis, series, reference, label, legend,
 tooltip, and brush declarations. `MappedGeneralSeries` maps typed application rows before the
@@ -293,6 +329,8 @@ type general_series_kind =
   | "range_area"
   | "range_bar"
   | "column"
+  | "waterfall"
+  | "bullet"
   | "histogram"
   | "horizontal_bar"
   | "scatter"
@@ -407,6 +445,68 @@ whose center lies in the range; a Y brush selects them by height. A shared toolt
 histogram reports only that bin, and other series never include histogram bins. Histogram series
 appear in the legend like columns and persist in V2 documents with their samples and options.
 
+### Business families: waterfall, bullet, lollipop, dumbbell, slope and bump
+
+Two of these families have their own kind because their rows carry data no existing contract
+holds; the other four are presentation options on an existing kind because their data is
+already an existing row shape:
+
+| Family | API | Why |
+| --- | --- | --- |
+| Waterfall | `add_series("waterfall")` | A row carries a step role (relative, subtotal, total), and the bar extents come from an engine-owned running total, not from the row value alone. |
+| Bullet | `add_series("bullet")` | A row carries a measure plus a target, an optional comparative measure and up to three band thresholds. |
+| Lollipop | `bar_mark: "lollipop"` on `column` / `horizontal_bar` | Same category/value rows and value domain as a bar; only the mark changes. |
+| Dumbbell | `bar_mark: "dumbbell"` on `range_bar` | Same low/high rows as a range bar. |
+| Slope | `end_labels` on `xy_line` | A line over two (or more) categories; only the labels change. |
+| Bump | `rank` on `xy_line` | The engine ranks ordinary line values, so hosts pass raw values and tooltips keep them. |
+
+`waterfall` binds a band category axis and a linear value axis in either orientation (category X
+with value Y, or value X with category Y). Rows are `{ x, y, step?, id?, label?, color? }`. A
+`relative` step (the default) adds its signed `y` to the running total and draws from the previous
+total to the new one; `subtotal` and `total` steps draw the running total from zero and ignore `y`,
+which may be null. A relative step with a null `y` draws no bar and leaves the total unchanged.
+Increases default to the market up green, decreases to the market down red, totals
+to the series color, and subtotals to the total color; `waterfall: { increase_color, decrease_color,
+subtotal_color, total_color, connectors }` overrides them, and a row `color` overrides its bar.
+Connectors (default on) are thin lines in the theme text color at 45% opacity from each bar's end
+level to the next bar. `data_labels` shows each step's magnitude (subtotals and totals show the
+running total). Typed ingestion uses `category_waterfall_columns`: the category columns plus
+`steps: Uint8Array` with 0 relative, 1 subtotal and 2 total.
+
+`bullet` binds the same axes. Rows are `{ x, y, target, comparative?, bands?, id?, label?, color? }`
+where `y` is the measure. Up to three ascending `bands` thresholds each span from the previous
+threshold (or zero) to their own value as full-thickness qualitative bands, darkest toward zero, from
+the theme text color. The comparative measure is a half-thickness bar in the series color at half
+opacity, the measure a third-thickness bar, and the target a 2 CSS px marker two thirds of the slot
+thick, following Stephen Few's bullet graph specification. Typed ingestion uses
+`category_bullet_columns`: `target`, optional `comparative`, and optional band-major `bands`
+(every row's first threshold, then every second, then every third), each with an optional validity
+mask. Neither kind supports stacking or grouping.
+
+`bar_mark: "lollipop"` draws a stem from the baseline to the value with a `point_symbol` of
+`point_radius` at the value on an unstacked `column` or `horizontal_bar`; `bar_mark: "dumbbell"`
+draws a connector between two symbols at the low and high values of a `range_bar`. Hits measure the
+distance to the stem and symbols. Other kinds reject both marks, and stacked lollipops are rejected.
+
+`end_labels: "start" | "end" | "both"` on `xy_line` labels the first and/or last plotted point with
+`"<title> <value>"` before the first point and `"<value> <title>"` after the last, in the line color.
+All labels on one side of a pane are spread vertically to one label height and a quarter apart and
+kept inside the plot, so they never overlap. Labels are not clipped to the outer category padding;
+use `band_padding_outer` on the X axis to reserve room for them.
+
+`rank: "dense" | "competition"` on `xy_line` plots each row at its rank among the visible ranked
+`xy_line` series that share the pane, X axis and Y axis at the same X datum; rank 1 is the largest
+value. Dense ties give 1, 2, 2, 3; competition ties give 1, 2, 2, 4. A Y axis carrying only ranked
+lines spans `0.5..N + 0.5` for N ranked series without a zero baseline and runs top-down so rank 1
+is at the top; `reverse: true` flips it back. Ranks are recomputed from the current values on every
+frame, hit test and snapshot, so updates and visibility changes re-rank immediately.
+
+Tooltip, data and accessibility snapshots carry `detail` for these families: `{ type: "waterfall",
+mark, start, end }` with the running total before and after the bar, `{ type: "bullet", target,
+comparative, bands }`, or `{ type: "rank", rank }` (the snapshot `value` stays the original value).
+Other series report `detail: null`. Accessibility announcements include the step, target, bands or
+rank. All six persist in V2 documents with their rows and options.
+
 Path interpolation accepts `step_before` (vertical then horizontal), `step_middle` (turn at the
 interval midpoint), and `step_after` (horizontal then vertical). The existing `step` name keeps its
 step-after behavior for saved charts. Map Recharts `step`, `stepBefore`, and `stepAfter` to
@@ -453,6 +553,15 @@ interface cartesian_series_options {
   /** Optional box-plot interquartile fill and median stroke CSS colors. */
   box_fill_color?: string;
   box_median_color?: string;
+  /** Lollipop (column/horizontal_bar) or dumbbell (range_bar) marks; defaults to bar. */
+  bar_mark?: "bar" | "lollipop" | "dumbbell";
+  /** Waterfall step colors and connectors; waterfall series only. */
+  waterfall?: { increase_color?: string | null; decrease_color?: string | null;
+    subtotal_color?: string | null; total_color?: string | null; connectors?: boolean };
+  /** Slope-chart labels at the first/last point of an xy_line; defaults to none. */
+  end_labels?: "none" | "start" | "end" | "both";
+  /** Bump-chart rank transform of an xy_line; defaults to null (plot values). */
+  rank?: "dense" | "competition" | null;
   group_id?: string;
   stack_id?: string;
   stack_mode?: "normal" | "cumulative" | "silhouette" | "wiggle" | "percent" | "positive";
@@ -558,6 +667,26 @@ interface box_plot_row {
   median: number | null;
   q3: number | null;
   max: number | null;
+  color?: string;
+  label?: string;
+}
+
+interface waterfall_row {
+  id?: general_row_id;
+  x: string;
+  y: number | null; // ignored by subtotal and total steps
+  step?: "relative" | "subtotal" | "total"; // default relative
+  color?: string;
+  label?: string;
+}
+
+interface bullet_row {
+  id?: general_row_id;
+  x: string;
+  y: number | null; // measure
+  target: number | null;
+  comparative?: number | null;
+  bands?: readonly (number | null)[]; // up to three ascending thresholds
   color?: string;
   label?: string;
 }

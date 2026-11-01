@@ -13,6 +13,14 @@ use crate::{ChartEngine, ChartError, ErrorCode, PaneId};
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
 
+mod calendar;
+mod gantt;
+mod mosaic;
+
+pub use calendar::{CalendarDay, CalendarInput};
+pub use gantt::GanttTask;
+pub use mosaic::MosaicCell;
+
 const MAX_LAYOUT_DATASETS: usize = 64;
 const MAX_LAYOUT_SERIES: usize = 64;
 const MAX_LAYOUT_ROWS: usize = 4_096;
@@ -55,12 +63,29 @@ pub struct GeneralLayoutHit {
     pub row: usize,
 }
 
+/// Tooltip parts of one layout item.
+pub(crate) struct LayoutItemTooltip {
+    pub(crate) label: String,
+    pub(crate) title: String,
+    pub(crate) value: Option<f64>,
+    /// The item's painted color.
+    pub(crate) color: Color,
+    /// Text that follows the formatted value, or replaces it when there is no value.
+    pub(crate) detail: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GeneralLayoutElement {
     Stage,
     Node,
     Link,
+    /// A Gantt task bar or milestone; its row is the task's input index.
+    Task,
+    /// A calendar day; its row is the day offset from January 1 of the first covered year.
+    Day,
+    /// A Marimekko cell; its row is the cell's input index.
+    Cell,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -80,6 +105,10 @@ pub struct GeneralLayoutAccessibilitySnapshot {
     pub total: usize,
     pub offset: usize,
     pub items: Vec<GeneralLayoutAccessibilityItem>,
+    /// Items per grid column when the items form a column-major grid (a calendar's seven
+    /// weekdays): the vertical arrows then move one item and the horizontal arrows one column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grid_stride: Option<usize>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GeneralLayoutSeriesKind {
@@ -87,6 +116,9 @@ pub enum GeneralLayoutSeriesKind {
     Treemap,
     Sankey,
     Sunburst,
+    Gantt,
+    CalendarHeatmap,
+    Marimekko,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -165,6 +197,15 @@ pub enum GeneralLayoutInput {
         nodes: Vec<FlowNode>,
         links: Vec<FlowLink>,
     },
+    /// Task rows on a time track. `now` is the host's current time in UTC epoch milliseconds:
+    /// the engine never reads a wall clock, so frames stay deterministic and replayable.
+    Gantt {
+        tasks: Vec<GanttTask>,
+        #[serde(default)]
+        now: Option<f64>,
+    },
+    Calendar(CalendarInput),
+    Mosaic(Vec<MosaicCell>),
 }
 
 impl GeneralLayoutInput {
@@ -217,6 +258,9 @@ impl GeneralLayoutInput {
                     .chain(links.iter().map(|link| link.value))
                     .collect()
             }
+            Self::Gantt { tasks, .. } => gantt::semantic_values(tasks),
+            Self::Calendar(calendar) => calendar::semantic_values(&calendar.days),
+            Self::Mosaic(cells) => cells.iter().map(|cell| cell.value).collect(),
         }
     }
 
@@ -225,6 +269,9 @@ impl GeneralLayoutInput {
             Self::Funnel(stages) => stages.len(),
             Self::Hierarchy(nodes) => nodes.len(),
             Self::Flow { nodes, links } => nodes.len() + links.len(),
+            Self::Gantt { tasks, .. } => tasks.len(),
+            Self::Calendar(calendar) => calendar::semantic_value_count(&calendar.days),
+            Self::Mosaic(cells) => cells.len(),
         }
     }
     fn validate(&self) -> Result<(), ChartError> {
@@ -242,6 +289,9 @@ impl GeneralLayoutInput {
             }
             Self::Hierarchy(nodes) => validate_hierarchy(nodes)?,
             Self::Flow { nodes, links } => validate_flow(nodes, links)?,
+            Self::Gantt { tasks, now } => gantt::validate(tasks, *now)?,
+            Self::Calendar(calendar) => calendar::validate(calendar)?,
+            Self::Mosaic(cells) => mosaic::validate(cells)?,
         }
         if self.estimated_bytes() + self.semantic_value_count() * std::mem::size_of::<f64>()
             > MAX_LAYOUT_DATASET_BYTES
@@ -284,6 +334,13 @@ impl GeneralLayoutInput {
                         .iter()
                         .map(|row| row.source.capacity() + row.target.capacity())
                         .sum::<usize>()
+            }
+            Self::Gantt { tasks, .. } => {
+                tasks.capacity() * std::mem::size_of::<GanttTask>() + gantt::heap_bytes(tasks)
+            }
+            Self::Calendar(calendar) => calendar::heap_bytes(calendar),
+            Self::Mosaic(cells) => {
+                cells.capacity() * std::mem::size_of::<MosaicCell>() + mosaic::heap_bytes(cells)
             }
         }
     }
@@ -422,6 +479,9 @@ struct LayoutSeriesEntry {
     treemap: RefCell<Option<TreemapCache>>,
     sankey: RefCell<Option<SankeyCache>>,
     sunburst: RefCell<Option<SunburstCache>>,
+    /// First Gantt row in the viewport. Clamped wherever it is read, so a data or size change
+    /// never leaves the viewport past the last row.
+    scroll_row: usize,
 }
 
 struct SunburstCache {
@@ -1518,10 +1578,10 @@ impl GeneralLayoutStore {
         else {
             return false;
         };
-        let Some(input) = self.get(series.options.dataset) else {
+        let Some(entry) = self.entry(series.options.dataset) else {
             return false;
         };
-        match (input, hit.element) {
+        match (&entry.input, hit.element) {
             (GeneralLayoutInput::Funnel(stages), GeneralLayoutElement::Stage) => {
                 hit.row < stages.len()
             }
@@ -1533,6 +1593,15 @@ impl GeneralLayoutStore {
             }
             (GeneralLayoutInput::Flow { links, .. }, GeneralLayoutElement::Link) => {
                 hit.row < links.len()
+            }
+            (GeneralLayoutInput::Gantt { tasks, .. }, GeneralLayoutElement::Task) => {
+                hit.row < tasks.len()
+            }
+            (GeneralLayoutInput::Calendar(_), GeneralLayoutElement::Day) => {
+                hit.row < entry.semantic_values.len()
+            }
+            (GeneralLayoutInput::Mosaic(cells), GeneralLayoutElement::Cell) => {
+                hit.row < cells.len()
             }
             _ => false,
         }
@@ -1886,6 +1955,7 @@ impl GeneralLayoutStore {
             treemap: RefCell::new(None),
             sankey: RefCell::new(None),
             sunburst: RefCell::new(None),
+            scroll_row: 0,
         });
         self.next_series_id = next;
         Ok(id)
@@ -1945,8 +2015,25 @@ impl GeneralLayoutSeriesKind {
                     GeneralLayoutInput::Hierarchy(_)
                 )
                 | (Self::Sankey, GeneralLayoutInput::Flow { .. })
+                | (Self::Gantt, GeneralLayoutInput::Gantt { .. })
+                | (Self::CalendarHeatmap, GeneralLayoutInput::Calendar(_))
+                | (Self::Marimekko, GeneralLayoutInput::Mosaic(_))
         )
     }
+}
+
+/// Device-pixel rectangle of layout-space bounds, or `None` when it rounds to nothing.
+fn layout_irect(bounds: GeneralPlotRect, hpr: f64, vpr: f64) -> Option<IRect> {
+    let x0 = (bounds.x * hpr).round() as i32;
+    let y0 = (bounds.y * vpr).round() as i32;
+    let x1 = ((bounds.x + bounds.width) * hpr).round() as i32;
+    let y1 = ((bounds.y + bounds.height) * vpr).round() as i32;
+    (x1 > x0 && y1 > y0).then_some(IRect {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    })
 }
 
 fn cache_reservation(kind: GeneralLayoutSeriesKind, input: &GeneralLayoutInput) -> usize {
@@ -2319,6 +2406,35 @@ impl ChartEngine {
                     }
                 });
             }
+            if let Some(entry) = store.entry(series.options.dataset) {
+                match (series.options.kind, entry.display_input()) {
+                    (GeneralLayoutSeriesKind::Gantt, GeneralLayoutInput::Gantt { tasks, now }) => {
+                        self.build_gantt_frame(
+                            series,
+                            (tasks, *now),
+                            plot,
+                            (hpr, vpr),
+                            out,
+                            points,
+                        );
+                    }
+                    (
+                        GeneralLayoutSeriesKind::CalendarHeatmap,
+                        GeneralLayoutInput::Calendar(calendar),
+                    ) => self.build_calendar_frame(
+                        series,
+                        (calendar, &entry.semantic_values),
+                        plot,
+                        (hpr, vpr),
+                        out,
+                        points,
+                    ),
+                    (GeneralLayoutSeriesKind::Marimekko, GeneralLayoutInput::Mosaic(cells)) => {
+                        self.build_mosaic_frame(series, cells, plot, (hpr, vpr), out);
+                    }
+                    _ => {}
+                }
+            }
         }
         if let Some(hit) = store.focused
             && let Some((x, y)) = self.general_layout_hit_anchor(pane_index, hit)
@@ -2427,8 +2543,23 @@ impl ChartEngine {
                     .iter()
                     .find(|shape| shape.row == hit.row)
                     .map(|shape| shape.point(0.5)),
-                GeneralLayoutElement::Stage => None,
+                _ => None,
             }),
+            (
+                GeneralLayoutInput::Gantt { tasks, .. },
+                GeneralLayoutSeriesKind::Gantt,
+                GeneralLayoutElement::Task,
+            ) => gantt::anchor(tasks, plot, series.scroll_row, hit.row),
+            (
+                GeneralLayoutInput::Calendar(calendar),
+                GeneralLayoutSeriesKind::CalendarHeatmap,
+                GeneralLayoutElement::Day,
+            ) => self.calendar_anchor(calendar, plot, hit.row),
+            (
+                GeneralLayoutInput::Mosaic(cells),
+                GeneralLayoutSeriesKind::Marimekko,
+                GeneralLayoutElement::Cell,
+            ) => mosaic::MosaicLayout::new(cells, plot).anchor(hit.row),
             _ => None,
         }
     }
@@ -2534,6 +2665,34 @@ impl ChartEngine {
                     });
                 }
             }
+            let Some(entry) = store.entry(series.options.dataset) else {
+                continue;
+            };
+            let hit = match (series.options.kind, entry.display_input()) {
+                (GeneralLayoutSeriesKind::Gantt, GeneralLayoutInput::Gantt { tasks, .. }) => {
+                    gantt::hit(tasks, plot, series.scroll_row, x, y)
+                        .map(|row| (GeneralLayoutElement::Task, row))
+                }
+                (
+                    GeneralLayoutSeriesKind::CalendarHeatmap,
+                    GeneralLayoutInput::Calendar(calendar),
+                ) => self
+                    .calendar_hit(calendar, &entry.semantic_values, plot, x, y)
+                    .map(|row| (GeneralLayoutElement::Day, row)),
+                (GeneralLayoutSeriesKind::Marimekko, GeneralLayoutInput::Mosaic(cells)) => {
+                    mosaic::MosaicLayout::new(cells, plot)
+                        .hit(x, y)
+                        .map(|row| (GeneralLayoutElement::Cell, row))
+                }
+                _ => None,
+            };
+            if let Some((element, row)) = hit {
+                return Some(GeneralLayoutHit {
+                    series: series.id,
+                    element,
+                    row,
+                });
+            }
         }
         None
     }
@@ -2601,18 +2760,119 @@ impl ChartEngine {
         if !size.is_finite() || !(4.0..=128.0).contains(&size) {
             return false;
         }
-        let Some(store) = self.general_layout_data.as_mut() else {
+        let Some(store) = self.general_layout_data.as_ref() else {
             return false;
         };
         if !store.contains_hit(hit) {
             return false;
         }
-        if store.focused == Some(hit) && store.focus_color == parsed && store.focus_size == size {
+        let revealed = self.reveal_general_layout_hit(hit);
+        let Some(store) = self.general_layout_data.as_mut() else {
+            return false;
+        };
+        if !revealed
+            && store.focused == Some(hit)
+            && store.focus_color == parsed
+            && store.focus_size == size
+        {
             return true;
         }
         store.focused = Some(hit);
         store.focus_color = parsed;
         store.focus_size = size;
+        self.invalidate_frame_all();
+        true
+    }
+
+    /// Scrolls a bounded Gantt series so the task in `hit` is inside its row viewport. Returns
+    /// whether the viewport moved.
+    fn reveal_general_layout_hit(&mut self, hit: GeneralLayoutHit) -> bool {
+        if hit.element != GeneralLayoutElement::Task {
+            return false;
+        }
+        let Some(store) = self.general_layout_data.as_ref() else {
+            return false;
+        };
+        let Some(index) = store
+            .series
+            .iter()
+            .position(|series| series.id == hit.series)
+        else {
+            return false;
+        };
+        let series = &store.series[index];
+        let Some(plot) = self
+            .pane_index_for_id(series.pane_id)
+            .and_then(|pane| self.general_plot_rect(pane))
+        else {
+            return false;
+        };
+        let Some(GeneralLayoutInput::Gantt { tasks, .. }) = store
+            .entry(series.options.dataset)
+            .map(LayoutDatasetEntry::display_input)
+        else {
+            return false;
+        };
+        let scroll_row = gantt::reveal(tasks, plot, series.scroll_row, hit.row);
+        self.set_general_layout_scroll_row(index, scroll_row)
+    }
+
+    /// Scrolls the topmost visible Gantt series in `pane` under `(x, y)` by a wheel delta
+    /// (browser-normalized, wheel up positive). Returns whether its row viewport moved; a
+    /// viewport already at its end leaves the wheel to the remaining wheel policy.
+    pub(crate) fn scroll_general_layout_rows(
+        &mut self,
+        pane: usize,
+        x: f64,
+        y: f64,
+        delta_y: f64,
+    ) -> bool {
+        let (Some(pane_id), Some(plot)) = (self.pane_stable_id(pane), self.general_plot_rect(pane))
+        else {
+            return false;
+        };
+        if x < plot.x || x >= plot.x + plot.width || y < plot.y || y >= plot.y + plot.height {
+            return false;
+        }
+        let Some(store) = self.general_layout_data.as_ref() else {
+            return false;
+        };
+        let target = store
+            .series
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, series)| {
+                series.pane_id == pane_id
+                    && series.options.visible
+                    && series.options.kind == GeneralLayoutSeriesKind::Gantt
+            })
+            .find_map(|(index, series)| {
+                let GeneralLayoutInput::Gantt { tasks, .. } =
+                    store.entry(series.options.dataset)?.display_input()
+                else {
+                    return None;
+                };
+                gantt::scrolled(tasks, plot, series.scroll_row, gantt::wheel_rows(delta_y))
+                    .map(|scroll_row| (index, scroll_row))
+            });
+        target.is_some_and(|(index, scroll_row)| {
+            self.set_general_layout_scroll_row(index, scroll_row)
+        })
+    }
+
+    fn set_general_layout_scroll_row(&mut self, index: usize, scroll_row: usize) -> bool {
+        let Some(series) = self
+            .general_layout_data
+            .as_mut()
+            .and_then(|store| store.series.get_mut(index))
+        else {
+            return false;
+        };
+        if series.scroll_row == scroll_row {
+            return false;
+        }
+        series.scroll_row = scroll_row;
         self.invalidate_frame_all();
         true
     }
@@ -2650,27 +2910,58 @@ impl ChartEngine {
             (GeneralLayoutInput::Flow { nodes, .. }, GeneralLayoutElement::Link) => {
                 nodes.len().checked_add(hit.row)?
             }
+            (GeneralLayoutInput::Gantt { .. }, GeneralLayoutElement::Task)
+            | (GeneralLayoutInput::Calendar(_), GeneralLayoutElement::Day)
+            | (GeneralLayoutInput::Mosaic(_), GeneralLayoutElement::Cell) => hit.row,
             _ => return None,
         };
-        entry.semantic_values.get(index).copied()
+        // Calendar days without data hold NaN so day offsets stay addressable.
+        entry
+            .semantic_values
+            .get(index)
+            .copied()
+            .filter(|value| !value.is_nan())
     }
 
-    /// Tooltip parts of one layout item in `pane_index`: item label, series title, semantic
-    /// value, and the item's painted color.
+    /// Host-facing identity and label of a Gantt, calendar, or Marimekko item.
+    pub fn general_layout_item_identity(&self, hit: GeneralLayoutHit) -> Option<(String, String)> {
+        let store = self.general_layout_data.as_ref()?;
+        let series = store.series.iter().find(|series| series.id == hit.series)?;
+        match (&store.entry(series.options.dataset)?.input, hit.element) {
+            (GeneralLayoutInput::Gantt { tasks, .. }, GeneralLayoutElement::Task) => {
+                let task = tasks.get(hit.row)?;
+                Some((task.id.clone(), task.label.clone()))
+            }
+            (GeneralLayoutInput::Calendar(calendar), GeneralLayoutElement::Day) => {
+                let date = calendar::item_date(&calendar.days, hit.row)?;
+                Some((date.clone(), date))
+            }
+            (GeneralLayoutInput::Mosaic(cells), GeneralLayoutElement::Cell) => {
+                let cell = cells.get(hit.row)?;
+                Some((
+                    format!("{}/{}", cell.column, cell.segment),
+                    format!("{} · {}", cell.column, cell.segment),
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// Tooltip parts of one layout item in `pane_index`.
     pub(crate) fn general_layout_item_tooltip(
         &self,
         pane_index: usize,
         hit: GeneralLayoutHit,
-    ) -> Option<(String, String, Option<f64>, Color)> {
+    ) -> Option<LayoutItemTooltip> {
         let store = self.general_layout_data.as_ref()?;
         let series = store.series.iter().find(|series| series.id == hit.series)?;
         if self.pane_index_for_id(series.pane_id) != Some(pane_index) {
             return None;
         }
         let entry = store.entry(series.options.dataset)?;
-        let (label, color) = match (&entry.input, hit.element) {
+        let (label, color, detail) = match (&entry.input, hit.element) {
             (GeneralLayoutInput::Funnel(stages), GeneralLayoutElement::Stage) => {
-                (stages.get(hit.row)?.label.clone(), series.color)
+                (stages.get(hit.row)?.label.clone(), series.color, None)
             }
             (GeneralLayoutInput::Hierarchy(nodes), GeneralLayoutElement::Node) => (
                 nodes.get(hit.row)?.label.clone(),
@@ -2679,9 +2970,10 @@ impl ChartEngine {
                 } else {
                     series.color
                 },
+                None,
             ),
             (GeneralLayoutInput::Flow { nodes, .. }, GeneralLayoutElement::Node) => {
-                (nodes.get(hit.row)?.label.clone(), SANKEY_NODE_FILL)
+                (nodes.get(hit.row)?.label.clone(), SANKEY_NODE_FILL, None)
             }
             (GeneralLayoutInput::Flow { nodes, links }, GeneralLayoutElement::Link) => {
                 let link = links.get(hit.row)?;
@@ -2695,16 +2987,43 @@ impl ChartEngine {
                 (
                     format!("{} → {}", name(&link.source), name(&link.target)),
                     series.color,
+                    None,
+                )
+            }
+            (GeneralLayoutInput::Gantt { tasks, .. }, GeneralLayoutElement::Task) => {
+                let task = tasks.get(hit.row)?;
+                // The schedule replaces the progress number, which the detail already states.
+                return Some(LayoutItemTooltip {
+                    label: task.label.clone(),
+                    title: series.options.title.clone(),
+                    value: None,
+                    color: series.color,
+                    detail: Some(self.gantt_task_detail(task)),
+                });
+            }
+            (GeneralLayoutInput::Calendar(calendar), GeneralLayoutElement::Day) => (
+                calendar::item_date(&calendar.days, hit.row)?,
+                self.calendar_day_color(series, calendar, &entry.semantic_values, hit.row),
+                None,
+            ),
+            (GeneralLayoutInput::Mosaic(cells), GeneralLayoutElement::Cell) => {
+                let cell = cells.get(hit.row)?;
+                let layout = mosaic::MosaicLayout::new(cells, mosaic::UNIT_PLOT);
+                (
+                    format!("{} · {}", cell.column, cell.segment),
+                    layout.color(series.color, hit.row),
+                    Some(format!("({:.1}%)", layout.share(hit.row) * 100.0)),
                 )
             }
             _ => return None,
         };
-        Some((
+        Some(LayoutItemTooltip {
             label,
-            series.options.title.clone(),
-            self.general_layout_hit_value(hit),
+            title: series.options.title.clone(),
+            value: self.general_layout_hit_value(hit),
             color,
-        ))
+            detail,
+        })
     }
 
     pub fn general_layout_accessibility_snapshot(
@@ -2807,6 +3126,25 @@ impl ChartEngine {
                 }
                 (nodes.len() + links.len(), items)
             }
+            GeneralLayoutInput::Gantt { tasks, .. } => (
+                tasks.len(),
+                self.gantt_accessibility_items(series_id, tasks, selected, offset, limit),
+            ),
+            GeneralLayoutInput::Calendar(calendar) => (
+                entry.semantic_values.len(),
+                self.calendar_accessibility_items(
+                    series_id,
+                    &calendar.days,
+                    &entry.semantic_values,
+                    selected,
+                    offset,
+                    limit,
+                ),
+            ),
+            GeneralLayoutInput::Mosaic(cells) => (
+                cells.len(),
+                self.mosaic_accessibility_items(series_id, cells, selected, offset, limit),
+            ),
         };
         Some(GeneralLayoutAccessibilitySnapshot {
             series: series_id,
@@ -2814,6 +3152,7 @@ impl ChartEngine {
             total,
             offset: offset.min(total),
             items,
+            grid_stride: matches!(input, GeneralLayoutInput::Calendar(_)).then_some(7),
         })
     }
     pub fn add_general_layout_series(
@@ -4883,6 +5222,385 @@ mod tests {
                 .main
                 .iter()
                 .any(|prim| matches!(prim, Prim::MeshFill { .. }))
+        );
+    }
+
+    fn gantt_tasks(count: usize) -> Vec<GanttTask> {
+        const DAY: f64 = 86_400_000.0;
+        (0..count)
+            .map(|index| GanttTask {
+                id: format!("t{index}"),
+                label: format!("Task {index}"),
+                start: index as f64 * DAY,
+                end: if index == 2 {
+                    2.0 * DAY
+                } else {
+                    (index as f64 + 2.0) * DAY
+                },
+                progress: if index == 0 { 0.5 } else { 0.0 },
+                group: (index < 4).then(|| "Phase 1".to_owned()),
+                dependencies: if index == 1 {
+                    vec!["t0".into()]
+                } else {
+                    Vec::new()
+                },
+            })
+            .collect()
+    }
+
+    fn laid_out(chart: &mut ChartEngine) -> crate::ChartFrame {
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 6.0, |_, _| 0.0);
+        chart.build_frame()
+    }
+
+    fn painted_text(frame: &crate::ChartFrame, text: &str) -> bool {
+        frame.panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::Text { text: painted, .. } if painted == text))
+    }
+
+    #[test]
+    fn gantt_paints_progress_milestones_dependencies_and_a_host_supplied_now_line() {
+        let mut chart = chart();
+        let dataset = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Gantt {
+                tasks: gantt_tasks(5),
+                now: Some(86_400_000.0 * 1.5),
+            })
+            .unwrap();
+        let series = chart
+            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
+                0,
+                dataset,
+                GeneralLayoutSeriesKind::Gantt,
+            ))
+            .unwrap();
+        let frame = laid_out(&mut chart);
+        let main = &frame.panes[0].main;
+        assert!(
+            main.iter().any(|prim| matches!(
+                prim,
+                Prim::VLine { style: LineStyle::Dashed, color, .. } if *color == gantt::NOW_COLOR
+            )),
+            "now line absent"
+        );
+        // One milestone diamond (two triangles) plus one dependency arrowhead.
+        assert_eq!(
+            main.iter()
+                .filter(|prim| matches!(prim, Prim::Triangle { .. }))
+                .count(),
+            3
+        );
+        assert_eq!(
+            main.iter()
+                .filter(|prim| matches!(prim, Prim::Polyline { .. }))
+                .count(),
+            1
+        );
+        assert!(painted_text(&frame, "Phase 1"));
+        let task = |row| GeneralLayoutHit {
+            series,
+            element: GeneralLayoutElement::Task,
+            row,
+        };
+        let plot = chart.general_plot_rect(0).unwrap();
+        let (x, y) = chart.general_layout_hit_anchor(0, task(0)).unwrap();
+        // The 50% progress fill paints in the series color over half of the first bar's track.
+        let color = chart.general_layout_data.as_ref().unwrap().series[0].color;
+        let rects: Vec<_> = main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Rect { rect, color } if rect.h == 18 => Some((*rect, *color)),
+                _ => None,
+            })
+            .collect();
+        let (track, _) = rects[0];
+        let (fill, fill_color) = rects[1];
+        assert_eq!(fill_color, color);
+        assert_eq!((fill.x, fill.w), (track.x, track.w / 2));
+        assert_eq!(chart.general_layout_hit_test(0, x, y), Some(task(0)));
+        let milestone = chart.general_layout_hit_anchor(0, task(2)).unwrap();
+        assert_eq!(
+            chart.general_layout_hit_test(0, milestone.0, milestone.1),
+            Some(task(2))
+        );
+        assert_eq!(chart.general_layout_hit_test(0, plot.x + 2.0, y), None);
+        let tooltip = chart.general_layout_item_tooltip(0, task(0)).unwrap();
+        assert_eq!(tooltip.label, "Task 0");
+        assert_eq!(tooltip.value, None);
+        assert_eq!(
+            tooltip.detail.as_deref(),
+            Some("1 Jan 1970 – 3 Jan 1970 · 50% complete")
+        );
+        assert_eq!(chart.general_layout_hit_value(task(0)), Some(50.0));
+        let snapshot = chart
+            .general_layout_accessibility_snapshot(series, 0, 10)
+            .unwrap();
+        assert_eq!(snapshot.total, 5);
+        assert_eq!(snapshot.grid_stride, None);
+        assert_eq!(snapshot.items[2].label, "Task 2, Milestone 3 Jan 1970");
+        assert_eq!(
+            chart.general_layout_item_identity(task(0)),
+            Some(("t0".into(), "Task 0".into()))
+        );
+    }
+
+    #[test]
+    fn gantt_rows_are_bounded_and_scroll_by_wheel_and_keyboard_focus() {
+        let mut chart = chart();
+        let dataset = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Gantt {
+                tasks: gantt_tasks(40),
+                now: None,
+            })
+            .unwrap();
+        let series = chart
+            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
+                0,
+                dataset,
+                GeneralLayoutSeriesKind::Gantt,
+            ))
+            .unwrap();
+        let frame = laid_out(&mut chart);
+        let task = |row| GeneralLayoutHit {
+            series,
+            element: GeneralLayoutElement::Task,
+            row,
+        };
+        let plot = chart.general_plot_rect(0).unwrap();
+        let visible_rows = ((plot.height - 24.0) / 28.0).floor() as usize;
+        // Only visible rows are painted: the group header plus one bar per visible task row.
+        let bars = frame.panes[0]
+            .main
+            .iter()
+            .filter(|prim| matches!(prim, Prim::Text { text, .. } if text.starts_with("Task")))
+            .count();
+        assert_eq!(bars, visible_rows - 1);
+        assert!(chart.general_layout_hit_anchor(0, task(0)).is_some());
+        assert!(chart.general_layout_hit_anchor(0, task(39)).is_none());
+        let wheel = |delta_y| crate::WheelSample {
+            x: plot.x + plot.width * 0.5,
+            y: plot.y + plot.height * 0.5,
+            delta_y,
+            ..Default::default()
+        };
+        chart.input_wheel(wheel(1.0));
+        assert!(
+            chart.general_layout_hit_anchor(0, task(0)).is_some(),
+            "already at the first row"
+        );
+        assert!(chart.input_wheel(wheel(-1.0)));
+        assert!(chart.general_layout_hit_anchor(0, task(0)).is_none());
+        assert!(chart.set_general_layout_accessibility_focus(task(39), "#2962ff", 14.0));
+        assert!(chart.general_layout_hit_anchor(0, task(39)).is_some());
+        chart.input_wheel(wheel(-1.0));
+        assert!(
+            chart.general_layout_hit_anchor(0, task(39)).is_some(),
+            "already at the last row"
+        );
+        assert!(chart.set_general_layout_accessibility_focus(task(0), "#2962ff", 14.0));
+        let (_, y) = chart.general_layout_hit_anchor(0, task(0)).unwrap();
+        // Revealing the first grouped task keeps its group header above it.
+        assert!(y > plot.y + 24.0 + 28.0);
+        assert!(chart.input_wheel(wheel(-0.28)));
+        let (_, scrolled) = chart.general_layout_hit_anchor(0, task(0)).unwrap();
+        assert!((y - scrolled - 28.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn calendar_heatmap_is_utc_week_start_and_locale_aware_with_day_and_week_items() {
+        const DAY: f64 = 86_400_000.0;
+        let utc = |year, month, day| {
+            aeris_charts_core::scale::time_tick_marks::days_from_civil(year, month, day).unwrap()
+                as f64
+                * DAY
+        };
+        let mut chart =
+            ChartEngine::new_with_initial_domain(900.0, 300.0, 1.0, HorizontalDomain::Layout)
+                .unwrap();
+        // The display time zone does not move calendar days.
+        chart.set_time_zone("America/New_York").unwrap();
+        let english = aeris_charts_core::format::time_formatter::MonthNames::english();
+        let mut long = english.long.clone();
+        long[1] = "février".into();
+        chart.set_month_names(english.short, long);
+        let input = CalendarInput {
+            days: vec![
+                CalendarDay {
+                    date: utc(2024, 2, 29) + DAY - 1.0,
+                    value: 10.0,
+                },
+                CalendarDay {
+                    date: utc(2024, 3, 7),
+                    value: 0.0,
+                },
+            ],
+            week_start: 1,
+            day_labels: ["D", "L", "M", "M", "J", "V", "S"]
+                .map(str::to_owned)
+                .to_vec(),
+            low_color: Some("#ffffff".into()),
+            high_color: Some("#003366".into()),
+        };
+        let dataset = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Calendar(input))
+            .unwrap();
+        let series = chart
+            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
+                0,
+                dataset,
+                GeneralLayoutSeriesKind::CalendarHeatmap,
+            ))
+            .unwrap();
+        let frame = laid_out(&mut chart);
+        let leap_row = 31 + 28;
+        let day = |row| GeneralLayoutHit {
+            series,
+            element: GeneralLayoutElement::Day,
+            row,
+        };
+        let (x, y) = chart.general_layout_hit_anchor(0, day(leap_row)).unwrap();
+        assert_eq!(chart.general_layout_hit_test(0, x, y), Some(day(leap_row)));
+        // One week later is the next column on the same weekday row.
+        let (next_x, next_y) = chart
+            .general_layout_hit_anchor(0, day(leap_row + 7))
+            .unwrap();
+        assert!(next_x > x && (next_y - y).abs() < 1e-9);
+        // 2024-03-01 is the next row of the same Monday-first column, and has no value.
+        let (below_x, below_y) = chart
+            .general_layout_hit_anchor(0, day(leap_row + 1))
+            .unwrap();
+        assert!((below_x - x).abs() < 1e-9 && below_y > y);
+        assert_eq!(chart.general_layout_hit_test(0, below_x, below_y), None);
+        let tooltip = chart.general_layout_item_tooltip(0, day(leap_row)).unwrap();
+        assert_eq!(tooltip.label, "2024-02-29");
+        assert_eq!(tooltip.value, Some(10.0));
+        assert_eq!(tooltip.color, Color::parse_css("#003366").unwrap());
+        let snapshot = chart
+            .general_layout_accessibility_snapshot(series, leap_row, 2)
+            .unwrap();
+        assert_eq!(snapshot.total, 366);
+        assert_eq!(snapshot.grid_stride, Some(7));
+        assert_eq!(snapshot.items[0].label, "29 février 2024");
+        assert_eq!(snapshot.items[0].id, "2024-02-29");
+        assert_eq!(snapshot.items[1].value, None);
+        // Keyboard focus may rest on an empty day so week steps cross gaps.
+        assert!(chart.set_general_layout_accessibility_focus(day(leap_row + 1), "#2962ff", 14.0));
+        assert!(!chart.set_general_layout_accessibility_focus(day(366), "#2962ff", 14.0));
+        for text in ["L", "Feb", "2024", "0", "10"] {
+            assert!(painted_text(&frame, text), "{text} label absent");
+        }
+    }
+
+    #[test]
+    fn marimekko_cells_have_share_tooltips_hits_and_a_segment_legend() {
+        let mut chart = chart();
+        let cell = |column: &str, segment: &str, value| MosaicCell {
+            column: column.into(),
+            segment: segment.into(),
+            value,
+        };
+        let dataset = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Mosaic(vec![
+                cell("North", "Retail", 30.0),
+                cell("North", "Online", 10.0),
+                cell("South", "Retail", 20.0),
+                cell("Empty", "Retail", 0.0),
+            ]))
+            .unwrap();
+        let series = chart
+            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
+                0,
+                dataset,
+                GeneralLayoutSeriesKind::Marimekko,
+            ))
+            .unwrap();
+        let frame = laid_out(&mut chart);
+        let hit = |row| GeneralLayoutHit {
+            series,
+            element: GeneralLayoutElement::Cell,
+            row,
+        };
+        let (x, y) = chart.general_layout_hit_anchor(0, hit(1)).unwrap();
+        assert_eq!(chart.general_layout_hit_test(0, x, y), Some(hit(1)));
+        assert_eq!(chart.general_layout_hit_anchor(0, hit(3)), None);
+        let tooltip = chart.general_layout_item_tooltip(0, hit(1)).unwrap();
+        assert_eq!(tooltip.label, "North · Online");
+        assert_eq!(tooltip.value, Some(10.0));
+        assert_eq!(tooltip.detail.as_deref(), Some("(25.0%)"));
+        let snapshot = chart
+            .general_layout_accessibility_snapshot(series, 0, 8)
+            .unwrap();
+        assert_eq!(snapshot.total, 4);
+        for text in ["Retail", "Online", "North", "South"] {
+            assert!(painted_text(&frame, text), "{text} label absent");
+        }
+    }
+
+    #[test]
+    fn timeline_calendar_and_mosaic_inputs_are_validated_atomically() {
+        let mut chart = chart();
+        let dataset = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Gantt {
+                tasks: gantt_tasks(3),
+                now: None,
+            })
+            .unwrap();
+        for kind in [
+            GeneralLayoutSeriesKind::CalendarHeatmap,
+            GeneralLayoutSeriesKind::Marimekko,
+            GeneralLayoutSeriesKind::Funnel,
+        ] {
+            assert_eq!(
+                chart
+                    .add_general_layout_series(GeneralLayoutSeriesOptions::new(0, dataset, kind))
+                    .unwrap_err()
+                    .code(),
+                ErrorCode::InvalidData
+            );
+        }
+        chart
+            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
+                0,
+                dataset,
+                GeneralLayoutSeriesKind::Gantt,
+            ))
+            .unwrap();
+        let before = chart.general_layout_dataset(dataset).cloned();
+        let mut cyclic = gantt_tasks(3);
+        cyclic[0].dependencies = vec!["t1".into()];
+        for tasks_and_now in [(cyclic, None), (gantt_tasks(3), Some(f64::NAN))] {
+            let (tasks, now) = tasks_and_now;
+            assert!(
+                chart
+                    .replace_general_layout_dataset(
+                        dataset,
+                        GeneralLayoutInput::Gantt { tasks, now }
+                    )
+                    .is_err()
+            );
+            assert_eq!(chart.general_layout_dataset(dataset).cloned(), before);
+        }
+        assert!(
+            chart
+                .create_general_layout_dataset(GeneralLayoutInput::Mosaic(vec![MosaicCell {
+                    column: "A".into(),
+                    segment: "x".into(),
+                    value: -1.0,
+                }]))
+                .is_err()
+        );
+        assert!(
+            chart
+                .create_general_layout_dataset(GeneralLayoutInput::Calendar(CalendarInput {
+                    days: Vec::new(),
+                    week_start: 9,
+                    day_labels: Vec::new(),
+                    low_color: None,
+                    high_color: None,
+                }))
+                .is_err()
         );
     }
 }

@@ -157,6 +157,8 @@ pub enum GeneralSeriesKind {
     Radar,
     RadialBar,
     PolarArea,
+    Waterfall,
+    Bullet,
 }
 
 /// Recharts `PolarChart` default `outerRadius="80%"` of the polar plot radius.
@@ -289,6 +291,106 @@ pub enum GeneralPointSymbol {
     Triangle,
 }
 
+/// Mark drawn for each bar value. `Lollipop` draws a stem from the bar baseline to a point
+/// symbol at the value (column and horizontal_bar); `Dumbbell` draws point symbols at both ends
+/// of a range joined by a connector (range_bar). Both keep the bar data contract, so they are
+/// presentation options rather than series kinds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralBarMark {
+    #[default]
+    Bar,
+    Lollipop,
+    Dumbbell,
+}
+
+/// Resolved role of one painted waterfall bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeneralWaterfallMark {
+    Increase,
+    Decrease,
+    Subtotal,
+    Total,
+}
+
+impl GeneralWaterfallMark {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Increase => "increase",
+            Self::Decrease => "decrease",
+            Self::Subtotal => "subtotal",
+            Self::Total => "total",
+        }
+    }
+}
+
+/// Step colors and connector lines of a waterfall series. Omitted colors use the defaults:
+/// green increases, red decreases, and the series color for totals; subtotals fall back to
+/// the total color.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct GeneralWaterfallOptions {
+    pub increase_color: Option<String>,
+    pub decrease_color: Option<String>,
+    pub subtotal_color: Option<String>,
+    pub total_color: Option<String>,
+    /// Draw a line from each bar's running total to the next bar.
+    pub connectors: bool,
+}
+
+impl Default for GeneralWaterfallOptions {
+    fn default() -> Self {
+        Self {
+            increase_color: None,
+            decrease_color: None,
+            subtotal_color: None,
+            total_color: None,
+            connectors: true,
+        }
+    }
+}
+
+/// Labels at the first and last plotted point of an xy_line, as in a slope chart. Labels read
+/// `name value` before the first point and `value name` after the last point; labels on one side
+/// of a pane are spread apart so they never overlap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralEndLabels {
+    #[default]
+    None,
+    Start,
+    End,
+    Both,
+}
+
+/// Tie policy of the xy_line rank transform (bump charts). Rank 1 is the largest value among
+/// the ranked xy_line series that share the pane, X axis, and Y axis at one X datum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralRankTies {
+    /// Equal values share a rank and the next value takes the next rank: 1, 2, 2, 3.
+    Dense,
+    /// Equal values share a rank and the next value skips the tied places: 1, 2, 2, 4.
+    Competition,
+}
+
+/// Family-specific values of one row that the generic tooltip and accessibility fields do
+/// not carry.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GeneralRowDetail {
+    /// A painted waterfall bar: its role and the running total it spans.
+    Waterfall {
+        mark: GeneralWaterfallMark,
+        start: f64,
+        end: f64,
+    },
+    /// A bullet row: its target, comparative measure, and qualitative band thresholds.
+    Bullet {
+        target: Option<f64>,
+        comparative: Option<f64>,
+        bands: [Option<f64>; 3],
+    },
+    /// The rank a ranked xy_line row plots at.
+    Rank(u32),
+}
+
 impl GeneralInterpolation {
     pub(crate) fn render_type(self) -> LineType {
         match self {
@@ -358,6 +460,14 @@ pub struct GeneralSeriesOptions {
     pub stack_mode: GeneralStackMode,
     /// Binning policy; non-default values require a histogram series.
     pub histogram: GeneralHistogramOptions,
+    /// Mark of each bar value; lollipops need column or horizontal_bar, dumbbells range_bar.
+    pub bar_mark: GeneralBarMark,
+    /// Step colors and connectors; non-default values require a waterfall series.
+    pub waterfall: GeneralWaterfallOptions,
+    /// First/last point labels of an xy_line (slope charts).
+    pub end_labels: GeneralEndLabels,
+    /// Rank transform of an xy_line (bump charts); `None` plots raw values.
+    pub rank: Option<GeneralRankTies>,
 }
 
 impl GeneralSeriesOptions {
@@ -401,6 +511,10 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
             histogram: GeneralHistogramOptions::default(),
+            bar_mark: GeneralBarMark::Bar,
+            waterfall: GeneralWaterfallOptions::default(),
+            end_labels: GeneralEndLabels::None,
+            rank: None,
         }
     }
 
@@ -444,6 +558,10 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
             histogram: GeneralHistogramOptions::default(),
+            bar_mark: GeneralBarMark::Bar,
+            waterfall: GeneralWaterfallOptions::default(),
+            end_labels: GeneralEndLabels::None,
+            rank: None,
         }
     }
 
@@ -487,6 +605,10 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
             histogram: GeneralHistogramOptions::default(),
+            bar_mark: GeneralBarMark::Bar,
+            waterfall: GeneralWaterfallOptions::default(),
+            end_labels: GeneralEndLabels::None,
+            rank: None,
         }
     }
 
@@ -541,6 +663,10 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
             histogram: GeneralHistogramOptions::default(),
+            bar_mark: GeneralBarMark::Bar,
+            waterfall: GeneralWaterfallOptions::default(),
+            end_labels: GeneralEndLabels::None,
+            rank: None,
         }
     }
 
@@ -584,6 +710,10 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
             histogram: GeneralHistogramOptions::default(),
+            bar_mark: GeneralBarMark::Bar,
+            waterfall: GeneralWaterfallOptions::default(),
+            end_labels: GeneralEndLabels::None,
+            rank: None,
         }
     }
 
@@ -627,6 +757,10 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
             histogram: GeneralHistogramOptions::default(),
+            bar_mark: GeneralBarMark::Bar,
+            waterfall: GeneralWaterfallOptions::default(),
+            end_labels: GeneralEndLabels::None,
+            rank: None,
         }
     }
 
@@ -670,6 +804,10 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
             histogram: GeneralHistogramOptions::default(),
+            bar_mark: GeneralBarMark::Bar,
+            waterfall: GeneralWaterfallOptions::default(),
+            end_labels: GeneralEndLabels::None,
+            rank: None,
         }
     }
 
@@ -726,6 +864,10 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
             histogram: GeneralHistogramOptions::default(),
+            bar_mark: GeneralBarMark::Bar,
+            waterfall: GeneralWaterfallOptions::default(),
+            end_labels: GeneralEndLabels::None,
+            rank: None,
         }
     }
 
@@ -769,6 +911,10 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
             histogram: GeneralHistogramOptions::default(),
+            bar_mark: GeneralBarMark::Bar,
+            waterfall: GeneralWaterfallOptions::default(),
+            end_labels: GeneralEndLabels::None,
+            rank: None,
         }
     }
 
@@ -812,6 +958,10 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
             histogram: GeneralHistogramOptions::default(),
+            bar_mark: GeneralBarMark::Bar,
+            waterfall: GeneralWaterfallOptions::default(),
+            end_labels: GeneralEndLabels::None,
+            rank: None,
         }
     }
 
@@ -862,6 +1012,31 @@ impl GeneralSeriesOptions {
         options.polar.outer_radius = RECHARTS_POLAR_OUTER_RADIUS;
         options
     }
+
+    /// A waterfall over category rows. A band X axis with a linear Y axis draws vertical steps;
+    /// a linear X axis with a band Y axis (continuous-linear pane) draws horizontal steps.
+    pub fn waterfall(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::column(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::Waterfall;
+        options
+    }
+
+    /// One bullet per category row, oriented by its axes like a waterfall.
+    pub fn bullet(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::column(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::Bullet;
+        options
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -900,6 +1075,10 @@ pub struct GeneralSeries {
     stack_id: Option<String>,
     stack_mode: GeneralStackMode,
     histogram: GeneralHistogramOptions,
+    bar_mark: GeneralBarMark,
+    waterfall: GeneralWaterfallOptions,
+    end_labels: GeneralEndLabels,
+    rank: Option<GeneralRankTies>,
     composition_key: Option<String>,
 }
 
@@ -914,6 +1093,98 @@ pub(crate) struct GeneralColumnGeometry {
     pub(crate) end_at_min: bool,
     /// Whether this bar has an exposed value end (or is unstacked).
     pub(crate) exposed_end: bool,
+}
+
+/// Value mapping of a category series that may run vertically or horizontally.
+pub(crate) struct GeneralCategorySlots {
+    horizontal: bool,
+    value: LinearScale,
+    limits: (f64, f64),
+}
+
+impl GeneralCategorySlots {
+    fn value(&self, value: f64) -> Option<f64> {
+        Some(
+            self.value
+                .coordinate_clamped(value)?
+                .clamp(self.limits.0, self.limits.1),
+        )
+    }
+
+    /// The bar spanning `from..to` value pixels across `low..high` band pixels.
+    fn bar(&self, row: usize, low: f64, high: f64, from: f64, to: f64) -> GeneralColumnGeometry {
+        let (start, end) = (from.min(to), from.max(to));
+        let (left, right, top, bottom) = if self.horizontal {
+            (start, end, low, high)
+        } else {
+            (low, high, start, end)
+        };
+        GeneralColumnGeometry {
+            row,
+            left,
+            right,
+            top,
+            bottom,
+            end_at_min: to < from,
+            exposed_end: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GeneralWaterfallGeometry {
+    pub(crate) bar: GeneralColumnGeometry,
+    pub(crate) mark: GeneralWaterfallMark,
+    pub(crate) horizontal: bool,
+    /// Connector from the previous painted bar: band-axis start, band-axis end, and the
+    /// value-axis pixel of the running total it carries.
+    pub(crate) connector: Option<(f64, f64, f64)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GeneralBulletGeometry {
+    pub(crate) row: usize,
+    /// The union of every painted part, used for hit testing and anchoring.
+    pub(crate) slot: GeneralColumnGeometry,
+    pub(crate) bands: [Option<GeneralColumnGeometry>; 3],
+    pub(crate) measure: Option<GeneralColumnGeometry>,
+    /// Painted below the measure, wider than it, so either may be the longer one.
+    pub(crate) comparative: Option<GeneralColumnGeometry>,
+    pub(crate) target: Option<GeneralColumnGeometry>,
+    pub(crate) horizontal: bool,
+}
+
+/// Start, end, and role of every waterfall row in row order; missing relative rows are `None`
+/// and leave the running total unchanged.
+pub(crate) fn general_waterfall_rows(
+    dataset: &crate::GeneralDataset,
+) -> Vec<Option<(f64, f64, GeneralWaterfallMark)>> {
+    let mut total = 0.0;
+    (0..dataset.len())
+        .map(|row| match dataset.waterfall_step(row) {
+            crate::GeneralWaterfallStep::Relative => {
+                if !dataset.y_is_valid(row) {
+                    return None;
+                }
+                let value = dataset.y()[row];
+                let start = total;
+                total += value;
+                Some((
+                    start,
+                    total,
+                    if value < 0.0 {
+                        GeneralWaterfallMark::Decrease
+                    } else {
+                        GeneralWaterfallMark::Increase
+                    },
+                ))
+            }
+            crate::GeneralWaterfallStep::Subtotal => {
+                Some((0.0, total, GeneralWaterfallMark::Subtotal))
+            }
+            crate::GeneralWaterfallStep::Total => Some((0.0, total, GeneralWaterfallMark::Total)),
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1540,6 +1811,7 @@ pub struct GeneralTooltipSnapshot {
     pub q1: Option<f64>,
     pub q3: Option<f64>,
     pub size: Option<f64>,
+    pub detail: Option<GeneralRowDetail>,
     pub title: String,
     /// Opaque identity color of the row's mark: the sector fill for polar series, else the row
     /// color, the series color or the default line color.
@@ -1569,6 +1841,7 @@ pub struct GeneralAccessibilityItem {
     pub q1: Option<f64>,
     pub q3: Option<f64>,
     pub size: Option<f64>,
+    pub detail: Option<GeneralRowDetail>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1949,6 +2222,22 @@ impl GeneralSeries {
         self.histogram
     }
 
+    pub fn bar_mark(&self) -> GeneralBarMark {
+        self.bar_mark
+    }
+
+    pub fn waterfall(&self) -> &GeneralWaterfallOptions {
+        &self.waterfall
+    }
+
+    pub fn end_labels(&self) -> GeneralEndLabels {
+        self.end_labels
+    }
+
+    pub fn rank(&self) -> Option<GeneralRankTies> {
+        self.rank
+    }
+
     pub(crate) fn estimated_bytes(&self) -> usize {
         self.x_axis_id.capacity()
             + self.y_axis_id.capacity()
@@ -1960,6 +2249,15 @@ impl GeneralSeries {
             + self.box_median_color.as_ref().map_or(0, String::capacity)
             + self.group_id.as_ref().map_or(0, String::capacity)
             + self.stack_id.as_ref().map_or(0, String::capacity)
+            + [
+                &self.waterfall.increase_color,
+                &self.waterfall.decrease_color,
+                &self.waterfall.subtotal_color,
+                &self.waterfall.total_color,
+            ]
+            .into_iter()
+            .map(|color| color.as_ref().map_or(0, String::capacity))
+            .sum::<usize>()
             + self.composition_key.as_ref().map_or(0, String::capacity)
     }
 }
@@ -2206,6 +2504,10 @@ impl GeneralSeriesRegistry {
             stack_id: options.stack_id,
             stack_mode: options.stack_mode,
             histogram: options.histogram,
+            bar_mark: options.bar_mark,
+            waterfall: options.waterfall,
+            end_labels: options.end_labels,
+            rank: options.rank,
             composition_key: None,
         });
         self.next_id = next_id;
@@ -2485,6 +2787,10 @@ fn apply_composed_series_options(
     series.stack_id = options.stack_id;
     series.stack_mode = options.stack_mode;
     series.histogram = options.histogram;
+    series.bar_mark = options.bar_mark;
+    series.waterfall = options.waterfall;
+    series.end_labels = options.end_labels;
+    series.rank = options.rank;
 }
 
 impl ChartEngine {
@@ -3266,6 +3572,10 @@ impl ChartEngine {
         series.stack_id = options.stack_id;
         series.stack_mode = options.stack_mode;
         series.histogram = options.histogram;
+        series.bar_mark = options.bar_mark;
+        series.waterfall = options.waterfall;
+        series.end_labels = options.end_labels;
+        series.rank = options.rank;
         if geometry_binding_changed {
             registry.scatter_spatial.get_mut().remove(&id);
         }
@@ -3626,7 +3936,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -3931,7 +4241,7 @@ impl ChartEngine {
             (0.0, plot.width)
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -4081,7 +4391,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -4370,7 +4680,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -4424,7 +4734,9 @@ impl ChartEngine {
             };
             let top = low_y.min(high_y).clamp(plot.y, plot_bottom);
             let bottom = low_y.max(high_y).clamp(plot.y, plot_bottom);
-            if bar_right > bar_left && bottom > top {
+            // A dumbbell with equal ends still paints its coinciding markers.
+            if bar_right > bar_left && (bottom > top || series.bar_mark == GeneralBarMark::Dumbbell)
+            {
                 visit(GeneralColumnGeometry {
                     row,
                     left: bar_left,
@@ -4436,6 +4748,316 @@ impl ChartEngine {
                 });
             }
         }
+    }
+
+    /// Whether a series grows its values along X from a band Y axis: horizontal bars, and
+    /// waterfall or bullet series bound to a band Y axis.
+    pub(crate) fn general_series_horizontal(&self, series: &GeneralSeries) -> bool {
+        match series.kind {
+            GeneralSeriesKind::HorizontalBar => true,
+            GeneralSeriesKind::Waterfall | GeneralSeriesKind::Bullet => self
+                .general_axis(&series.y_axis_id)
+                .is_some_and(|axis| axis.scale() == GeneralScaleType::Band),
+            _ => false,
+        }
+    }
+
+    /// Visit the band slot of every category row of a waterfall or bullet series. A band X axis
+    /// grows values upward; a band Y axis grows them rightward.
+    fn visit_general_category_slots<F>(&self, series: &GeneralSeries, mut visit: F)
+    where
+        F: FnMut(&GeneralCategorySlots, usize, f64, f64),
+    {
+        if !series.visible {
+            return;
+        }
+        let Some(pane_index) = self.pane_index_for_id(series.pane_id) else {
+            return;
+        };
+        let Some(plot) = self.general_plot_rect(pane_index) else {
+            return;
+        };
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
+            return;
+        };
+        let (Some(categories), Some(category_indices)) =
+            (dataset.categories(), dataset.category_indices())
+        else {
+            return;
+        };
+        let (Some(x_axis), Some(y_axis)) = (
+            self.general_axis(&series.x_axis_id),
+            self.general_axis(&series.y_axis_id),
+        ) else {
+            return;
+        };
+        let horizontal = y_axis.scale() == GeneralScaleType::Band;
+        let (band_axis, value_axis) = if horizontal {
+            (y_axis, x_axis)
+        } else {
+            (x_axis, y_axis)
+        };
+        let Some(GeneralAxisDomain::Category(axis_categories)) =
+            self.effective_general_axis_domain(band_axis)
+        else {
+            return;
+        };
+        let Some(GeneralAxisDomain::Numeric([from, to])) =
+            self.effective_general_axis_domain(value_axis)
+        else {
+            return;
+        };
+        let plot_bottom = plot.y + plot.height;
+        let x_range = if x_axis.reverse() {
+            (plot.width, 0.0)
+        } else {
+            (0.0, plot.width)
+        };
+        let y_range = if self.general_axis_range_reversed(y_axis) {
+            (plot.y, plot_bottom)
+        } else {
+            (plot_bottom, plot.y)
+        };
+        let (band_range, value_range, band_limits) = if horizontal {
+            (y_range, x_range, (plot.y, plot_bottom))
+        } else {
+            (x_range, y_range, (0.0, plot.width))
+        };
+        let Ok(band) = BandScale::new(
+            axis_categories.len(),
+            band_range.0,
+            band_range.1,
+            band_axis.band_padding_inner(),
+            band_axis.band_padding_outer(),
+            0.5,
+        ) else {
+            return;
+        };
+        let Ok(value) = LinearScale::new(from, to, value_range.0, value_range.1) else {
+            return;
+        };
+        let lookup: HashMap<&str, usize> = axis_categories
+            .iter()
+            .enumerate()
+            .map(|(index, category)| (category.as_str(), index))
+            .collect();
+        let slots = GeneralCategorySlots {
+            horizontal,
+            value,
+            limits: if horizontal {
+                (0.0, plot.width)
+            } else {
+                (plot.y, plot_bottom)
+            },
+        };
+        for (row, &category_index) in category_indices.iter().enumerate() {
+            let Some(category) = usize::try_from(category_index)
+                .ok()
+                .and_then(|index| categories.get(index))
+            else {
+                continue;
+            };
+            let Some(&axis_index) = lookup.get(category.as_str()) else {
+                continue;
+            };
+            let Some(bounds) = self
+                .category_motion_bounds(band_axis, category, band_range.0, band_range.1)
+                .or_else(|| band.bounds(axis_index))
+            else {
+                continue;
+            };
+            let (first, second) = self
+                .category_row_motion_bounds(band_axis, series.dataset, row, bounds, band_range)
+                .unwrap_or(bounds);
+            let Some((low, high)) = bar_thickness_bounds(
+                first.min(second).clamp(band_limits.0, band_limits.1),
+                first.max(second).clamp(band_limits.0, band_limits.1),
+                series.bar_gap,
+                series.bar_max_width,
+            ) else {
+                continue;
+            };
+            visit(&slots, row, low, high);
+        }
+    }
+
+    pub(crate) fn visit_general_waterfall_bars<F>(&self, series: &GeneralSeries, mut visit: F)
+    where
+        F: FnMut(GeneralWaterfallGeometry),
+    {
+        if series.kind != GeneralSeriesKind::Waterfall {
+            return;
+        }
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
+            return;
+        };
+        let steps = general_waterfall_rows(dataset);
+        let mut previous: Option<(f64, f64, f64)> = None;
+        self.visit_general_category_slots(series, |slots, row, low, high| {
+            let Some((start, end, mark)) = steps[row] else {
+                return;
+            };
+            let (Some(from), Some(to)) = (slots.value(start), slots.value(end)) else {
+                return;
+            };
+            let bar = slots.bar(row, low, high, from, to);
+            let connector = previous.and_then(|(previous_low, previous_high, level)| {
+                if low >= previous_high {
+                    Some((previous_high, low, level))
+                } else if previous_low >= high {
+                    Some((previous_low, high, level))
+                } else {
+                    None
+                }
+            });
+            previous = Some((low, high, to));
+            visit(GeneralWaterfallGeometry {
+                bar,
+                mark,
+                horizontal: slots.horizontal,
+                connector,
+            });
+        });
+    }
+
+    pub(crate) fn visit_general_bullets<F>(&self, series: &GeneralSeries, mut visit: F)
+    where
+        F: FnMut(GeneralBulletGeometry),
+    {
+        if series.kind != GeneralSeriesKind::Bullet {
+            return;
+        }
+        let Some(dataset) = self.general_geometry_dataset(series.dataset) else {
+            return;
+        };
+        self.visit_general_category_slots(series, |slots, row, low, high| {
+            let Some(zero) = slots.value(0.0) else {
+                return;
+            };
+            let thickness = high - low;
+            let center = (low + high) * 0.5;
+            let span = |value: Option<f64>, from: f64, part: f64| {
+                let to = slots.value(value?)?;
+                let half = thickness * part * 0.5;
+                Some(slots.bar(row, center - half, center + half, from, to))
+            };
+            let mut band_start = zero;
+            let bands = dataset.bullet_bands(row).map(|threshold| {
+                let band = span(threshold, band_start, 1.0)?;
+                band_start = slots.value(threshold?)?;
+                Some(band)
+            });
+            let measure_value = dataset.y_is_valid(row).then(|| dataset.y()[row]);
+            let comparative_value = dataset
+                .low_is_valid(row)
+                .then(|| dataset.low().map(|values| values[row]))
+                .flatten();
+            let target_value = dataset
+                .high_is_valid(row)
+                .then(|| dataset.high().map(|values| values[row]))
+                .flatten();
+            let target = target_value.and_then(|value| {
+                let at = slots.value(value)?;
+                let half = (thickness / 3.0).max(1.0);
+                Some(slots.bar(row, center - half, center + half, at - 1.0, at + 1.0))
+            });
+            let measure = span(measure_value, zero, 1.0 / 3.0);
+            let comparative = span(comparative_value, zero, 0.5);
+            let Some(slot) = bands
+                .iter()
+                .chain([&measure, &comparative, &target])
+                .flatten()
+                .copied()
+                .reduce(|union, part| GeneralColumnGeometry {
+                    left: union.left.min(part.left),
+                    right: union.right.max(part.right),
+                    top: union.top.min(part.top),
+                    bottom: union.bottom.max(part.bottom),
+                    ..union
+                })
+            else {
+                return;
+            };
+            visit(GeneralBulletGeometry {
+                row,
+                slot,
+                bands,
+                measure,
+                comparative,
+                target,
+                horizontal: slots.horizontal,
+            });
+        });
+    }
+
+    /// Ranks of one ranked xy_line series' rows among the visible ranked xy_line series that
+    /// share its pane and axes at the same X datum. Rank 1 is the largest value.
+    pub(crate) fn general_series_ranks(
+        &self,
+        series: &GeneralSeries,
+        canonical: bool,
+    ) -> Vec<Option<u32>> {
+        let Some(ties) = series.rank else {
+            return Vec::new();
+        };
+        let dataset_of = |id| {
+            if canonical {
+                self.general_dataset(id)
+            } else {
+                self.general_geometry_dataset(id)
+            }
+        };
+        let Some(dataset) = dataset_of(series.dataset) else {
+            return Vec::new();
+        };
+        let mut peers: HashMap<GeneralStackXKey, Vec<f64>> = HashMap::new();
+        for peer in self.general_series_iter().filter(|peer| {
+            peer.visible
+                && peer.rank.is_some()
+                && peer.kind == GeneralSeriesKind::XyLine
+                && peer.pane_id == series.pane_id
+                && peer.x_axis_id == series.x_axis_id
+                && peer.y_axis_id == series.y_axis_id
+        }) {
+            let Some(peer_dataset) = dataset_of(peer.dataset) else {
+                continue;
+            };
+            for row in 0..peer_dataset.len() {
+                if peer_dataset.y_is_valid(row)
+                    && let Some(key) = general_stack_x_key(peer_dataset, row)
+                {
+                    peers.entry(key).or_default().push(peer_dataset.y()[row]);
+                }
+            }
+        }
+        for values in peers.values_mut() {
+            values.sort_by(|a, b| b.total_cmp(a));
+        }
+        (0..dataset.len())
+            .map(|row| {
+                if !dataset.y_is_valid(row) {
+                    return None;
+                }
+                let value = dataset.y()[row];
+                let values = peers.get(&general_stack_x_key(dataset, row)?)?;
+                let greater = values.iter().take_while(|peer| **peer > value);
+                let rank = match ties {
+                    GeneralRankTies::Competition => greater.count(),
+                    GeneralRankTies::Dense => {
+                        let mut distinct = 0;
+                        let mut last = None;
+                        for peer in greater {
+                            if last != Some(*peer) {
+                                distinct += 1;
+                                last = Some(*peer);
+                            }
+                        }
+                        distinct
+                    }
+                };
+                u32::try_from(rank + 1).ok()
+            })
+            .collect()
     }
 
     fn general_horizontal_bar_group_slot(&self, series: &GeneralSeries) -> (usize, usize) {
@@ -4983,7 +5605,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5165,7 +5787,7 @@ impl ChartEngine {
             (0.0, plot.width)
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5224,15 +5846,21 @@ impl ChartEngine {
             _ => None,
         };
 
+        let ranks = self.general_series_ranks(series, false);
         let mut starts_new_run = true;
         for row in 0..dataset.len() {
-            if !dataset.y_is_valid(row) {
+            let value = if series.rank.is_some() {
+                ranks.get(row).copied().flatten().map(f64::from)
+            } else {
+                dataset.y_is_valid(row).then(|| dataset.y()[row])
+            };
+            let Some(value) = value else {
                 if !series.connect_missing {
                     starts_new_run = true;
                 }
                 continue;
-            }
-            let Some(y) = y_scale.coordinate(dataset.y()[row]) else {
+            };
+            let Some(y) = y_scale.coordinate(value) else {
                 starts_new_run = true;
                 continue;
             };
@@ -5347,7 +5975,7 @@ impl ChartEngine {
             (0.0, plot.width)
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5508,7 +6136,7 @@ impl ChartEngine {
             return None;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5567,7 +6195,7 @@ impl ChartEngine {
             (0.0, plot.width)
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5847,7 +6475,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -5992,7 +6620,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -6147,7 +6775,7 @@ impl ChartEngine {
             return;
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -6298,7 +6926,7 @@ impl ChartEngine {
             (0.0, plot.width)
         };
         let plot_bottom = plot.y + plot.height;
-        let y_range = if y_axis.range_reversed() {
+        let y_range = if self.general_axis_range_reversed(y_axis) {
             (plot.y, plot_bottom)
         } else {
             (plot_bottom, plot.y)
@@ -6321,7 +6949,7 @@ impl ChartEngine {
                 x_scale: x_axis.scale(),
                 y_scale: y_axis.scale(),
                 x_reverse: x_axis.reverse(),
-                y_reverse: y_axis.range_reversed(),
+                y_reverse: self.general_axis_range_reversed(y_axis),
                 radius: radius.to_bits(),
             },
             x_scale,
@@ -7898,22 +8526,42 @@ impl ChartEngine {
                 }
                 GeneralSeriesKind::Histogram => {}
                 GeneralSeriesKind::Column => self.visit_general_columns(series, |geometry| {
-                    consider(
-                        geometry.row,
-                        distance_to_bar(x_css, y_css, geometry, series, self, false),
-                    );
+                    let distance = if series.bar_mark == GeneralBarMark::Lollipop {
+                        distance_to_bar_stem(x_css, y_css, geometry, false, series, dataset)
+                    } else {
+                        distance_to_bar(x_css, y_css, geometry, series, self, false)
+                    };
+                    consider(geometry.row, distance);
                 }),
                 GeneralSeriesKind::RangeBar => self.visit_general_range_bars(series, |geometry| {
-                    consider(geometry.row, distance_to_rect(x_css, y_css, geometry));
+                    let distance = if series.bar_mark == GeneralBarMark::Dumbbell {
+                        distance_to_bar_stem(x_css, y_css, geometry, false, series, dataset)
+                    } else {
+                        distance_to_rect(x_css, y_css, geometry)
+                    };
+                    consider(geometry.row, distance);
                 }),
                 GeneralSeriesKind::HorizontalBar => {
                     self.visit_general_horizontal_bars(series, |geometry| {
+                        let distance = if series.bar_mark == GeneralBarMark::Lollipop {
+                            distance_to_bar_stem(x_css, y_css, geometry, true, series, dataset)
+                        } else {
+                            distance_to_bar(x_css, y_css, geometry, series, self, true)
+                        };
+                        consider(geometry.row, distance);
+                    })
+                }
+                GeneralSeriesKind::Waterfall => {
+                    self.visit_general_waterfall_bars(series, |geometry| {
                         consider(
-                            geometry.row,
-                            distance_to_bar(x_css, y_css, geometry, series, self, true),
+                            geometry.bar.row,
+                            distance_to_rect(x_css, y_css, geometry.bar),
                         );
                     })
                 }
+                GeneralSeriesKind::Bullet => self.visit_general_bullets(series, |geometry| {
+                    consider(geometry.row, distance_to_rect(x_css, y_css, geometry.slot));
+                }),
                 GeneralSeriesKind::BoxPlot => self.visit_general_box_plots(series, |geometry| {
                     consider(
                         geometry.row,
@@ -8193,7 +8841,7 @@ impl ChartEngine {
                 pane_id,
                 axis.dimension(),
                 axis.scale(),
-                axis.range_reversed(),
+                self.general_axis_range_reversed(axis),
                 axis.band_padding_inner(),
                 axis.band_padding_outer(),
                 domain,
@@ -8572,7 +9220,14 @@ impl ChartEngine {
             for row in 0..rows {
                 let matched = match histogram.as_ref() {
                     Some(bins) => histogram_bin_matches_brush(bins, row, brush),
-                    None => general_row_matches_brush(series, dataset, row, brush, &domain),
+                    None => general_row_matches_brush(
+                        series,
+                        self.general_series_horizontal(series),
+                        dataset,
+                        row,
+                        brush,
+                        &domain,
+                    ),
                 };
                 if !matched {
                     continue;
@@ -8623,7 +9278,7 @@ impl ChartEngine {
         let plot = self.general_plot_rect(pane_index)?;
         let (range_from, range_to) = match brush.dimension {
             AxisDimension::X => {
-                if axis.range_reversed() {
+                if self.general_axis_range_reversed(axis) {
                     (plot.width, 0.0)
                 } else {
                     (0.0, plot.width)
@@ -8631,7 +9286,7 @@ impl ChartEngine {
             }
             AxisDimension::Y => {
                 let bottom = plot.y + plot.height;
-                if axis.range_reversed() {
+                if self.general_axis_range_reversed(axis) {
                     (plot.y, bottom)
                 } else {
                     (bottom, plot.y)
@@ -8919,6 +9574,7 @@ impl ChartEngine {
             q1: None,
             q3: None,
             size: None,
+            detail: None,
             title: series.title.clone(),
             color: Color::rgb(color.r(), color.g(), color.b()),
         })
@@ -8941,6 +9597,23 @@ impl ChartEngine {
             .then(|| general_heatmap_y_label(dataset, row))
             .flatten();
         let is_box_plot = series.kind == GeneralSeriesKind::BoxPlot;
+        let waterfall = if series.kind == GeneralSeriesKind::Waterfall {
+            general_waterfall_rows(dataset)
+        } else {
+            Vec::new()
+        };
+        let detail = general_row_detail(
+            series,
+            dataset,
+            row,
+            &waterfall,
+            &self.general_series_ranks(series, true),
+        );
+        // Waterfall and bullet channels carry family roles that only `detail` reports.
+        let generic = !matches!(
+            series.kind,
+            GeneralSeriesKind::Waterfall | GeneralSeriesKind::Bullet
+        );
         let color = match series.kind {
             GeneralSeriesKind::Pie
             | GeneralSeriesKind::PolarArea
@@ -8959,26 +9632,34 @@ impl ChartEngine {
             x_label,
             y_label,
             label: dataset.row_label(row).map(str::to_owned),
-            value: dataset.y_is_valid(row).then(|| dataset.y()[row]),
-            low: dataset
-                .low()
-                .and_then(|values| dataset.low_is_valid(row).then(|| values[row])),
-            high: dataset.high().map_or_else(
-                || {
+            value: general_row_value(dataset, row, detail),
+            low: generic
+                .then(|| {
                     dataset
                         .low()
-                        .and_then(|_| dataset.y_is_valid(row).then(|| dataset.y()[row]))
-                },
-                |values| dataset.high_is_valid(row).then(|| values[row]),
-            ),
-            x_low: (!is_box_plot)
+                        .and_then(|values| dataset.low_is_valid(row).then(|| values[row]))
+                })
+                .flatten(),
+            high: generic
+                .then(|| {
+                    dataset.high().map_or_else(
+                        || {
+                            dataset
+                                .low()
+                                .and_then(|_| dataset.y_is_valid(row).then(|| dataset.y()[row]))
+                        },
+                        |values| dataset.high_is_valid(row).then(|| values[row]),
+                    )
+                })
+                .flatten(),
+            x_low: (generic && !is_box_plot)
                 .then(|| {
                     dataset
                         .x_low()
                         .and_then(|values| dataset.x_low_is_valid(row).then(|| values[row]))
                 })
                 .flatten(),
-            x_high: (!is_box_plot)
+            x_high: (generic && !is_box_plot)
                 .then(|| {
                     dataset
                         .x_high()
@@ -8999,9 +9680,14 @@ impl ChartEngine {
                         .and_then(|values| dataset.x_high_is_valid(row).then(|| values[row]))
                 })
                 .flatten(),
-            size: dataset
-                .size()
-                .and_then(|values| dataset.size_is_valid(row).then(|| values[row])),
+            size: generic
+                .then(|| {
+                    dataset
+                        .size()
+                        .and_then(|values| dataset.size_is_valid(row).then(|| values[row]))
+                })
+                .flatten(),
+            detail,
             title: series.title.clone(),
             color: Color::rgb(color.r(), color.g(), color.b()),
         })
@@ -9158,6 +9844,7 @@ impl ChartEngine {
                         q1: None,
                         q3: None,
                         size: None,
+                        detail: None,
                     })
                 })
                 .collect::<Option<Vec<_>>>()?;
@@ -9176,6 +9863,16 @@ impl ChartEngine {
             .saturating_add(limit.min(MAX_GENERAL_ACCESSIBILITY_ITEMS))
             .min(total_rows);
         let mut items = Vec::with_capacity(end - offset);
+        let waterfall = if series.kind == GeneralSeriesKind::Waterfall {
+            general_waterfall_rows(dataset)
+        } else {
+            Vec::new()
+        };
+        let ranks = self.general_series_ranks(series, true);
+        let generic = !matches!(
+            series.kind,
+            GeneralSeriesKind::Waterfall | GeneralSeriesKind::Bullet
+        );
         for row in offset..end {
             let row_id = dataset.row_identity(row)?.clone();
             let x_label = general_x_label(dataset, row)?;
@@ -9183,32 +9880,41 @@ impl ChartEngine {
                 .then(|| general_heatmap_y_label(dataset, row))
                 .flatten();
             let is_box_plot = series.kind == GeneralSeriesKind::BoxPlot;
+            let detail = general_row_detail(series, dataset, row, &waterfall, &ranks);
             items.push(GeneralAccessibilityItem {
                 row,
                 row_id,
                 x_label,
                 y_label,
                 label: dataset.row_label(row).map(str::to_owned),
-                value: dataset.y_is_valid(row).then(|| dataset.y()[row]),
-                low: dataset
-                    .low()
-                    .and_then(|values| dataset.low_is_valid(row).then(|| values[row])),
-                high: dataset.high().map_or_else(
-                    || {
+                value: general_row_value(dataset, row, detail),
+                low: generic
+                    .then(|| {
                         dataset
                             .low()
-                            .and_then(|_| dataset.y_is_valid(row).then(|| dataset.y()[row]))
-                    },
-                    |values| dataset.high_is_valid(row).then(|| values[row]),
-                ),
-                x_low: (!is_box_plot)
+                            .and_then(|values| dataset.low_is_valid(row).then(|| values[row]))
+                    })
+                    .flatten(),
+                high: generic
+                    .then(|| {
+                        dataset.high().map_or_else(
+                            || {
+                                dataset
+                                    .low()
+                                    .and_then(|_| dataset.y_is_valid(row).then(|| dataset.y()[row]))
+                            },
+                            |values| dataset.high_is_valid(row).then(|| values[row]),
+                        )
+                    })
+                    .flatten(),
+                x_low: (generic && !is_box_plot)
                     .then(|| {
                         dataset
                             .x_low()
                             .and_then(|values| dataset.x_low_is_valid(row).then(|| values[row]))
                     })
                     .flatten(),
-                x_high: (!is_box_plot)
+                x_high: (generic && !is_box_plot)
                     .then(|| {
                         dataset
                             .x_high()
@@ -9229,9 +9935,14 @@ impl ChartEngine {
                             .and_then(|values| dataset.x_high_is_valid(row).then(|| values[row]))
                     })
                     .flatten(),
-                size: dataset
-                    .size()
-                    .and_then(|values| dataset.size_is_valid(row).then(|| values[row])),
+                size: generic
+                    .then(|| {
+                        dataset
+                            .size()
+                            .and_then(|values| dataset.size_is_valid(row).then(|| values[row]))
+                    })
+                    .flatten(),
+                detail,
             });
         }
         Some(GeneralAccessibilitySnapshot {
@@ -9242,6 +9953,101 @@ impl ChartEngine {
             items,
         })
     }
+}
+
+/// The family detail of one row; `waterfall` and `ranks` are the series' precomputed running
+/// totals and ranks (empty for other families).
+fn general_row_detail(
+    series: &GeneralSeries,
+    dataset: &crate::GeneralDataset,
+    row: usize,
+    waterfall: &[Option<(f64, f64, GeneralWaterfallMark)>],
+    ranks: &[Option<u32>],
+) -> Option<GeneralRowDetail> {
+    match series.kind {
+        GeneralSeriesKind::Waterfall => {
+            let (start, end, mark) = waterfall.get(row).copied().flatten()?;
+            Some(GeneralRowDetail::Waterfall { mark, start, end })
+        }
+        GeneralSeriesKind::Bullet => Some(GeneralRowDetail::Bullet {
+            target: dataset
+                .high()
+                .and_then(|values| dataset.high_is_valid(row).then(|| values[row])),
+            comparative: dataset
+                .low()
+                .and_then(|values| dataset.low_is_valid(row).then(|| values[row])),
+            bands: dataset.bullet_bands(row),
+        }),
+        GeneralSeriesKind::XyLine => ranks
+            .get(row)
+            .copied()
+            .flatten()
+            .map(GeneralRowDetail::Rank),
+        _ => None,
+    }
+}
+
+/// A row's reported value: the running total for waterfall subtotals and totals (whose own
+/// value is ignored), otherwise the row value.
+fn general_row_value(
+    dataset: &crate::GeneralDataset,
+    row: usize,
+    detail: Option<GeneralRowDetail>,
+) -> Option<f64> {
+    match detail {
+        Some(GeneralRowDetail::Waterfall {
+            mark: GeneralWaterfallMark::Subtotal | GeneralWaterfallMark::Total,
+            end,
+            ..
+        }) => Some(end),
+        _ => dataset.y_is_valid(row).then(|| dataset.y()[row]),
+    }
+}
+
+/// Base and value-end points of the centered stem a lollipop or dumbbell draws through its bar
+/// slot. A dumbbell (range bar) puts a marker on both points.
+pub(crate) fn general_bar_stem(
+    geometry: GeneralColumnGeometry,
+    horizontal: bool,
+) -> [(f64, f64); 2] {
+    if horizontal {
+        let y = (geometry.top + geometry.bottom) * 0.5;
+        if geometry.end_at_min {
+            [(geometry.right, y), (geometry.left, y)]
+        } else {
+            [(geometry.left, y), (geometry.right, y)]
+        }
+    } else {
+        let x = (geometry.left + geometry.right) * 0.5;
+        if geometry.end_at_min {
+            [(x, geometry.bottom), (x, geometry.top)]
+        } else {
+            [(x, geometry.top), (x, geometry.bottom)]
+        }
+    }
+}
+
+fn distance_to_bar_stem(
+    x: f64,
+    y: f64,
+    geometry: GeneralColumnGeometry,
+    horizontal: bool,
+    series: &GeneralSeries,
+    dataset: &crate::GeneralDataset,
+) -> f64 {
+    let [base, end] = general_bar_stem(geometry, horizontal);
+    let symbol = dataset
+        .row_symbol(geometry.row)
+        .unwrap_or(series.point_symbol);
+    let marker =
+        |(cx, cy): (f64, f64)| distance_to_point_symbol(x, y, cx, cy, series.point_radius, symbol);
+    let stem = (distance_to_segment(x, y, base.0, base.1, end.0, end.1).0 - 3.0).max(0.0);
+    let ends = if series.bar_mark == GeneralBarMark::Dumbbell {
+        marker(base).min(marker(end))
+    } else {
+        marker(end)
+    };
+    stem.min(ends)
 }
 
 fn distance_to_rect(x: f64, y: f64, geometry: GeneralColumnGeometry) -> f64 {
@@ -10103,6 +10909,7 @@ fn histogram_bin_matches_brush(
 
 fn general_row_matches_brush(
     series: &GeneralSeries,
+    horizontal: bool,
     dataset: &crate::GeneralDataset,
     row: usize,
     brush: &GeneralBrushSelection,
@@ -10112,7 +10919,7 @@ fn general_row_matches_brush(
         (GeneralBrushRange::Numeric([from, to]), GeneralAxisDomain::Numeric(_)) => {
             let value = match brush.dimension {
                 AxisDimension::X => {
-                    if series.kind == GeneralSeriesKind::HorizontalBar {
+                    if horizontal {
                         dataset.y_is_valid(row).then(|| dataset.y()[row])
                     } else {
                         dataset
@@ -10122,7 +10929,7 @@ fn general_row_matches_brush(
                     }
                 }
                 AxisDimension::Y => {
-                    if series.kind == GeneralSeriesKind::HorizontalBar {
+                    if horizontal {
                         None
                     } else if series.kind == GeneralSeriesKind::HeatmapGrid {
                         dataset
@@ -10155,14 +10962,14 @@ fn general_row_matches_brush(
             };
             let label = match brush.dimension {
                 AxisDimension::X => {
-                    if series.kind == GeneralSeriesKind::HorizontalBar {
+                    if horizontal {
                         None
                     } else {
                         general_x_label(dataset, row)
                     }
                 }
                 AxisDimension::Y => match series.kind {
-                    GeneralSeriesKind::HorizontalBar => general_x_label(dataset, row),
+                    _ if horizontal => general_x_label(dataset, row),
                     GeneralSeriesKind::HeatmapGrid => general_heatmap_y_label(dataset, row),
                     _ => None,
                 },
@@ -10299,6 +11106,25 @@ fn validate_general_series_axis_compatibility(
             {
                 return Err(invalid(
                     "the initial column series requires a category-band pane, category X data, a band X axis, and a linear Y axis",
+                ));
+            }
+        }
+        GeneralSeriesKind::Waterfall | GeneralSeriesKind::Bullet => {
+            let vertical = pane_domain
+                == (HorizontalDomain::Category {
+                    scale: crate::CategoryScaleType::Band,
+                })
+                && x_scale == GeneralScaleType::Band
+                && y_scale == GeneralScaleType::Linear;
+            let horizontal = pane_domain
+                == (HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                })
+                && x_scale == GeneralScaleType::Linear
+                && y_scale == GeneralScaleType::Band;
+            if dataset_kind != GeneralXKind::Category || !(vertical || horizontal) {
+                return Err(invalid(
+                    "waterfall and bullet require category data with a category-band pane, band X axis, and linear Y axis, or a continuous-linear pane, linear X axis, and band Y axis",
                 ));
             }
         }
@@ -10526,6 +11352,25 @@ fn validate_dataset_for_series(
         GeneralSeriesKind::Histogram => {
             if dataset.x_kind() != GeneralXKind::Values {
                 return Err(invalid("histogram requires sample values data"));
+            }
+        }
+        GeneralSeriesKind::Waterfall => {
+            if dataset.x_kind() != GeneralXKind::Category
+                || dataset.size().is_none()
+                || dataset.low().is_some()
+            {
+                return Err(invalid("waterfall requires waterfall category data"));
+            }
+        }
+        GeneralSeriesKind::Bullet => {
+            if dataset.x_kind() != GeneralXKind::Category
+                || dataset.low().is_none()
+                || dataset.high().is_none()
+                || dataset.x_low().is_none()
+                || dataset.x_high().is_none()
+                || dataset.size().is_none()
+            {
+                return Err(invalid("bullet requires bullet category data"));
             }
         }
         GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
@@ -11016,6 +11861,20 @@ fn validate_input_for_series(
                 ));
             }
         }
+        GeneralSeriesKind::Waterfall => {
+            if !matches!(input, GeneralXyInput::WaterfallCategory { .. }) {
+                return Err(invalid(
+                    "a dataset bound to a waterfall must remain waterfall category data",
+                ));
+            }
+        }
+        GeneralSeriesKind::Bullet => {
+            if !matches!(input, GeneralXyInput::BulletCategory { .. }) {
+                return Err(invalid(
+                    "a dataset bound to a bullet must remain bullet category data",
+                ));
+            }
+        }
         GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
             let expected_x = match x_axis.scale() {
                 GeneralScaleType::Linear
@@ -11379,11 +12238,60 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
             | GeneralSeriesKind::Histogram
             | GeneralSeriesKind::HorizontalBar
             | GeneralSeriesKind::RangeBar
+            | GeneralSeriesKind::Waterfall
+            | GeneralSeriesKind::Bullet
     ) && (options.bar_gap != 0.0 || options.bar_max_width.is_some())
     {
         return Err(invalid(
-            "bar_gap and bar_max_width are supported only by column, histogram, horizontal_bar, and range_bar",
+            "bar_gap and bar_max_width are supported only by column, histogram, horizontal_bar, range_bar, waterfall, and bullet",
         ));
+    }
+    match options.bar_mark {
+        GeneralBarMark::Bar => {}
+        GeneralBarMark::Lollipop => {
+            if !matches!(
+                options.kind,
+                GeneralSeriesKind::Column | GeneralSeriesKind::HorizontalBar
+            ) || options.stack_id.is_some()
+            {
+                return Err(invalid(
+                    "bar_mark lollipop requires an unstacked column or horizontal_bar series",
+                ));
+            }
+        }
+        GeneralBarMark::Dumbbell => {
+            if options.kind != GeneralSeriesKind::RangeBar {
+                return Err(invalid("bar_mark dumbbell requires a range_bar series"));
+            }
+        }
+    }
+    if options.kind != GeneralSeriesKind::Waterfall
+        && options.waterfall != GeneralWaterfallOptions::default()
+    {
+        return Err(invalid("waterfall options require a waterfall series"));
+    }
+    for color in [
+        options.waterfall.increase_color.as_deref(),
+        options.waterfall.decrease_color.as_deref(),
+        options.waterfall.subtotal_color.as_deref(),
+        options.waterfall.total_color.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if color.len() > MAX_GENERAL_SERIES_COLOR_BYTES {
+            return Err(resource(format!(
+                "waterfall color exceeds {MAX_GENERAL_SERIES_COLOR_BYTES} UTF-8 bytes"
+            )));
+        }
+        if Color::parse_css(color).is_none() {
+            return Err(invalid("waterfall colors must be valid CSS colors"));
+        }
+    }
+    if options.kind != GeneralSeriesKind::XyLine
+        && (options.end_labels != GeneralEndLabels::None || options.rank.is_some())
+    {
+        return Err(invalid("end_labels and rank are supported only by xy_line"));
     }
     if !options.bar_corner_radius.is_finite()
         || !(0.0..=64.0).contains(&options.bar_corner_radius)
@@ -11419,6 +12327,7 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
         ));
     }
     if options.point_symbol != GeneralPointSymbol::Circle
+        && options.bar_mark == GeneralBarMark::Bar
         && !matches!(
             options.kind,
             GeneralSeriesKind::XyLine
@@ -11429,7 +12338,7 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
         )
     {
         return Err(invalid(
-            "general series point_symbol requires a path, scatter, or radar series",
+            "general series point_symbol requires a path, scatter, radar, lollipop, or dumbbell series",
         ));
     }
     if options.connect_missing
@@ -11549,7 +12458,9 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
     // Earlier V2 writers retained any finite dormant radius, including zero.
     // A zero error-bar cap is meaningful (a stem without caps), even when painted.
     if !options.point_radius.is_finite()
-        || ((options.kind == GeneralSeriesKind::Scatter || options.point_markers)
+        || ((options.kind == GeneralSeriesKind::Scatter
+            || options.point_markers
+            || options.bar_mark != GeneralBarMark::Bar)
             && !(MIN_GENERAL_POINT_RADIUS..=MAX_GENERAL_POINT_RADIUS)
                 .contains(&options.point_radius))
         || (options.kind == GeneralSeriesKind::ErrorBar

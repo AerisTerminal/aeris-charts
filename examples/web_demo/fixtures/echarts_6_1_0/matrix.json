@@ -1,0 +1,117 @@
+{
+  "reference": {
+    "package": "echarts",
+    "version": "6.1.0",
+    "packageLicense": "Apache-2.0",
+    "licenseChecked": "2026-11-01",
+    "packageLicenseFile": "examples/web_demo/node_modules/echarts/LICENSE",
+    "implementationCopied": false
+  },
+  "conditions": {
+    "viewport": "960x600 CSS px",
+    "dpr": 1,
+    "theme": "light",
+    "renderer": "ECharts canvas renderer, animation off",
+    "referenceFixture": "/echarts_reference.html?case=<row id>"
+  },
+  "rows": [
+    {
+      "id": "gantt",
+      "capability": "Gantt schedule: task bars, progress, milestones, finish-to-start dependencies, now line, grouped bounded rows",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_layout/gantt.rs; chart_input.rs wheel row scroll; WASM/TypeScript layout input",
+      "dependency": "G9",
+      "referenceFixture": "/echarts_reference.html?case=gantt",
+      "referenceApi": "series.custom renderItem rect/polygon on time xAxis and category yAxis, markLine now",
+      "referenceEvidence": ["custom renderItem task bars", "progress overlay", "milestone diamond", "markLine now", "convertToPixel task geometry"],
+      "aerisFixture": "tests/g9_timeline_calendar.spec.mjs Gantt geometry pair and bounded wheel/End/Home row-scroll test; general_layout.rs gantt paint, hit, tooltip, accessibility and bounded-row tests; persistence.rs layout round trip",
+      "aerisApi": "add_layout_series(\"gantt\", options, { type: \"gantt\", tasks, now })",
+      "supportedCombinations": "Temporal UTC millisecond tasks with optional progress 0..1, optional group, finish-to-start dependencies by id, zero-length milestones, optional host-supplied now; one layout pane",
+      "differences": "ECharts has no Gantt series; the reference is a custom series. Aeris draws bars, progress, milestones, elbow dependency arrows and a host-supplied now line in one ordered frame; the engine never reads the clock. Rows are bounded to the pane and scroll by wheel inside the engine, and keyboard focus reveals the focused task. A Chromium/Firefox/WebKit pair confirms normalized start/end positions and row order for every task against convertToPixel. Resize-by-drag editing, other dependency types and calibrated visual review remain open."
+    },
+    {
+      "id": "calendar_heatmap",
+      "capability": "Calendar heatmap: year day grid, week start, locale labels, UTC days, color scale and legend, per-day hits and keyboard",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_layout/calendar.rs; TypeScript accessibility grid_stride navigation",
+      "dependency": "G9",
+      "referenceFixture": "/echarts_reference.html?case=calendar_heatmap",
+      "referenceApi": "calendar coordinate system, series.heatmap coordinateSystem calendar, visualMap continuous",
+      "referenceEvidence": ["calendar dayLabel firstDay 1", "heatmap cells", "visualMap", "convertToPixel calendarIndex"],
+      "aerisFixture": "tests/g9_timeline_calendar.spec.mjs calendar grid pair, empty-day hit and week/day keyboard test; general_layout.rs UTC, week start, leap year, locale labels, stride and empty-day focus tests",
+      "aerisApi": "add_layout_series(\"calendar_heatmap\", options, { type: \"calendar\", days, week_start, day_labels, low_color, high_color })",
+      "supportedCombinations": "ISO YYYY-MM-DD UTC days spanning up to ten years, week_start 0..6, host-supplied day labels, two-color linear scale with in-canvas legend",
+      "differences": "Days are UTC calendar days; Aeris does not apply a local time zone. Days without a value draw an empty cell and have no hit region, as in ECharts. A Chromium/Firefox/WebKit pair confirms the column/row placement of probe days across the year against convertToPixel. Keyboard focus moves one week with Left/Right and one day with Up/Down. Piecewise visual maps, vertical orientation and calibrated visual review remain open."
+    },
+    {
+      "id": "marimekko",
+      "capability": "Marimekko: variable-width 100% stacked columns, labels, hits, per-segment legend",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_layout/mosaic.rs; WASM/TypeScript layout input",
+      "dependency": "G9",
+      "referenceFixture": "/echarts_reference.html?case=marimekko",
+      "referenceApi": "series.custom renderItem rect on value xAxis/yAxis",
+      "referenceEvidence": ["custom renderItem mosaic rects", "convertToPixel cell geometry"],
+      "aerisFixture": "tests/g9_timeline_calendar.spec.mjs Marimekko width/share pair; general_layout.rs marimekko hit, tooltip and legend tests; persistence.rs layout round trip",
+      "aerisApi": "add_layout_series(\"marimekko\", options, { type: \"mosaic\", cells })",
+      "supportedCombinations": "Non-negative column/segment/value cells; column width proportional to column total, segment height proportional to its share of the column",
+      "differences": "ECharts has no Marimekko series; the reference is a custom series. Aeris draws an in-canvas legend with one entry per segment in place of the series-toggle legend. A Chromium/Firefox/WebKit pair confirms normalized x offset, width and height of every cell. Legend toggling of segments and calibrated visual review remain open."
+    },
+    {
+      "id": "waterfall",
+      "capability": "Waterfall: relative increase/decrease steps, subtotal and total bars, running base, connectors, per-kind colors, labels, both orientations",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_series.rs waterfall rows and geometry; frame/general_series_geometry.rs paint; WASM/TypeScript waterfall rows and typed columns",
+      "dependency": "G9",
+      "referenceFixture": "/echarts_reference.html?case=waterfall",
+      "referenceApi": "series.bar stack with a transparent placeholder series under the visible step series, per-item itemStyle colors, label position top/right, yAxis inverse for the horizontal panel",
+      "referenceEvidence": ["transparent placeholder stack", "per-step itemStyle color", "bar labels", "convertToPixel step extents"],
+      "aerisFixture": "tests/g9_business.spec.mjs vertical and horizontal waterfall pairs (extents, category order, step colors, connectors on/off, labels, typed detail, keyboard announcements); general_business_tests.rs running totals, subtotal/total reset, hit, tooltip, persistence",
+      "aerisApi": "add_series(\"waterfall\", { waterfall: { increase_color, decrease_color, subtotal_color, total_color, connectors } }) with rows { x, y, step: \"relative\" | \"subtotal\" | \"total\" } or set_data_typed({ categories, values, steps })",
+      "supportedCombinations": "Band category axis with a linear value axis in either orientation; signed relative steps; subtotal and total rows that ignore y; row colors; data labels; one waterfall per category slot",
+      "differences": "ECharts has no waterfall series; its recipe stacks a transparent placeholder under the visible bar and the host computes the running total. Aeris takes the steps directly, computes running totals in the engine, and returns { mark, start, end } in tooltip, hit and accessibility detail. Subtotal bars draw the running total from zero like totals. Connector lines join each bar's end to the next bar. A Chromium/Firefox/WebKit pair confirms normalized bar extents, category order and step colors against convertToPixel. Grouped or stacked waterfalls and calibrated visual review remain open."
+    },
+    {
+      "id": "bullet",
+      "capability": "Bullet graph: qualitative bands, measure bar, target marker, optional comparative measure, both orientations",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_series.rs bullet geometry; frame/general_series_geometry.rs paint; WASM/TypeScript bullet rows and typed columns",
+      "dependency": "G9",
+      "referenceFixture": "/echarts_reference.html?case=bullet",
+      "referenceApi": "series.custom renderItem rects for three bands, comparative, measure and target on a value xAxis and inverse category yAxis",
+      "referenceEvidence": ["custom renderItem band rects", "comparative and measure rects", "target rect", "convertToPixel value positions"],
+      "aerisFixture": "tests/g9_business.spec.mjs horizontal and vertical bullet pairs (band edges, measure, comparative, target, thickness ratio, typed detail); general_business_tests.rs geometry, missing parts, hit, tooltip and persistence",
+      "aerisApi": "add_series(\"bullet\", options) with rows { x, y, target, comparative?, bands? } or set_data_typed({ categories, measure, target, comparative, bands })",
+      "supportedCombinations": "Band category axis with a linear value axis in either orientation; up to three ascending band thresholds; optional comparative and target per row; row measure colors",
+      "differences": "ECharts has no bullet series; the reference is a custom series with the same Stephen Few proportions (bands full slot, comparative one half, measure one third, target two thirds by 2 px). Aeris band colors derive from the theme text color so they read on light and dark surfaces. A Chromium/Firefox/WebKit pair confirms normalized band edges, measure, comparative and target positions and the measure thickness ratio in both orientations. More than three bands and calibrated visual review remain open."
+    },
+    {
+      "id": "lollipop_dumbbell",
+      "capability": "Lollipop (stem plus head on column and horizontal_bar) and dumbbell (connector plus two ends on range_bar)",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_series.rs bar_mark option, stem hit distance; frame/general_series_geometry.rs paint",
+      "dependency": "G9",
+      "referenceFixture": "/echarts_reference.html?case=lollipop_dumbbell",
+      "referenceApi": "series.bar barWidth 2 plus series.scatter symbolSize 12; stacked transparent bar plus 2 px connector bar plus two scatter series",
+      "referenceEvidence": ["bar stem", "scatter head", "stacked connector", "convertToPixel head positions"],
+      "aerisFixture": "tests/g9_business.spec.mjs vertical and horizontal lollipop and dumbbell pairs (head positions, baselines, head width, connector runs); general_business_tests.rs stem paint, hit and validation",
+      "aerisApi": "add_series(\"column\" | \"horizontal_bar\", { bar_mark: \"lollipop\", point_symbol, point_radius }); add_series(\"range_bar\", { bar_mark: \"dumbbell\", point_symbol, point_radius })",
+      "supportedCombinations": "Unstacked column/horizontal_bar lollipops in either orientation; vertical or horizontal range_bar dumbbells; circle, square, diamond and triangle symbols",
+      "differences": "ECharts composes these from two or more series; Aeris draws one series with one hit target per row, and hover/selection, tooltip and accessibility address the row instead of a separate stem and head. A Chromium/Firefox/WebKit pair confirms normalized head positions, baselines and head width against convertToPixel. Stacked lollipops are rejected. Calibrated visual review remains open."
+    },
+    {
+      "id": "slope_bump",
+      "capability": "Slope chart end labels with collision avoidance; bump chart rank transform with dense/competition ties on a top-down rank axis",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_series.rs end_labels/rank options and general_series_ranks; general_axes.rs rank domain and default reversal; frame/general_series_geometry.rs end-label spreading",
+      "dependency": "G9",
+      "referenceFixture": "/echarts_reference.html?case=slope_bump",
+      "referenceApi": "series.line with first/last point labels and labelLayout moveOverlap shiftY; series.line of host-computed dense ranks on an inverse value yAxis min 0.5 max N+0.5",
+      "referenceEvidence": ["first/last labels", "moveOverlap shiftY", "inverse rank axis", "convertToPixel point positions"],
+      "aerisFixture": "tests/g9_business.spec.mjs slope marker and end-label pair (normalized positions, value order, no shared label row) and bump pair (normalized rank positions, rank 1 at top, typed rank detail, dense/competition ties, rank announcement); general_business_tests.rs rank ties, spreading and validation",
+      "aerisApi": "add_series(\"xy_line\", { end_labels: \"none\" | \"start\" | \"end\" | \"both\" }); add_series(\"xy_line\", { rank: \"dense\" | \"competition\" })",
+      "supportedCombinations": "Category point or band X axes with any number of xy_line series; end labels on one or both sides; ranks among visible ranked xy_line series sharing pane and axes, largest value rank 1",
+      "differences": "ECharts needs host-computed ranks and an explicitly inverted axis; Aeris ranks inside the engine, spans the rank axis 0.5..N+0.5 for N ranked series, and puts rank 1 at the top unless the axis is reversed. Tooltips and accessibility report both the rank and the original value. Aeris spreads end labels vertically with a fixed gap inside the plot; ECharts shifts overlapping labels. A Chromium/Firefox/WebKit pair confirms normalized marker positions, label order and label separation. Labels are not truncated when wider than the outer padding, so hosts reserve room with band_padding_outer; calibrated visual review remains open."
+    }
+  ]
+}

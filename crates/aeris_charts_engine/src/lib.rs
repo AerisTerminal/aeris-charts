@@ -42,6 +42,8 @@ mod volume_profile;
 pub use volume_profile::{
     MAX_VOLUME_PROFILE_INDICATORS, VolumeProfileIndicatorOptions, VolumeProfileIndicatorSnapshot,
 };
+#[cfg(test)]
+mod general_business_tests;
 mod ordering;
 mod persistence;
 mod price_line_api;
@@ -182,34 +184,35 @@ pub use general_axes::{
 };
 #[doc(hidden)]
 pub use general_data::{
-    GeneralDataset, GeneralDatasetId, GeneralRowId, GeneralRowIdentity, GeneralXKind,
-    GeneralXyInput, MAX_GENERAL_DATASET_CATEGORIES, MAX_GENERAL_DATASET_CATEGORY_BYTES,
-    MAX_GENERAL_DATASET_ROWS, MAX_GENERAL_DATASETS, MAX_GENERAL_ROW_ID_BYTES,
-    MAX_GENERAL_ROW_ID_BYTES_TOTAL,
+    GeneralDataset, GeneralDatasetId, GeneralRowId, GeneralRowIdentity, GeneralWaterfallStep,
+    GeneralXKind, GeneralXyInput, MAX_GENERAL_DATASET_CATEGORIES,
+    MAX_GENERAL_DATASET_CATEGORY_BYTES, MAX_GENERAL_DATASET_ROWS, MAX_GENERAL_DATASETS,
+    MAX_GENERAL_ROW_ID_BYTES, MAX_GENERAL_ROW_ID_BYTES_TOTAL,
 };
 #[doc(hidden)]
 pub use general_layout::{
-    FlowLink, FlowNode, FunnelStage, GeneralLayoutAccessibilityItem,
-    GeneralLayoutAccessibilitySnapshot, GeneralLayoutDatasetId, GeneralLayoutElement,
-    GeneralLayoutHit, GeneralLayoutInput, GeneralLayoutSeriesId, GeneralLayoutSeriesKind,
-    GeneralLayoutSeriesOptions, HierarchyNode,
+    CalendarDay, CalendarInput, FlowLink, FlowNode, FunnelStage, GanttTask,
+    GeneralLayoutAccessibilityItem, GeneralLayoutAccessibilitySnapshot, GeneralLayoutDatasetId,
+    GeneralLayoutElement, GeneralLayoutHit, GeneralLayoutInput, GeneralLayoutSeriesId,
+    GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, HierarchyNode, MosaicCell,
 };
 #[doc(hidden)]
 pub use general_series::{
     DEFAULT_GENERAL_FILL_OPACITY, GeneralAccessibilityItem, GeneralAccessibilitySnapshot,
-    GeneralAreaBaseline, GeneralBrushEndpoint, GeneralBrushRange, GeneralBrushSnapshot,
-    GeneralHistogramNormalization, GeneralHistogramOptions, GeneralHitMode, GeneralInterpolation,
-    GeneralLegendItem, GeneralLegendSlice, GeneralLegendSnapshot, GeneralLineStyle,
-    GeneralPaneComposedReference, GeneralPaneComposedSeries, GeneralPaneComposition,
-    GeneralPaneCompositionResult, GeneralPaneProposal, GeneralPaneReferenceComposition,
-    GeneralPaneSeriesComposition, GeneralPointSymbol, GeneralPolarOptions, GeneralReference,
-    GeneralReferenceId, GeneralReferenceOptions, GeneralReferenceValue, GeneralSeries,
+    GeneralAreaBaseline, GeneralBarMark, GeneralBrushEndpoint, GeneralBrushRange,
+    GeneralBrushSnapshot, GeneralEndLabels, GeneralHistogramNormalization, GeneralHistogramOptions,
+    GeneralHitMode, GeneralInterpolation, GeneralLegendItem, GeneralLegendSlice,
+    GeneralLegendSnapshot, GeneralLineStyle, GeneralPaneComposedReference,
+    GeneralPaneComposedSeries, GeneralPaneComposition, GeneralPaneCompositionResult,
+    GeneralPaneProposal, GeneralPaneReferenceComposition, GeneralPaneSeriesComposition,
+    GeneralPointSymbol, GeneralPolarOptions, GeneralRankTies, GeneralReference, GeneralReferenceId,
+    GeneralReferenceOptions, GeneralReferenceValue, GeneralRowDetail, GeneralSeries,
     GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
     GeneralSeriesProposal, GeneralSharedTooltipSnapshot, GeneralStackMode, GeneralTooltipSnapshot,
-    MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_BRUSH_ITEMS, MAX_GENERAL_HISTOGRAM_BINS,
-    MAX_GENERAL_LEGEND_SLICES_PER_SERIES, MAX_GENERAL_LEGEND_SLICES_PER_SNAPSHOT,
-    MAX_GENERAL_POINT_RADIUS, MAX_GENERAL_REFERENCES, MAX_GENERAL_SERIES,
-    MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_GROUP_ID_BYTES,
+    GeneralWaterfallMark, GeneralWaterfallOptions, MAX_GENERAL_ACCESSIBILITY_ITEMS,
+    MAX_GENERAL_BRUSH_ITEMS, MAX_GENERAL_HISTOGRAM_BINS, MAX_GENERAL_LEGEND_SLICES_PER_SERIES,
+    MAX_GENERAL_LEGEND_SLICES_PER_SNAPSHOT, MAX_GENERAL_POINT_RADIUS, MAX_GENERAL_REFERENCES,
+    MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_GROUP_ID_BYTES,
     MAX_GENERAL_SERIES_STACK_ID_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES,
     MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
 };
@@ -2198,6 +2201,13 @@ pub struct ChartEngine {
 }
 
 impl ChartEngine {
+    /// Whether this build compiled the chart-family modules gated behind the `complete` Cargo
+    /// feature. Hosts use it to report which build they loaded; families shared by both builds
+    /// behave identically either way.
+    pub const fn build_includes_complete_families() -> bool {
+        cfg!(feature = "complete")
+    }
+
     pub fn new(css_width: f64, css_height: f64, dpr: f64) -> Self {
         Self::new_with_initial_domain(css_width, css_height, dpr, HorizontalDomain::FinancialTime)
             .expect("the default financial domain requires no bounded registry entry")

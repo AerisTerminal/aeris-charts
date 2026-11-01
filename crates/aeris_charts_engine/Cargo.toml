@@ -8,6 +8,11 @@ repository.workspace = true
 publish.workspace = true
 description = "Headless chart model and frame-production state for Aeris Charts"
 
+[features]
+# The complete build: whole chart-family modules too large for the standard browser size budget.
+# It gates modules only, never options or behavior of families both builds contain.
+complete = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

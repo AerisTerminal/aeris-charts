@@ -1222,7 +1222,8 @@ test("general dashboard showcases every catalog example", async ({ page, browser
   expect(new Set(result.summary.flatMap((entry) => entry.series_kinds))).toEqual(new Set([
     "xy_line", "xy_area", "range_area", "range_bar", "error_bar", "column", "histogram", "horizontal_bar",
     "box_plot", "heatmap_grid", "scatter", "bubble", "pie", "radar", "polar_area", "radial_bar",
-    "funnel", "treemap", "sankey", "sunburst",
+    "waterfall", "bullet",
+    "funnel", "treemap", "sankey", "sunburst", "gantt", "calendar_heatmap", "marimekko",
   ]));
 
   const first_host = page.locator("#general_workspace .general-chart-host").first();

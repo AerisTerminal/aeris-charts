@@ -9,11 +9,12 @@ use std::collections::HashMap;
 
 use aeris_charts_core::options::ChartTheme;
 use aeris_charts_engine::{
-    CategoryScaleType, ChartEngine, ChartFrame, ContinuousScaleType, FinancialFrameRequest,
-    FlowLink, FlowNode, FunnelStage, GeneralAxisOptions, GeneralAxisTick, GeneralHistogramOptions,
-    GeneralLayoutInput, GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GeneralPolarOptions,
-    GeneralReferenceOptions, GeneralScaleType, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralXyInput, HierarchyNode, HorizontalDomain,
+    CalendarInput, CategoryScaleType, ChartEngine, ChartFrame, ContinuousScaleType,
+    FinancialFrameRequest, FlowLink, FlowNode, FunnelStage, GanttTask, GeneralAxisOptions,
+    GeneralAxisTick, GeneralHistogramOptions, GeneralLayoutInput, GeneralLayoutSeriesKind,
+    GeneralLayoutSeriesOptions, GeneralPolarOptions, GeneralReferenceOptions, GeneralScaleType,
+    GeneralSeriesKind, GeneralSeriesOptions, GeneralWaterfallOptions, GeneralXyInput,
+    HierarchyNode, HorizontalDomain, MosaicCell,
 };
 use aeris_charts_render::draw_list::Prim;
 use aeris_charts_render_gpui::{
@@ -132,6 +133,10 @@ struct SeriesSpec {
     stack_id: Option<String>,
     stack_mode: Option<String>,
     histogram: Option<HistogramSpec>,
+    bar_mark: Option<String>,
+    waterfall: Option<GeneralWaterfallOptions>,
+    end_labels: Option<String>,
+    rank: Option<String>,
 }
 
 /// Browser `general_histogram_options`; omitted fields keep the engine defaults.
@@ -167,6 +172,14 @@ enum LayoutData {
     Flow {
         nodes: Vec<FlowNode>,
         links: Vec<FlowLink>,
+    },
+    Gantt {
+        tasks: Vec<GanttTask>,
+        now: Option<f64>,
+    },
+    Calendar(CalendarInput),
+    Mosaic {
+        cells: Vec<MosaicCell>,
     },
 }
 
@@ -256,9 +269,29 @@ fn axis_options(spec: &AxisSpec) -> GeneralAxisOptions {
     axis
 }
 
-const ROW_FIELDS: [&str; 18] = [
-    "x", "y", "low", "high", "size", "label", "color", "symbol", "x_low", "x_high", "y_low",
-    "y_high", "min", "q1", "median", "q3", "max", "value",
+const ROW_FIELDS: [&str; 22] = [
+    "x",
+    "y",
+    "low",
+    "high",
+    "size",
+    "label",
+    "color",
+    "symbol",
+    "x_low",
+    "x_high",
+    "y_low",
+    "y_high",
+    "min",
+    "q1",
+    "median",
+    "q3",
+    "max",
+    "value",
+    "step",
+    "target",
+    "comparative",
+    "bands",
 ];
 
 /// One numeric row channel; `null` or an absent field is a missing value.
@@ -279,6 +312,27 @@ fn channel(rows: &[Map<String, Value>], field: &str) -> (Vec<f64>, Option<Vec<u8
             .map(|value| value.unwrap_or(0.0))
             .collect(),
         valid,
+    )
+}
+
+/// Threshold `band` of each row's `bands` array; a short or absent array is a missing value.
+fn bullet_band(rows: &[Map<String, Value>], band: usize) -> (Vec<f64>, Option<Vec<u8>>) {
+    let values = rows
+        .iter()
+        .map(|row| {
+            row.get("bands")
+                .and_then(Value::as_array)
+                .and_then(|bands| bands.get(band))
+                .and_then(Value::as_f64)
+        })
+        .collect::<Vec<_>>();
+    let valid = values
+        .iter()
+        .map(|value| u8::from(value.is_some()))
+        .collect();
+    (
+        values.iter().map(|value| value.unwrap_or(0.0)).collect(),
+        Some(valid),
     )
 }
 
@@ -342,6 +396,8 @@ fn xy_input(
             | Kind::RadialBar
             | Kind::BoxPlot
             | Kind::HeatmapGrid
+            | Kind::Waterfall
+            | Kind::Bullet
     );
     let numeric_kind = matches!(kind, Kind::Scatter | Kind::Bubble);
     let range = matches!(kind, Kind::RangeArea | Kind::RangeBar);
@@ -389,6 +445,46 @@ fn xy_input(
                     q3_valid,
                     max,
                     max_valid,
+                }
+            }
+            Kind::Waterfall => {
+                let (values, values_valid) = channel(rows, "y");
+                let steps = rows
+                    .iter()
+                    .map(|row| {
+                        engine_enum(
+                            row.get("step")
+                                .and_then(Value::as_str)
+                                .unwrap_or("relative"),
+                        )
+                    })
+                    .collect();
+                GeneralXyInput::WaterfallCategory {
+                    ids: None,
+                    categories,
+                    category_indices,
+                    values,
+                    values_valid,
+                    steps,
+                }
+            }
+            Kind::Bullet => {
+                let (measure, measure_valid) = channel(rows, "y");
+                let (target, target_valid) = channel(rows, "target");
+                let (comparative, comparative_valid) = bound(rows, "comparative");
+                let [band_1, band_2, band_3] = [0, 1, 2].map(|band| bullet_band(rows, band));
+                GeneralXyInput::BulletCategory {
+                    ids: None,
+                    categories,
+                    category_indices,
+                    measure,
+                    measure_valid,
+                    target,
+                    target_valid,
+                    comparative,
+                    comparative_valid,
+                    bands: [band_1.0, band_2.0, band_3.0],
+                    bands_valid: [band_1.1, band_2.1, band_3.1],
                 }
             }
             Kind::ErrorBar => {
@@ -553,6 +649,8 @@ fn series_options(
         Kind::RadialBar => GeneralSeriesOptions::radial_bar(0, dataset, x, y),
         Kind::PolarArea => GeneralSeriesOptions::polar_area(0, dataset, x, y),
         Kind::Histogram => GeneralSeriesOptions::histogram(0, dataset, x, y),
+        Kind::Waterfall => GeneralSeriesOptions::waterfall(0, dataset, x, y),
+        Kind::Bullet => GeneralSeriesOptions::bullet(0, dataset, x, y),
     };
     // Browser defaults: options the host omits take these values in `add_series`.
     options.visible = spec.visible.unwrap_or(true);
@@ -596,6 +694,10 @@ fn series_options(
             cumulative: histogram.cumulative.unwrap_or(false),
         };
     }
+    options.bar_mark = engine_enum(spec.bar_mark.as_deref().unwrap_or("bar"));
+    options.waterfall = spec.waterfall.clone().unwrap_or_default();
+    options.end_labels = engine_enum(spec.end_labels.as_deref().unwrap_or("none"));
+    options.rank = spec.rank.as_deref().map(engine_enum);
     options
 }
 
@@ -692,6 +794,12 @@ fn build_engine(example: &Example) -> ChartEngine {
                 nodes: nodes.clone(),
                 links: links.clone(),
             },
+            LayoutData::Gantt { tasks, now } => GeneralLayoutInput::Gantt {
+                tasks: tasks.clone(),
+                now: *now,
+            },
+            LayoutData::Calendar(calendar) => GeneralLayoutInput::Calendar(calendar.clone()),
+            LayoutData::Mosaic { cells } => GeneralLayoutInput::Mosaic(cells.clone()),
         };
         let dataset = engine
             .create_general_layout_dataset(input)

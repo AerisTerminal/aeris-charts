@@ -6,6 +6,15 @@ import { fileURLToPath } from "node:url";
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const benchmark_root = resolve(root, "..", "..", "benchmarks");
 const port = Number.parseInt(process.env.AERIS_CHARTS_TEST_PORT ?? "4174", 10);
+// The complete-build server answers the shared bundle path with the complete bundle, so every page
+// and spec runs unchanged against `@aeristerminal/aeris-charts/complete`.
+const complete_build = process.env.AERIS_CHARTS_BUILD === "complete";
+const bundle_aliases = new Map(complete_build
+  ? [
+    ["/dist/aeris_charts_financial.js", "/dist/aeris_charts_financial_complete.js"],
+    ["/dist/react_phase3_fixture.js", "/dist/react_phase3_fixture_complete.js"],
+  ]
+  : []);
 const mime_types = new Map([
   [".html", "text/html; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
@@ -24,7 +33,8 @@ const server = createServer(async (request, response) => {
       response.writeHead(204).end();
       return;
     }
-    const relative = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
+    const requested = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
+    const relative = bundle_aliases.get(requested) ?? requested;
     const is_benchmark = relative.startsWith("/benchmarks/");
     const serving_root = is_benchmark ? benchmark_root : root;
     const serving_relative = is_benchmark ? relative.slice("/benchmarks".length) : relative;
@@ -52,7 +62,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Aeris browser-test server listening on http://127.0.0.1:${port}`);
+  console.log(`Aeris browser-test server (${complete_build ? "complete" : "standard"} build) listening on http://127.0.0.1:${port}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

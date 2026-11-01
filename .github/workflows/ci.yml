@@ -39,10 +39,16 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy (native, all targets)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: clippy (native, all targets, complete build)
+        run: cargo clippy --workspace --all-targets --locked --features aeris_charts_engine/complete -- -D warnings
       - name: clippy (wasm32)
         run: cargo clippy -p aeris_charts_wasm --target wasm32-unknown-unknown --locked -- -D warnings
+      - name: clippy (wasm32, complete build)
+        run: cargo clippy -p aeris_charts_wasm --target wasm32-unknown-unknown --locked --features complete -- -D warnings
       - name: tests (includes golden-image regression)
         run: cargo test --workspace --locked
+      - name: tests (complete build)
+        run: cargo test --workspace --locked --features aeris_charts_engine/complete
       - name: perf gate (hard configured budgets)
         run: cargo run -p aeris_charts_native --example perf_gate --release
         env:
@@ -106,7 +112,7 @@ jobs:
       - name: Lint
         working-directory: packages/charts
         run: npm run lint
-      - name: Build (wasm + bundle + types)
+      - name: Build (standard and complete wasm + bundles + types)
         working-directory: packages/charts
         run: npm run build
       - name: Enforce production artifact size budgets
@@ -120,7 +126,13 @@ jobs:
       - name: Release gate policy simulation
         working-directory: packages/charts
         run: npm run check:release-gates
-      - name: Pack smoke test (tarball installs and imports)
+      - name: Standard/complete build contract
+        working-directory: packages/charts
+        run: npm run test:build-variant
+      - name: React SSR import (standard and complete)
+        working-directory: packages/charts
+        run: npm run test:react-ssr
+      - name: Pack smoke test (both builds install, import, and initialize)
         working-directory: packages/charts
         run: npm run test:pack
 

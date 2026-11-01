@@ -190,6 +190,32 @@ fits (`data_labels` switches the text to node names). Each cached `f64` sector i
 into bounded shared-frame triangles, and its hit test checks those same triangles, so the hole
 and ring gaps never hit; zero-weight subtrees emit no sectors. Plot changes rebuild the cache,
 and data replacement clears it alongside the treemap and Sankey caches.
+G9 adds Gantt, calendar heatmap and Marimekko layout inputs to the same store, validation,
+persistence, hit, tooltip and accessibility paths, in the standard build. Defaults follow pinned
+Apache ECharts 6.1.0. `general_layout/gantt.rs` validates unique task IDs, bounded UTC
+epoch-millisecond times with `end >= start`, progress in `[0, 1]`, contiguous groups, and
+acyclic finish-to-start dependencies (at most 32 per task and the flow-link cap in total). The
+optional current-time line is host data: the engine never reads a clock, so frames stay
+deterministic. Rows have a fixed pitch with one header row per group, and each Gantt series owns
+a clamped first-row viewport. Frame construction, exact hits and focus anchors resolve only the
+visible rows, so work is bounded by the pane height rather than the task count; dependency arrows
+whose endpoints are off screen are not drawn, and a scroll thumb shows the position. The input
+controller routes a wheel over a Gantt series to that viewport before any time-scale policy and
+consumes it only when the viewport moves, so at either end the wheel follows the normal policy;
+keyboard accessibility focus reveals the focused task through the same engine operation. The
+viewport is view state, not V2 state. Time ticks reuse the general temporal-axis tick selection.
+`general_layout/calendar.rs` maps each day by an explicit UTC policy,
+`floor(epoch_ms / 86_400_000)`, independent of the chart's display time zone. A calendar covers
+whole UTC years (at most ten); its accessibility items are every day offset from the first
+covered January 1, with `NaN` semantic values for days without data, so keyboard navigation moves
+by exactly one day or week across gaps. Its snapshot carries `grid_stride: 7`; the browser
+controller then maps Left/Right to one week and Up/Down to one day instead of switching series.
+Day cells snap to whole pixels, empty days paint the chart surface and have no hit, and month
+outlines, localized month names, host-supplied weekday labels and a continuous color legend are
+ordered-frame marks. `general_layout/mosaic.rs` sizes Marimekko columns by column total and
+segments by share, in first-appearance order, and paints an in-canvas legend with one entry per
+segment because the series-level legend toggles whole series, not segments. These three families
+have no value transitions; updates apply immediately.
 The layout pane blocks financial series and cannot be removed while a layout series is bound.
 V2 state stores layout datasets and series in input order with dataset references, preserving
 shared input identity and styles. Restore validates the complete layout graph in the staged
@@ -408,8 +434,8 @@ bars, points, error bars, boxes, and heatmap cells use the row color when presen
 
 The released Phase 2 Cartesian bindings are category-band columns, horizontal bars, box plots, category/category
 plus numeric/numeric and temporal/numeric heatmaps, numeric XY scatter/bubble marks, numeric/temporal/category
-error bars, `xy_line`, `xy_area`, `range_area`, category-band `range_bar`, and linear
-`histogram`. General
+error bars, `xy_line`, `xy_area`, `range_area`, category-band `range_bar`, linear
+`histogram`, and category-band `waterfall` and `bullet`. General
 series have monotonic chart-local identities, stable pane/axis/dataset ownership, bounded title/color
 state, and lazy registry allocation. Populated axes and datasets cannot be removed out from under a
 series, and a pane containing a general series cannot be removed until that series is detached. Visible
@@ -525,6 +551,24 @@ through the column rectangle path and are addressed by bin index in hits, select
 reconciliation, tooltips, brushes, and accessibility. A histogram-only X axis autoscale spans
 the outer bin edges; Y autoscale includes zero and the tallest bin. V2 persistence stores the
 samples and binning options, never derived bins.
+G9 business families reuse the category general dataset and the bar slot geometry. `waterfall` and
+`bullet` are general kinds with their own dataset inputs (`GeneralDatasetInput::WaterfallCategory`
+with a per-row step role and `BulletCategory` with aligned target, comparative and three band
+columns) because their rows carry data no existing contract holds. The engine derives waterfall
+running totals in one O(rows) pass (`general_waterfall_rows`), and a missing relative step leaves
+the total unchanged; frame paint, exact hits, value-axis autoscale, tooltips and accessibility all
+read that pass, so bar extents never come from a host. Bullet geometry splits each category slot
+into full-thickness bands, a half-thickness comparative, a third-thickness measure and a target
+marker, all lowered to ordered `Rect` primitives. Lollipop and dumbbell are a `GeneralBarMark` on
+`column`/`horizontal_bar` and `range_bar`; they reuse those kinds' slots, domains and data and only
+change the painted mark and the hit distance (stem plus symbols). Slope and bump are `xy_line`
+options: `end_labels` collects first/last point labels per pane and spreads each side to a fixed
+gap inside the plot after all series paint, and `rank` replaces plotted values with dense or
+competition ranks computed across the visible ranked lines of the same pane and axes
+(`general_series_ranks`). A Y axis holding only ranked lines autoscales to `0.5..N + 0.5` and
+defaults to top-down. Ranks are derived on demand and never persisted; V2 stores the raw values,
+step roles, bullet columns and the new options. Rows expose the derived values through
+`GeneralRowDetail` in tooltip and accessibility snapshots.
 `heatmap_grid` keeps one aligned dataset across all supported Cartesian coordinate variants. Category/category
 heatmaps add a second engine-owned category dictionary/index column for Y; the existing category X column remains
 the X registry and the ordinary numeric value/validity column remains cell intensity data. Continuous numeric and
@@ -1504,6 +1548,12 @@ The package also ships `aeris_charts.css` as the portable host design system. It
 
 The package preserves its complete `snake_case` surface and adds camel-case aliases for the common JavaScript chart/series/scale lifecycle without creating parallel state or handles. Financial and general series use the same chart object and ordered frame. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. Typed update batches transfer their sanitized owned columns to the engine's batch entry point; the browser wrapper never loops through the single-row engine API. The published artifact exports the optimized WASM asset explicitly and the generated glue also resolves that sibling asset by `import.meta.url`; source-tree `pkg/`, crate, benchmark, and demo paths are not runtime dependencies. `examples/web_demo` remains an integration and parity test host, while `examples/all_in_one` contains consumer-facing framework-neutral and React compositions.
 
+The package ships two builds of the same crates because the compressed standard WebAssembly module is close to its measured size ceiling. `@aeristerminal/aeris-charts` and `/react` load the standard module (`dist/aeris_charts_wasm_bg.wasm`). `@aeristerminal/aeris-charts/complete` and `/complete/react` load `dist/aeris_charts_wasm_complete_bg.wasm`, which is compiled with the `complete` Cargo feature of `aeris_charts_engine` (forwarded by `aeris_charts_wasm`'s own `complete` feature). It is the only Cargo feature. It gates whole chart-family modules, never options, defaults or behavior, so every family that both builds contain must produce the same frames, hits, events and persisted state in either build. Rust hosts (GPUI, native) enable the same feature on their `aeris_charts_engine` dependency. `scripts/build_wasm.mjs` runs `wasm-pack` once per build with the same release profile and wasm-opt flags, into `pkg/` and `pkg_complete/`. Its `--out-name` sets the sibling `.wasm` file that each generated glue module resolves through `import.meta.url`. `scripts/build_js.mjs` bundles the same TypeScript sources four times. `src/complete.ts` and `src/complete_react.ts` only re-export the root and React entries; the complete bundles resolve the generated glue to `pkg_complete/` and the React adapter's core import to `./complete.js`. Both builds share one set of declarations. `./complete/wasm` exports the complete module for bundlers that pass an explicit `init_wasm` URL.
+
+The engine reports its build through `ChartEngine::build_includes_complete_families()`, exported to WASM as `build_includes_complete_families`. The package records the answer once at initialization and exposes it as `build_variant()`. A family whose module is gated registers its creation kind in `complete_only_families` (`src/build_variant.ts`). `add_series` and `add_layout_series` call `require_family_in_build` before any engine mutation, so creating a complete-only family through the standard build fails atomically with an `AerisChartsError` of code `complete_build_required` that names `@aeristerminal/aeris-charts/complete`. Any new creation API for a complete-only family must make the same call first.
+
+Both builds run the package gates. `npm run test:build-variant` drives that guard with a fake complete-only family against both engine answers. `test:react-ssr` imports both React entries. `test:pack` initializes each installed entry from its own sibling module and bundles every consumer recipe against each build. `check:api` snapshots the shared declarations together with both entry declarations. `node benchmarks/benchmark.mjs size` enforces separate standard and complete JavaScript and WebAssembly ceilings from `budgets.json`; the complete ceilings rise only with measured evidence as gated families arrive, and the standard ceilings stay fixed. The npm tarball and unpacked ceilings cover both modules. Playwright's `chromium-complete` project runs the build, general-chart, G8-default, accessibility and license specs against a second test server (`AERIS_CHARTS_BUILD=complete`, default port `AERIS_CHARTS_TEST_PORT + 1`, overridable by `AERIS_CHARTS_COMPLETE_TEST_PORT`), which answers the shared bundle and React-fixture paths with their complete builds (`examples/web_demo/build_react_fixtures.mjs` bundles the fixture against each build). CI also runs workspace clippy and tests with `--features aeris_charts_engine/complete`, and wasm32 clippy with `--features complete`.
+
 `GeneralPane` still accepts keyed axis/series arrays. Its React child declarations add axes,
 canonical or mapped series, data labels, and keyed references through the same reconciliation.
 For a general-only React chart, `AerisChart` supplies an explicit first-pane domain and one
@@ -1533,7 +1583,8 @@ the same engine error as imperative callers after a rejected composition. Chart 
 release newly acquired handles. Importing the React entry remains SSR-safe; it creates no chart
 until mounted in a browser. The package smoke gate installs an npm tarball into a clean consumer
 directory and bundles standalone Cartesian, standalone polar, standalone flow, mixed, linked,
-and React examples from that installed package.
+and React examples from that installed package, once against the standard entries and once against
+the complete entries.
 
 Financial appearance keeps theme provenance typed in the engine. Canvas background, chart text
 (layout and price-axis labels), grid, crosshair, bullish, bearish, wick, and border colors are either
@@ -1869,7 +1920,7 @@ Changes to geometry, snapping, scales, interactions, or execution require the na
 
 ## Dependency direction
 
-Lower layers never import a host API to bypass their boundary. The headless path is `aeris_charts_core` and `aeris_charts_indicators` into `aeris_charts_engine`, then `aeris_charts_render`; GPUI, WebGPU, native, and WASM/browser code sit at execution boundaries. Avoid new crates, traits, and feature flags unless they enforce a real current dependency or platform boundary.
+Lower layers never import a host API to bypass their boundary. The headless path is `aeris_charts_core` and `aeris_charts_indicators` into `aeris_charts_engine`, then `aeris_charts_render`; GPUI, WebGPU, native, and WASM/browser code sit at execution boundaries. Avoid new crates, traits, and feature flags unless they enforce a real current dependency or platform boundary. The one Cargo feature, `complete`, is the measured package-size split described under the TypeScript package.
 
 ## Repository documentation
 
@@ -1884,6 +1935,9 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy -p aeris_charts_wasm --target wasm32-unknown-unknown --locked -- -D warnings
 cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked --features aeris_charts_engine/complete -- -D warnings
+cargo clippy -p aeris_charts_wasm --target wasm32-unknown-unknown --locked --features complete -- -D warnings
+cargo test --workspace --locked --features aeris_charts_engine/complete
 cargo run -p aeris_charts_native --example perf_gate --release
 
 cd packages/charts
@@ -1891,6 +1945,10 @@ npm ci
 npm run lint
 npm run build
 npm run typecheck
+npm run check:api
+npm run check:release-gates
+npm run test:build-variant
+npm run test:react-ssr
 npm run test:pack
 ```
 

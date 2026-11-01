@@ -60,6 +60,26 @@ pub use workspace::AerisWorkspace;
 #[cfg(target_arch = "wasm32")]
 pub use smoke::render_prim_smoke_2d;
 
+/// Whether this module is the complete build. The package records it at initialization to report
+/// the loaded build and to reject complete-only families in the standard build.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn build_includes_complete_families() -> bool {
+    aeris_charts_engine::ChartEngine::build_includes_complete_families()
+}
+
+#[cfg(test)]
+mod build_variant_tests {
+    // Workspace builds may enable the engine feature directly (as Rust hosts do), so only the
+    // forwarding direction is an invariant of this crate.
+    #[test]
+    fn complete_feature_reaches_the_engine() {
+        if cfg!(feature = "complete") {
+            assert!(aeris_charts_engine::ChartEngine::build_includes_complete_families());
+        }
+    }
+}
+
 /// A tiny exported entry point that renders a handful of prims through the web-sys [`Canvas2d`]
 /// target — the browser-side proof that the Prim-IR executor drives a real 2D canvas. Exercised
 /// from the demo/tests via `getImageData`; not part of the public chart API.

@@ -11,6 +11,10 @@ description = "wasm-bindgen host shell: canvas surface, data ingestion, gestures
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# Builds the `@aeristerminal/aeris-charts/complete` WebAssembly module.
+complete = ["aeris_charts_engine/complete"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

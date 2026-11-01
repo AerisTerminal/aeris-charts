@@ -42,7 +42,7 @@ export type series_kind =
   | "custom";
 
 /** General series available through the shared chart engine. */
-export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "range_bar" | "error_bar" | "column" | "histogram" | "horizontal_bar" | "box_plot" | "heatmap_grid" | "scatter" | "bubble" | "pie" | "radar" | "polar_area" | "radial_bar";
+export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "range_bar" | "error_bar" | "column" | "histogram" | "horizontal_bar" | "box_plot" | "heatmap_grid" | "scatter" | "bubble" | "pie" | "radar" | "polar_area" | "radial_bar" | "waterfall" | "bullet";
 export type general_row_id = string | number;
 
 export interface general_xy_row {
@@ -94,6 +94,44 @@ export interface box_plot_row {
   max: number | null;
   label?: string;
   /** Optional CSS color for this mark; paths retain the series stroke. */
+  color?: string;
+  /** Optional symbol for point marks. */
+  symbol?: "circle" | "square" | "diamond" | "triangle";
+}
+
+/**
+ * One waterfall step. A relative row adds its signed `y` to the running total; subtotal and
+ * total rows draw the running total from zero and ignore `y`, which may be null.
+ */
+export interface waterfall_row {
+  id?: general_row_id;
+  x: string;
+  y: number | null;
+  /** Step role (default `relative`). */
+  step?: "relative" | "subtotal" | "total";
+  /** Optional custom text for an enabled data label; omitted labels use the bar's value. */
+  label?: string;
+  /** Optional CSS color for this bar, overriding the step color. */
+  color?: string;
+  /** Optional symbol for point marks. */
+  symbol?: "circle" | "square" | "diamond" | "triangle";
+}
+
+/** One bullet: the measure bar `y`, a target marker, and optional comparative and band context. */
+export interface bullet_row {
+  id?: general_row_id;
+  x: string;
+  y: number | null;
+  target: number | null;
+  /** Secondary measure drawn as a thinner bar inside the measure, such as last year's value. */
+  comparative?: number | null;
+  /**
+   * Up to three ascending qualitative band thresholds (for example poor, satisfactory, good).
+   * Each band spans from the previous threshold, or zero, to its own threshold.
+   */
+  bands?: readonly (number | null)[];
+  label?: string;
+  /** Optional CSS color for this measure bar. */
   color?: string;
   /** Optional symbol for point marks. */
   symbol?: "circle" | "square" | "diamond" | "triangle";
@@ -257,6 +295,22 @@ export interface category_box_columns {
   max_valid?: Uint8Array;
 }
 
+/** Category waterfall steps; `steps` holds one code per row: 0 relative, 1 subtotal, 2 total. */
+export interface category_waterfall_columns extends category_xy_columns {
+  steps: Uint8Array;
+}
+
+/** Category bullets; `y` is the measure. Omitted comparative or band columns are missing values. */
+export interface category_bullet_columns extends category_xy_columns {
+  target: Float64Array;
+  target_valid?: Uint8Array;
+  comparative?: Float64Array;
+  comparative_valid?: Uint8Array;
+  /** Band-major thresholds: every row's first band, then every second, then every third (3 x rows). */
+  bands?: Float64Array;
+  bands_valid?: Uint8Array;
+}
+
 /** Typed histogram samples; `values_valid` marks missing samples with 0. */
 export interface histogram_columns {
   ids?: readonly general_row_id[];
@@ -323,7 +377,15 @@ export interface initial_pane_options {
   horizontal_domain: horizontal_domain_options;
 }
 
-export type layout_series_kind = "funnel" | "treemap" | "sankey" | "sunburst";
+export type layout_series_kind =
+  | "funnel"
+  | "treemap"
+  | "sankey"
+  | "sunburst"
+  | "gantt"
+  | "calendar_heatmap"
+  | "marimekko";
+export type layout_element = "stage" | "node" | "link" | "task" | "day" | "cell";
 export type layout_input =
   | { type: "funnel"; stages: readonly { id: string; label: string; value: number }[] }
   | {
@@ -331,7 +393,38 @@ export type layout_input =
       /** `color_value` is a signed leaf metric (for example a percent change) that shades a treemap cell up or down by magnitude. */
       nodes: readonly { id: string; parent: string | null; label: string; value: number | null; color_value?: number }[];
     }
-  | { type: "flow"; nodes: readonly { id: string; label: string }[]; links: readonly { source: string; target: string; value: number }[] };
+  | { type: "flow"; nodes: readonly { id: string; label: string }[]; links: readonly { source: string; target: string; value: number }[] }
+  | {
+      type: "gantt";
+      /**
+       * Times are UTC epoch milliseconds; `end === start` is a milestone. `progress` is the
+       * completed fraction in [0, 1]. Tasks sharing a `group` must be contiguous.
+       * `dependencies` lists finish-to-start predecessor task IDs.
+       */
+      tasks: readonly {
+        id: string;
+        label: string;
+        start: number;
+        end: number;
+        progress?: number;
+        group?: string | null;
+        dependencies?: readonly string[];
+      }[];
+      /** Host-supplied current instant for the "now" line; the engine never reads a clock. */
+      now?: number | null;
+    }
+  | {
+      type: "calendar";
+      /** Each `date` is any instant inside its UTC day, in epoch milliseconds. */
+      days: readonly { date: number; value: number }[];
+      /** Weekday of the first row: 0 = Sunday through 6 = Saturday. */
+      week_start?: number;
+      /** Seven weekday labels beginning with Sunday; omit for English initials. */
+      day_labels?: readonly string[];
+      low_color?: string | null;
+      high_color?: string | null;
+    }
+  | { type: "mosaic"; cells: readonly { column: string; segment: string; value: number }[] };
 
 export interface layout_series_options {
   pane: number;
@@ -344,7 +437,7 @@ export interface layout_series_options {
 
 export interface layout_hit {
   series: number;
-  element: "stage" | "node" | "link";
+  element: layout_element;
   row: number;
   id: string;
   label: string;
@@ -353,7 +446,7 @@ export interface layout_hit {
 }
 
 export interface layout_accessibility_item {
-  element: "stage" | "node" | "link";
+  element: layout_element;
   row: number;
   id: string;
   label: string;
@@ -367,6 +460,8 @@ export interface layout_accessibility_snapshot {
   total: number;
   offset: number;
   items: layout_accessibility_item[];
+  /** Items per grid column (calendar weeks); arrow keys move by row and by column. */
+  grid_stride?: number;
 }
 export interface layout_series_api {
   readonly id: number;
@@ -549,7 +644,55 @@ export interface general_series_options {
   stack_mode?: "normal" | "cumulative" | "silhouette" | "wiggle" | "percent" | "positive";
   /** Engine-side binning for `histogram` series; other kinds reject non-default values. */
   histogram?: general_histogram_options;
+  /**
+   * Bar mark shape (default `bar`). `lollipop` draws a stem from the baseline with a point
+   * symbol at the value on unstacked `column`/`horizontal_bar` series; `dumbbell` draws point
+   * symbols at both ends of a `range_bar` joined by a connector. `point_symbol` and
+   * `point_radius` style the markers.
+   */
+  bar_mark?: "bar" | "lollipop" | "dumbbell";
+  /** Step colors and connector lines of a `waterfall` series. */
+  waterfall?: general_waterfall_options;
+  /**
+   * `xy_line` labels before the first and/or after the last plotted point, as in a slope chart.
+   * Labels on one side are spread apart so they never overlap (default `none`).
+   */
+  end_labels?: "none" | "start" | "end" | "both";
+  /**
+   * Plot an `xy_line` at its rank instead of its value, as in a bump chart. Rank 1 is the largest
+   * value among ranked lines sharing the pane and axes at one X. `dense` ties give 1, 2, 2, 3;
+   * `competition` ties give 1, 2, 2, 4. The rank axis runs top-down by default. Default null.
+   */
+  rank?: "dense" | "competition" | null;
 }
+
+/** Waterfall colors; omitted colors use green increases, red decreases, and the series color for totals. */
+export interface general_waterfall_options {
+  increase_color?: string | null;
+  decrease_color?: string | null;
+  /** Defaults to the total color. */
+  subtotal_color?: string | null;
+  total_color?: string | null;
+  /** Draw a line from each bar's running total to the next bar (default true). */
+  connectors?: boolean;
+}
+
+/** Family-specific values of one row that the generic tooltip fields do not carry. */
+export type general_row_detail =
+  | {
+    type: "waterfall";
+    mark: "increase" | "decrease" | "subtotal" | "total";
+    /** Running total at the start and end of this bar. */
+    start: number;
+    end: number;
+  }
+  | {
+    type: "bullet";
+    target: number | null;
+    comparative: number | null;
+    bands: readonly [number | null, number | null, number | null];
+  }
+  | { type: "rank"; rank: number };
 
 export interface general_histogram_options {
   /**
@@ -601,6 +744,8 @@ export interface general_tooltip_snapshot {
   title: string;
   /** Opaque CSS identity color of the row's mark (sector fill, row color or series color). */
   color: string;
+  /** Waterfall, bullet, or rank values of this row, or null for other series. */
+  detail: general_row_detail | null;
 }
 
 export interface general_shared_tooltip_snapshot {
@@ -655,6 +800,7 @@ export interface general_accessibility_snapshot {
     q1: number | null;
     q3: number | null;
     size: number | null;
+    detail: general_row_detail | null;
   }[];
 }
 
@@ -699,13 +845,13 @@ export interface general_series_api {
   /** Mutate presentation and compatible pane/axis bindings while retaining identity and data. */
   apply_options(options: Partial<general_series_options>): void;
   set_visible(visible: boolean): void;
-  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[]): void;
-  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns): void;
+  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[]): void;
+  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_waterfall_columns | category_bullet_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns): void;
   /** Update existing rows and append missing rows by explicit `id`, atomically. */
-  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[], options?: general_update_options): void;
+  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[], options?: general_update_options): void;
   /** Typed-column form of {@link update_data}; `ids` is required at runtime. */
   update_data_typed(
-    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns,
+    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_waterfall_columns | category_bullet_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns,
     options?: general_update_options,
   ): void;
   data_at(row: number): general_tooltip_snapshot | null;
@@ -2839,7 +2985,9 @@ export interface chart_state_v2 {
       | "Pie"
       | "Radar"
       | "PolarArea"
-      | "RadialBar";
+      | "RadialBar"
+      | "Waterfall"
+      | "Bullet";
     pane: number;
     dataset: `dataset-${number}`;
     x_axis_id: string;
@@ -2864,13 +3012,24 @@ export interface chart_state_v2 {
       normalization: "Count" | "Percent" | "Density";
       cumulative: boolean;
     };
+    /** Absent in documents written before waterfall, bullet, lollipop, slope, and bump options. */
+    bar_mark?: "Bar" | "Lollipop" | "Dumbbell";
+    waterfall?: {
+      increase_color: string | null;
+      decrease_color: string | null;
+      subtotal_color: string | null;
+      total_color: string | null;
+      connectors: boolean;
+    };
+    end_labels?: "None" | "Start" | "End" | "Both";
+    rank?: "Dense" | "Competition" | null;
   }[];
   /** Layout records are absent in older V2 documents. */
   layout_datasets?: { id: `layout-dataset-${number}`; input: Record<string, unknown> }[];
   layout_series?: {
     dataset: `layout-dataset-${number}`;
     pane: number;
-    kind: "Funnel" | "Treemap" | "Sankey" | "Sunburst";
+    kind: "Funnel" | "Treemap" | "Sankey" | "Sunburst" | "Gantt" | "CalendarHeatmap" | "Marimekko";
     title: string;
     color: string;
     data_labels?: boolean;
@@ -3395,7 +3554,7 @@ export interface general_pane_series_composition {
   key: string;
   kind: general_series_kind;
   options: Omit<general_series_options, "pane"> & { pane?: number };
-  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[];
+  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[];
   current?: general_series_api;
 }
 
@@ -4292,7 +4451,7 @@ export interface chart_api {
     series: readonly {
       kind: general_series_kind;
       options: Omit<general_series_options, "pane"> & { pane?: number };
-      data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row | histogram_row)[];
+      data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[];
     }[],
     references: readonly general_reference_options[],
   ): void;

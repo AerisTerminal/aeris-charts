@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { WASM_RUST_OPT_LEVEL, wasm_build_environment } from "./build_wasm.mjs";
+import { WASM_BUILDS, WASM_RUST_OPT_LEVEL, wasm_build_environment, wasm_pack_arguments } from "./build_wasm.mjs";
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 const ci = readFileSync(`${root}/.github/workflows/ci.yml`, "utf8");
@@ -21,6 +21,16 @@ function verify(ciSource, publishSource) {
     "artifact size budgets cannot continue on error");
   assert.match(ciSource, /machine-sensitive[\s\S]{0,220}continue-on-error: true/,
     "machine-calibrated evidence must remain non-authoritative");
+  assert.match(ciSource, /cargo clippy --workspace --all-targets --locked --features aeris_charts_engine\/complete -- -D warnings/,
+    "native clippy must also cover the complete build");
+  assert.match(ciSource, /cargo clippy -p aeris_charts_wasm --target wasm32-unknown-unknown --locked --features complete -- -D warnings/,
+    "wasm32 clippy must also cover the complete build");
+  assert.match(ciSource, /cargo test --workspace --locked --features aeris_charts_engine\/complete/,
+    "workspace tests must also run on the complete build");
+  assert.match(ciSource, /npm run test:build-variant/,
+    "the standard/complete build contract must block CI");
+  assert.match(ciSource, /npm run test:react-ssr/,
+    "SSR imports of both React entries must block CI");
   assert.match(publishSource, /tags: \["v\*"\]/,
     "version tags must trigger publication");
   assert.match(publishSource, /actions: read[\s\S]*contents: read[\s\S]*id-token: write/,
@@ -44,7 +54,23 @@ assert.equal(wasm_build_environment({ SENTINEL: "kept" }).SENTINEL, "kept",
   "the WASM build profile must preserve its caller environment");
 assert.equal(wasm_build_environment({}).CARGO_PROFILE_RELEASE_OPT_LEVEL, "z",
   "the WASM build profile must override Cargo release optimization without changing native release builds");
+assert.deepEqual(WASM_BUILDS.map(({ variant }) => variant), ["standard", "complete"],
+  "the package must build exactly the standard and complete WebAssembly modules");
+assert.deepEqual(WASM_BUILDS[0].features, [], "the standard build must enable no Cargo feature");
+assert.deepEqual(WASM_BUILDS[1].features, ["complete"], "the complete build must enable only the complete feature");
+const [standard_args, complete_args] = WASM_BUILDS.map(wasm_pack_arguments);
+const shared_args = (args) => args.filter((arg, index) =>
+  !["--out-dir", "--out-name"].includes(args[index - 1]) && !["--", "--features", "complete"].includes(arg));
+assert.deepEqual(shared_args(complete_args), shared_args(standard_args),
+  "both WebAssembly builds must share the same wasm-pack target and release profile");
+for (const entry of [".", "./react", "./complete", "./complete/react"]) {
+  assert.ok(packageJson.exports[entry]?.types && packageJson.exports[entry]?.import,
+    `package export ${entry} must ship types and an ES module`);
+}
 for (const [brokenCi, brokenPublish] of [
+  [ci.replace("--features aeris_charts_engine/complete -- -D warnings", "-- -D warnings"), publish],
+  [ci.replace("cargo test --workspace --locked --features aeris_charts_engine/complete", "cargo test --workspace --locked"), publish],
+  [ci.replaceAll("npm run test:build-variant", "npm run lint"), publish],
   [ci.replace("AERIS_CHARTS_PERF_STRICT: \"1\"", "AERIS_CHARTS_PERF_STRICT: \"0\""), publish],
   [ci.replace("node benchmarks/benchmark.mjs size", "node benchmarks/benchmark.mjs test"), publish],
   [ci.replace("id: portable-browser-suite", "id: portable-browser-suite\n        continue-on-error: true"), publish],
