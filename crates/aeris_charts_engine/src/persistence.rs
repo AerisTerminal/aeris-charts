@@ -2468,7 +2468,7 @@ impl ChartEngine {
         self.selected_drawing = None;
         self.selected_drawings.clear();
         self.drawing_drag = None;
-        self.drawing_history = crate::DrawingHistory::default();
+        self.history.clear();
         // Persistence replaces committed semantic state, but an armed host tool is transient UI
         // state and historically survived import. Abort only the in-flight placement/capture.
         self.drawing_controller.pending = None;
@@ -2770,6 +2770,8 @@ impl ChartEngine {
             remapped_outputs.push(outputs);
         }
         self.study_restore_pane_cursor = None;
+        // Restored indicators are the document's state, not edits the user can undo.
+        self.history.clear();
         self.general_transition_duration_ms = transition_duration_ms;
         result.schema_version = PERSISTENCE_SCHEMA_VERSION_STUDIES;
         Ok(result)
@@ -3006,7 +3008,7 @@ impl ChartEngine {
         self.selected_drawing = None;
         self.selected_drawings.clear();
         self.drawing_drag = None;
-        self.drawing_history = crate::DrawingHistory::default();
+        self.history.clear();
         self.drawing_controller.pending = None;
         self.drawing_controller.brush = None;
         self.drawing_controller.measure = None;

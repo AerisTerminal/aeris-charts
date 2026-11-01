@@ -1115,9 +1115,12 @@ impl ChartEngine {
         if binding_ids.is_empty() {
             return false;
         }
+        // One undo brings every binding back.
+        self.begin_history_group();
         for binding_id in binding_ids {
             let _ = self.remove_indicator_binding(binding_id);
         }
+        self.end_history_group();
         true
     }
 
@@ -2884,6 +2887,9 @@ impl ChartEngine {
                 }
             }
             IndicatorKind::Custom { .. } => {}
+        }
+        if let Some(&binding) = ids.first() {
+            self.record_indicator_added(binding);
         }
         ids
     }

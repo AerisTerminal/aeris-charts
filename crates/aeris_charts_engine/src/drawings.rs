@@ -1907,10 +1907,9 @@ pub(crate) struct DrawingDrag {
     pub(crate) duplicate: bool,
 }
 
-const DRAWING_HISTORY_LIMIT: usize = 100;
-
+/// One committed drawing edit as recorded in the chart history (`history.rs`).
 #[derive(Clone)]
-enum DrawingCommand {
+pub(crate) enum DrawingCommand {
     Create {
         drawing: Drawing,
         index: usize,
@@ -1939,7 +1938,7 @@ enum DrawingCommand {
 }
 
 impl DrawingCommand {
-    fn rebase_logical_with<F>(&mut self, map: F)
+    pub(crate) fn rebase_logical_with<F>(&mut self, map: F)
     where
         F: Fn(f64) -> f64 + Copy,
     {
@@ -1974,47 +1973,36 @@ impl DrawingCommand {
         }
     }
 
+    /// Follow a pane removal, swap or move in every drawing the command carries.
+    pub(crate) fn remap_panes_with<F>(&mut self, map: F)
+    where
+        F: Fn(usize) -> usize + Copy,
+    {
+        let remap = |drawing: &mut Drawing| drawing.pane_index = map(drawing.pane_index);
+        match self {
+            Self::Create { drawing, .. } | Self::Delete { drawing, .. } => remap(drawing),
+            Self::Update { before, after } => {
+                remap(before);
+                remap(after);
+            }
+            Self::Clear { drawings } => drawings.iter_mut().for_each(remap),
+            Self::Reorder { before, after } | Self::BatchUpdate { before, after } => {
+                before.iter_mut().chain(after.iter_mut()).for_each(remap);
+            }
+            Self::Batch(commands) => {
+                for command in commands {
+                    command.remap_panes_with(map);
+                }
+            }
+        }
+    }
+
     /// One undo step for `commands`: `None` when empty, the command itself when alone.
     fn batch(mut commands: Vec<Self>) -> Option<Self> {
         match commands.len() {
             0 => None,
             1 => commands.pop(),
             _ => Some(Self::Batch(commands)),
-        }
-    }
-}
-
-/// Runtime-only, chart-local drawing history. Commands carry only the semantic drawing state
-/// needed to reverse one committed action; previews, hit indexes, selection, and render caches
-/// never enter the stack.
-#[derive(Default)]
-pub(crate) struct DrawingHistory {
-    undo: Vec<DrawingCommand>,
-    redo: Vec<DrawingCommand>,
-    /// Snapshots taken when a settings session opened (`begin_drawing_options_edit` or
-    /// `begin_selected_drawings_options_edit`). While non-empty, updates to those drawings are
-    /// live previews that coalesce into one entry on commit. It lives with the stack so every
-    /// history reset also ends a session whose baseline it invalidated.
-    options_edit: Vec<Drawing>,
-}
-
-impl DrawingHistory {
-    pub(crate) fn clear(&mut self) {
-        self.undo.clear();
-        self.redo.clear();
-        self.options_edit.clear();
-    }
-
-    fn in_options_edit(&self, id: DrawingId) -> bool {
-        self.options_edit.iter().any(|before| before.id == id)
-    }
-
-    fn rebase_logical_with<F>(&mut self, map: F)
-    where
-        F: Fn(f64) -> f64 + Copy,
-    {
-        for command in self.undo.iter_mut().chain(&mut self.redo) {
-            command.rebase_logical_with(map);
         }
     }
 }
@@ -3038,7 +3026,7 @@ impl ChartEngine {
             transient_changed |= rebase_points_with(&mut drag.start_points, map);
             transient_changed |= rebase_points_with(&mut drag.history_points, map);
         }
-        self.drawing_history.rebase_logical_with(map);
+        self.history.rebase_logical_with(map);
 
         if committed_changed {
             self.drawing_runtime
@@ -3091,7 +3079,7 @@ impl ChartEngine {
     }
 
     fn record_drawing_command(&mut self, mut command: DrawingCommand) {
-        let history = &self.drawing_history;
+        let history = &self.history;
         match &mut command {
             DrawingCommand::Update { before, .. } if history.in_options_edit(before.id) => return,
             DrawingCommand::Batch(commands) => {
@@ -3105,11 +3093,7 @@ impl ChartEngine {
             }
             _ => {}
         }
-        if self.drawing_history.undo.len() == DRAWING_HISTORY_LIMIT {
-            self.drawing_history.undo.remove(0);
-        }
-        self.drawing_history.undo.push(command);
-        self.drawing_history.redo.clear();
+        self.history.record_drawing(command);
         self.drawing_revision = self.drawing_revision.wrapping_add(1);
     }
 
@@ -3120,7 +3104,7 @@ impl ChartEngine {
         self.drawing_revision
     }
 
-    fn bump_drawing_sync_revision(&mut self) {
+    pub(crate) fn bump_drawing_sync_revision(&mut self) {
         self.drawing_sync_revision = self.drawing_sync_revision.wrapping_add(1).max(1);
     }
 
@@ -3136,7 +3120,7 @@ impl ChartEngine {
 
     fn remove_drawing_snapshot(&mut self, id: DrawingId) -> Option<(Drawing, usize)> {
         let index = self.drawings.iter().position(|drawing| drawing.id == id)?;
-        if self.drawing_history.in_options_edit(id) {
+        if self.history.in_options_edit(id) {
             self.commit_drawing_options_edit();
         }
         let drawing = self.drawings.remove(index);
@@ -3173,7 +3157,7 @@ impl ChartEngine {
         true
     }
 
-    fn apply_drawing_command(&mut self, command: &DrawingCommand, undo: bool) {
+    pub(crate) fn apply_drawing_command(&mut self, command: &DrawingCommand, undo: bool) {
         match command {
             DrawingCommand::Create { drawing, index } => {
                 if undo {
@@ -3246,51 +3230,6 @@ impl ChartEngine {
                 }
             }
         }
-    }
-
-    /// Undo one committed drawing-semantic operation for this chart only.
-    pub fn undo_drawing(&mut self) -> bool {
-        self.commit_drawing_options_edit();
-        let Some(command) = self.drawing_history.undo.pop() else {
-            return false;
-        };
-        self.invalidate_frame_drawings();
-        self.drawing_controller.pending = None;
-        self.drawing_controller.brush = None;
-        self.apply_drawing_command(&command, true);
-        self.bump_drawing_sync_revision();
-        self.drawing_revision = self.drawing_revision.wrapping_add(1);
-        self.drawing_history.redo.push(command);
-        true
-    }
-
-    /// Redo one previously undone drawing-semantic operation for this chart only.
-    pub fn redo_drawing(&mut self) -> bool {
-        self.commit_drawing_options_edit();
-        let Some(command) = self.drawing_history.redo.pop() else {
-            return false;
-        };
-        self.invalidate_frame_drawings();
-        self.drawing_controller.pending = None;
-        self.drawing_controller.brush = None;
-        self.apply_drawing_command(&command, false);
-        self.bump_drawing_sync_revision();
-        self.drawing_revision = self.drawing_revision.wrapping_add(1);
-        self.drawing_history.undo.push(command);
-        true
-    }
-
-    pub fn can_undo_drawing(&self) -> bool {
-        !self.drawing_history.undo.is_empty()
-            || self
-                .drawing_history
-                .options_edit
-                .iter()
-                .any(|before| self.drawing(before.id) != Some(before))
-    }
-
-    pub fn can_redo_drawing(&self) -> bool {
-        !self.drawing_history.redo.is_empty()
     }
 
     // --- store access ---
@@ -4878,7 +4817,7 @@ impl ChartEngine {
     }
 
     fn begin_options_edit_for(&mut self, ids: &[DrawingId]) -> bool {
-        let history = &self.drawing_history;
+        let history = &self.history;
         if !ids.is_empty()
             && history.options_edit.len() == ids.len()
             && ids.iter().all(|&id| history.in_options_edit(id))
@@ -4893,22 +4832,19 @@ impl ChartEngine {
             return false;
         }
         self.commit_drawing_options_edit();
-        self.drawing_history.options_edit = before;
+        self.history.options_edit = before;
         true
     }
 
     /// The drawing whose settings session is open, if any (the first of a selection session).
     pub fn drawing_options_edit(&self) -> Option<DrawingId> {
-        self.drawing_history
-            .options_edit
-            .first()
-            .map(|before| before.id)
+        self.history.options_edit.first().map(|before| before.id)
     }
 
     /// Close the open settings session, recording its net change as one undo step. Returns
     /// whether a session was open.
     pub fn commit_drawing_options_edit(&mut self) -> bool {
-        let session = std::mem::take(&mut self.drawing_history.options_edit);
+        let session = std::mem::take(&mut self.history.options_edit);
         if session.is_empty() {
             return false;
         }
@@ -4934,7 +4870,7 @@ impl ChartEngine {
     /// Close the open settings session and restore its drawings exactly as they were when the
     /// session opened, without a history entry. Returns whether a session was open.
     pub fn cancel_drawing_options_edit(&mut self) -> bool {
-        let session = std::mem::take(&mut self.drawing_history.options_edit);
+        let session = std::mem::take(&mut self.history.options_edit);
         if session.is_empty() {
             return false;
         }
@@ -5768,7 +5704,7 @@ impl ChartEngine {
         self.drawing_sync_revision = payload.revision;
         self.selected_drawing = None;
         self.selected_drawings.clear();
-        self.drawing_history.clear();
+        self.history.forget_drawings();
         self.drawing_runtime
             .borrow_mut()
             .rebuild_all(&self.drawings, self.panes.len());

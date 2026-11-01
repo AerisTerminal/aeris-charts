@@ -79,17 +79,17 @@ fn drawing_history_reverses_create_delete_points_and_style() {
     let id = add_trend(&mut chart);
     let initial_drawing = chart.drawing(id).unwrap().clone();
 
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert!(chart.drawing(id).is_none());
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     assert_eq!(chart.drawing(id), Some(&initial_drawing));
 
     assert!(chart.drawing_apply_options(id, r##"{"color":"#ff0000","width":5}"##));
     let styled = chart.drawing(id).unwrap().clone();
     assert_ne!(styled, initial_drawing);
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawing(id), Some(&initial_drawing));
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     assert_eq!(chart.drawing(id), Some(&styled));
 
     let moved_points = vec![
@@ -104,16 +104,16 @@ fn drawing_history_reverses_create_delete_points_and_style() {
     ];
     assert!(chart.drawing_set_points(id, &serde_json::to_string(&moved_points).unwrap()));
     assert_eq!(chart.drawing(id).unwrap().points, moved_points);
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawing(id), Some(&styled));
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     assert_eq!(chart.drawing(id).unwrap().points, moved_points);
 
     assert!(chart.remove_drawing(id));
     assert!(chart.drawing(id).is_none());
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawing(id).unwrap().points, moved_points);
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     assert!(chart.drawing(id).is_none());
 }
 
@@ -143,10 +143,10 @@ fn historical_insert_rebases_fractional_anchors_and_history_without_a_history_co
         )
         .unwrap();
 
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert!(chart.drawing(id).is_none());
     assert!(chart.update_series_bar(0, 15.0, [10.5; 4]));
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     assert_eq!(chart.drawing(id).unwrap().points[0].logical, 1.0);
     assert_eq!(chart.drawing(id).unwrap().points[1].logical, 2.0);
 }
@@ -469,17 +469,17 @@ fn drawing_drag_is_one_history_entry_and_new_mutation_invalidates_redo() {
     let after = chart.drawing(id).unwrap().points.clone();
     assert_ne!(after, before);
 
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawing(id).unwrap().points, before);
     // A second undo removes the creation, proving the 50 move samples coalesced into one entry.
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert!(chart.drawing(id).is_none());
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     assert_eq!(chart.drawing(id).unwrap().points, before);
 
     assert!(chart.drawing_apply_options(id, r##"{"color":"#00ff00"}"##));
-    assert!(!chart.can_redo_drawing());
-    assert!(!chart.redo_drawing());
+    assert!(!chart.can_redo());
+    assert!(!chart.redo());
 }
 
 #[test]
@@ -499,7 +499,7 @@ fn cancelled_drag_rolls_back_and_keyboard_nudge_uses_history() {
     chart.set_selected_drawing(Some(id));
     assert!(chart.nudge_selected_drawing(1.0, 0.0, None));
     assert_ne!(chart.drawing(id).unwrap().points, before);
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawing(id).unwrap().points, before);
 }
 
@@ -765,7 +765,7 @@ fn drawing_history_is_bounded_to_one_hundred_operations() {
             .unwrap();
     }
     let mut undone = 0;
-    while chart.undo_drawing() {
+    while chart.undo() {
         undone += 1;
     }
     assert_eq!(undone, 100);
@@ -791,7 +791,7 @@ fn delete_undo_restores_prior_drawing_order() {
         })
         .collect::<Vec<_>>();
     assert!(chart.remove_drawing(ids[1]));
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(
         chart
             .drawings()
@@ -977,7 +977,7 @@ fn b2_clipboard_clone_and_z_order_are_bounded_and_undoable() {
     assert_eq!(pasted.len(), 1);
     assert_ne!(pasted[0], first);
     assert!(chart.move_drawing_z_order(second, -1));
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert!(chart.drawing(second).is_some());
 }
 
@@ -2572,9 +2572,9 @@ fn path_creation_requires_finish_and_supports_pop_and_history() {
     let drawing = chart.drawing(id).unwrap();
     assert_eq!(drawing.kind, DrawingKind::Path);
     assert_eq!(drawing.points.len(), 3);
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert!(chart.drawing(id).is_none());
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     assert_eq!(chart.drawing(id).unwrap().points.len(), 3);
 }
 
@@ -4791,9 +4791,9 @@ fn position_account_settings_are_atomic_and_survive_history_and_persistence() {
         assert!(!chart.drawing_apply_options(id, patch));
         assert_eq!(chart.drawing(id).unwrap(), &updated);
     }
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawing(id).unwrap().position_account_size, 1000.0);
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     let saved = chart.export_state_json().unwrap();
     let mut restored = settled_chart();
     restored.import_state_json(&saved).unwrap();
@@ -6848,10 +6848,10 @@ fn anchored_text_stays_at_screen_position_and_drag_history_restores_it() {
             chart.drawing(id).unwrap().screen_y
         )
     );
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawing(id).unwrap().screen_x, original.screen_x);
     assert_eq!(chart.drawing(id).unwrap().screen_y, original.screen_y);
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     assert_eq!(
         chart.drawing_px(chart.drawing(id).unwrap()).unwrap()[0],
         moved
@@ -7116,7 +7116,7 @@ fn shift_measure_drag_freezes_on_release_and_the_next_press_dismisses_it() {
     assert!(has_fill(&mut chart, primary()));
     // Transient: never a drawing, history entry, or persisted object.
     assert!(chart.drawings().is_empty());
-    assert!(!chart.can_undo_drawing());
+    assert!(!chart.can_undo());
     assert!(
         !chart
             .export_state_json()
@@ -8053,7 +8053,7 @@ fn selected_icons_frame_their_box_and_resize_from_any_corner() {
         assert!(grown.icon_size > 50.0, "{kind:?}: {}", grown.icon_size);
         assert_eq!(grown.points, before, "resizing never moves the anchor");
         // Undo restores the size; a cancelled resize leaves it untouched.
-        assert!(chart.undo_drawing());
+        assert!(chart.undo());
         assert_eq!(chart.drawing(id).unwrap().icon_size, 40.0);
         chart.build_frame();
         assert!(chart.drawing_drag_start_at(cx, cy));
@@ -8539,13 +8539,13 @@ fn settings_session_commits_one_undo_step_and_cancel_restores_the_drawing() {
     let edited = chart.drawing(id).unwrap().clone();
     assert_ne!(edited, original);
     assert_eq!(edited.points[1].price, 13.0);
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(
         chart.drawing(id),
         Some(&original),
         "one undo reverts the whole session"
     );
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     assert_eq!(chart.drawing(id), Some(&edited));
 
     assert!(chart.begin_drawing_options_edit(id));
@@ -8553,13 +8553,13 @@ fn settings_session_commits_one_undo_step_and_cancel_restores_the_drawing() {
     assert_eq!(chart.drawing(id).unwrap().width, 9.0, "edits preview live");
     assert!(chart.cancel_drawing_options_edit());
     assert_eq!(chart.drawing(id), Some(&edited));
-    assert!(chart.undo_drawing(), "cancel adds no history entry");
+    assert!(chart.undo(), "cancel adds no history entry");
     assert_eq!(chart.drawing(id), Some(&original));
 
     // Undo during an open session commits it first, then reverts it.
     assert!(chart.begin_drawing_options_edit(id));
     assert!(chart.drawing_apply_options(id, r#"{"width":3}"#));
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawing_options_edit(), None);
     assert_eq!(chart.drawing(id), Some(&original));
 
@@ -8568,9 +8568,9 @@ fn settings_session_commits_one_undo_step_and_cancel_restores_the_drawing() {
     assert!(chart.drawing_apply_options(id, r#"{"width":6}"#));
     assert!(chart.remove_drawing(id));
     assert_eq!(chart.drawing_options_edit(), None);
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawing(id).unwrap().width, 6.0);
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawing(id), Some(&original));
 }
 
@@ -9056,19 +9056,19 @@ fn removing_the_selection_is_one_undo_step_that_restores_it_selected() {
     );
     assert!(chart.selected_drawings().is_empty());
 
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawings(), before.as_slice());
     let mut expected = vec![trend, text];
     expected.sort_unstable();
     assert_eq!(chart.selected_drawings(), expected.as_slice());
 
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     assert_eq!(chart.drawings().len(), 1);
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawings(), before.as_slice());
 
     assert_eq!(chart.remove_drawings(&[rect, 9_999]), 1);
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawings(), before.as_slice());
 }
 
@@ -9105,9 +9105,9 @@ fn a_selection_style_patch_reaches_only_drawings_that_have_each_setting() {
     assert_eq!(chart.drawing(text), before.iter().find(|d| d.id == text));
 
     // Unselected drawings never change, and the whole edit is one undo step.
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawings(), before.as_slice());
-    assert!(chart.redo_drawing());
+    assert!(chart.redo());
     assert_eq!(chart.drawing(trend).unwrap().width, 4.0);
 
     assert_eq!(chart.apply_selected_drawings_options("not json"), 0);
@@ -9142,9 +9142,9 @@ fn a_selection_options_edit_session_commits_as_one_undo_step() {
             .iter()
             .all(|drawing| drawing.color == "#0000ff")
     );
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawings(), before.as_slice());
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(
         chart.drawings().len(),
         1,
@@ -9164,12 +9164,12 @@ fn locking_hiding_and_cloning_the_selection_are_single_undo_steps() {
     assert_eq!(chart.set_selected_drawings_locked(true), 2);
     assert!(chart.drawing(trend).unwrap().locked && chart.drawing(rect).unwrap().locked);
     assert!(!chart.drawing(text).unwrap().locked);
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawings(), before.as_slice());
 
     assert_eq!(chart.set_selected_drawings_visibility(false), 2);
     assert!(!chart.drawing(trend).unwrap().visible && !chart.drawing(rect).unwrap().visible);
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawings(), before.as_slice());
 
     let copies = chart.clone_selected_drawings(1.0, 0.5);
@@ -9187,7 +9187,7 @@ fn locking_hiding_and_cloning_the_selection_are_single_undo_steps() {
             assert_eq!(moved.price, original.price + 0.5);
         }
     }
-    assert!(chart.undo_drawing());
+    assert!(chart.undo());
     assert_eq!(chart.drawings(), before.as_slice());
     assert!(chart.clone_selected_drawings(f64::NAN, 0.0).is_empty());
 }

@@ -1612,6 +1612,7 @@ impl ChartEngine {
     }
 
     pub fn remove_native_primitive(&mut self, id: NativePrimitiveId) -> bool {
+        let volume_profile = self.volume_profile_history_snapshot(id);
         if let Some((series_id, index)) = self.series.iter().find_map(|series| {
             series
                 .native_primitives
@@ -1637,6 +1638,9 @@ impl ChartEngine {
                 if removed_delta_tooltip {
                     self.invalidate_axis_frame();
                 }
+            }
+            if let Some(profile) = volume_profile {
+                self.record_volume_profile(profile, false);
             }
             return true;
         }

@@ -523,6 +523,9 @@ impl ChartEngine {
         self.indicator_changes.extend(changes.into_iter().flatten());
         self.propagate_indicator_changes();
         self.sync_time_points();
+        if let Some(&binding) = ids.first() {
+            self.record_indicator_added(binding);
+        }
         Ok(ids)
     }
 

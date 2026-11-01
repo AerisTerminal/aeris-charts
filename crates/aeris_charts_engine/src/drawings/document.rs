@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use super::{
-    BarsPatternBar, Drawing, DrawingAnchorTime, DrawingHistory, DrawingId, DrawingKind,
-    DrawingPatch, DrawingPoint, MAX_BARS_PATTERN_BARS, MAX_DRAWING_POINTS,
+    BarsPatternBar, Drawing, DrawingAnchorTime, DrawingId, DrawingKind, DrawingPatch, DrawingPoint,
+    MAX_BARS_PATTERN_BARS, MAX_DRAWING_POINTS,
 };
 use crate::persistence::{
     PERSISTENCE_MAX_DOCUMENT_BYTES, PERSISTENCE_MAX_DRAWINGS, PERSISTENCE_MAX_TOTAL_POINTS,
@@ -325,7 +325,7 @@ impl ChartEngine {
         self.drawing_text_edit = None;
         self.hovered_drawing = None;
         self.hovered_text = None;
-        self.drawing_history = DrawingHistory::default();
+        self.history.forget_drawings();
         self.drawing_revision = self.drawing_revision.wrapping_add(1);
         self.bump_drawing_sync_revision();
         self.drawing_runtime
@@ -637,10 +637,7 @@ mod tests {
         assert!(restored.drawings[0].locked);
         assert_eq!(restored.drawings[1].bars_pattern, frozen);
         assert_ne!(restored.drawing_revision(), revision);
-        assert!(
-            !restored.undo_drawing(),
-            "a restore is not an undoable edit"
-        );
+        assert!(!restored.undo(), "a restore is not an undoable edit");
         assert_eq!(restored.drawings.len(), 2);
     }
 

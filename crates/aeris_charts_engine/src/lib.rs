@@ -32,6 +32,7 @@ mod general_layout;
 mod general_legend;
 mod general_series;
 mod heikin_ashi;
+mod history;
 mod hit_test;
 mod host_layout;
 mod indicators;
@@ -136,8 +137,7 @@ pub use drawings::{
     TextCapCenterFn, TextCapMetrics, TextMeasureFn, normalize_drawing_text,
 };
 pub(crate) use drawings::{
-    DrawingAnchorTime, DrawingController, DrawingDrag, DrawingHistory, DrawingIconRegistry,
-    DrawingRuntime,
+    DrawingAnchorTime, DrawingController, DrawingDrag, DrawingIconRegistry, DrawingRuntime,
 };
 pub use external_studies::{
     ExternalStudyError, ExternalStudyInputRequirements, ExternalStudyInputStream,
@@ -216,6 +216,8 @@ pub use general_series::{
     MAX_GENERAL_SERIES_STACK_ID_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES,
     MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
 };
+pub(crate) use history::ChartHistory;
+pub use history::{ChartHistoryChange, HostEditId};
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub use host_layout::{
     ExportFrame, ExportFrameRequest, FinancialFramePreparation, FinancialFrameRequest,
@@ -2143,9 +2145,9 @@ pub struct ChartEngine {
     /// A merged-time rebase refreshed live interaction pixels immediately; refresh once more after
     /// the next frame's layout and autoscale settle their final coordinate transforms.
     drawing_baselines_need_frame_refresh: bool,
-    /// Bounded chart-local semantic history for committed drawing mutations. Runtime-only:
-    /// persistence stores the current drawings, never this stack.
-    drawing_history: DrawingHistory,
+    /// Bounded chart-local undo history shared by drawing, indicator and host edits
+    /// (`history.rs`). Runtime-only: persistence stores the current state, never this stack.
+    history: ChartHistory,
     /// One engine-owned drawing-tool controller: armed tool/template, anchored placement and
     /// freehand capture. Hosts forward normalized actions and never own per-tool creation logic.
     drawing_controller: DrawingController,
@@ -2374,7 +2376,7 @@ impl ChartEngine {
             drawing_drag: None,
             drawing_marquee: None,
             drawing_baselines_need_frame_refresh: false,
-            drawing_history: DrawingHistory::default(),
+            history: ChartHistory::default(),
             drawing_controller: DrawingController::default(),
             drawing_sync_source: String::new(),
             drawing_sync_revision: 0,
@@ -3465,6 +3467,12 @@ impl ChartEngine {
             .iter()
             .find(|s| s.id == id)
             .map(|s| s.pane_index);
+        // Removing an indicator output removes its binding and every binding derived from it as
+        // one undoable step. Bindings that leave with a removed host series are not recorded:
+        // their source is gone, so undo could not bring them back.
+        let removed_indicators = self
+            .indicator_binding_id(id)
+            .map(|binding| self.indicator_subtree_snapshots(binding));
         // Drop indicator bindings touching this series and collect their output series to tombstone
         // alongside it (a removed source leaves no derived data behind).
         let mut tombstones = self.drop_indicators_touching(id);
@@ -3580,6 +3588,9 @@ impl ChartEngine {
         // nothing).
         if let Some(pane_index) = home_pane {
             self.cleanup_if_pane_is_empty(pane_index);
+        }
+        if let Some(snapshots) = removed_indicators {
+            self.record_indicators_removed(snapshots);
         }
         tombstones
     }
@@ -3764,7 +3775,7 @@ impl ChartEngine {
                 drawing.pane_index -= 1;
             }
         }
-        self.remap_depth_panes(|pane| {
+        let remap = move |pane: usize| {
             if pane == index {
                 PANELESS
             } else if !replacing_last && pane != PANELESS && pane > index {
@@ -3772,14 +3783,15 @@ impl ChartEngine {
             } else {
                 pane
             }
-        });
+        };
+        self.remap_depth_panes(remap);
         self.prune_depth_interaction();
         self.remove_trading_pane(index);
         self.remove_alert_pane(index);
         self.drawing_runtime
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
-        self.drawing_history.clear();
+        self.history.remap_drawing_panes(remap);
         self.invalidate_frame_all();
         true
     }
@@ -3808,7 +3820,7 @@ impl ChartEngine {
                 drawing.pane_index = first;
             }
         }
-        self.remap_depth_panes(|pane| {
+        let remap = move |pane: usize| {
             if pane == first {
                 second
             } else if pane == second {
@@ -3816,13 +3828,14 @@ impl ChartEngine {
             } else {
                 pane
             }
-        });
+        };
+        self.remap_depth_panes(remap);
         self.swap_trading_panes(first, second);
         self.swap_alert_panes(first, second);
         self.drawing_runtime
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
-        self.drawing_history.clear();
+        self.history.remap_drawing_panes(remap);
         self.invalidate_frame_all();
         true
     }
@@ -3868,7 +3881,7 @@ impl ChartEngine {
                 pane
             };
         }
-        self.remap_depth_panes(|pane| {
+        let remap = move |pane: usize| {
             if pane == PANELESS {
                 pane
             } else if pane == from {
@@ -3880,13 +3893,14 @@ impl ChartEngine {
             } else {
                 pane
             }
-        });
+        };
+        self.remap_depth_panes(remap);
         self.move_trading_pane(from, to);
         self.move_alert_pane(from, to);
         self.drawing_runtime
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
-        self.drawing_history.clear();
+        self.history.remap_drawing_panes(remap);
         self.invalidate_frame_all();
         true
     }

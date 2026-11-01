@@ -5898,6 +5898,10 @@ impl AerisChart {
                 ChartInputEvent::IndicatorRemoved(id) => {
                     serde_json::json!({"kind":"indicator_removed","id":id})
                 }
+                ChartInputEvent::VolumeProfileRemoved(id) => {
+                    serde_json::json!({"kind":"volume_profile_removed","id":id})
+                }
+                ChartInputEvent::HistoryChanged => serde_json::json!({"kind":"history_changed"}),
                 ChartInputEvent::CrosshairLeft => serde_json::json!({"kind":"crosshair_left"}),
                 ChartInputEvent::DeltaTooltipChanged => {
                     serde_json::json!({"kind":"delta_tooltip_changed"})
@@ -6377,11 +6381,12 @@ impl AerisChart {
     pub fn drawing_drag_active(&self) -> bool {
         self.inner.borrow().drawing_drag_active()
     }
-    /// Undo one committed drawing mutation in this chart's bounded semantic history.
+    /// Undo the newest committed edit in this chart's bounded history: a drawing or an
+    /// engine-owned indicator.
     pub fn undo_drawing(&mut self) -> bool {
         self.inner.borrow_mut().undo_drawing()
     }
-    /// Redo one previously undone drawing mutation in this chart.
+    /// Redo the newest undone edit in this chart.
     pub fn redo_drawing(&mut self) -> bool {
         self.inner.borrow_mut().redo_drawing()
     }

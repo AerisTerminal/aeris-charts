@@ -1434,6 +1434,13 @@ impl Probe {
                 ChartInputEvent::IndicatorRemoved(binding) => {
                     format!("removed indicator #{binding}")
                 }
+                ChartInputEvent::VolumeProfileRemoved(id) => {
+                    format!("removed volume profile #{id}")
+                }
+                ChartInputEvent::HistoryChanged => {
+                    let changes = self.engine.take_history_changes();
+                    format!("history changed ({} effects)", changes.len())
+                }
                 ChartInputEvent::CrosshairLeft => "crosshair left".into(),
                 ChartInputEvent::DeltaTooltipChanged => "delta tooltip changed".into(),
                 ChartInputEvent::GeneralBrushChanged => "general brush changed".into(),

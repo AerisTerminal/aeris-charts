@@ -133,7 +133,7 @@ impl ChartEngine {
         {
             return None;
         }
-        self.insert_native_primitive(
+        let id = self.insert_native_primitive(
             source,
             NativeSeriesPrimitiveKind::VolumeProfileIndicator(Box::new(
                 VolumeProfileIndicatorState {
@@ -143,7 +143,11 @@ impl ChartEngine {
                     key: None,
                 },
             )),
-        )
+        )?;
+        if let Some(profile) = self.volume_profile_history_snapshot(id) {
+            self.record_volume_profile(profile, true);
+        }
+        Some(id)
     }
 
     pub fn set_volume_profile_indicator_options(

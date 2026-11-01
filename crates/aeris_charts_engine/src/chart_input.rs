@@ -372,9 +372,15 @@ pub enum ChartInputEvent {
     /// an external study). The host decides how its own objects are removed.
     RemoveSeries(SeriesId),
     /// Delete removed an engine-owned indicator binding, named by its binding id (its first
-    /// output). The engine has already removed every output; hosts that keep state for that
-    /// binding drop it and record the removal.
+    /// output). The engine has already removed every output and recorded the removal as one
+    /// undo step; hosts that keep state for that binding drop it.
     IndicatorRemoved(SeriesId),
+    /// Delete removed an engine-owned volume-profile indicator and recorded it as one undo step;
+    /// hosts that keep its handle drop it.
+    VolumeProfileRemoved(NativePrimitiveId),
+    /// An undo or redo step changed indicators or host edits. Drain the effects through
+    /// [`ChartEngine::take_history_changes`].
+    HistoryChanged,
     /// Delta-tooltip comparison state changed; the host notifies its range subscribers.
     DeltaTooltipChanged,
     /// A committed or cancelled general brush gesture changed its semantic range.
@@ -1764,8 +1770,8 @@ impl ChartEngine {
                 self.refresh_input_cursor();
                 cancelled
             }
-            ChartKey::Undo => self.undo_drawing(),
-            ChartKey::Redo => self.redo_drawing(),
+            ChartKey::Undo => self.undo(),
+            ChartKey::Redo => self.redo(),
         };
         if handled {
             if !panned {
@@ -1997,6 +2003,13 @@ impl ChartEngine {
             self.input.events.pop_front();
         }
         self.input.events.push_back(event);
+    }
+
+    /// One pending notice covers every history change until the host drains them.
+    pub(crate) fn note_history_changed(&mut self) {
+        if !self.input.events.contains(&ChartInputEvent::HistoryChanged) {
+            self.push_input_event(ChartInputEvent::HistoryChanged);
+        }
     }
 
     /// A separator drag resizes on every motion sample; one pending notice is enough.
@@ -2641,7 +2654,11 @@ impl ChartEngine {
         }
         if let Some(id) = self.selected_volume_profile_indicator() {
             self.clear_volume_profile_selection();
-            return self.remove_native_primitive(id);
+            if !self.remove_native_primitive(id) {
+                return false;
+            }
+            self.push_input_event(ChartInputEvent::VolumeProfileRemoved(id));
+            return true;
         }
         let Some(series) = self.selected_series() else {
             return false;
@@ -3869,7 +3886,7 @@ mod tests {
         );
 
         // Each duplicate is exactly one undo step.
-        assert!(chart.undo_drawing());
+        assert!(chart.undo());
         assert_eq!(chart.drawings().len(), 2);
         assert!(chart.drawing(copy.id).is_none());
 
@@ -4142,7 +4159,7 @@ mod tests {
         chart.set_selected_drawing(Some(id));
         assert!(chart.input_key_down(ChartKey::Delete, InputModifiers::default(), false, 0.0));
         assert!(chart.drawing(id).is_none());
-        assert!(chart.can_undo_drawing());
+        assert!(chart.can_undo());
     }
 
     #[test]
@@ -4365,9 +4382,9 @@ mod tests {
         assert_eq!(raised[0].logical, moved[0].logical);
         assert_eq!(chart.scroll_position(), scroll, "the chart never pans");
 
-        assert!(chart.undo_drawing());
+        assert!(chart.undo());
         assert_eq!(chart.drawing(id).unwrap().points, moved);
-        assert!(chart.undo_drawing());
+        assert!(chart.undo());
         assert_eq!(
             chart.drawing(id).unwrap().points,
             original,
@@ -4910,7 +4927,7 @@ mod tests {
         assert_ne!(edited[0], original[0]);
         assert!(chart.input_target_key_down(target, ChartKey::Enter, none));
         assert_eq!(chart.drawing_edit_session(), None);
-        assert!(chart.undo_drawing());
+        assert!(chart.undo());
         assert_eq!(
             chart.drawing(id).unwrap().points,
             original,

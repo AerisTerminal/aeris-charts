@@ -3058,16 +3058,16 @@ impl ChartInner {
             .set_series_markers_z_order(series_id as SeriesId, z_order)
     }
     pub fn undo_drawing(&mut self) -> bool {
-        self.engine.undo_drawing()
+        self.engine.undo()
     }
     pub fn redo_drawing(&mut self) -> bool {
-        self.engine.redo_drawing()
+        self.engine.redo()
     }
     pub fn can_undo_drawing(&self) -> bool {
-        self.engine.can_undo_drawing()
+        self.engine.can_undo()
     }
     pub fn can_redo_drawing(&self) -> bool {
-        self.engine.can_redo_drawing()
+        self.engine.can_redo()
     }
 
     // Canonical drawing-tool controller. These are the host-facing interaction methods; the
